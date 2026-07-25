@@ -389,9 +389,11 @@ keep/reject decision are stored against the image row, and each row remembers
 its file *relative* to the bank's folder. So moving a 30 000-image bank to
 another drive costs nothing — you just have to tell the app where it went.
 
-Move (or rename) the folder first, then open the 🗃️ Image bank page and hit
-**📦** on the bank's card — the same button also appears inside the warning the
-app shows once it notices the folder is gone. Paste or browse to the new folder
+You can do this in either order. **📦 Move folder…** sits in the bank's header
+next to its path (and **📦** on the bank's card in the list), so you can open it
+before touching anything to see what the app will ask for; it also appears inside
+the warning shown once the app notices the folder is gone, if you moved first.
+Paste or browse to the new folder
 and press **🔍 Check this folder**. Nothing is written yet: the app walks the
 candidate folder and tells you how many of *this bank's* images are in there and
 how many are not.
