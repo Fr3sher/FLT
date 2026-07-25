@@ -8,6 +8,7 @@ import DeleteRejectedDialog from './DeleteRejectedDialog'
 import LaunchAllDialog from './LaunchAllDialog'
 import PipelineReport from './PipelineReport'
 import FolderSyncNote from './FolderSyncNote'
+import RelocateBankDialog from './RelocateBankDialog'
 import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
 // Source-folder re-walk messages (pure/testable).
@@ -327,6 +328,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [deleteRejectedOpen, setDeleteRejectedOpen] = useState(false)
   const [launchOpen, setLaunchOpen] = useState(false)
   const [dismissedReportAt, setDismissedReportAt] = useState(null)
+  const [relocating, setRelocating] = useState(false)
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
   const [showAutoReject, setShowAutoReject] = useState(false)
   // Curation popovers ('diverse' | 'similar' | null) and their target counts.
@@ -697,11 +699,24 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <span className="rounded border border-amber-400/50 bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wide text-amber-300">Beta</span>
         </div>
         {payload?.source_path && (
-          <p className="truncate font-mono text-xs text-content-subtle" title={payload.source_path}>
-            {payload.source_path}
-          </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <p className="min-w-0 grow truncate font-mono text-xs text-content-subtle"
+              title={payload.source_path}>
+              {payload.source_path}
+            </p>
+            {/* Cold path. The folder-sync note below offers this too, but only once
+                the folder is already gone — and the real move is PLANNED: you look
+                for the option before you drag 30 000 files to another drive, not
+                after breaking the bank to discover it could have been repaired. */}
+            <button type="button" onClick={() => setRelocating(true)}
+              title="Moving this folder to another disk? Point the bank at its new location."
+              className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+              📦 Move folder…
+            </button>
+          </div>
         )}
-        <FolderSyncNote sync={payload?.folder_sync} />
+        <FolderSyncNote sync={payload?.folder_sync}
+          onRelocate={() => setRelocating(true)} />
         {counts && (
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border pt-2 text-sm">
             <Stat label="images" value={counts.total} />
@@ -1269,6 +1284,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {review && (
         <BankReviewLightbox bankId={bankId} ids={review.ids} startId={review.startId}
           seedImages={page.images} onDecided={onReviewDecided} onClose={closeReview} />
+      )}
+
+      {relocating && (
+        <RelocateBankDialog bankId={bankId} bankName={payload?.name || `Bank #${bankId}`}
+          sourcePath={payload?.source_path} onClose={() => setRelocating(false)}
+          onDone={() => { refreshPayload({ force: true }); refreshImages() }} />
       )}
     </div>
   )
