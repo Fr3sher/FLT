@@ -9,6 +9,7 @@ import { removeRunFromTree } from '../../utils/runDeletable.js';
 import { canContinueFromCheckpoint } from './lineageContinue.js';
 import { postJson } from '../../api/fetchClient';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
+import { trainingRunVariantLabel } from '../../utils/trainingRuns';
 import { useToast } from '../common/Toast';
 import {
   checkpointKey, toggleCheckpointSelection, selectedCheckpointRefs,
@@ -33,6 +34,12 @@ import {
 
 const MIN_SCALE = 0.5;   // shrink to fit down to here, then pan instead
 const MAX_H = 560;       // the panel never grows taller than this before it pans
+
+/** The run's variant as the app NAMES it, not the raw stored value: Krea's raw
+ *  recipe is stored 'base' and shown "Raw" everywhere else, so a card reading
+ *  "Krea 2 · base" next to a dialog reading "Krea 2 · Raw" looked like two
+ *  different runs. One label helper for both. */
+const variantLabel = (node) => trainingRunVariantLabel(node.train_type, node.variant);
 
 /** One run as a fixed-size card. Mirrors the list card's content, sized to the
  *  graph's card box; sits at the top of the run's cell (pills go below). */
@@ -64,8 +71,9 @@ function GraphCard({ node, lit, annotated, compareRole, onSelect }) {
           #{node.source === 'cloud' && node.run_id ? node.run_id : node.record_id}
         </span>
         <span className={`min-w-0 truncate text-[0.75rem] font-semibold ${dim ? 'text-content-muted' : 'text-content'}`}
-          title={`${famLabel(node.train_type)}${node.variant ? ` · ${node.variant}` : ''}`}>
-          {famLabel(node.train_type)}{node.variant ? <span className="font-normal text-content-muted"> · {node.variant}</span> : null}
+          title={`${famLabel(node.train_type)}${variantLabel(node) ? ` · ${variantLabel(node)}` : ''}`}>
+          {famLabel(node.train_type)}{variantLabel(node)
+            ? <span className="font-normal text-content-muted"> · {variantLabel(node)}</span> : null}
         </span>
         {cur && (
           <span className="shrink-0 rounded-full bg-indigo-500/25 px-1.5 py-0.5 text-indigo-100 text-[0.5rem] font-bold uppercase tracking-wider">
