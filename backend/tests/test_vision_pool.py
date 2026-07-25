@@ -166,6 +166,56 @@ def test_cancel_never_pulls_an_item_it_will_not_process():
     assert yielded == pulled, 'items were prepared and then never processed'
 
 
+@pytest.mark.parametrize('workers', [1, 4])
+def test_cancel_never_pulls_an_item_it_will_not_process_at_any_width(workers):
+    """Same contract at workers=1 — and it is the width where it mattered most.
+
+    `for item in iterator:` pulls the item BEFORE the loop body can test the
+    cancel flag, so the sequential path ran the caller's preparation and then
+    threw the item away. For the watermark pass that preparation drops the
+    cleaned file the user is looking at: a Stop destroyed a cleaned image and
+    left nothing analysed in its place, so a resumed pass could not even redo
+    it. The parallel path has always tested the flag before pulling.
+    """
+    pulled = []
+    stop = threading.Event()
+
+    def source():
+        for i in range(60):
+            pulled.append(i)
+            yield i
+
+    def work(i):
+        if i >= 4:
+            stop.set()
+        return i
+
+    out = list(map_vision(source(), work, workers=workers,
+                          should_cancel=stop.is_set))
+    yielded = [item for item, _r, _e in out]
+    assert stop.is_set()
+    assert len(yielded) < 60, 'a cancel must actually cut the pass short'
+    assert yielded == pulled, 'items were prepared and then never processed'
+
+
+def test_cancel_before_the_first_call_does_nothing_sequentially():
+    """workers=1, cancelled from the start: not a single item may be pulled out
+    of the caller's iterable — pulling one is already destructive."""
+    pulled = []
+    calls = []
+
+    def source():
+        for i in range(50):
+            pulled.append(i)
+            yield i
+
+    out = list(map_vision(source(), calls.append, workers=1,
+                          should_cancel=lambda: True))
+    assert out == []
+    assert calls == []
+    assert pulled == []
+
+
 def test_cancel_before_the_first_call_does_nothing():
     calls = []
     out = list(map_vision(range(50), calls.append, workers=4,

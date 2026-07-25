@@ -129,7 +129,9 @@ def map_vision(items, work, *, workers=None, should_cancel=None):
       immediately picked up by a thread, so nothing is ever pulled from
       ``items`` and then dropped unprocessed (which would waste the caller's
       per-item preparation — for the watermark pass, that preparation is
-      destructive).
+      destructive). Both paths test the flag BEFORE pulling, for that reason
+      alone: at ``workers=1`` this is what stops a Stop from destroying the
+      cleaned file of an image it will never analyse.
 
     The cost is the stop latency: draining takes about one call round (~3 s at
     the default concurrency) instead of the ~1.7 s a sequential pass waits for
@@ -139,12 +141,21 @@ def map_vision(items, work, *, workers=None, should_cancel=None):
     count = vision_concurrency(workers)
     iterator = iter(items)
     if count <= 1:
-        for item in iterator:
+        while True:
+            # The flag is tested BEFORE pulling, exactly like submit_next()
+            # below. `for item in iterator` reads the item first and can only
+            # test afterwards — which pulled one item through the caller's
+            # preparation and then dropped it unprocessed on every Stop. That
+            # preparation is destructive for the watermark pass (it discards
+            # the cleaned blob), so the sequential path was deleting a user's
+            # cleaned file and storing nothing in its place.
             if should_cancel and should_cancel():
+                return
+            item = next(iterator, _NOTHING)
+            if item is _NOTHING:
                 return
             result, error = _guarded(work, item)
             yield item, result, error
-        return
     # Abandoning the generator (a `break`, or an exception in the consumer)
     # exits this `with`, which joins the pool — a pass can never leave worker
     # threads calling Ollama behind it.

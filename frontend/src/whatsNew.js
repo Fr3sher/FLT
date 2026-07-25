@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-stop-during-a-watermark-pass-loses-nothing',
+    date: '2026-07-26',
+    title: '🛑 Stopping a watermark pass no longer costs you a cleaned image',
+    blurb:
+      'A watermark re-scan always looks at the ORIGINAL pixels, so it throws away the cleaned version of an image just before analysing it again. If you had set the vision passes back to one image at a time (Settings ▸ Local tools ▸ Ollama), pressing Stop took one image further than it analysed: that last image lost its cleaned file and got no new verdict in exchange. Stop now lets go before touching the next image, at any speed setting — so a cleaned image is only ever given up in return for a fresh answer. Everything already analysed still stays analysed, exactly as before.',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-26-move-folder-accepts-a-pasted-path',
     date: '2026-07-26',
     title: '📦 Move folder…: a pasted path is accepted the way you paste it',
