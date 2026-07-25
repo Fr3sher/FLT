@@ -99,6 +99,27 @@ def bank_delete(bank_id):
     return jsonify({'ok': True})
 
 
+@bp.post('/bank/<int:bank_id>/relocate')
+def bank_relocate(bank_id):
+    """Point a bank at a new folder after the user moved it (another disk, a
+    rename). Two-step ON PURPOSE: {folder} alone only REPORTS how many of the
+    bank's files are in there, {folder, confirm: true} applies it. 400 when the
+    folder holds none of them (that is a different folder, not a moved one),
+    409 while a pass is running. Nothing is ever deleted — a partial match keeps
+    every row and its analysis."""
+    data = request.get_json(silent=True) or {}
+    try:
+        out = banks.relocate_bank(LOCAL_USER, bank_id, data.get('folder'),
+                                  confirm=bool(data.get('confirm')))
+    except bank_jobs.BankJobBusy as e:
+        return jsonify({'error': str(e)}), 409
+    except banks.BankRelocateMismatch as e:
+        return jsonify({'error': str(e), **e.preview}), 400
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **out})
+
+
 @bp.get('/bank/<int:bank_id>/images')
 def bank_images(bank_id):
     args = request.args

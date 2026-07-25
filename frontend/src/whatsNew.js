@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-bank-move-folder',
+    date: '2026-07-25',
+    title: '📦 Move a bank to another disk without losing a single analysis',
+    blurb:
+      'A bank was nailed to the folder path you gave it: move that folder to a bigger drive and the bank had no way to follow — and worse, running a pass while the files were away marked every image "unreadable" and auto-rejected it, quietly wiping the triage of a 30 000-image bank. Both are fixed. Move the folder, then press 📦 on the bank\'s card: the app checks the new location FIRST and tells you how many of this bank\'s images are actually in there and how many are not, before anything is written. Confirm and every score, duplicate group, face cluster, caption and keep/reject decision is still there. A folder holding none of your images is refused instead of accepted in silence, nothing is ever deleted — and a pass that finds the files missing now stops and says the folder appears to have moved, rather than grading absent files as broken ones.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-25-keep-custom-shot',
     date: '2026-07-25',
     title: '⇪ Keep a custom shot you wrote — it stops dying with your browser cache',

@@ -381,6 +381,35 @@ mark position; the panel says so and one more **🚩 Find watermarks** run makes
 them cleanable.
 
 
+## Move a bank folder to another disk
+
+A bank points at a folder *in place*, but nothing it computes lives in that
+folder: the quality scores, duplicate groups, face clusters, captions and every
+keep/reject decision are stored against the image row, and each row remembers
+its file *relative* to the bank's folder. So moving a 30 000-image bank to
+another drive costs nothing — you just have to tell the app where it went.
+
+Move (or rename) the folder first, then open the 🗃️ Image bank page and hit
+**📦** on the bank's card — the same button also appears inside the warning the
+app shows once it notices the folder is gone. Paste or browse to the new folder
+and press **🔍 Check this folder**. Nothing is written yet: the app walks the
+candidate folder and tells you how many of *this bank's* images are in there and
+how many are not.
+
+- **All of them found** → confirm, and the bank is repointed with every score
+  and decision intact.
+- **Some found, some missing** → you can still confirm. Nothing is deleted:
+  rows whose file didn't come along keep their analysis and simply read as
+  missing until the file comes back.
+- **None found** → refused. That folder is a *different* folder, not a moved
+  one — the usual cause is picking the parent of the folder you moved.
+
+The app never deletes a row on its own, and an analysis pass run while the files
+are away no longer degrades them either: a file that is *absent* is not a file
+that is *broken*, so the pass stops and tells you the folder appears to have
+moved instead of marking thousands of images unusable.
+
+
 ## Tips that save runs
 
 - Trust the composition meter over your instinct — a set that "looks varied"

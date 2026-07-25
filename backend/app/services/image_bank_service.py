@@ -60,6 +60,16 @@ THUMB_MAX_SIDE = 320
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
+# A quality pass that keeps finding NOTHING on disk is not looking at a bank of
+# broken images — it is looking at the wrong folder. Bail out after this many
+# absent files (when they are at least half of what has been walked) rather than
+# grind through 30 000 of them; a handful of genuinely deleted files stays a
+# non-event and only shows up in the folder-sync note.
+_MISSING_ABORT_AT = 20
+MOVED_FOLDER_MSG = (
+    "this folder no longer holds the bank's images — it may have been moved, "
+    'renamed, or sit on a drive that is disconnected. Nothing was changed: '
+    'point the bank at its new folder, then run the pass again.')
 
 
 # --- thresholds -------------------------------------------------------------
@@ -300,6 +310,104 @@ def refresh_banks(user_id, force=False) -> dict:
         res = refresh_bank(user_id, bank_id, force=force)
         if res is not None:
             out[bank_id] = res
+    return out
+
+
+# --- relocate ---------------------------------------------------------------
+_MISSING_SAMPLE = 8         # relpaths quoted back so the user can recognise them
+
+
+class BankRelocateMismatch(ValueError):
+    """The candidate folder holds none of the bank's files. Carries the counts
+    so the route can report them instead of a bare sentence."""
+    def __init__(self, message, preview):
+        super().__init__(message)
+        self.preview = preview
+
+
+def _relocate_target(folder) -> str:
+    """Normalise a pasted folder into an absolute path we can walk. Same
+    unquoting nicety as create_bank (Windows «Copy as path» pastes quoted)."""
+    folder = (folder or '').strip().strip('"\'')
+    if not folder:
+        raise ValueError('a folder is required')
+    if not os.path.isdir(folder):
+        raise ValueError(f'folder not found or not readable: {folder}')
+    return os.path.realpath(folder)
+
+
+def relocate_preview(user_id, bank_id, folder) -> dict:
+    """Dry-run a relocation: how much of THIS bank is in THAT folder?
+
+    Nothing is written. Every known relpath is looked up under the candidate
+    folder (one os.walk, matched case-insensitively through normcase — same
+    keying as refresh_bank, so a drive letter or a folder re-created in another
+    case still counts as the same tree). Returns {folder, total, found, missing,
+    missing_sample, extra, same_folder}; ValueError on an unknown bank/folder.
+
+    The point of the two numbers is that the user decides: a bank moved whole
+    reads 29 759 found / 0 missing, and a mistyped folder reads 0 / 29 759 — a
+    distinction the caller must never make silently on their behalf."""
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        raise ValueError('bank not found')
+    target = _relocate_target(folder)
+    known = {}
+    for (rel,) in db.session.query(BankImage.relpath).filter_by(bank_id=bank_id):
+        known.setdefault(os.path.normcase(rel), rel)
+    seen = set()
+    for root, _dirs, files in os.walk(target, onerror=lambda _e: None):
+        for f in files:
+            if f.lower().endswith(IMG_EXTS):
+                seen.add(os.path.normcase(
+                    os.path.relpath(os.path.join(root, f), target)))
+    hit = seen & set(known)
+    gone = sorted(known[k] for k in set(known) - hit)
+    return {
+        'folder': target,
+        'total': len(known),
+        'found': len(hit),
+        'missing': len(gone),
+        'missing_sample': gone[:_MISSING_SAMPLE],
+        'extra': len(seen - hit),
+        'same_folder': os.path.normcase(target) == os.path.normcase(
+            os.path.realpath(bank.source_path or '')),
+    }
+
+
+def relocate_bank(user_id, bank_id, folder, confirm=False) -> dict:
+    """Point a bank at a NEW folder, keeping every row and every analysis.
+
+    Moving a bank costs nothing by construction: BankImage.relpath is relative
+    to source_path, and scores / dhash / duplicate groups / face verdicts /
+    captions / keep-reject decisions all hang off the row id. So this only
+    rewrites ONE string — the danger is never the write, it is aiming it wrong.
+
+    Hence: no call applies anything without ``confirm``; a folder that holds
+    NONE of the bank's files is refused outright (that is a different folder,
+    not a moved one); and a partial match goes through but deletes nothing —
+    rows whose file did not come along keep their analysis and simply read as
+    missing in the folder-sync note. Returns the preview dict plus
+    {'applied', 'needs_confirm', 'overlaps'}."""
+    if bank_jobs.running(bank_id):
+        raise bank_jobs.BankJobBusy(bank_jobs.get(bank_id)['kind'])
+    out = relocate_preview(user_id, bank_id, folder)
+    out['needs_confirm'] = out['missing'] > 0
+    out['applied'] = False
+    if out['total'] and not out['found']:
+        raise BankRelocateMismatch(
+            'none of this bank\'s '
+            f"{out['total']} image(s) are in that folder — it does not look "
+            'like this bank. Pick the folder that CONTAINS the images '
+            '(the one you moved), not its parent.', out)
+    if not confirm:
+        return out
+    bank = get_bank(user_id, bank_id)
+    bank.source_path = out['folder']
+    db.session.commit()
+    _folder_sync.pop(bank_id, None)     # next walk must see the new folder
+    out['applied'] = True
+    out['overlaps'] = overlapping_banks(user_id, bank_id)
     return out
 
 
@@ -915,7 +1023,13 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     try:
         out['file_size'] = os.path.getsize(path)
     except OSError:
-        pass
+        # ABSENT ≠ CORRUPT. A file that is simply not there says nothing about
+        # the image — the folder moved, or its drive is unplugged. 'missing' is
+        # an in-memory signal for the job loop only (it is never written to
+        # quality_state, so the row stays unscanned and a later pass retries it).
+        if not os.path.exists(path):
+            out['quality_state'] = 'missing'
+            return out
     try:
         with Image.open(path) as im:
             out['width'], out['height'] = im.size
@@ -975,8 +1089,12 @@ def _scan_job(bank_id, rescan):
         thumbs = _thumbs_dir(bank_id)
         thumbs.mkdir(parents=True, exist_ok=True)
         src_root = bank.source_path
+        if items and not os.path.isdir(src_root or ''):
+            bank_jobs.fail(job, MOVED_FOLDER_MSG)
+            return
         workers = min(8, os.cpu_count() or 4)
         done = 0
+        missing = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
             it = iter(items)
             futures = deque()
@@ -990,6 +1108,21 @@ def _scan_job(bank_id, rescan):
                 submit_next()
             while futures:
                 res = futures.popleft().result()
+                if res['quality_state'] == 'missing':
+                    # Leave the row EXACTLY as it was (unscanned, undecided) and
+                    # count it. Grading an absent file would auto-reject it, and
+                    # a folder that moved makes every file absent at once — that
+                    # path silently rejects a whole bank, so it must not exist.
+                    missing += 1
+                    done += 1
+                    bank_jobs.bump(job)
+                    if missing >= _MISSING_ABORT_AT and missing * 2 >= done:
+                        db.session.commit()
+                        bank_jobs.fail(job, MOVED_FOLDER_MSG)
+                        return
+                    if not bank_jobs.cancelled(job):
+                        submit_next()
+                    continue
                 row = db.session.get(BankImage, res['id'])
                 if row is not None:
                     row.quality_state = res['quality_state']
@@ -1015,7 +1148,10 @@ def _scan_job(bank_id, rescan):
         if not bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail='grouping duplicates')
             groups = rebuild_dup_groups(bank_id)
-            bank_jobs.progress(job, detail=f'done — {groups} duplicate group(s)')
+            tail = (f' — {missing} file(s) were not on disk and were left '
+                    'untouched') if missing else ''
+            bank_jobs.progress(
+                job, detail=f'done — {groups} duplicate group(s){tail}')
     return run
 
 

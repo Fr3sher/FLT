@@ -52,7 +52,9 @@ export function folderSyncNote(sync) {
     return {
       tone: 'error',
       text: 'Source folder unavailable (moved, renamed or on a disconnected drive) — '
-        + 'the bank keeps every image and decision; reconnect it to refresh.',
+        + 'the bank keeps every image and decision; reconnect the drive, or point '
+        + 'the bank at the folder\'s new location.',
+      canRelocate: true,
     }
   }
   const missing = Number(sync.missing) || 0
@@ -60,7 +62,9 @@ export function folderSyncNote(sync) {
     return {
       tone: 'warn',
       text: `${missing} image(s) listed here are no longer in the folder — their rows `
-        + 'are kept (nothing is deleted for you) but they will fail to load.',
+        + 'are kept (nothing is deleted for you) but they will fail to load. If you '
+        + 'moved the folder, point the bank at its new location.',
+      canRelocate: true,
     }
   }
   return null

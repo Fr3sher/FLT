@@ -52,6 +52,18 @@ test('folderSyncNote: an unavailable folder says the bank is intact', () => {
   assert.match(n.text, /keeps every image and decision/);
 });
 
+test('folderSyncNote: both off-sync states offer to repoint the bank', () => {
+  // A folder that moved is the usual cause of BOTH shapes, and repointing is
+  // the fix — the note is where the user is already looking, so it carries the
+  // affordance instead of leaving them to hunt for it.
+  for (const sync of [{ ...clean, unavailable: true }, { ...clean, missing: 7 }]) {
+    const n = folderSyncNote(sync);
+    assert.equal(n.canRelocate, true);
+    assert.match(n.text, /new location/);
+  }
+  assert.equal(folderSyncNote(clean), null);
+});
+
 test('folderSyncNote: unavailable wins over a stale missing count', () => {
   assert.match(folderSyncNote({ ...clean, unavailable: true, missing: 900 }).text,
     /unavailable/);

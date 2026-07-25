@@ -8,6 +8,7 @@ import { hiddenCount, previewSlots } from '../components/bank/bankPreview'
 import { bankListSyncToast } from '../components/bank/bankSync'
 import { overlapNotice } from '../components/bank/bankOverlap'
 import FolderSyncNote from '../components/bank/FolderSyncNote'
+import RelocateBankDialog from '../components/bank/RelocateBankDialog'
 
 const CURRENT_KEY = 'bankCurrentId'
 
@@ -56,6 +57,7 @@ export default function BankPage() {
   const [name, setName] = useState('')
   const [folder, setFolder] = useState('')
   const [creating, setCreating] = useState(false)
+  const [relocating, setRelocating] = useState(null)   // the bank being repointed
 
   const refresh = useCallback(async () => {
     try {
@@ -158,20 +160,28 @@ export default function BankPage() {
           No bank yet — create one above to start triaging a folder.
         </p>
       ) : (
-        <ul className="grid gap-3 sm:grid-cols-2">
+        // grid-cols-1 (= minmax(0,1fr)), NOT the implicit auto column: an auto
+        // column is sized on max-content, so the unbreakable source PATH inside
+        // a card stretched it past the viewport and scrolled the whole page
+        // sideways on a phone — with `truncate` never getting a chance to fire.
+        <ul className="grid gap-3 grid-cols-1 sm:grid-cols-2">
           {banks.map((b) => (
             <li key={b.id}
-              className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-4">
-              <div className="flex items-center gap-2">
+              className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-surface p-4">
+              <div className="flex min-w-0 items-center gap-2">
                 <button type="button" onClick={() => open(b.id)}
-                  className="text-left text-base font-semibold text-content hover:underline">
+                  className="min-w-0 truncate text-left text-base font-semibold text-content hover:underline">
                   {b.name}
                 </button>
                 {b.activity && !b.activity.finished && (
                   <span className="text-xs text-amber-300">⏳ {b.activity.kind}…</span>
                 )}
+                <button type="button" onClick={() => setRelocating(b)}
+                  aria-label={`Move the folder of bank ${b.name}`}
+                  title="Moved this folder to another disk? Point the bank at its new location."
+                  className="ml-auto px-1.5 text-content-subtle hover:text-content">📦</button>
                 <button type="button" onClick={() => remove(b)} aria-label={`Remove bank ${b.name}`}
-                  className="ml-auto px-1.5 text-content-subtle hover:text-rose-300">✕</button>
+                  className="px-1.5 text-content-subtle hover:text-rose-300">✕</button>
               </div>
               <p className="truncate font-mono text-xs text-content-subtle" title={b.source_path}>
                 {b.source_path}
@@ -180,7 +190,8 @@ export default function BankPage() {
               <p className="text-xs text-content-muted">
                 {b.total} image(s) · {b.scanned} scanned · <span className="text-emerald-300">{b.keep} kept</span> · <span className="text-rose-300">{b.reject} rejected</span>
               </p>
-              <FolderSyncNote sync={b.folder_sync} />
+              <FolderSyncNote sync={b.folder_sync}
+                onRelocate={() => setRelocating(b)} />
               <button type="button" onClick={() => open(b.id)}
                 className="self-start rounded-md border border-border bg-surface-raised px-3 py-1 text-xs font-semibold text-content hover:bg-surface">
                 Open →
@@ -188,6 +199,12 @@ export default function BankPage() {
             </li>
           ))}
         </ul>
+      )}
+
+      {relocating && (
+        <RelocateBankDialog bankId={relocating.id} bankName={relocating.name}
+          sourcePath={relocating.source_path}
+          onClose={() => setRelocating(null)} onDone={refresh} />
       )}
     </div>
   )
