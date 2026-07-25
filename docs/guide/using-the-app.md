@@ -396,7 +396,10 @@ the warning shown once the app notices the folder is gone, if you moved first.
 Paste or browse to the new folder
 and press **🔍 Check this folder**. Nothing is written yet: the app walks the
 candidate folder and tells you how many of *this bank's* images are in there and
-how many are not.
+how many are not. Paste it however you like — Windows' *Copy as path* wraps the
+path in quotes, and a trailing `\` or forward slashes are equally fine; the field
+then shows the folder the app actually resolved, so what you confirm is what it
+will use.
 
 - **All of them found** → confirm, and the bank is repointed with every score
   and decision intact.

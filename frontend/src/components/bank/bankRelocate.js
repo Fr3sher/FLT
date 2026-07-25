@@ -20,6 +20,37 @@ export function canApplyRelocation(preview) {
   return total === 0 || found > 0
 }
 
+const sameText = (a, b) => String(a ?? '').trim().toLowerCase()
+  === String(b ?? '').trim().toLowerCase()
+
+/** Does this preview answer the folder the field is showing RIGHT NOW?
+ *
+ * `checkedFor` is the string that was actually sent to the server. That
+ * distinction is the whole fix: the answer comes back NORMALISED — unquoted,
+ * realpath()'d, junctions resolved, trailing separators gone — so it is never
+ * character-for-character what the user typed. Comparing the answer to the
+ * typed text therefore failed on the most ordinary gesture on Windows, "Copy
+ * as path", which quotes what it copies: the verdict block disappeared, Apply
+ * never enabled, and nothing on screen said why.
+ *
+ * Two ways to match, because after a successful check the field ADOPTS the
+ * resolved path (so the user sees the folder the app settled on): the string
+ * we sent, or the path we got back. Editing the field after a check matches
+ * neither, which is the guard this predicate is actually for. */
+export function relocationPreviewMatches(preview, folder, checkedFor) {
+  if (!preview) return false
+  const typed = String(folder ?? '').trim()
+  if (!typed) return false
+  return sameText(checkedFor, typed) || sameText(preview.folder, typed)
+}
+
+/** The one predicate behind the Apply button: a preview that is about the
+ * folder on screen AND holds enough of the bank to be worth applying. */
+export function relocationReady(preview, folder, checkedFor) {
+  return relocationPreviewMatches(preview, folder, checkedFor)
+    && canApplyRelocation(preview)
+}
+
 /** The verdict line under the folder field: what the dry run found, in words
  * that name the numbers. {tone, headline, detail} — tone drives the colour. */
 export function relocationSummary(preview) {

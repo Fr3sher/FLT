@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-move-folder-accepts-a-pasted-path',
+    date: '2026-07-26',
+    title: '📦 Move folder…: a pasted path is accepted the way you paste it',
+    blurb:
+      'Right-clicking a folder in Windows and choosing "Copy as path" wraps it in quotes — the most natural way there is to hand the app a folder. The Move folder… dialog checked it happily, then dropped the whole verdict off the screen and left "Repoint this bank" greyed out for good, with nothing said. It was comparing your text to the tidied-up path it had resolved, and those two are never identical. Quotes, a trailing backslash, forward slashes, a junction — all accepted now, and once the check has run the field shows the folder the app actually resolved, so the number you confirm belongs to the folder you can see.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-26-cloud-checkpoint-rescue-is-never-cut-short',
     date: '2026-07-26',
     title: '💾 A cloud checkpoint being brought home can no longer be lost on the way',

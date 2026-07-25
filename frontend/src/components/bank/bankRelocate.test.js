@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import {
   canApplyRelocation, relocationApplyLabel, relocationDoneText,
-  relocationSummary,
+  relocationPreviewMatches, relocationReady, relocationSummary,
 } from './bankRelocate.js';
 
 const preview = (over) => ({
@@ -51,6 +51,53 @@ test('re-picking the current folder is called out instead of looking like a move
 
 test('the apply label carries the number the user is agreeing to', () => {
   assert.match(relocationApplyLabel(preview({ found: 29759 })), /29,?759/);
+});
+
+// --- the preview must survive the server's normalisation -------------------
+// Windows' "Copy as path" puts QUOTES around what it copies, and pasting that
+// is the most natural gesture there is. The backend unquotes and realpath()s
+// it, so the answer never comes back character-for-character identical to what
+// was typed. Comparing the two used to make the verdict block vanish and the
+// Apply button dead — with nothing on screen saying why.
+
+test('a path pasted with quotes still unlocks Apply', () => {
+  const typed = '"D:\\Photos\\bank"';
+  const answer = preview({ folder: 'D:\\Photos\\bank' });
+  assert.equal(relocationPreviewMatches(answer, typed, typed), true);
+  assert.equal(relocationReady(answer, typed, typed), true);
+});
+
+test('a trailing separator or forward slashes do not kill the verdict', () => {
+  for (const typed of ['D:\\Photos\\bank\\', 'D:/Photos/bank', '  D:\\Photos\\bank  ']) {
+    assert.equal(relocationReady(preview({ folder: 'D:\\Photos\\bank' }),
+      typed, typed), true, typed);
+  }
+});
+
+test('the resolved path the field adopted matches on its own', () => {
+  // After a check the field shows the SERVER's path; checkedFor still holds the
+  // quoted original, so the resolved form has to match by itself.
+  assert.equal(relocationPreviewMatches(preview({ folder: 'D:\\Photos\\bank' }),
+    'D:\\Photos\\bank', '"D:\\Photos\\bank"'), true);
+});
+
+test('a folder edited after the check no longer counts as verified', () => {
+  const answer = preview({ folder: 'D:\\Photos\\bank' });
+  assert.equal(relocationPreviewMatches(answer, 'D:\\Photos\\other', '"D:\\Photos\\bank"'),
+    false);
+  assert.equal(relocationReady(answer, 'D:\\Photos\\other', '"D:\\Photos\\bank"'), false);
+});
+
+test('a matching preview that holds none of the bank stays unappliable', () => {
+  const answer = preview({ folder: 'D:\\Photos\\bank', found: 0, missing: 10 });
+  assert.equal(relocationPreviewMatches(answer, 'D:\\Photos\\bank', 'D:\\Photos\\bank'),
+    true);                                        // the verdict is still shown
+  assert.equal(relocationReady(answer, 'D:\\Photos\\bank', 'D:\\Photos\\bank'), false);
+});
+
+test('no preview and no folder are never ready', () => {
+  assert.equal(relocationReady(null, 'D:\\Photos\\bank', 'D:\\Photos\\bank'), false);
+  assert.equal(relocationReady(preview(), '   ', '   '), false);
 });
 
 test('the done toast reports what survived, and what is still absent', () => {

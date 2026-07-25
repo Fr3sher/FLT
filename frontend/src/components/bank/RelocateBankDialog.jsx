@@ -3,8 +3,8 @@ import { postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import FolderPickerField from '../common/FolderPicker'
 import {
-  canApplyRelocation, relocationApplyLabel, relocationDoneText,
-  relocationSummary,
+  relocationApplyLabel, relocationDoneText, relocationPreviewMatches,
+  relocationReady, relocationSummary,
 } from './bankRelocate'
 
 /** 📦 Move a bank's folder — repoint a bank at the folder's NEW location after
@@ -22,20 +22,32 @@ export default function RelocateBankDialog({ bankId, bankName, sourcePath, onClo
   const toast = useToast()
   const [folder, setFolder] = useState(sourcePath || '')
   const [preview, setPreview] = useState(null)
+  // The string actually SENT to the server, kept so the answer can be tied
+  // back to it — the answer itself comes back normalised (see
+  // relocationPreviewMatches).
+  const [checkedFor, setCheckedFor] = useState(null)
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
 
+  // The server resolved the path; show the user what it settled on rather than
+  // leaving their quoted paste in the field pretending nothing happened.
+  const adopt = (d) => { if (d?.folder) setFolder(d.folder) }
+
   const call = async (confirm) => {
-    if (busy || !folder.trim()) return null
+    const typed = folder.trim()
+    if (busy || !typed) return null
     setBusy(true)
     setError(null)
+    setCheckedFor(typed)
     try {
-      return await postJson(`/api/bank/${bankId}/relocate`, { folder, confirm })
+      return await postJson(`/api/bank/${bankId}/relocate`,
+        { folder: typed, confirm })
     } catch (e) {
       // A mismatch comes back as a 400 WITH the counts, so the same verdict
       // block explains it instead of a bare error line.
       if (e?.body && Number(e.body.total) >= 0 && e.body.found != null) {
         setPreview(e.body)
+        adopt(e.body)
       } else {
         setError(e?.message || 'Could not check that folder.')
         setPreview(null)
@@ -48,7 +60,7 @@ export default function RelocateBankDialog({ bankId, bankName, sourcePath, onClo
 
   const check = async () => {
     const d = await call(false)
-    if (d) setPreview(d)
+    if (d) { setPreview(d); adopt(d) }
   }
 
   const apply = async () => {
@@ -60,9 +72,8 @@ export default function RelocateBankDialog({ bankId, bankName, sourcePath, onClo
   }
 
   const summary = relocationSummary(preview)
-  const stale = preview && preview.folder
-    && preview.folder.toLowerCase() !== folder.trim().toLowerCase()
-  const ready = !!preview && !stale && canApplyRelocation(preview)
+  const current = relocationPreviewMatches(preview, folder, checkedFor)
+  const ready = relocationReady(preview, folder, checkedFor)
   const tone = {
     ok: 'border-emerald-500/50 bg-emerald-500/10 text-emerald-200',
     warn: 'border-amber-500/60 bg-amber-500/10 text-amber-200',
@@ -84,15 +95,16 @@ export default function RelocateBankDialog({ bankId, bankName, sourcePath, onClo
           <span className="font-mono text-content-muted break-all">{sourcePath}</span>
         </p>
         <FolderPickerField id={`relocate-folder-${bankId}`} label="New folder"
-          value={folder} onChange={(v) => { setFolder(v); setPreview(null) }}
-          hint="The folder that CONTAINS the images — the one you moved, not its parent." />
+          value={folder}
+          onChange={(v) => { setFolder(v); setPreview(null); setCheckedFor(null) }}
+          hint="The folder that CONTAINS the images — the one you moved, not its parent. Quotes around a pasted path are fine." />
 
         {error && (
           <p className="rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
             {error}
           </p>
         )}
-        {summary && !stale && (
+        {summary && current && (
           <div className={`rounded-md border px-3 py-2 text-sm space-y-1 ${tone}`}>
             <p className="font-semibold">{summary.headline}</p>
             <p className="opacity-90">{summary.detail}</p>
