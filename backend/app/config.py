@@ -51,7 +51,11 @@ DEFAULTS = {
                 # the DERIVED comfyui.skipped in capabilities.probe), so it can never
                 # mask a real error of a configured ComfyUI.
                 'setup_skipped': False},
-    'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct'},  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
+    'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct',  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
+               # How many vision calls a bank pass keeps in flight. 4 is the
+               # measured knee and matches Ollama's own default parallelism;
+               # see services/vision_pool.py for the numbers behind it.
+               'vision_concurrency': 4},
     'aitoolkit': {'dir': '', 'datasets_dir': '', 'output_dir': '', 'hf_home': '',
                   # Explicit interpreter for installs without venv/.venv
                   # (conda, uv, system python). Empty = auto-detect.

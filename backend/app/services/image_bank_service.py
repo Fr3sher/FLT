@@ -2345,6 +2345,7 @@ def _watermark_job(bank_id, rescan):
         import json as _json
         from .face_dataset_service import WATERMARK_BBOX_PROMPT, _parse_watermark_bbox
         from .vision_ollama import describe_image_ollama, unload_vision_model
+        from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -2354,55 +2355,70 @@ def _watermark_job(bank_id, rescan):
         if not rows:
             return
         detected = clean = errors = checked = unanswered = 0
+
+        def prepared():
+            """Yielded on the JOB's thread, one image per free slot in the pool.
+            Everything that reads the database or has a side effect lives here,
+            so it stays off the workers, keeps its original order, and is only
+            paid for by images the pass actually reaches (which matters: the
+            discard below is destructive)."""
+            for row in rows:
+                # Always detect on the SOURCE pixels: a re-scan of an already
+                # cleaned image drops its cleaned version first (otherwise we
+                # would be asking "is there a watermark?" about our own edit).
+                if row.watermark_clean_method:
+                    _discard_clean_blob(bank_id, row)
+                yield row, abs_image_path(bank, row)
+
+        def ask(item):
+            """WORKER thread: read the file, ask Ollama. Touches no session — the
+            path was resolved above, on the owning thread. Returns None (not '')
+            for a file that is gone, so the caller can tell "nothing to analyse"
+            from "the model answered nothing"."""
+            _row, path = item
+            if not path or not os.path.isfile(path):
+                return None
+            with open(path, 'rb') as fh:
+                return describe_image_ollama(
+                    fh.read(), WATERMARK_BBOX_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
-                for i, row in enumerate(rows, 1):
-                    if bank_jobs.cancelled(job):
-                        break
-                    # Always detect on the SOURCE pixels: a re-scan of an already
-                    # cleaned image drops its cleaned version first (otherwise we
-                    # would be asking "is there a watermark?" about our own edit).
-                    if row.watermark_clean_method:
-                        _discard_clean_blob(bank_id, row)
-                    path = abs_image_path(bank, row)
-                    if not path or not os.path.isfile(path):
-                        bank_jobs.bump(job)
-                        continue
-                    try:
-                        with open(path, 'rb') as fh:
-                            raw = describe_image_ollama(
-                                fh.read(), WATERMARK_BBOX_PROMPT, num_predict=400,
-                                prefer_json=True, fmt='json', keep_alive='5m')
-                    except Exception:  # noqa: BLE001 — one bad file never sinks the pass
+                # The calls overlap (see vision_pool); the loop body — every
+                # database write below — still runs here, on this one thread.
+                for (row, _path), raw, error in map_vision(
+                        prepared(), ask,
+                        should_cancel=lambda: bank_jobs.cancelled(job)):
+                    if error is not None:  # one bad file never sinks the pass
                         row.watermark_state = 'error'
                         errors += 1
-                        bank_jobs.bump(job)
-                        continue
+                    elif raw is None:      # file gone: leave the row as it was
+                        pass
                     # Empty output = Ollama unreachable, NOT "clean": leave the
                     # state untouched so a retry can finish it (same reasoning as
                     # the dataset detector), never falsely mark everything clean.
-                    if not (raw or '').strip():
+                    elif not raw.strip():
                         # COUNTED, not merely skipped: a pass where every image
                         # came back empty reported "done — 0 with a watermark,
                         # 0 clean", which reads as "looked at them all, found
                         # nothing" when in truth nothing could be looked at. The
                         # rows stay unscanned on purpose — the report must say so.
                         unanswered += 1
-                        bank_jobs.bump(job)
-                        continue
-                    bbox = _parse_watermark_bbox(raw)
-                    if bbox:
-                        row.watermark_state = 'detected'
-                        # Keep the box — the crop/inpaint levels route on it.
-                        row.watermark_bbox = _json.dumps([round(v, 4) for v in bbox])
-                        detected += 1
                     else:
-                        row.watermark_state = 'none'
-                        row.watermark_bbox = None
-                        clean += 1
-                    checked += 1
-                    if checked % 25 == 0:
-                        db.session.commit()
+                        bbox = _parse_watermark_bbox(raw)
+                        if bbox:
+                            row.watermark_state = 'detected'
+                            # Keep the box — the crop/inpaint levels route on it.
+                            row.watermark_bbox = _json.dumps([round(v, 4) for v in bbox])
+                            detected += 1
+                        else:
+                            row.watermark_state = 'none'
+                            row.watermark_bbox = None
+                            clean += 1
+                        checked += 1
+                        if checked % 25 == 0:
+                            db.session.commit()
                     bank_jobs.bump(job)
             finally:
                 db.session.commit()
@@ -2832,6 +2848,7 @@ def _framing_job(bank_id, rescan):
     def run(job):
         from .face_dataset_service import CLASSIFY_PROMPT, _parse_classify
         from .vision_ollama import describe_image_ollama, unload_vision_model
+        from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -2845,35 +2862,46 @@ def _framing_job(bank_id, rescan):
         if not rows:
             return
         classified = errors = 0
+
+        def prepared():
+            """Path resolution reads the row, so it belongs on the job's own
+            thread — pulled one image per free slot in the pool."""
+            for row in rows:
+                yield row, abs_image_path(bank, row)
+
+        def ask(item):
+            """WORKER thread: file + network only, no session. None means the
+            file is gone, as opposed to '' meaning the model said nothing."""
+            _row, path = item
+            if not path or not os.path.isfile(path):
+                return None
+            with open(path, 'rb') as fh:
+                return describe_image_ollama(
+                    fh.read(), CLASSIFY_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
-                for row in rows:
-                    if bank_jobs.cancelled(job):
-                        break
-                    path = abs_image_path(bank, row)
-                    if not path or not os.path.isfile(path):
-                        bank_jobs.bump(job)
-                        continue
-                    try:
-                        with open(path, 'rb') as fh:
-                            raw = describe_image_ollama(
-                                fh.read(), CLASSIFY_PROMPT, num_predict=400,
-                                prefer_json=True, fmt='json', keep_alive='5m')
-                    except Exception:  # noqa: BLE001 — one bad file never sinks the pass
+                # The calls overlap (see vision_pool); every write below still
+                # happens here, on this one thread.
+                for (row, _path), raw, error in map_vision(
+                        prepared(), ask,
+                        should_cancel=lambda: bank_jobs.cancelled(job)):
+                    if error is not None:  # one bad file never sinks the pass
                         errors += 1
-                        bank_jobs.bump(job)
-                        continue
+                    elif raw is None:      # file gone: leave the row as it was
+                        pass
                     # Empty output = Ollama unreachable, NOT "unknown": leave the
                     # framing NULL so a retry can finish it (same reasoning as the
                     # watermark/dataset classifier), never mislabel everything.
-                    if not (raw or '').strip():
-                        bank_jobs.bump(job)
-                        continue
-                    framing, _label = _parse_classify(raw)
-                    row.framing = framing            # face|bust|body|back|unknown
-                    classified += 1
-                    if classified % 25 == 0:
-                        db.session.commit()
+                    elif not raw.strip():
+                        pass
+                    else:
+                        framing, _label = _parse_classify(raw)
+                        row.framing = framing        # face|bust|body|back|unknown
+                        classified += 1
+                        if classified % 25 == 0:
+                            db.session.commit()
                     bank_jobs.bump(job)
             finally:
                 db.session.commit()

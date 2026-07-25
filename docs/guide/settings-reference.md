@@ -180,6 +180,8 @@ The card shows Ollama's live state and, when the binary is installed but the ser
 - **Ollama URL** → `ollama.url`. Where Ollama is listening. Default **`http://127.0.0.1:11434`**.
 - **Ollama vision model** → `ollama.vision_model`. The vision model used for auto-captioning, framing auto-classify, head-crop and watermark detection. Default **`huihui_ai/qwen3-vl-abliterated:8b-instruct`** — the **abliterated** (uncensored) build, so it captions adult datasets instead of refusing them. **Trap:** keep the **`-instruct`** tag. The plain `:8b` tag is the *Thinking* variant, which reasons out loud instead of captioning and produces garbage here.
 
+- **Images analysed at once** → `ollama.vision_concurrency`. How many images a bank pass sends to Ollama at the same time. Default **4**. The passes that read every image in a bank — watermark scan, framing, captions — spend most of each request waiting on the round-trip rather than on the GPU, so overlapping them roughly **halves** a long pass (measured 2.0× at 4). Going higher gains little: 6 and 8 buy single-digit percentages unless your Ollama is configured for more parallel requests (`OLLAMA_NUM_PARALLEL`), and they make **Stop** take a few seconds longer because it waits for the calls already in flight. Set it to **1** to get the old strictly-one-at-a-time behaviour back. Any value the app can't read falls back to 4, and anything above 16 is clamped — a bad value costs you speed, never the pass.
+
 **Test** checks end-to-end: that Ollama is reachable *and* the configured model is actually pulled.
 
 ### ai-toolkit
@@ -404,6 +406,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `comfyui.loras_dir` | Explicit override for ComfyUI's LoRA folder. |
 | `ollama.url` | Base URL of your Ollama instance (default `http://127.0.0.1:11434`). |
 | `ollama.vision_model` | Ollama vision model used for auto-classify and auto head-crop (default `huihui_ai/qwen3-vl-abliterated:8b-instruct`, the uncensored **abliterated** build — use the Instruct, not Thinking, variant). |
+| `ollama.vision_concurrency` | How many images a bank vision pass (watermark / framing / captions) sends to Ollama at once (default `4`, clamped to 1-16). Higher overlaps more waiting; `1` restores the old one-at-a-time behaviour. |
 | `aitoolkit.dir` | ai-toolkit install directory. |
 | `aitoolkit.datasets_dir` | Override for ai-toolkit's datasets folder (defaults to `<aitoolkit.dir>/datasets`). |
 | `aitoolkit.output_dir` | Override for ai-toolkit's output folder (defaults to `<aitoolkit.dir>/output`). |

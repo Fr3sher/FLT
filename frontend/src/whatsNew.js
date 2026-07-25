@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-bank-vision-passes-twice-as-fast',
+    date: '2026-07-25',
+    title: '⚡ The bank passes that took all night now take half of it',
+    blurb:
+      'Watermark scan, framing and captions ask the vision model about every single image in the bank, and they used to ask one image at a time — on a 30 000-image bank that is most of a night, and almost all of it was spent waiting on the round-trip rather than on your GPU. Those calls now overlap. Measured on the real thing, the same set of images finishes in half the time (2× faster), so a pass that ran from midnight to lunchtime lands before breakfast. Nothing about the results changes, Stop still stops within seconds, and everything already analysed when you stop stays analysed — a re-run picks up where it left off instead of starting over. You can tune it, or put it back to strictly one at a time, under Settings ▸ Local tools ▸ Ollama.',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-25-bank-move-folder',
     date: '2026-07-25',
     title: '📦 Move a bank to another disk without losing a single analysis',

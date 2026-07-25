@@ -4040,8 +4040,12 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
     extra_instructions : appended to the prompt (both engines), like the dataset options.
     should_cancel() : polled at each image boundary in the Ollama phase for a graceful
                       stop (JoyCaption runs as one batch and isn't interruptible mid-load,
-                      same as the dataset pass).
+                      same as the dataset pass). The Ollama phase overlaps several calls
+                      (see vision_pool), so a stop drains what is in flight — a couple of
+                      seconds — and every drained answer is still handed to on_caption.
     on_caption(path, caption) : fired as each caption lands, for incremental persistence.
+                      ALWAYS called on the caller's own thread, never on a worker, so it
+                      is free to use the database session.
     progress(done, total)     : progress callback (every handled image, captioned or not).
 
     Best-effort: a totally unavailable engine raises RuntimeError (so the caller can
@@ -4112,22 +4116,54 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             from .vision_ollama import describe_image_ollama, unload_vision_model
         except ImportError:
             raise RuntimeError('vision (Ollama) service not configured/available yet')
+        from .vision_pool import map_vision
+
+        def _describe(path, *, auto_start=False):
+            """One caption call. Runs on a WORKER thread under map_vision, so it
+            touches nothing but the file and the network."""
+            with open(path, 'rb') as fh:
+                return describe_image_ollama(
+                    fh.read(), cap_prompt, num_predict=2000, model=ollama_model,
+                    keep_alive=_VISION_BATCH_KEEPALIVE,
+                    auto_start_local=auto_start, timeout=(10, 300))
+
+        def _land(path, cap):
+            """Persist one answer. Always on the CALLING thread — `on_caption` is
+            what writes to the database, and that session isn't thread-safe."""
+            nonlocal done
+            cap = (cap or '').strip().strip('"').strip()
+            if cap:
+                _emit(path, _cap_caption(cap))
+            else:
+                done += 1  # handled-but-empty still advances the bar
+                if progress:
+                    progress(done, total)
+
         try:
-            for index, p in enumerate(remaining, 1):
-                if should_cancel and should_cancel():
-                    break  # graceful stop at an image boundary (see caption_images)
-                with open(p, 'rb') as fh:
-                    cap = describe_image_ollama(
-                        fh.read(), cap_prompt, num_predict=2000, model=ollama_model,
-                        keep_alive=_VISION_BATCH_KEEPALIVE,
-                        auto_start_local=(index == 1), timeout=(10, 300))
-                cap = (cap or '').strip().strip('"').strip()
-                if cap:
-                    _emit(p, _cap_caption(cap))
-                else:
-                    done += 1  # handled-but-empty still advances the bar
-                    if progress:
-                        progress(done, total)
+            # The first image runs ALONE, and is the only one allowed to start a
+            # stopped local Ollama: a cold server must be woken (and diagnosed)
+            # once, not by several callers racing into the same restart. It also
+            # warms the model, so the calls that follow overlap real inference
+            # instead of queueing behind a model load.
+            first, rest = remaining[0], remaining[1:]
+            if not (should_cancel and should_cancel()):
+                _land(first, _describe(first, auto_start=True))
+                # The rest overlap: most of a caption call is round-trip waiting,
+                # not GPU work (services/vision_pool.py has the measurements).
+                # should_cancel is still polled per image, so the graceful stop
+                # keeps its meaning — it just drains the calls in flight first.
+                for path, cap, error in map_vision(rest, _describe,
+                                                   should_cancel=should_cancel):
+                    if error is not None:
+                        # A file that vanished mid-pass, a permission error: one
+                        # image is skipped and counted, the batch goes on.
+                        logger.warning('caption_paths: %s skipped: %s',
+                                       os.path.basename(path), error)
+                        done += 1
+                        if progress:
+                            progress(done, total)
+                        continue
+                    _land(path, cap)
         except RuntimeError as e:
             # 'auto' tried JoyCaption first and it was unavailable, then Ollama failed too
             # — report BOTH so the caller isn't debugging blind (issue #6 reasoning).

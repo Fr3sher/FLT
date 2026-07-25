@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, TextField, TestResult, TestButton, SecretField } from './primitives'
+import { INPUT_CLASS, Card, TextField, TestResult, TestButton, SecretField } from './primitives'
 import { postJson } from '../../api/fetchClient'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
@@ -135,6 +135,30 @@ export default function LocalToolsSection(props) {
           </div>
           <TestButton target="ollama" beforeTest={() => saveConfigSection('ollama')}
             onResult={(r) => recordTestResult('ollama', r)} />
+        </div>
+        <div>
+          <label htmlFor="ollama-vision-concurrency" className="block text-sm font-medium text-content">
+            Images analysed at once
+          </label>
+          <select
+            id="ollama-vision-concurrency"
+            value={String(config.ollama.vision_concurrency ?? 4)}
+            onChange={(e) => setField('ollama', 'vision_concurrency', Number(e.target.value))}
+            className={INPUT_CLASS}
+          >
+            <option value="1">1 — one at a time (slowest, gentlest)</option>
+            <option value="2">2</option>
+            <option value="4">4 — recommended (about twice as fast)</option>
+            <option value="6">6</option>
+            <option value="8">8 — only if Ollama is set up for it</option>
+          </select>
+          <p className="mt-1 text-xs text-content-muted">
+            Bank passes that read every image — watermark scan, framing, captions — send
+            this many requests to Ollama at the same time. Most of each request is
+            waiting, not computing, so overlapping them roughly halves a long pass.
+            Raising it past 4 gains little unless your Ollama is configured for more
+            parallel requests, and it makes Stop take a few seconds longer.
+          </p>
         </div>
       </Card>
 
