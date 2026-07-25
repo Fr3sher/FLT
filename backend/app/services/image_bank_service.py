@@ -45,7 +45,7 @@ from sqlalchemy import and_, case, func, or_
 
 from .. import config as cfg
 from ..extensions import db
-from ..models import BankImage, FaceDataset, ImageBank
+from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
 from . import bank_jobs, trash
 from .face_dataset_service import _dhash, _hamming, import_images
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
@@ -369,7 +369,36 @@ def image_flags(row: BankImage, th: dict) -> list:
     return flags
 
 
-def _image_dict(row: BankImage, th: dict) -> dict:
+def _promoted_dataset_by_image(image_ids) -> dict:
+    """{bank_image_id: dataset_id} for the images a dataset REALLY holds right
+    now, read off the back-links. Only the ids of the page being rendered, so a
+    30 000-image bank still costs one small query. An image promoted into
+    several datasets reports the lowest id — the ⬆ badge only says THAT it
+    landed somewhere, and a stable pick keeps the grid from flickering."""
+    out: dict = {}
+    ids = [int(i) for i in image_ids]
+    for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+        rows = (db.session.query(FaceDatasetImage.bank_image_id,
+                                 func.min(FaceDatasetImage.dataset_id))
+                .filter(FaceDatasetImage.bank_image_id.in_(ids[i0:i0 + _SQL_IN_CHUNK]))
+                .group_by(FaceDatasetImage.bank_image_id).all())
+        out.update({bid: ds for bid, ds in rows})
+    return out
+
+
+def _page_images(rows, th: dict) -> list:
+    """One page of grid payloads, with the ⬆ promoted state resolved in a single
+    extra query for the whole page (never one per row)."""
+    promoted_by = _promoted_dataset_by_image([r.id for r in rows])
+    return [_image_dict(r, th, promoted_by) for r in rows]
+
+
+def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> dict:
+    # ⬆ promoted = the dataset that holds this image TODAY (back-link), falling
+    # back to the legacy one-way flag for promotions that predate it. Deriving it
+    # means the badge disappears when the user deletes the image in the dataset,
+    # instead of advertising a copy that is gone.
+    promoted = (promoted_by or {}).get(row.id, row.promoted_dataset_id)
     return {
         'id': row.id,
         'name': os.path.basename(row.relpath),
@@ -388,7 +417,7 @@ def _image_dict(row: BankImage, th: dict) -> dict:
         'face_state': row.face_state, 'face_cluster': row.face_cluster,
         'framing': row.framing,
         'status': row.status, 'reject_reason': row.reject_reason,
-        'promoted_dataset_id': row.promoted_dataset_id,
+        'promoted_dataset_id': promoted,
         'caption': row.caption,
     }
 
@@ -523,7 +552,14 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'pending': base.filter_by(status='pending').count(),
         'keep': base.filter_by(status='keep').count(),
         'reject': base.filter_by(status='reject').count(),
-        'promoted': base.filter(BankImage.promoted_dataset_id.isnot(None)).count(),
+        # Images a dataset REALLY holds today (back-link), plus the ones promoted
+        # before that link existed (legacy flag). Counting the flag alone kept
+        # advertising copies the user had since deleted.
+        'promoted': base.filter(or_(
+            BankImage.promoted_dataset_id.isnot(None),
+            BankImage.id.in_(db.session.query(FaceDatasetImage.bank_image_id)
+                             .filter(FaceDatasetImage.bank_image_id.isnot(None))),
+        )).count(),
         # V2 pass progress — how many images the scoring / watermark passes reached
         # (so the UI can show "scored 0/9000" and enable the threshold facets).
         'scored': base.filter(or_(BankImage.aesthetic_score.isnot(None),
@@ -661,8 +697,7 @@ def _promotable_counts(user_id, dataset_id) -> dict | None:
             .join(ImageBank, ImageBank.id == BankImage.bank_id)
             .filter(ImageBank.user_id == user_id,
                     BankImage.status == 'keep',
-                    or_(BankImage.promoted_dataset_id.is_(None),
-                        BankImage.promoted_dataset_id != dataset_id))
+                    _not_already_on(dataset_id))
             .group_by(BankImage.bank_id).all())
     return {bank_id: n for bank_id, n in rows}
 
@@ -727,8 +762,7 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         total = len(ordered_rows)
         off = max(0, int(offset))
         page = ordered_rows[off:off + max(1, min(500, int(limit)))]
-        return {'images': [_image_dict(r, th) for r in page], 'total': total,
-                'offset': off}
+        return {'images': _page_images(page, th), 'total': total, 'offset': off}
     q = BankImage.query.filter_by(bank_id=bank_id)
     if status in ('pending', 'keep', 'reject'):
         q = q.filter(BankImage.status == status)
@@ -820,7 +854,7 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
     order_by = order if isinstance(order, tuple) else (order,)
     rows = q.order_by(*order_by).offset(max(0, int(offset))) \
             .limit(max(1, min(500, int(limit)))).all()
-    return {'images': [_image_dict(r, th) for r in rows], 'total': total,
+    return {'images': _page_images(rows, th), 'total': total,
             'offset': max(0, int(offset))}
 
 
@@ -907,12 +941,26 @@ def start_scan(app, user_id, bank_id, rescan=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    q = BankImage.query.filter_by(bank_id=bank_id)
-    if not rescan:
-        q = q.filter(BankImage.quality_state.is_(None))
-    total = q.count()
+    total = _scan_pool(bank_id, rescan).count()
     return bank_jobs.start(app, bank_id, 'scan',
                            _scan_job(bank_id, rescan), total=total)
+
+
+def _scan_pool(bank_id, rescan):
+    """What the quality pass has to look at. Rejected images are OUT, like every
+    other pass: on a 30 000-image bank two thirds of a rescan went to shots the
+    user had already thrown away.
+
+    Skipping them cannot swallow a FIRST scan: an image is only rejected by hand
+    (after it was scanned) or by this very pass when it turns out unreadable, so
+    a never-scanned image is still pending here. Un-reject one and it comes back
+    into the pool on its own — that is why the filter is `!= reject` rather than
+    an explicit pending/keep list."""
+    q = (BankImage.query.filter_by(bank_id=bank_id)
+         .filter(BankImage.status != 'reject'))
+    if not rescan:
+        q = q.filter(BankImage.quality_state.is_(None))
+    return q
 
 
 def _scan_job(bank_id, rescan):
@@ -920,10 +968,8 @@ def _scan_job(bank_id, rescan):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        q = BankImage.query.filter_by(bank_id=bank_id)
-        if not rescan:
-            q = q.filter(BankImage.quality_state.is_(None))
-        items = [(r.id, r.relpath) for r in q.order_by(BankImage.id.asc()).all()]
+        items = [(r.id, r.relpath) for r in
+                 _scan_pool(bank_id, rescan).order_by(BankImage.id.asc()).all()]
         bank_jobs.progress(job, done=0, total=len(items), detail='quality scan')
         thumbs = _thumbs_dir(bank_id)
         thumbs.mkdir(parents=True, exist_ok=True)
@@ -1208,7 +1254,7 @@ def dup_groups_payload(user_id, bank_id, offset=0, limit=50,
                 .order_by(BankImage.id.asc()).all())
         groups.append({'group': gid,
                        'best_id': _best_of(rows).id if rows else None,
-                       'images': [_image_dict(r, th) for r in rows]})
+                       'images': _page_images(rows, th)})
     return {'groups': groups, 'total': total, 'offset': max(0, int(offset))}
 
 
@@ -1511,16 +1557,124 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
     return {'results': results, 'image_ids': [ids[k] for k in keep],
             'pool': len(ids), 'ref_id': int(ref_id)}
 def _trash_or_remove(path: str) -> str:
-    """Send a source file to the OS trash when send2trash is installed, else
-    hard-delete it. Returns the mode actually used ('trash' | 'delete'). The
-    import is optional so an install that predates the dependency still works
-    (degraded to a permanent delete) — the caller reports which happened."""
+    """Get a source file out of the user's folder, keeping it recoverable.
+
+    Order of preference: the OS trash (send2trash — real, familiar, restores in
+    place), then the app's own trash (a MOVE into data/trash, recoverable until
+    the user empties it from Settings). A permanent unlink is the last resort,
+    when neither can take the file. send2trash is an OPTIONAL dependency and is
+    absent from a default install, so the app trash is the branch most people
+    actually get — deleting thousands of a user's own photos with no way back
+    was never an acceptable default. Returns the mode used:
+    'trash' | 'app_trash' | 'delete'."""
     try:
         from send2trash import send2trash   # optional dependency
     except Exception:
+        pass
+    else:
+        send2trash(path)
+        return 'trash'
+    try:
+        trash.send_to_trash(path, context='bank-rejected')
+        return 'app_trash'
+    except OSError:
+        # Cross-device copy refused, locked file, unwritable trash… the file is
+        # still in the user's folder at this point, so a plain remove is the only
+        # way to honour the request. It raises on its own failure.
         os.remove(path)
         return 'delete'
-    send2trash(path)
+
+
+def _bank_folders(user_id, exclude_id=None) -> list:
+    """[(bank, normalised realpath)] for the user's banks with a usable folder."""
+    out = []
+    for b in ImageBank.query.filter_by(user_id=user_id).all():
+        if exclude_id is not None and b.id == exclude_id:
+            continue
+        if not b.source_path:
+            continue
+        try:
+            out.append((b, os.path.normcase(os.path.realpath(b.source_path))))
+        except (OSError, ValueError):
+            continue
+    return out
+
+
+def overlapping_banks(user_id, bank_id) -> list:
+    """The user's OTHER banks whose folder contains, or sits inside, this one's.
+
+    Two banks over nested folders see the same files, and a bank never owns its
+    source folder — so a delete run from one silently amputates the other. The
+    UI has to be able to say so BEFORE the click. Returns
+    [{'id', 'name', 'source_path', 'relation'}] with relation 'parent' (it
+    contains us) or 'child' (it sits inside us)."""
+    bank = get_bank(user_id, bank_id)
+    if not bank or not bank.source_path:
+        return []
+    try:
+        mine = os.path.normcase(os.path.realpath(bank.source_path))
+    except (OSError, ValueError):
+        return []
+    out = []
+    for other, theirs in _bank_folders(user_id, exclude_id=bank_id):
+        if theirs == mine:
+            relation = 'same'
+        elif mine.startswith(theirs + os.sep):
+            relation = 'parent'
+        elif theirs.startswith(mine + os.sep):
+            relation = 'child'
+        else:
+            continue
+        out.append({'id': other.id, 'name': other.name,
+                    'source_path': other.source_path, 'relation': relation})
+    return sorted(out, key=lambda o: o['id'])
+
+
+def rejected_delete_preview(user_id, bank_id) -> dict | None:
+    """What a 🗑 Delete rejected would actually destroy — the honest warning the
+    confirmation needs. Counts the rejected files of this bank that ANOTHER bank
+    also lists, per bank, by matching absolute paths against that bank's own
+    inventory. None when the bank is gone.
+
+    Returns {'rejected', 'mode', 'shared': [{'id','name','relation','files'}]}.
+    ``mode`` is where the files would go, resolved the same way the deletion
+    resolves it, so the dialog never promises the wrong thing."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    rows = BankImage.query.filter_by(bank_id=bank_id, status='reject').all()
+    mine = {}
+    for r in rows:
+        p = abs_image_path(bank, r)
+        if p:
+            mine[os.path.normcase(p)] = True
+    shared = []
+    for other in overlapping_banks(user_id, bank_id):
+        ob = db.session.get(ImageBank, other['id'])
+        if ob is None:
+            continue
+        n = 0
+        for (rel,) in db.session.query(BankImage.relpath).filter_by(bank_id=ob.id):
+            try:
+                full = os.path.normcase(os.path.realpath(
+                    os.path.join(os.path.realpath(ob.source_path), rel)))
+            except (OSError, ValueError):
+                continue
+            if full in mine:
+                n += 1
+        if n:
+            shared.append({'id': other['id'], 'name': other['name'],
+                           'relation': other['relation'], 'files': n})
+    return {'rejected': len(rows), 'mode': _delete_mode(), 'shared': shared}
+
+
+def _delete_mode() -> str:
+    """Where a deleted source file WOULD go, without deleting anything: mirrors
+    _trash_or_remove's preference order so the confirmation can say it."""
+    try:
+        import send2trash          # noqa: F401  (probe only)
+    except Exception:
+        return 'app_trash'
     return 'trash'
 
 
@@ -1528,17 +1682,22 @@ def delete_rejected(user_id, bank_id) -> dict:
     """Delete the SOURCE files of every status='reject' image from disk, then
     drop their bank_image rows.
 
-    This is the ONLY bank action that writes to the user's source folder. It is
-    destructive: with send2trash installed the files go to the OS trash (real,
-    OS-level recovery); without it they are permanently removed. Either way the
-    app's own trash cannot bring them back — these are files outside the app.
+    This is the ONLY bank action that writes to the user's source folder. Where
+    the files land is _trash_or_remove's decision (OS trash, else the app's own
+    trash, else a permanent unlink) and rides back in 'mode' — the confirmation
+    dialog says it BEFORE the click, via rejected_delete_preview().
+
+    ⚠️ A bank does not own its folder. When another bank sits over the same tree,
+    these files are ITS files too and it will find them gone; the preview names
+    those banks so the warning can.
 
     Non-rejected images are never touched. Per-file failures (permission, a path
     that escapes the bank folder) are collected and reported; they never abort
     the batch. A row is dropped only when its file is gone afterwards (deleted,
     trashed, or already absent) — a file we failed to remove keeps its row so the
     user can see and retry it. Returns
-    {'mode', 'deleted', 'trashed', 'already_absent', 'rows_removed', 'skipped'}.
+    {'mode', 'deleted', 'trashed', 'already_absent', 'rows_removed', 'skipped'}
+    where 'trashed' counts everything that stayed recoverable.
     """
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -1550,7 +1709,7 @@ def delete_rejected(user_id, bank_id) -> dict:
     out = {'mode': 'trash', 'deleted': 0, 'trashed': 0, 'already_absent': 0,
            'rows_removed': 0, 'skipped': []}
     remove_ids = []
-    saw_hard_delete = False
+    modes_used = set()
     for row in rows:
         path = abs_image_path(bank, row)
         if path is None:
@@ -1566,11 +1725,11 @@ def delete_rejected(user_id, bank_id) -> dict:
         except OSError as e:
             out['skipped'].append({'relpath': row.relpath, 'reason': str(e)})
             continue
-        if mode == 'trash':
-            out['trashed'] += 1
-        else:
+        modes_used.add(mode)
+        if mode == 'delete':
             out['deleted'] += 1
-            saw_hard_delete = True
+        else:
+            out['trashed'] += 1          # OS trash or app trash — recoverable
         remove_ids.append(row.id)
 
     for i0 in range(0, len(remove_ids), _SQL_IN_CHUNK):
@@ -1579,9 +1738,12 @@ def delete_rejected(user_id, bank_id) -> dict:
         ).delete(synchronize_session=False)
     out['rows_removed'] = len(remove_ids)
     db.session.commit()
-    # 'delete' means at least one file was permanently removed (send2trash absent
-    # or it refused a path); the UI wording follows this.
-    out['mode'] = 'delete' if saw_hard_delete else 'trash'
+    # Report the WORST outcome that happened: one permanently removed file makes
+    # the run 'delete', whatever the rest did. The UI wording follows this.
+    for mode in ('delete', 'app_trash', 'trash'):
+        if mode in modes_used:
+            out['mode'] = mode
+            break
     return out
 
 
@@ -3095,16 +3257,42 @@ def coverage(user_id, bank_id) -> dict | None:
 
 
 # --- promotion --------------------------------------------------------------
+def _promoted_here(dataset_id):
+    """The bank_image ids the dataset STILL holds — one row per promoted image,
+    written by the promotion itself (FaceDatasetImage.bank_image_id). Deleting
+    the image in the dataset deletes the row, so this shrinks on its own."""
+    return (db.session.query(FaceDatasetImage.bank_image_id)
+            .filter(FaceDatasetImage.dataset_id == dataset_id,
+                    FaceDatasetImage.bank_image_id.isnot(None)))
+
+
+def _not_already_on(dataset_id):
+    """The criterion 'this kept image is not already sitting on that dataset'.
+
+    Measured, not remembered: an image counts as already there only while the
+    dataset really holds a row pointing back at it. Delete that image in the
+    dataset and the bank offers it again — the old one-way promoted_dataset_id
+    flag never came back, so a bank could end up advertising nothing promotable
+    into a dataset it had no image left in, which reads as "the bank lost my
+    images".
+
+    promoted_dataset_id survives as the LEGACY answer, for images promoted
+    before the back-link existed: nothing writes it any more (a promotion clears
+    it as it records the link), so it can only ever describe a pre-upgrade
+    promotion, and it is dropped for good the next time that image is promoted.
+    """
+    return and_(BankImage.id.notin_(_promoted_here(dataset_id)),
+                or_(BankImage.promoted_dataset_id.is_(None),
+                    BankImage.promoted_dataset_id != dataset_id))
+
+
 def _promotable_query(bank_id, dataset_id):
-    """The KEPT images eligible to promote into ``dataset_id``: everything kept
-    that isn't ALREADY sitting on this exact target. promoted_dataset_id is a
-    scalar (it remembers only the LAST target), so the guard is per-target, not
-    a global 'promoted anywhere' lock — an image promoted to dataset A stays
+    """The KEPT images eligible to promote into ``dataset_id``. Per-target, not a
+    global 'promoted anywhere' lock — an image promoted to dataset A stays
     promotable to B. (The dataset-side perceptual dedup on import is the real
     guard against genuine duplicates.)"""
     return (BankImage.query.filter_by(bank_id=bank_id, status='keep')
-            .filter(or_(BankImage.promoted_dataset_id.is_(None),
-                        BankImage.promoted_dataset_id != dataset_id)))
+            .filter(_not_already_on(dataset_id)))
 
 
 def promotable_count(user_id, bank_id, dataset_id) -> int | None:
@@ -3278,14 +3466,27 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
                 except (OSError, TypeError):
                     failed += 1
             if blobs:
-                new_ids, bad = import_images(user_id, dataset_id, blobs,
-                                             dedupe=True, stats=stats, captions=caps)
+                new_ids, bad = import_images(
+                    user_id, dataset_id, blobs, dedupe=True, stats=stats,
+                    captions=caps, bank_image_ids=[r.id for r in chunk_rows])
                 imported += len(new_ids)
                 failed += bad
-                # 'Promoted' = handed to the dataset — a dedupe skip means the
-                # dataset already holds an equivalent, which counts as handled.
+                # The dataset row now carries the link back (import_images writes
+                # it, and hands it to the matched row when a dedupe skips the
+                # blob), so 'already promoted here' is a fact we can re-check.
+                # Clear the legacy one-way flag as we go: it would otherwise keep
+                # excluding this image from the target long after the user
+                # deleted it there.
+                #
+                # The exception is an image whose row in the dataset is already
+                # credited to ANOTHER bank (both banks hold the same photo). There
+                # is one column for one owner, so this bank gets no verifiable
+                # trace and keeps the old flag — the alternative is offering the
+                # image on every promotion, forever.
+                unlinked = set(stats.get('bank_unlinked') or ())
+                stats.pop('bank_unlinked', None)
                 for r in chunk_rows:
-                    r.promoted_dataset_id = dataset_id
+                    r.promoted_dataset_id = dataset_id if r.id in unlinked else None
                 db.session.commit()
             bank_jobs.bump(job, len(chunk))
         dups = stats.get('duplicates', 0)

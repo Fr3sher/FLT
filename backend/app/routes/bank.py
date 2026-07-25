@@ -51,7 +51,11 @@ def bank_create():
                                         data.get('folder'))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
-    return jsonify({'ok': True, 'id': bank.id, 'added': added})
+    # Nested folders mean two banks over the same files: harmless while triaging
+    # (statuses are per bank), but 🗑 Delete rejected in one amputates the other.
+    # Say it now, once, rather than at the destructive click only.
+    return jsonify({'ok': True, 'id': bank.id, 'added': added,
+                    'overlaps': banks.overlapping_banks(LOCAL_USER, bank.id)})
 
 
 @bp.post('/bank/from-dataset')
@@ -483,12 +487,23 @@ def bank_select_similar(bank_id):
     return jsonify({'ok': True, **out})
 
 
+@bp.get('/bank/<int:bank_id>/delete-rejected/preview')
+def bank_delete_rejected_preview(bank_id):
+    """What 🗑 Delete rejected would really do, for the confirmation dialog: how
+    many files, where they would go, and which OTHER banks share them (nested
+    source folders make one bank's cleanup another bank's amputation)."""
+    out = banks.rejected_delete_preview(LOCAL_USER, bank_id)
+    if out is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(out)
+
+
 @bp.post('/bank/<int:bank_id>/delete-rejected')
 def bank_delete_rejected(bank_id):
     """Destructive: delete the SOURCE files of every rejected image from disk
-    (OS trash when send2trash is present, hard delete otherwise) and drop their
+    (OS trash, else the app's own trash, else a permanent delete) and drop their
     rows. The ONLY bank action that writes to the source folder — the front-end
-    gates it behind a type-DELETE confirmation."""
+    gates it behind a type-DELETE confirmation fed by the preview above."""
     try:
         out = banks.delete_rejected(LOCAL_USER, bank_id)
     except ValueError:

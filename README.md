@@ -341,7 +341,7 @@ Point the **Bank** tab at a huge, messy folder (a Telegram export, a scrape pile
 
 **② Filter & find** — narrow the pile by **Status / Quality flags / Score / Groups / Resolution** with a live count, framing chips, and a **🔍 full-text search** that filters a 9,000-image dump by what's actually *in* each shot (from its caption).
 
-**③ Curate** — **Pick diverse** (spread across the pool), **Similar to selected** (find more like a good one), read **coverage advice**, and **Keep / Reject / Undecide** in bulk. **Delete rejected** is a real, irreversible filesystem `DELETE` — it's the one destructive action here and asks first.
+**③ Curate** — **Pick diverse** (spread across the pool), **Similar to selected** (find more like a good one), read **coverage advice**, and **Keep / Reject / Undecide** in bulk. **Delete rejected** really removes the files from your folder — the one destructive action here. It asks first, says where the files will go (your OS trash, else the app's own Trash), and warns you when another bank points at the same folder.
 
 **④ Promote** — **Promote all kept** into a target dataset (the counter is **per-target**, so "nothing to promote" means those images are undecided, not kept), and resolve **duplicate groups** as you go.
 

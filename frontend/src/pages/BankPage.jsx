@@ -6,6 +6,7 @@ import BankWorkspace from '../components/bank/BankWorkspace'
 import FolderPickerField from '../components/common/FolderPicker'
 import { hiddenCount, previewSlots } from '../components/bank/bankPreview'
 import { bankListSyncToast } from '../components/bank/bankSync'
+import { overlapNotice } from '../components/bank/bankOverlap'
 import FolderSyncNote from '../components/bank/FolderSyncNote'
 
 const CURRENT_KEY = 'bankCurrentId'
@@ -88,6 +89,10 @@ export default function BankPage() {
     try {
       const d = await postJson('/api/bank/create', { name, folder })
       toast.success(`Bank created — ${d.added} image(s) inventoried.`)
+      // Nested folders mean two banks over the same files. Harmless while
+      // triaging, destructive at 🗑 Delete rejected — said once, up front.
+      const overlap = overlapNotice(d.overlaps)
+      if (overlap) toast.warning(overlap, 12000)
       setName(''); setFolder('')
       open(d.id)
     } catch (err) {

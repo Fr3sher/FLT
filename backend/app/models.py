@@ -117,6 +117,14 @@ class FaceDatasetImage(db.Model):
     # both stay outside training until the user resolves the pair explicitly.
     parent_image_id = db.Column(Integer, nullable=True)
     derivation_kind = db.Column(String(32), nullable=True)
+    # The bank_image this row was promoted FROM (NULL for everything else). It is
+    # what makes "already promoted into this dataset" a fact we can re-check
+    # instead of a one-way flag: when the user deletes the image here, the row —
+    # and with it the link — disappears, so the bank offers the image again.
+    # Deliberately no ForeignKey, like parent_image_id: legacy databases cannot
+    # gain one, and a dangling id must read as "not promoted", never as a boot
+    # error. Additive column (migration in create_app).
+    bank_image_id = db.Column(Integer, nullable=True, index=True)
     # Ressemblance faciale vs la reference (face analyzer Lot A). face_score = cosinus
     # ArcFace brut (NULL si non note) ; face_state = scorable|no_face|low_det|too_small|
     # extreme_pose|unreadable|error. Score brut persiste -> seuils recalibrables cote UI.

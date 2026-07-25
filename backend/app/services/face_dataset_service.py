@@ -2789,7 +2789,7 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
 def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
-                  source_metadata=None, captions=None):
+                  source_metadata=None, captions=None, bank_image_ids=None):
     """Normalize (or head-crop) + persist + create import rows (status=keep).
     When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
     must then hold the GPU-exclusive window - and is by construction a face,
@@ -2811,6 +2811,15 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     captions here, so a promoted selection starts already captioned). Empty/None entries
     leave the row uncaptioned. A skipped duplicate simply drops its caption with it.
 
+    ``bank_image_ids`` is an optional list parallel to ``files_bytes`` — the
+    bank_image each blob came from, recorded on the new row. A blob dropped as a
+    perceptual DUPLICATE hands its bank id to the row it matched (when that row
+    carries none yet): the dataset does hold that bank image, just under another
+    row, and the bank's "already promoted here" answer must say so. That link is
+    what lets the bank re-offer an image once the user deletes it here. Bank ids
+    that could NOT be linked (the matched row already belongs to another bank —
+    a scalar column can only credit one) are listed in ``stats['bank_unlinked']``.
+
     Returns (ids, failed_count)."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
@@ -2819,9 +2828,14 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     # chemin « carré padé » ajoutait des bandes noires que le LoRA apprendrait, et
     # forçait tous les imports personnage en carré — un plan buste/corps importé
     # doit rester tel quel (ai-toolkit gère le bucketing multi-ratios).
-    seen = _existing_dhashes(dataset_id) if dedupe else None
+    seen = _existing_dhash_rows(dataset_id) if dedupe else None
     metadata_by_index = list(source_metadata) if source_metadata is not None else []
     captions_by_index = list(captions) if captions is not None else []
+    bank_ids_by_index = list(bank_image_ids) if bank_image_ids is not None else []
+
+    def bank_id_at(i):
+        return bank_ids_by_index[i] if i < len(bank_ids_by_index) else None
+
     ids = []
     failed = 0
     for index, raw in enumerate(files_bytes):
@@ -2844,6 +2858,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             failed += 1
             logger.warning(f"dataset import: image skipped (dataset {dataset_id}): {e}")
             continue
+        fp = None
         if dedupe:
             try:
                 with Image.open(io.BytesIO(webp)) as im:
@@ -2851,12 +2866,22 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             except (OSError, ValueError):
                 fp = None   # unreadable output would have failed above; belt & braces
             if fp is not None:
-                if any(_hamming(fp, s) <= SCRAPE_DHASH_MAX_DISTANCE for s in seen):
+                match = next((mid for h, mid in seen
+                              if _hamming(fp, h) <= SCRAPE_DHASH_MAX_DISTANCE), None)
+                if match is not None:
                     if stats is not None:
                         stats['duplicates'] = stats.get('duplicates', 0) + 1
+                    # The dataset already holds this image — hand the provenance to
+                    # the row that holds it, so the source can tell it landed. When
+                    # that row is already claimed (another bank supplied the same
+                    # photo first), report the id back: the caller has no verifiable
+                    # trace here and needs to fall back on its own bookkeeping.
+                    bid = bank_id_at(index)
+                    if bid and not _attach_bank_provenance(match, bid) \
+                            and stats is not None:
+                        stats.setdefault('bank_unlinked', []).append(bid)
                     logger.info(f"dataset import: perceptual duplicate skipped (dataset {dataset_id})")
                     continue
-                seen.append(fp)
         fn = f"{user_id}_dataset_{uuid.uuid4().hex[:8]}.webp"
         with open(os.path.join(_dataset_dir(dataset_id), fn), 'wb') as fh:
             fh.write(webp)
@@ -2865,11 +2890,14 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
         img = FaceDatasetImage(dataset_id=dataset_id, source='import', status='keep',
                                filename=fn, framing='face' if crop else None,
                                upscale_ratio=scale, caption=cap,
+                               bank_image_id=bank_id_at(index),
                                source_metadata=_source_metadata_storage(
                                    metadata_by_index[index]
                                    if index < len(metadata_by_index) else None))
         db.session.add(img)
         db.session.commit()
+        if dedupe and fp is not None:
+            seen.append((fp, img.id))
         ids.append(img.id)
     return ids, failed
 
@@ -3074,10 +3102,12 @@ def _hamming(a: int, b: int) -> int:
     return bin(a ^ b).count('1')
 
 
-def _existing_dhashes(dataset_id) -> list:
-    """dHashes des images déjà dans le dataset (keep/pending), recalculés à la
-    volée : resize 9×8 ≈ qq ms/image et un dataset plafonne à ~200 images —
-    pas de colonne/migration pour si peu."""
+def _existing_dhash_rows(dataset_id) -> list:
+    """[(dHash, image_id)] des images déjà dans le dataset (keep/pending),
+    recalculés à la volée : resize 9×8 ≈ qq ms/image et un dataset plafonne à
+    ~200 images — pas de colonne/migration pour si peu. L'id accompagne le hash
+    pour que l'appelant sache QUELLE image un doublon a rencontrée (l'import
+    depuis une bank y raccroche sa provenance)."""
     out = []
     rows = FaceDatasetImage.query.filter(
         FaceDatasetImage.dataset_id == dataset_id,
@@ -3087,10 +3117,31 @@ def _existing_dhashes(dataset_id) -> list:
             continue
         try:
             with Image.open(os.path.join(_dataset_dir(dataset_id), r.filename)) as im:
-                out.append(_dhash(im))
+                out.append((_dhash(im), r.id))
         except (OSError, ValueError):
             continue
     return out
+
+
+def _existing_dhashes(dataset_id) -> list:
+    """Les seuls dHashes (sans les ids) — voir _existing_dhash_rows."""
+    return [h for h, _id in _existing_dhash_rows(dataset_id)]
+
+
+def _attach_bank_provenance(image_id, bank_image_id) -> bool:
+    """Raccroche une image de dataset DÉJÀ présente à la bank_image dont elle est
+    le doublon perceptuel, et dit si le lien a été pris. N'écrase jamais une
+    provenance existante : la première bank qui a fourni l'image la garde (sinon
+    deux banks se voleraient le lien à chaque promotion croisée) — l'appelant
+    apprend alors que CETTE bank n'a pas de trace vérifiable ici."""
+    if not image_id or not bank_image_id:
+        return False
+    row = db.session.get(FaceDatasetImage, image_id)
+    if row is None or row.bank_image_id is not None:
+        return False
+    row.bank_image_id = bank_image_id
+    db.session.commit()
+    return True
 
 
 def _accept_scrape_bytes(raw, seen_hashes, skipped, rescue_small=False):

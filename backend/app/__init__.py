@@ -81,6 +81,10 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'watermark_bbox', 'TEXT'),
     ('face_dataset_image', 'watermark_regions', 'TEXT'),
     ('face_dataset_image', 'source_metadata', 'TEXT'),
+    # Back-link to the bank_image a promotion copied here. Existing rows keep
+    # NULL: a bank that was promoted before this column existed still relies on
+    # its own promoted_dataset_id pointer (see _promotable_query).
+    ('face_dataset_image', 'bank_image_id', 'INTEGER'),
     ('training_run_record', 'settings', 'TEXT'),
     ('training_run_record', 'parent_record_id', 'INTEGER'),
     ('training_run_record', 'resumed_from', 'INTEGER'),
