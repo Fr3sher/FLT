@@ -6,6 +6,7 @@ import DupGroupsPanel from './DupGroupsPanel'
 import PromoteDialog from './PromoteDialog'
 import DeleteRejectedDialog from './DeleteRejectedDialog'
 import LaunchAllDialog from './LaunchAllDialog'
+import ScoringPythonDialog from './ScoringPythonDialog'
 import PipelineReport from './PipelineReport'
 import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
@@ -314,7 +315,7 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
 
 export default function BankWorkspace({ bankId, onBack, onGone }) {
   const toast = useToast()
-  const { caps } = useCapabilities()
+  const { caps, loading: capsLoading, refresh: refreshCaps } = useCapabilities()
   const [payload, setPayload] = useState(null)
   const [filter, setFilter] = useState({ status: null, flag: null, cluster: null,
     style: null, subfolder: null, search: null, sort: 'default', resBucket: null,
@@ -327,6 +328,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [promoteOpen, setPromoteOpen] = useState(false)
   const [deleteRejectedOpen, setDeleteRejectedOpen] = useState(false)
   const [launchOpen, setLaunchOpen] = useState(false)
+  // ✨ Score's interpreter picker — reuse a CUDA Python this machine already has
+  // instead of downloading another torch. Opened from the CPU warning.
+  const [scoringPythonOpen, setScoringPythonOpen] = useState(false)
   const [dismissedReportAt, setDismissedReportAt] = useState(null)
   const [relocating, setRelocating] = useState(false)
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
@@ -819,6 +823,26 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             {scoreNote.text}
           </p>
         )}
+        {!capsLoading && !caps.bank_scoring && (
+          <p className="text-xs text-content-muted">
+            ✨ Score needs its own packages (Setup ▸ Quality tools) — or an interpreter
+            that already has them. If you train LoRAs or run ComfyUI, this machine
+            probably has one.
+          </p>
+        )}
+        {/* The interpreter picker, offered where it can actually help: the pass is
+            about to crawl on the CPU of a machine that HAS a card, or the scoring
+            packages are missing and another Python here may already carry them. On
+            a machine with no NVIDIA card the note is "this is how it is", and
+            sending the user hunting for interpreters would be a dead end. */}
+        {!capsLoading && (scoreNote?.tone === 'warn' || !caps.bank_scoring) && (
+          <div>
+            <button type="button" onClick={() => setScoringPythonOpen(true)}
+              className="rounded-md border border-amber-400/50 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10">
+              ⚡ Use a GPU Python I already have
+            </button>
+          </div>
+        )}
         {captionVocab === 'explicit' && !visionModelLooksUncensored && (
           <p className="text-xs text-amber-400/90">
             ⚠️ Explicit captions need an uncensored (abliterated) Ollama vision model
@@ -1279,6 +1303,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {launchOpen && (
         <LaunchAllDialog caps={caps} visionReady={visionReady}
           onClose={() => setLaunchOpen(false)} onLaunch={startPipeline} />
+      )}
+
+      {scoringPythonOpen && (
+        <ScoringPythonDialog onClose={() => setScoringPythonOpen(false)}
+          onChanged={async () => {
+            // The pass reads bank_scoring_gpu_available(); force both probes so
+            // the CPU warning and the "holds the GPU" tooltip agree at once.
+            await refreshCaps(true)
+            await refreshPayload()
+          }} />
       )}
 
       {review && (

@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-score-borrows-your-gpu-python',
+    date: '2026-07-25',
+    title: '⚡ ✨ Score can borrow the CUDA Python you already have',
+    blurb:
+      'Score ships CPU-only PyTorch on purpose — a first install stays small instead of pulling 2.5 GB on people with no card. On a machine that has one, that meant hours: nearly three of them on a 30 000-image bank. But if you train LoRAs or run ComfyUI, this machine already has a proven CUDA PyTorch sitting right there. Score can now use it — no download, no second install. Open a bank, and where the CPU warning appears click "Use a GPU Python I already have": the app checks the interpreters it knows about (ai-toolkit, ComfyUI, its own) and tells you, package by package, which ones can really run the pass. One that has CUDA but is missing OpenCLIP is refused by name rather than accepted and crashed an hour in — and nothing is ever installed into an environment the app did not create: it shows you the command and lets you decide. You can type a path of your own, re-check after installing something, and go back to the app default whenever you like.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-26-stop-training-button-says-what-it-does',
     date: '2026-07-26',
     title: '⏹ The button that stops your training now says so',

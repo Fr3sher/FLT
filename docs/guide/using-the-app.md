@@ -412,6 +412,50 @@ that is *broken*, so the pass stops and tells you the folder appears to have
 moved instead of marking thousands of images unusable.
 
 
+## Make Score use a GPU Python you already have
+
+The **✨ Score** pass (aesthetic · NSFW · style) runs in its own small Python
+environment, and that environment deliberately carries **CPU-only PyTorch**: a
+first install stays a few hundred megabytes instead of pulling ~2.5 GB of CUDA
+wheels onto machines that may have no card at all.
+
+On a machine that *does* have one, that default is expensive — CLIP measures
+about **336 ms per image on the CPU against ~15 ms on a recent card**, so a
+30 000-image bank is the difference between a coffee break and most of an
+afternoon. The bank says so: when Score is about to run on the CPU on a machine
+with an NVIDIA card, an amber note gives you the estimate and a button, **⚡ Use
+a GPU Python I already have**.
+
+That button is the point. If you train LoRAs or run ComfyUI, this machine
+*already* has a PyTorch with working CUDA. Score can simply borrow it — no
+download, no third environment to maintain.
+
+The dialog lists the interpreters the app knows about (the environment it built
+for scoring, ai-toolkit's, ComfyUI's, its own) and reports each one **package by
+package**:
+
+- **GPU ready** — everything the pass imports is there *and* PyTorch sees the
+  card. Pick it and the next Score run is minutes instead of hours.
+- **Missing packages** — the reason is named. The common one is an interpreter
+  with a perfect CUDA PyTorch but no **OpenCLIP**: Score needs `open_clip` and
+  `transformers`/`timm` too, so CUDA alone is not enough. Such an interpreter is
+  **refused**, on purpose — accepting it would trade slow-but-working scoring for
+  an import error an hour into the pass.
+- **CPU only** — it can run the pass, it just has no usable CUDA.
+- **No answer** — the path is not a working interpreter (moved venv, unplugged
+  drive). Nothing changes.
+
+**The app never installs anything into an environment it did not create.** Your
+ai-toolkit venv runs your training and ComfyUI's runs your generation; a silent
+`pip install` into either is not something a dataset tool gets to do. When a
+package is missing the dialog shows you the exact command and leaves the choice
+to you — run it in a terminal, then hit **↻ Check again** and the row updates.
+
+Not listed? Paste any python executable's path and press **Check it** — a conda
+env, a uv venv, anything. And **Back to the app default** puts it back exactly as
+it was; the choice is reversible at any time, and the note under the passes
+always says which interpreter is in use.
+
 ## Tips that save runs
 
 - Trust the composition meter over your instinct — a set that "looks varied"

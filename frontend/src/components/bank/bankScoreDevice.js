@@ -35,8 +35,11 @@ export function scoreDeviceNote(info, installed = true) {
   return {
     tone: 'warn',
     text: `✨ Score runs on the CPU — about 20× slower than your GPU.${cost} `
-      + `The scoring environment ships CPU-only PyTorch so a first install stays small; `
-      + `installing a CUDA build into it (${CUDA_TORCH_DOWNLOAD}) makes this pass minutes instead of hours.`,
+      + `The scoring environment ships CPU-only PyTorch so a first install stays small. `
+      + `If another Python on this machine already has a working CUDA PyTorch — the one `
+      + `that trains your LoRAs, the one ComfyUI runs on — Score can borrow it and this `
+      + `pass takes minutes instead of hours, with nothing to download. Failing that, a `
+      + `CUDA build (${CUDA_TORCH_DOWNLOAD}) into the scoring environment does the same job.`,
   }
 }
 
