@@ -10,6 +10,7 @@ one, and nothing is ever installed into an environment the app did not build.
 No real subprocess runs here: `scoring_python._run_probe` is the single seam.
 """
 import json
+import subprocess
 from unittest.mock import patch
 
 import pytest
@@ -98,7 +99,7 @@ def test_a_complete_but_cpu_only_interpreter_is_accepted_and_says_so(sp, app, tm
 
 def test_a_path_that_is_not_an_interpreter_degrades_instead_of_exploding(sp, app):
     from app import config as cfg
-    with app.app_context():
+    with app.app_context(), patch.object(sp, '_run_probe', lambda p: None):
         # _run_probe returns None for anything that doesn't answer (missing file,
         # broken venv, cold-import timeout) — never a raise.
         verdict = sp.describe('Z:/nope/python.exe', sp.probe('Z:/nope/python.exe'))
@@ -153,6 +154,161 @@ def test_reverting_to_the_app_default_clears_the_override(sp, app, tmp_path):
         assert cfg.get('bank_scoring.python') == str(good)
         assert sp.select('')['reverted'] is True
         assert (cfg.get('bank_scoring.python') or '') == ''
+
+
+# ── Machines that are NOT this one ───────────────────────────────────────────
+# The developer's box is a test case, not the target. These pin the states a
+# stranger's install lands in — the majority state (nothing configured) most of
+# all: it must be the best-handled one, not the least.
+
+def test_nothing_configured_at_all_is_a_usable_state_not_a_dead_end(sp, app, client):
+    """The default install: no ai-toolkit, no ComfyUI, nothing selected. The
+    panel must still answer, say what to do, and leave the pass on the CPU."""
+    from app import config as cfg
+    with app.app_context():
+        assert (cfg.get('bank_scoring.python') or '') == ''
+        assert (cfg.get('aitoolkit.dir') or '') == ''
+        assert (cfg.get('comfyui.base_dir') or '') == ''
+    with patch.object(sp, '_run_probe', lambda p: _facts(cuda=False, missing=('torch', 'open_clip'))):
+        res = client.get('/api/scoring-python')
+    assert res.status_code == 200
+    body = res.get_json()
+    rows = body['interpreters']
+    # Exactly one row — the app's own Python — and it is named, not blamed.
+    assert [r['source'] for r in rows] == ['app']
+    assert rows[0]['status'] == 'incomplete'
+    assert rows[0]['install_command'], 'the way forward is spelled out'
+    assert body['selected'] == '', 'nothing was silently selected'
+    assert body['default_python']
+
+
+def test_a_machine_with_no_nvidia_card_is_told_so_and_offered_no_cuda_fix(sp, app, client):
+    """No card, an AMD/Intel card, or no driver: three STATES, never errors.
+    gpu_vram_gb() answers None for all three and the payload must carry that so
+    the UI can drop every word about CUDA."""
+    from app import capabilities
+    with patch.object(capabilities, 'gpu_vram_gb', lambda: None), \
+         patch.object(sp, '_run_probe', lambda p: _facts(cuda=False)):
+        assert sp.nvidia_present() is False
+        res = client.get('/api/scoring-python')
+    assert res.status_code == 200
+    assert res.get_json()['nvidia_present'] is False
+    # …and the probe still works: a card-less machine can borrow the packages.
+    assert all(r['status'] == 'cpu_only' for r in res.get_json()['interpreters'])
+
+
+def test_a_probe_that_cannot_tell_whether_there_is_a_card_never_raises(sp, app):
+    from app import capabilities
+    with app.app_context(), patch.object(
+            capabilities, 'gpu_vram_gb', side_effect=OSError('nvidia-smi is gone')):
+        assert sp.nvidia_present() is False
+
+
+@pytest.mark.parametrize('name', [
+    'Program Files with spaces',       # the classic Windows install location
+    'énvironnement-accentué',          # non-ASCII, and it must survive round-trip
+    "it's mine",                       # an apostrophe in a folder name
+])
+def test_an_exotic_path_is_accepted_or_refused_for_an_exact_reason(sp, app, tmp_path, name):
+    """Spaces, accents, quotes, another drive: never a crash, always a verdict
+    naming the interpreter EXACTLY as the user gave it."""
+    env = tmp_path / name
+    env.mkdir()
+    exe = env / 'python.exe'
+    exe.write_text('')
+    with app.app_context(), \
+         patch.object(sp, '_run_probe', lambda p: _facts(cuda=True, missing=('open_clip',))):
+        verdict = sp.describe(str(exe), sp.probe(str(exe)))
+        assert verdict['status'] == 'incomplete'
+        assert verdict['path'] == str(exe), 'the path is echoed byte-for-byte'
+        # A path with a space is quoted in the copyable command, so pasting it works.
+        assert str(exe) in verdict['install_command'].replace('"', '')
+        if ' ' in str(exe):
+            assert f'"{exe}"' in verdict['install_command']
+
+
+def test_a_path_pasted_with_quotes_or_stray_whitespace_still_resolves(sp, tmp_path):
+    """"Copy as path" on Windows wraps the path in quotes; a terminal copy drags
+    a trailing space along. Neither is a different interpreter."""
+    exe = tmp_path / 'my env' / 'python.exe'
+    exe.parent.mkdir()
+    exe.write_text('')
+    for raw in (f'"{exe}"', f'  {exe}  ', f"'{exe}'", str(exe)):
+        assert sp.resolve_entered_path(raw) == [str(exe)]
+
+
+def test_an_environment_FOLDER_is_accepted_as_readily_as_an_interpreter(sp, tmp_path):
+    """People have "my conda env", not "my conda env's python.exe". Both must
+    lead to the same place, and the layout is TRIED, never assumed: a conda env
+    keeps python.exe at its root, a venv hides it under Scripts/ or bin/."""
+    venv = tmp_path / 'venv'
+    (venv / 'Scripts').mkdir(parents=True)
+    (venv / 'Scripts' / 'python.exe').write_text('')
+    assert sp.resolve_entered_path(str(venv)) == [str(venv / 'Scripts' / 'python.exe')]
+
+    posix = tmp_path / 'posixenv'
+    (posix / 'bin').mkdir(parents=True)
+    (posix / 'bin' / 'python').write_text('')
+    assert sp.resolve_entered_path(str(posix)) == [str(posix / 'bin' / 'python')]
+
+    conda = tmp_path / 'envs' / 'ml'
+    conda.mkdir(parents=True)
+    (conda / 'python.exe').write_text('')
+    assert sp.resolve_entered_path(str(conda)) == [str(conda / 'python.exe')]
+
+    # A folder holding no interpreter at all: no candidates, no crash.
+    assert sp.resolve_entered_path(str(tmp_path / 'empty')) == [str(tmp_path / 'empty')]
+    (tmp_path / 'empty').mkdir()
+    assert sp.resolve_entered_path(str(tmp_path / 'empty')) == []
+    assert sp.resolve_entered_path('') == []
+    assert sp.resolve_entered_path(None) == []
+
+
+def test_an_interpreter_is_never_rejected_on_its_FILENAME(sp, tmp_path):
+    """python3.11, a shim, a wrapper script — the name proves nothing. Only the
+    probe's answer decides."""
+    for name in ('python3.11', 'python', 'py', 'python3.11.exe', 'ml-python'):
+        exe = tmp_path / name
+        exe.write_text('')
+        assert sp.resolve_entered_path(str(exe)) == [str(exe)]
+
+
+def test_no_torch_or_cuda_VERSION_is_ever_required(sp, app, tmp_path):
+    """Demanding a torch/CUDA version would rule out perfectly working rigs — an
+    older card on cu118, a 50-series that only works on cu128, a nightly. The
+    contract is exactly what the script needs: the modules import and
+    torch.cuda.is_available() is true."""
+    exe = tmp_path / 'python'
+    exe.write_text('')
+    for version, cuda_build in (('1.13.1+cu117', '11.7'), ('2.9.1+cu128', '12.8'),
+                                ('2.10.0.dev20260101+cu130', '13.0'), (None, None)):
+        facts = _facts(cuda=True)
+        facts['torch_version'] = version
+        with app.app_context(), patch.object(sp, '_run_probe', lambda p, f=facts: f):
+            verdict = sp.describe(str(exe), sp.probe(str(exe), force=True))
+        assert verdict['status'] == 'gpu_ready', f'{version} must be usable'
+    # And the probe program asks nothing about versions beyond reporting them.
+    assert '__version__' in sp._PROBE_CODE
+    assert 'version_info' in sp._PROBE_CODE
+    for forbidden in ('>=', 'parse_version', 'LooseVersion', 'packaging'):
+        assert forbidden not in sp._PROBE_CODE, f'no version gate: {forbidden}'
+
+
+def test_an_install_that_works_today_keeps_working_untouched(sp, app):
+    """The update must change nothing for someone who never opens the picker:
+    the pass reads bank_scoring.python, it is still empty, and the fallback is
+    still the app's own interpreter. Detection is an OFFER, never a prerequisite."""
+    import sys
+    from app import capabilities, config as cfg
+    with app.app_context():
+        assert (cfg.get('bank_scoring.python') or '') == ''
+        seen = {}
+        with patch.object(capabilities, '_cached_import',
+                          lambda key, python, expr: seen.setdefault(key, python) and False):
+            capabilities.probe_bank_scoring()
+            capabilities.bank_scoring_gpu_available()
+        assert seen['bank_scoring'] == sys.executable
+        assert seen['bank_scoring_gpu'] == sys.executable
 
 
 # ── Candidates & caching ─────────────────────────────────────────────────────
@@ -246,18 +402,36 @@ def test_the_probe_program_reports_every_scoring_dependency(sp):
     assert 'cuda.is_available' in sp._PROBE_CODE
 
 
-def test_the_probe_program_runs_in_a_real_interpreter(sp):
-    """Executed for real, once, against THIS interpreter — a syntax error in the
-    generated program would otherwise read as 'every Python on your machine is
-    unreachable'. Asserts the SHAPE, never which packages happen to be here."""
-    import subprocess
-    import sys
-    proc = subprocess.run([sys.executable, '-c', sp._PROBE_CODE],
-                          capture_output=True, text=True, timeout=sp.PROBE_TIMEOUT)
-    assert proc.returncode == 0, proc.stderr
-    info = json.loads(proc.stdout.strip().splitlines()[-1])
+def test_the_probe_program_really_runs_and_emits_the_expected_shape(sp):
+    """The generated program is EXECUTED here — a syntax error in it would
+    otherwise read as 'every Python on your machine is unreachable' — but in
+    THIS process, with find_spec forced to miss, so it takes its no-torch branch.
+
+    No subprocess and no `import torch` anywhere in the suite: importing torch
+    for real would load the CUDA runtime (hundreds of MB per process, and this
+    machine is somebody's desktop)."""
+    import contextlib
+    import io as _io
+
+    buf = _io.StringIO()
+    with patch('importlib.util.find_spec', lambda name: None), \
+         contextlib.redirect_stdout(buf):
+        exec(compile(sp._PROBE_CODE, '<probe>', 'exec'), {'__name__': '__probe__'})
+    info = json.loads(buf.getvalue().strip().splitlines()[-1])
     assert set(info['modules']) == {d['module'] for d in sp.SCORING_DEPS}
-    assert isinstance(info['cuda'], bool)
+    assert info['modules'] == {d['module']: False for d in sp.SCORING_DEPS}
+    assert info['cuda'] is False and info['torch_version'] is None
+    assert info['python'].count('.') == 2
+
+
+def test_the_probe_never_raises_when_the_interpreter_cannot_even_start(sp):
+    """OSError (path is not executable, missing DLL, permission) and a timeout
+    are both UNKNOWN, not a crash — and neither reaches the request."""
+    for boom in (OSError('not executable'),
+                 subprocess.TimeoutExpired(cmd='python', timeout=1),
+                 ValueError('embedded null byte')):
+        with patch.object(sp.subprocess, 'run', side_effect=boom):
+            assert sp._run_probe('whatever') is None
 
 
 # ── Route contract ───────────────────────────────────────────────────────────

@@ -15,6 +15,8 @@ import BankWatermarkPanel from './BankWatermarkPanel'
 // Source-folder re-walk messages (pure/testable).
 import { folderSyncToast } from './bankSync.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
+// Wording that adapts to the machine (a card-less box is never sold CUDA).
+import { openerLabel } from './scoringPython.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it.
 import { VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
 // Ordered zone model + the "what's next" accent, both pure/testable.
@@ -668,6 +670,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // computes on the CPU, and the UI must say which of the two is happening.
   const scoreDevice = payload?.score_device
   const scoreNote = scoreDeviceNote(scoreDevice, Boolean(caps.bank_scoring))
+  // Does this machine have an NVIDIA card AT ALL? Reported by the same
+  // score_device probe, and only meaningful while the pass would run on the
+  // CPU (a GPU pass answers gpu:true and stops looking). Undefined until the
+  // payload lands — assume a card, so we never flash "no NVIDIA card" at
+  // someone who has one.
+  const scoreGpuPresent = scoreDevice ? scoreDevice.gpu || !!scoreDevice.gpu_present : true
   const watermarkScanned = counts?.watermark_scanned || 0
   // Score flags only make sense once their pass ran; watermark is its own pass.
   const availableScoreFlags = SCORE_REJECT_FLAGS.filter(
@@ -826,20 +834,25 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         {!capsLoading && !caps.bank_scoring && (
           <p className="text-xs text-content-muted">
             ✨ Score needs its own packages (Setup ▸ Quality tools) — or an interpreter
-            that already has them. If you train LoRAs or run ComfyUI, this machine
-            probably has one.
+            that already has them{scoreGpuPresent
+              ? '. If you train LoRAs or run ComfyUI, this machine probably has one.'
+              : ', which saves installing them twice.'}
           </p>
         )}
         {/* The interpreter picker, offered where it can actually help: the pass is
             about to crawl on the CPU of a machine that HAS a card, or the scoring
-            packages are missing and another Python here may already carry them. On
-            a machine with no NVIDIA card the note is "this is how it is", and
-            sending the user hunting for interpreters would be a dead end. */}
+            packages are missing and another Python here may already carry them
+            (true with or without a card — it saves an install either way). The
+            LABEL adapts: a machine with no NVIDIA card must never be promised "a
+            GPU Python", and the note it gets alongside is "this is how it is",
+            not a fix to chase. */}
         {!capsLoading && (scoreNote?.tone === 'warn' || !caps.bank_scoring) && (
           <div>
             <button type="button" onClick={() => setScoringPythonOpen(true)}
-              className="rounded-md border border-amber-400/50 px-2 py-1 text-xs font-medium text-amber-300 hover:bg-amber-500/10">
-              ⚡ Use a GPU Python I already have
+              className={`rounded-md border px-2 py-1 text-xs font-medium ${scoreGpuPresent
+                ? 'border-amber-400/50 text-amber-300 hover:bg-amber-500/10'
+                : 'border-border text-content-muted hover:bg-surface-raised hover:text-content'}`}>
+              {openerLabel(scoreGpuPresent)}
             </button>
           </div>
         )}

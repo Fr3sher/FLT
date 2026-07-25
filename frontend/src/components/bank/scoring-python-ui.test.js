@@ -12,6 +12,7 @@ import test from 'node:test';
 const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
 const dialog = fs.readFileSync(new URL('./ScoringPythonDialog.jsx', import.meta.url), 'utf8');
 const device = fs.readFileSync(new URL('./bankScoreDevice.js', import.meta.url), 'utf8');
+const logic = fs.readFileSync(new URL('./scoringPython.js', import.meta.url), 'utf8');
 
 test('the picker is reachable from BOTH dead ends: a CPU pass, and no extra at all', () => {
   assert.match(ws, /scoreNote\?\.tone === 'warn' \|\| !caps\.bank_scoring/);
@@ -20,15 +21,30 @@ test('the picker is reachable from BOTH dead ends: a CPU pass, and no extra at a
   // every open of a bank that is perfectly set up.
   assert.match(ws, /!capsLoading && \(scoreNote\?\.tone === 'warn'/);
   assert.match(ws, /const \{ caps, loading: capsLoading, refresh: refreshCaps \}/);
-  assert.match(ws, /Use a GPU Python I already have/);
+  assert.match(ws, /openerLabel\(scoreGpuPresent\)/);
   assert.match(ws, /<ScoringPythonDialog/);
 });
 
-test('a machine with no NVIDIA card is never sent hunting for interpreters', () => {
-  // scoreDeviceNote only returns tone 'warn' when gpu_present — the condition
-  // above therefore cannot fire on a card-less machine while the extra is set up.
+test('a machine with no NVIDIA card is never sold a CUDA fix', () => {
+  // scoreDeviceNote only returns tone 'warn' when gpu_present, so the amber
+  // "your GPU is idle" branch cannot fire on a card-less machine…
   assert.match(device, /if \(!info\.gpu_present\)/);
   assert.match(device, /tone: 'info'/);
+  // …and where the picker IS still offered (it saves a second install), both
+  // the button label and the dialog copy drop every mention of a GPU.
+  assert.match(ws, /const scoreGpuPresent = /);
+  assert.match(ws, /openerLabel\(scoreGpuPresent\)/);
+  assert.match(dialog, /dialogCopy\(nvidia\)/);
+  assert.match(dialog, /result\.nvidia_present !== false/);
+});
+
+test('a hand-typed path is a first-class route, not a fallback', () => {
+  // Most installs out there have neither ai-toolkit nor ComfyUI where we look.
+  // The field must be present, checkable on its own, and never gated on the
+  // automatic list having found something.
+  assert.match(dialog, /Enter the path to a python executable/);
+  assert.match(dialog, /load\(\{ force: true, path: typed\.trim\(\) \}\)/);
+  assert.doesNotMatch(dialog, /rows\.length\s*&&[\s\S]{0,200}scoring-python-path/);
 });
 
 test('changing the interpreter re-probes the capabilities, not just the payload', () => {
@@ -40,7 +56,8 @@ test('changing the interpreter re-probes the capabilities, not just the payload'
 });
 
 test('the dialog promises — and shows — that nothing is installed for the user', () => {
-  assert.match(dialog, /never changed/);
+  assert.match(logic, /never changed/);
+  assert.match(logic, /already carries them/);
   assert.match(dialog, /will not install into an environment we did not create/);
   assert.match(dialog, /install_command/);
 });

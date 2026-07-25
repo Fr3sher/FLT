@@ -4,7 +4,9 @@ import {
   bestUpgrade,
   canSelect,
   detectionSummary,
+  dialogCopy,
   missingLabels,
+  openerLabel,
   selectionNote,
   sortInterpreters,
   statusBadge,
@@ -72,6 +74,53 @@ test('an interpreter that did not answer is inert, never a crash', () => {
   assert.deepEqual(missingLabels(null), []);
   assert.equal(detectionSummary([]), 'No Python interpreters found to check yet.');
   assert.equal(detectionSummary(null), 'No Python interpreters found to check yet.');
+});
+
+// ── Four machines, four sentences ────────────────────────────────────────────
+// This app runs on installs we will never see. Each of them must get the line
+// that is true FOR IT — that is the whole feature. An opaque "no" is the
+// failure mode we are designing against.
+
+test('a machine with no NVIDIA card is never shown a word about CUDA', () => {
+  const rows = [row({ label: 'App Python', status: 'incomplete', cuda: false,
+    missingLabels: ['PyTorch', 'OpenCLIP'] })];
+  const summary = detectionSummary(rows, false);
+  assert.match(summary, /No NVIDIA card detected/);
+  assert.match(summary, /runs on the CPU either way/);
+  assert.ok(!/CUDA/i.test(summary), 'nothing to fix, so nothing is suggested');
+  const copy = dialogCopy(false);
+  assert.ok(!/CUDA/i.test(copy.title + copy.intro), 'no CUDA pitch to a card-less machine');
+  assert.ok(!/GPU/.test(openerLabel(false)), 'and no promise of a "GPU Python"');
+  // …but the offer itself survives: borrowing still saves a second install.
+  assert.match(copy.intro, /already carries them/);
+});
+
+test('a card-less machine that HAS a usable interpreter is told it can skip the install', () => {
+  const rows = [row({ label: 'ComfyUI', status: 'cpu_only', cuda: false })];
+  const summary = detectionSummary(rows, false);
+  assert.match(summary, /1 interpreter here already has the packages/);
+  assert.ok(!/faster|speed|hours/i.test(summary), 'never sold a speed-up it cannot have');
+});
+
+test('a machine with a card and nothing usable is told exactly what to do next', () => {
+  const rows = [row({ label: 'App Python', status: 'unreachable', cuda: false, usable: false })];
+  const summary = detectionSummary(rows, true);
+  assert.match(summary, /stays on the CPU/);
+  assert.match(summary, /enter its path below/, 'the manual route is offered, not hidden');
+});
+
+test('nothing found at all is a state, not an error', () => {
+  assert.equal(detectionSummary([], true), 'No Python interpreters found to check yet.');
+  assert.match(detectionSummary([], false), /No NVIDIA card detected/);
+  assert.equal(bestUpgrade([]), null);
+  assert.equal(sortInterpreters(undefined).length, 0);
+});
+
+test('the wording defaults to "there is a card" while the probe has not answered', () => {
+  // Flashing "no NVIDIA card" at someone who has one is the one wrong guess.
+  assert.match(detectionSummary([row()]), /can run/);
+  assert.match(dialogCopy().title, /GPU Python/);
+  assert.match(openerLabel(), /GPU Python/);
 });
 
 test('the panel names the interpreter in use, and stays quiet on the default', () => {

@@ -50,11 +50,33 @@ export function missingLabels(row) {
   return (row?.deps || []).filter((d) => !d.present).map((d) => d.label)
 }
 
-/** One honest line under the dialog title, from the whole detection result.
- *  Never promises: when nothing GPU-capable was found it says so plainly rather
- *  than inviting the user to keep hunting. */
-export function detectionSummary(rows) {
+/** One honest line under the dialog title. Every machine gets the sentence that
+ *  is TRUE FOR IT — that specificity is the whole feature; an opaque "no" is
+ *  what makes someone give up. The five situations, in the order they matter:
+ *
+ *    1. no NVIDIA card at all — there is nothing to fix and nothing to sell;
+ *       say so and stop. Never mention CUDA to a machine that has none.
+ *    2. nothing to check yet — the honest state of a fresh install.
+ *    3. one or more are ready — the good case, counted.
+ *    4. one reaches the GPU but lacks packages — name the interpreter AND the
+ *       packages, because that is the sentence someone can act on.
+ *    5. none reaches the GPU — plainly, without inviting a hunt.
+ *
+ *  `nvidiaPresent` defaults to true so a caller that hasn't loaded it yet gets
+ *  the old wording rather than wrongly telling someone they have no card. */
+export function detectionSummary(rows, nvidiaPresent = true) {
   const list = rows || []
+  const usable = list.filter((r) => r.usable)
+  if (!nvidiaPresent) {
+    // A card-less machine can still SKIP the install by borrowing an
+    // interpreter that already has the packages — worth offering, worth being
+    // honest that it changes nothing about speed.
+    const offer = usable.length
+      ? ` ${usable.length} interpreter${usable.length === 1 ? '' : 's'} here already `
+        + `${usable.length === 1 ? 'has' : 'have'} the packages, if you would rather not install them again.`
+      : ''
+    return `No NVIDIA card detected on this machine — ✨ Score runs on the CPU either way.${offer}`
+  }
   if (!list.length) return 'No Python interpreters found to check yet.'
   const ready = list.filter((r) => r.status === 'gpu_ready')
   if (ready.length) {
@@ -65,7 +87,37 @@ export function detectionSummary(rows) {
     const names = close.map((r) => `${r.label} (${missingLabels(r).join(', ')})`)
     return `None is ready yet. Reaches the GPU but needs packages: ${names.join('; ')}.`
   }
-  return 'None of these can reach the GPU — ✨ Score stays on the CPU.'
+  return 'None of these can reach the GPU — ✨ Score stays on the CPU. '
+    + 'If you have another Python with a CUDA PyTorch, enter its path below.'
+}
+
+/** Title + intro for the dialog, adapted to the machine. Same rule as above: a
+ *  machine with no NVIDIA card is never shown a CUDA pitch. */
+export function dialogCopy(nvidiaPresent = true) {
+  if (!nvidiaPresent) {
+    return {
+      title: '⚡ Run ✨ Score in a Python you already have',
+      intro: 'Score needs PyTorch, OpenCLIP and a couple of others. If another '
+        + 'Python on this machine already carries them, it can run the pass — no '
+        + 'second install. Nothing is ever installed into those environments: '
+        + 'they are checked, never changed.',
+    }
+  }
+  return {
+    title: '⚡ Run ✨ Score on a GPU Python you already have',
+    intro: 'If this machine already has a working CUDA PyTorch — the one that '
+      + 'trains your LoRAs, or the one ComfyUI runs on — Score can borrow it '
+      + 'instead of downloading another. Nothing is ever installed into those '
+      + 'environments: they are checked, never changed.',
+  }
+}
+
+/** The label of the button that opens the picker. A machine with no NVIDIA card
+ *  must not be offered "a GPU Python" — it would be a promise we cannot keep. */
+export function openerLabel(nvidiaPresent = true) {
+  return nvidiaPresent
+    ? '⚡ Use a GPU Python I already have'
+    : '⚡ Use a Python I already have'
 }
 
 /** What the Score panel says about the current interpreter, once one has been

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import {
-  canSelect, detectionSummary, missingLabels, sortInterpreters, statusBadge,
+  canSelect, detectionSummary, dialogCopy, missingLabels, sortInterpreters, statusBadge,
 } from './scoringPython.js'
 
 /** ⚡ Use a GPU Python you already have — the picker behind the "✨ Score runs on
@@ -88,21 +88,20 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
 
   const rows = sortInterpreters(result?.interpreters)
   const hasOverride = Boolean(result?.selected)
+  // Until the probe answers, assume a card: claiming "no NVIDIA card" on a
+  // machine that has one is the one wrong thing to flash.
+  const nvidia = result ? result.nvidia_present !== false : true
+  const copy = dialogCopy(nvidia)
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Choose the Python that runs Score"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 sm:p-4">
       <div className="w-full max-w-2xl max-h-[92vh] overflow-y-auto rounded-xl border border-border bg-surface-overlay p-4 shadow-2xl space-y-4 sm:p-5">
         <div>
-          <h2 className="text-base font-bold text-content">⚡ Run ✨ Score on a GPU Python you already have</h2>
-          <p className="mt-1 text-sm text-content-muted">
-            If this machine already has a working CUDA PyTorch — the one that trains
-            your LoRAs, or the one ComfyUI runs on — Score can borrow it instead of
-            downloading another. Nothing is ever installed into those environments:
-            they are checked, never changed.
-          </p>
+          <h2 className="text-base font-bold text-content">{copy.title}</h2>
+          <p className="mt-1 text-sm text-content-muted">{copy.intro}</p>
           {!loading && (
-            <p className="mt-2 text-xs text-content-subtle">{detectionSummary(rows)}</p>
+            <p className="mt-2 text-xs text-content-subtle">{detectionSummary(rows, nvidia)}</p>
           )}
         </div>
 

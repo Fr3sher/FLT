@@ -140,6 +140,80 @@ def _quote(p: str) -> str:
     return f'"{p}"' if ' ' in str(p) else str(p)
 
 
+# Where an interpreter sits INSIDE an environment folder. venv and conda do not
+# agree, and neither does a portable bundle, so all the shapes are tried and the
+# one that ANSWERS wins — we never decide from the folder's look. Ordered
+# cheapest-first; on a POSIX box the .exe entries simply never match.
+_INTERPRETER_SPOTS = (
+    ('Scripts', 'python.exe'),      # Windows venv / virtualenv
+    ('bin', 'python'),              # POSIX venv, and conda envs on Linux/macOS
+    ('bin', 'python3'),
+    ('python.exe',),                # conda env root, portable python_embeded
+    ('python',),
+)
+
+
+def _clean_path(raw: str) -> str:
+    """A path as a HUMAN gives it: pasted from a file manager (wrapped in
+    quotes), copied out of a terminal (trailing space), or dragged in. Only
+    transport noise is removed — the path itself, spaces, accents and all, is
+    left exactly as typed. Never resolves, never guesses."""
+    p = (raw or '').strip().strip('\r\n')
+    if len(p) >= 2 and p[0] == p[-1] and p[0] in '"\'':
+        p = p[1:-1].strip()
+    return p
+
+
+def interpreters_in(folder) -> list:
+    """Every path inside `folder` that COULD be an interpreter, in probe order.
+
+    Deliberately not a verdict: it only says where to knock. A venv, a conda
+    env, a portable bundle and a bare folder holding a python.exe all get their
+    shapes tried; whether any of them answers is the probe's business, not a
+    guess from the folder's name or contents. Empty list on anything unreadable
+    — a folder we cannot list is not an error, just no candidates."""
+    out = []
+    try:
+        root = Path(folder)
+        if not root.is_dir():
+            return []
+    except OSError:
+        return []
+    for spot in _INTERPRETER_SPOTS:
+        cand = root.joinpath(*spot)
+        try:
+            if cand.is_file():
+                out.append(str(cand))
+        except OSError:
+            continue
+    return out
+
+
+def resolve_entered_path(raw: str) -> list:
+    """What to probe for a path a user typed, best guess first.
+
+    Accepts BOTH an interpreter and an environment folder, because both are what
+    people have at hand: "C:\\miniconda3\\envs\\ml" and ".../envs/ml/python.exe"
+    must lead to the same place. A file is taken at its word (any name — `python`,
+    `python3.11`, `python.exe`, a shim); a folder is expanded to the shapes above.
+    Returns [] for a path that exists as neither, so the caller can say so
+    precisely instead of probing nothing and calling it a failure."""
+    p = _clean_path(raw)
+    if not p:
+        return []
+    try:
+        path = Path(p)
+        if path.is_file():
+            return [str(path)]
+        if path.is_dir():
+            return interpreters_in(path)
+    except OSError:
+        return []
+    # Doesn't exist (yet): hand it back anyway so the probe produces the honest
+    # "did not answer" verdict against the exact string the user typed.
+    return [p]
+
+
 def describe(python: str, info) -> dict:
     """Turn raw probe facts into the verdict the UI renders.
 
@@ -195,17 +269,20 @@ def describe(python: str, info) -> dict:
 
 
 def _comfyui_pythons() -> list:
-    """Interpreter paths a ComfyUI install may use: its own venv, or the portable
-    bundle's python_embeded (which sits NEXT TO the ComfyUI folder, not inside)."""
+    """Interpreter paths a ComfyUI install may use. ComfyUI is installed half a
+    dozen ways in the wild — a venv inside the folder, the portable bundle's
+    python_embeded (which sits NEXT TO the ComfyUI folder, not inside), a conda
+    env, the system Python. We look in the places tied to the folder we were
+    given and let the probe decide; a shape we don't know about is not excluded,
+    it just isn't guessed — the user can still enter it by hand."""
     base = (cfg.get('comfyui.base_dir') or '').strip()
     if not base:
         return []
     root = Path(base)
-    exe = 'Scripts/python.exe' if os.name == 'nt' else 'bin/python'
-    out = [root / 'venv' / exe, root / '.venv' / exe]
-    if os.name == 'nt':
-        out += [root / 'python_embeded' / 'python.exe',
-                root.parent / 'python_embeded' / 'python.exe']
+    out = []
+    for env_dir in (root / 'venv', root / '.venv',
+                    root / 'python_embeded', root.parent / 'python_embeded'):
+        out.extend(interpreters_in(env_dir))
     return out
 
 
@@ -271,9 +348,17 @@ def detect(force=False, extra_path='') -> dict:
     raises: a candidate that explodes degrades to 'unreachable'."""
     selected = (cfg.get('bank_scoring.python') or '').strip()
     entries = list(candidates())
-    typed = (extra_path or '').strip()
-    if typed and _norm(typed) not in {_norm(e['path']) for e in entries}:
-        entries.append({'path': typed, 'source': 'manual', 'label': 'The path you entered'})
+    known = {_norm(e['path']) for e in entries}
+    # A hand-typed path is a FIRST-CLASS route, not a fallback: most installs
+    # out there have neither ai-toolkit nor ComfyUI where we look (or at all),
+    # and for those users this field IS the feature. A folder is expanded to
+    # every interpreter shape it could hold, so "my conda env" works as well as
+    # "my conda env's python.exe".
+    for p in resolve_entered_path(extra_path):
+        if _norm(p) not in known:
+            known.add(_norm(p))
+            entries.append({'path': p, 'source': 'manual',
+                            'label': 'The path you entered'})
     # Probed in PARALLEL: each candidate costs a cold `import torch`, which is
     # seconds of native-DLL loading (and antivirus scanning) that spends its time
     # in a subprocess, not holding the GIL. Serially, four interpreters made the
@@ -297,8 +382,26 @@ def detect(force=False, extra_path='') -> dict:
         # No explicit selection = the pass runs in the app's own Python. Naming it
         # keeps "what am I on right now" answerable in both states.
         'default_python': sys.executable,
+        # Is there an NVIDIA card here AT ALL (nvidia-smi, cached ~10 min)? Drives
+        # the WORDING, never a refusal. A machine with no card — or an AMD/Intel
+        # one — has nothing to fix, and a screen talking to it about CUDA is pure
+        # noise. It can still borrow an interpreter that already has the
+        # packages; it just isn't sold a speed-up it cannot have.
+        'nvidia_present': nvidia_present(),
         'interpreters': out,
     }
+
+
+def nvidia_present() -> bool:
+    """True when this machine has an NVIDIA card we could ever use. False for no
+    GPU, an AMD/Intel GPU, or no driver — three situations that are STATES, not
+    errors. Never raises: gpu_vram_gb() returns None for 'unknown', which we
+    read as 'assume nothing to offer' rather than as a failure."""
+    from ..capabilities import gpu_vram_gb
+    try:
+        return gpu_vram_gb() is not None
+    except Exception:      # noqa: BLE001
+        return False
 
 
 class SelectionError(ValueError):

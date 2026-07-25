@@ -451,10 +451,29 @@ ai-toolkit venv runs your training and ComfyUI's runs your generation; a silent
 package is missing the dialog shows you the exact command and leaves the choice
 to you — run it in a terminal, then hit **↻ Check again** and the row updates.
 
-Not listed? Paste any python executable's path and press **Check it** — a conda
-env, a uv venv, anything. And **Back to the app default** puts it back exactly as
-it was; the choice is reversible at any time, and the note under the passes
-always says which interpreter is in use.
+**Not listed? That field is not a fallback.** Most machines have neither
+ai-toolkit nor ComfyUI where the app looks — or at all — so entering a path
+yourself is a first-class route, checked exactly the same way. Paste an
+interpreter *or* the environment folder that contains it: a venv, a conda or
+miniconda env, a uv venv, a portable bundle, the system Python, something on a
+second disk. Spaces, accents and quotes around the path are fine ("Copy as path"
+on Windows wraps it in quotes; that is handled). The layout is never assumed —
+the app knocks on the shapes an environment can have and keeps whichever one
+actually answers.
+
+No version of PyTorch or CUDA is required. The only question asked is the one
+that matters: do the packages import, and does PyTorch see a card. An old card
+on cu118, a 50-series that only works on cu128, a nightly build — all fine.
+
+**No NVIDIA card?** Then there is nothing to fix, and the app says so plainly
+instead of suggesting a CUDA install you could not use. Borrowing an interpreter
+is still offered, for one honest reason: if another Python here already has the
+packages, you can skip installing them a second time. It will not be faster.
+
+**Back to the app default** puts everything back exactly as it was. The choice is
+reversible at any time, and the note under the passes always says which
+interpreter is in use. If you never open this dialog, nothing changes: an install
+that works today keeps working, untouched.
 
 ## Tips that save runs
 
