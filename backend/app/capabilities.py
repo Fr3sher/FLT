@@ -417,6 +417,21 @@ def face_gpu_available() -> bool:
         "sys.exit(0 if 'CUDAExecutionProvider' in onnxruntime.get_available_providers() else 1)")
 
 
+def bank_scoring_gpu_available() -> bool:
+    """True only when the bank-scoring interpreter can actually run torch on
+    CUDA. The scoring child picks its own device (``cuda if
+    torch.cuda.is_available()``), and the PARENT has to know the same answer:
+    it decides whether to take the GPU-exclusive window, which unloads ComfyUI
+    and blocks a training start for the whole pass. The stock extra installs
+    CPU-only torch, so this is False until the user puts a CUDA build in that
+    interpreter — and a pass that never touches the GPU must never hold it.
+    Same cached subprocess probe as the import checks (exit 0 == available)."""
+    python = cfg.get('bank_scoring.python') or sys.executable
+    return _cached_import(
+        'bank_scoring_gpu', python,
+        'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)')
+
+
 def probe_masks() -> dict:
     python = cfg.get('masks.python') or sys.executable
     ok = _cached_import('masks', python, 'import rembg')

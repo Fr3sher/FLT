@@ -47,6 +47,38 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-bank-score-frees-the-gpu',
+    date: '2026-07-25',
+    title: '🖥️ ✨ Score no longer locks your GPU to compute on the CPU',
+    blurb:
+      'The scoring pass took the GPU-exclusive lock every time — unloading ComfyUI and blocking any training start for its whole run — even though it installs CPU-only PyTorch and was computing on the processor anyway. The worst of both worlds: the card idle and unusable, the pass slow regardless. It now takes that lock only when it really runs on the card, so a scoring pass on the CPU leaves you free to train or generate at the same time. It also finally tells you which of the two is happening, how long the images left would take, and — only if you actually have an NVIDIA card — what a CUDA install into the scoring environment would cost you in download size.',
+    to: '/bank',
+  },
+  {
+    id: '2026-07-25-bank-promote-is-rechecked',
+    date: '2026-07-25',
+    title: '🗃️ Delete a promoted image in a dataset and the bank offers it again',
+    blurb:
+      'Promoting marked a bank image as done and that was final: delete the copy in the dataset and the bank still refused to offer it, so a bank you had emptied into a dataset could end up announcing nothing left to import — as if it had lost your images. The bank now CHECKS instead of remembering. It reads whether the dataset really still holds each image, so deleting one there puts exactly that one back on offer, the ⬆ promoted badge disappears with the copy, and the counter matches what you can see. Nothing was ever deleted from your bank — but it looked like it, and that was our fault.',
+    to: '/bank',
+  },
+  {
+    id: '2026-07-25-bank-scan-skips-rejected',
+    date: '2026-07-25',
+    title: '⚡ The quality scan stops re-analysing images you already threw away',
+    blurb:
+      'Every other bank pass skipped rejected images; the quality scan did not. On a 30 000-image bank with two thirds rejected, running it again spent two thirds of its time on shots you had discarded. It now leaves them alone, so a rescan takes a fraction of the time and the progress bar counts only real work. Un-reject an image and it comes straight back into the pool — and a first scan still flags unreadable files exactly as before.',
+    to: '/bank',
+  },
+  {
+    id: '2026-07-25-bank-shared-folders-warning',
+    date: '2026-07-25',
+    title: '🛡️ Two banks over the same folder can no longer amputate each other',
+    blurb:
+      'Nothing stops a bank pointing at a folder that sits inside another bank\'s — and that is fine until 🗑 Delete rejected, the one action that removes real files: the other bank simply finds them gone, along with every decision you made on them. Creating such a bank now says so up front, and the delete confirmation names the other bank and how many of its files are about to disappear. It also tells you where the files GO before you click. And when the optional send2trash package is missing — which is most installs — deleted photos now land in the app\'s own Trash instead of being erased for good.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-25-shot-catalog-json',
     date: '2026-07-25',
     title: '📥 Bring your own shots — import a catalog written by an LLM',

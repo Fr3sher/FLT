@@ -12,6 +12,7 @@ import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
 // Source-folder re-walk messages (pure/testable).
 import { folderSyncToast } from './bankSync.js'
+import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it.
 import { VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
 // Ordered zone model + the "what's next" accent, both pure/testable.
@@ -657,6 +658,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const visionModel = caps.ollama?.vision_model || ''
   const visionModelLooksUncensored = /abliterat|uncensor|huihui|nsfw/i.test(visionModel)
   const scored = counts?.scored || 0
+  // What ✨ Score will really run on — the pass no longer holds the GPU when it
+  // computes on the CPU, and the UI must say which of the two is happening.
+  const scoreDevice = payload?.score_device
+  const scoreNote = scoreDeviceNote(scoreDevice, Boolean(caps.bank_scoring))
   const watermarkScanned = counts?.watermark_scanned || 0
   // Score flags only make sense once their pass ran; watermark is its own pass.
   const availableScoreFlags = SCORE_REJECT_FLAGS.filter(
@@ -755,7 +760,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </PassButton>
           <PassButton onClick={startScore} disabled={live || !caps.bank_scoring}
             title={caps.bank_scoring
-              ? 'Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". GPU when available; runs in the background.'
+              ? `Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". Runs in the background${
+                holdsTheGpu(scoreDevice) ? ', and holds the GPU (ComfyUI is unloaded and training cannot start) for its duration' : ' on the CPU, leaving the GPU free'}.`
               : 'Install the Bank scoring extra (Setup ▸ Quality tools) to score aesthetics / NSFW / style'}>
             ✨ Score{!caps.bank_scoring && ' (needs setup)'}
           </PassButton>
@@ -792,6 +798,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             "which level can run, and why not" logic stays unit-tested. */}
         <BankWatermarkPanel bankId={bankId} live={live}
           onChanged={async () => { await refreshPayload(); await refreshImages() }} />
+        {scoreNote && (
+          <p className={`text-xs ${scoreNote.tone === 'warn'
+            ? 'text-amber-400/90' : 'text-content-subtle'}`}>
+            {scoreNote.text}
+          </p>
+        )}
         {captionVocab === 'explicit' && !visionModelLooksUncensored && (
           <p className="text-xs text-amber-400/90">
             ⚠️ Explicit captions need an uncensored (abliterated) Ollama vision model

@@ -635,6 +635,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'style_clusters': style_clusters,
         'activity': bank_jobs.get(bank_id),
         'pipeline_report': _load_pipeline_report(bank),
+        'score_device': score_device_info(bank_id),
         'thresholds': th,
     }
 
@@ -2002,11 +2003,58 @@ def _gpu_busy_reason() -> str | None:
     return None
 
 
+def _resolve_score_device() -> tuple:
+    """(device, use_gpu) for the scoring pass — what the CHILD will actually do.
+
+    bank_score_infer.py picks `cuda if torch.cuda.is_available() else cpu` on its
+    own, so the parent asks the same interpreter the same question. It matters
+    beyond a label: use_gpu decides whether we take the GPU-exclusive window,
+    which unloads ComfyUI and blocks any training start for the whole pass. The
+    extra ships CPU-only torch, so the honest answer is usually 'cpu' — and an
+    hour of CPU work must not hold a GPU it never touches."""
+    from ..capabilities import bank_scoring_gpu_available
+    use_gpu = bank_scoring_gpu_available()
+    return ('cuda' if use_gpu else 'cpu'), use_gpu
+
+
+# CLIP ViT-L/14 measured at ~336 ms/image on CPU against ~15 ms on a recent
+# card. Used only to warn, never to refuse — a slow pass is still a pass.
+SCORE_CPU_MS_PER_IMAGE = 336
+
+
+def score_device_info(bank_id=None) -> dict:
+    """What ✨ Score will run on, and — when that is the CPU — how long the bank
+    would take and whether this machine even has a card to switch to.
+
+    The pass is not slow by accident: the scoring extra installs CPU-only torch
+    on purpose (Setup builds it a small venv rather than pushing a ~2.5 GB CUDA
+    download on people with no GPU). That is a defensible default, but it has to
+    be VISIBLE — an unexplained hour looks like a hang, and the user cannot fix
+    what nobody told them about."""
+    from ..capabilities import gpu_vram_gb
+    device, use_gpu = _resolve_score_device()
+    out = {'device': device, 'gpu': use_gpu, 'gpu_present': False,
+           'eta_minutes': None}
+    if use_gpu:
+        return out
+    out['gpu_present'] = gpu_vram_gb() is not None
+    if bank_id is not None:
+        pending = (BankImage.query.filter_by(bank_id=bank_id)
+                   .filter(BankImage.status != 'reject')
+                   .filter(BankImage.aesthetic_score.is_(None)).count())
+        # Rounded UP to a whole minute while there is anything left: "0 minutes"
+        # for work that is about to start reads as "instant" and is a lie.
+        out['eta_minutes'] = (max(1, round(pending * SCORE_CPU_MS_PER_IMAGE / 60000))
+                              if pending else None)
+    return out
+
+
 def start_score(app, user_id, bank_id):
     """Launch the scoring pass (LAION aesthetic + NSFW + style clustering) over
     the bank's non-rejected images. Needs the bank-scoring extra (Setup ▸ Quality
-    tools). Serialized against training/vision, so it refuses (503) when the GPU
-    is held."""
+    tools). Serialized against training/vision ONLY when it will really run on
+    the GPU: refusing a CPU pass because 'the GPU is busy' would block an hour of
+    work that never wanted the card."""
     from ..capabilities import probe_bank_scoring
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -2014,7 +2062,8 @@ def start_score(app, user_id, bank_id):
     if not probe_bank_scoring().get('ok'):
         raise RuntimeError('bank scoring is not installed '
                            '(Quality tools step in Setup)')
-    reason = _gpu_busy_reason()
+    _device, use_gpu = _resolve_score_device()
+    reason = _gpu_busy_reason() if use_gpu else None
     if reason:
         raise RuntimeError(reason)
     total = (BankImage.query.filter_by(bank_id=bank_id)
@@ -2026,6 +2075,8 @@ def _score_job(bank_id):
     def run(job):
         import json as _json
         import sys
+        from contextlib import nullcontext
+
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -2039,7 +2090,12 @@ def _score_job(bank_id):
             if p and os.path.isfile(p):
                 by_path[p] = r.id
         paths = list(by_path)
-        bank_jobs.progress(job, done=0, total=len(paths), detail='scoring pass')
+        device, use_gpu = _resolve_score_device()
+        # Say WHICH device, every time. On CPU this pass is ~20× slower (CLIP
+        # ViT-L is the whole cost), and a progress bar crawling for an hour with
+        # no explanation reads as a hang.
+        bank_jobs.progress(job, done=0, total=len(paths),
+                           detail=f'scoring pass ({device.upper()})')
         if not paths:
             return
         _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
@@ -2053,11 +2109,16 @@ def _score_job(bank_id):
             'style_threshold': th['style_threshold'],
         })
         python = cfg.get('bank_scoring.python') or sys.executable
-        # GPU-exclusive: frees ComfyUI VRAM and blocks a training start for the
-        # duration, exactly like the dataset vision passes.
+        # The GPU-exclusive window frees ComfyUI's VRAM and blocks any training
+        # start for the whole pass — so it is taken ONLY when the child really
+        # runs on the card, exactly like the face pass. Holding it through an
+        # hour of CPU inference was the worst of both worlds: the GPU idle and
+        # unusable, the work slow anyway.
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
+                  else nullcontext())
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _SCORE_SCRIPT, payload, cache_path, _SCORE_PROGRESS_RE,
-            gpu_exclusive_vision_window(flag_ttl=1800))
+            window)
         # Stopped by the user — say exactly what's kept, never a mute ✗ (the cached
         # scores/embeddings are safe; relaunching skips them and finishes the rest).
         if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
