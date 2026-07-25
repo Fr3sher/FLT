@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-cloud-checkpoint-rescue-is-never-cut-short',
+    date: '2026-07-26',
+    title: '💾 A cloud checkpoint being brought home can no longer be lost on the way',
+    blurb:
+      'The safety net that shuts down a silent cloud run had one blind spot, and it was the worst one possible: the very end, when the training has succeeded and the app is pulling the finished LoRA off the pod. Some hosts serve that file in fits and starts — a big checkpoint can take a long while — and for all that time the run reported nothing, so it looked exactly like a run that had died. The pod could be terminated with the result still on it: the work done, the money spent, and nothing to show for it. The transfer now reports itself. The run card says "Downloading" and shows the megabytes climbing, so you can see it is working rather than guess, and no watchdog treats a live transfer as silence — including after you press Stop, where rescuing the checkpoint is the whole point. A transfer that genuinely dies is still caught, just as before.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-26-continue-training-appears-and-resumes-the-final-save',
     date: '2026-07-26',
     title: '▶ Continue training: the dialog shows up, and the last checkpoint can be resumed',

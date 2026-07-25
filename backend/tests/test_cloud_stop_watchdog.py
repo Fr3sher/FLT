@@ -173,6 +173,113 @@ def test_supervisor_spares_a_legitimately_slow_phase(ct, app, monkeypatch):
         assert destroyed == []
 
 
+def test_the_final_checkpoint_download_is_never_judged_frozen(ct, app,
+                                                             monkeypatch,
+                                                             tmp_path):
+    """THE worst possible loss: the run SUCCEEDED, and the pod is destroyed
+    while we are pulling the checkpoint off it.
+
+    test_supervisor_spares_a_legitimately_slow_phase covers the status
+    'downloading' — but the row only reached that status AFTER the transfer
+    returned, so during the transfer itself the run was still 'training' and
+    judged on the 45-minute threshold with a frozen updated_at. This drives the
+    real call path instead of a hand-made row.
+    """
+    with app.app_context():
+        ct.cfg.save_config({'cloud': {'freeze_watchdog_minutes': 45}})
+        run = _mkrun(ct, status='training')
+        destroyed = _stub_destroy(ct, monkeypatch)
+        seen = {}
+        monkeypatch.setattr(ct, '_newest_remote_checkpoint',
+                            lambda remote, job_id: {'path': 'out/j1/j1.safetensors',
+                                                    'size': 88_000_000})
+
+        def slow_fetch(r, remote, ckpt, **kw):
+            # 50 minutes into a big transfer over a slow pod proxy: legitimate,
+            # and nothing has written to the row since it started.
+            r.updated_at = datetime.utcnow() - timedelta(minutes=50)
+            ct.db.session.commit()
+            seen['status'] = r.status
+            seen['acted'] = ct.supervise_active_runs()
+            dest = tmp_path / 'j1.safetensors'
+            dest.write_bytes(b'x')
+            return str(dest)
+
+        monkeypatch.setattr(ct, '_fetch_checkpoint', slow_fetch)
+
+        assert ct._try_download_checkpoint(run, object()) is True
+
+        assert seen['status'] == 'downloading'   # active, and a SILENT phase
+        assert seen['acted'] == []               # the supervisor left it alone
+        assert destroyed == []                   # the pod survived the rescue
+        ct.db.session.refresh(run)
+        assert run.checkpoint_local_path.endswith('j1.safetensors')
+
+
+def test_a_stop_is_not_deadlined_while_the_checkpoint_is_being_rescued(
+        ct, app, monkeypatch):
+    """A stop whose monitor is DOWNLOADING the result is not a wedged monitor:
+    it is doing the most valuable part of the stop. The deadline still applies
+    the moment it goes quiet (see the next test)."""
+    with app.app_context():
+        ct.cfg.save_config({'cloud': {'freeze_watchdog_minutes': 45}})
+        _mkrun(ct, status='downloading', updated_at=datetime.utcnow(),
+               stop_requested_at=datetime.utcnow() - timedelta(minutes=40))
+        destroyed = _stub_destroy(ct, monkeypatch)
+
+        assert ct.supervise_active_runs() == []
+        assert destroyed == []
+
+
+def test_a_download_that_goes_silent_is_still_deadlined(ct, app, monkeypatch):
+    """The exemption is narrow on purpose: a monitor that died mid-transfer
+    stops being spared one heartbeat later."""
+    with app.app_context():
+        ct.cfg.save_config({'cloud': {'freeze_watchdog_minutes': 45}})
+        run = _mkrun(ct, status='downloading',
+                     updated_at=datetime.utcnow() - timedelta(minutes=10),
+                     stop_requested_at=datetime.utcnow() - timedelta(minutes=40))
+        destroyed = _stub_destroy(ct, monkeypatch)
+
+        acted = ct.supervise_active_runs()
+
+        assert [a['reason'] for a in acted] == ['stop_deadline']
+        assert destroyed == ['90001']
+        ct.db.session.refresh(run)
+        assert run.status == 'stopped'
+
+
+def test_a_long_transfer_keeps_beating_the_progress_clock(ct, app, monkeypatch,
+                                                          tmp_path):
+    """The status flip alone buys a fixed floor; a transfer that reports its
+    progress cannot look like silence at all — and the user sees a figure move
+    instead of a frozen 'Downloading…'."""
+    with app.app_context():
+        run = _mkrun(ct, status='training')
+        monkeypatch.setattr(ct, '_newest_remote_checkpoint',
+                            lambda remote, job_id: {'path': 'out/j1/j1.safetensors',
+                                                    'size': 88_000_000})
+        beats = []
+
+        def fetch_with_progress(r, remote, ckpt, on_progress=None, **kw):
+            r.updated_at = datetime.utcnow() - timedelta(minutes=50)
+            ct.db.session.commit()
+            assert on_progress is not None, 'no progress callback was passed'
+            silent_since = r.updated_at
+            on_progress(44_000_000, 88_000_000)
+            beats.append((silent_since, r.updated_at, r.phase_detail))
+            dest = tmp_path / 'j1.safetensors'
+            dest.write_bytes(b'x')
+            return str(dest)
+
+        monkeypatch.setattr(ct, '_fetch_checkpoint', fetch_with_progress)
+        ct._try_download_checkpoint(run, object())
+
+        (before, after, detail) = beats[0]
+        assert (after - before).total_seconds() > 40 * 60   # the clock beat
+        assert 'MB' in (detail or '')
+
+
 def test_supervisor_spares_a_progressing_run(ct, app, monkeypatch):
     with app.app_context():
         ct.cfg.save_config({'cloud': {'freeze_watchdog_minutes': 45}})

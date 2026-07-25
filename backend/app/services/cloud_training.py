@@ -1438,7 +1438,9 @@ def supervise_active_runs() -> list:
     Three rules, all anchored on durable database state:
       * runtime cap  — the configured ceiling used to be a deadline computed
         inside the monitor itself, so the net died with what it protected;
-      * stop deadline — a stop handed to a monitor that never carries it out;
+      * stop deadline — a stop handed to a monitor that never carries it out
+        (a monitor still streaming the checkpoint down is exempt while it
+        keeps writing — see _rescuing_checkpoint);
       * freeze watchdog — no database progress for longer than the phase
         allows (see _freeze_limit_seconds).
     A margin is deliberately left on the first two so a HEALTHY monitor always
@@ -1462,7 +1464,8 @@ def supervise_active_runs() -> list:
                     continue
                 stop_age = ((now - run.stop_requested_at).total_seconds()
                             if run.stop_requested_at else 0)
-                if stop_age > STOP_DEADLINE_SECONDS:
+                if stop_age > STOP_DEADLINE_SECONDS \
+                        and not _rescuing_checkpoint(run, now):
                     res = _force_stop(
                         run, detail='Stopped by user — the run monitor never '
                                     'completed the stop, so the pod was '
@@ -1484,6 +1487,22 @@ def supervise_active_runs() -> list:
     except Exception:
         logger.exception('cloud supervisor tick failed')
     return acted
+
+
+def _rescuing_checkpoint(run, now=None) -> bool:
+    """Is this run, right now, pulling its checkpoint off the pod — and still
+    writing while it does?
+
+    The stop deadline exists for a monitor that WEDGED after being handed a
+    stop. A monitor that is downloading the result is the opposite: it is doing
+    the single most valuable part of the stop, and cutting it there throws away
+    a checkpoint the user already paid for. The exemption is deliberately
+    narrow — it needs the 'downloading' status AND a row written inside the
+    handoff window (the transfer heartbeats far more often than that), so a
+    monitor that dies mid-transfer stops being spared within a couple of
+    minutes and falls back to the freeze watchdog and the runtime cap."""
+    return (run.status == 'downloading'
+            and _idle_seconds(run, now) <= STOP_HANDOFF_SECONDS)
 
 
 def _freeze_limit_seconds(run, c=None) -> int:
@@ -2139,7 +2158,8 @@ def _newest_remote_checkpoint(remote, job_id):
     return sorted(files, key=lambda f: f['path'])[-1]
 
 
-def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3) -> str:
+def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
+                      on_progress=None) -> str:
     """Download the checkpoint entry ({'path','size'}) into staging and return
     the local path. Skips the transfer when this exact save is already local
     (the mid-run sync usually got there first). Two integrity layers:
@@ -2156,7 +2176,8 @@ def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3) -> str:
             and os.path.basename(run.checkpoint_local_path) == name:
         return dest
     remote.download_public_file(remote_path, dest, timeout=timeout,
-                                expected_size=ckpt.get('size'), attempts=attempts)
+                                expected_size=ckpt.get('size'), attempts=attempts,
+                                on_progress=on_progress)
     want = int(ckpt.get('size') or 0)
     got = os.path.getsize(dest)
     if want and got != want:
@@ -2220,6 +2241,42 @@ def _sync_latest_checkpoint(run, remote):
         logger.debug('mid-run checkpoint sync failed: %s', e)
 
 
+_DOWNLOAD_HEARTBEAT_SECONDS = 20
+
+
+def _transfer_size(got, want) -> str:
+    got_mb = (got or 0) / 1e6
+    return f'{got_mb:.0f} / {want / 1e6:.0f} MB' if want else f'{got_mb:.0f} MB'
+
+
+def _download_heartbeat(run, name):
+    """Progress callback for a long checkpoint transfer.
+
+    A transfer of tens of minutes must not LOOK like a dead monitor. Every
+    safety net in this module reads database progress and nothing else, so a
+    silent transfer is indistinguishable from a wedged thread — and the pod
+    would be terminated exactly while we are rescuing the thing the run was
+    for. Beating updated_at from inside the stream is what makes the two
+    distinguishable; the user gets a moving figure out of it too.
+
+    Throttled, and it never raises: a heartbeat that cannot write must not
+    sink a transfer that is otherwise working."""
+    state = {'ts': 0.0}
+
+    def beat(got, want):
+        now = _now()
+        if now - state['ts'] < _DOWNLOAD_HEARTBEAT_SECONDS:
+            return
+        state['ts'] = now
+        try:
+            _set(run, phase_detail=f'Downloading {name} — '
+                                   f'{_transfer_size(got, want)}'[:500])
+        except Exception:
+            logger.debug('download heartbeat could not write', exc_info=True)
+
+    return beat
+
+
 def _try_download_checkpoint(run, remote, allow_stale=False) -> bool:
     """Download the newest .safetensors into staging. False on failure.
     allow_stale (rescue paths — stop/stall/cap): when the pod can't serve the
@@ -2230,11 +2287,24 @@ def _try_download_checkpoint(run, remote, allow_stale=False) -> bool:
     try:
         ckpt = _newest_remote_checkpoint(remote, run.remote_job_id)
         if ckpt:
+            name = os.path.basename(ckpt['path'].replace('\\', '/'))
+            # The status flips BEFORE the transfer, not after it. This is the
+            # end of a run that WORKED, and the transfer can take tens of
+            # minutes on a pod proxy that cuts the stream every couple of MB.
+            # While it was still labelled 'training' the freeze watchdog judged
+            # it on the training threshold (45 min of database silence) with a
+            # frozen updated_at — it would have destroyed the pod mid-rescue,
+            # throwing away a checkpoint already paid for. 'downloading' is an
+            # ACTIVE state judged on the silent-phase floor, and the heartbeat
+            # below keeps even that from being needed.
+            _set(run, status='downloading',
+                 phase_detail=f'Downloading {name}…'[:500])
             # Large attempts budget: a sick-proxy host cutting the stream
             # every ~0.5-2 MB still delivers an 85 MB file via ~100 resumed
             # connections (validated live 2026-07-13, run #7's manual rescue).
-            dest = _fetch_checkpoint(run, remote, ckpt, attempts=400)
-            _set(run, status='downloading', checkpoint_local_path=dest,
+            dest = _fetch_checkpoint(run, remote, ckpt, attempts=400,
+                                     on_progress=_download_heartbeat(run, name))
+            _set(run, checkpoint_local_path=dest,
                  phase_detail=f'Downloaded {os.path.basename(dest)}')
             return True
     except Exception as e:
