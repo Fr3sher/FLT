@@ -101,6 +101,62 @@ Pick **Style** at creation. What changes:
 - **Step count switches to a sublinear √n scale** built for the large sets
   (hundreds of images) style LoRAs want.
 
+## Your own shot catalog (JSON import)
+
+The workspace ships a built-in shot catalog per subject type (53 shots for a
+human, ~59 for an animal, and so on). If you want shots nobody wrote for you —
+40 breed-specific poses for a dog, a product line's signature angles — you don't
+have to type them one at a time. Open **📥 Shot catalog (JSON)** under the shot
+grid.
+
+**Export first.** The exported file is the format, and the example an LLM needs:
+
+```json
+{
+  "format": "lds-shots/1",
+  "subject_type": "animal",
+  "shots": [
+    {
+      "label": "Dog, zoomies on the lawn",
+      "framing": "body",
+      "prompt": "full body photo of the animal running fast across a lawn, side view, sunny day"
+    }
+  ],
+  "examples": []
+}
+```
+
+Then ask a chat assistant for more shots *in that exact shape*, and import the
+file it gives you.
+
+Each shot needs three things:
+
+- **`label`** — a short name, max 80 characters, shown on the card. It must be
+  unique: not a built-in label (of *any* subject type), and not one of your
+  existing shots. The app refuses a collision and tells you which label is at
+  fault — two shots sharing a label would make it resolve the wrong prompt the
+  day you regenerate one.
+- **`framing`** — exactly one of `face`, `bust`, `body`, `back`. Anything else is
+  refused; it is never quietly remapped.
+- **`prompt`** — the text sent to the image engine, max 500 characters.
+
+`nsfw: true` is optional and only has an effect when Klein is the only engine
+checked. Everything under **`examples`** is ignored on import — that's how the
+export can show you samples without them coming back as duplicates. Any other
+field (including `aspect`) is ignored too, and the import summary says so: an
+imported shot uses its framing's default aspect ratio.
+
+**Nothing is written until you confirm.** The app reads the file, lists what
+would land and what it refuses (naming the entry and the reason), and waits. A
+40-shot file whose 37th entry is broken never leaves 36 shots half-imported.
+
+Imported shots appear in their own **📥 Imported** group after the built-ins, one
+set per subject type. They never replace a built-in, you can delete them one by
+one or all at once, and they're stored with the app — not in the browser — so
+they survive a cache wipe, show up on your phone and ride along in the backup.
+
+*Feature requested by ashish.sinha (Discord).*
+
 ## Back up everything
 
 The **💾 Back up everything** button on the Datasets library packs your whole
@@ -225,11 +281,19 @@ still covers person mix, style spread and resolution and hints to run framing.
 "your source folder is never modified" rule, and it's opt-in. Once you're happy
 with your triage, it removes every image you marked ✕ rejected from its source
 folder — the actual files, not just the status. It asks you to type **DELETE**
-first, and sends the files to your OS trash when [`send2trash`](https://pypi.org/project/Send2Trash/)
-is installed (a permanent delete otherwise). This is **irreversible** — the
-app's own trash can't recover these, they live outside the app. Kept and
-undecided images are never touched, and a file it can't remove (locked,
-read-only) is reported and left alone rather than aborting the batch.
+first, and tells you where the files will go before you confirm: your OS trash
+when [`send2trash`](https://pypi.org/project/Send2Trash/) is installed, the
+app's own Trash otherwise (recoverable until you empty it from Settings), and a
+permanent delete only when neither can take the file. Kept and undecided images
+are never touched, and a file it can't remove (locked, read-only) is reported
+and left alone rather than aborting the batch.
+
+⚠️ A bank doesn't own its folder, so two banks can point at nested folders and
+list the **same files**. That's harmless while you triage — decisions live on
+the bank — but deleting from disk in one bank removes those files from the other
+too, along with every decision you made on them there. The app says so when you
+create such a bank, and the confirmation names the other bank and how many of
+its files are about to disappear.
 
 **🚀 Launch all** does the whole funnel for you in one go. Tick which passes
 run and how auto-reject behaves, hit Go, and walk away — it chains *scan →

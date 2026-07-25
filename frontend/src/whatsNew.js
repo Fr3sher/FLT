@@ -47,6 +47,22 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-shot-catalog-json',
+    date: '2026-07-25',
+    title: '📥 Bring your own shots — import a catalog written by an LLM',
+    blurb:
+      'Typing 30-40 shot prompts by hand was the only way to go beyond the built-in catalog. Under the shot grid, 📥 Shot catalog (JSON) now exports the current catalog as a template, so you can ask a chat assistant for forty more shots in the same shape and import the file it writes. Bad files do not get through: an unknown framing, a missing prompt or a label that clashes with an existing shot is refused by name, and nothing at all is saved until you have seen the summary — a forty-shot file with one broken entry can never leave you with thirty-nine and a mystery. Imported shots live in their own group per subject type, never replace a built-in, can be removed one by one, and are stored with the app rather than in the browser, so they survive a cache wipe and follow you to your phone. Idea by ashish.sinha on Discord.',
+    to: '/datasets?section=add',
+  },
+  {
+    id: '2026-07-25-non-human-catalogs-deeper',
+    date: '2026-07-25',
+    title: '🐕 Animals, creatures and objects get a real shot catalog',
+    blurb:
+      'The non-human catalogs shipped as first drafts: 16 shots for an animal against 53 for a human, which is not enough to build a varied dataset. Animal now offers around 59 shots (head angles and expressions, light directions, poses from sleeping to jumping, snow, water, forest, city, plus coat, paw and tail details), Creature 40, Object 30 and Other 22. Their presets are curated instead of "select everything", so one click no longer queues — or bills — the whole catalog: each type has a balanced spread plus focused sets (head, full body, studio, in context).',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-25-training-failure-real-cause',
     date: '2026-07-25',
     title: '🔎 A failed run now tells you what actually killed it',

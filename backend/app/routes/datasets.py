@@ -25,7 +25,9 @@ from ..services.face_variations import (NSFW_VARIATION_CATALOG, VARIATION_CATALO
                                         is_nsfw_label, select_preset,
                                         normalize_subject_type, variation_catalog,
                                         nsfw_variation_catalog, presets_for,
-                                        preset_meta_for)
+                                        preset_meta_for, all_catalog_labels,
+                                        sanitize_custom_shots,
+                                        MAX_CUSTOM_SHOTS_PER_SUBJECT)
 from ..utils.comfyui import KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS, get_krea_loras
 from ._common import (_map_error, _require_comfyui, _studio_arch_mismatch_response,
                       _studio_missing_response)
@@ -176,6 +178,39 @@ def dataset_variations():
                     'presets': {n: [e['id'] for e in select_preset(n, st)] for n in presets_for(st)},
                     'preset_meta': preset_meta_for(st),
                     'subject_type': st})
+
+
+@bp.get('/dataset/shot-catalog')
+def dataset_shot_catalog():
+    """The user's imported shots for a subject type + the labels an import may NOT
+    re-use. `reserved_labels` is the union of EVERY catalog plus the legacy aliases,
+    not just this subject's: the by-label resolvers search that whole union, so a
+    label borrowed from another subject type would resolve to the wrong entry."""
+    st = normalize_subject_type(request.args.get('subject_type'))
+    shots = sanitize_custom_shots(cfg.get('custom_shots') or {})
+    return jsonify({'subject_type': st, 'shots': shots.get(st, []),
+                    'reserved_labels': all_catalog_labels(),
+                    'max_shots': MAX_CUSTOM_SHOTS_PER_SUBJECT})
+
+
+@bp.put('/dataset/shot-catalog')
+def dataset_shot_catalog_save():
+    """Replace the imported shots of ONE subject type. The whole list is sent, so a
+    removal is just a shorter list; the other subjects are untouched (config
+    _deep_merge replaces the list under this key only). Sanitized again here — the
+    client validates on import, but this endpoint is the one that writes."""
+    body = request.get_json(force=True, silent=True) or {}
+    st = normalize_subject_type(body.get('subject_type'))
+    shots = body.get('shots')
+    if not isinstance(shots, list):
+        return jsonify({'error': "'shots' must be a list"}), 400
+    if len(shots) > MAX_CUSTOM_SHOTS_PER_SUBJECT:
+        return jsonify({'error': f'too many shots (max {MAX_CUSTOM_SHOTS_PER_SUBJECT})'}), 400
+    kept = sanitize_custom_shots({st: shots}).get(st, [])
+    cfg.save_config({'custom_shots': {st: kept}})
+    # Report what actually landed: a shot dropped here (a label shadowing a
+    # built-in, a framing outside the enum) must not look like it was saved.
+    return jsonify({'subject_type': st, 'shots': kept, 'dropped': len(shots) - len(kept)})
 
 
 @bp.get('/dataset/list')

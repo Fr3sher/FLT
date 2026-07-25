@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Flux2KleinModelPicker from '../shared/Flux2KleinModelPicker';
 import { useToast } from '../common/Toast';
 import { useCapabilities } from '../../context/CapabilitiesContext';
-import { apiFetch } from '../../api/fetchClient';
+import { apiFetch, putJson } from '../../api/fetchClient';
 import ShotIllustration, { contextEmoji } from './ShotIllustration';
 import { displayLabel } from '../../utils/labels';
 import { kleinMissingLabels } from '../../hooks/useSetupSteps';
@@ -18,6 +18,9 @@ import {
   renameShotPreset,
   saveShotPreset,
 } from '../../utils/shotPresets';
+import {
+  applyShotImport, buildShotExport, parseShotImport, MAX_IMPORT_BYTES,
+} from '../../utils/shotImport';
 import {
   ENGINE_ACCENTS, ENGINE_LABELS, billingEngines, canonicalEngines, engineBatches,
   estimateCost, generateBlockedReason, kleinQueuesBehindApi, readEngines, readMode,
@@ -203,6 +206,146 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     setCustomShots((s) => s.filter((c) => c.id !== id));
     setSelected((s) => { const n = new Set(s); n.delete(id); return n; });
   };
+
+  // 📥 Imported shots (idea by ashish.sinha — Discord): a JSON catalog the user
+  // had an LLM write, rather than typing 40 shots by hand. These live SERVER-side
+  // (config `custom_shots`, per subject type), so they survive a browser wipe,
+  // show up on a phone as well as the desktop and ride along in the full backup —
+  // the ✨ cards above stay in localStorage, unchanged.
+  const [importedShots, setImportedShots] = useState([]);
+  // Every label the by-label resolvers already answer for (all catalogs + legacy
+  // aliases). An imported label that shadows one of these resolves to the WRONG
+  // entry on regenerate, so the importer refuses them — see shotImport.js.
+  const [reservedLabels, setReservedLabels] = useState([]);
+  const [importReview, setImportReview] = useState(null);   // {result, name} — nothing written yet
+  const [importBusy, setImportBusy] = useState(false);
+  const importFileRef = useRef(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    apiFetch(`/api/dataset/shot-catalog?subject_type=${encodeURIComponent(subject)}`)
+      .then((d) => {
+        if (cancelled) return;
+        setImportedShots(d.shots || []);
+        setReservedLabels(d.reserved_labels || []);
+      })
+      .catch(() => { /* no imported shots is a valid state — never block the panel */ });
+    return () => { cancelled = true; };
+  }, [subject]);
+
+  /** Persist the WHOLE list for this subject (a removal is just a shorter list).
+   *  The server re-validates and answers with what actually landed. */
+  const persistImported = async (shots) => {
+    const d = await putJson('/api/dataset/shot-catalog', { subject_type: subject, shots });
+    setImportedShots(d.shots || []);
+    return d;
+  };
+
+  const readImportFile = async (file) => {
+    if (!file) return;
+    setImportReview(null);
+    let text = '';
+    try { text = await file.text(); }
+    catch { toast.error('Could not read that file.'); return; }
+    const result = parseShotImport(text, {
+      subjectType: subject,
+      reservedLabels,
+      // A new label may not collide with the built-ins NOR with a shot the user
+      // already has — imported or hand-written.
+      existingLabels: [...importedShots, ...customShots].map((s) => s.label),
+      byteLength: file.size,
+    });
+    if (result.blocked) { toast.error(result.blocked.message); return; }
+    setImportReview({ result, name: file.name });
+  };
+
+  /** Second stage: the user has SEEN the summary and says go. Until this runs,
+   *  nothing has been written — a 40-shot file with a bad 37th entry can never
+   *  leave 36 shots half-imported. */
+  const confirmImport = async () => {
+    const { result } = importReview || {};
+    if (!result?.accepted.length) return;
+    setImportBusy(true);
+    try {
+      const d = await persistImported(applyShotImport(importedShots, result.accepted));
+      setImportReview(null);
+      toast.success(d.dropped
+        ? `${result.accepted.length - d.dropped} shots imported (${d.dropped} refused by the server)`
+        : `${result.accepted.length} shot${result.accepted.length === 1 ? '' : 's'} imported`);
+    } catch {
+      toast.error('Could not save the imported shots.');
+    } finally { setImportBusy(false); }
+  };
+
+  const removeImportedShot = async (shot) => {
+    setSelected((s) => { const n = new Set(s); n.delete(shot.id); return n; });
+    try { await persistImported(importedShots.filter((s) => s.id !== shot.id)); }
+    catch { toast.error('Could not remove that shot.'); }
+  };
+
+  const removeAllImported = async () => {
+    if (!window.confirm(`Remove all ${importedShots.length} imported shots for this subject type? The built-in shots are not affected.`)) return;
+    const ids = new Set(importedShots.map((s) => s.id));
+    setSelected((s) => new Set([...s].filter((id) => !ids.has(id))));
+    try { await persistImported([]); }
+    catch { toast.error('Could not clear the imported shots.'); }
+  };
+
+  /** The file the user hands to an LLM — and the backup of their own shots. */
+  const exportShotCatalog = () => {
+    const blob = new Blob([buildShotExport({
+      subjectType: subject, shots: [...importedShots, ...customShots], catalog,
+    })], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `lds-shots-${subject}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  // Shots the user owns, in ONE list: everything below (selection, the 🔞 purge,
+  // the Generate payload, the preset composition bars) treats them alike.
+  const userShots = useMemo(() => [...customShots, ...importedShots],
+    [customShots, importedShots]);
+
+  /** One user-shot card — selectable like a catalog card, plus the ✕ that only
+   *  user shots have. Shared by the ✨ Custom and 📥 Imported groups so they can
+   *  never drift apart. */
+  const renderUserShot = (c, onRemove, removeTitle) => {
+    const on = selected.has(c.id);
+    const done = doneByLabel.get(c.label) || 0;
+    const blocked = c.nsfw && !kleinOnly;   // 🔞 card while an API engine is in the run
+    const cls = on
+      ? 'bg-primary/20 border-primary/50 text-white ring-1 ring-primary/30'
+      : done > 0
+        ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100/90 hover:bg-emerald-500/15'
+        : 'border-border bg-app/40 text-content-muted hover:bg-surface-raised';
+    return (
+      <div key={c.id} className={`relative flex items-center gap-1.5 px-1.5 py-1 rounded-lg text-[0.625rem] border transition-colors ${cls} ${blocked ? 'opacity-40' : ''}`}>
+        <button type="button" onClick={() => !blocked && toggle(c.id)} aria-pressed={on}
+          disabled={blocked}
+          title={blocked ? '🔞 shot — check Klein alone to generate it' : c.prompt}
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left disabled:cursor-not-allowed">
+          <ShotIllustration framing={c.framing} label={c.label} className="w-7 h-7 shrink-0" />
+          {/* Wraps like a catalog card instead of truncating: an imported label is
+              a real name the user chose, and "Shiba, zo…" identifies nothing. */}
+          <span className="min-w-0 leading-tight break-words">{c.label}</span>
+          <span className="ml-auto shrink-0 flex items-center gap-1">
+            {done > 0 && <span className="text-emerald-300 font-semibold">✓×{done}</span>}
+            {on && <span className="text-indigo-300" aria-hidden="true">✓</span>}
+          </span>
+        </button>
+        <button type="button" onClick={onRemove}
+          aria-label={`${removeTitle} ${c.label}`} title={removeTitle}
+          className="shrink-0 w-4 h-4 grid place-items-center rounded bg-black/40 text-content-subtle hover:text-white text-[0.625rem] leading-none">
+          ✕
+        </button>
+      </div>
+    );
+  };
   // Identity LoRA strength (F1): higher = closer to the reference face,
   // lower = more variety in the generated variations.
   // dx8152 consistency LoRA: anchors STRUCTURE, its guide recommends ~0.5 and
@@ -359,12 +502,12 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   // catalog nsfw_ entries AND 🔞 custom cards alike.
   useEffect(() => {
     if (kleinOnly) return;
-    const hotCustom = new Set(customShots.filter((c) => c.nsfw).map((c) => c.id));
+    const hotCustom = new Set(userShots.filter((c) => c.nsfw).map((c) => c.id));
     setSelected((s) => {
       const n = new Set([...s].filter((id) => !id.startsWith('nsfw_') && !hotCustom.has(id)));
       return n.size === s.size ? s : n;
     });
-  }, [kleinOnly, customShots]);
+  }, [kleinOnly, userShots]);
 
   // "Already in the dataset" per variation label: live images (kept, pending or
   // still generating — not failed/rejected) → the green ✓×N state on the cards.
@@ -403,7 +546,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
 
   const customPresetStats = useMemo(() => {
     const framingById = new Map([
-      ...catalog, ...nsfwCatalog, ...customShots,
+      ...catalog, ...nsfwCatalog, ...userShots,
       ...customPresets.flatMap((preset) => preset.customShots || []),
     ].map((shot) => [shot.id, shot.framing]));
     return Object.fromEntries(customPresets.map((preset) => {
@@ -430,7 +573,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     const name = window.prompt('Name this shot preset:');
     if (name == null) return;
     try {
-      const next = saveShotPreset(customPresets, name, selected, customShots);
+      const next = saveShotPreset(customPresets, name, selected, userShots);
       setCustomPresets(next);
       toast.success(`Preset saved: ${next.at(-1).name}`);
     } catch (error) { toast.error(error.message || 'Could not save preset'); }
@@ -441,8 +584,12 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
       setSelected(new Set());
       return;
     }
-    const restored = applyShotPreset(preset, customShots);
-    setCustomShots(restored.customShots);
+    // A saved preset carries a COPY of the user shots it selected. Restore the
+    // missing ones as ✨ cards, minus those the subject already has imported —
+    // otherwise an imported shot would be duplicated into localStorage.
+    const restored = applyShotPreset(preset, userShots);
+    const importedIds = new Set(importedShots.map((s) => s.id));
+    setCustomShots(restored.customShots.filter((s) => !importedIds.has(s.id)));
     setSelected(new Set(restored.selectedIds));
   };
 
@@ -505,7 +652,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     }
     // Custom cards: selectable like catalog shots; 🔞 ones only ride with Klein
     // (the label prefix is what regenerate uses to re-pick the uncensored wrapper).
-    variations.push(...customShots
+    variations.push(...userShots
       .filter((c) => selected.has(c.id) && (kleinOnly || !c.nsfw))
       .map((c) => ({ label: c.label, prompt: c.prompt, framing: c.framing,
                      ...(c.nsfw ? { nsfw: true } : {}) })));
@@ -954,36 +1101,31 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
               <span className="text-content-subtle text-[0.625rem]">your own shots — remove with ✕</span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5">
-              {customShots.map((c) => {
-                const on = selected.has(c.id);
-                const done = doneByLabel.get(c.label) || 0;
-                const blocked = c.nsfw && !kleinOnly;   // 🔞 card while an API engine is in the run
-                const cls = on
-                  ? 'bg-primary/20 border-primary/50 text-white ring-1 ring-primary/30'
-                  : done > 0
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-100/90 hover:bg-emerald-500/15'
-                    : 'border-border bg-app/40 text-content-muted hover:bg-surface-raised';
-                return (
-                  <div key={c.id} className={`relative flex items-center gap-1.5 px-1.5 py-1 rounded-lg text-[0.625rem] border transition-colors ${cls} ${blocked ? 'opacity-40' : ''}`}>
-                    <button type="button" onClick={() => !blocked && toggle(c.id)} aria-pressed={on}
-                      disabled={blocked}
-                      title={blocked ? '🔞 shot — check Klein alone to generate it' : c.prompt}
-                      className="flex items-center gap-1.5 flex-1 min-w-0 text-left disabled:cursor-not-allowed">
-                      <ShotIllustration framing={c.framing} label={c.label} className="w-7 h-7 shrink-0" />
-                      <span className="min-w-0 leading-tight truncate">{c.label}</span>
-                      <span className="ml-auto shrink-0 flex items-center gap-1">
-                        {done > 0 && <span className="text-emerald-300 font-semibold">✓×{done}</span>}
-                        {on && <span className="text-indigo-300" aria-hidden="true">✓</span>}
-                      </span>
-                    </button>
-                    <button type="button" onClick={() => removeCustomShot(c.id)}
-                      aria-label={`Remove custom shot ${c.label}`} title="Remove this custom shot"
-                      className="shrink-0 w-4 h-4 grid place-items-center rounded bg-black/40 text-content-subtle hover:text-white text-[0.625rem] leading-none">
-                      ✕
-                    </button>
-                  </div>
-                );
-              })}
+              {customShots.map((c) => renderUserShot(c, () => removeCustomShot(c.id),
+                'Remove this custom shot'))}
+            </div>
+          </div>
+        )}
+
+        {/* Imported group — a JSON catalog (idea by ashish.sinha, Discord). Always
+            AFTER the built-ins and never in their place: an import can be undone
+            shot by shot, or all at once, and the shipped catalog is untouched. */}
+        {importedShots.length > 0 && (
+          <div>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+              <span aria-hidden="true">📥</span>
+              <span className="text-[0.6875rem] uppercase font-semibold text-content-muted">Imported</span>
+              <span className="text-content-subtle text-[0.625rem]">
+                {importedShots.length} shot{importedShots.length === 1 ? '' : 's'} from your JSON catalog — saved on this machine, not in the browser
+              </span>
+              <button type="button" onClick={removeAllImported}
+                className="ml-auto px-1.5 py-px rounded border border-border text-content-subtle hover:text-white text-[0.625rem]">
+                Remove all
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5">
+              {importedShots.map((c) => renderUserShot(c, () => removeImportedShot(c),
+                'Remove this imported shot'))}
             </div>
           </div>
         )}
@@ -1075,6 +1217,87 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
               ＋ Add
             </button>
           </div>
+        </div>
+      </details>
+
+      {/* 📥 Shot catalog JSON — idea by ashish.sinha (Discord): export the catalog,
+          have an LLM write 40 more shots in the same shape, import the result.
+          Export FIRST on purpose: nobody (and no LLM) can produce the right JSON
+          without an example of it. Collapsed by default. */}
+      <details className="rounded-lg border border-border bg-app/30 open:pb-2">
+        <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
+          📥 Shot catalog (JSON)
+          <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
+            import your own shots — export first to get the format
+          </span>
+          <HelpBadge topic="shot-catalog-json" />
+        </summary>
+        <div className="px-2.5 pt-1 flex flex-col gap-1.5">
+          <p className="text-content-muted text-[0.6875rem]">
+            Export the {SUBJECT_TYPE_LABELS[subject]?.toLowerCase() || 'current'} catalog, ask an LLM
+            for more shots in the same shape, then import the file. Imported shots are saved on this
+            machine (not in the browser), so they follow you from one device to the next.
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            <button type="button" onClick={() => importFileRef.current?.click()}
+              title={`Import a JSON shot catalog (max ${Math.round(MAX_IMPORT_BYTES / 1024)} KB — nothing is added until you confirm the summary)`}
+              className="px-2.5 py-1 rounded-lg border border-border text-content text-[0.6875rem] font-semibold hover:bg-surface-raised">
+              ⬆ Import
+            </button>
+            <button type="button" onClick={exportShotCatalog}
+              title="Download this subject's catalog as JSON — your own shots, plus a few built-in examples to show the format"
+              className="px-2.5 py-1 rounded-lg border border-border text-content text-[0.6875rem] font-semibold hover:bg-surface-raised">
+              ⬇ Export
+            </button>
+            <input ref={importFileRef} type="file" accept="application/json,.json" className="hidden"
+              onChange={(e) => { readImportFile(e.target.files?.[0]); e.target.value = ''; }} />
+          </div>
+          {/* The review step. Nothing has been written yet — this is what makes a
+              partly-bad file safe: the user sees exactly what would land and what
+              was refused, and decides. */}
+          {importReview && (
+            <div className="rounded-lg border border-border bg-app/60 p-2 flex flex-col gap-1.5">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-[0.6875rem] font-semibold text-content truncate max-w-full">
+                  {importReview.name}
+                </span>
+                <span className="text-[0.625rem] text-emerald-300">
+                  {importReview.result.accepted.length} ready
+                </span>
+                {importReview.result.rejected.length > 0 && (
+                  <span className="text-[0.625rem] text-amber-300">
+                    {importReview.result.rejected.length} rejected
+                  </span>
+                )}
+              </div>
+              {importReview.result.rejected.length > 0 && (
+                <ul className="max-h-32 overflow-y-auto flex flex-col gap-0.5 text-[0.625rem] text-amber-200/90">
+                  {importReview.result.rejected.map((r) => (
+                    <li key={`${r.index}-${r.code}`}>• {r.message}</li>
+                  ))}
+                </ul>
+              )}
+              {(importReview.result.skippedExamples > 0 || importReview.result.ignoredFields.length > 0) && (
+                <p className="text-[0.625rem] text-content-subtle">
+                  {importReview.result.skippedExamples > 0
+                    && `${importReview.result.skippedExamples} built-in example${importReview.result.skippedExamples === 1 ? '' : 's'} ignored. `}
+                  {importReview.result.ignoredFields.length > 0
+                    && `Ignored fields: ${importReview.result.ignoredFields.join(', ')} — an imported shot uses its framing's default aspect ratio.`}
+                </p>
+              )}
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={confirmImport}
+                  disabled={importBusy || !importReview.result.accepted.length}
+                  className="px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-[0.6875rem] font-semibold disabled:opacity-40">
+                  {importBusy ? 'Importing…' : `Import ${importReview.result.accepted.length} shot${importReview.result.accepted.length === 1 ? '' : 's'}`}
+                </button>
+                <button type="button" onClick={() => setImportReview(null)}
+                  className="px-2.5 py-1 rounded-lg border border-border text-content-muted text-[0.6875rem] hover:bg-surface-raised">
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </details>
 

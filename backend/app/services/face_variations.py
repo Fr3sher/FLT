@@ -721,6 +721,106 @@ ANIMAL_CATALOG = [
        cb=True, aspect='4:3'),
     _e('animal_back', 'framing', 'back', 'Animal, from behind',
        'full body photo of the animal seen from behind, hindquarters and tail visible, natural setting', cb=True),
+    # --- Head: remaining angles, states and light directions -------------------
+    _e('animal_head_down', 'angle', 'face', 'Animal head, looking down',
+       'close-up photo of the animal, head lowered, looking downward, calm, soft indoor light', cb=True),
+    _e('animal_head_tilt', 'angle', 'face', 'Animal head, tilted',
+       'close-up photo of the animal, head tilted to one side, curious, ears forward, soft daylight', cb=True),
+    _e('animal_head_low', 'angle', 'face', 'Animal head, low angle',
+       'close-up photo of the animal, head seen from below, low camera angle, imposing, plain background', cb=True),
+    _e('animal_head_top', 'angle', 'face', 'Animal head, from above',
+       'close-up photo of the animal, head seen from directly above, looking up at the camera, floor background', cb=True),
+    _e('animal_head_open_mouth', 'expression', 'face', 'Animal head, mouth open',
+       'close-up photo of the animal, head, mouth open, tongue and teeth visible, relaxed, outdoor daylight', cb=True),
+    _e('animal_head_ears', 'expression', 'face', 'Animal head, ears alert',
+       'close-up photo of the animal, head, ears raised and alert, attentive gaze, plain background', cb=True),
+    _e('animal_head_eyes', 'framing', 'face', 'Animal eyes, extreme close-up',
+       'extreme close-up photo of the animal, eyes and surrounding fur in sharp focus, shallow depth of field', cb=True),
+    _e('animal_head_golden', 'lighting', 'face', 'Animal head, golden hour',
+       'close-up photo of the animal, head, warm golden hour light from the side, outdoor, blurred background', cb=True),
+    _e('animal_head_window', 'lighting', 'face', 'Animal head, window light',
+       'close-up photo of the animal, head, soft window light indoors, blurred room background', cb=True),
+    _e('animal_head_backlit', 'lighting', 'face', 'Animal head, backlit',
+       'close-up photo of the animal, head, backlit with a bright rim of light around the fur, dark background', cb=True),
+    _e('animal_head_night', 'lighting', 'face', 'Animal head, low light',
+       'close-up photo of the animal, head, dim night light, dark background, eyes catching the light', cb=True),
+    _e('animal_head_overcast', 'lighting', 'face', 'Animal head, overcast light',
+       'close-up photo of the animal, head, flat overcast daylight, even and shadowless, outdoor', cb=True),
+    _e('animal_head_wide', 'framing', 'face', 'Animal head, cinematic framing',
+       'close-up photo of the animal, head off-center, wide cinematic framing, blurred environment',
+       cb=True, aspect='16:9'),
+    _e('animal_head_tall', 'framing', 'face', 'Animal head, tall framing',
+       'close-up photo of the animal, head, tall vertical framing, plain background, soft light',
+       cb=True, aspect='9:16'),
+    _e('animal_detail_fur', 'framing', 'face', 'Animal detail, coat texture',
+       'extreme close-up photo of the animal, fur or skin texture and its markings, sharp focus, soft even light', cb=True),
+    _e('animal_detail_paw', 'framing', 'face', 'Animal detail, paw',
+       'close-up photo of the animal, one paw or foot, sharp focus, natural ground, soft light', cb=True),
+    _e('animal_detail_tail', 'framing', 'face', 'Animal detail, tail',
+       'close-up photo of the animal, tail, sharp focus, natural setting, soft daylight', cb=True),
+    # --- Half body -------------------------------------------------------------
+    _e('animal_half_side', 'framing', 'bust', 'Animal half-body, side',
+       'half-body photo of the animal, side view, head and chest visible, plain background, even light', cb=True),
+    _e('animal_half_studio', 'lighting', 'bust', 'Animal half-body, studio',
+       'half-body photo of the animal, studio lighting, plain seamless background', cb=True),
+    _e('animal_half_golden', 'lighting', 'bust', 'Animal half-body, golden hour',
+       'half-body photo of the animal, three-quarter view, warm golden hour light, outdoor', cb=True),
+    _e('animal_half_lying', 'framing', 'bust', 'Animal half-body, resting',
+       'half-body photo of the animal lying down with its head raised, front legs visible, indoor floor, soft light', cb=True),
+    _e('animal_half_look_up', 'angle', 'bust', 'Animal half-body, looking up',
+       'half-body photo of the animal sitting and looking upward, alert, blurred outdoor background', cb=True),
+    # --- Full body: poses ------------------------------------------------------
+    _e('animal_body_stand_34', 'framing', 'body', 'Animal body, standing three-quarter',
+       'full body photo of the animal, standing, three-quarter view, the whole body visible, natural setting', cb=True),
+    _e('animal_body_sit_front', 'framing', 'body', 'Animal body, sitting front',
+       'full body photo of the animal, sitting, front view, the entire body visible, plain background', cb=True),
+    _e('animal_body_sit_side', 'framing', 'body', 'Animal body, sitting side',
+       'full body photo of the animal, sitting, side profile, the whole body visible, natural ground', cb=True),
+    _e('animal_body_jump', 'framing', 'body', 'Animal body, jumping',
+       'full body photo of the animal mid-jump, all four legs off the ground, dynamic action, outdoor',
+       cb=True, aspect='16:9'),
+    _e('animal_body_play', 'framing', 'body', 'Animal body, playing',
+       'full body photo of the animal playing, lively pose, outdoor grass, daylight', cb=True),
+    _e('animal_body_sleep', 'framing', 'body', 'Animal body, sleeping',
+       'full body photo of the animal curled up asleep, eyes closed, soft indoor light, blanket or floor', cb=True),
+    _e('animal_body_drink', 'framing', 'body', 'Animal body, drinking',
+       'full body photo of the animal drinking, head lowered to a bowl or water, side view, natural light', cb=True),
+    _e('animal_body_stretch', 'framing', 'body', 'Animal body, stretching',
+       'full body photo of the animal stretching, elongated pose, side view, indoor floor, soft light', cb=True),
+    # --- Full body: settings and light ----------------------------------------
+    _e('animal_body_studio', 'lighting', 'body', 'Animal body, studio',
+       'full body photo of the animal, standing, studio lighting, plain seamless background, the whole body visible', cb=True),
+    _e('animal_body_golden', 'lighting', 'body', 'Animal body, golden hour',
+       'full body photo of the animal standing outdoors, warm golden hour backlight, long shadows',
+       cb=True, aspect='4:3'),
+    _e('animal_body_night', 'lighting', 'body', 'Animal body, night',
+       'full body photo of the animal outdoors at night, cool dim light, dark background', cb=True),
+    _e('animal_body_snow', 'background', 'body', 'Animal body, snow',
+       'full body photo of the animal walking in snow, white winter landscape, cold daylight',
+       cb=True, aspect='16:9'),
+    _e('animal_body_water', 'background', 'body', 'Animal body, water',
+       'full body photo of the animal at the edge of water, wet ground reflecting the light, outdoor daylight',
+       cb=True, aspect='4:3'),
+    _e('animal_body_forest', 'background', 'body', 'Animal body, forest',
+       'full body photo of the animal in a forest, trees and undergrowth around it, dappled light',
+       cb=True, aspect='4:3'),
+    _e('animal_body_field', 'background', 'body', 'Animal body, tall grass',
+       'full body photo of the animal standing in tall grass, meadow, warm daylight', cb=True, aspect='4:3'),
+    _e('animal_body_urban', 'background', 'body', 'Animal body, city street',
+       'full body photo of the animal on a city pavement, urban background, daylight',
+       cb=True, aspect='16:9'),
+    _e('animal_body_indoor', 'background', 'body', 'Animal body, indoors',
+       'full body photo of the animal on a sofa or indoor floor, home interior, warm lamp light', cb=True),
+    _e('animal_body_low', 'angle', 'body', 'Animal body, low angle',
+       'full body photo of the animal from a very low camera angle at ground level, the whole body visible, outdoor', cb=True),
+    _e('animal_body_top', 'angle', 'body', 'Animal body, from above',
+       'full body photo of the animal from directly above, top-down view, floor or ground background', cb=True),
+    # --- From behind -----------------------------------------------------------
+    _e('animal_back_34', 'framing', 'back', 'Animal, rear three-quarter',
+       'full body photo of the animal from a rear three-quarter angle, back and one flank visible, natural setting', cb=True),
+    _e('animal_back_walk', 'framing', 'back', 'Animal, walking away',
+       'full body photo of the animal walking away from the camera, seen from behind, outdoor path',
+       cb=True, aspect='16:9'),
 ]
 CREATURE_CATALOG = [
     _e('creature_face_front', 'expression', 'face', 'Creature face, front',
@@ -750,6 +850,73 @@ CREATURE_CATALOG = [
        cb=True, aspect='4:3'),
     _e('creature_back', 'framing', 'back', 'Creature, from behind',
        'full body shot of the creature seen from behind, back silhouette and back-facing features visible', cb=True),
+    # --- Face: states, angles, light -------------------------------------------
+    _e('creature_face_menacing', 'expression', 'face', 'Creature face, menacing',
+       'close-up portrait of the creature, front view, menacing expression, hard directional light, dark background', cb=True),
+    _e('creature_face_calm', 'expression', 'face', 'Creature face, calm',
+       'close-up portrait of the creature, three-quarter view, calm and still expression, soft daylight', cb=True),
+    _e('creature_face_roar', 'expression', 'face', 'Creature face, roaring',
+       'close-up portrait of the creature, mouth wide open roaring, teeth visible, dramatic light', cb=True),
+    _e('creature_face_low', 'angle', 'face', 'Creature face, low angle',
+       'close-up of the creature seen from below, low heroic camera angle, sky or ceiling behind', cb=True),
+    _e('creature_face_top', 'angle', 'face', 'Creature face, high angle',
+       'close-up of the creature seen from above, high camera angle looking down at it, ground background', cb=True),
+    _e('creature_face_rim', 'lighting', 'face', 'Creature face, rim light',
+       'close-up portrait of the creature, cinematic rim light outlining its silhouette, dark background', cb=True),
+    _e('creature_face_fire', 'lighting', 'face', 'Creature face, firelight',
+       'close-up portrait of the creature lit by warm flickering firelight from below, deep shadows', cb=True),
+    _e('creature_face_mist', 'lighting', 'face', 'Creature face, mist',
+       'close-up portrait of the creature in cold mist, diffuse light, pale desaturated background', cb=True),
+    _e('creature_face_eyes', 'framing', 'face', 'Creature eyes, extreme close-up',
+       'extreme close-up of the creature, eyes and the surrounding skin in sharp focus, shallow depth of field', cb=True),
+    _e('creature_detail_skin', 'framing', 'face', 'Creature detail, skin texture',
+       'extreme close-up of the creature, skin, scale or fur texture and its markings, sharp focus, soft light', cb=True),
+    _e('creature_detail_hand', 'framing', 'face', 'Creature detail, hand or claw',
+       'close-up of the creature, one hand, claw or limb extremity, sharp focus, neutral background', cb=True),
+    _e('creature_face_tall', 'framing', 'face', 'Creature face, tall framing',
+       'close-up portrait of the creature, tall vertical framing, head and shoulders, plain background',
+       cb=True, aspect='9:16'),
+    # --- Bust ------------------------------------------------------------------
+    _e('creature_bust_side', 'framing', 'bust', 'Creature bust, side',
+       'upper body shot of the creature, side view, plain background, even light', cb=True),
+    _e('creature_bust_studio', 'lighting', 'bust', 'Creature bust, studio',
+       'upper body shot of the creature, studio lighting, plain seamless background', cb=True),
+    _e('creature_bust_dark', 'lighting', 'bust', 'Creature bust, low key',
+       'upper body shot of the creature, low key lighting, most of the frame in shadow, single light source', cb=True),
+    _e('creature_bust_gear', 'outfit', 'bust', 'Creature bust, gear visible',
+       'upper body shot of the creature, its armour, harness or gear clearly visible, three-quarter view', cb=True),
+    # --- Full body: poses ------------------------------------------------------
+    _e('creature_body_walk', 'framing', 'body', 'Creature body, walking',
+       'full body shot of the creature walking, side view, the entire body visible, natural environment',
+       cb=True, aspect='16:9'),
+    _e('creature_body_crouch', 'framing', 'body', 'Creature body, crouching',
+       'full body shot of the creature crouched low, coiled and ready to move, the whole body visible', cb=True),
+    _e('creature_body_leap', 'framing', 'body', 'Creature body, leaping',
+       'full body shot of the creature mid-leap, airborne, dynamic action, dramatic environment',
+       cb=True, aspect='16:9'),
+    _e('creature_body_rest', 'framing', 'body', 'Creature body, resting',
+       'full body shot of the creature at rest, seated or lying, calm, the entire body visible', cb=True),
+    _e('creature_body_scale', 'framing', 'body', 'Creature body, size reference',
+       'full body shot of the creature next to an ordinary doorway or vehicle that gives its true scale, wide shot',
+       cb=True, aspect='16:9'),
+    # --- Full body: settings and light -----------------------------------------
+    _e('creature_body_studio', 'lighting', 'body', 'Creature body, studio',
+       'full body shot of the creature, standing, studio lighting, plain seamless background, the whole body visible', cb=True),
+    _e('creature_body_ruins', 'background', 'body', 'Creature body, ruins',
+       'full body shot of the creature among stone ruins, overgrown architecture, moody daylight',
+       cb=True, aspect='4:3'),
+    _e('creature_body_forest', 'background', 'body', 'Creature body, forest',
+       'full body shot of the creature in a dense forest, dappled light through the trees', cb=True, aspect='4:3'),
+    _e('creature_body_night', 'lighting', 'body', 'Creature body, night',
+       'full body shot of the creature at night, cool moonlight, dark environment, the whole body still readable', cb=True),
+    _e('creature_body_low', 'angle', 'body', 'Creature body, low angle',
+       'full body shot of the creature from a low camera angle at ground level, towering over the viewer', cb=True),
+    # --- From behind -----------------------------------------------------------
+    _e('creature_back_34', 'framing', 'back', 'Creature, rear three-quarter',
+       'full body shot of the creature from a rear three-quarter angle, back and one side visible, natural setting', cb=True),
+    _e('creature_back_walk', 'framing', 'back', 'Creature, walking away',
+       'full body shot of the creature walking away from the camera, seen from behind, wide environment',
+       cb=True, aspect='16:9'),
 ]
 OBJECT_CATALOG = [
     _e('object_full_front', 'framing', 'body', 'Object, full front',
@@ -779,6 +946,47 @@ OBJECT_CATALOG = [
        'photo of the object held in a hand for scale, neutral background, soft light', cb=True),
     _e('object_back', 'angle', 'back', 'Object, rear view',
        'product photo of the object from behind, rear view, plain background, even light', cb=True),
+    # --- Angles ----------------------------------------------------------------
+    _e('object_full_45', 'angle', 'body', 'Object, elevated three-quarter',
+       'product photo of the object from an elevated three-quarter angle, the full object visible, plain background', cb=True),
+    _e('object_bottom', 'angle', 'bust', 'Object, underside',
+       'product photo of the underside of the object, base and markings visible, plain background, even light', cb=True),
+    _e('object_back_34', 'angle', 'back', 'Object, rear three-quarter',
+       'product photo of the object from a rear three-quarter angle, back and one side visible, plain background', cb=True),
+    # --- Studio light ----------------------------------------------------------
+    _e('object_studio_soft', 'lighting', 'body', 'Object, soft studio light',
+       'product photo of the object, large softbox lighting, very soft shadows, white seamless background', cb=True),
+    _e('object_studio_hard', 'lighting', 'body', 'Object, hard light',
+       'product photo of the object, single hard light source, sharp defined shadow on the surface, plain background', cb=True),
+    _e('object_backlit', 'lighting', 'body', 'Object, backlit',
+       'product photo of the object backlit, bright rim along its edges, dark gradient background', cb=True),
+    _e('object_night', 'lighting', 'body', 'Object, night lighting',
+       'photo of the object at night, coloured ambient and neon light, dark surroundings', cb=True),
+    # --- In the real world -----------------------------------------------------
+    _e('object_table', 'background', 'body', 'Object, on a wooden table',
+       'photo of the object resting on a wooden table, home interior, soft daylight from a window', cb=True),
+    _e('object_floor', 'background', 'body', 'Object, on the ground',
+       'photo of the object on the ground outdoors, natural surface, overcast daylight', cb=True),
+    _e('object_shelf', 'background', 'body', 'Object, on a shelf',
+       'photo of the object on a shelf among ordinary items, indoor ambient light', cb=True),
+    _e('object_city', 'background', 'body', 'Object, city background',
+       'photo of the object outdoors with a city street behind it, daylight, shallow depth of field',
+       cb=True, aspect='16:9'),
+    _e('object_in_use', 'framing', 'body', 'Object, in use',
+       'photo of the object being used as intended, hands present but the object stays the focus, natural light', cb=True),
+    _e('object_scale', 'framing', 'bust', 'Object, size reference',
+       'photo of the object beside an everyday item that gives its true scale, plain background, even light', cb=True),
+    _e('object_medium_34', 'framing', 'bust', 'Object, medium three-quarter',
+       'medium photo of the object from a three-quarter angle, part of the surroundings visible, soft light', cb=True),
+    # --- Details ---------------------------------------------------------------
+    _e('object_detail_material', 'framing', 'face', 'Object, detail material',
+       'extreme close-up photo of the object, its material and surface finish, sharp focus, raking light', cb=True),
+    _e('object_detail_edge', 'framing', 'face', 'Object, detail seam',
+       'close-up photo of the object focusing on a seam, joint or edge where two parts meet, sharp focus', cb=True),
+    _e('object_detail_wear', 'framing', 'face', 'Object, detail wear',
+       'close-up photo of the object showing wear, scratches or patina from use, sharp focus, soft light', cb=True),
+    _e('object_detail_top', 'framing', 'face', 'Object, detail from above',
+       'close-up photo of the top surface of the object seen from directly above, sharp focus, even light', cb=True),
 ]
 OTHER_CATALOG = [
     _e('other_full_front', 'framing', 'body', 'Subject, full front',
@@ -801,6 +1009,31 @@ OTHER_CATALOG = [
        'photo of the subject from an elevated angle, plain background', cb=True),
     _e('other_back', 'angle', 'back', 'Subject, rear view',
        'photo of the subject from behind, rear view, plain background', cb=True),
+    _e('other_full_back34', 'angle', 'back', 'Subject, rear three-quarter',
+       'photo of the subject from a rear three-quarter angle, back and one side visible, plain background', cb=True),
+    _e('other_low', 'angle', 'bust', 'Subject, low angle',
+       'photo of the subject from a low camera angle, plain background, even light', cb=True),
+    _e('other_medium_side', 'framing', 'bust', 'Subject, medium side',
+       'medium shot of the subject from the side, simple background, soft light', cb=True),
+    _e('other_scale', 'framing', 'bust', 'Subject, size reference',
+       'photo of the subject beside an everyday item that gives its true scale, plain background', cb=True),
+    _e('other_studio', 'lighting', 'body', 'Subject, studio',
+       'photo of the subject, studio lighting, plain seamless background, the entire subject visible', cb=True),
+    _e('other_studio_hard', 'lighting', 'body', 'Subject, hard light',
+       'photo of the subject, single hard light source, sharp defined shadows, plain background', cb=True),
+    _e('other_backlit', 'lighting', 'body', 'Subject, backlit',
+       'photo of the subject backlit, bright rim along its edges, dark gradient background', cb=True),
+    _e('other_night', 'lighting', 'body', 'Subject, night',
+       'photo of the subject at night, dim ambient light, dark surroundings', cb=True),
+    _e('other_indoor', 'background', 'body', 'Subject, indoors',
+       'photo of the subject in an ordinary interior, home or workshop background, warm ambient light', cb=True),
+    _e('other_wide', 'framing', 'body', 'Subject, wide shot',
+       'wide photo of the subject off-center with plenty of environment around it, cinematic framing',
+       cb=True, aspect='16:9'),
+    _e('other_detail_3', 'framing', 'face', 'Subject, detail material',
+       'extreme close-up of the subject, its material and surface finish, sharp focus, raking light', cb=True),
+    _e('other_detail_marking', 'framing', 'face', 'Subject, detail marking',
+       'close-up of the subject focusing on a distinctive marking, text or feature, sharp focus', cb=True),
 ]
 
 # subject_type -> catalog / nsfw / by-id. 'human' reuses the existing objects so
@@ -982,32 +1215,120 @@ _PRESETS = {'balanced_25': _BALANCED_25, 'zimage_12': _ZIMAGE_12,
             'fullbody_focused': _FULLBODY_FOCUSED, 'body_emphasis': _BODY_EMPHASIS}
 _BY_ID = {e['id']: e for e in VARIATION_CATALOG}
 
-# Non-human presets (one balanced spread each — first draft). The frontend renders
-# these from `preset_meta_for` (returned by the /variations route) so it doesn't
-# need to know their keys ahead of time; the human path keeps its own hardcoded
-# PRESET_META untouched (so the human /variations response stays byte-identical).
-_ANIMAL_BALANCED = [e['id'] for e in ANIMAL_CATALOG]
-_CREATURE_BALANCED = [e['id'] for e in CREATURE_CATALOG]
-_OBJECT_BALANCED = [e['id'] for e in OBJECT_CATALOG]
-_OTHER_BALANCED = [e['id'] for e in OTHER_CATALOG]
+# Non-human presets. The frontend renders these from `preset_meta_for` (returned
+# by the /variations route) so it doesn't need to know their keys ahead of time;
+# the human path keeps its own hardcoded PRESET_META untouched (so the human
+# /variations response stays byte-identical).
+#
+# These used to be `[e['id'] for e in <CATALOG>]` — every shot of the type. That
+# was defensible on a 12-shot first draft; on the catalogs below it would mean a
+# single click queueing 59 images (and, on an API engine, billing them). So each
+# preset is now CURATED: a deliberate composition, the way the human presets are.
+# The KEYS are unchanged (`animal_balanced`…) — only their contents grew, which
+# is the safe direction: preset keys are transient, but the shot IDS they list are
+# persisted in the user's saved presets (`datasetCustomPresetsV1.selectedIds`), so
+# no existing id is ever renamed or dropped.
+_ANIMAL_BALANCED = [
+    'animal_head_front', 'animal_head_34', 'animal_head_profile_l', 'animal_head_up',
+    'animal_head_tilt', 'animal_head_studio', 'animal_head_golden', 'animal_detail_fur',
+    'animal_half_front', 'animal_half_34', 'animal_half_side', 'animal_half_studio',
+    'animal_half_look_up',
+    'animal_body_stand_side', 'animal_body_stand_front', 'animal_body_stand_34',
+    'animal_body_sit_front', 'animal_body_lying', 'animal_body_walk', 'animal_body_run',
+    'animal_body_outdoor', 'animal_body_studio',
+    'animal_back', 'animal_back_34',
+]
+_ANIMAL_HEAD = [
+    'animal_head_front', 'animal_head_34', 'animal_head_profile_l', 'animal_head_profile_r',
+    'animal_head_up', 'animal_head_down', 'animal_head_tilt', 'animal_head_studio',
+    'animal_head_window', 'animal_head_golden', 'animal_head_backlit', 'animal_head_eyes',
+]
+_ANIMAL_FULLBODY = [
+    'animal_body_stand_side', 'animal_body_stand_front', 'animal_body_stand_34',
+    'animal_body_sit_front', 'animal_body_lying', 'animal_body_walk', 'animal_body_run',
+    'animal_body_jump', 'animal_body_outdoor', 'animal_body_studio',
+    'animal_back', 'animal_back_34',
+]
+_CREATURE_BALANCED = [
+    'creature_face_front', 'creature_face_34l', 'creature_face_34r', 'creature_face_profile',
+    'creature_face_calm', 'creature_detail_skin',
+    'creature_bust_front', 'creature_bust_34', 'creature_bust_side', 'creature_bust_studio',
+    'creature_body_stand', 'creature_body_34', 'creature_body_walk', 'creature_body_crouch',
+    'creature_body_rest', 'creature_body_action', 'creature_body_outdoor', 'creature_body_studio',
+    'creature_back', 'creature_back_34',
+]
+_CREATURE_FACE = [
+    'creature_face_front', 'creature_face_34l', 'creature_face_34r', 'creature_face_profile',
+    'creature_face_calm', 'creature_face_menacing', 'creature_face_roar', 'creature_face_rim',
+    'creature_face_low', 'creature_face_eyes',
+]
+_CREATURE_FULLBODY = [
+    'creature_body_stand', 'creature_body_34', 'creature_body_walk', 'creature_body_action',
+    'creature_body_leap', 'creature_body_crouch', 'creature_body_rest', 'creature_body_outdoor',
+    'creature_back', 'creature_back_34',
+]
+_OBJECT_BALANCED = [
+    'object_full_front', 'object_full_34', 'object_full_side', 'object_full_45',
+    'object_hero', 'object_context', 'object_outdoor', 'object_studio_soft',
+    'object_top', 'object_low', 'object_hand', 'object_medium_34',
+    'object_detail', 'object_detail_marking', 'object_detail_material', 'object_detail_edge',
+    'object_back', 'object_back_34',
+]
+_OBJECT_STUDIO = [
+    'object_full_front', 'object_full_34', 'object_full_side', 'object_full_45',
+    'object_hero', 'object_studio_soft', 'object_studio_hard', 'object_backlit',
+    'object_top', 'object_back',
+]
+_OBJECT_CONTEXT = [
+    'object_context', 'object_outdoor', 'object_table', 'object_floor', 'object_shelf',
+    'object_city', 'object_in_use', 'object_hand', 'object_scale', 'object_night',
+]
+_OTHER_BALANCED = [
+    'other_full_front', 'other_full_34', 'other_full_side', 'other_context',
+    'other_outdoor', 'other_studio', 'other_indoor',
+    'other_medium', 'other_medium_side', 'other_top', 'other_low',
+    'other_detail', 'other_detail_2', 'other_detail_3',
+    'other_back', 'other_full_back34',
+]
+_OTHER_QUICK = [
+    'other_full_front', 'other_full_34', 'other_full_side', 'other_medium',
+    'other_detail', 'other_detail_2', 'other_context', 'other_back',
+]
 _SUBJECT_PRESETS = {
     'human': _PRESETS,
-    'animal': {'animal_balanced': _ANIMAL_BALANCED},
-    'creature': {'creature_balanced': _CREATURE_BALANCED},
-    'object': {'object_balanced': _OBJECT_BALANCED},
-    'other': {'other_balanced': _OTHER_BALANCED},
+    'animal': {'animal_balanced': _ANIMAL_BALANCED, 'animal_head_focused': _ANIMAL_HEAD,
+               'animal_fullbody_focused': _ANIMAL_FULLBODY},
+    'creature': {'creature_balanced': _CREATURE_BALANCED, 'creature_face_focused': _CREATURE_FACE,
+                 'creature_fullbody_focused': _CREATURE_FULLBODY},
+    'object': {'object_balanced': _OBJECT_BALANCED, 'object_studio': _OBJECT_STUDIO,
+               'object_context': _OBJECT_CONTEXT},
+    'other': {'other_balanced': _OTHER_BALANCED, 'other_quick': _OTHER_QUICK},
 }
 # Preset display metadata surfaced ONLY for non-human types (human uses the
 # frontend's hardcoded PRESET_META, keeping the human payload byte-identical).
 _SUBJECT_PRESET_META = {
     'animal': [{'key': 'animal_balanced', 'name': 'Balanced',
-                'hint': 'A balanced spread of head, half-body, full-body and rear shots for an animal.'}],
+                'hint': 'A balanced spread of head, half-body, full-body and rear shots for an animal.'},
+               {'key': 'animal_head_focused', 'name': 'Head focused',
+                'hint': 'Head angles, expressions and light directions — for a face the model must nail.'},
+               {'key': 'animal_fullbody_focused', 'name': 'Full body focused',
+                'hint': 'Standing, sitting, moving and rear shots — for the whole silhouette and proportions.'}],
     'creature': [{'key': 'creature_balanced', 'name': 'Balanced',
-                  'hint': 'Face, bust, full-body and rear shots for a creature or fictional character.'}],
+                  'hint': 'Face, bust, full-body and rear shots for a creature or fictional character.'},
+                 {'key': 'creature_face_focused', 'name': 'Face focused',
+                  'hint': 'Angles, expressions and dramatic light on the face alone.'},
+                 {'key': 'creature_fullbody_focused', 'name': 'Full body focused',
+                  'hint': 'Poses, action and rear views — for anatomy and silhouette.'}],
     'object': [{'key': 'object_balanced', 'name': 'Balanced',
-                'hint': 'Front, angle, detail and rear views for an object or product.'}],
+                'hint': 'Front, angle, detail and rear views for an object or product.'},
+               {'key': 'object_studio', 'name': 'Studio',
+                'hint': 'Clean product shots on a plain background, several angles and light setups.'},
+               {'key': 'object_context', 'name': 'In context',
+                'hint': 'The object in real settings and in use — teaches it apart from its backdrop.'}],
     'other': [{'key': 'other_balanced', 'name': 'Balanced',
-               'hint': 'Angles, framings and detail shots for any subject.'}],
+               'hint': 'Angles, framings and detail shots for any subject.'},
+              {'key': 'other_quick', 'name': 'Quick set',
+               'hint': 'Eight shots to test a subject before committing to a full run.'}],
 }
 _SUBJECT_BY_ID = {st: {e['id']: e for e in cat} for st, cat in _SUBJECT_CATALOGS.items()}
 
@@ -1038,6 +1359,73 @@ def select_preset(name: str, subject_type: str = 'human'):
     st = normalize_subject_type(subject_type)
     by_id = _SUBJECT_BY_ID.get(st, _BY_ID)
     return [by_id[i] for i in presets_for(st).get(name, []) if i in by_id]
+
+
+# --- Custom shot catalogs (imported from JSON) --------------------------------
+# Idea by ashish.sinha (Discord): instead of typing 30-40 shots by hand, export
+# the catalog, have an LLM write more, import the result. The shots live in the
+# config (`custom_shots`), per subject type — NOT in localStorage: a catalog that
+# vanishes when the browser is cleared, after paying an LLM to write it, is a
+# feature that punishes its user, and the config is what makes the same shots
+# visible from a second device and part of the full backup.
+#
+# The frontend validates on import (`shotImport.js`) and never sends the aspect
+# (it is resolved server-side per label), so a custom shot is stored exactly as
+# {id, label, prompt, framing, nsfw?}. This sanitizer is the second line: config
+# .json is a plain file a user can hand-edit, and every shot that reaches it must
+# still satisfy the invariants — enum framing, and above all a label that does
+# NOT shadow a built-in one (see the by-label resolvers below).
+MAX_CUSTOM_SHOTS_PER_SUBJECT = 300
+_MAX_CUSTOM_LABEL = 80
+_MAX_CUSTOM_PROMPT = 500
+
+
+def all_catalog_labels() -> list:
+    """Every label the by-label resolvers can already answer for: the union of all
+    catalogs PLUS the legacy French aliases (still stored on pre-migration rows and
+    routed through `canonical_label`). This is the reserved set an imported shot may
+    never re-use — a collision would silently resolve to the built-in entry."""
+    return sorted({e['label'] for e in _ALL_CATALOGS} | set(LEGACY_LABEL_ALIASES))
+
+
+def sanitize_custom_shots(raw) -> dict:
+    """{subject_type: [shot]} keeping only well-formed, non-colliding shots.
+    Never raises: a malformed config must degrade to 'no custom shots', not 500
+    the workspace."""
+    if not isinstance(raw, dict):
+        return {}
+    reserved = {lbl.strip().lower() for lbl in all_catalog_labels()}
+    out = {}
+    for subject, shots in raw.items():
+        st = normalize_subject_type(subject)
+        if not isinstance(shots, list):
+            continue
+        seen_ids, seen_labels, kept = set(), set(), []
+        for shot in shots[:MAX_CUSTOM_SHOTS_PER_SUBJECT]:
+            if not isinstance(shot, dict):
+                continue
+            sid = shot.get('id')
+            label = shot.get('label')
+            prompt = shot.get('prompt')
+            framing = shot.get('framing')
+            if not all(isinstance(v, str) and v.strip() for v in (sid, label, prompt, framing)):
+                continue
+            sid, label, prompt = sid.strip(), label.strip(), prompt.strip()
+            framing = framing.strip().lower()
+            if framing not in ASPECT_BY_FRAMING:
+                continue
+            if len(label) > _MAX_CUSTOM_LABEL or len(prompt) > _MAX_CUSTOM_PROMPT:
+                continue
+            key = label.lower()
+            if key in reserved or key in seen_labels or sid in seen_ids:
+                continue
+            seen_ids.add(sid)
+            seen_labels.add(key)
+            kept.append({'id': sid, 'label': label, 'prompt': prompt, 'framing': framing,
+                         **({'nsfw': True} if shot.get('nsfw') is True else {}),
+                         'imported': True})
+        out.setdefault(st, []).extend(kept)
+    return {st: shots for st, shots in out.items() if shots}
 
 
 def prompt_by_label(label):

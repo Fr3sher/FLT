@@ -339,6 +339,12 @@ These have no UI control — they're for advanced users editing `config.json` by
 |---|---|---|
 | `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane. The image model stays `gpt-image-2` regardless — this is not the image model. |
 
+**Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
+
+| Key | Default | Role |
+|---|---|---|
+| `custom_shots` | `{}` | `{subject_type: [{id, label, prompt, framing, nsfw?}]}` — the shots you imported from JSON, one list per subject type. Kept here rather than in the browser so they survive a cache wipe, follow you to another device and ride along in the backup. Entries are re-checked on read: a bad `framing`, a missing field, or a `label` that already belongs to a built-in shot is dropped (two shots sharing a label would resolve to the wrong prompt when one is regenerated). |
+
 **Cloud (vast.ai) internals** — knobs for after the real-world smoke test; the UI-exposed cloud settings above are the ones you'll normally want:
 
 | Key | Default | Role |

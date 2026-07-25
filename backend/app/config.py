@@ -213,6 +213,15 @@ DEFAULTS = {
     'identity_prompts': {'face_single': '', 'face_multi': '', 'klein_identity': '',
                          'klein_improve': '', 'klein_improve_enabled': True,
                          'by_subject': {}},
+    # User shot catalogs imported from JSON, {subject_type: [{id,label,prompt,
+    # framing,nsfw?}]} — idea by ashish.sinha (Discord): have an LLM write 40 shots
+    # instead of typing them. Stored SERVER-side rather than in localStorage so a
+    # catalog survives a browser wipe, shows up on the phone as well as the desktop
+    # and rides along in the full backup. Written by the workspace's Import button
+    # (validated client-side by shotImport.js) and re-checked on read by
+    # face_variations.sanitize_custom_shots — this file is hand-editable, and a
+    # label shadowing a built-in one would hijack prompt/aspect/NSFW resolution.
+    'custom_shots': {},
     'updates': {'repo': 'perfectgf/lora-dataset-studio'},      # GitHub repo for the release feed
 }
 
