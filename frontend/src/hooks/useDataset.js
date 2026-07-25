@@ -972,7 +972,10 @@ export function useDataset() {
 
   const stopTraining = useCallback(async () => {
     const d = await postJson('/api/dataset/train/stop');
-    if (d.ok) toast.success('ComfyUI re-enabled'); else toast.error(d.error || 'Unexpected error');
+    // Say what happened (the run stopped) and what survived, not just the side
+    // effect — mirrors the Runs hub toast for the same endpoint.
+    if (d.ok) toast.success('Training stopped — checkpoints already saved are kept; ComfyUI is re-enabled.');
+    else toast.error(d.error || 'Unexpected error');
   }, [toast]);
 
   // baseModel/variant ciblent le run de la base SÉLECTIONNÉE (undefined → base

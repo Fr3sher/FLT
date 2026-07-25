@@ -1437,11 +1437,30 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             <span aria-hidden>☁️</span> Train in cloud
           </button>
         )}
+        {/* ⏹ Stop = the DESTRUCTIVE action, named after what it does. Its old
+            label named only the SIDE EFFECT (the GPU going back to ComfyUI) and
+            read like housekeeping — users lost hours-long runs to one click, and
+            one reported avoiding the button for days rather than finding out.
+            Verb first, consequence in the title, and the same confirm wording as
+            the Runs hub's "Stop run" for the very same endpoint.
+            Reported by wannadecryptor (Discord). */}
         {status.in_progress && (
-          <button type="button" onClick={async () => { await ds.stopTraining(); refreshStatus(); }}
-            className="px-3 py-1.5 rounded-lg bg-red-600/80 text-white text-sm font-semibold">
-            Finish / re-enable ComfyUI
-          </button>
+          <>
+            <button type="button"
+              title="Stops this training run. Checkpoints already saved are kept — ComfyUI gets the GPU back."
+              onClick={async () => {
+                const who = status.current?.name ? `“${status.current.name}”` : 'this dataset';
+                if (!window.confirm(`Stop the training run for ${who}?\n\n`
+                  + 'The training process is terminated and the pending local training queue is cleared. '
+                  + 'Checkpoints already saved remain available, and ComfyUI gets the GPU back.')) return;
+                await ds.stopTraining();
+                refreshStatus();
+              }}
+              className="px-3 py-1.5 rounded-lg bg-red-600/80 text-white text-sm font-semibold">
+              ⏹ Stop training
+            </button>
+            <HelpBadge topic="action-training-stop" />
+          </>
         )}
         {status.in_progress && status.installed && (keptCount >= trainMinFloor || allowNotReady) && !sliderPromptsMissing && (
           <button type="button" disabled={queued || baseBlocksTrain} onClick={enqueue}

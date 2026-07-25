@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-stop-training-button-says-what-it-does',
+    date: '2026-07-26',
+    title: '⏹ The button that stops your training now says so',
+    blurb:
+      'While a training ran, the red button beside Train read “Finish / re-enable ComfyUI” — which sounds like tidying up, and instead killed the run. People lost hours-long trainings to one click, and at least one just stopped touching it rather than find out what it did. It now reads ⏹ Stop training, hovering it tells you what survives, and it asks for confirmation before ending a run — because a training you meant to keep is worth one extra click. What you keep is unchanged and now stated up front: every checkpoint already saved stays, testable in the Studio and resumable with ▶ Continue, and ComfyUI still gets the GPU back. Reported by wannadecryptor (Discord).',
+    to: '/datasets?section=training&panel=launch',
+  },
+  {
     id: '2026-07-26-cloud-stop-that-cannot-lie',
     date: '2026-07-26',
     title: '🛑 Stop really stops the pod — and a frozen cloud run stops billing you',

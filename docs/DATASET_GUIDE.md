@@ -192,6 +192,14 @@ just crash the trainer — **zero kept images**, or a **slider with no prompt pa
 — are never offered the option, and the box un-ticks itself the moment the
 blockers change.
 
+**Stopping a training run.** The red **⏹ Stop training** button next to Train
+ends the run in progress — it is not a housekeeping button. It kills the training
+process, clears the pending local training queue, and hands the GPU back to
+ComfyUI. What you keep: **every checkpoint already saved**, which stays testable
+in the Studio and can be continued later with ▶ Continue. Because a run can be
+hours long, the button asks for confirmation first. The same run can also be
+stopped from the **Runs** hub ("Stop run"), which does exactly the same thing.
+
 ---
 
 ## 6. After training: pick the right checkpoint
