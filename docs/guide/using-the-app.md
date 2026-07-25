@@ -155,6 +155,20 @@ set per subject type. They never replace a built-in, you can delete them one by
 one or all at once, and they're stored with the app — not in the browser — so
 they survive a cache wipe, show up on your phone and ride along in the backup.
 
+### Keeping a shot you wrote by hand
+
+The **✨ Custom shot** box below the grid is the quick way to add one shot: type a
+prompt, pick a framing, Add. Those cards are stored **in your browser**, so
+clearing its data takes them with it.
+
+Any card you want to keep, press **Keep** on it. It moves into the 📥 Imported
+group and is saved with the app, exactly like an imported shot — surviving a
+cache wipe, following you to another device, included in the backup. The card
+keeps its identity, so a shot preset that had it selected still works. If its
+label happens to clash with a built-in shot or with one you already imported, the
+app says which label and refuses rather than creating a duplicate; rename the
+card (remove it and add it again) and press **Keep** once more.
+
 *Feature requested by ashish.sinha (Discord).*
 
 ## Back up everything

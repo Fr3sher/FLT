@@ -19,7 +19,7 @@ import {
   saveShotPreset,
 } from '../../utils/shotPresets';
 import {
-  applyShotImport, buildShotExport, parseShotImport, MAX_IMPORT_BYTES,
+  applyShotImport, buildShotExport, parseShotImport, promoteCustomShot, MAX_IMPORT_BYTES,
 } from '../../utils/shotImport';
 import {
   ENGINE_ACCENTS, ENGINE_LABELS, billingEngines, canonicalEngines, engineBatches,
@@ -283,6 +283,28 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     catch { toast.error('Could not remove that shot.'); }
   };
 
+  /** ⇪ Keep — promote a hand-written ✨ card into the durable catalog. Those cards
+   *  live in localStorage and die with the browser cache; exporting and
+   *  re-importing them can't rescue them (they collide with themselves), so this
+   *  is the only path — one click, and the card visibly moves to the 📥 group.
+   *  Saved first, removed from localStorage only once the server confirms it
+   *  landed: a failure must never make the card disappear. */
+  const keepCustomShot = async (shot) => {
+    const res = promoteCustomShot({ shot, customShots, importedShots, reservedLabels });
+    if (!res.ok) { toast.error(res.message); return; }
+    try {
+      const d = await persistImported(res.importedShots);
+      if (!(d.shots || []).some((s) => s.id === res.promoted.id)) {
+        toast.error(`“${shot.label}” was refused by the app — the card is still here.`);
+        return;
+      }
+      setCustomShots(res.customShots);
+      toast.success(`Kept “${shot.label}” — it now lives with the app, not in this browser`);
+    } catch {
+      toast.error('Could not keep that shot — the card is still here.');
+    }
+  };
+
   const removeAllImported = async () => {
     if (!window.confirm(`Remove all ${importedShots.length} imported shots for this subject type? The built-in shots are not affected.`)) return;
     const ids = new Set(importedShots.map((s) => s.id));
@@ -314,7 +336,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   /** One user-shot card — selectable like a catalog card, plus the ✕ that only
    *  user shots have. Shared by the ✨ Custom and 📥 Imported groups so they can
    *  never drift apart. */
-  const renderUserShot = (c, onRemove, removeTitle) => {
+  const renderUserShot = (c, onRemove, removeTitle, onKeep = null) => {
     const on = selected.has(c.id);
     const done = doneByLabel.get(c.label) || 0;
     const blocked = c.nsfw && !kleinOnly;   // 🔞 card while an API engine is in the run
@@ -338,11 +360,23 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
             {on && <span className="text-indigo-300" aria-hidden="true">✓</span>}
           </span>
         </button>
-        <button type="button" onClick={onRemove}
-          aria-label={`${removeTitle} ${c.label}`} title={removeTitle}
-          className="shrink-0 w-4 h-4 grid place-items-center rounded bg-black/40 text-content-subtle hover:text-white text-[0.625rem] leading-none">
-          ✕
-        </button>
+        <span className="shrink-0 flex flex-col items-stretch gap-0.5">
+          {/* "Keep" in words, not a glyph: the point of this button is that the
+              card stops living in the browser, and no icon says that. */}
+          {onKeep && (
+            <button type="button" onClick={onKeep}
+              aria-label={`Keep the shot ${c.label}`}
+              title="Keep this shot for good — it moves to Imported and is saved with the app, so it survives clearing your browser and shows up on your other devices"
+              className="px-1 py-px rounded bg-black/40 text-content-subtle hover:text-emerald-300 text-[0.5625rem] leading-none">
+              Keep
+            </button>
+          )}
+          <button type="button" onClick={onRemove}
+            aria-label={`${removeTitle} ${c.label}`} title={removeTitle}
+            className="self-end w-4 h-4 grid place-items-center rounded bg-black/40 text-content-subtle hover:text-white text-[0.625rem] leading-none">
+            ✕
+          </button>
+        </span>
       </div>
     );
   };
@@ -1098,11 +1132,13 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
             <div className="flex items-center gap-2 mb-1">
               <span aria-hidden="true">✨</span>
               <span className="text-[0.6875rem] uppercase font-semibold text-content-muted">Custom</span>
-              <span className="text-content-subtle text-[0.625rem]">your own shots — remove with ✕</span>
+              <span className="text-content-subtle text-[0.625rem]">
+                your own shots, stored in this browser — Keep saves one for good, ✕ removes it
+              </span>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-1.5">
               {customShots.map((c) => renderUserShot(c, () => removeCustomShot(c.id),
-                'Remove this custom shot'))}
+                'Remove this custom shot', () => keepCustomShot(c)))}
             </div>
           </div>
         )}

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {
   SHOT_IMPORT_FORMAT, FRAMINGS, MAX_IMPORT_BYTES, MAX_IMPORT_SHOTS,
   MAX_LABEL_LEN, MAX_PROMPT_LEN,
-  parseShotImport, applyShotImport, buildShotExport,
+  parseShotImport, applyShotImport, buildShotExport, promoteCustomShot,
 } from './shotImport.js';
 
 /** A valid file with `n` distinct shots, so each test only writes the ONE thing
@@ -294,4 +294,87 @@ test('every refusal names the entry AND what is wrong with it — that is the wh
   assert.match(bad.message, /Dog bad/);       // WHICH entry
   assert.match(bad.message, /nope/);          // WHAT is wrong
   assert.match(bad.message, /face, bust, body, back/);   // and what to do instead
+});
+
+// --- Keep: promote a hand-written ✨ card into the durable catalog -------------
+// The ✨ cards live in localStorage and die with the browser cache. Exporting +
+// re-importing them cannot rescue them (they collide with themselves), so the
+// only real fix is a direct promotion — and it has to MOVE the card, not copy it.
+
+const custom = (over = {}) => ({ id: 'custom_1700000000000', label: '✨ on a vintage motorbike',
+  prompt: 'full body shot, sitting on a vintage motorbike in a garage, warm light',
+  framing: 'body', ...over });
+
+test('promoting moves the card: gone from the custom list, present in the imported one', () => {
+  const shotToKeep = custom();
+  const other = custom({ id: 'custom_2', label: '✨ another' });
+  const res = promoteCustomShot({ shot: shotToKeep, customShots: [shotToKeep, other], importedShots: [] });
+  assert.equal(res.ok, true);
+  // MOVED, not copied — two copies would mean two shots with the same label,
+  // which is the very collision the importer refuses.
+  assert.deepEqual(res.customShots.map((s) => s.id), ['custom_2']);
+  assert.deepEqual(res.importedShots.map((s) => s.label), ['✨ on a vintage motorbike']);
+  assert.equal(res.importedShots[0].imported, true);
+});
+
+test('promoting KEEPS the card id, so a saved preset that selected it still resolves', () => {
+  // datasetCustomPresetsV1.selectedIds stores shot IDS. Minting a fresh `imp_…`
+  // here would silently orphan every preset that had this card selected.
+  const shotToKeep = custom();
+  const res = promoteCustomShot({ shot: shotToKeep, customShots: [shotToKeep], importedShots: [] });
+  assert.equal(res.importedShots[0].id, 'custom_1700000000000');
+});
+
+test('a 🔞 card keeps its nsfw flag through the promotion', () => {
+  const hot = custom({ id: 'custom_hot', label: '🔞 something', nsfw: true });
+  const res = promoteCustomShot({ shot: hot, customShots: [hot], importedShots: [] });
+  assert.equal(res.importedShots[0].nsfw, true);
+});
+
+test('promoting a card whose label shadows a built-in is refused, in the importer wording', () => {
+  const clash = custom({ label: 'Bust, front' });
+  const res = promoteCustomShot({ shot: clash, customShots: [clash], importedShots: [],
+    reservedLabels: ['Bust, front'] });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'label_collides_builtin');
+  assert.match(res.message, /Bust, front/);
+  assert.match(res.message, /rename/i);
+});
+
+test('promoting a card that clashes with an already-imported shot is refused', () => {
+  const clash = custom({ label: 'Dog zoomies' });
+  const res = promoteCustomShot({ shot: clash, customShots: [clash],
+    importedShots: [{ id: 'imp_dog', label: 'Dog zoomies', prompt: 'x', framing: 'body' }] });
+  assert.equal(res.ok, false);
+  assert.equal(res.code, 'label_collides_existing');
+  assert.match(res.message, /already/i);
+});
+
+test('a refused promotion changes NOTHING — the card stays where it was', () => {
+  const clash = custom({ label: 'Bust, front' });
+  const before = [clash];
+  const res = promoteCustomShot({ shot: clash, customShots: before, importedShots: [],
+    reservedLabels: ['Bust, front'] });
+  assert.equal(res.ok, false);
+  assert.equal(res.customShots, undefined);
+  assert.deepEqual(before, [clash]);
+});
+
+test('an id already taken among imported shots is uniquified rather than overwriting it', () => {
+  const shotToKeep = custom({ id: 'custom_dup' });
+  const res = promoteCustomShot({ shot: shotToKeep, customShots: [shotToKeep],
+    importedShots: [{ id: 'custom_dup', label: 'Older', prompt: 'x', framing: 'body' }] });
+  assert.equal(res.ok, true);
+  assert.equal(res.importedShots.length, 2);
+  assert.notEqual(res.importedShots[1].id, 'custom_dup');
+  assert.equal(new Set(res.importedShots.map((s) => s.id)).size, 2);
+});
+
+test('a malformed card is refused instead of poisoning the durable catalog', () => {
+  const broken = { id: 'custom_x', label: '', prompt: 'x', framing: 'body' };
+  assert.equal(promoteCustomShot({ shot: broken, customShots: [broken] }).ok, false);
+  const noFraming = { id: 'custom_y', label: 'Fine', prompt: 'x', framing: 'closeup' };
+  const res = promoteCustomShot({ shot: noFraming, customShots: [noFraming] });
+  assert.equal(res.ok, false);
+  assert.match(res.message, /face, bust, body, back/);
 });

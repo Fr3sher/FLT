@@ -127,6 +127,19 @@ def test_sanitize_custom_shots_caps_the_list():
 
 # --- route --------------------------------------------------------------------
 
+def test_a_promoted_custom_card_keeps_its_id():
+    """The ⇪ Keep button promotes a hand-written ✨ card without minting a new id:
+    ids are what saved presets store (datasetCustomPresetsV1.selectedIds), so the
+    backend must accept the card's own `custom_…` id verbatim, not normalise it."""
+    kept = fv.sanitize_custom_shots({'human': [
+        {'id': 'custom_1700000000000', 'label': '✨ on a vintage motorbike',
+         'prompt': 'full body shot, sitting on a vintage motorbike in a garage',
+         'framing': 'body'},
+    ]})['human']
+    assert [s['id'] for s in kept] == ['custom_1700000000000']
+    assert kept[0]['imported'] is True
+
+
 def test_shot_catalog_route_round_trip(client, tmp_path, monkeypatch):
     from app import config as cfg
     monkeypatch.setattr(cfg, '_config_path', lambda: tmp_path / 'config.json')

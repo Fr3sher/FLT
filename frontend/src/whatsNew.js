@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-keep-custom-shot',
+    date: '2026-07-25',
+    title: '⇪ Keep a custom shot you wrote — it stops dying with your browser cache',
+    blurb:
+      'A shot you typed into the ✨ Custom shot box was stored in the browser and nowhere else, so clearing its data quietly took your prompts with it — and nothing on screen ever said so. Every custom card now has a ⇪ button: press it and the card moves into the 📥 Imported group, saved with the app instead of the browser. It survives a cache wipe, shows up on your other devices, and rides along in the backup. The card keeps its identity, so a shot preset that had it selected still works, and if its name clashes with a built-in shot the app says which one and leaves the card untouched rather than making a duplicate. Follow-up to the shot catalog import — idea by ashish.sinha on Discord.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-25-bank-score-frees-the-gpu',
     date: '2026-07-25',
     title: '🖥️ ✨ Score no longer locks your GPU to compute on the CPU',
