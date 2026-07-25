@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-25-training-failure-real-cause',
+    date: '2026-07-25',
+    title: '🔎 A failed run now tells you what actually killed it',
+    blurb:
+      'When a local run died, the red box printed the last lines of the log — and ai-toolkit\'s last lines are usually a harmless huggingface_hub FutureWarning about HF_HUB_ENABLE_HF_TRANSFER. People spent hours chasing a deprecation notice. The box now quotes the real cause: the last traceback, or the last genuine error line. A warning is never shown in red as if it were the reason, and when the log truly holds no error we say exactly that instead of pretending. RTX 50-series owners get more: the pre-flight and the failure box both detect the Blackwell trap — CUDA reports your card, training starts, then dies at the first computation because the PyTorch in your ai-toolkit venv only ships kernels up to sm_90 — and hand you the one pip command that fixes it. Reported by wannadecryptor on Discord.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-25-identity-prompts-per-subject',
     date: '2026-07-25',
     title: '🐾 Identity prompts no longer leak between subject types',

@@ -4278,6 +4278,28 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
     except Exception:
         pass
 
+    # 8) torch build vs GPU architecture — the RTX 50 (Blackwell) trap. Stable
+    # PyTorch wheels stop at sm_90; `torch.cuda.is_available()` stays True, the
+    # run builds its buckets, then dies at the first real computation. Catching
+    # it HERE is the whole point: the alternative is 20 minutes of setup for an
+    # opaque "ai-toolkit exited 1". A warning, not a blocker — the verdict is a
+    # read of the venv, and an unknown probe (None) says nothing at all.
+    try:
+        from .. import capabilities
+        from .training_diagnostics import torch_arch_verdict
+        arch = torch_arch_verdict(capabilities.aitoolkit_torch_info(),
+                                  venv_python=cfg.aitoolkit_path('venv_python'))
+        if arch and not arch['supported']:
+            warnings.append(arch['message']
+                            + (f' Fix: {arch["command"]}' if arch['command'] else ''))
+            # Keep the row SHORT — it sits in a one-line list next to ten other
+            # checks, on a phone too. The full explanation + fix is the warning.
+            _check('torch_arch', 'PyTorch supports this GPU', 'warn',
+                   f'torch {arch["torch"]} has no {arch["sm"]} kernels — the run '
+                   'dies at the first GPU computation')
+    except Exception:
+        pass   # a probe failure must never block or fake a diagnosis
+
     # Verdict agrégé pour la pastille : un fail = 🔴, sinon un warn = 🟡, sinon 🟢.
     statuses = {c['status'] for c in checks}
     verdict = ('blocked' if 'fail' in statuses
@@ -4345,6 +4367,36 @@ def _log_tail(path: str, n: int = 30) -> str:
         return '(log illisible)'
 
 
+# Scanning window for the excerpt: wide enough that a full traceback (frames +
+# exception line) is never cut in half, while `log_tail` keeps its historical
+# 30-line shape for anything still reading that field.
+_ERROR_SCAN_LINES = 200
+
+
+def _crash_payload(log_path, dataset_id, rc) -> dict:
+    """The `training_error` state a crashed local run leaves behind: the tail
+    (path-redacted — this text is shown to the user and pasted into public help
+    threads), the excerpt that actually EXPLAINS the failure, and, when the venv
+    says so, the GPU-architecture verdict that turns "exited 1" into something
+    the user can act on. Best-effort throughout: nothing here may raise inside
+    the watcher thread, and an unknown probe adds no key at all."""
+    from ..utils.redact import redact_user_paths
+    from .training_diagnostics import extract_error_excerpt, torch_arch_verdict
+    wide = _log_tail(log_path, _ERROR_SCAN_LINES)
+    payload = {'dataset_id': dataset_id, 'rc': rc,
+               'log_tail': redact_user_paths(_log_tail(log_path))[-1500:],
+               'excerpt': extract_error_excerpt(wide)}
+    try:
+        from .. import capabilities
+        arch = torch_arch_verdict(capabilities.aitoolkit_torch_info(),
+                                  venv_python=cfg.aitoolkit_path('venv_python'))
+        if arch and not arch['supported']:
+            payload['gpu_arch'] = {'message': arch['message'], 'command': arch['command']}
+    except Exception:
+        pass
+    return payload
+
+
 def _watch_training(app, proc, log_path, dataset_id) -> None:
     """Thread daemon : attend la fin du process ai-toolkit puis fait avancer la
     file (libère ComfyUI / lance le suivant) DÈS la fin, sans dépendre du polling
@@ -4359,13 +4411,12 @@ def _watch_training(app, proc, log_path, dataset_id) -> None:
     try:
         with app.app_context():
             if rc not in (0, None):
-                tail = _log_tail(log_path)
+                payload = _crash_payload(log_path, dataset_id, rc)
                 logger.error("Entraînement ai-toolkit dataset %s terminé en ERREUR (rc=%s). "
-                             "Fin du log :\n%s", dataset_id, rc, tail)
+                             "Cause probable :\n%s", dataset_id, rc,
+                             payload['excerpt']['text'] or payload['log_tail'])
                 # Surface l'erreur à l'UI (sinon un crash = juste « terminé » silencieux).
-                queue_manager._set_system_state(
-                    'training_error', {'dataset_id': dataset_id, 'rc': rc, 'log_tail': tail[-1500:]},
-                    ttl_seconds=3600)
+                queue_manager._set_system_state('training_error', payload, ttl_seconds=3600)
             else:
                 logger.info("Entraînement ai-toolkit dataset %s terminé (rc=%s).", dataset_id, rc)
             process_training_queue()  # libère le GPU / enchaîne la file immédiatement
@@ -5046,14 +5097,20 @@ def last_local_error() -> dict | None:
 
 
 def local_error_message(err) -> str:
-    """One-line, paste-safe summary of a local crash for the Runs page."""
+    """One-line, paste-safe summary of a local crash for the Runs page. Quotes the
+    line that EXPLAINS the crash (last traceback / error line), never the last
+    line of the log — which is very often a harmless FutureWarning. When the log
+    holds no error line at all, the summary stays honest and says just that."""
     if not isinstance(err, dict):
         return 'Training crashed.'
+    from .training_diagnostics import extract_error_excerpt
     rc = err.get('rc')
-    tail = (err.get('log_tail') or '').strip()
-    last = tail.splitlines()[-1].strip() if tail else ''
+    excerpt = err.get('excerpt')
+    if not isinstance(excerpt, dict):     # legacy payload written before excerpts
+        excerpt = extract_error_excerpt(err.get('log_tail') or '')
+    headline = (excerpt.get('headline') or '').strip()[:300]
     base = f'Training crashed (exit code {rc}).' if rc is not None else 'Training crashed.'
-    return f'{base} {last}' if last else base
+    return f'{base} {headline}' if headline else f'{base} No error line in the log.'
 
 
 def _failed_local_record_id() -> int | None:

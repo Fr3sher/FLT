@@ -43,6 +43,7 @@ import ContinueDialog from './ContinueDialog';
 import RunLineageGraph from './RunLineageGraph';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
+import { failureView } from './trainingFailure';
 import SettingsLink from '../common/SettingsLink';
 import { DatasetVersionChip, RunIdChip } from './RunIdentityBadges';
 import {
@@ -1259,23 +1260,38 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           starts then dies just flips back to idle after the green "Training started"
           toast — the exact "shows confirmation but nothing happens" report (GH #3).
           Cleared automatically on the next launch (server resets training_error). */}
-      {status.error && (!status.error.dataset_id || status.error.dataset_id === ds.currentId) && (
+      {status.error && (!status.error.dataset_id || status.error.dataset_id === ds.currentId) && (() => {
+        const view = failureView(status.error);
+        return (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-red-200 text-[0.6875rem]">
-          <div className="font-semibold">
-            ⚠ The last training run failed{status.error.rc != null ? ` (ai-toolkit exited ${status.error.rc})` : ''} — nothing is training now.
-          </div>
-          {status.error.log_tail && (
-            <pre className="mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-1.5 font-mono text-[0.625rem] text-red-300/90">
-              {status.error.log_tail}
+          <div className="font-semibold">⚠ {view.title}</div>
+          {/* The GPU-architecture verdict is a PROVEN cause read from the venv
+              that trains — it goes first, above the log, with its remedy. */}
+          {view.gpuArch && (
+            <div className="mt-1.5 rounded border border-amber-400/40 bg-amber-500/10 p-2 text-amber-100">
+              <div className="font-semibold">This GPU needs a different PyTorch build</div>
+              <p className="m-0 mt-0.5 text-amber-200/90">{view.gpuArch.message}</p>
+              {view.gpuArch.command && (
+                <>
+                  <div className="mt-1 text-amber-200/80">Run this once, then Train again:</div>
+                  <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap break-all rounded bg-black/40 p-1.5 font-mono text-[0.625rem] text-amber-100">
+                    {view.gpuArch.command}
+                  </pre>
+                </>
+              )}
+            </div>
+          )}
+          {view.excerpt && (
+            <pre className={`mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-1.5 font-mono text-[0.625rem] ${
+              view.tone === 'error' ? 'text-red-300/90' : 'text-content-muted'}`}>
+              {view.excerpt}
             </pre>
           )}
-          <div className="mt-1 text-red-300/80">
-            Common first-run causes: ai-toolkit’s Python venv is missing packages
-            (re-run its install), or the base model is still downloading / needs a
-            Hugging Face token (gated models like Krea 2, FLUX.1 and FLUX.2 Klein). Fix the cause above, then Train again.
-          </div>
+          <div className="mt-1 text-red-300/80">{view.note}</div>
+          {view.causes && <div className="mt-1 text-red-300/80">{view.causes}</div>}
         </div>
-      )}
+        );
+      })()}
 
       {/* Live progress of THIS dataset's run: bar + loss sparkline + sample
           previews. Only while it is the one training (queued/other runs: no poll). */}

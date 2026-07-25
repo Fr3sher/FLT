@@ -6,6 +6,7 @@ every reachability probe goes through it so tests can patch one symbol.
 `_import_ok` is the equivalent seam for the slow subprocess import-probes.
 """
 import copy
+import json
 import os
 import re
 import shutil
@@ -631,6 +632,106 @@ def gpu_vram_gb():
         gb = None
     _gpu_cache.update(ts=now, gb=gb)
     return gb
+
+
+# --- ai-toolkit torch probe (what actually trains) -----------------------------
+# ai-toolkit runs in ITS OWN venv, which LDS never installs — it only reads the
+# interpreter the user pointed at. Whether that venv's torch carries kernels for
+# the local GPU is invisible from here, and getting it wrong is silent: RTX 50
+# (Blackwell, sm_120) + a stable wheel = `is_available()` True, then a hard
+# "no kernel image is available for execution on the device" at the first real
+# computation. So: probe the venv, but only when it can matter.
+#
+# COST DISCIPLINE. `import torch` in a cold venv costs seconds, so the expensive
+# probe is gated behind a ~100 ms nvidia-smi capability read: a GPU below
+# compute 10.0 (everything up to Ada / RTX 40) can never hit the trap and pays
+# nothing at all. What we do run is cached 10 min — a venv does not change
+# between two runs.
+_cc_cache = {'ts': 0.0, 'cc': None}
+_TORCH_PROBE_TTL = 600
+_torch_probe_cache = {}   # interpreter path -> (ts, info)
+
+# First capability major that stable wheels may not cover (Blackwell = 12).
+# 10 is deliberately lower than 12: it keeps the gate honest if a future
+# generation lands before the wheels do.
+_RISKY_CC_MAJOR = 10
+
+_TORCH_PROBE_CODE = (
+    'import json, torch\n'
+    'cap = name = None\n'
+    'try:\n'
+    '    if torch.cuda.is_available():\n'
+    '        cap = list(torch.cuda.get_device_capability(0))\n'
+    '        name = torch.cuda.get_device_name(0)\n'
+    'except Exception:\n'
+    '    pass\n'
+    'print(json.dumps({"torch": torch.__version__, "cuda": torch.version.cuda,\n'
+    '                  "capability": cap, "device_name": name,\n'
+    '                  "arch_list": list(torch.cuda.get_arch_list())}))\n'
+)
+
+
+def gpu_compute_capability():
+    """(major, minor) of GPU 0 via nvidia-smi, cached 10 min. None = unknown."""
+    now = time.time()
+    if _cc_cache['ts'] and (now - _cc_cache['ts']) < _GPU_TTL:
+        return _cc_cache['cc']
+    cc = None
+    try:
+        proc = subprocess.run(
+            ['nvidia-smi', '--query-gpu=compute_cap', '--format=csv,noheader'],
+            capture_output=True, text=True, timeout=5,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if proc.returncode == 0:
+            lines = (proc.stdout or '').strip().splitlines()
+            if lines:
+                major, _, minor = lines[0].strip().partition('.')
+                cc = (int(major), int(minor or 0))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        cc = None
+    _cc_cache.update(ts=now, cc=cc)
+    return cc
+
+
+def _torch_probe(python: str, timeout=90):
+    """Raw torch facts from `python`, as a dict, or None. None is UNKNOWN — torch
+    not importable, interpreter broken, cold-import timeout — never a claim."""
+    try:
+        proc = subprocess.run([python, '-c', _TORCH_PROBE_CODE],
+                              capture_output=True, text=True, timeout=timeout,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        return None
+    if proc.returncode != 0:
+        return None
+    try:
+        info = json.loads(((proc.stdout or '').strip().splitlines() or [''])[-1])
+    except Exception:
+        return None
+    return info if isinstance(info, dict) else None
+
+
+def aitoolkit_torch_info():
+    """torch/GPU facts from the ai-toolkit venv — the interpreter that TRAINS —
+    or None when we cannot know (no ai-toolkit, no NVIDIA GPU, GPU old enough to
+    be covered by every wheel, torch not importable, probe timeout). Callers must
+    treat None as 'no information', never as a verdict."""
+    cc = gpu_compute_capability()
+    if cc is None or cc[0] < _RISKY_CC_MAJOR:
+        return None                       # cheap exit: no torch import at all
+    python = cfg.aitoolkit_path('venv_python')
+    if not python or not Path(python).is_file():
+        return None
+    key = str(python)
+    now = time.time()
+    hit = _torch_probe_cache.get(key)
+    if hit and (now - hit[0]) < _TORCH_PROBE_TTL:
+        return hit[1]
+    info = _torch_probe(key)
+    if info is None:
+        return None      # a cold-import timeout must not be cached as a fact
+    _torch_probe_cache[key] = (now, info)
+    return info
 
 
 def _is_comfyui_dir(d) -> bool:
