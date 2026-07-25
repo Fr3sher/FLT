@@ -36,7 +36,30 @@ ACTIVE_STATES = ('preparing', 'provisioning', 'uploading', 'training',
 
 _stop_events = {}        # run_id -> threading.Event
 _monitor_threads = {}    # run_id -> threading.Thread
+_supervisor_thread = None    # the one out-of-monitor watchdog (start_supervisor)
 _auto_retry_lock = threading.Lock()
+
+# -- watchdog / stop authority ------------------------------------------------
+# A pod bills by the hour, so every guarantee below is anchored on the DATABASE
+# (and on the vast API), never on in-process state: a threading.Event does not
+# survive a restart and is worthless when the thread meant to observe it is
+# dead or wedged.
+SUPERVISOR_INTERVAL_SECONDS = 60
+# Database silence past which a monitor thread is no longer trusted to carry
+# out a stop -- it writes phase_detail every poll (~10 s), so two minutes of
+# nothing means it is not coming back in time to save a paid pod.
+STOP_HANDOFF_SECONDS = 120
+# ... and how long a stop handed to a (then) responsive monitor may stay
+# unfinished before the supervisor terminates the pod itself. Generous enough
+# to cover the graceful path: stop the remote job, pull the last checkpoint.
+STOP_DEADLINE_SECONDS = 15 * 60
+# The supervisor defers to a live monitor on the runtime cap (the monitor
+# rescues the checkpoint first); it only acts if the monitor did not.
+_SUPERVISOR_MARGIN_SECONDS = 120
+# Floor for phases that are legitimately silent (staging, boot, upload, final
+# download). The runtime cap stays their real backstop.
+_SILENT_PHASE_FREEZE_SECONDS = 120 * 60
+_FREEZE_WATCHDOG_MINUTES = 45   # default when config carries no value
 # Flask serves requests from multiple threads in the portable app.  SQLite
 # cannot express the two launch invariants (global active-run cap and
 # per-dataset/family uniqueness) as a simple UNIQUE constraint because both
@@ -1291,17 +1314,220 @@ def _provision(run):
         raise
 
 
-def request_stop(run_id=None) -> bool:
+def _idle_seconds(run, now=None) -> float:
+    """How long this run has been silent in the DATABASE — the only progress
+    signal that survives a restart and does not depend on the monitor thread
+    being healthy. Every monitor poll writes phase_detail through _set(), which
+    bumps updated_at, so a frozen updated_at means the monitor stopped
+    completing iterations (whatever the reason: dead, wedged in a socket read,
+    or gone with a restart)."""
+    now = now or datetime.utcnow()
+    ref = run.updated_at or run.created_at or now
+    return max(0.0, (now - ref).total_seconds())
+
+
+def _monitor_is_responsive(run) -> bool:
+    """Can this run's monitor thread be TRUSTED to carry out a stop?
+
+    Both halves matter. A registered thread object proves nothing (the run-103
+    monitor was still alive, blocked forever inside one HTTP call), and a fresh
+    updated_at alone would be satisfied by a monitor that has just died. Only a
+    live thread that is also still writing gets the graceful path."""
+    thread = _monitor_threads.get(int(run.id))
+    if thread is None or not thread.is_alive():
+        return False
+    return _idle_seconds(run) <= STOP_HANDOFF_SECONDS
+
+
+def _force_stop(run, detail, error=None) -> dict:
+    """Terminate the pod HERE, without asking the monitor thread.
+
+    The pod is the thing that costs money, and the vast API is the only
+    authority on whether it is gone: a successful destroy closes the run as
+    'stopped'; a refused or failing destroy must NEVER be reported as a
+    success. In that case the run is parked in 'error_pod_kept' — the existing
+    status meaning "a pod may still be alive out there" — so boot/launch
+    reconciliation reaps it later, and the caller gets the instance id to
+    destroy by hand in the meantime."""
+    iid = run.vast_instance_id
+    _stop_event_for(run.id).set()   # a still-living monitor stands down too
+    if not iid:
+        _set(run, status='stopped', phase_detail=detail,
+             error=error, finished_at=datetime.utcnow())
+        return {'ok': True, 'run_id': run.id, 'mode': 'forced',
+                'message': detail, 'instance_id': None}
+    gone = False
+    failure = ''
+    try:
+        gone = bool(vast_client.destroy_instance(iid))
+        if not gone:
+            failure = 'the vast.ai API refused the termination'
+    except Exception as e:
+        failure = str(e)[:200]
+        logger.warning('forced stop of run %s: destroy %s failed: %s',
+                       run.id, iid, failure)
+    if gone:
+        _set(run, status='stopped', phase_detail=detail,
+             error=error, finished_at=datetime.utcnow())
+        logger.warning('forced stop of run %s: pod %s terminated (%s)',
+                       run.id, iid, error or detail)
+        return {'ok': True, 'run_id': run.id, 'mode': 'forced',
+                'message': detail, 'instance_id': iid}
+    message = (f'Could not terminate instance {iid} ({failure}). It may still '
+               f'be running and billing — destroy it in the vast.ai console.')
+    _set(run, status='error_pod_kept', phase_detail=detail[:500],
+         error=message, finished_at=datetime.utcnow())
+    return {'ok': False, 'run_id': run.id, 'mode': 'failed',
+            'error': message, 'instance_id': iid}
+
+
+def _stop_one(run) -> dict:
+    # Decide BEFORE writing anything: stamping stop_requested_at bumps
+    # updated_at, which would make a frozen run look freshly alive.
+    responsive = _monitor_is_responsive(run)
+    _stop_event_for(run.id).set()
+    if not run.stop_requested_at:
+        _set(run, stop_requested_at=datetime.utcnow())
+    if responsive:
+        # Graceful: the monitor stops the remote job and rescues the latest
+        # checkpoint before terminating. The stamped stop_requested_at arms the
+        # supervisor's deadline in case it wedges on the way.
+        return {'ok': True, 'run_id': run.id, 'mode': 'graceful',
+                'message': 'Stopping the run — the pod is winding down…',
+                'instance_id': run.vast_instance_id}
+    return _force_stop(
+        run,
+        detail='Stopped by user — the run monitor was not responding, so the '
+               'pod was terminated directly (checkpoints already downloaded '
+               'are kept)',
+        error='stopped by user without a responsive monitor')
+
+
+def request_stop(run_id=None) -> dict:
+    """Stop one run (or every active run when run_id is None) and report what
+    ACTUALLY happened.
+
+    Historically this only set an in-process threading.Event and returned True
+    as long as the row was active — so when the monitor thread was dead or
+    wedged, the button answered "ok" and the pod kept billing for hours
+    (incident 2026-07-25). A stop now either terminates the pod or says it
+    could not, naming the instance."""
     if run_id is not None:
         run = CloudTrainingRun.query.get(int(run_id))
-        if not run or run.status not in ACTIVE_STATES:
-            return False
-        _stop_event_for(run.id).set()
-        return True
-    actives = get_active_runs()
-    for run in actives:
-        _stop_event_for(run.id).set()
-    return bool(actives)
+        runs = [run] if run and run.status in ACTIVE_STATES else []
+    else:
+        runs = get_active_runs()
+    if not runs:
+        return {'ok': False, 'mode': 'none', 'runs': [],
+                'error': 'No active cloud run to stop — it may have already '
+                         'finished.'}
+    results = [_stop_one(run) for run in runs]
+    failed = [r for r in results if not r['ok']]
+    modes = {r['mode'] for r in results}
+    return {'ok': not failed,
+            'mode': modes.pop() if len(modes) == 1 else 'mixed',
+            'runs': results,
+            'message': results[0].get('message', ''),
+            'error': failed[0]['error'] if failed else None}
+
+
+def supervise_active_runs() -> list:
+    """One supervisor tick: enforce, from OUTSIDE any monitor thread, the
+    guarantees a monitor can no longer make once it is dead or wedged.
+
+    Three rules, all anchored on durable database state:
+      * runtime cap  — the configured ceiling used to be a deadline computed
+        inside the monitor itself, so the net died with what it protected;
+      * stop deadline — a stop handed to a monitor that never carries it out;
+      * freeze watchdog — no database progress for longer than the phase
+        allows (see _freeze_limit_seconds).
+    A margin is deliberately left on the first two so a HEALTHY monitor always
+    gets to act first: its own paths rescue the last checkpoint from the pod,
+    while a forced stop can only keep what mid-run mirroring already pulled.
+    Never raises — the whole point is a net that cannot die."""
+    acted = []
+    try:
+        c = cfg.get('cloud') or {}
+        max_seconds = int(c.get('max_runtime_minutes') or 480) * 60
+        now = datetime.utcnow()
+        for run in get_active_runs():
+            try:
+                age = (now - (run.created_at or now)).total_seconds()
+                if age > max_seconds + _SUPERVISOR_MARGIN_SECONDS:
+                    res = _force_stop(
+                        run, detail='Max runtime reached — pod terminated by '
+                                    'the supervisor', error='max runtime cap hit')
+                    acted.append({'run_id': run.id, 'reason': 'runtime_cap',
+                                  'ok': res['ok']})
+                    continue
+                stop_age = ((now - run.stop_requested_at).total_seconds()
+                            if run.stop_requested_at else 0)
+                if stop_age > STOP_DEADLINE_SECONDS:
+                    res = _force_stop(
+                        run, detail='Stopped by user — the run monitor never '
+                                    'completed the stop, so the pod was '
+                                    'terminated by the supervisor',
+                        error='stop request not honoured in time')
+                    acted.append({'run_id': run.id, 'reason': 'stop_deadline',
+                                  'ok': res['ok']})
+                    continue
+                limit = _freeze_limit_seconds(run, c)
+                if limit and _idle_seconds(run, now) > limit:
+                    res = _force_stop(
+                        run, detail=f'Frozen — no progress for {limit // 60} min; '
+                                    'pod terminated by the supervisor',
+                        error='freeze watchdog')
+                    acted.append({'run_id': run.id, 'reason': 'freeze',
+                                  'ok': res['ok']})
+            except Exception:
+                logger.exception('supervisor: run %s could not be judged', run.id)
+    except Exception:
+        logger.exception('cloud supervisor tick failed')
+    return acted
+
+
+def _freeze_limit_seconds(run, c=None) -> int:
+    """Seconds of database silence tolerated in the run's CURRENT phase (0 =
+    watchdog off).
+
+    Only 'training' is judged on the configured value: there the monitor writes
+    phase_detail on every poll (~10 s), so silence is unambiguous. Every other
+    phase is silent by design for long stretches — staging a big dataset,
+    renting and booting a pod, uploading images, pulling the final checkpoint —
+    and killing a run that is merely starting up would be worse than the leak
+    we are closing. They get a fixed, very generous floor; the runtime cap
+    remains their real backstop."""
+    c = c if c is not None else (cfg.get('cloud') or {})
+    raw = c.get('freeze_watchdog_minutes')
+    minutes = _FREEZE_WATCHDOG_MINUTES if raw is None else int(raw or 0)
+    if minutes <= 0:
+        return 0
+    if run.status == 'training':
+        return minutes * 60
+    return max(minutes * 60, _SILENT_PHASE_FREEZE_SECONDS)
+
+
+def _supervisor_loop(app):
+    while True:
+        try:
+            with app.app_context():
+                supervise_active_runs()
+        except Exception:
+            logger.exception('cloud supervisor loop failed')
+        _sleep(SUPERVISOR_INTERVAL_SECONDS)
+
+
+def start_supervisor(app):
+    """Start the single watchdog thread (idempotent). Deliberately independent
+    of boot_recover and of every per-run monitor: it owns nothing, blocks on
+    nothing but its own sleep, and therefore survives what they cannot."""
+    global _supervisor_thread
+    if _supervisor_thread is not None and _supervisor_thread.is_alive():
+        return _supervisor_thread
+    _supervisor_thread = threading.Thread(
+        target=_supervisor_loop, args=(app,), daemon=True, name='cloud-supervisor')
+    _supervisor_thread.start()
+    return _supervisor_thread
 
 
 def reconcile_orphans(app) -> int:
@@ -1513,6 +1739,18 @@ def _finish(run, status, detail='', error=None, destroy=True):
     return pod_gone
 
 
+class _RunClosedExternally(Exception):
+    """The run row left ACTIVE_STATES while this monitor was working — a forced
+    stop or the supervisor closed it. The monitor must stand down instead of
+    resurrecting the row (or renting a pod for a run nobody waits for)."""
+
+
+def _assert_run_open(run):
+    db.session.refresh(run)     # another thread may have committed a close
+    if run.status not in ACTIVE_STATES:
+        raise _RunClosedExternally(run.status)
+
+
 def _monitor(app, run_id):
     """Full run lifecycle. Runs in a daemon thread; every exit path goes
     through _finish() so the pod cannot be leaked by this thread."""
@@ -1538,9 +1776,11 @@ def _monitor(app, run_id):
         try:
             # -- heavy launch work, moved off the HTTP path (see launch) ----
             _prepare_staging(run)
+            _assert_run_open(run)       # never rent for an already-stopped run
             # -- provision (if resuming, the instance may already exist) ----
             if not run.vast_instance_id:
                 _provision(run)
+            _assert_run_open(run)
             # Boot-readiness timeout anchor. A FRESH launch measures from now
             # (post-provision) so dataset staging / offer search never eat into
             # the pod's boot budget. A RESUME must NOT get a brand-new window on
@@ -1572,6 +1812,7 @@ def _monitor(app, run_id):
                 logger.warning('cloud.ui_port=8675 is stale for template mode — using 18675')
                 port = 18675
             while True:
+                _assert_run_open(run)
                 # A transient vast API hiccup is just "not ready yet" -- only
                 # READY_TIMEOUT_SECONDS may fail the boot wait, never a single
                 # 502 that would destroy a pod about to come up fine.
@@ -1702,6 +1943,7 @@ def _monitor(app, run_id):
             unreachable_since = None
             polls = 0
             while True:
+                _assert_run_open(run)
                 if _now() - cap_anchor > max_seconds:
                     try:
                         remote.stop_job(job_id)
@@ -1803,6 +2045,19 @@ def _monitor(app, run_id):
                             error='first-step watchdog')
                     return
                 _sleep(POLL_SECONDS)
+        except _RunClosedExternally as closed:
+            # Someone with more authority than this thread (a forced stop, the
+            # supervisor) already closed the run. Do NOT touch the row -- but a
+            # pod we may have just rented is still ours to kill, unless the row
+            # says it was deliberately kept for manual recovery.
+            logger.warning('cloud run %s closed externally (%s) — monitor '
+                           'standing down', run_id, closed)
+            if run.vast_instance_id and run.status != 'error_pod_kept':
+                try:
+                    vast_client.destroy_instance(run.vast_instance_id)
+                except Exception:
+                    logger.exception('stand-down destroy of %s raised',
+                                     run.vast_instance_id)
         except Exception as e:
             logger.exception('cloud run %s failed', run_id)
             error_text = str(e)[:500]
@@ -2249,6 +2504,14 @@ def _run_payload(run) -> dict:
             'auto_retry_of': _run_param(run, 'auto_retry_of'),
             'auto_retry_run_id': _run_param(run, 'auto_retry_run_id'),
             'created_at': run.created_at.isoformat() if run.created_at else None,
+            # How long the run has reported nothing, and how long it is allowed
+            # to (0 = the freeze watchdog is off). The card warns on its own
+            # from these two, so a silent run is visible even when the watchdog
+            # is configured never to cut.
+            'idle_seconds': int(_idle_seconds(run)),
+            'idle_limit_seconds': (_freeze_limit_seconds(run)
+                                   if run.status in ACTIVE_STATES else 0),
+            'stop_requested': bool(run.stop_requested_at),
             'finished_at': run.finished_at.isoformat() if run.finished_at else None}
     if base_model is not None:
         payload['base_model'] = base_model

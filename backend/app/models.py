@@ -511,6 +511,11 @@ class CloudTrainingRun(db.Model):
     error = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # When the user asked this run to stop. Durable on purpose: an in-memory
+    # threading.Event does not survive a restart and cannot be enforced by
+    # anything but the monitor thread — which is exactly what may be dead.
+    # The supervisor uses this to terminate a pod whose stop was never honoured.
+    stop_requested_at = db.Column(db.DateTime)
     finished_at = db.Column(db.DateTime)
 
 

@@ -153,6 +153,24 @@ function CloudTrainingCard({ config, setField }) {
           />
         </div>
         <div>
+          <label htmlFor="cloud-freeze-watchdog" className="block text-sm font-medium text-content">
+            Freeze watchdog (minutes, 0 = warn only)
+          </label>
+          <input
+            id="cloud-freeze-watchdog"
+            type="number"
+            min="0"
+            max="480"
+            step="1"
+            value={config.cloud?.freeze_watchdog_minutes ?? 45}
+            onChange={(e) => setField('cloud', 'freeze_watchdog_minutes', Math.max(0, parseInt(e.target.value, 10) || 0))}
+            className={INPUT_CLASS}
+          />
+          <p className="mt-1 text-[0.6875rem] text-content-subtle">
+            Last-resort net when a training run stops reporting altogether (a restart, a connection wedged against the pod): the pod is terminated from outside the run, so it can't keep billing unnoticed. Checkpoints already downloaded are kept. Set 0 to only get the warning on the run card. Booting, uploading and downloading are never cut by this.
+          </p>
+        </div>
+        <div>
           <label htmlFor="cloud-unreachable-grace" className="block text-sm font-medium text-content">
             Unreachable grace (minutes)
           </label>

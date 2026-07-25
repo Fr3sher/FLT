@@ -110,6 +110,10 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'watermark_bbox', 'TEXT'),
     ('bank_image', 'watermark_clean_method', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
+    # the database so the supervisor can terminate a pod whose monitor thread
+    # never honoured it. Additive — existing runs simply carry NULL.
+    ('cloud_training_run', 'stop_requested_at', 'DATETIME'),
 )
 
 def _apply_additive_migrations():
@@ -338,3 +342,7 @@ def _start_workers(app):
     from .services import cloud_training
     threading.Thread(target=cloud_training.boot_recover, args=(app,),
                      daemon=True, name='cloud-boot-recover').start()
+    # Started separately from boot_recover on purpose: the watchdog that
+    # enforces the runtime cap, the stop deadline and the freeze detection must
+    # not share a fate with the recovery it supervises.
+    cloud_training.start_supervisor(app)

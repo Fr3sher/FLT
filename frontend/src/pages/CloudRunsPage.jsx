@@ -22,6 +22,7 @@ import {
   trainingRunVariantLabel,
 } from '../utils/trainingRuns';
 import { confirmableRetryFlag } from '../utils/trainingRefusals';
+import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
   TRASH_REMINDER,
@@ -171,6 +172,23 @@ function RecipeWarning({ run }) {
       {replayBlocked && (
         <span className="font-semibold"> Retry and Continue are disabled; start a fresh validated run.</span>
       )}
+    </div>
+  );
+}
+
+/* A rented pod bills even when nothing is happening. Surfaced on the card as
+   soon as a run goes quiet — well before the watchdog would act, and the only
+   signal at all when the user turned automatic termination off. */
+function SilenceWarning({ run }) {
+  const warning = runSilenceWarning(run);
+  if (!warning) return null;
+  const critical = warning.level === 'critical';
+  return (
+    <div role="alert"
+      className={`w-full rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${
+        critical ? 'border-red-400/50 bg-red-500/10 text-red-200'
+          : 'border-amber-400/40 bg-amber-500/10 text-amber-200'}`}>
+      <span className="font-semibold">{critical ? '⛔' : '⚠'} Silent run:</span> {warning.text}
     </div>
   );
 }
@@ -392,8 +410,11 @@ export default function CloudRunsPage() {
     setStopping((m) => ({ ...m, [run.run_id]: true }));
     try {
       const d = await postJson('/api/dataset/train/cloud/stop', { run_id: run.run_id });
-      if (d.ok === false) toast.error('Could not stop the run — it may have already finished.');
-      else toast.info('Stopping the run — the pod is winding down…');
+      const m = stopOutcomeMessage(d);
+      // A failed termination is the expensive case: keep it on screen (the
+      // instance id in the text is what the user needs in the vast console).
+      if (m.level === 'error') toast.error(m.text, 20000);
+      else toast.info(m.text, m.level === 'warn' ? 12000 : undefined);
       poll();
     } finally {
       setStopping((m) => ({ ...m, [run.run_id]: false }));
@@ -937,6 +958,7 @@ export default function CloudRunsPage() {
               </div>
 
               <RecipeWarning run={run} />
+              <SilenceWarning run={run} />
               <TrainingProgress datasetId={run.dataset_id} trainType={run.train_type} variant={run.variant} cloud />
 
               <div className="flex flex-wrap items-center gap-2">

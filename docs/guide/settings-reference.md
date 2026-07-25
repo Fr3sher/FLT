@@ -268,6 +268,7 @@ Guard-rails on cost and host quality for rented pods. The card also shows a live
 | **Max price per hour ($)** | `cloud.max_price_per_hour` | `0.80` | 0.1–5 | A safety cap on the hourly offer price; pricier hosts are skipped before launch. |
 | **Monthly budget ($, 0 = unlimited)** | `cloud.monthly_budget_usd` | `0` | ≥0 | A hard spend ceiling for the month; new launches are **blocked** once you pass it. `0` means no limit. |
 | **Stall timeout (minutes)** | `cloud.stall_timeout_minutes` | `30` | 5–240 | If no training step progresses for this long, the watchdog rescues the logs and kills the pod. |
+| **Freeze watchdog (minutes, 0 = warn only)** | `cloud.freeze_watchdog_minutes` | `45` | 0 or 15–480 | Last-resort net for a run whose own supervision stopped answering (an app restart, a wedged connection to the pod): if a **training** run reports no progress at all for this long, the pod is terminated from outside — the stall timeout above can only act while the run is still being watched. Checkpoints already downloaded are kept. Set to `0` to only see the warning on the run card and never cut automatically. Phases that are silent by design (booting, uploading, downloading the result) are never judged on this value; they get a fixed 2 h floor and the runtime cap as backstop. |
 | **Unreachable grace (minutes)** | `cloud.unreachable_grace_minutes` | `6` | 1–60 | How long a running pod may stay unreachable (a vast.ai network blackout) before the run is given up and auto-retried on a fresh host. Raise it if healthy runs die with *pod unreachable*. |
 | **Min host reliability** | `cloud.min_reliability` | `0.98` | 0.9–0.999 | vast.ai reliability floor. Lowering toward 0.95 surfaces cheaper hosts at a higher boot-failure risk. |
 | **Verified hosts only** | `cloud.verified_only` | **on** | toggle | Restrict to vast.ai's verified hosts (the historical, safer behaviour). |
@@ -360,7 +361,7 @@ These have no UI control — they're for advanced users editing `config.json` by
 | `cloud.min_disk_bw_mbps` | `500` | Skip hosts too slow to extract it. |
 | `cloud.host_blacklist_days` | `3` | How long to skip a host whose pod never became ready. |
 | `cloud.ready_timeout_minutes` | `25` | Boot budget: image pull + services up. |
-| `cloud.max_runtime_minutes` | `480` | Hard stop past this (the stall watchdog is the first line of defence). |
+| `cloud.max_runtime_minutes` | `480` | Hard stop past this (the stall watchdog is the first line of defence). Enforced by the out-of-run supervisor too, so it holds even if the run's own supervision dies. |
 | `cloud.disk_gb` | `60` | Instance disk (base model + dataset + checkpoints). |
 | `cloud.min_vram_gb` | `{zimage:24, sdxl:16, krea:24, flux2klein:32}` | Minimum VRAM **per family**. flux2klein uses 32 (the 9B is the cloud-first lane; a 32 GB pod also trains the 4B). |
 | `cloud.onstart` | `''` | Optional startup command for the raw-image fallback. |
@@ -422,6 +423,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `cloud.max_price_per_hour` | Safety cap on the hourly offer price in $ (default `0.80`); pricier hosts are skipped before launch. |
 | `cloud.monthly_budget_usd` | Hard monthly spend ceiling in $ (default `0` = unlimited); launches are blocked past it. |
 | `cloud.stall_timeout_minutes` | Kill + rescue a cloud run after this many minutes without step progress (default `30`, 5–240). |
+| `cloud.freeze_watchdog_minutes` | Terminate a training run that reports nothing at all for this long, from outside the run's own supervision (default `45`; `0` = warn on the card only). |
 | `cloud.min_reliability` | vast.ai host-reliability floor (default `0.98`, 0.9–0.999); lower surfaces cheaper, riskier hosts. |
 | `cloud.verified_only` | Restrict to vast.ai verified hosts (default `true`). |
 | `cloud.secure_cloud_only` | Restrict to vast.ai's Secure Cloud (datacenter) tier (default `false`; narrows the market, raises price). |

@@ -44,6 +44,7 @@ import RunLineageGraph from './RunLineageGraph';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
 import { failureView } from './trainingFailure';
+import { stopOutcomeMessage } from '../../utils/runSilence';
 import SettingsLink from '../common/SettingsLink';
 import { DatasetVersionChip, RunIdChip } from './RunIdentityBadges';
 import {
@@ -1334,7 +1335,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               View in Runs ↗
             </Link>
             <button type="button" className="px-2 py-0.5 rounded bg-red-600/80 text-white text-[0.6875rem] font-semibold"
-              onClick={async () => { await postJson('/api/dataset/train/cloud/stop', { run_id: cloudActiveHere.run_id }); }}>
+              onClick={async () => {
+                const d = await postJson('/api/dataset/train/cloud/stop', { run_id: cloudActiveHere.run_id });
+                // Never leave a stop unanswered: a pod that could not be
+                // terminated keeps billing, and the message names the instance.
+                const m = stopOutcomeMessage(d);
+                if (m.level === 'error') toast.error(m.text, 20000);
+                else toast.info(m.text, m.level === 'warn' ? 12000 : undefined);
+              }}>
               Stop cloud run
             </button>
           </div>

@@ -1565,8 +1565,18 @@ def dataset_train_cloud_progress(dataset_id):
 
 @bp.post('/dataset/train/cloud/stop')
 def dataset_train_cloud_stop():
+    """Stop a cloud run and report what really happened.
+
+    The answer is never a courtesy 'ok': when no monitor thread is in a state
+    to honour the request, request_stop terminates the pod itself, and if even
+    that fails the payload carries the instance id the user must destroy by
+    hand (HTTP stays 200 — the request was understood, the outcome is in the
+    body, which is what the UI renders)."""
     d = request.get_json(silent=True) or {}
-    return jsonify({'ok': ct.request_stop(d.get('run_id'))})
+    res = ct.request_stop(d.get('run_id'))
+    if not isinstance(res, dict):       # defensive: legacy bool contract
+        res = {'ok': bool(res)}
+    return jsonify(res)
 
 
 @bp.get('/dataset/<int:dataset_id>/train/cloud/sample/<path:filename>')

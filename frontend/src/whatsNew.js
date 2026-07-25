@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-cloud-stop-that-cannot-lie',
+    date: '2026-07-26',
+    title: '🛑 Stop really stops the pod — and a frozen cloud run stops billing you',
+    blurb:
+      'A rented GPU bills by the hour whether or not anything is happening, so two things had to become impossible. First: Stop can no longer answer "ok" without doing anything. If nothing is left in a state to wind the run down — the app was restarted, the connection to the pod wedged — the pod is now terminated on the spot, and if even that fails you get an error naming the instance to destroy in the vast.ai console instead of a reassuring message. Second: a run that goes completely silent is caught from outside itself. The run card warns as soon as a training run stops reporting, and after 45 minutes of total silence the pod is shut down automatically — checkpoints already downloaded are kept. The runtime cap is enforced from that same place, so it holds even if the run\'s own supervision died. Phases that are quiet by design — booting, uploading, downloading the result — are never cut. You can change the delay, or set it to warn only, under Settings ▸ Training ▸ Cloud training.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-25-bank-vision-passes-twice-as-fast',
     date: '2026-07-25',
     title: '⚡ The bank passes that took all night now take half of it',
