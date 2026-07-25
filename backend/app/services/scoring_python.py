@@ -354,7 +354,9 @@ def detect(force=False, extra_path='') -> dict:
     # and for those users this field IS the feature. A folder is expanded to
     # every interpreter shape it could hold, so "my conda env" works as well as
     # "my conda env's python.exe".
-    for p in resolve_entered_path(extra_path):
+    resolved = resolve_entered_path(extra_path)
+    entered_keys = {_norm(p) for p in resolved}
+    for p in resolved:
         if _norm(p) not in known:
             known.add(_norm(p))
             entries.append({'path': p, 'source': 'manual',
@@ -375,7 +377,12 @@ def detect(force=False, extra_path='') -> dict:
     out = []
     for entry, verdict in zip(entries, verdicts):
         verdict.update(source=entry['source'], label=entry['label'],
-                       selected=bool(selected) and _norm(entry['path']) == _norm(selected))
+                       selected=bool(selected) and _norm(entry['path']) == _norm(selected),
+                       # Marks the row the typed path landed on — INCLUDING one we
+                       # already knew about. Without it, entering a path the list
+                       # already holds looks like the button did nothing, which is
+                       # the worst answer for the route most users depend on.
+                       entered=_norm(entry['path']) in entered_keys)
         out.append(verdict)
     return {
         'selected': selected,
@@ -388,6 +395,12 @@ def detect(force=False, extra_path='') -> dict:
         # noise. It can still borrow an interpreter that already has the
         # packages; it just isn't sold a speed-up it cannot have.
         'nvidia_present': nvidia_present(),
+        # What became of a path the user typed: '' when nothing was typed,
+        # 'resolved' when it produced at least one row, 'no_interpreter' when the
+        # folder exists but holds nothing that could be one. Silence is the wrong
+        # answer to someone who just typed a path and pressed a button.
+        'entered_status': ('' if not _clean_path(extra_path)
+                           else 'resolved' if resolved else 'no_interpreter'),
         'interpreters': out,
     }
 

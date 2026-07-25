@@ -42,7 +42,10 @@ test('a hand-typed path is a first-class route, not a fallback', () => {
   // Most installs out there have neither ai-toolkit nor ComfyUI where we look.
   // The field must be present, checkable on its own, and never gated on the
   // automatic list having found something.
-  assert.match(dialog, /Enter the path to a python executable/);
+  assert.match(dialog, /Enter the path to a Python interpreter or its folder/);
+  // An answer is ALWAYS produced, including for a path that lands on a row
+  // that was already there — silence read as a broken button.
+  assert.match(dialog, /enteredNote\(result\)/);
   assert.match(dialog, /load\(\{ force: true, path: typed\.trim\(\) \}\)/);
   assert.doesNotMatch(dialog, /rows\.length\s*&&[\s\S]{0,200}scoring-python-path/);
 });

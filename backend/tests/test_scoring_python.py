@@ -264,6 +264,33 @@ def test_an_environment_FOLDER_is_accepted_as_readily_as_an_interpreter(sp, tmp_
     assert sp.resolve_entered_path(None) == []
 
 
+def test_a_typed_path_always_produces_an_answer_even_when_already_listed(sp, app, tmp_path):
+    """Found live: entering a path that resolves onto an interpreter the list
+    ALREADY holds produced no new row — the screen looked unchanged and the
+    button looked broken. The row is now marked, so the UI can say which one it
+    is. Silence is the worst reply for the route most installs depend on."""
+    import sys
+    with app.app_context(), patch.object(sp, '_run_probe', lambda p: _facts(cuda=True)):
+        # The app's own interpreter is always listed; typing it must be ACKNOWLEDGED.
+        res = sp.detect(extra_path=sys.executable)
+        assert res['entered_status'] == 'resolved'
+        hit = [r for r in res['interpreters'] if r.get('entered')]
+        assert len(hit) == 1 and hit[0]['source'] == 'app', \
+            'the typed path is marked on the row it landed on, not duplicated'
+        assert len([r for r in res['interpreters'] if r['source'] == 'manual']) == 0
+
+        # A folder that exists but holds no interpreter: named as such, not silence.
+        empty = tmp_path / 'not-an-env'
+        empty.mkdir()
+        res = sp.detect(extra_path=str(empty))
+        assert res['entered_status'] == 'no_interpreter'
+        assert not any(r.get('entered') for r in res['interpreters'])
+
+        # Nothing typed at all stays quiet.
+        assert sp.detect()['entered_status'] == ''
+        assert sp.detect(extra_path='   ')['entered_status'] == ''
+
+
 def test_an_interpreter_is_never_rejected_on_its_FILENAME(sp, tmp_path):
     """python3.11, a shim, a wrapper script — the name proves nothing. Only the
     probe's answer decides."""

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import {
-  canSelect, detectionSummary, dialogCopy, missingLabels, sortInterpreters, statusBadge,
+  canSelect, detectionSummary, dialogCopy, enteredNote, missingLabels,
+  sortInterpreters, statusBadge,
 } from './scoringPython.js'
 
 /** ⚡ Use a GPU Python you already have — the picker behind the "✨ Score runs on
@@ -92,6 +93,7 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
   // machine that has one is the one wrong thing to flash.
   const nvidia = result ? result.nvidia_present !== false : true
   const copy = dialogCopy(nvidia)
+  const entered = loading ? null : enteredNote(result)
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Choose the Python that runs Score"
@@ -169,12 +171,12 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
 
         <div className="space-y-2 border-t border-border pt-3">
           <label htmlFor="scoring-python-path" className="block text-xs font-medium text-content">
-            Not listed? Enter the path to a python executable
+            Not listed? Enter the path to a Python interpreter or its folder
           </label>
           <div className="flex flex-col gap-2 sm:flex-row">
             <input id="scoring-python-path" type="text" value={typed} spellCheck={false}
               onChange={(e) => setTyped(e.target.value)}
-              placeholder="…/envs/myenv/Scripts/python.exe"
+              placeholder="…/envs/myenv  or  …/envs/myenv/Scripts/python.exe"
               className="min-w-0 flex-1 rounded-md border border-border bg-surface px-2 py-1 font-mono text-xs text-content" />
             <button type="button" disabled={!typed.trim() || loading}
               onClick={() => load({ force: true, path: typed.trim() })}
@@ -182,9 +184,18 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
               Check it
             </button>
           </div>
-          <p className="text-[0.6875rem] text-content-subtle">
-            Checked and added to the list above — it is only used once you pick it.
-          </p>
+          {entered ? (
+            <p className={`text-[0.6875rem] ${entered.tone === 'warn'
+              ? 'text-amber-300' : 'text-content-muted'}`}>
+              {entered.text}
+            </p>
+          ) : (
+            <p className="text-[0.6875rem] text-content-subtle">
+              An interpreter, or the folder holding it — a venv, a conda env, a portable
+              bundle, anywhere on any disk. Checked and added to the list above; it is
+              only used once you pick it.
+            </p>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">

@@ -5,6 +5,7 @@ import {
   canSelect,
   detectionSummary,
   dialogCopy,
+  enteredNote,
   missingLabels,
   openerLabel,
   selectionNote,
@@ -121,6 +122,38 @@ test('the wording defaults to "there is a card" while the probe has not answered
   assert.match(detectionSummary([row()]), /can run/);
   assert.match(dialogCopy().title, /GPU Python/);
   assert.match(openerLabel(), /GPU Python/);
+});
+
+// ── The typed path always gets an answer ─────────────────────────────────────
+
+test('a typed path that lands on an interpreter already listed says which one', () => {
+  // Found live: the row already existed, so nothing visibly happened and the
+  // button read as broken. This is the route most installs depend on.
+  const note = enteredNote({
+    entered_status: 'resolved',
+    interpreters: [row({ label: "The app's own Python", source: 'app', entered: true,
+      detail: 'ready — scores on a 4090' })],
+  });
+  assert.equal(note.tone, 'info');
+  assert.match(note.text, /already listed as “The app's own Python”/);
+  assert.match(note.text, /4090/);
+});
+
+test('a folder holding no interpreter is named as such, never left silent', () => {
+  const note = enteredNote({ entered_status: 'no_interpreter', interpreters: [] });
+  assert.equal(note.tone, 'warn');
+  assert.match(note.text, /holds nothing that looks like a Python interpreter/);
+  assert.match(note.text, /or at the environment folder/);
+});
+
+test('a freshly checked new interpreter reports its verdict, and silence means silence', () => {
+  const note = enteredNote({
+    entered_status: 'resolved',
+    interpreters: [row({ source: 'manual', entered: true, detail: 'missing OpenCLIP' })],
+  });
+  assert.match(note.text, /Checked: missing OpenCLIP/);
+  assert.equal(enteredNote({ entered_status: '', interpreters: [] }), null);
+  assert.equal(enteredNote(null), null);
 });
 
 test('the panel names the interpreter in use, and stays quiet on the default', () => {

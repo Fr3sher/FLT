@@ -120,6 +120,29 @@ export function openerLabel(nvidiaPresent = true) {
     : '⚡ Use a Python I already have'
 }
 
+/** What to tell someone who just typed a path and pressed Check it. Silence is
+ *  the wrong answer for the route most installs depend on — and the sneaky case
+ *  is a path that resolves onto an interpreter ALREADY in the list, where the
+ *  screen would otherwise look unchanged. null when nothing was entered. */
+export function enteredNote(result) {
+  const status = result?.entered_status
+  if (!status) return null
+  if (status === 'no_interpreter') {
+    return {
+      tone: 'warn',
+      text: 'That folder exists, but holds nothing that looks like a Python '
+        + 'interpreter. Point at the interpreter itself, or at the environment '
+        + 'folder that contains it.',
+    }
+  }
+  const hit = (result.interpreters || []).find((r) => r.entered)
+  if (!hit) return null
+  if (hit.source !== 'manual') {
+    return { tone: 'info', text: `That is the one already listed as “${hit.label}” — ${hit.detail}` }
+  }
+  return { tone: 'info', text: `Checked: ${hit.detail}` }
+}
+
 /** What the Score panel says about the current interpreter, once one has been
  *  chosen explicitly. null when the app default is in use (the CPU note already
  *  covers that case, and saying it twice is noise). */
