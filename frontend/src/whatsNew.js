@@ -55,14 +55,6 @@ export const WHATS_NEW = [
     to: '/datasets?section=checkpoints',
   },
   {
-    id: '2026-07-25-score-borrows-your-gpu-python',
-    date: '2026-07-25',
-    title: '⚡ ✨ Score can borrow the CUDA Python you already have',
-    blurb:
-      'Score ships CPU-only PyTorch on purpose — a first install stays small instead of pulling 2.5 GB on people with no card. On a machine that has one, that meant hours: nearly three of them on a 30 000-image bank. But if you train LoRAs or run ComfyUI, this machine already has a proven CUDA PyTorch sitting right there. Score can now use it — no download, no second install. Open a bank, and where the CPU warning appears click "Use a GPU Python I already have": the app checks the interpreters it knows about (ai-toolkit, ComfyUI, its own) and tells you, package by package, which ones can really run the pass. One that has CUDA but is missing OpenCLIP is refused by name rather than accepted and crashed an hour in — and nothing is ever installed into an environment the app did not create: it shows you the command and lets you decide. Typing a path yourself is a first-class route, not a fallback — point it at an interpreter or at the environment folder holding it (venv, conda, uv, a portable bundle, the system Python, another disk; spaces and accents are fine), and the app works out the rest instead of assuming a layout. No particular PyTorch or CUDA version is demanded, so an old card and a brand-new one are equally welcome. If this machine has no NVIDIA card, it is told so plainly rather than sold a CUDA install it could not use — borrowing is still offered there, purely to avoid installing the same packages twice. And if you never open the dialog, nothing changes: it is an offer, never a prerequisite. Re-check after installing something, and go back to the app default whenever you like.',
-    to: '/bank',
-  },
-  {
     id: '2026-07-26-stop-training-button-says-what-it-does',
     date: '2026-07-26',
     title: '⏹ The button that stops your training now says so',
@@ -77,6 +69,14 @@ export const WHATS_NEW = [
     blurb:
       'A rented GPU bills by the hour whether or not anything is happening, so two things had to become impossible. First: Stop can no longer answer "ok" without doing anything. If nothing is left in a state to wind the run down — the app was restarted, the connection to the pod wedged — the pod is now terminated on the spot, and if even that fails you get an error naming the instance to destroy in the vast.ai console instead of a reassuring message. Second: a run that goes completely silent is caught from outside itself. The run card warns as soon as a training run stops reporting, and after 45 minutes of total silence the pod is shut down automatically — checkpoints already downloaded are kept. The runtime cap is enforced from that same place, so it holds even if the run\'s own supervision died. Phases that are quiet by design — booting, uploading, downloading the result — are never cut. You can change the delay, or set it to warn only, under Settings ▸ Training ▸ Cloud training.',
     to: '/cloud',
+  },
+  {
+    id: '2026-07-25-score-borrows-your-gpu-python',
+    date: '2026-07-25',
+    title: '⚡ ✨ Score can borrow the CUDA Python you already have',
+    blurb:
+      'Score ships CPU-only PyTorch on purpose — a first install stays small instead of pulling 2.5 GB on people with no card. On a machine that has one, that meant hours: nearly three of them on a 30 000-image bank. But if you train LoRAs or run ComfyUI, this machine already has a proven CUDA PyTorch sitting right there. Score can now use it — no download, no second install. Open a bank, and where the CPU warning appears click "Use a GPU Python I already have": the app checks the interpreters it knows about (ai-toolkit, ComfyUI, its own) and tells you, package by package, which ones can really run the pass. One that has CUDA but is missing OpenCLIP is refused by name rather than accepted and crashed an hour in — and nothing is ever installed into an environment the app did not create: it shows you the command and lets you decide. Typing a path yourself is a first-class route, not a fallback — point it at an interpreter or at the environment folder holding it (venv, conda, uv, a portable bundle, the system Python, another disk; spaces and accents are fine), and the app works out the rest instead of assuming a layout. No particular PyTorch or CUDA version is demanded, so an old card and a brand-new one are equally welcome. If this machine has no NVIDIA card, it is told so plainly rather than sold a CUDA install it could not use — borrowing is still offered there, purely to avoid installing the same packages twice. And if you never open the dialog, nothing changes: it is an offer, never a prerequisite. Re-check after installing something, and go back to the app default whenever you like.',
+    to: '/bank',
   },
   {
     id: '2026-07-25-bank-vision-passes-twice-as-fast',
@@ -95,12 +95,12 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
-    id: '2026-07-25-keep-custom-shot',
+    id: '2026-07-25-crashed-run-log-is-findable',
     date: '2026-07-25',
-    title: '⇪ Keep a custom shot you wrote — it stops dying with your browser cache',
+    title: '🪵 A training that dies in seconds now hands you its log',
     blurb:
-      'A shot you typed into the ✨ Custom shot box was stored in the browser and nowhere else, so clearing its data quietly took your prompts with it — and nothing on screen ever said so. Every custom card now has a ⇪ button: press it and the card moves into the 📥 Imported group, saved with the app instead of the browser. It survives a cache wipe, shows up on your other devices, and rides along in the backup. The card keeps its identity, so a shot preset that had it selected still works, and if its name clashes with a built-in shot the app says which one and leaves the card untouched rather than making a duplicate. Follow-up to the shot catalog import — idea by ashish.sinha on Discord.',
-    to: '/datasets?section=add',
+      'When a run crashed we told you to open training.log via "📂 Run folder" — and that button opened the folder of the checkpoints, one level BELOW the folder the log is written in. A run that died at boot has no checkpoints, so the button silently created that empty folder and showed you exactly nothing. You could search the disk and never find a log that had been there all along. The button now opens the run\'s own folder, log included (the checkpoints are one click deeper), and a failed run gets its own 📂 Open run folder button right next to the error — no more digging under a collapsed "Checkpoints" section for it. Reported by wannadecryptor (Discord).',
+    to: '/datasets',
   },
   {
     id: '2026-07-25-bank-score-frees-the-gpu',
@@ -133,6 +133,14 @@ export const WHATS_NEW = [
     blurb:
       'Nothing stops a bank pointing at a folder that sits inside another bank\'s — and that is fine until 🗑 Delete rejected, the one action that removes real files: the other bank simply finds them gone, along with every decision you made on them. Creating such a bank now says so up front, and the delete confirmation names the other bank and how many of its files are about to disappear. It also tells you where the files GO before you click. And when the optional send2trash package is missing — which is most installs — deleted photos now land in the app\'s own Trash instead of being erased for good.',
     to: '/bank',
+  },
+  {
+    id: '2026-07-25-keep-custom-shot',
+    date: '2026-07-25',
+    title: '⇪ Keep a custom shot you wrote — it stops dying with your browser cache',
+    blurb:
+      'A shot you typed into the ✨ Custom shot box was stored in the browser and nowhere else, so clearing its data quietly took your prompts with it — and nothing on screen ever said so. Every custom card now has a ⇪ button: press it and the card moves into the 📥 Imported group, saved with the app instead of the browser. It survives a cache wipe, shows up on your other devices, and rides along in the backup. The card keeps its identity, so a shot preset that had it selected still works, and if its name clashes with a built-in shot the app says which one and leaves the card untouched rather than making a duplicate. Follow-up to the shot catalog import — idea by ashish.sinha on Discord.',
+    to: '/datasets?section=add',
   },
   {
     id: '2026-07-25-shot-catalog-json',
