@@ -71,7 +71,7 @@ test('the dialog can open on a specific checkpoint (◉ Graph "continue from her
   // the requested step when it is a real save, else the newest.
   assert.match(dialog, /initialFromStep\s*=\s*null/);
   assert.match(dialog, /initialResumeStep\(initialFromStep, steps\)/);
-  assert.match(dialog, /import \{ initialResumeStep, resolveInitialLane \} from '\.\/lineageContinue\.js'/);
+  assert.match(dialog, /import \{ initialResumeStep, resolveInitialLane, submitBlockedReason \} from '\.\/lineageContinue\.js'/);
 });
 
 test('the dialog can offer the LANE (local vs cloud), opt-in and reasoned', () => {

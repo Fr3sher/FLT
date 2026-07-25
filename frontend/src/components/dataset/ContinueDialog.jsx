@@ -19,7 +19,7 @@
  * own `where` back and can ignore the field. */
 import { useEffect, useMemo, useState } from 'react';
 import { HelpBadge } from '../../help/HelpMode';
-import { initialResumeStep, resolveInitialLane } from './lineageContinue.js';
+import { initialResumeStep, resolveInitialLane, submitBlockedReason } from './lineageContinue.js';
 
 const SAVE_CHOICES = [250, 500, 1000];
 const SAMPLE_EVERY_CHOICES = [100, 250, 500, 1000];
@@ -69,6 +69,8 @@ export default function ContinueDialog({
   const [lane, setLane] = useState(() => resolveInitialLane(where, lanes));
   const laneState = (id) => (lanes ? (lanes[id] || {}) : {});
   const laneBlocked = !!lanes && laneState(lane).available === false;
+  const blockedReason = submitBlockedReason({
+    latest, laneBlocked, laneReason: laneState(lane).reason, lane });
 
   const inheritedSave = SAVE_CHOICES.includes(settings.save_every) ? settings.save_every : 250;
   const inheritedSampleEvery =
@@ -299,6 +301,13 @@ export default function ContinueDialog({
             </div>
           )}
         </div>
+
+        {/* A disabled ▶ Continue that explains nothing reads as a broken button.
+            The blocked lane already prints its reason above; this covers the
+            state that printed none at all. */}
+        {blockedReason && (
+          <span className="text-amber-300/90 text-[0.6875rem] leading-relaxed">{blockedReason}</span>
+        )}
 
         <div className="flex items-center gap-2 pt-1">
           <button type="button" onClick={() => onResolve(null)}

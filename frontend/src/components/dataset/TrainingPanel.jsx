@@ -40,6 +40,7 @@ import { HelpBadge } from '../../help/HelpMode';
 import { requestHelpTip } from '../../help/helpTips';
 import { useToast } from '../common/Toast';
 import ContinueDialog from './ContinueDialog';
+import { graphContinueRefusal } from './lineageContinue.js';
 import RunLineageGraph from './RunLineageGraph';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
@@ -1050,12 +1051,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // resume here: say so instead of silently falling back to the latest save.
   const continueFromGraphCheckpoint = (node, pill) => {
     const step = pill?.step ?? null;
-    if (step != null && !checkpoints.some((c) => c.step === step)) {
-      toast.warning(`Step ${step} is not in the active checkpoint set (${checkpointTypeLabel} · ${checkpointVariantDisplay}) `
-        + '— switch the Checkpoints selection to that run’s family, base and variant, '
-        + 'or continue that cloud run from the Runs page.');
-      return;
-    }
+    // The refusal must state the reason that is TRUE for this pill (a foreign
+    // run identity vs a save this machine simply doesn't hold) — the rule lives
+    // in lineageContinue.js, JSX-free and unit-tested.
+    const refusal = graphContinueRefusal(node, pill, {
+      steps: checkpoints.map((c) => c.step),
+      trainType: checkpointTrainType, variant: checkpointVariant, base: checkpointBase,
+      familyLabel: checkpointTypeLabel, variantLabel: checkpointVariantDisplay,
+    });
+    if (refusal) { toast.warning(refusal); return; }
     setContinueInitialStep(step);
     setContinueOpen(true);
   };
@@ -2854,7 +2858,17 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         </div>
       )}
 
-      {continueOpen && (
+      {/* Rendered at the BODY level, not in the panel's own subtree: this panel
+          is mounted once inside the Training section, which the workspace keeps
+          `display:none` while another section is shown — but its checkpoint
+          manager PORTALS into the Checkpoints section (CheckpointPortal above).
+          So the ▶ Continue buttons and the ◉ Graph pills are visible and
+          clickable from a section where everything this component renders on its
+          own is invisible: the dialog opened inside the hidden container and the
+          click looked completely dead (no dialog, no toast, no request — it only
+          appeared once the user navigated to Training). A modal must live where
+          it is seen, whichever section opened it. */}
+      {continueOpen && createPortal((
         <ContinueDialog
           context={`${checkpointBaseLabel} · ${checkpointVariantDisplay}`}
           where={laneOfStep(continueInitialStep)}
@@ -2869,7 +2883,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           // Local lane is disabled with its reason, the Cloud lane stays usable.
           busy={status.in_progress && !continueLanes.cloud.available}
           onResolve={runContinue} />
-      )}
+      ), document.body)}
 
     </div>
   );

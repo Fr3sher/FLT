@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-continue-training-appears-and-resumes-the-final-save',
+    date: '2026-07-26',
+    title: '▶ Continue training: the dialog shows up, and the last checkpoint can be resumed',
+    blurb:
+      'Two things made "Continue training" look broken from the Checkpoints & LoRAs page. The dialog did open — invisibly, in the section you were not looking at — so the click produced nothing at all until you happened to walk over to Training and found it waiting there. It now opens where you clicked, in any section. And the final checkpoint of a finished run is resumable again: that file carries no step number in its name, so the graph called it "3k" while the list quietly filed it under the previous save (2750) and refused the pill you had just clicked, blaming a family/base/variant selection that was perfectly correct. Both views now agree on the run\'s real last step, so "Continue from here" on the last pill resumes the run\'s true end — and when a save really is missing here, the message says the true reason (it lives in its cloud run: continue it from the Runs page) instead of sending you to change a setting that was never in cause. A greyed Continue button also states why, rather than sitting there silently.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-07-25-score-borrows-your-gpu-python',
     date: '2026-07-25',
     title: '⚡ ✨ Score can borrow the CUDA Python you already have',

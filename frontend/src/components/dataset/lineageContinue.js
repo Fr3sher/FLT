@@ -61,4 +61,60 @@ export function resolveInitialLane(where, lanes) {
   return lane;
 }
 
+/* Krea's raw recipe answers to two names ('base' in the run rows, 'raw' in the
+   labels): comparing the strings blindly would call one run two runs. */
+const sameVariant = (a, b) => {
+  const norm = (v) => (String(v || '').trim().toLowerCase() === 'raw' ? 'base'
+    : String(v || '').trim().toLowerCase());
+  return norm(a) === norm(b);
+};
+
+/* WHY a ◉ Graph pill cannot be resumed from the dataset panel — the true reason,
+   or null when it can be. The panel's ▶ Continue dialog resumes the ACTIVE
+   checkpoint set (the family/base/variant chosen under "Browse results"), so:
+
+     - a pill from ANOTHER run identity is a selection problem — say so;
+     - a pill of the SAME identity that the active set simply doesn't hold is
+       NOT: that save is not on this machine (a cloud epoch never mirrored
+       here). Blaming the selection sent the user to change a setting that was
+       already right — the reported "switch the Checkpoints selection" message
+       on a run whose family, base and variant all matched.
+
+   `active` = { steps, trainType, variant, base, familyLabel, variantLabel }. */
+export function graphContinueRefusal(node, pill, active = {}) {
+  const step = pill?.step ?? null;
+  const steps = Array.isArray(active.steps) ? active.steps : [];
+  if (step == null || steps.includes(step)) return null;
+  const here = `${active.familyLabel || 'this family'} · ${active.variantLabel || 'this variant'}`;
+  const differs = (node?.train_type && node.train_type !== active.trainType)
+    || (node?.variant && !sameVariant(node.variant, active.variant))
+    || (node?.base_model != null && (node.base_model || '') !== (active.base || ''));
+  if (differs) {
+    return `Step ${step} comes from a run trained with a different family, base or variant `
+      + `than the checkpoints selected here (${here}) — switch the Checkpoints selection to `
+      + 'that run’s family, base and variant to continue it.';
+  }
+  const highest = steps.length ? Math.max(...steps) : null;
+  return `Step ${step} is not among the checkpoints this machine holds for ${here}`
+    + (highest ? ` (they stop at step ${highest})` : ' (none are on this machine)')
+    + ' — that save lives in its cloud run: continue it from the Runs page.';
+}
+
+/* Why the ▶ Continue dialog's submit button is disabled, as text to SHOW — or
+   null when it is live. A greyed button that explains nothing is read as a
+   broken one ("I click Continue and nothing happens"), so every state that
+   disables it owes the user a sentence: a blocked lane has its own reason (it is
+   printed with the lane picker, so we don't repeat it), but "this run has no
+   checkpoint" printed nothing at all. */
+export function submitBlockedReason({ latest, laneBlocked, laneReason, lane } = {}) {
+  if (!(latest > 0)) {
+    return 'This run has no checkpoint to resume from on this machine — continue it from '
+      + 'the Runs page (where its own saves live), or start a fresh run.';
+  }
+  if (laneBlocked && !laneReason) {
+    return `Continuing on the ${lane === 'cloud' ? 'cloud' : 'local'} GPU is unavailable right now.`;
+  }
+  return null;      // live, or a blocked lane that already states its reason
+}
+
 export default canContinueFromCheckpoint;

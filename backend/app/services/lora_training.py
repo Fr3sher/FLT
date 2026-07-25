@@ -3233,6 +3233,16 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
                 c['run_id'], c['run_source'] = rec.cloud_run_id, 'cloud'
             else:
                 c['run_id'], c['run_source'] = rec.id, 'local'
+            # The FINAL save has no step in its name, so it was filed under the
+            # last NUMBERED one (2750 for a 3000-step run) — where the dedup of
+            # the ▶ Continue list swallowed it, making the run's real end
+            # unresumable from here. The ◉ Graph reads a cloud run's staging and
+            # numbers the same file at the run's target (3000): two views, two
+            # truths, and a pill the panel then refused. Number it like the graph
+            # does — its own run's target — whenever the record knows better.
+            if c.get('final') and (rec.steps or 0) > c['step']:
+                c['step'] = rec.steps
+    out.sort(key=lambda c: (c['step'], bool(c.get('final'))))
     return out
 
 

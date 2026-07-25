@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { canContinueFromCheckpoint, initialResumeStep, resolveInitialLane } from './lineageContinue.js';
+import {
+  canContinueFromCheckpoint, graphContinueRefusal, initialResumeStep, resolveInitialLane,
+  submitBlockedReason,
+} from './lineageContinue.js';
 
 const cloudDone = { source: 'cloud', run_id: 42, status: 'done' };
 const cloudFailed = { source: 'cloud', run_id: 43, status: 'error' };
@@ -71,4 +74,63 @@ test('no handler wired → no Continue action at all', () => {
   assert.equal(canContinueFromCheckpoint(cloudDone, save, { hasHandler: false }), false);
   assert.equal(canContinueFromCheckpoint(localRun, save, { continueSource: 'any', hasHandler: false }),
     false);
+});
+
+// --- the REASON a pill is refused (reported: a message that blamed the wrong thing)
+
+const active = {
+  steps: [250, 500, 2750],
+  trainType: 'krea', variant: 'base', base: '',
+  familyLabel: 'Krea 2', variantLabel: 'Raw',
+};
+
+test('a pill the active set holds is never refused', () => {
+  assert.equal(graphContinueRefusal({ train_type: 'krea', variant: 'base', base_model: '' },
+    { step: 2750 }, active), null);
+  // no step asked (the plain Continue button) → the dialog's own default
+  assert.equal(graphContinueRefusal({ train_type: 'krea' }, {}, active), null);
+});
+
+test('a save this machine does not hold does NOT blame the selection', () => {
+  const msg = graphContinueRefusal(
+    { train_type: 'krea', variant: 'base', base_model: '' }, { step: 3000 }, active);
+  assert.match(msg, /not among the checkpoints this machine holds/);
+  assert.match(msg, /they stop at step 2750/);
+  assert.match(msg, /Runs page/);
+  assert.doesNotMatch(msg, /switch the Checkpoints selection/,
+    'the family, base and variant all match — sending the user to change them is a lie');
+});
+
+test('a pill from another run identity DOES name the selection', () => {
+  const msg = graphContinueRefusal(
+    { train_type: 'zimage', variant: 'turbo', base_model: '' }, { step: 3000 }, active);
+  assert.match(msg, /switch the Checkpoints selection/);
+});
+
+test('Krea’s raw recipe answers to both of its names', () => {
+  // 'raw' and 'base' are ONE variant: a pill labelled either way is the same run
+  const msg = graphContinueRefusal(
+    { train_type: 'krea', variant: 'raw', base_model: '' }, { step: 3000 }, active);
+  assert.doesNotMatch(msg, /switch the Checkpoints selection/);
+});
+
+// --- a disabled ▶ Continue always has something to say
+
+test('a run with no resumable save says so instead of greying out in silence', () => {
+  const msg = submitBlockedReason({ latest: 0, laneBlocked: false });
+  assert.match(msg, /no checkpoint to resume from/);
+  assert.match(msg, /Runs page/);
+});
+
+test('a blocked lane that states its own reason is not repeated', () => {
+  assert.equal(submitBlockedReason({
+    latest: 2750, laneBlocked: true, laneReason: 'A Krea 2 cloud run is already active', lane: 'cloud',
+  }), null);
+  // …but a lane blocked WITHOUT a reason still owes the user a sentence
+  assert.match(submitBlockedReason({ latest: 2750, laneBlocked: true, lane: 'cloud' }),
+    /cloud GPU is unavailable/);
+});
+
+test('a live dialog shows no blocking note', () => {
+  assert.equal(submitBlockedReason({ latest: 2750, laneBlocked: false }), null);
 });
