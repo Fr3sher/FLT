@@ -33,17 +33,32 @@ test('a log with no error line is shown as context, never painted as the cause',
   assert.match(view.note, /training\.log/)   // the full log stays reachable
 })
 
-test('both notes name the disclosure the Run folder button hides under', () => {
-  // The button is real but sits inside a collapsed "Checkpoints" section; a
-  // note that just says "open Run folder" sends a beginner hunting.
+test('both notes name a button rendered in the failure block itself', () => {
+  // Previously they named the "📂 Run folder" button buried in the collapsed
+  // "📦 Checkpoints & trained LoRAs" disclosure — a beginner went hunting, and
+  // that button opened the checkpoints folder, NOT the one holding
+  // training.log (wannadecryptor, Discord). The note must point at the button
+  // sitting right next to it.
   for (const note of [NO_ERROR_NOTE, FULL_LOG_NOTE]) {
-    assert.match(note, /📂 Run folder/)
-    assert.match(note, /📦 Checkpoints & trained LoRAs/)
+    assert.match(note, /📂 Open run folder/)
   }
-  // node:test runs cases after the module has evaluated, so `panel` (read at the
+  // node:test runs cases after the module has evaluated, so `block` (read at the
   // bottom of this file) is available here.
-  assert.ok(panel.includes('📂 Run folder'), 'the button the notes point at must exist')
-  assert.ok(panel.includes('📦 Checkpoints &amp; trained LoRAs'), 'the disclosure they name must exist')
+  assert.ok(block.includes('📂 Open run folder'),
+    'the button the notes point at must live in the failure block')
+})
+
+test('the failure block opens the folder of the run that DIED, not the browsed one', () => {
+  // No trainingRunSelection here on purpose: the persisted family/base/variant
+  // are the crashed run's, whereas the checkpoint browser can be showing any
+  // other run.
+  const call = block.slice(block.indexOf('📂 Open run folder') - 900,
+                           block.indexOf('📂 Open run folder'))
+  assert.match(call, /train\/open-folder/)
+  assert.match(call, /\{ target: 'run' \}/)
+  assert.doesNotMatch(call, /trainingRunSelection/)
+  // 400 px: the button and its note share a row that must wrap, never squeeze.
+  assert.match(call, /flex flex-wrap[^"]*gap/)
 })
 
 test('a traceback IS the cause and is styled as one', () => {

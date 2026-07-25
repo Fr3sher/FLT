@@ -1287,7 +1287,22 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               {view.excerpt}
             </pre>
           )}
-          <div className="mt-1 text-red-300/80">{view.note}</div>
+          {/* One click to the log, right here. The other "📂 Run folder" button
+              lives inside a collapsed disclosure further down — nobody looks for
+              a log under "checkpoints" (reported by wannadecryptor on Discord).
+              NO run selection is sent on purpose: the persisted base/family/
+              variant are those of the run that just died, whatever the checkpoint
+              browser happens to show. */}
+          <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <button type="button"
+              onClick={() => postTrain(`/api/dataset/${ds.currentId}/train/open-folder`,
+                { target: 'run' })}
+              title="Open the folder of the run that just failed — training.log is in it"
+              className="shrink-0 px-2 py-1 rounded-lg bg-red-500/20 border border-red-400/40 text-red-100 text-[0.6875rem] font-semibold">
+              📂 Open run folder
+            </button>
+            <span className="min-w-0 text-red-300/80">{view.note}</span>
+          </div>
           {view.causes && <div className="mt-1 text-red-300/80">{view.causes}</div>}
         </div>
         );

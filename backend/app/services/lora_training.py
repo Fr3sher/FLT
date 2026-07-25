@@ -2580,7 +2580,8 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
 
     `training_folder` (cloud seam) : utilisé TEL QUEL comme process.training_folder
     dans les 3 familles - aucun appel à _output_dir() (pas d'ai-toolkit local requis).
-    Défaut (None) = comportement historique inchangé (_output_dir() / _run_name(ds))."""
+    Défaut (None) = comportement historique inchangé (`_run_root(ds)`) - c'est aussi
+    le dossier où atterrit training.log, l'invariant que « 📂 Run folder » ouvre."""
     if _train_type(ds) == 'sdxl':
         cfg_ = _build_job_config_sdxl(ds, dataset_folder, steps, training_folder=training_folder)
         _apply_style_overrides(ds, cfg_['config']['process'][0], 'sdxl')
@@ -2636,7 +2637,7 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _zrank, 'zimage'),
@@ -2728,7 +2729,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _krank, 'krea'),
@@ -2810,7 +2811,7 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _frank, 'flux'),
@@ -2900,7 +2901,7 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _fkrank, 'flux2klein'),
@@ -2986,7 +2987,7 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _arank, 'anima'),
@@ -3066,7 +3067,7 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
             'process': [{
                 'type': 'sd_trainer',
                 'training_folder': (training_folder if training_folder
-                                    else str(_output_dir() / _run_name(ds))),
+                                    else str(_run_root(ds))),
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _srank, 'sdxl'),
@@ -3115,6 +3116,24 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
 _CK_RE = re.compile(r'_(\d{4,})\.safetensors$')
 
 
+def _run_root(ds, base_model=_PERSISTED, family=None, variant=_PERSISTED):
+    """ai-toolkit's `training_folder` for this run — the run's TOP folder.
+
+    It holds `training.log` (we open it before spawning, so it exists from the
+    first second of a run) and, once ai-toolkit reaches its first save, the
+    `lora_<trigger>` save_root below. Two distinct folders were both being
+    called "the run folder" at nine call sites; this is the top one, `_run_dir`
+    is the save_root, and no caller should rebuild either by hand again."""
+    return _output_dir() / _run_name(ds, base_model, family, variant)
+
+
+def _run_log_path(ds, base_model=_PERSISTED, family=None, variant=_PERSISTED) -> str:
+    """Where the local run's `training.log` is written and read. Single source
+    of truth: the writer, the progress reader and « 📂 Run folder » must never
+    disagree on it (they did — a crashed run's log looked missing)."""
+    return str(_run_root(ds, base_model, family, variant) / 'training.log')
+
+
 def _run_dir(user_id, dataset_id, base_model=_PERSISTED, family=None,
              variant=_PERSISTED) -> str:
     ds = fds.get_dataset(user_id, dataset_id)
@@ -3125,7 +3144,7 @@ def _run_dir(user_id, dataset_id, base_model=_PERSISTED, family=None,
     # `base_model` cible le run d'une base PRÉCISE (sélection UI) ; `family` cible la
     # famille sélectionnée (Krea vs Z-Image) - sans quoi le panneau montre les
     # checkpoints du mauvais run quand deux familles partagent le même trigger.
-    return str(_output_dir() / _run_name(ds, base_model, family, variant)
+    return str(_run_root(ds, base_model, family, variant)
                / f'lora_{_safe_trigger(ds)}')
 
 
@@ -3134,7 +3153,8 @@ def open_training_folder(user_id, dataset_id, target='loras', family=None,
     """Ouvre dans l'explorateur de fichiers du POSTE (app locale mono-utilisateur,
     le navigateur tourne sur la même machine) le dossier demandé :
     'loras' → dossier d'import ComfyUI de la famille (loras/krea, loras/sdxl,
-    loras/z image) ; 'run' → dossier de checkpoints du run courant (base+famille) ;
+    loras/z image) ; 'run' → dossier HAUT du run courant (base+famille) : il porte
+    training.log, et les checkpoints sont dans son sous-dossier lora_<trigger> ;
     'dataset' → dossier des images du dataset (data/datasets/<id>/ — où « 💾 Write
     .txt files » dépose les captions sidecar ; aucune dépendance ai-toolkit).
     Cibles FIXES résolues côté serveur — le client n'envoie jamais de chemin.
@@ -3144,7 +3164,14 @@ def open_training_folder(user_id, dataset_id, target='loras', family=None,
     if not ds:
         raise ValueError('dataset not found')
     if target == 'run':
-        path = _run_dir(user_id, dataset_id, base_model, family, variant)
+        # The run's TOP folder, not the `lora_<trigger>` save_root below it.
+        # That save_root is created by ai-toolkit at its first save, so a run
+        # that died at boot has none — opening it used to CREATE an empty
+        # folder and reveal that, while `training.log` sat one level up, in
+        # the very folder the failure message sends people to (reported by
+        # wannadecryptor on Discord). The top folder shows the log AND leads
+        # to the checkpoints.
+        path = str(_run_root(ds, base_model, family, variant))
     elif target == 'loras':
         path = _lora_dest_dir(ds, family)
     elif target == 'dataset':
@@ -4432,7 +4459,7 @@ def archive_previous_run(ds) -> str | None:
     main) et tombent avec le dataset : le nom garde le préfixe `lora_<trigger>`
     donc purge_training_artifacts les balaie aussi. Les copies déjà importées
     dans ComfyUI (loras/<famille>) ne sont pas touchées. None si aucun run."""
-    run_dir = _output_dir() / _run_name(ds)
+    run_dir = _run_root(ds)
     if not run_dir.is_dir():
         return None
     dest = f'{run_dir}_archived_{datetime.now().strftime("%Y%m%d-%H%M%S")}'
@@ -4601,10 +4628,10 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # HF_HOME route les poids base/adapter sur le disque configuré. PYTHONIOENCODING
     # évite les crashs cp1252 sur les logs unicode. Jamais shell=True ; args en liste.
     env = dict(os.environ, HF_HOME=str(_hf_home()), PYTHONIOENCODING='utf-8')
-    run_dir = _output_dir() / _run_name(
-        ds, base_model=base_model, family=launch_fam, variant=variant)
+    run_dir = _run_root(ds, base_model=base_model, family=launch_fam, variant=variant)
     run_dir.mkdir(parents=True, exist_ok=True)
-    log_path = str(run_dir / 'training.log')
+    log_path = _run_log_path(ds, base_model=base_model, family=launch_fam,
+                             variant=variant)
     run_token = secrets.token_hex(16)
     # The authoritative live-run check, identity state and PID publication are
     # one transition under the SAME lock used by Stop and queue advancement.
@@ -4700,7 +4727,7 @@ def _seed_continuation_from(user_id, dataset_id, base, family, variant,
     Returns the archived folder path."""
     ds = fds.get_dataset(user_id, dataset_id)
     trigger = _safe_trigger(ds)
-    training_folder = _output_dir() / _run_name(ds, base, family, variant)
+    training_folder = _run_root(ds, base, family, variant)
     if not training_folder.is_dir():
         raise ValueError('run folder missing - cannot seed the earlier checkpoint')
     dest = f'{training_folder}_superseded_{datetime.now().strftime("%Y%m%d-%H%M%S")}'
@@ -5310,9 +5337,7 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
     active = (bool(queue_manager._get_system_state('training_in_progress', False))
               and cur_id is not None and int(cur_id) == int(dataset_id)
               and _pid_alive(queue_manager._get_system_state('training_pid', None)))
-    log_path = os.path.join(
-        str(_output_dir() / _run_name(ds, base_model, family, variant)),
-        'training.log')
+    log_path = _run_log_path(ds, base_model, family, variant)
     parsed = {'step': None, 'total': None, 'loss': None, 'speed': None, 'eta': None,
               'loss_curve': []}
     log_exists = os.path.isfile(log_path)
@@ -5621,8 +5646,7 @@ def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
     if not ds:
         return None
     trigger = _safe_trigger(ds)
-    run = str(_output_dir() / _run_name(
-        ds, base_model, family, variant) / f'lora_{trigger}')
+    run = str(_run_root(ds, base_model, family, variant) / f'lora_{trigger}')
     final = os.path.join(run, f'lora_{trigger}.safetensors')
     numbered = os.path.join(run, f'lora_{trigger}_{step:09d}.safetensors')
     if not os.path.isfile(final) or os.path.exists(numbered):

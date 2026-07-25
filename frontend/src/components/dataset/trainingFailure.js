@@ -20,17 +20,18 @@
  *                                                 guesswork with the real one.
  */
 
-// Both notes point at the SAME button — 📂 Run folder, which lives inside the
-// "📦 Checkpoints & trained LoRAs" disclosure further down. Naming the
-// disclosure matters: it is collapsed by default and nobody looks for a log
-// under "checkpoints".
+// Both notes point at the 📂 Open run folder button rendered NEXT TO them in
+// the failure block. They used to send people to the "📂 Run folder" button
+// inside the collapsed "📦 Checkpoints & trained LoRAs" disclosure further
+// down — and that button opened the `lora_<trigger>` save_root, one level
+// BELOW the folder holding training.log, which a run dead at boot never even
+// creates. Naming a button that sits right here keeps the two in sync.
 export const NO_ERROR_NOTE =
-  'No error line in this log — these are just its last lines. Open the full '
-  + 'training.log via 📂 Run folder, under 📦 Checkpoints & trained LoRAs below.';
+  'No error line in this log — these are just its last lines. The full '
+  + 'training.log is in the run folder (📂 Open run folder).';
 
 export const FULL_LOG_NOTE =
-  'The full log is training.log — open it via 📂 Run folder, under '
-  + '📦 Checkpoints & trained LoRAs below.';
+  'The full log is training.log, in the run folder (📂 Open run folder).';
 
 // A run can die before writing anything (a bad interpreter, a missing run.py):
 // then there are no "last lines" to point at either.
