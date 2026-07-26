@@ -48,6 +48,22 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-resume-keeps-its-lora',
+    date: '2026-07-26',
+    title: '▶ Continue now resumes the LoRA you picked — at the rank it was trained with',
+    blurb:
+      'One dataset can hold several runs whose saves sit side by side in the same folder, and a continuation used to be filed under whichever run was most recent rather than the one whose file it actually loaded. The lineage then showed a continuation of a run that was never touched — and, worse, the new run took its rank from the dataset\'s current settings instead of the checkpoint\'s. Rank and alpha size a LoRA\'s matrices, so they are a property of the weights, not a setting to re-pick: a cloud continuation now inherits them from the checkpoint, and a local one refuses to start rather than quietly train a different LoRA you would believe was a continuation.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-07-26-lineage-edge-and-numbers',
+    date: '2026-07-26',
+    title: '🌳 Lineage: the missing links are back, and a run has one number',
+    blurb:
+      'A run linked to its parent in a straight line drew no connector at all — the most common shape in the graph was the one that vanished. It is drawn again, and a branch that continued from before its parent\'s end now reads clearly even on a phone at low brightness. Cards, the tree and the inspector also agree on the run number at last: the run\'s own number everywhere, with its cloud run spelled out next to it ("Run #107 · cloud #103") instead of two numbers that never matched.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-26-runs-indicator',
     date: '2026-07-26',
     title: '🏋️ A live dot on Runs tells you something is still training',

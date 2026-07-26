@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { configRows } from './lineageDetail.js';
 import { isRunDeletable } from '../../utils/runDeletable.js';
+import { runIdentityLabel } from '../../utils/runIdentity';
 import { putJson, del } from '../../api/fetchClient';
 import { useToast } from '../common/Toast';
 
@@ -89,7 +90,8 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
     <div className="fixed right-0 top-0 z-50 flex h-full w-80 flex-col overflow-y-auto border-l border-border bg-surface-overlay p-4 shadow-xl">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-content">
-          Run #{node.record_id}
+          {/* Same number as the card that opened this panel (see runIdentity). */}
+          {runIdentityLabel(node)}
           {node.train_type ? ` · ${node.train_type}` : ''}
           {node.steps ? ` · ${node.steps.toLocaleString()} steps` : ''}
         </h3>

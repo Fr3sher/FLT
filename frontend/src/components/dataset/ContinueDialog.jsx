@@ -294,9 +294,16 @@ export default function ContinueDialog({
                 gentler — a smaller rate polishes texture without moving the identity, the LR pendant of the low-noise
                 timestep recipe. The values are factors of this run&apos;s current rate.
               </span>
+              {/* This was already the contract; it is now also what the backend
+                  enforces. Naming the actual rank makes it checkable at a glance
+                  — the Estelle run continued a rank-64 LoRA while the dataset had
+                  been edited to rank 32, and nothing on screen said which won. */}
               <span className="text-content-subtle text-[0.625rem] leading-relaxed">
                 Only cadence, preview prompts, the timestep weighting and the learning rate can change on a resume —
-                rank, base, optimizer and the like are locked to the checkpoint being continued.
+                rank, base, optimizer and the like are locked to the checkpoint being continued
+                {settings?.rank
+                  ? <> (rank {settings.rank}{settings.alpha ? ` · alpha ${settings.alpha}` : ''}, inherited from it)</>
+                  : null}.
               </span>
             </div>
           )}

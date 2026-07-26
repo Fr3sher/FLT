@@ -132,6 +132,43 @@ def newest_record_for(dataset_id, family, base_model='', variant=None):
     return q.order_by(TrainingRunRecord.id.desc()).first()
 
 
+def record_by_id(record_id):
+    """One record by primary key, or None. The counterpart of the `record_id`
+    stamp list_checkpoints puts on every save: a continuation resolves its
+    lineage parent from the file it actually resumes, not from whichever record
+    happens to be the newest."""
+    if record_id is None:
+        return None
+    try:
+        return db.session.get(TrainingRunRecord, int(record_id))
+    except (TypeError, ValueError):
+        return None
+
+
+def network_geometry(rec):
+    """The LoRA's FIXED shape as a record trained it: {'rank': int, 'alpha': int}
+    with only the keys that were recorded. Rank and alpha size the LoRA matrices,
+    so they are a property of the weights, never a choice a continuation gets to
+    make — resuming rank-32 weights into a rank-64 network cannot load. Empty
+    dict for a legacy/unparsable record: unknown geometry must not be enforced."""
+    out = {}
+    if rec is None or not getattr(rec, 'settings', None):
+        return out
+    try:
+        cfg = json.loads(rec.settings)
+    except (ValueError, TypeError):
+        return out
+    if not isinstance(cfg, dict):
+        return out
+    for key in ('rank', 'alpha'):
+        val = cfg.get(key)
+        if isinstance(val, bool):
+            continue
+        if isinstance(val, int) and val > 0:
+            out[key] = val
+    return out
+
+
 def resolve_lineage(record_id):
     """The whole lineage COMPONENT containing ``record_id``, as a root-first BFS
     list of TrainingRunRecord. Edges are the persisted parent_record_id links:

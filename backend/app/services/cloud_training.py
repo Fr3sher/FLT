@@ -661,18 +661,32 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     lr_factor = override_patch.pop('lr_factor', None)
     if lr_factor is not None:
         override_patch['learning_rate'] = lt.resolve_resume_lr(lt._train_settings(ds), lr_factor)
-    snapshot = _UNSET      # _UNSET → launch stamps the dataset's live settings
-    if override_patch:
-        snapshot = _merge_resume_overrides(getattr(ds, 'train_settings', None),
-                                           override_patch)
-    # Lineage: the parent is the newest record of THIS local lane, exactly like
-    # lora_training.continue_training resolves it. Best-effort — a failure leaves
-    # the edge NULL and never blocks the launch.
+    # Lineage: the parent is the record that PRODUCED the file being seeded — the
+    # `record_id` list_checkpoints stamps on every save — NOT the newest record of
+    # the lane. A lane holds several runs whose saves share one run dir, so "newest
+    # record" pointed the edge at a run whose weights were never loaded: the graph
+    # claimed a continuation of a rank-32 run while a rank-64 file went up the wire.
+    # Falls back to the lane's newest record for a pre-registry save. Best-effort —
+    # a failure leaves the edge NULL and never blocks the launch.
     from . import checkpoint_registry
     try:
-        _parent = checkpoint_registry.newest_record_for(dataset_id, fam, base, var)
+        _parent = checkpoint_registry.record_by_id(chosen.get('record_id'))
+        if _parent is None:
+            _parent = checkpoint_registry.newest_record_for(dataset_id, fam, base, var)
     except Exception:
         _parent = None
+    # The LoRA's geometry belongs to the weights, not to today's dataset settings:
+    # rank-32 weights cannot load into a rank-64 network. Without this, a resume
+    # stamped the dataset's LIVE rank onto the run (snapshot _UNSET) — edit rank
+    # between two runs and the "continuation" silently trained a different LoRA.
+    # This lane carries a PER-RUN snapshot, so the parent's geometry is inherited
+    # here with no side effect on the dataset (the local lane, which trains from
+    # the persisted settings, refuses loudly instead).
+    geometry = checkpoint_registry.network_geometry(_parent)
+    snapshot = _UNSET      # _UNSET → launch stamps the dataset's live settings
+    if override_patch or geometry:
+        snapshot = _merge_resume_overrides(getattr(ds, 'train_settings', None),
+                                           {**override_patch, **geometry})
     res = launch_cloud_training(
         user_id, dataset_id,
         steps=chosen['step'] + extra,

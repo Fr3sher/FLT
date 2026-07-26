@@ -2,6 +2,7 @@ import { CARD_H } from '../../utils/lineageGraph';
 import { resumeCaption } from '../../utils/lineageTree';
 import { famLabel, StatusDot, SavesChip } from './lineageChrome';
 import { trainingRunVariantLabel } from '../../utils/trainingRuns';
+import { runNumber, cloudNumber, runIdentityLabel } from '../../utils/runIdentity';
 
 /* ◉ The two things a lineage is DRAWN with: a run card and a checkpoint pill.
 
@@ -47,9 +48,17 @@ export function GraphCard({ node, lit, annotated, compareRole, onSelect }) {
         + (clickable ? 'cursor-pointer' : '')}>
       <div className="flex min-w-0 items-center gap-1.5">
         <StatusDot status={node.status} />
-        <span className="shrink-0 font-mono text-content-muted text-[0.625rem]">
+        {/* THE run number = the record id, the same one the inspector shows.
+            The cloud id rides along as an explicit secondary (and in the title)
+            so the card can still be matched to a row on the Runs page — it is
+            never printed as a bare number that would read like the run's own. */}
+        <span className="shrink-0 font-mono text-content-muted text-[0.625rem]"
+          title={runIdentityLabel(node)}>
           <span aria-hidden>{node.source === 'cloud' ? '☁' : '💻'}</span>{' '}
-          #{node.source === 'cloud' && node.run_id ? node.run_id : node.record_id}
+          {runNumber(node)}
+          {cloudNumber(node) != null && (
+            <span className="text-content-subtle"> · cloud #{cloudNumber(node)}</span>
+          )}
         </span>
         <span className={`min-w-0 truncate text-[0.75rem] font-semibold ${dim ? 'text-content-muted' : 'text-content'}`}
           title={`${famLabel(node.train_type)}${variantLabel(node) ? ` · ${variantLabel(node)}` : ''}`}>

@@ -105,9 +105,28 @@ function indexTree(tree) {
  *  the endpoints move with their node, and re-deriving them from the finished
  *  `d` string (or keeping a second copy of this formula) is how two renderings
  *  of the same edge start to drift. */
+/* ⚠️ A PERFECTLY horizontal edge is not drawn at all.
+   Every lineage edge is painted with a `linearGradient`, and a gradient's default
+   `gradientUnits` is objectBoundingBox — which SVG leaves undefined (and Chrome
+   renders as nothing) when the referencing geometry's bounding box has zero width
+   or height. A straight parent→child hop has bbox height EXACTLY 0.
+
+   That is the whole "the edge is missing" report, and it is why the bug looked
+   selective: a fork slopes, so its edges have height and paint fine; the most
+   common shape of all — a plain chain, where a parent is centred on its single
+   child and therefore sits at the same y — is the one that vanishes.
+
+   So a flat edge ends half a unit below where it started. Half a unit is under a
+   third of a pixel at the scales this graph draws at (invisible, and the edge
+   still arrives on the child's left edge), while the bbox stops being degenerate
+   and the gradient resolves. Fixing it HERE fixes every surface that draws these
+   edges, and keeps each edge's own parent→child ramp (which is exactly what
+   switching the gradients to userSpaceOnUse would have thrown away). */
+const FLAT_EDGE_NUDGE = 0.5;
 export function edgePath(x1, y1, x2, y2) {
   const mx = x1 + (x2 - x1) / 2;
-  return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
+  const ey = y1 === y2 ? y2 + FLAT_EDGE_NUDGE : y2;
+  return `M${x1},${y1} C${mx},${y1} ${mx},${ey} ${x2},${ey}`;
 }
 
 /**
