@@ -277,11 +277,10 @@ def dataset_set_ref(dataset_id):
     # widen back out later — the auto head-crop is only the default framing, not a
     # one-way lossy door (the old behavior discarded it and re-crops could only tighten).
     orig_fn = f"{LOCAL_USER}_datasetreforig_{uuid.uuid4().hex[:8]}.webp"
-    with open(os.path.join(dsdir, orig_fn), 'wb') as fh:
-        fh.write(svc.normalize_to_webp(raw, size=2048))
+    svc.write_image_atomic(os.path.join(dsdir, orig_fn),
+                           svc.normalize_to_webp(raw, size=2048))
     fn = f"{LOCAL_USER}_datasetref_{uuid.uuid4().hex[:8]}.webp"
-    with open(os.path.join(dsdir, fn), 'wb') as fh:
-        fh.write(webp)
+    svc.write_image_atomic(os.path.join(dsdir, fn), webp)
     ds.ref_original_filename = orig_fn
     ds.ref_filename = fn
     svc.db.session.commit()

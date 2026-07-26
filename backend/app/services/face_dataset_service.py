@@ -333,10 +333,9 @@ def add_extra_ref(user_id, dataset_id, image_bytes) -> str:
     # ✂ Crop reads the original, so a re-crop can widen back out instead of only
     # eating further into the previous crop.
     orig_fn = extra_ref_original_name(fn)
-    with open(os.path.join(dsdir, orig_fn), 'wb') as fh:
-        fh.write(normalize_to_webp(image_bytes, size=2048))
-    with open(os.path.join(dsdir, fn), 'wb') as fh:
-        fh.write(normalize_to_webp(image_bytes))
+    write_image_atomic(os.path.join(dsdir, orig_fn),
+                       normalize_to_webp(image_bytes, size=2048))
+    write_image_atomic(os.path.join(dsdir, fn), normalize_to_webp(image_bytes))
     ds.ref_extra_filenames = json.dumps(extras + [fn])
     db.session.commit()
     return fn
@@ -2346,8 +2345,7 @@ def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs
                 return
             cand_fn = f'{user_id}{reference_edit_jobs.CANDIDATE_MARKER}{uuid.uuid4().hex[:8]}.webp'
             cand_path = os.path.join(_dataset_dir(dataset_id), cand_fn)
-            with open(cand_path, 'wb') as fh:
-                fh.write(normalize_to_webp(out))
+            write_image_atomic(cand_path, normalize_to_webp(out))
             # set_ready BEFORE the finally end() — see ORDERING above.
             if not reference_edit_jobs.set_ready(dataset_id, token, cand_fn):
                 reference_edit_jobs._unlink(cand_path)      # superseded: drop our orphan
@@ -2641,6 +2639,35 @@ def dataset_payload(user_id, dataset_id):
 
 
 # --- Image normalization ---------------------------------------------------
+def write_image_atomic(path, data: bytes) -> None:
+    """Publish an image file in one step: it is either absent or COMPLETE.
+
+    `open(path, 'wb')` truncates immediately, and the bytes usually arrive a
+    second or two later (a WEBP re-encode of a 1024px generation is not free).
+    Under its FINAL name that leaves an empty file on disk for the whole
+    encode, and the grid polls the dataset while a batch runs: the browser
+    asks for it, the server answers 200 with zero bytes, and the tile renders
+    black. Reported after an OpenRouter generation, but nothing about it was
+    engine-specific — every generated image had the same window.
+
+    Writing beside the target and renaming closes it: os.replace is atomic on
+    the same filesystem, so a reader sees the old state or the new one, never
+    a half-written one. A missing file is already handled everywhere (the tile
+    shows its pending state), which is the honest answer while it is encoding.
+    """
+    tmp = f'{path}.part'
+    try:
+        with open(tmp, 'wb') as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)          # never leave a .part behind on failure
+        except OSError:
+            pass
+        raise
+
+
 def normalize_to_webp(image_bytes: bytes, size: int = 1024) -> bytes:
     """Resize so the longest side ≤ `size`, KEEP the aspect ratio (no square pad),
     return WEBP. Pour les variations Nano Banana : un plan corps reste en portrait
@@ -5536,8 +5563,8 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 return engine
             if out:
                 fn = f"{user_id}_{_ENGINE_FILE_TAG[engine]}_{uuid.uuid4().hex[:8]}.webp"
-                with open(os.path.join(_dataset_dir(img.dataset_id), fn), 'wb') as fh:
-                    fh.write(normalize_to_webp(out))
+                write_image_atomic(os.path.join(_dataset_dir(img.dataset_id), fn),
+                                   normalize_to_webp(out))
                 img.filename = fn
             else:
                 img.status = 'failed'
@@ -5699,8 +5726,8 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
                 fn = f"{ds.user_id}_{tag}_{uuid.uuid4().hex[:8]}.webp"
                 try:
                     # Conserve le ratio demandé (pas de letterbox carré sur les corps).
-                    with open(os.path.join(_dataset_dir(img.dataset_id), fn), 'wb') as fh:
-                        fh.write(normalize_to_webp(out))
+                    write_image_atomic(os.path.join(_dataset_dir(img.dataset_id), fn),
+                                       normalize_to_webp(out))
                     img.filename = fn
                 except Exception as e:
                     logger.warning(f"{engine} batch: save failed for row {image_id}: {e}")
