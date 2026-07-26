@@ -6,7 +6,7 @@
 
 🖥️ **Train locally** on your own NVIDIA GPU — or ☁️ **train in the cloud** on a rented pod (~$1–2 per run, no GPU required): same one-click flow, every epoch synced back to your machine. You can even bring your own custom base weights to either lane.
 
-📑 **Not sure which settings to use?** Fifteen researched presets ship built-in — a Character, Style and Concept recipe for each family, sourced from Ostris' ai-toolkit defaults, vendor guidance and documented community consensus. One click applies the whole recipe.
+📑 **Not sure which settings to use?** Seventeen researched presets ship built-in — a Character and Concept recipe for every family, plus a Style recipe for five of the six — sourced from Ostris' ai-toolkit defaults, vendor guidance and documented community consensus. One click applies the whole recipe.
 
 ### ▶️ Watch the whole thing, start to finish
 
@@ -42,7 +42,7 @@ Four ways to fill a dataset, and one choice at creation that rewires everything 
 | :-- | :-- |
 | **Character / Concept / Style** | One choice at creation rewires captioning, masking and step-scaling — it isn't just a label |
 | **✨ Generate from references** | Nano Banana Pro (Gemini), ChatGPT (`gpt-image-2`) or a local Klein/ComfyUI model, each request wrapped in identity-preservation instructions |
-| **Variation catalog** | Character sets fan out expression / angle / lighting / framing / outfit / background without you writing a single prompt |
+| **Variation catalog** | Fans out expression / angle / lighting / framing / outfit / background without you writing a prompt — with its own catalog per subject type (person, animal, creature, object, other), extendable from a JSON file |
 | **📥 Import your own** | Drag photos in — full frame for Concept/Style, optional auto head-crop for Character |
 | **🌐 Scrape the web** | Reddit keyword search, Pexels via its official API, or a supported gallery / album / direct-media URL — straight into the open dataset |
 | **✏️ Edit the prompt, regenerate** | Every generated tile reopens its exact prompt inline and re-renders through the same engine, identity guard included |
@@ -55,16 +55,18 @@ Four ways to fill a dataset, and one choice at creation that rewires everything 
   <img src="docs/screenshots/bank/bank-overview.png" alt="The Image bank: a large grid of thumbnails from an unsorted dump, each tagged with quality flags (blurry, small, near-duplicate) and aesthetic/NSFW score badges, with the Analyse, Filter, Curate and Promote action zones laid out around it" width="820">
 </p>
 
-Point it at a messy dump of thousands of images and triage it in place — your source folder is never modified.
+Point it at a messy dump of thousands of images and triage it in place. Nothing in your folder is touched unless you explicitly ask — **Delete rejected** is the only action that removes anything, and it tells you where the files will go first.
 
 | Sub-feature | What it gets you |
 | :-- | :-- |
 | **Quality scan** | Flags 🌫 blurry, 📺 noisy, ⬜ flat and 📐 small shots, and groups ≈ near-duplicates with one **keep-best** click |
 | **✨ Score** | A LAION aesthetic score, an NSFW probability and a 🎨 style grouping — one GPU pass, all three |
 | **✂ Find crops & variants** | Catches the same shot re-cropped or re-compressed, reusing Score's embeddings (no extra GPU pass) |
-| **🚩 Find watermarks** | A local vision pass flags overlaid logos/URLs/usernames with a stored bounding box |
+| **🚩 Find & 🧽 clean watermarks** | Flags overlaid logos/URLs with a box, then removes them in two manual passes — a model-free crop, or a LaMa/Klein repaint into a *separate* file |
 | **👥 Group by person** | Clusters faces into people **with no reference photo needed**, GPU-accelerated when the card is free |
 | **🔍 Search & filter** | Full-text search over captions plus Status / Quality / Score / Groups / Resolution filters with a live count |
+| **▶ Review one by one** | Full-screen, one image at a time, **Keep / Reject / Skip** — for the pile that needs an eye, not a filter |
+| **📦 Move folder…** | Move a bank's images to another disk and keep every analysis: scores, duplicate groups, faces, decisions, captions |
 | **🚀 Launch all** | Runs the whole chain end to end overnight and leaves a morning report |
 | **④ Promote** | Pushes the keepers into a target dataset, resolving duplicate groups as you go |
 
@@ -138,11 +140,11 @@ Left in, a site logo is something the LoRA learns. Find → Review → Clean, on
 | Sub-feature | What it gets you |
 | :-- | :-- |
 | **Six families** | Z-Image, SDXL, Krea 2, FLUX.1, FLUX.2 Klein and Anima (anime, local-only for now), each with its own safety checks |
-| **Fifteen researched presets** | A Character, Style and Concept recipe per family, every value sourced with a one-line *why* |
+| **Seventeen researched presets** | A Character and Concept recipe per family (plus Style for five of the six), every value sourced with a one-line *why* |
 | **Adaptive step policies** | Character ≈120 steps/image, Concept `475 × √images`, Style 50 steps/image inside a safe envelope |
 | **Readiness & launch guards** | Image counts, untriaged rows, suspicious captions, duplicates, VRAM, disk and family compatibility, re-checked at launch |
 | **⚙ Advanced controls** | Rank/alpha, resolution, LoRA or LoKr, dropout, timestep weighting, optimizer, scheduler, EMA, save/sample cadence |
-| **Training queue** | Runs line up instead of colliding on the GPU, with a protected **Stop run** |
+| **Training queue** | Runs line up instead of colliding on the GPU, with a protected **⏹ Stop training** |
 | **☁️ Cloud training** | Rent a vast.ai GPU (~$1–2/run, no local GPU), same exact config, pod terminated automatically |
 | **Custom base weights** | Train on your own compatible base locally — or in the cloud via a one-time push to a private HF repo |
 | **🎚 Slider LoRA (Beta)** | A bipolar LoRA whose ±strength dials a trait at inference, on a fixed 1000-step policy |
@@ -236,25 +238,22 @@ This README follows the app itself: the road you actually walk, from an empty da
 | **[3 · Curate down to the keepers](#3-curate-down-to-the-keepers)** | Keep/reject on a real curation grid, with face-similarity scoring, auto-triage and a live composition meter. |
 | **[4 · Caption for the model](#4-caption-for-the-model)** | Prose or booru tags, model-matched and machine-written, with a Vocabulary preset, a Caption Lab and full find/replace. |
 | **[5 · Scrub watermarks](#5-scrub-watermarks)** | Find overlaid logos/URLs, then crop or inpaint them (fast LaMa or Klein quality) behind a review step. |
-| **[6 · Train](#6-train--guided-advanced-when-you-need-it)** | Guided training over five families and fifteen presets, adaptive steps and guards, sliders — [locally or in the cloud](#no-gpu-train-in-the-cloud). |
+| **[6 · Train](#6-train--guided-advanced-when-you-need-it)** | Guided training over six families and seventeen presets, adaptive steps and guards, sliders — [locally or in the cloud](#no-gpu-train-in-the-cloud). |
 | **[7 · Read the family tree](#7-read-the-family-tree)** | Every continuation and fork drawn as a lineage graph you can inspect, diff, annotate and preview. |
 | **[8 · Pick the best checkpoint](#8-pick-the-best-checkpoint)** | Sweep checkpoint × strength in **Test Studio**, vote, rank, and export a shareable grid. |
 | **[9 · Take it with you](#9-take-it-with-you)** | Training ZIPs, portable backups, merges, Hugging Face publishing, one-click ComfyUI import. |
 
-Everything above degrades gracefully — a feature simply stays hidden until its dependency (an API key, a reachable tool, an installed extra) is satisfied. See the [feature matrix by backend](#feature-matrix-by-backend) for the exact requirements, and [Run it your way](#run-it-your-way) for the two run modes.
-
 ### Recent improvements
 
-- **🎨 Anima — a first-class anime training family** — the anime-focused **Anima** model (2B, on the Cosmos-Predict2 architecture) is now a full training family: pick it like any other, with its own default recipe (extrapolated from ai-toolkit's own defaults — no Anima-specific community study exists yet), prose captions and safety checks. It trains **locally** on an up-to-date ai-toolkit ([support merged upstream](https://github.com/ostris/ai-toolkit/pull/860)); the cloud lane is intentionally held back until the rented-pod image is confirmed to carry it, so a run can never burn a GPU on an arch the pod doesn't know.
-- **🌳 Run lineage & family-tree graph** — when you continue a training (from its last checkpoint or an earlier, less-cooked epoch) a lineage is born: the original run, its continuation, the re-continuation, any branch you forked off. The Runs page draws it two ways — a compact **☰ List** and a **◉ Graph**, a left-to-right family tree with flowing connectors and the path to the run you're viewing lit up. The graph shows each run's **checkpoints as pills**, and a continuation's connector starts from the **exact checkpoint it resumed** — click any checkpoint to **⬇ download** it or **▶ continue from here**. It opens for a single run the moment it has one saved checkpoint (also from a dataset's Checkpoints & LoRAs panel), and older continuations are **reconnected automatically** on first start — anything too ambiguous is left as a root, never invented.
-- **🗃️ Image bank (Beta) — a giant unsorted folder becomes a dataset** — point the new **Bank** tab at a huge, messy dump (a Telegram export, a scrape pile): a quality scan flags blurry/noisy/flat/too-small shots, near-duplicates group up with one **keep-best** click, and a face pass sorts everything **by person — no reference photo needed** (now **GPU-accelerated** when the card is free). Then **✨ Score** rates aesthetics, flags NSFW and groups by visual style, **✂ Find crops & variants** catches the same shot re-cropped or re-compressed (reusing Score's embeddings, no extra GPU pass), **🚩 Find watermarks** flags overlaid logos/URLs, **🏷️ Caption** describes images right in the Bank and a **🔍 search** filters a 9,000-image dump by what's in it. **🚀 Launch all** runs the whole pipeline end to end while you sleep, with a morning report. Your source folder is never modified; promote the keepers straight into a dataset.
-- **🎓 Sharper training recipes from verified research** — two defaults re-tuned from a fact-checked sweep of recent community results: a **FLUX.2 Klein style** LoRA now trains the winning **128/64/64/32** network (a 64-run sweep and Black Forest Labs' own example converge on it), and **Slider** LoRAs default to **alpha 4** (matching the Ostris slider notebook). Both are just smarter defaults — existing runs are untouched, and Advanced options still lets you set the alpha back.
-- **⚙️ Per-dataset caption options** — a new **⚙️ Options** button in Captions lets you pick the engine (Auto / JoyCaption / Ollama vision), choose or **pull** the exact Ollama vision model, set a **Vocabulary** preset for how nudity is named (Explicit / Clinical / Safe), and add your own wording instructions — all remembered on the dataset and layered on top of the built-in guardrails.
-- **⬆️ "Update & restart" now works for ZIP installs** — installed from a release ZIP with no Git? The update button used to just send you off to download by hand; now it names the release and its size, **downloads and installs** it with a live progress bar, keeps your datasets, settings, `.env` and Python environment intact, and **rolls back automatically** if anything fails. Git checkouts update exactly as before.
-- **🧰 A one-click install step in Setup** — after you configure your services, **Install everything** queues every installable component (ML extras, the Ollama vision model, Klein weights) with a live **X / N** progress bar; heavy installs run one at a time so they never clash. A per-item menu stays available with a **↻ Reinstall** on each, to repair a single broken component without redoing the rest.
-- **💾 Back up everything — Trained state included** — a **💾 Back up everything** button packs every dataset (images, captions, statuses, references), its training history and your settings into one file (API keys deliberately excluded). Restore rebuilds every dataset without overwriting, and now brings back each one's **Trained** status and run history instead of "Not trained yet". Tick **Include trained LoRAs** to bundle the `.safetensors` themselves.
+- **🛡️ Your files are harder to lose** — **Delete rejected** was the one action in the app that could destroy photos for good. It can't any more: files go to your OS Recycle Bin, and when that isn't available (`send2trash` isn't installed by default) they go to the **app's own Trash**, recoverable until you empty it — a permanent delete only happens when neither can take the file, and the confirmation says which of the three you are about to get *before* you arm it. It also refuses to be quiet about the case that actually bites: two banks pointing at the same folder, **or one nested inside the other**, where deleting from one amputates the other.
+- **📦 Move a bank to another disk without losing a single analysis** — a full bank represents hours of GPU time. **📦 Move folder…** lets you move those images to a bigger drive and repoint the bank at them: every aesthetic score, duplicate group, face verdict, caption and keep/reject decision survives, because only the folder path changes. It previews the match before it commits, and it accepts a path pasted exactly the way Windows' *Copy as path* gives it to you — quotes and all.
+- **🧽 Banks now remove the watermarks they find, in two manual passes** — a **crop** that cuts the mark off with no model involved at all, and a **repaint** (LaMa, or the Klein engine for quality) for marks a crop can't reach. Your file is never opened for writing: the clean image is a separate copy, so **↩ Undo** is one click and the original is still byte-for-byte what you downloaded. Alongside it, **▶ Review** walks the pile full-screen — one image, **Keep / Reject / Skip** — and a bank re-inventories its folder on its own, so images you drop in after creating it simply appear.
+- **⚡ Twice the speed on the long passes** — the bank's vision passes (watermarks, framing, captions) now send several images to Ollama at once instead of queuing them: **2.03× faster** measured at the default of 4 in flight, tunable in **Settings → Local tools → Ollama**. And **✨ Score** can **borrow a CUDA-capable Python you already have** (ComfyUI's, ai-toolkit's, your own) instead of downloading ~2.5 GB of CUDA wheels for a second copy — the app lists what it can find and you pick.
+- **📥 Bring your own shot catalog, and real catalogs for non-humans** — the variation catalog **imports and exports as JSON**, so any LLM can write a shot list for your subject; the import panel shows what would land and **names every entry it refused, with the reason**, before anything is added. The non-human subject types stopped being stubs: **59** shots for animals (up from 16), **40** for creatures, **30** for objects, **22** for other. A one-off shot you type in can also be **Kept** — it moves into the durable catalog server-side instead of dying with your browser cache.
+- **🔎 A failed run tells you what killed it** — the failure panel quotes the line that actually explains the crash instead of whatever warning was printed last, and the **RTX 50-series PyTorch trap** (a `sm_120` card meeting a torch build that stops at `sm_90`) is recognised by name with its fix. A run that dies in the first seconds still hands you an **Open run folder** button pointing at its log.
+- **☁️ A cloud Stop that can't lie, and a bill that can't run away** — 🛑 Stop now decides on evidence: still reporting, it stops gracefully; silent, the pod is terminated through the vast.ai API before the button claims anything. A run that freezes mid-training is destroyed by a watchdog rather than billing you for a frozen GPU — while the **download of a finished checkpoint** reports its own megabytes, so a slow rescue is never mistaken for a dead run and thrown away.
 
-Older improvements roll into [CHANGELOG.md](CHANGELOG.md).
+Much of the above came from people reporting things in public: **wannadecryptor** and **ashish.sinha** on Discord, **Psyko_2000** on Reddit. Older improvements roll into [CHANGELOG.md](CHANGELOG.md).
 
 ### Roadmap
 
@@ -262,7 +261,7 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
 
 - **🧬 Merge Lab** *(next big one)* — bake your trained LoRAs into a standalone, shareable checkpoint and merge models with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids). Full model fine-tuning on large curated datasets comes later on the same path.
 - **🎬 WAN 2.1 / 2.2 video LoRAs** — ai-toolkit already trains WAN and the scraper can already pull video, so the whole pipeline (scrape, curate, caption, train, test) extends naturally to motion. Community-driven.
-- **🧠 Smarter watermark detection** — a dedicated NSFW-trained detector and optional cleaning during import (subject-safe masked inpainting already shipped with the Klein engine).
+- **🧠 Smarter watermark detection** — a dedicated NSFW-trained detector, and cleaning that happens **during import** instead of as a separate errand. *(Detection and manual two-pass cleaning already ship, in datasets and in the Image bank; what's missing is a detector that doesn't need a vision model, and automation you can trust unattended.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
 
 ### Table of contents
@@ -311,6 +310,10 @@ Everything downstream keys off one choice at creation: **Character**, **Concept*
 
 Character and Concept use an activation trigger; Style is intentionally different. You can also change the kind later from **⚙ Dataset settings** — the modal spells out exactly what changes (caption strategy, which panels show, the trigger's role) and confirms that **nothing is deleted** before you save.
 
+**Not all Characters are people.** A Character dataset picks a **subject type** — person, animal, creature, object or other — and each one gets its own shot catalog and its own identity wording, so an animal set is no longer asked for "expressions" and a prompt written for a face never leaks into a statue. The non-human catalogs are real catalogs, not stubs: **59** shots for animals, **40** for creatures, **30** for objects, **22** for other.
+
+**Bring your own shots.** The catalog **exports and imports as JSON**, so you can have any LLM write a shot list for your subject and drop it in — the import panel shows what would land *and names every entry it refused, with the reason*, before anything is added. And a one-off shot you type into the ✨ card can be **Kept**: it moves into the durable catalog server-side, so it survives clearing your browser and follows you to your other devices.
+
 ---
 
 ## 2. Fill it with images
@@ -326,12 +329,12 @@ An empty dataset needs material. There are four ways in, and they mix freely ins
 
 ### The Image bank — triage a giant folder in place
 
-Point the **Bank** tab at a huge, messy folder (a Telegram export, a scrape pile of thousands). Nothing there is ever modified; the Bank works on a read-only copy of the metadata and promotes only what you choose. It has four zones:
+Point the **Bank** tab at a huge, messy folder (a Telegram export, a scrape pile of thousands). Every pass reads your images and writes its verdicts to the app's own database — your files stay where they are, and only the two actions that say so (**Delete rejected**, and a watermark clean, which writes a copy) ever go near them. It has four zones:
 
 **① Analyse** — run any of these passes over the whole pile, individually or all at once:
 
 - **Quality scan** — flags **🌫 blurry** (low Laplacian variance), **📺 noisy** (high-frequency residual), **⬜ flat** (near-empty frames) and **📐 small** (short side under 768 px) shots, and groups **≈ near-duplicates** by perceptual hash with one **keep-best** click.
-- **✨ Score** — a LAION **aesthetic** score (~1–10), an **NSFW** probability, and a **🎨 style** grouping (screenshots/memes cluster apart from photoreal) — one GPU pass, all three.
+- **✨ Score** — a LAION **aesthetic** score (~1–10), an **NSFW** probability, and a **🎨 style** grouping (screenshots/memes cluster apart from photoreal) — one GPU pass, all three. The bundled scoring environment is deliberately **CPU-only**; if you already have a CUDA-capable Python on the machine (ComfyUI's, ai-toolkit's, your own), point Score at it instead of pulling ~2.5 GB of CUDA wheels — the app lists the interpreters it can find and you pick one.
 - **✂ Find crops & variants** — catches the same shot re-cropped or re-compressed, **reusing Score's CLIP embeddings** so there's no extra GPU pass.
 - **🚩 Find watermarks** — a local vision pass (Qwen3-VL) flags overlaid logos/URLs/usernames with a stored bounding box.
 - **👥 Group by person** — clusters faces into people **with no reference photo needed** (GPU-accelerated when the card is free).
@@ -339,9 +342,15 @@ Point the **Bank** tab at a huge, messy folder (a Telegram export, a scrape pile
 - **🏷️ Caption** — describes images right in the Bank.
 - **🚀 Launch all** — runs the entire chain end to end overnight and leaves a **morning report**.
 
+The vision passes (watermarks, framing, captions) send **several images at a time** to Ollama instead of queuing them one by one — measured **2.03× faster** at the default of 4 in flight, on an 8B vision model. Lower it in **Settings → Local tools → Ollama** if the GPU is shared with something else.
+
 **② Filter & find** — narrow the pile by **Status / Quality flags / Score / Groups / Resolution** with a live count, framing chips, and a **🔍 full-text search** that filters a 9,000-image dump by what's actually *in* each shot (from its caption).
 
-**③ Curate** — **Pick diverse** (spread across the pool), **Similar to selected** (find more like a good one), read **coverage advice**, and **Keep / Reject / Undecide** in bulk. **Delete rejected** really removes the files from your folder — the one destructive action here. It asks first, says where the files will go (your OS trash, else the app's own Trash), and warns you when another bank points at the same folder.
+**③ Curate** — **Pick diverse** (spread across the pool), **Similar to selected** (find more like a good one), read **coverage advice**, and **Keep / Reject / Undecide** in bulk. When filters aren't enough, **▶ Review** opens the pile full-screen, one image at a time, with **Keep / Reject / Skip** — the fast way through a set that needs an eye rather than a threshold.
+
+**🧽 Cleaning watermarks in the bank** is two manual passes, both driven by you from the flag: a **crop** that cuts the mark off with no model involved at all, and a **repaint** (LaMa, or the Klein engine for quality) for marks a crop can't reach. Neither ever opens your file for writing — the cleaned image is a **separate copy** the bank keeps beside its row, so **↩ Undo** is just deleting that copy and the original is still byte-for-byte what you downloaded.
+
+**Your files, and getting them back.** A bank re-inventories its folder when you open the bank list, so images you drop in after creating it show up on their own. **📦 Move folder…** repoints a bank at the same images on another disk — every score, duplicate group, face verdict, caption and keep/reject decision survives, because only the folder path changes. And **Delete rejected**, the one destructive action here, asks first and says exactly where the files will go before you arm it: your OS Recycle Bin when `send2trash` is installed, otherwise the app's **own Trash** (recoverable until you empty it), and a permanent delete only when neither can take the file. It also warns you when another bank points at the same folder **or at one nested inside it** — the case where deleting from one bank quietly amputates the other.
 
 **④ Promote** — **Promote all kept** into a target dataset (the counter is **per-target**, so "nothing to promote" means those images are undecided, not kept), and resolve **duplicate groups** as you go.
 
@@ -429,12 +438,13 @@ Inpainting is an **ML extra**: without it, Clean still crops border marks and si
 Click **Train** and [ai-toolkit](https://github.com/ostris/ai-toolkit) runs underneath. The recommended path needs no config file; **⚙ Advanced** exposes the levers for deliberate experiments. The preset picker only shows a recipe when dataset kind, family and variant match.
 
 - **Six training families with distinct recipes** — **Z-Image** (Turbo/Base/De-Turbo), **SDXL**, **Krea 2** (Raw/Turbo), **FLUX.1**, **FLUX.2 Klein** (4B/9B), and **Anima** (a 2B anime-focused model on the Cosmos-Predict2 architecture — **local-only for now**, cloud lane lands once the pod image is verified), each with its own safety checks. Custom compatible weights train locally for any family, and Z-Image, Krea 2 and FLUX.2 Klein can also train on a **custom base in the cloud** via a one-time push to a private Hugging Face repo (SDXL and FLUX.1 stay local-only). Z-Image bases can be **converted** to the layout the trainer expects, straight from ComfyUI.
-- **Fifteen researched built-ins** — a **Built-in (researched)** group ships a Character, Style and Concept recipe for each of the five families. Every value is sourced (ai-toolkit defaults, vendor guidance or documented community consensus) with a one-line *why*, and the picker only shows a recipe when dataset kind, family and variant match. Save/import/export your own Advanced recipe as JSON too.
+- **Seventeen researched built-ins** — a **Built-in (researched)** group ships a Character and a Concept recipe for each of the six families, plus a Style recipe for five of them (Anima has no published style source yet, so none is invented). Every value is sourced (ai-toolkit defaults, vendor guidance or documented community consensus) with a one-line *why*, and the picker only shows a recipe when dataset kind, family and variant match. Save/import/export your own Advanced recipe as JSON too.
 - **Adaptive step policies** — Character ≈ 120 steps/image (1500–3500), Concept `475 × √images` (2000–12000), Style 50 steps/image inside a family/variant-specific safe envelope.
 - **Readiness and launch guards** — minimum image counts, untriaged rows, missing/suspicious captions, near-duplicates, Character composition, VRAM, disk space, base architecture and family/variant compatibility are checked again at launch, queue start, continue and cloud retry.
-- **Advanced controls** — rank/alpha, resolution, LoRA or LoKr, network dropout, timestep weighting, optimizer, learning-rate scheduler/warmup, gradient accumulation, EMA, save/sample cadence and preview prompts. A **training queue** with scheduling lines runs up instead of colliding on the GPU, with a protected **Stop run**. A **Saves kept** cap lets ai-toolkit trim older intermediate checkpoints during the run (default 4), and everything the app deletes goes to an app-wide **Trash** you empty on your own terms.
+- **Advanced controls** — rank/alpha, resolution, LoRA or LoKr, network dropout, timestep weighting, optimizer, learning-rate scheduler/warmup, gradient accumulation, EMA, save/sample cadence and preview prompts. A **training queue** with scheduling lines runs up instead of colliding on the GPU, with a protected **⏹ Stop training**. A **Saves kept** cap lets ai-toolkit trim older intermediate checkpoints during the run (default 4), and everything the app deletes goes to an app-wide **Trash** you empty on your own terms.
 - **Character-only masked training** from auto-generated rembg masks; Concept and Style force masking off so the subject or full-frame aesthetic isn't erased.
 - **Continue +N steps** to extend a run. Local checkpoints have a one-click import into ComfyUI; downloaded cloud results are imported automatically when a ComfyUI LoRA folder is configured.
+- **When a run dies, it says why** — the failure panel quotes the line that actually explains the crash (the traceback, else the last real error) instead of whatever warning happened to be printed last, and known traps are named with their fix — chief among them the **RTX 50-series PyTorch trap**, where a `sm_120` card meets a torch build that doesn't know it. A run that dies in the first seconds still gets an **Open run folder** button pointing at its `training.log`, so the log is never stranded in a folder the app didn't create.
 - **🎚 Slider LoRA mode (Beta)** — turn any dataset into a **concept slider**: give a positive and a negative prompt and ai-toolkit's `concept_slider` trainer learns a single bipolar LoRA whose ±strength dials the trait at inference (the images are only a denoising substrate, so caption guards the slider never reads are skipped). A fixed 1000-step policy, low default rank, bipolar preview samples and an isolated `_slider` run tag keep it from clobbering a normal setup. All five families are offered behind honest experimental notes — **Krea 2 is the reference** — and it runs **locally or in the cloud** (slider settings are snapshotted at launch so a mid-run edit can't retarget a rented run; the first paid slider run is still unproven — extra-Beta). Test both poles with Test Studio's **negative strengths**.
 
 ### No GPU? Train in the cloud
@@ -444,6 +454,7 @@ No local GPU? Add a **vast.ai API key** (Settings → Training, or the setup wiz
 - **Cost** — you pay vast.ai directly and offer prices vary over time. A price cap (`cloud.max_price_per_hour`, default $0.80/h), a monthly budget ceiling, and a hard runtime cap (`cloud.max_runtime_minutes`, default 4 h) are enforced before launch.
 - **Supported families** — **Z-Image, Krea 2 and FLUX.2 Klein**, on an official Hugging Face base *or* **your own custom base** pushed one-time to a private repo on your HF account (private enforced, cached by combo hash so the same base never uploads twice; the pod pulls it with your token). The launch verifies the repo, files and sizes before renting anything. **Klein 9B — 32-48 GB VRAM — is the cloud-first lane** of its family; SDXL and FLUX.1 require local training.
 - **Safety** — pods are labeled `lds-<run-id>`; on every app start, orphaned pods are destroyed automatically. If the app is closed mid-run, the pod keeps training and the app resumes monitoring on restart. Privacy note: the pod belongs to *your* vast.ai account; dataset images and checkpoints transit through it and are destroyed with the pod.
+- **A Stop that can't lie, and a bill that can't run away** — 🛑 **Stop** answers on evidence: if the run is still reporting, it stops it gracefully; if it isn't, the pod is terminated through the vast.ai API before the button ever says "stopped". And a run that goes silent mid-training is destroyed by a **freeze watchdog** (`cloud.freeze_watchdog_minutes`, default 45) instead of billing you for a frozen GPU. The one thing that is never mistaken for silence is the **download at the end**: bringing a finished checkpoint home reports its own progress in megabytes, so no watchdog can throw away a run that has already succeeded.
 
 ### The Runs hub
 
@@ -563,7 +574,8 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 | Watermark inpainting (LaMa) | `backend/requirements-ml.txt` (simple-lama-inpainting) — without it, Clean crops border marks only |
 | Scrape images into a dataset (Reddit search + supported gallery/search URLs) | `backend/requirements-scrape.txt`; Pexels enumeration additionally requires `PEXELS_API_KEY` and uses the official API instead of gallery-dl |
 | Concept-caption inversion / concept-leak checks | Ollama **or** ai-toolkit (JoyCaption) |
-| LoRA training | ai-toolkit installed and configured |
+| LoRA training (Z-Image / Krea 2 / FLUX.1 / FLUX.2 Klein / Anima) | ai-toolkit installed and configured — **no ComfyUI needed**: the base weights come from Hugging Face |
+| LoRA training (SDXL) | ai-toolkit **and** ComfyUI — SDXL is the one family whose base is a checkpoint picked from ComfyUI's `models/checkpoints` |
 | Cloud training (vast.ai) | `VAST_API_KEY`; Z-Image / Krea 2 / FLUX.2 Klein only |
 | Test Studio (Z-Image / SDXL / Krea 2) | ComfyUI reachable + the selected family's model assets |
 | Portable backup/restore and ZIP/folder dataset merge | No external service |
@@ -668,13 +680,19 @@ None of these are bundled — each one is optional, installed separately, and th
 
 | Tool | Unlocks | Get it |
 |---|---|---|
-| [ai-toolkit](https://github.com/ostris/ai-toolkit) (Ostris) | LoRA **training**, JoyCaption **captioning** | Follow its README install (clone + its installer creates a `venv`) |
-| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | **Klein** local generation/improvement, **Test Studio**, checkpoint/LoRA discovery | Windows portable build, git install, or the ComfyUI Desktop app; keep it running on `http://127.0.0.1:8188` |
+| [ai-toolkit](https://github.com/ostris/ai-toolkit) (Ostris) | LoRA **training**, JoyCaption **captioning** | Follow its own install instructions — **any** way you install it works; the app only needs the Python that runs it |
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | **Klein** local generation/improvement, **Test Studio**, checkpoint/LoRA discovery, **SDXL training bases** | Windows portable build, git install, or the ComfyUI Desktop app; keep it running on `http://127.0.0.1:8188` |
 | [Ollama](https://ollama.com) | Auto-captioning, framing auto-classify, head-crop, watermark detection | Install, then `ollama pull huihui_ai/qwen3-vl-abliterated:8b-instruct` (the uncensored **abliterated** build; keep the **-instruct** tag, not the Thinking one — or set your own vision model in Settings) |
 
-**ai-toolkit** — install it anywhere (e.g. `C:\ai-toolkit`), following [its own instructions](https://github.com/ostris/ai-toolkit#installation). Paste the folder path into **Settings → Local tools → ai-toolkit directory** and hit Test — training and JoyCaption captioning appear once it's valid. The app looks for `<folder>/run.py` and auto-detects the interpreter from a `venv/` **or** `.venv/` next to it (Scripts\python.exe on Windows, bin/python on Linux). Installed with conda, uv, or system Python and have **no venv folder**? Leave the directory pointing at the ai-toolkit folder and fill the optional **Python interpreter** field with the full path to the python that has ai-toolkit's dependencies. Job configs, datasets, and outputs live under that same folder by default (overridable under "Advanced").
+**ai-toolkit** — install it anywhere and **however you like**, following [its own instructions](https://github.com/ostris/ai-toolkit#installation) or any community installer. Paste the folder path into **Settings → Local tools → ai-toolkit directory** and hit Test — training and JoyCaption captioning appear once it's valid.
 
-**ComfyUI** — this app talks to a running ComfyUI over its HTTP API and scans its `models/` folders to list checkpoints and LoRAs. Set **Settings → ComfyUI API URL** (default `http://127.0.0.1:8188`) and **ComfyUI install directory** (the folder containing `models/`, `output/`, `input/`). Each family's base model goes in the layout its scanner expects:
+> **A virtual environment is not required.** All this app needs is the path of the Python that can run ai-toolkit. It auto-detects one from a `venv/` or `.venv/` sitting next to `run.py` simply because that is what ai-toolkit's own installer produces — but a conda env, `uv`, the system Python, or a portable bundle that ships a `python_embeded/` folder instead are all supported installs, not broken ones. Fill in **Settings → Local tools → ai-toolkit Python interpreter** with the full path to that interpreter and everything works identically. When Setup can see a candidate interpreter inside your ai-toolkit folder, it offers it to you in one click; when it can't, it says so plainly rather than telling you to build a venv.
+
+Job configs, datasets, and outputs live under the ai-toolkit folder by default (overridable under "Advanced").
+
+**ComfyUI** — optional, and not needed to train. Only **SDXL** requires it, because an SDXL run trains on a checkpoint you pick from ComfyUI's own `models/checkpoints`; Z-Image, Krea 2, FLUX.1, FLUX.2 Klein and Anima all download official base weights and train without it. What ComfyUI *does* unlock is everything you look at: Klein generation and 2 MP improvements, the Test Studio, and one-click deployment of your trained LoRAs.
+
+This app talks to a running ComfyUI over its HTTP API and scans its `models/` folders to list checkpoints and LoRAs. Set **Settings → ComfyUI API URL** (default `http://127.0.0.1:8188`) and **ComfyUI install directory** (the folder containing `models/`, `output/`, `input/`). Each family's base model goes in the layout its scanner expects:
 
 - **Z-Image** → a sub-folder whose name contains **`z image`** (or `zimage`) under `models/unet` (or `models/diffusion_models`) — e.g. `models/unet/z image/bigLove_zt3.safetensors`. A file dropped **loose** in `models/unet` is *not* detected. The text encoder and VAE go at `models/text_encoders/Z image/qwen_3_4b.safetensors` and `models/vae/z ae.safetensors`.
 - **SDXL** → `models/checkpoints` (a `Biglove/` sub-folder is also scanned).
@@ -746,6 +764,9 @@ A known npm bug ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) can mak
 
 **Training log looks frozen for several minutes**
 This is normal — ai-toolkit's stdout is block-buffered during model load and latent caching, so nothing prints for a while even though it's working. Check GPU utilization or watch for new files under the ai-toolkit output directory to confirm it's alive; a "warming up" state before the first logged step is expected.
+
+**Training dies immediately on an RTX 50-series card ("no kernel image is available")**
+Blackwell GPUs are compute capability `sm_120`, and stable PyTorch wheels only carry kernels up to `sm_90`. `torch.cuda.is_available()` still says True and the card is named correctly, so the run starts normally and then dies on the first real kernel launch. The app now names this trap in the failure panel and in the training preflight: install a CUDA 12.8 torch build **into ai-toolkit's own environment** (`pip install torch --index-url https://download.pytorch.org/whl/cu128`). It never guesses — on any other architecture mismatch it describes what it sees and invents no command.
 
 **ComfyUI shows as unreachable**
 Check `comfyui.api_url` in Settings, confirm ComfyUI is actually running, and check that nothing (firewall, a different bind interface) is blocking the connection between this app and ComfyUI.
