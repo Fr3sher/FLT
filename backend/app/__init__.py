@@ -116,6 +116,21 @@ _SCHEMA_ADDITIONS = (
     ('cloud_training_run', 'stop_requested_at', 'DATETIME'),
 )
 
+# Indexes that only a FRESH database ever got. `index=True` on a model column is
+# honoured by db.create_all() when it creates the table; on a database that
+# already existed, the additive path above adds the COLUMN and nothing else — so
+# every install that predates one of these columns has been scanning without its
+# index ever since. These are exactly the _SCHEMA_ADDITIONS columns declared
+# index=True in models.py, under SQLAlchemy's own default name (ix_<table>_<col>),
+# so a fresh database finds them already there and does nothing.
+_INDEX_ADDITIONS = (
+    ('face_dataset_image', 'bank_image_id'),
+    ('bank_image', 'semantic_dup_group'),
+    ('bank_image', 'style_cluster'),
+    ('bank_image', 'framing'),
+)
+
+
 def _apply_additive_migrations():
     from sqlalchemy import text
     for table, col, col_type in _SCHEMA_ADDITIONS:
@@ -126,6 +141,15 @@ def _apply_additive_migrations():
                 db.session.commit()
         except Exception:
             db.session.rollback()  # a failed ALTER must never block boot
+    # Same loop, same discipline: idempotent (IF NOT EXISTS), additive only, and
+    # fail-open — a database that cannot take an index still boots, just slower.
+    for table, col in _INDEX_ADDITIONS:
+        try:
+            db.session.execute(text(
+                f'CREATE INDEX IF NOT EXISTS ix_{table}_{col} ON {table} ({col})'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
 
 
 def _cleanup_orphaned_lora_test_images():
