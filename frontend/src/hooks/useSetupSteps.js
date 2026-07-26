@@ -1,5 +1,9 @@
 // Pure derivation of the guided Setup wizard state from live capabilities.
 // No I/O — deterministic, so it is the single source of truth for card status.
+// Pure JS on purpose (no JSX): node --test drives it directly, which is what
+// keeps the capability destinations below honest.
+import { getHelpTopic } from '../help/helpRegistry.js'
+import { SETTINGS_SECTIONS } from '../components/settings/registry.js'
 
 export const SETUP_STEP_IDS = ['image', 'comfyui', 'ollama', 'quality', 'training']
 
@@ -267,21 +271,68 @@ export function deriveCapabilitySummary(caps) {
   const cu = c.comfyui || {}
   const comfyOff = !!cu.dir_valid && !cu.reachable
   const NOTE = 'launch ComfyUI to enable'
+  // `topic` = the help-registry topic that OWNS the control turning this
+  // capability on. It is not a second navigation table: the route + focus id
+  // are read back from the registry (capabilityDestination below), so a field
+  // that moves section moves the tile with it. `waitingTopic` is the door for
+  // the pending state — "the install is fine, the process isn't up" is not the
+  // same problem as "it isn't installed", so it must not lead to the same page.
+  const WAITING = 'comfyui.api_url'
   return [
-    { label: 'Nano Banana (Gemini)', ok: !!e.nanobanana },
-    { label: 'ChatGPT (gpt-image-2)', ok: !!e.chatgpt },
-    { label: 'OpenRouter', ok: !!e.openrouter },
+    { label: 'Nano Banana (Gemini)', ok: !!e.nanobanana, topic: 'GEMINI_API_KEY' },
+    { label: 'ChatGPT (gpt-image-2)', ok: !!e.chatgpt, topic: 'engines.chatgpt_auth' },
+    { label: 'OpenRouter', ok: !!e.openrouter, topic: 'OPENROUTER_API_KEY' },
     { label: 'Klein (local)', ok: !!e.klein,
+      topic: 'setup-comfyui', waitingTopic: WAITING,
       ...(!e.klein && comfyOff ? { pending: true, note: NOTE } : {}) },
-    { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama) },
-    { label: 'Auto-framing & head-crop', ok: !!(o.reachable && o.vision_model_ready) },
-    { label: 'Face-similarity scoring', ok: !!c.face_scoring },
-    { label: 'Person masks', ok: !!c.masks },
-    { label: 'Watermark inpainting', ok: !!c.watermark_inpaint },
-    { label: 'LoRA training', ok: !!c.training_visible },
+    { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama), topic: 'setup-ollama' },
+    { label: 'Auto-framing & head-crop', ok: !!(o.reachable && o.vision_model_ready),
+      topic: 'setup-ollama' },
+    { label: 'Face-similarity scoring', ok: !!c.face_scoring, topic: 'setup-quality' },
+    { label: 'Person masks', ok: !!c.masks, topic: 'setup-quality' },
+    { label: 'Watermark inpainting', ok: !!c.watermark_inpaint, topic: 'setup-quality' },
+    { label: 'LoRA training', ok: !!c.training_visible, topic: 'setup-training' },
     { label: 'Test Studio', ok: !!c.studio_visible,
+      topic: 'setup-comfyui', waitingTopic: WAITING,
       ...(!c.studio_visible && comfyOff ? { pending: true, note: NOTE } : {}) },
   ]
+}
+
+// Human name of the screen a capability route lands on — derived, never typed
+// twice: the Settings rail owns its section titles, the wizard owns its own.
+function destinationName(route) {
+  const id = (route.match(/^\/settings\/([a-z0-9-]+)/) || [])[1]
+  if (id) {
+    const s = SETTINGS_SECTIONS.find((x) => x.id === id)
+    return s ? s.title : null
+  }
+  return route.startsWith('/setup') ? 'Setup wizard' : null
+}
+
+/* Resolve ONE capability row to the door that turns it on:
+     { topic, href, where, announce }
+   - href     in-app path, focus hint appended so the field is scrolled to and
+              ringed on arrival (SettingsPage's ?focus= deep-link);
+   - where    the screen's human name, for the visible/accessible wording;
+   - announce the full accessible label — state FIRST (the sr-only "(ready)" /
+              "(not available)" this replaces must not be lost), then where the
+              row leads, because a link whose name hides its destination is a
+              trap for anyone not looking at the grid.
+   `getTopic` is injectable so the contract test can drive it explicitly. */
+export function capabilityDestination(entry, getTopic = getHelpTopic) {
+  if (!entry) return null
+  const id = (entry.pending && entry.waitingTopic) ? entry.waitingTopic : entry.topic
+  const t = id ? getTopic(id) : null
+  if (!t || !t.app || !t.app.route) return null
+  const { route, focus } = t.app
+  const href = focus ? `${route}${route.includes('?') ? '&' : '?'}focus=${focus}` : route
+  const where = destinationName(route)
+  if (!where) return null
+  // Ready rows still lead somewhere — that screen is where the capability is
+  // managed (re-test a key, reinstall a helper), so "manage in" not "fix in".
+  const state = entry.pending ? (entry.note || 'waiting') : (entry.ok ? 'ready' : 'not available')
+  const verb = entry.pending || entry.ok ? 'manage in' : 'configure in'
+  return { topic: id, href, where, announce: `${entry.label} — ${state}, ${verb} ${where}` }
 }
 
 export function recommendedMet(caps) {

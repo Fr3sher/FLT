@@ -43,9 +43,18 @@
 // =====================================================================
 import { SETTINGS_SECTIONS } from './components/settings/registry.js';
 import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
+import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
+  {
+    id: '2026-07-26-capability-rows-are-doors',
+    date: '2026-07-26',
+    title: '🚪 Every line of the Capabilities list now takes you to the thing that turns it on',
+    blurb:
+      "Settings › Overview told you what was missing and then left you to find it: \"✗ Person masks\" was a dead end, and the four generic links underneath sent you to the top of a screen to hunt. Each of the eleven rows is now a link that lands you ON the control — the OpenRouter key field, the ComfyUI URL, the button that installs person masks — with the field scrolled to and highlighted. Rows that only need ComfyUI running now say so in amber instead of showing a red cross, and point at the connection test rather than at an install you have already done.",
+    to: '/settings/overview',
+  },
   {
     id: '2026-07-26-new-engines-reach-existing-installs',
     date: '2026-07-26',
@@ -1315,7 +1324,12 @@ export function parseTarget(to) {
   if (typeof to !== 'string' || !to.startsWith('/')) return null;
   const [path, query = ''] = to.split('?');
   const params = new URLSearchParams(query);
-  return { path, section: params.get('section'), panel: params.get('panel') };
+  return {
+    path,
+    section: params.get('section'),
+    panel: params.get('panel'),
+    step: params.get('step'),
+  };
 }
 
 // Is `to` a target the app can actually navigate to? Validated against the LIVE
@@ -1323,7 +1337,15 @@ export function parseTarget(to) {
 export function isValidTarget(to) {
   const t = parseTarget(to);
   if (!t) return false;
-  const { path, section, panel } = t;
+  const { path, section, panel, step } = t;
+
+  // /setup with an optional ?step=<wizard step id> deep-link (the Settings
+  // Overview capability rows use it to open the screen that installs them).
+  if (path === '/setup') {
+    if (section || panel) return false;
+    return step === null || SETUP_STEP_IDS.includes(step);
+  }
+  if (step) return false; // ?step= is meaningless anywhere but the wizard
 
   // /settings and /settings/<id> — never carry section/panel query params.
   if (path === '/settings') return !section && !panel;

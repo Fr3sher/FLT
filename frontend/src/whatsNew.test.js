@@ -146,9 +146,11 @@ test('opening the panel after a partial read clears the whole badge', () => {
 
 test('parseTarget splits path and workspace query params', () => {
   assert.deepEqual(parseTarget('/settings/engines'),
-    { path: '/settings/engines', section: null, panel: null });
+    { path: '/settings/engines', section: null, panel: null, step: null });
   assert.deepEqual(parseTarget('/datasets?section=curation&panel=watermarks'),
-    { path: '/datasets', section: 'curation', panel: 'watermarks' });
+    { path: '/datasets', section: 'curation', panel: 'watermarks', step: null });
+  assert.deepEqual(parseTarget('/setup?step=quality'),
+    { path: '/setup', section: null, panel: null, step: 'quality' });
   assert.equal(parseTarget('https://example.com'), null);
   assert.equal(parseTarget(undefined), null);
 });
@@ -185,10 +187,13 @@ test('isValidTarget accepts good routes and rejects malformed ones', () => {
     '/datasets', '/studio', '/cloud', '/guide', '/help', '/setup',
     '/settings/engines', '/settings/maintenance', '/guide/using-the-app',
     '/datasets?section=scrape&panel=scan', '/datasets?section=add',
+    '/setup?step=quality', '/setup?step=comfyui',
   ]) {
     assert.equal(isValidTarget(ok), true, ok);
   }
   for (const bad of [
+    '/setup?step=nope',
+    '/settings/engines?step=quality',
     '/settings/does-not-exist',
     '/datasets?section=nope',
     '/datasets?section=curation&panel=nope',

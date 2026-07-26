@@ -29,7 +29,13 @@ For containerized or scripted setups, a handful of environment variables overrid
 
 ## Overview
 
-The Overview section has **no settings of its own** — it's the at-a-glance dashboard for the rest of the page. If nothing is configured yet, it opens with a *Let's get you set up* banner. Below that, a **Capabilities** grid marks each feature ✓ or ✗ depending on what the app can currently see (a key, a reachable tool, an installed extra), and a **Where to fix it** list links straight to the section that turns each one on. Use it as your first stop to answer "why is this feature greyed out?" — then follow the link to the section that fixes it.
+The Overview section has **no settings of its own** — it's the at-a-glance dashboard for the rest of the page. If nothing is configured yet, it opens with a *Let's get you set up* banner. Below that, a **Capabilities** grid marks each feature ✓ or ✗ depending on what the app can currently see (a key, a reachable tool, an installed extra).
+
+Every row is a **link to the control that turns that capability on**, not just to the right screen: picking *OpenRouter* lands on the OpenRouter key field with it scrolled to and highlighted; picking *Person masks* opens the Setup wizard step that installs it. Use the grid as your first stop to answer "why is this feature greyed out?" — the answer is one click away on the row itself.
+
+A row marked **◐ in amber** is not broken: the tool is installed, it just isn't running (typically *launch ComfyUI to enable* for Klein and the Test Studio). Those rows lead to the **ComfyUI API URL** field and its **Test** button rather than to an install you have already done. The counter at the top reads `X/11 ready` plus, when it applies, how many are waiting on a process.
+
+If nothing on the grid tells you where to start, the line at the bottom opens the **Setup wizard**, which scans the machine and installs what it can.
 
 ## Image engines
 

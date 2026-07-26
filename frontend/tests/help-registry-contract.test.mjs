@@ -9,6 +9,7 @@ import {
 import { markdownHeadingId } from '../src/utils/headingId.js'
 import { SETTINGS_SECTIONS } from '../src/components/settings/registry.js'
 import { WORKSPACE_SECTIONS } from '../src/components/dataset/workspaceSections.js'
+import { SETUP_STEP_IDS } from '../src/hooks/useSetupSteps.js'
 import { getWorkspacePanel } from '../src/components/dataset/workspaceNavigation.js'
 import { buildGuideTextIndex, matchGuideAnchors } from '../src/help/guideTextIndex.js'
 import { shouldShowTip, markTipSeen } from '../src/help/helpTips.js'
@@ -43,13 +44,18 @@ const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id))
 const WORKSPACE_IDS = new Set(WORKSPACE_SECTIONS.map((s) => s.id))
 const STATIC_ROUTES = new Set(['/datasets', '/bank', '/setup', '/settings', '/studio', '/cloud', '/help'])
 
-// route ∈ {static} OR /settings/<settings-id> OR /datasets?section=<ws-id>[&panel=<panel>]
+// route ∈ {static} OR /settings/<settings-id> OR /setup?step=<setup-step-id>
+//         OR /datasets?section=<ws-id>[&panel=<panel>]
 const routeValid = (route) => {
   const [path, qs] = route.split('?')
   if (!qs) {
     if (STATIC_ROUTES.has(path)) return true
     const m = path.match(/^\/settings\/([a-z0-9-]+)$/)
     return !!(m && SETTINGS_IDS.has(m[1]))
+  }
+  if (path === '/setup') {
+    const params = new URLSearchParams(qs)
+    return SETUP_STEP_IDS.includes(params.get('step'))
   }
   if (path !== '/datasets') return false
   const params = new URLSearchParams(qs)

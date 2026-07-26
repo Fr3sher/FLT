@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { apiFetch, putJson, postJson } from '../api/fetchClient'
 import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
@@ -86,7 +86,16 @@ export default function SetupPage() {
   const [detected, setDetected] = useState(null)   // autodetect result (path suggestions)
   const [detecting, setDetecting] = useState(false)
   const [scanned, setScanned] = useState(false)     // the on-load scan has completed at least once
-  const [screen, setScreen] = useState(0)           // index into SCREENS
+  // Deep link: /setup?step=<tool id> opens that wizard screen straight away.
+  // The Settings ▸ Overview capability rows link here — "✗ Person masks" must
+  // land ON the install button, not on the welcome screen with 4 Next clicks in
+  // between. Applied to the INITIAL state (not an effect) so the wizard never
+  // flashes the welcome screen first; an unknown/absent step falls back to 0.
+  const [searchParams] = useSearchParams()
+  const [screen, setScreen] = useState(() => {
+    const i = SETUP_STEP_IDS.indexOf(searchParams.get('step'))
+    return i < 0 ? 0 : i + 1                        // welcome=0, tools=1..N
+  })
   const [advancing, setAdvancing] = useState(false) // Next is mid save-&-recheck
   const [startingOllama, setStartingOllama] = useState(false) // "Start Ollama" in flight
   const [dirCheck, setDirCheck] = useState(null)    // live classify of the typed ComfyUI dir

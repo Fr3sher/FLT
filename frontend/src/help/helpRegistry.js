@@ -40,6 +40,17 @@ const setting = (id, section, focus, title, keywords, tip) => ({
   ...(tip ? { tip } : {}),
 });
 
+// Build a topic that opens ONE screen of the Setup wizard (/setup?step=<id>).
+// Several capabilities are turned on by an INSTALL, not by a setting — the
+// button that installs them lives in a wizard step, so that step is their real
+// address. Without these, "✗ Person masks" could only point at the top of the
+// wizard and let the user click Next until they found it.
+const setupStep = (id, step, title, keywords) => ({
+  id, kind: 'action', title, keywords,
+  guide: { chapter: 'getting-started', anchor: 'the-setup-wizard' },
+  app: { route: `/setup?step=${step}` },
+});
+
 const action = (id, title, keywords, route, chapter, anchor, tip) => ({
   id, kind: 'action', title, keywords,
   guide: { chapter, anchor },
@@ -237,6 +248,19 @@ const TOPICS = [
       'install all', 'connect', 'tools'],
     guide: { chapter: 'getting-started', anchor: 'the-setup-wizard' },
     app: { route: '/setup' } },
+  setupStep('setup-comfyui', 'comfyui', 'Set up ComfyUI & download the Klein model',
+    ['comfyui', 'klein', 'local engine', 'download model', 'weights', 'unet', 'vae',
+     'text encoder', 'studio', 'test studio', 'not installed', 'install klein']),
+  setupStep('setup-ollama', 'ollama', 'Set up Ollama & pull the vision model',
+    ['ollama', 'vision model', 'pull model', 'captioning', 'caption', 'auto-framing',
+     'framing', 'head-crop', 'head crop', 'qwen', 'install ollama']),
+  setupStep('setup-quality', 'quality', 'Install the optional ML helpers',
+    ['face scoring', 'face similarity', 'insightface', 'person masks', 'masks', 'rembg',
+     'watermark inpainting', 'lama', 'inpaint', 'bank scoring', 'ml extras', 'install',
+     'reinstall', 'repair', 'optional helpers']),
+  setupStep('setup-training', 'training', 'Set up ai-toolkit (LoRA training)',
+    ['ai-toolkit', 'aitoolkit', 'training', 'lora training', 'run.py', 'python',
+     'interpreter', 'install training', 'train']),
   { id: 'page-studio', kind: 'page', title: 'Test Studio',
     keywords: ['studio', 'test', 'lora', 'checkpoint', 'generate', 'compare'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
