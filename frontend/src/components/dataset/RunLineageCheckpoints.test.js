@@ -29,14 +29,48 @@ test('the drawing is shared with the canvas, not duplicated', () => {
   assert.match(edges, /export function LineageEdges\(/);
 });
 
-test('the canvas stops at slice-2 scope: it moves cards, it does not generate', () => {
-  // Selecting checkpoints for a batch and generating from them are slice 3.
-  // Shipping half of either here is what would make the canvas a dead end.
-  assert.doesNotMatch(canvas, /onToggleSelect/);
-  assert.doesNotMatch(canvas, /lineage\/previews/);
-  // …and the in-card graph is untouched: it still owns every pill action until
-  // the canvas reaches parity.
+test('the canvas GENERATES through the Test Studio, it does not grow a second one', () => {
+  // Slice 3 opened this up (the guard used to lock the canvas OUT of generation
+  // so the earlier slices could not quietly grow half a feature). What is locked
+  // now is the shape of the opening: the canvas mounts the Studio's panel and the
+  // Studio's hooks. A canvas that re-declared a prompt field, a seed control or a
+  // launch call would be the drift this whole design exists to prevent.
+  const panel = fs.readFileSync(new URL('../canvas/CanvasGenerationPanel.jsx', import.meta.url), 'utf8');
+  assert.match(panel, /import RunSetupPanel from '\.\.\/dataset\/studio\/RunSetupPanel'/);
+  assert.match(panel, /useStudioForm/);
+  assert.match(panel, /useCanvasStudio/);
+  assert.doesNotMatch(panel, /<textarea/);          // the prompt field is PromptField's
+  assert.doesNotMatch(panel, /rollSeed|nextSeed\(\)/);
+  // The canvas ticks pills; the in-card graph keeps its own selection intact.
+  assert.match(canvas, /onToggleSelect=\{\(\) => onTogglePick\(/);
   assert.match(graph, /onToggleSelect=\{\(pill\) => toggleCk\(/);
+});
+
+test('the canvas launch goes through ONE call site, so no setting can be dropped', () => {
+  const hook = fs.readFileSync(new URL('../../hooks/useCanvasStudio.js', import.meta.url), 'utf8');
+  const setup = fs.readFileSync(new URL('./studio/RunSetupPanel.jsx', import.meta.url), 'utf8');
+  // RunSetupPanel owns genSettings in local state and passes it to studio.launch.
+  // The canvas therefore swaps studio.launch — NOT the onLaunch handler, which
+  // would have silently lost the global generation settings from a canvas run.
+  assert.match(setup, /const onLaunch = async \(\) => \{/);
+  assert.match(setup, /studio\.launch\(/);
+  assert.doesNotMatch(setup, /onLaunchOverride/);
+  assert.match(hook, /genSettings = \{\}/);
+  assert.match(hook, /\.\.\.genSettings/);
+  assert.match(hook, /\/api\/train\/canvas\/generate/);
+});
+
+test('the canvas refuses mixed families and deploys before generating — in the pure layer', () => {
+  const rules = fs.readFileSync(new URL('../../utils/canvasGeneration.js', import.meta.url), 'utf8');
+  // Both decisions are arithmetic a test can check without a browser (behaviour
+  // covered in canvasGeneration.test.js); the component must USE them.
+  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasGeneration'/);
+  assert.match(canvas, /describeCanvasLaunch\(picks\)/);
+  assert.match(rules, /cannot run together/);
+  assert.match(rules, /different base models/);
+  assert.match(rules, /Deploy \$\{n\} checkpoint/);
+  // A failed deploy ABORTS: half a comparison answers a different question.
+  assert.match(canvas, /Deploy failed — nothing was generated/);
 });
 
 test('the canvas moves cards through the PURE placement layer, not by hand', () => {

@@ -48,6 +48,22 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-canvas-generate-from-the-board',
+    date: '2026-07-26',
+    title: 'Test your checkpoints straight from the LoRA Canvas',
+    blurb:
+      'Tick the ✓ on any checkpoint on the board and the Test Studio opens right there — the same prompt, seed, format, steps and engine settings, because it is the same panel, not a copy. The new part: your picks can come from several datasets at once, so you can put three LoRAs side by side on one prompt and one seed without leaving the board. Picked a checkpoint that is not in ComfyUI yet? The button says so before it does anything: "Deploy 2 checkpoints, then generate". Picked two families by mistake? It tells you Krea and Z-Image have no engine in common instead of going quietly dead.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-26-checkpoint-keeps-every-image-it-made',
+    date: '2026-07-26',
+    title: 'Every checkpoint keeps a gallery of everything it made',
+    blurb:
+      'Generating a second preview on a checkpoint used to replace the first one — the picture stayed on disk but you could not reach it again. They now pile up: a × N badge appears on the checkpoint and opens the whole set, newest first, whatever produced it (the canvas, the Test Studio, a comparison run). Which image belongs to which checkpoint is now recorded when it is generated instead of being worked out from the file name each time, so multi-word triggers can no longer scramble it. Older images are matched back where the evidence allows it; the ones that cannot be traced are counted and left out rather than filed under a checkpoint they may not belong to.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-26-existing-promoted-images-recover-their-framing',
     date: '2026-07-26',
     title: 'Images already promoted from a Bank take their framing back',

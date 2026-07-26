@@ -14,7 +14,14 @@ const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
  * `d` = payload de useLoraTestStudio (peut être null au 1er render).
  * `datasetId` = id du dataset (namespace de persistance).
  */
-export function useStudioForm(d, datasetId, family = null) {
+/* `pinnedCheckpoints` (optionnel) : la liste de checkpoints est IMPOSÉE par
+   l'appelant au lieu d'être cochée dans le picker. C'est la seule chose que le
+   ◉ LoRA Canvas fait autrement que le Studio de test — là-bas les checkpoints se
+   choisissent en cliquant les pastilles des nœuds, éventuellement sur plusieurs
+   datasets. Tout le reste (modèle, format, cfg, steps, seed, ×N, réglages
+   globaux) passe par exactement ce hook et exactement ce composant, donc les
+   deux écrans ne peuvent pas diverger. */
+export function useStudioForm(d, datasetId, family = null, { pinnedCheckpoints = null } = {}) {
   // Persistance namespacée par dataset ET par famille : chaque pipeline (ZIT/SDXL/Krea)
   // garde ses propres axes (checkpoints/strengths/modèle…). Le composant studio est
   // remonté quand la famille change → ce hook re-lit la bonne clé au montage.
@@ -49,7 +56,10 @@ export function useStudioForm(d, datasetId, family = null) {
   const checkpoints = d?.checkpoints || [];
   const allFns = checkpoints.map((c) => c.filename);
   // Filtre les checkpoints persistés qui n'existent plus (dataset modifié depuis).
-  const chosenCps = (selCps ?? allFns).filter((fn) => allFns.includes(fn));
+  // Checkpoints imposés (canvas) → ils sont la sélection, telle quelle. Ne PAS
+  // les filtrer sur `allFns` : ils viennent de plusieurs datasets, alors que
+  // `d.checkpoints` est la liste d'un seul.
+  const chosenCps = pinnedCheckpoints ?? (selCps ?? allFns).filter((fn) => allFns.includes(fn));
   const effectivePrompt = promptText ?? (d?.prompt || '');
   // Défaut = 1re entrée de la liste — y compris « Official » (value '' , Krea) pour
   // que la puce par défaut apparaisse pressée ; le backend mappe '' → défaut câblé.

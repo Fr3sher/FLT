@@ -1422,6 +1422,44 @@ def _batch_lora_axis(batch_loras, run_family) -> list:
     return [None] + entries[:4] if entries else [None]
 
 
+def checkpoint_origins(checkpoints, explicit=None) -> dict:
+    """{deployed filename: (record_id, step)} — WHICH training checkpoint each
+    selected LoRA came from, so every cell can record it on its row instead of
+    the app re-deriving it from the filename on every render (the heuristic that
+    already shipped a bug, see LoraTestImage.record_id).
+
+    `explicit` is the mapping a caller that ALREADY knows the answer provides —
+    the LoRA Canvas, where the user picked a lineage pill, so the run and the
+    step are the identity of what was clicked. It always wins.
+
+    Without it the origin is read back from the run tag the DEPLOY stamped into
+    the name (`_rl<record>` / `_rc<cloud run>` + the zero-padded step): the Test
+    Studio picks a filename out of a folder and has no other handle. That tag was
+    written by the app, not inferred from a trigger word — and a name that
+    carries none resolves to (None, None), i.e. an honestly unlinked cell.
+
+    Resolved ONCE per distinct filename: a 40-cell grid over 6 checkpoints costs
+    6 lookups."""
+    out = {}
+    for cp in checkpoints or []:
+        if cp in out:
+            continue
+        hint = (explicit or {}).get(cp)
+        if hint:
+            try:
+                out[cp] = (int(hint['record_id']), int(hint['step']))
+                continue
+            except (KeyError, TypeError, ValueError):
+                pass                     # malformed hint → fall through to the tag
+        try:
+            from .checkpoint_link_backfill import resolve_checkpoint_name
+            hit = resolve_checkpoint_name(cp)
+        except Exception:                # a registry read must never fail a launch
+            hit = None
+        out[cp] = (hit[0], hit[1]) if hit else (None, None)
+    return out
+
+
 def _batch_lora_label(row):
     """Nom lisible du LoRA « batch » d'une cellule (entrée batch:true de son JSON
     extra_loras), ou None - badge de la grille/lightbox."""
@@ -1434,7 +1472,7 @@ def _batch_lora_label(row):
     return None
 
 
-def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None) -> dict:
+def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None) -> dict:
     """Validate + materialize the grid and enqueue every cell.
 
     Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
@@ -1570,6 +1608,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
     # sert pour réécrire les nodes à variantes (node 30 Krea) vers le nom réellement
     # enregistré. None (probe échouée) = on garde les noms canoniques.
     available_classes = _target_node_classes()
+    # WHICH lineage checkpoint each selected LoRA is, stamped on every cell it
+    # produces (see checkpoint_origins) — the canvas gallery reads these columns,
+    # it never re-parses a filename.
+    origin_of = checkpoint_origins(cps_in, origins)
     ids = []
     for zm in valid_models:                       # AXE modèle de base (multi-sélection)
         for checkpoint, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 in cells:
@@ -1592,7 +1634,9 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
                                     detail_amount=knobs['detail_amount'],
                                     resolution_tier=knobs['resolution_tier'],
                                     resolution_multiplier=knobs['resolution_multiplier'],
-                                    init_image=knobs['init_image'], denoise=knobs['denoise'])
+                                    init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                    record_id=origin_of.get(checkpoint, (None, None))[0],
+                                    step=origin_of.get(checkpoint, (None, None))[1])
                 _persist_and_enqueue_cell(
                     img, user_id, dataset_id, prompt,
                     lambda: _build_cell_workflow(user_id, checkpoint, strength,
@@ -1622,7 +1666,10 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                           resolution_tier=None, resolution_multiplier=None,
                           init_image=None, denoise=None) -> dict:
     """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
-    [{dataset_id, checkpoint}]. Toutes les cellules partagent un run_id + le seed
+    [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
+    (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
+    est alors stampé tel quel sur les cellules ; sinon l'origine est relue du tag de
+    déploiement (cf. checkpoint_origins). Toutes les cellules partagent un run_id + le seed
     (équité). Le prompt : `prompt` commun si fourni, sinon l'identity_prompt du
     dataset de CHAQUE cellule (chaque LoRA a son trigger). 1 selection => run mono-LoRA.
 
@@ -1740,6 +1787,14 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # Classes du ComfyUI cible, lues UNE fois pour tout le run (cf. create_run) →
     # réécriture des nodes à variantes (node 30 Krea) vers le nom réellement enregistré.
     available_classes = _target_node_classes()
+    # Origine (run + step) de chaque LoRA sélectionné : explicite quand l'appelant
+    # la connaît (canvas), sinon relue du tag de déploiement. Une seule résolution
+    # par nom de fichier distinct.
+    origin_of = checkpoint_origins(
+        [s.get('checkpoint') for s in selections if s.get('checkpoint')],
+        {s['checkpoint']: s for s in selections
+         if s.get('checkpoint') and s.get('record_id') is not None
+         and s.get('step') is not None})
     run_id = uuid.uuid4().hex
     ids = []
     for sel in selections:
@@ -1770,7 +1825,9 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                                     detail_amount=knobs['detail_amount'],
                                     resolution_tier=knobs['resolution_tier'],
                                     resolution_multiplier=knobs['resolution_multiplier'],
-                                    init_image=knobs['init_image'], denoise=knobs['denoise'])
+                                    init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                    record_id=origin_of.get(cp, (None, None))[0],
+                                    step=origin_of.get(cp, (None, None))[1])
                 _persist_and_enqueue_cell(
                     img, user_id, ds.id, cell_prompt,
                     lambda: _build_cell_workflow(user_id, cp, strength, cell_prompt,

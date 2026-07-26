@@ -333,6 +333,25 @@ test('a deployed pill keeps the name of its ComfyUI copy', () => {
   assert.equal(plain.deployed_filename, null);   // never invented for a plain pill
 });
 
+test('a pill keeps the SIZE of its gallery, not only its newest preview', () => {
+  // Same trap as deployed_filename, hit again while building the canvas gallery:
+  // the server sent `preview_count`, this layer did not copy it onto the pill,
+  // and the × N badge was invisible everywhere with nothing failing. The pill
+  // objects ARE what the renderers read — a field missing here does not exist.
+  const g = buildLineageGraph({
+    root_id: 1, current_id: 1, single: true,
+    nodes: [{ record_id: 1, parent_record_id: null, is_current: true,
+      checkpoints: [
+        ck(1000),
+        ck(2000, { preview_count: 4, preview_url: '/api/dataset/1/img/a.png' }),
+      ] }],
+    edges: [],
+  });
+  const [plain, withGallery] = g.nodes[0].checkpoints;
+  assert.equal(withGallery.preview_count, 4);
+  assert.equal(plain.preview_count, 0);          // absent → 0, never undefined
+});
+
 test('empty / missing payloads return a safe empty shape', () => {
   for (const bad of [null, undefined, {}, { nodes: [] }]) {
     const g = buildLineageGraph(bad);

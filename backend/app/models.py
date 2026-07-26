@@ -351,6 +351,23 @@ class LoraTestImage(db.Model):
     # ('scorable'/'no_face'/'low_det'/…). NULL = cellule pas encore scorée.
     face_score = db.Column(Float, nullable=True)
     face_state = db.Column(String(16), nullable=True)
+    # WHICH training checkpoint produced this image — the run's record id and the
+    # step, written AT GENERATION TIME by every surface that launches (Test
+    # Studio, LoRA Canvas, comparison grid). Deliberately not a ForeignKey: run
+    # records outlive their dataset, exactly like canvas_node_position.
+    #
+    # This inverts a dependency. Membership used to be DERIVED, on every render,
+    # from the deployed LoRA's filename through comfyui._parse_trained_stem — the
+    # heuristic that already shipped a bug (multi-word triggers cut at the
+    # underscore, 2026-07-17). The parse now survives only in the one-shot
+    # backfill (services.checkpoint_link_backfill), never in the hot path.
+    #
+    # NULL means "not linked", never "unknown, guess it": a legacy row whose
+    # filename carries no run tag stays NULL and is simply absent from the
+    # checkpoint gallery, with a counter saying how many there are. Additive
+    # columns → existing databases keep their rows (see _SCHEMA_ADDITIONS).
+    record_id = db.Column(Integer, nullable=True, index=True)
+    step = db.Column(Integer, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
@@ -583,9 +600,19 @@ class CheckpointPreview(db.Model):
     the preview mapping lives here, keyed by (record_id, step). It does NOT store
     an image itself: the picture is produced by the reused Test-Studio engine and
     lands in the per-dataset folder as a LoraTestImage; `lora_test_image_id` points
-    at that row so the node reads the (async) filename + status live. Regenerating
-    a checkpoint replaces the pointer. New table -> created by db.create_all(),
-    no migration."""
+    at that row so the node reads the (async) filename + status live.
+
+    Previews ACCUMULATE. Until the LoRA Canvas there was a
+    ``UniqueConstraint('record_id', 'step')`` here and regenerating a checkpoint
+    REPLACED the pointer: the previous image stayed on disk but nothing pointed
+    at it any more, so a second look at the same epoch quietly erased the first.
+    A checkpoint now keeps every preview it was ever given, newest first, and the
+    node shows the newest one with the count beside it. Lifting a constraint on
+    SQLite means recreating the table — done once, row-count-guarded, in
+    ``services.checkpoint_preview_migration``.
+
+    New table -> created by db.create_all(); the constraint lift is the only
+    migration."""
     __tablename__ = 'checkpoint_preview'
     id = db.Column(db.Integer, primary_key=True)
     record_id = db.Column(db.Integer, nullable=False, index=True)
@@ -597,8 +624,11 @@ class CheckpointPreview(db.Model):
     prompt = db.Column(db.Text, nullable=False, default='')
     seed = db.Column(db.BigInteger, nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    __table_args__ = (db.UniqueConstraint('record_id', 'step',
-                                          name='uq_checkpoint_preview'),)
+    # No UniqueConstraint on (record_id, step) — see the class docstring. The
+    # composite index replaces it: the reads are all "every preview of this
+    # checkpoint", which is exactly what the old unique index used to serve.
+    __table_args__ = (db.Index('ix_checkpoint_preview_record_step',
+                               'record_id', 'step'),)
 
 
 class TrainingPreset(db.Model):

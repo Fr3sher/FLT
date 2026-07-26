@@ -107,7 +107,7 @@ export function GraphCard({ node, lit, annotated, compareRole, onSelect }) {
  *  (thumbnail when done, a ◌ while it renders, a ⚠ if it failed). Clicking the
  *  body opens the pill's actions; the checkbox toggles it into the shared-prompt
  *  generation batch. Absolutely positioned at the exact box the layout computed. */
-export function CheckpointPill({ pill, offX, offY, active, selected, preview, big, onOpen, onToggleSelect, onZoomPreview }) {
+export function CheckpointPill({ pill, offX, offY, active, selected, preview, big, onOpen, onToggleSelect, onZoomPreview, onOpenGallery, selectable = null }) {
   const gone = pill.present === false;
   const st = preview?.status || null;
   const label = pill.step >= 1000 && pill.step % 1000 === 0 ? `${pill.step / 1000}k` : pill.step;
@@ -180,10 +180,13 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
           )}
         </button>
       )}
-      {/* Select for the shared-prompt preview batch — deployed checkpoints only
-          (nothing to load otherwise). A corner box; clicking it never opens the
-          popover. Slightly larger in big mode so it stays clickable on the tile. */}
-      {pill.testable && typeof onToggleSelect === 'function' && (
+      {/* Select for the shared-prompt batch. A corner box; clicking it never opens
+          the popover. Slightly larger in big mode so it stays clickable on the tile.
+          `selectable` defaults to "deployed only" — the in-card graph can render
+          nothing else. The canvas passes a wider rule: it offers to DEPLOY the
+          picks that are not in ComfyUI yet, so a not-yet-deployed checkpoint has
+          to be pickable there. */}
+      {(selectable ?? pill.testable) && typeof onToggleSelect === 'function' && (
         <button type="button" role="checkbox" aria-checked={selected}
           aria-label={`Select step ${pill.step} for preview`}
           title={selected ? 'Selected for preview' : 'Select for preview'}
@@ -194,6 +197,29 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
             + (selected ? 'border-indigo-400 bg-indigo-500 text-white ' : 'border-border-strong bg-surface-overlay text-transparent hover:border-indigo-400 ')}>
           ✓
         </button>
+      )}
+      {/* × N — how many images this checkpoint has produced IN TOTAL, from any
+          surface (inline preview, Test Studio, comparison run). They accumulate
+          now: a regenerated preview no longer replaces the previous one, it joins
+          it. Clicking opens the gallery when the host offers one; without a
+          handler it stays an honest count rather than a dead button. */}
+      {preview?.count > 1 && (
+        typeof onOpenGallery === 'function' ? (
+          <button type="button"
+            aria-label={`Open the ${preview.count} images of step ${pill.step}`}
+            title={`${preview.count} images generated from this checkpoint — click to open them`}
+            onClick={(e) => { e.stopPropagation(); onOpenGallery(pill); }}
+            style={{ position: 'absolute', right: -6, bottom: -6 }}
+            className="lds-ckcount flex h-4 min-w-4 items-center justify-center rounded-full border border-indigo-400/70 bg-surface-overlay px-1 text-indigo-200 text-[0.5625rem] font-semibold leading-none tabular-nums shadow-sm hover:bg-indigo-500 hover:text-white">
+            {preview.count}
+          </button>
+        ) : (
+          <span title={`${preview.count} images generated from this checkpoint`}
+            style={{ position: 'absolute', right: -6, bottom: -6 }}
+            className="lds-ckcount flex h-4 min-w-4 items-center justify-center rounded-full border border-border bg-surface-overlay px-1 text-content-muted text-[0.5625rem] font-semibold leading-none tabular-nums">
+            {preview.count}
+          </span>
+        )
       )}
     </div>
   );
