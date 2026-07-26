@@ -5,6 +5,40 @@ import test from 'node:test';
 const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8');
 const cloud = fs.readFileSync(new URL('../../pages/CloudRunsPage.jsx', import.meta.url), 'utf8');
 const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
+// The card, the pill and the edges are no longer private to this component —
+// they were extracted so the LoRA Canvas draws with the SAME ones (a lookalike
+// would drift the first time either surface was tweaked).
+const nodes = fs.readFileSync(new URL('./lineageNodes.jsx', import.meta.url), 'utf8');
+const edges = fs.readFileSync(new URL('./lineageEdges.jsx', import.meta.url), 'utf8');
+const canvas = fs.readFileSync(new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+
+test('the drawing is shared with the canvas, not duplicated', () => {
+  // Both surfaces IMPORT the card/pill/edges; neither declares its own.
+  assert.match(graph, /import \{ GraphCard, CheckpointPill \} from '\.\/lineageNodes'/);
+  assert.match(graph, /import \{ LineageEdgeDefs, LineageEdges \} from '\.\/lineageEdges'/);
+  assert.match(canvas, /import \{ GraphCard, CheckpointPill \} from '\.\.\/dataset\/lineageNodes'/);
+  assert.match(canvas, /import \{ LineageEdgeDefs, LineageEdges \} from '\.\.\/dataset\/lineageEdges'/);
+  for (const src of [graph, canvas]) {
+    assert.doesNotMatch(src, /function GraphCard\(/);
+    assert.doesNotMatch(src, /function CheckpointPill\(/);
+    assert.doesNotMatch(src, /linearGradient id="lds-edge-/);
+  }
+  assert.match(nodes, /export function GraphCard\(/);
+  assert.match(nodes, /export function CheckpointPill\(/);
+  assert.match(edges, /export function LineageEdgeDefs\(/);
+  assert.match(edges, /export function LineageEdges\(/);
+});
+
+test('the canvas keeps slice-1 scope: no generation, no dragging', () => {
+  // Selecting checkpoints for a batch and moving nodes belong to slices 3 and 2.
+  // Shipping half of either here is what would make the canvas a dead end.
+  assert.doesNotMatch(canvas, /onToggleSelect/);
+  assert.doesNotMatch(canvas, /lineage\/previews/);
+  assert.doesNotMatch(canvas, /canvas_node_position/);
+  // …and the in-card graph is untouched: it still owns every pill action until
+  // the canvas reaches parity.
+  assert.match(graph, /onToggleSelect=\{\(pill\) => toggleCk\(/);
+});
 
 test('the graph draws checkpoint pills with a download link (reused endpoint)', () => {
   assert.match(graph, /CheckpointPill/);
@@ -104,7 +138,7 @@ test('a pill can be imported straight from the graph, deployed pills say so', ()
 test('a preview thumbnail opens LARGE in a lightbox, distinct from the popover', () => {
   assert.match(graph, /onZoomPreview/);
   // clicking the thumbnail must NOT open the popover (its own action)
-  assert.match(graph, /e\.stopPropagation\(\); onZoomPreview/);
+  assert.match(nodes, /e\.stopPropagation\(\); onZoomPreview/);
   assert.match(graph, /bigPreview/);
 });
 
@@ -115,7 +149,7 @@ test('a persisted 🔍 Big-previews mode enlarges the generated tiles', () => {
   assert.match(graph, /setItem\('lds\.graphBigPreviews'/);
   assert.match(graph, /buildLineageGraph\(shownTree, \{ bigPreviews \}\)/);
   // The pill sizes off the layout's per-mode geometry (pill.w/pill.h), not a const.
-  assert.match(graph, /width: pill\.w, height: pill\.h/);
+  assert.match(nodes, /width: pill\.w, height: pill\.h/);
 });
 
 test('the ◉ Graph button is the prominent (accent) view control', () => {

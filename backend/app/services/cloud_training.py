@@ -3511,6 +3511,54 @@ def dataset_lineage(dataset_id, train_type=None, variant=None) -> dict:
             'nodes': nodes, 'edges': edges, 'single': len(nodes) < 2}
 
 
+def canvas_dataset_index(user_id) -> dict:
+    """The LoRA Canvas' INDEX: every dataset of `user_id` that produced at least
+    one training run, with its run count and the families it covers.
+
+    Deliberately cheap — two grouped queries, no checkpoints, no disk. The canvas
+    draws its dataset filter from this and then pulls each shown dataset's
+    genealogy through the existing per-dataset lineage endpoint. Assembling the
+    whole forest in one response would have to scan every run's saves on disk
+    before ANYTHING could appear on screen, and a library of thirty datasets
+    would stare at a spinner for it. Datasets with no run are omitted: there is
+    nothing to draw for them, and offering them in the filter would only be a
+    list of dead ends.
+
+    Ordered newest-run-first, so the board opens on what was trained recently."""
+    from sqlalchemy import func
+    from ..models import TrainingRunRecord
+    datasets = {d.id: d for d in fds.list_datasets(user_id)}
+    if not datasets:
+        return {'datasets': []}
+    ids = list(datasets)
+    rows = (db.session.query(TrainingRunRecord.dataset_id,
+                             func.count(TrainingRunRecord.id),
+                             func.max(TrainingRunRecord.created_at))
+            .filter(TrainingRunRecord.dataset_id.in_(ids))
+            .group_by(TrainingRunRecord.dataset_id).all())
+    fams = {}
+    for ds_id, fam in (db.session.query(TrainingRunRecord.dataset_id,
+                                        TrainingRunRecord.family)
+                       .filter(TrainingRunRecord.dataset_id.in_(ids))
+                       .distinct().all()):
+        if fam:
+            fams.setdefault(ds_id, set()).add(fam)
+    out = []
+    for ds_id, runs, last_at in rows:
+        ds = datasets.get(ds_id)
+        if ds is None:
+            continue
+        out.append({
+            'id': ds_id,
+            'name': ds.name,
+            'runs': int(runs or 0),
+            'families': sorted(fams.get(ds_id) or ()),
+            'last_run_at': last_at.isoformat() if last_at else None,
+        })
+    out.sort(key=lambda d: (d['last_run_at'] or '', d['id']), reverse=True)
+    return {'datasets': out}
+
+
 def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
               variant=None) -> dict:
     """Live vast.ai offers for THIS dataset+family, grouped by GPU class

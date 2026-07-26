@@ -483,6 +483,35 @@ reversible at any time, and the note under the passes always says which
 interpreter is in use. If you never open this dialog, nothing changes: an install
 that works today keeps working, untouched.
 
+## The LoRA Canvas (every run on one board)
+
+**Canvas** in the top bar opens a single board holding the training history of
+every dataset you have. Each dataset gets a lane; inside a lane, each run is a
+card and each save it wrote is a small pill underneath it. When a run continued
+from an earlier one, the line between them starts at the *exact* checkpoint it
+resumed from — so "where did this LoRA come from" is a thing you read, not a
+thing you reconstruct.
+
+**Choosing what is on the board.** Everything is on it by default. The
+**Datasets** control above the board unticks what you do not want to see; the
+choice is remembered. On a phone it opens folded, with the current state written
+on the button ("3 of 7") so you always know what you are looking at.
+
+**Moving around.** Drag the background to pan, use the wheel (or two fingers) to
+zoom, and **Fit** puts the whole board back in view. The board only fits itself
+automatically until you first touch it — after that a dataset finishing its load
+never yanks your view away.
+
+**Reading a run.** Click a run card to open its inspector: the settings it
+trained with, its notes, and a note per checkpoint. **Shift-click two** run cards
+to compare their settings side by side, with the differences highlighted — and
+because every dataset is on the same board, those two runs no longer have to
+belong to the same dataset.
+
+The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
+still holds the per-checkpoint actions (download, deploy, continue from here,
+inline previews). The canvas is a second way in, not a replacement.
+
 ## Tips that save runs
 
 - Trust the composition meter over your instinct — a set that "looks varied"

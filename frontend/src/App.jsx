@@ -14,13 +14,19 @@ import SettingsPage from './pages/SettingsPage'
 import SetupPage from './pages/SetupPage'
 import GuidePage from './pages/GuidePage'
 import CloudRunsPage from './pages/CloudRunsPage'
+import CanvasPage from './pages/CanvasPage'
 import { recommendedMet } from './hooks/useSetupSteps'
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
 import { versionLabel } from './utils/versionLabel'
 
+// px-2 up to `lg`: the desktop bar starts at `md` (768 px) and now carries five
+// workspaces (Datasets · Bank · Runs · Canvas · Test Studio) plus the utility
+// icons. At the old px-3 that row overflowed the viewport at exactly 768 and
+// clipped the What's-new button off the right edge. Nothing is hidden — the
+// items simply breathe less until there is room for it.
 const NAV_ITEM_BASE =
-  'px-3 py-1.5 rounded-md text-sm font-medium no-underline transition-colors'
+  'px-2 lg:px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap no-underline transition-colors'
 const navItemClass = ({ isActive }) =>
   `${NAV_ITEM_BASE} ${
     isActive ? 'bg-surface-raised text-content' : 'text-content-muted hover:text-content hover:bg-surface-raised'
@@ -154,7 +160,9 @@ function NavBar() {
           folder, then promote the keepers into a dataset). */}
       <NavLink to="/bank" className={navItemClass} onClick={() => setOpen(false)}>
         <span className="inline-flex items-center gap-1"><span aria-hidden>🗃️</span> Bank
-          <span className="px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none">Beta</span>
+          {/* The Beta chip is the first thing to go when the bar is tight: it is
+              a nuance, not a destination. */}
+          <span className="hidden lg:inline px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none">Beta</span>
         </span>
       </NavLink>
       {/* Unified runs hub (cloud + local history) — useful as soon as ANY
@@ -162,6 +170,15 @@ function NavBar() {
       {(caps.cloud_training || caps.training_visible) && (
         <NavLink to="/cloud" className={navItemClass} onClick={() => setOpen(false)}>
           <span className="inline-flex items-center gap-1"><span aria-hidden>🏋️</span> Runs</span>
+        </NavLink>
+      )}
+      {/* ◉ Canvas — the whole training history on one board. It lives next to
+          Runs because it answers the same question from the other end: Runs
+          lists what happened, the canvas shows how the runs descend from each
+          other, across every dataset at once. */}
+      {(caps.cloud_training || caps.training_visible) && (
+        <NavLink to="/canvas" className={navItemClass} onClick={() => setOpen(false)}>
+          <span className="inline-flex items-center gap-1"><span aria-hidden>◉</span> Canvas</span>
         </NavLink>
       )}
       {caps.studio_visible && (
@@ -420,6 +437,7 @@ function AppInner() {
             <Route path="/studio" element={<StudioPage />} />
             <Route path="/dataset/studio/:id" element={<StudioPage />} />
             <Route path="/cloud" element={<CloudRunsPage />} />
+            <Route path="/canvas" element={<CanvasPage />} />
             <Route path="/settings" element={<SettingsPage />} />
             <Route path="/settings/:section" element={<SettingsPage />} />
             <Route path="/setup" element={<SetupPage />} />
