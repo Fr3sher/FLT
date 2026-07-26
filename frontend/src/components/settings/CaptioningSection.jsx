@@ -144,6 +144,28 @@ export default function CaptioningSection({ config, setField }) {
             <p className="mt-0.5 text-xs text-content-muted">Smaller side under this = 📐 small (trainers only downscale).</p>
           </div>
           <div>
+            <label htmlFor="bank-detail-min" className="block text-sm font-medium text-content">
+              Real-detail minimum
+            </label>
+            <input id="bank-detail-min" type="number" min="0" max="1" step="0.02"
+              value={config.bank?.detail_min ?? 0.72}
+              onChange={(e) => setField('bank', 'detail_min', parseFloat(e.target.value) || 0)}
+              className={INPUT_CLASS} />
+            <p className="mt-0.5 text-xs text-content-muted">
+              Share of the stored size that still carries real picture, under which an image is flagged 🫧 soft detail — the usual cause is an enlargement. 0.72 picks the softest few percent. A soft or out-of-focus photo reads the same way, so treat it as a score, not proof.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="bank-bars-max" className="block text-sm font-medium text-content">
+              Black-bar maximum
+            </label>
+            <input id="bank-bars-max" type="number" min="0" max="1" step="0.01"
+              value={config.bank?.bars_max ?? 0.04}
+              onChange={(e) => setField('bank', 'bars_max', parseFloat(e.target.value) || 0)}
+              className={INPUT_CLASS} />
+            <p className="mt-0.5 text-xs text-content-muted">Share of the frame that may be flat black letterbox before an image is flagged 🎞 black bars (video screenshots, padded stills).</p>
+          </div>
+          <div>
             <label htmlFor="bank-dup-distance" className="block text-sm font-medium text-content">
               Duplicate distance
             </label>

@@ -230,9 +230,12 @@ touching the folder itself:
    thousands of images) scores every file: sharpness, noise, flat/empty
    frames, resolution — and groups **near-duplicates**. The flags follow the
    thresholds in *Settings → Captioning & quality*; because the raw scores are
-   stored, tuning a threshold re-sorts the bank instantly, no rescan.
+   stored, tuning a threshold re-sorts the bank instantly, no rescan. The same
+   pass also answers two questions the file itself lies about — see
+   *Is this image really what it says it is?* below.
 3. **Cull** — use the filter chips (🌫 Blurry, 📺 Noisy, ⬜ Flat, 📐 Small,
-   ≈ Duplicates) to review the worst offenders first. **🧹 Auto-reject
+   🧇 Soft detail, 🎞 Black bars, ≈ Duplicates) to review the worst
+   offenders first. **🧹 Auto-reject
    flagged…** clears whole categories in one click (your manual ✓/✕ are never
    flipped). In the Duplicates view, resolve every group at once with **keep
    best** (highest resolution, then sharpest) or **keep first**, or pick the
@@ -326,6 +329,58 @@ pass left **off by default** (it's the slowest GPU pass and a clean-up run
 rarely needs a description on every shot). Stop it any time — and when you come
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
+
+## Is this image really what it says it is?
+
+Two things a file will happily lie about, both measured by the ordinary
+**🔎 Scan quality** pass — plain CPU work, no extra install, no GPU.
+
+**Its size.** An image enlarged from 512 px to 2048 px still *reports* 2048, so
+it walks into a dataset as a high-resolution shot and the LoRA learns
+interpolated mush. The scan measures how far real detail actually goes and says
+it in pixels on the image's details line: *"2048 px stored · ~512 px of real
+detail"*. The worst offenders sit behind the **🧇 Soft detail** filter chip,
+and *Settings → Captioning & quality → Real-detail minimum* moves the bar.
+
+Treat it exactly like the sharpness score: **a shortlist, not a verdict.** A
+photo with motion blur, a portrait with the background thrown out of focus, and
+a heavily denoised phone shot all genuinely lack fine detail and all read the
+same way as an enlargement — which is fine for choosing training images (a LoRA
+learns as little from either), but it is not proof the image was ever resized.
+Look before you mass-reject. Two honest limits: a *nearest-neighbour* enlargement
+is invisible to it (blocky pixels are real high-frequency detail), and large
+enlargements are under-stated, so the pixel figure ranks images rather than
+recovering the original file's size.
+
+**Where it came from.** The scan reads the file's own metadata and sorts the
+bank with the **🔎 Origin** chips:
+
+- **🤖 AI** — the file still carries generation metadata: a ComfyUI workflow
+  in the PNG, A1111-style `parameters`, or the C2PA/XMP "generated" marker the
+  commercial generators write. Certain when present.
+- **📷 Camera** — the file still carries camera EXIF (make, model, exposure).
+  Strong evidence it was actually photographed.
+- **❔ Unknown** — nothing left to read. **This is the normal answer**, not a
+  failure: scrapers, chat apps and social networks strip metadata on sight (on a
+  36 000-image Telegram export, *every single file* landed here). It is not
+  evidence the image is a real photo, and it is not evidence it is AI — it is
+  the absence of evidence, which is why it is its own answer instead of being
+  quietly folded into "not AI".
+
+On an image whose metadata is gone, the details line may add a *hint* when the
+dimensions are a standard generator size (1024×1024, 832×1216, 896×1152…) and
+there is no camera EXIF. It says it is a hint; plenty of crops and downloads
+land on round numbers too.
+
+Two smaller facts come free with the same pass: **🎞 Black bars** flags flat
+letterbox/pillarbox padding (video screenshots, stills padded into a square,
+which survive a training crop), and the **JPEG quality** of the last save is
+shown as-is — a low figure means the file has been through a re-encoding
+pipeline, but it is far too common to be worth a filter.
+
+A bank you already scanned picks all of this up on its next **🔎 Scan** — the
+pass re-visits the images that predate these measurements on its own. You do not
+need a full rescan.
 
 ## Review a bank one image at a time
 

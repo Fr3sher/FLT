@@ -177,6 +177,14 @@ _SCHEMA_ADDITIONS = (
     # is recorded. Additive: existing banks keep their rows, they just carry NULLs.
     ('bank_image', 'watermark_bbox', 'TEXT'),
     ('bank_image', 'watermark_clean_method', 'VARCHAR(16)'),
+    # Bank provenance pass — effective resolution, letterbox, JPEG quality and the
+    # ai/camera/unknown origin. Same additive path: existing banks keep every row
+    # and simply carry NULLs until the next quality scan fills them in.
+    ('bank_image', 'detail_ratio', 'REAL'),
+    ('bank_image', 'bars_ratio', 'REAL'),
+    ('bank_image', 'jpeg_quality', 'REAL'),
+    ('bank_image', 'origin', 'VARCHAR(8)'),
+    ('bank_image', 'origin_evidence', 'VARCHAR(24)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread
@@ -196,6 +204,7 @@ _INDEX_ADDITIONS = (
     ('bank_image', 'semantic_dup_group'),
     ('bank_image', 'style_cluster'),
     ('bank_image', 'framing'),
+    ('bank_image', 'origin'),
     ('lora_test_image', 'record_id'),
 )
 

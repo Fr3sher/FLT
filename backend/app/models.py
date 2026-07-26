@@ -280,9 +280,35 @@ class BankImage(db.Model):
     # the 📐 Framing filter chips AND the coverage advice. Additive column —
     # created by db.create_all(), no migration (see _SCHEMA_ADDITIONS).
     framing = db.Column(String(8), nullable=True, index=True)
+    # Provenance pass — computed by the SAME pure-PIL quality scan (no numpy, no
+    # model), so every install gets them. See services/image_provenance.py for
+    # what each one measures and what it CANNOT tell.
+    #   detail_ratio    : effective resolution, 0..1 of the stored size. 0.5 = half
+    #                     the stored width is interpolation. RAW score — the
+    #                     'soft_detail' verdict is recomputed at read time against
+    #                     bank.detail_min, like every other bank score. NOT blur:
+    #                     sharpness is a contrast figure, this is a SCALE. It still
+    #                     cannot separate an enlargement from a soft photograph.
+    #   bars_ratio      : fraction of the frame taken by flat black letterbox bars.
+    #   jpeg_quality    : quality of the last JPEG save, 1..100, from the
+    #                     quantization tables. A displayed FACT, never a flag.
+    #   origin          : 'ai' | 'camera' | 'unknown' — THREE states, never two.
+    #                     'unknown' is the normal case (scrapers and chat apps strip
+    #                     metadata); it must never be read as "not AI".
+    #   origin_evidence : short token naming what proved it ('png-prompt',
+    #                     'exif-camera', ...). NEVER the metadata's content — a
+    #                     prompt is user data and this column is shown in the UI.
+    # NULL on any row scanned by a build that predates them; the next quality scan
+    # picks those rows back up on its own (see _scan_pool).
+    detail_ratio = db.Column(Float, nullable=True)
+    bars_ratio = db.Column(Float, nullable=True)
+    jpeg_quality = db.Column(Float, nullable=True)
+    origin = db.Column(String(8), nullable=True, index=True)
+    origin_evidence = db.Column(String(24), nullable=True)
     # Triage decision — same words as dataset images (pending|keep|reject).
     # reject_reason: blur|noise|uniform|small|duplicate|unreadable|manual
-    #                |low_aesthetic|nsfw|watermark (the V2 score-derived flags).
+    #                |low_aesthetic|nsfw|watermark (the V2 score-derived flags)
+    #                |soft_detail|bars (the provenance pass).
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)
     # Set once the image has been promoted (copied) into a dataset — the funnel's

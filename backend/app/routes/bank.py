@@ -158,6 +158,7 @@ def bank_images(bank_id):
         sort=args.get('sort') or None,
         res_bucket=args.get('res_bucket') or None,
         framing=args.get('framing') or None,
+        origin=args.get('origin') or None,
         ids=ids,
         offset=_int('offset') or 0, limit=_int('limit') or 200)
     if payload is None:
