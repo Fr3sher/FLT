@@ -838,6 +838,162 @@ def test_monitor_resume_skips_upload_and_submit(ct, app, client, monkeypatch):
         assert destroyed == ['777']
 
 
+# ── The create/record window: the pod holds the job, our row does not ────────
+# create_job succeeded, then the app died before remote_job_id reached the DB.
+# The resume then walked back into the creation branch and the pod refused the
+# duplicate name (409) — one hour of 5090 time destroyed, twice over, for a
+# run that was training fine (run #107).
+
+class ConflictingRemote(FakeRemote):
+    """Pod that already holds this run's job: a second create_job with the same
+    name is refused with the ai-toolkit 409, and the job list can name it."""
+
+    def __init__(self, existing_name, existing_id='j-existing', **kw):
+        super().__init__(**kw)
+        self.existing_name = existing_name
+        self.existing_id = existing_id
+        self.started = []
+        self.create_attempts = []
+        self.listed = 0
+
+    def create_job(self, name, job_config, gpu_ids='0'):
+        self.create_attempts.append(name)
+        if name == self.existing_name:
+            raise RuntimeError(
+                'create_job -> HTTP 409: {"error":"Job name already exists"}')
+        return super().create_job(name, job_config)
+
+    def find_job_by_name(self, name):
+        self.listed += 1
+        if name == self.existing_name:
+            return {'id': self.existing_id, 'name': name,
+                    'status': 'running', 'step': 120}
+        return None
+
+    def start_job(self, job_id, gpu_ids='0'):
+        self.started.append(job_id)
+
+    def get_job(self, job_id):
+        return super().get_job(job_id)
+
+
+def test_resume_adopts_the_job_already_created_on_the_pod(ct, app, client, monkeypatch):
+    """THE incident: create_job succeeded but the app restarted before
+    remote_job_id was written, so the resume re-enters the creation branch and
+    the pod answers 409. The run must ADOPT the existing job (the name proves
+    it is ours) and keep polling it — not die with the hour already paid."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=3)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    with app.app_context():
+        run = ct.CloudTrainingRun.query.get(run_id)
+        job_name = run.job_name
+        # The crash window: the pod holds the job, our row still says NULL.
+        ct._set(run, vast_instance_id='777', remote_job_id=None,
+                status='uploading', base_url='http://pod.invalid:40123',
+                auth_token='tok')
+    conflicting = ConflictingRemote(job_name, polls_to_complete=3)
+    monkeypatch.setattr(ct, '_make_remote', lambda run: conflicting)
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'done'                      # the run SURVIVES
+        assert run.remote_job_id == 'j-existing'         # adopted, not recreated
+        assert conflicting.listed == 1                   # resolved by name
+        # A job already at step 120 must never be re-queued under a live trainer
+        assert conflicting.started == []
+        assert destroyed == ['777']
+
+
+def test_remote_job_id_is_recorded_before_seeding_and_start(ct, app, client,
+                                                            monkeypatch, tmp_path):
+    """Remedy 1: the window itself. The id must be in the DB the instant the pod
+    accepts the job — before the (slow) checkpoint seeding and before start_job.
+    Simulated crash: seeding raises, and the row must still carry the id."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=3)
+    seed = tmp_path / 'source.safetensors'
+    seed.write_bytes(b'CKPT')
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    with app.app_context():
+        run = ct.CloudTrainingRun.query.get(run_id)
+        params = json.loads(run.train_params)
+        params.update({'resume_ckpt_path': str(seed), 'resume_step': 500})
+        ct._set(run, train_params=json.dumps(params))
+
+    def boom(datasets_folder, dest_dir, remote_name, local_path):
+        raise RuntimeError('app died while seeding')
+
+    remote.seed_checkpoint = boom
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'error'
+        assert run.remote_job_id == 'j-1'    # recorded BEFORE the failure point
+
+
+class NeverStartedRemote(FakeRemote):
+    """Pod holding a job that was CREATED but never STARTED: ai-toolkit's
+    default row status is 'stopped' at step 0 until `start` queues it."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.started = []
+
+    def start_job(self, job_id, gpu_ids='0'):
+        self.started.append(job_id)
+
+    def get_job(self, job_id):
+        if not self.started:
+            return {'status': 'stopped', 'step': 0, 'info': 'created'}
+        return super().get_job(job_id)
+
+
+def test_resume_starts_a_job_that_was_created_but_never_launched(ct, app, client,
+                                                                 monkeypatch):
+    """The bug remedy 1 could trade in for: with the id recorded early, a crash
+    between create_job and start_job leaves a job sitting at 'stopped' — which
+    the poll loop reads as terminal. The resume must recognise 'created but not
+    started', start it for real, and let it train."""
+    destroyed = []
+    remote = NeverStartedRemote(polls_to_complete=3)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    with app.app_context():
+        run = ct.CloudTrainingRun.query.get(run_id)
+        # Exactly what the DB holds after the create/start crash under remedy 1.
+        ct._set(run, vast_instance_id='777', remote_job_id='j-1',
+                status='uploading', base_url='http://pod.invalid:40123',
+                auth_token='tok')
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert remote.started == ['j-1']      # started for real, not declared dead
+        assert run.status == 'done'
+        assert destroyed == ['777']
+
+
+def test_unadoptable_conflict_says_what_to_do_and_what_happens_to_the_pod(
+        ct, app, client, monkeypatch):
+    """When the pod refuses the name AND will not say which job owns it, the run
+    still fails — but the message must name the next move and the fate of the
+    pod, because this failure costs real money."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=3)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    with app.app_context():
+        job_name = ct.CloudTrainingRun.query.get(run_id).job_name
+    conflicting = ConflictingRemote(job_name, polls_to_complete=3)
+    conflicting.find_job_by_name = lambda name: None      # listing resolves nothing
+    monkeypatch.setattr(ct, '_make_remote', lambda run: conflicting)
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'error'
+        msg = (run.error or '').lower()
+        assert 'retry' in msg                       # what to do
+        assert 'terminated' in msg                  # what happens to the pod
+        assert destroyed == ['777']                 # and it really is
+
+
 class FrozenRemote(FakeRemote):
     """Pod whose step counter progresses a few polls then freezes at 50 while
     the job status stays 'running' forever (wedged trainer, silent OOM loop)."""

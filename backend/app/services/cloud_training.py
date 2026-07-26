@@ -1939,16 +1939,34 @@ def _monitor(app, run_id):
                 job_config = _cloudify_job_config(job_config, run.job_name,
                                                   staging_dataset, pod_settings,
                                                   run_params=params)
-                job_id = remote.create_job(run.job_name, job_config)
-                # Continue-in-cloud: drop the source checkpoint into the job's
-                # save_root BEFORE start so ai-toolkit auto-resumes from it.
-                _seed_resume_checkpoint(run, remote, pod_settings)
-                remote.start_job(job_id)
-                _set(run, remote_job_id=job_id, status='training',
-                     phase_detail='Job queued on the pod')
+                job_id, adopted = _create_or_adopt_job(run, remote, job_config)
+                # Persist the id THE INSTANT the job exists on the pod, before
+                # the (slow) seeding and the start. Recording it only after
+                # start_job left a window in which the pod already held the job
+                # but our row still said remote_job_id=NULL — an app restart
+                # inside that window sent the resume straight back into this
+                # branch, where the pod refused the duplicate name with
+                # 409 "Job name already exists" and the run died with the money
+                # already spent (run #107, ~1 h of 5090 time). The run is NOT
+                # yet 'training' here: only start_job earns that status, and the
+                # resume branch relies on the distinction.
+                _set(run, remote_job_id=job_id,
+                     phase_detail='Job created on the pod')
+                if adopted:
+                    # The pod already had this job (this run's earlier attempt).
+                    # Never blind-start it: it may be mid-training.
+                    _ensure_remote_job_started(run, remote, job_id, pod_settings)
+                else:
+                    # Continue-in-cloud: drop the source checkpoint into the
+                    # job's save_root BEFORE start so ai-toolkit auto-resumes.
+                    _seed_resume_checkpoint(run, remote, pod_settings)
+                    remote.start_job(job_id)
+                    _set(run, status='training',
+                         phase_detail='Job queued on the pod')
             else:
                 job_id = run.remote_job_id
                 _set(run, phase_detail='Resuming — reattaching to running job')
+                _ensure_remote_job_started(run, remote, job_id)
 
             # -- poll until terminal ------------------------------------------
             # Two watchdogs share one progress clock (last_progress_ts):
@@ -2119,6 +2137,86 @@ def _monitor(app, run_id):
             _stop_events.pop(int(run_id), None)
             _monitor_threads.pop(int(run_id), None)
             _sync_state.pop(int(run_id), None)
+
+
+# A run that has reached one of these has provably had its remote job STARTED
+# (only the post-start_job write sets 'training'). Anything earlier means the
+# job may exist on the pod without ever having been launched.
+_JOB_STARTED_STATES = ('training', 'downloading', 'terminating')
+
+
+def _create_or_adopt_job(run, remote, job_config):
+    """Submit this run's job, or ADOPT the one already on the pod.
+
+    Returns (job_id, adopted). The pod's job `name` is unique, and ours is
+    `lds<run.id>_<run_name>` — stable for the life of the run and derived from a
+    primary key, so a 409 on submit can only mean THIS run already created THIS
+    job on THIS pod (an earlier attempt whose id never reached our row). Killing
+    the run over a duplicate of its own job wastes an already-paid hour, so the
+    id is read back from the pod's job list and the run continues.
+
+    If the list cannot resolve the name, the run still fails — but with an error
+    that says what happens next and what becomes of the pod."""
+    try:
+        return remote.create_job(run.job_name, job_config), False
+    except Exception as e:
+        if 'HTTP 409' not in str(e):
+            raise
+        logger.warning('run %s: the pod already holds job %r (409) — adopting it '
+                       'instead of failing the run', run.id, run.job_name)
+        existing = None
+        try:
+            existing = remote.find_job_by_name(run.job_name)
+        except Exception:
+            logger.exception('run %s: could not list the pod jobs to adopt %r',
+                             run.id, run.job_name)
+        job_id = str((existing or {}).get('id') or '')
+        if job_id:
+            _set(run, phase_detail='Reattached to the job already on the pod')
+            return job_id, True
+        raise RuntimeError(
+            f'this pod already holds a training job named "{run.job_name}" '
+            'but would not say which one, so it cannot be reattached. The pod '
+            'is being terminated so it stops costing money; any checkpoint it '
+            'had already produced is lost. Use "Retry" on this run to relaunch '
+            'on a fresh pod — a retry gets a new job name, so it cannot hit '
+            'this again.')
+
+
+def _ensure_remote_job_started(run, remote, job_id, pod_settings=None):
+    """Guarantee the remote job is actually RUNNING, not merely created.
+
+    ai-toolkit creates a job with status 'stopped' and only `start` moves it to
+    'queued'. The poll loop below reads 'stopped' as a terminal state, so a job
+    that exists but was never started would kill the run at the first poll —
+    exactly the bug traded in if the id were recorded early and nothing else
+    changed. A run past `_JOB_STARTED_STATES` provably started its job; anything
+    earlier asks the pod, and starts (after re-seeding any resume checkpoint,
+    which must land before the first step) only a job still sitting at
+    'stopped' with no step. Never blind-starts: re-queuing a live job would
+    disturb a run that is training fine."""
+    if run.status in _JOB_STARTED_STATES:
+        return
+    try:
+        job = remote.get_job(job_id) or {}
+    except Exception as e:
+        # Not fatal here: the poll loop owns pod reachability and its grace
+        # window. Guessing 'never started' on an unreachable pod could re-queue
+        # a job that is training.
+        logger.warning('run %s: could not read job %s to check whether it was '
+                       'started (%s) — leaving it to the poll loop', run.id, job_id, e)
+        return
+    if (job.get('status') or 'stopped') != 'stopped' or (job.get('step') or 0) > 0:
+        _set(run, status='training')     # already live (or finished) — poll it
+        return
+    logger.warning('run %s: job %s exists on the pod but was never started — '
+                   'starting it now', run.id, job_id)
+    _set(run, phase_detail='Resuming — the job was created but never started')
+    _seed_resume_checkpoint(run, remote,
+                            pod_settings if pod_settings is not None
+                            else remote.get_settings())
+    remote.start_job(job_id)
+    _set(run, status='training', phase_detail='Job queued on the pod')
 
 
 def _seed_resume_checkpoint(run, remote, pod_settings):

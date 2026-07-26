@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-cloud-run-survives-a-restart-after-submit',
+    date: '2026-07-26',
+    title: '☁️ Restarting the app no longer destroys a cloud run that was training',
+    blurb:
+      'A cloud run submits its job to the pod, then records the job id. If the app restarted in the sliver of time between those two steps, the run came back not knowing it had already submitted anything — so it submitted again, the pod refused the duplicate name, and the run died as FAILED with the GPU hour already paid for. The id is now written the instant the pod accepts the job, and if a duplicate is ever refused anyway, the run reattaches to the job already on the pod and keeps polling it instead of failing. A job that was created but never actually launched is recognised as such and started for real, rather than being read as "stopped" and buried. When nothing can be salvaged, the error now tells you what to do next and says plainly that the pod is being terminated so it stops costing money.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-26-face-scoring-off-for-anime',
     date: '2026-07-26',
     title: '🎭 Face scoring no longer pretends to read a drawn face',

@@ -115,6 +115,22 @@ class RemoteAiToolkit:
             raise RemoteError(f'create_job -> HTTP {r.status_code}: {r.text[:200]}')
         return str(r.json().get('id'))
 
+    def find_job_by_name(self, name: str):
+        """The job row whose `name` matches exactly, or None.
+
+        `GET /api/jobs` with no `id` query param returns `{'jobs': [...]}` —
+        every job row, newest first, with its `id`, `name`, `status` and
+        `step`. This is what makes a create/adopt retry possible: the pod's
+        job `name` carries a UNIQUE constraint (POST /api/jobs answers
+        `409 {"error":"Job name already exists"}` on the violation), so a name
+        we already submitted can be resolved back to its id instead of being a
+        dead end."""
+        jobs = (self._json('GET', '/api/jobs') or {}).get('jobs') or []
+        for job in jobs:
+            if isinstance(job, dict) and job.get('name') == name:
+                return job
+        return None
+
     def start_job(self, job_id: str, gpu_ids: str = '0') -> None:
         self._json('GET', f'/api/jobs/{job_id}/start')
         self._json('GET', f'/api/queue/{gpu_ids}/start')
