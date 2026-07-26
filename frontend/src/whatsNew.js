@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-existing-promoted-images-recover-their-framing',
+    date: '2026-07-26',
+    title: 'Datasets you already built from a Bank get their Composition back',
+    blurb:
+      'Carrying the framing across a promotion fixes the images you promote from now on — it does nothing for the ones already in your datasets. So the next start repairs them too: every image promoted from a Bank that is still missing a framing takes back the verdict its Bank image carries, and starts counting in the Composition bar. It is a recovery, not a guess: an image you classified yourself is never touched, and one whose Bank verdict was never worked out (or came back "unknown") stays blank so \u{1F4D0} Classify framing can still take it. Nothing to click, it runs once. Reported by axelf_ (Discord).',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-26-promoted-images-count-in-composition',
     date: '2026-07-26',
     title: 'Images promoted from a Bank now count in the dataset Composition',

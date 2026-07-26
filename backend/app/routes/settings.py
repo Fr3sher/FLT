@@ -601,6 +601,7 @@ def diagnostic():
     from ..version import APP_VERSION
     from ..services import updater
     from ..services import lineage_backfill as _lineage_backfill
+    from ..services import framing_backfill as _framing_backfill
     conf = cfg.load_config()
     caps = capabilities.probe()
     e = caps.get('engines') or {}
@@ -687,6 +688,10 @@ def diagnostic():
         # lineage edge was persisted: how many edges it reconstructed (0 on a fresh
         # or fully-native database). Paste-safe — counts only, no paths.
         'lineage_backfill': _lineage_backfill.summary(),
+        # Same idea for the images promoted from a bank before the promotion
+        # carried their framing: how many rows the one-shot pass gave back to the
+        # Composition tally (0 on a fresh database). Counts only, no paths.
+        'framing_backfill': _framing_backfill.summary(),
         'log_tail': log_lines,
         'generated_at': int(time.time()),
     })

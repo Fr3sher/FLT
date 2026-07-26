@@ -352,6 +352,11 @@ def create_app(config_object=None):
         # — once, best-effort, never blocks boot (see services.lineage_backfill).
         from .services.lineage_backfill import run_if_needed as _lineage_backfill
         _lineage_backfill()
+        # Give back their framing to the images promoted from a bank before the
+        # promotion carried it, so they count in Composition instead of sitting
+        # invisible — once, best-effort (see services.framing_backfill).
+        from .services.framing_backfill import run_if_needed as _framing_backfill
+        _framing_backfill()
         # Vision requests are process-local, while their mutual-exclusion flag is
         # persisted in SQLite. A killed captioning request therefore cannot still
         # be running after boot; clear its stale flag immediately instead of
