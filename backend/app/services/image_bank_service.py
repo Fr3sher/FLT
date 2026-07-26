@@ -418,9 +418,13 @@ def _is_imported_source(path) -> bool:
     try:
         root = os.path.realpath(cfg.bank_sources_root())
         p = os.path.realpath(str(path or ''))
+        # commonpath RAISES on Windows when the two paths sit on different drives
+        # ("Paths don't have the same drive") — and a bank pointing at another disk
+        # is precisely the common case. Raising here turned every such delete into
+        # a 500. Different drive == certainly not under our root, so: False.
+        return bool(p) and os.path.commonpath([root, p]) == root and p != root
     except (OSError, ValueError):
         return False
-    return bool(p) and os.path.commonpath([root, p]) == root and p != root
 
 
 def delete_bank(user_id, bank_id) -> bool:
