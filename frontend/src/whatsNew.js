@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/datasets?section=curation',
   },
   {
+    id: '2026-07-26-anima-note-on-anime-datasets',
+    date: '2026-07-26',
+    title: '🎌 A quiet pointer to Anima when you train an anime character',
+    blurb:
+      "If your dataset's subject type is Anime and you are about to train on another family, the training panel now mentions in passing that Anima trains on an anime base. That is all it does. Nothing is preselected for you, nothing is greyed out, and no launch is blocked — training an anime character on SDXL or Z-Image is a perfectly reasonable thing to want, and Anima is local-only and needs an up-to-date ai-toolkit, so making it the forced answer would just break launches for everyone else. The line also stays away entirely if your ai-toolkit cannot run Anima, rather than recommending something you would not be able to start.",
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-26-edit-the-reference-with-openrouter',
     date: '2026-07-26',
     title: '✦ Edit your reference photo with OpenRouter too',

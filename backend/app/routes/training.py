@@ -514,6 +514,14 @@ def dataset_train_base_info(dataset_id):
                     # Slider LoRA mode (Beta) : état + prompts persistés + knobs résolus
                     # (colonne dédiée train_slider — jamais écrasé par un preset).
                     'slider': lt.effective_slider_settings(ds),
+                    # Can this machine actually train Anima? The arch is an ai-toolkit
+                    # EXTENSION, so an older checkout simply doesn't have it (the launch
+                    # refuses with a 400). Exposed here rather than in /api/capabilities
+                    # because the check walks the extensions tree: base-info is fetched
+                    # when the training panel opens, capabilities is polled every 30s.
+                    # The panel uses it to stay quiet instead of recommending Anima to
+                    # someone who cannot run it.
+                    'anima_supported': lt._aitoolkit_supports_anima(),
                     'bases_by_type': {'zimage': bases, 'sdxl': sdxl_bases,
                                       'krea': krea_bases, 'flux': flux_bases,
                                       'flux2klein': flux2klein_bases}})

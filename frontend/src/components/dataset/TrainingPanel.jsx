@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
+import { animeFamilyNote } from './animeFamilyNote.js';
 import {
   checkpointSelectionMatchesTraining,
   checkpointVariantLabel,
@@ -1165,6 +1166,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       ? `Cloud run limit reached (${actives.length}/${cloudStatus.limit || 1}) — stop one or raise the limit in Settings`
     : null;
 
+  // Informational pointer for anime datasets (see animeFamilyNote.js). Reads the
+  // subject type straight off the dataset payload and Anima's real availability off
+  // base-info — no local rule, no forced selection, no launch blocked.
+  const animeNote = animeFamilyNote({
+    subjectType: ds.data?.subject_type,
+    trainType,
+    animaSupported: baseInfo?.anima_supported,
+  });
+
   // ▶ Continue — WHERE it runs. A checkpoint is just a file: a run trained on this
   // machine can be finished on a rented GPU (the file is seeded onto a fresh pod)
   // and a cloud epoch mirrored here can be finished locally. Each lane states its
@@ -1590,6 +1600,18 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           </>
         )}
       </div>
+
+      {/* Anime dataset on a non-Anima family: a pointer, not a rule. Deliberately
+          NOT a warning (nothing is wrong — SDXL trains an anime character fine) and
+          deliberately not a preselection: Anima is local-only and needs an up-to-date
+          ai-toolkit, so forcing it would turn a description of the subject into a
+          launch failure. See animeFamilyNote.js — it also keeps quiet when this
+          machine cannot run Anima at all. */}
+      {animeNote && (
+        <p className="m-0 text-sky-300/90 text-[0.6875rem]">
+          ℹ {animeNote}
+        </p>
+      )}
 
       {/* A disabled ☁ Train-in-cloud button always states WHY, right under the
           button row — the tooltip alone was invisible until hovered, so a greyed
