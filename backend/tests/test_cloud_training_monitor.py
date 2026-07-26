@@ -1082,3 +1082,64 @@ def test_boot_timeout_fresh_run_not_charged_for_stale_created_at(ct, app, client
         ct._monitor(app, run_id)
         assert ct.CloudTrainingRun.query.get(run_id).status == 'done'
         assert destroyed == ['777']
+
+
+# ── A close decided elsewhere wins over the monitor's terminal write ─────────
+# _assert_run_open at the top of the poll loop only protects the loop. Every
+# terminal branch then works for minutes (stop the job, pull the checkpoint,
+# import, mirror) before it writes — and the supervisor runs in another thread,
+# on another session. These two tests close the run INSIDE that window and
+# require the monitor to stand down rather than rewrite the row.
+
+def test_completed_branch_does_not_resurrect_a_run_closed_mid_download(
+        ct, app, client, monkeypatch):
+    """The pod completed, and while we were importing the result the supervisor
+    force-stopped the run and destroyed the instance. The monitor must NOT flip
+    that row back to 'done' — the pod it would be reporting on is gone."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=2)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    real_mirror = ct._mirror_into_local_run
+
+    def mirror_then_supervisor_closes(run, *a, **kw):
+        out = real_mirror(run, *a, **kw)
+        # what _force_stop writes once the vast API confirms the kill
+        ct._set(run, status='stopped', phase_detail='Stopped by the supervisor',
+                error='stop request not honoured in time',
+                finished_at=ct.datetime.utcnow())
+        return out
+
+    monkeypatch.setattr(ct, '_mirror_into_local_run', mirror_then_supervisor_closes)
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'stopped'
+        assert 'supervisor' in (run.phase_detail or '')
+        # the checkpoint pulled before the close is still on disk — standing
+        # down throws away the WRITE, never the work
+        assert run.checkpoint_local_path and os.path.exists(run.checkpoint_local_path)
+
+
+def test_pod_kept_is_not_announced_for_a_run_closed_mid_download(
+        ct, app, client, monkeypatch):
+    """The download failed, so the monitor wants to park the run in
+    'error_pod_kept' and point the user at the pod. If the supervisor already
+    destroyed that pod, that message sends them to an instance that no longer
+    exists — the close must win."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=2, fail_downloads=True)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    real_download = ct._try_download_checkpoint
+
+    def download_then_supervisor_closes(run, *a, **kw):
+        out = real_download(run, *a, **kw)
+        ct._set(run, status='stopped', phase_detail='Stopped by the supervisor',
+                finished_at=ct.datetime.utcnow())
+        return out
+
+    monkeypatch.setattr(ct, '_try_download_checkpoint', download_then_supervisor_closes)
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'stopped'
+        assert 'recover manually' not in (run.error or '')

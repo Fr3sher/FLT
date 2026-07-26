@@ -1770,6 +1770,22 @@ def _assert_run_open(run):
         raise _RunClosedExternally(run.status)
 
 
+def _finish_if_open(run, status, detail='', error=None, destroy=True):
+    """_finish(), but only for a run that is still ours to close.
+
+    Checking ONCE at the top of the poll loop is not enough. Every terminal
+    branch does minutes of work after that check — stopping the remote job,
+    pulling the final checkpoint, importing it, mirroring it locally — and the
+    supervisor is a different thread on a different session: it can force-stop
+    the run, destroy the pod and write the row inside that window. The monitor
+    would then rewrite a closed row and announce a pod it 'kept' that no longer
+    exists. Re-asserting immediately before the write means a run closed behind
+    our back raises _RunClosedExternally and takes the stand-down path instead
+    (the work done up to here — the downloaded checkpoint — is kept on disk)."""
+    _assert_run_open(run)
+    return _finish(run, status, detail=detail, error=error, destroy=destroy)
+
+
 def _monitor(app, run_id):
     """Full run lifecycle. Runs in a daemon thread; every exit path goes
     through _finish() so the pod cannot be leaked by this thread."""
@@ -1969,9 +1985,9 @@ def _monitor(app, run_id):
                     except Exception:
                         pass
                     _try_download_checkpoint(run, remote, allow_stale=True)
-                    _finish(run, 'stopped',
-                            detail='Max runtime reached — pod terminated',
-                            error='max runtime cap hit')
+                    _finish_if_open(run, 'stopped',
+                                    detail='Max runtime reached — pod terminated',
+                                    error='max runtime cap hit')
                     return
                 if stop_event.is_set():
                     stop_event.clear()
@@ -1981,7 +1997,7 @@ def _monitor(app, run_id):
                     except Exception:
                         pass
                     _try_download_checkpoint(run, remote, allow_stale=True)
-                    _finish(run, 'stopped', detail='Stopped by user')
+                    _finish_if_open(run, 'stopped', detail='Stopped by user')
                     return
                 try:
                     job = remote.get_job(job_id)
@@ -2015,6 +2031,10 @@ def _monitor(app, run_id):
                                         'could not serve the final checkpoint')
                         # LoRA > a few minutes of pod time: keep the pod for
                         # manual recovery; max-runtime/reconcile will reap it.
+                        # Same guard as _finish_if_open: announcing a kept pod
+                        # for a run the supervisor just force-stopped would
+                        # point the user at an instance that is already gone.
+                        _assert_run_open(run)
                         _set(run, status='error_pod_kept',
                              error='checkpoint download failed — pod kept, '
                                    f'recover manually at {run.base_url}',
@@ -2023,12 +2043,12 @@ def _monitor(app, run_id):
                     _download_intermediates(run, remote)
                     _import_result(run)
                     _mirror_into_local_run(run)
-                    _finish(run, 'done', detail='Training complete')
+                    _finish_if_open(run, 'done', detail='Training complete')
                     return
                 if status in ('error', 'stopped'):
                     _try_download_checkpoint(run, remote, allow_stale=True)
-                    _finish(run, 'error' if status == 'error' else 'stopped',
-                            detail=f'Remote job {status}', error=info or status)
+                    _finish_if_open(run, 'error' if status == 'error' else 'stopped',
+                                    detail=f'Remote job {status}', error=info or status)
                     return
                 # -- stall watchdog: guiding rule — NEVER kill a run that
                 # progresses. The elif keeps a progressing poll from ever
@@ -2044,10 +2064,10 @@ def _monitor(app, run_id):
                     except Exception:
                         pass
                     _try_download_checkpoint(run, remote, allow_stale=True)
-                    _finish(run, 'error',
-                            detail='Stalled — no step progress for '
-                                   f'{stall_seconds // 60} min; pod terminated',
-                            error='stall watchdog')
+                    _finish_if_open(run, 'error',
+                                    detail='Stalled — no step progress for '
+                                           f'{stall_seconds // 60} min; pod terminated',
+                                    error='stall watchdog')
                     return
                 elif last_step <= 0 and (_now() - last_progress_ts) > first_step_seconds:
                     # No training step in first_step_timeout_minutes — the pod is
@@ -2057,11 +2077,11 @@ def _monitor(app, run_id):
                         remote.stop_job(job_id)
                     except Exception:
                         pass
-                    _finish(run, 'error',
-                            detail='No training step reached in '
-                                   f'{first_step_seconds // 60} min — pod likely '
-                                   'stuck downloading the base model; terminated',
-                            error='first-step watchdog')
+                    _finish_if_open(run, 'error',
+                                    detail='No training step reached in '
+                                           f'{first_step_seconds // 60} min — pod likely '
+                                           'stuck downloading the base model; terminated',
+                                    error='first-step watchdog')
                     return
                 _sleep(POLL_SECONDS)
         except _RunClosedExternally as closed:
