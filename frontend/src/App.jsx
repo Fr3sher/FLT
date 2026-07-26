@@ -192,10 +192,14 @@ function NavBar() {
         <NavLink to="/canvas" className={navItemClass} onClick={() => setOpen(false)}>
           <span className="inline-flex items-center gap-1"><span aria-hidden>◉</span> Canvas
             {/* The Beta chip marks the newest surface, not the oldest: the Bank
-                has been in daily use for weeks, the canvas ships today. It is
-                the first thing to go when the bar is tight — a nuance, not a
-                destination. */}
-            <span className="hidden lg:inline px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none">Beta</span>
+                has been in daily use for weeks, the canvas ships today.
+
+                It hides ONLY on the tight desktop bar (md→lg), where a fifth
+                workspace already overflows the row. It stays visible in the
+                mobile panel — a vertical list with room to spare — because that
+                is where this app is actually browsed, and a "beta" warning that
+                disappears on the reader's own screen warns nobody. */}
+            <span className="px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none md:hidden lg:inline">Beta</span>
           </span>
         </NavLink>
       )}
