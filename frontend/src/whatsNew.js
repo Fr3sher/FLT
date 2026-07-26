@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-runs-indicator',
+    date: '2026-07-26',
+    title: '🏋️ A live dot on Runs tells you something is still training',
+    blurb:
+      'A training holds your graphics card for hours when it runs here, and bills by the minute when it runs on a rented pod — but from any other page nothing said it was still going. A small pulsing dot now sits next to Runs whenever anything is training, and hovering it (or long-pressing on a phone) says where: on this machine, in the cloud, or both, with how many. A cloud run counts from the moment its pod starts provisioning, not from its first step, because that is when it starts costing you. The check is deliberately free — one flag and one count, no scan — and it pauses while the tab is in the background.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-26-lora-canvas',
     date: '2026-07-26',
     title: '◉ Your whole training history on one board',

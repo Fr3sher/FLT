@@ -2993,6 +2993,20 @@ def checkpoint_notes_for(record_id):
             if r.note}
 
 
+def training_activity() -> dict:
+    """🏋️ Is anything training RIGHT NOW — locally or on a rented pod.
+
+    Deliberately the cheapest question the app can ask: one persisted flag plus
+    one indexed COUNT. No capability probe, no disk, no network — the nav bar
+    polls this from every page, so it has to stay free. `cloud` is a count
+    because several pods can train at once; `local` is a boolean because local
+    training is single-flight."""
+    cloud = (CloudTrainingRun.query
+             .filter(CloudTrainingRun.status.in_(ACTIVE_STATES)).count())
+    local = training_in_progress()
+    return {'local': local, 'cloud': cloud, 'running': bool(local or cloud)}
+
+
 def training_in_progress() -> bool:
     """True while a LoRA training holds the GPU — the Lab's inline generation is
     refused with a 409 in that window (a training and a generation must never

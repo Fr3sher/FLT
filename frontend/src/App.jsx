@@ -19,6 +19,8 @@ import { recommendedMet } from './hooks/useSetupSteps'
 import { HelpModeProvider, useHelpMode, TipHost } from './help/HelpMode'
 import HeaderMenu from './components/common/HeaderMenu'
 import { versionLabel } from './utils/versionLabel'
+import { useTrainingActivity } from './hooks/useTrainingActivity'
+import { activityLabel } from './utils/trainingActivity'
 
 // px-2 up to `lg`: the desktop bar starts at `md` (768 px) and now carries five
 // workspaces (Datasets · Bank · Runs · Canvas · Test Studio) plus the utility
@@ -131,6 +133,10 @@ function HelpModeToggle({ onToggle }) {
 
 function NavBar() {
   const { caps } = useCapabilities()
+  // 🏋️ Live indicator on Runs: a training can hold the GPU for hours (local) or
+  // bill by the minute (cloud), and from any other page nothing said so.
+  const activity = useTrainingActivity()
+  const activityTitle = activityLabel(activity)
   // Below `md` the horizontal link row has nowhere to go (it used to just wrap
   // mid-word, brand included) -- collapse it into a hamburger-triggered panel
   // instead. navLinks is shared markup: `hidden md:flex` on desktop, only
@@ -165,7 +171,17 @@ function NavBar() {
           training path exists, not just the cloud one. */}
       {(caps.cloud_training || caps.training_visible) && (
         <NavLink to="/cloud" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><span aria-hidden>🏋️</span> Runs</span>
+          <span className="inline-flex items-center gap-1"><span aria-hidden>🏋️</span> Runs
+            {activity.running && (
+              /* Presence IS the message, so it must not be colour-only: the
+                 label is read out and shown on hover/long-press. */
+              <span title={activityTitle} aria-label={activityTitle} role="status"
+                className="relative inline-flex h-2 w-2 shrink-0">
+                <span aria-hidden className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400/70" />
+                <span aria-hidden className="relative inline-flex h-2 w-2 rounded-full bg-emerald-400" />
+              </span>
+            )}
+          </span>
         </NavLink>
       )}
       {/* ◉ Canvas — the whole training history on one board. It lives next to

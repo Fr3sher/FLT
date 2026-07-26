@@ -1658,6 +1658,15 @@ def dataset_train_checkpoint_file(dataset_id):
     return send_file(path, as_attachment=True)
 
 
+@bp.get('/train/activity')
+def train_activity():
+    """🏋️ Live "something is training" signal for the nav indicator, local and
+    cloud. Ungated and free by design (one flag + one COUNT): every page polls
+    it, so it must never probe, touch the disk or reach the network. An
+    unconfigured cloud simply reports zero."""
+    return jsonify(ct.training_activity())
+
+
 @bp.get('/train/canvas/datasets')
 def train_canvas_datasets():
     """◉ LoRA Canvas index: which datasets have runs worth drawing, how many, and
