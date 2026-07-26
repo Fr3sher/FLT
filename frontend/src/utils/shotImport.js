@@ -105,7 +105,8 @@ function checkShot(raw, { index = 1, reserved = new Set(), taken = new Set(), se
  * @param {object} opts
  * @param {string} opts.subjectType   the subject the user is importing INTO
  * @param {string[]} opts.reservedLabels  every built-in label across ALL catalogs,
- *        plus the legacy aliases (from /api/dataset/variation-labels)
+ *        plus the legacy aliases — the `reserved_labels` field of
+ *        GET /api/dataset/shot-catalog
  * @param {string[]} opts.existingLabels  labels of the shots already imported here
  * @param {number} [opts.byteLength]  file size, when known, checked before parsing
  * @returns {{blocked: ?{code,message}, accepted: object[],
@@ -247,6 +248,13 @@ export function promoteCustomShot({ shot, customShots = [], importedShots = [], 
  * (round-trips cleanly) plus a few built-ins under `examples`, which the importer
  * ignores by contract: without that, the model echoes the samples back and the
  * user eats six label collisions on their very first import.
+ *
+ * "Round-trips cleanly" has to hold for EVERY first-class field, and `nsfw` is
+ * one: the importer accepts it, `applyShotImport` keeps it and the backend
+ * persists it. Dropping it on export meant a 🔞 shot came back as a safe one —
+ * silently rerouted to a different engine on the next regenerate. It is only
+ * emitted when true, so a safe catalog looks exactly as it did. `examples` stay
+ * at three fields on purpose: they are illustrations, never imported.
  */
 export function buildShotExport({ subjectType, shots = [], catalog = [] }) {
   const step = Math.max(1, Math.ceil(catalog.length / EXAMPLE_COUNT));
@@ -255,8 +263,10 @@ export function buildShotExport({ subjectType, shots = [], catalog = [] }) {
   return `${JSON.stringify({
     format: SHOT_IMPORT_FORMAT,
     subject_type: subjectType,
-    instructions: `Add shots to the "shots" array. Each shot needs a unique "label" (max ${MAX_LABEL_LEN} chars), a "framing" among ${FRAMING_LIST}, and a "prompt" (max ${MAX_PROMPT_LEN} chars) describing the image to produce. Labels must not repeat a built-in label — see "examples", which this app ignores on import.`,
-    shots: shots.map(({ label, framing, prompt }) => ({ label, framing, prompt })),
+    instructions: `Add shots to the "shots" array. Each shot needs a unique "label" (max ${MAX_LABEL_LEN} chars), a "framing" among ${FRAMING_LIST}, and a "prompt" (max ${MAX_PROMPT_LEN} chars) describing the image to produce. Add "nsfw": true only on shots that are explicit. Labels must not repeat a built-in label — see "examples", which this app ignores on import.`,
+    shots: shots.map(({ label, framing, prompt, nsfw }) => ({
+      label, framing, prompt, ...(nsfw ? { nsfw: true } : {}),
+    })),
     examples,
   }, null, 2)}\n`;
 }

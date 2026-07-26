@@ -65,6 +65,14 @@ export const WHATS_NEW = [
   {
   },
   {
+    id: '2026-07-26-exported-shots-keep-their-nsfw-flag',
+    date: '2026-07-26',
+    title: '🔞 Exporting your shot catalog no longer strips the explicit flag',
+    blurb:
+      'The export is both your backup and the file you hand to an LLM to write more shots — so it has to come back exactly as it left. It did not: a shot marked explicit was written out without that mark, and re-importing it produced a safe shot with the same name, quietly sent to a different image engine the next time it was regenerated. The flag now travels with the shot. Safe shots are written exactly as before, and re-importing an older export is unaffected.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-26-interpreter-search-says-when-it-broke',
     date: '2026-07-26',
     title: '🔎 "No Python found" now means it looked — not that the search broke',

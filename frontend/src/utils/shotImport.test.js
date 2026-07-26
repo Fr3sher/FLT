@@ -284,6 +284,31 @@ test('an export re-imports cleanly: its own shots come back, its examples do not
   assert.equal(res.skippedExamples, 1);
 });
 
+test('a 🔞 shot survives the round-trip — nsfw is a first-class field', () => {
+  // The importer accepts nsfw, applyShotImport keeps it and the backend stores
+  // it. Dropping it on export turned an explicit shot into a safe one on the way
+  // back — the SAME label, quietly rerouted to another engine on regenerate.
+  const exported = buildShotExport({
+    subjectType: 'human',
+    shots: [
+      { id: 'imp_1', label: 'Spicy A', framing: 'body', prompt: 'a', nsfw: true, imported: true },
+      { id: 'imp_2', label: 'Safe B', framing: 'face', prompt: 'b', imported: true },
+    ],
+    catalog: [],
+  });
+  const payload = JSON.parse(exported);
+  assert.equal(payload.shots[0].nsfw, true);
+  // a safe shot stays exactly as it was — no `nsfw: false` noise in the file
+  assert.deepEqual(Object.keys(payload.shots[1]).sort(), ['framing', 'label', 'prompt']);
+
+  const res = parseShotImport(exported, { subjectType: 'human' });
+  assert.equal(res.blocked, null);
+  assert.equal(res.accepted.length, 2);
+  assert.equal(res.accepted[0].nsfw, true);
+  assert.equal(res.accepted[1].nsfw, undefined);
+  assert.equal(applyShotImport([], res.accepted)[0].nsfw, true);
+});
+
 test('every refusal names the entry AND what is wrong with it — that is the whole point', () => {
   const res = parse(file([
     shot(1),
