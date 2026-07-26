@@ -1658,6 +1658,15 @@ def dataset_train_checkpoint_file(dataset_id):
     return send_file(path, as_attachment=True)
 
 
+@bp.get('/train/canvas/datasets')
+def train_canvas_datasets():
+    """◉ LoRA Canvas index: which datasets have runs worth drawing, how many, and
+    in which families. Cheap by design (no checkpoints, no disk) — the canvas
+    fetches each selected dataset's genealogy separately, so the board and its
+    filter appear immediately instead of after a full-library disk scan."""
+    return jsonify(ct.canvas_dataset_index(LOCAL_USER))
+
+
 @bp.get('/dataset/<int:dataset_id>/train/lineage')
 def dataset_train_dataset_lineage(dataset_id):
     """🌳 Genealogy forest of ALL this dataset's runs (every launch + its

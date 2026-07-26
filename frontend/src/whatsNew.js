@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-lora-canvas',
+    date: '2026-07-26',
+    title: '◉ Your whole training history on one board',
+    blurb:
+      'Lineage graphs used to be locked inside a single run’s card — one dataset at a time, in a fixed frame. The new Canvas tab puts every dataset you have trained on one surface you can zoom and pan: each dataset gets a lane, each run a card, and a continuation is joined to the exact checkpoint it resumed from. Untick the datasets you do not want to see, click a run to inspect what it trained with, and shift-click two runs to compare their settings — across different datasets now, which was never possible before. The graph inside your dataset panel is unchanged and keeps all of its checkpoint actions.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-26-cloud-run-survives-a-busy-database',
     date: '2026-07-26',
     title: '💾 A busy database no longer abandons a cloud run you are paying for',
@@ -1402,7 +1410,7 @@ export function markAllSeen(storage, entries = WHATS_NEW) {
 
 // Param-less top-level routes (mirror App.jsx <Routes>).
 const TOP_LEVEL_ROUTES = new Set([
-  '/datasets', '/bank', '/studio', '/cloud', '/guide', '/help', '/setup',
+  '/datasets', '/bank', '/studio', '/cloud', '/canvas', '/guide', '/help', '/setup',
 ]);
 
 const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id));
