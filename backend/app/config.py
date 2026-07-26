@@ -69,7 +69,7 @@ DEFAULTS = {
     # of which engines the app offered the last time the user picked, written by
     # save_config; [] means "no ledger yet".
     'engines': {'default': 'chatgpt',
-                'enabled': ['nanobanana', 'chatgpt', 'openrouter', 'klein'],
+                'enabled': ['nanobanana', 'chatgpt', 'openrouter', 'klein', 'krea'],
                 'known': [],
                 # chatgpt_auth: 'auto' = subscription when connected, else API key.
                 'chatgpt_auth': 'auto',            # auto|api|subscription
@@ -231,6 +231,34 @@ DEFAULTS = {
               # Total pixel budget the source is rescaled to before sampling, so it
               # is the output resolution. 2 = the value hardcoded in the workflow.
               'improve_megapixels': 2.0},
+    # Krea 2 Identity Edit — the second LOCAL generation engine (services/
+    # krea_edit_helper.py). Every value here is a RESOLUTION HINT or a sampler
+    # knob, never a hardcoded machine path: blank/absent means "find it yourself"
+    # (canonical filename first, then a narrow token match, across every
+    # extra_model_paths root), which is what makes the engine work on installs
+    # that look nothing like the developer's.
+    'krea': {
+        # Blank = auto-resolve a Krea 2 base under any 'krea'-named model folder,
+        # preferring a Turbo then a Raw build. Set it to a filename to pin one.
+        'base_model': '',
+        # The edit LoRA the whole engine hangs on. Not found under this name ->
+        # the resolver scans the loras roots for a krea2_identity_edit* file, so a
+        # renamed download still works.
+        'identity_lora': 'krea/krea2_identity_edit_v1_2.safetensors',
+        # THE consistency <-> prompt-adherence dial, in pixels: the resolution the
+        # reference is shown to the vision text-encoder at. LOW = follows the
+        # PROMPT (more variety, weaker likeness); HIGH = RESEMBLES the reference
+        # (stronger likeness, but it starts copying the pose and the outfit you
+        # asked it to change). The node's own default is 768; its author
+        # recommends 1024+ for people, and a character dataset is people.
+        'grounding_px': 1024,
+        # Pack reference workflow values, measured working. cfg is pinned at 1.0
+        # in code (guidance-distilled model) and is deliberately NOT a setting.
+        'steps': 10,
+        'identity_lora_strength': 1.0,
+        # How hard the source latent is pushed back into the model each step.
+        'ref_boost': 4.0,
+    },
     # Editable identity / quality prompts (feature request by @bbsorry / 雨田壹).
     # The identity "locks" that ride ahead of every generated variation used to be
     # hardcoded and invisible; these overrides expose them without touching the

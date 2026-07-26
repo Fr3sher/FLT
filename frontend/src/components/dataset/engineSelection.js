@@ -17,14 +17,21 @@
    one-engine selection — i.e. exactly today's behaviour. */
 
 /** Canonical engine order — drives the card order, the primary pick and the
- *  round-robin. Stable: it is also the order batches are BUILT in, and Klein
- *  must come last at DISPATCH time (see engineBatches). */
-export const ENGINES = ['klein', 'nanobanana', 'chatgpt', 'openrouter'];
+ *  round-robin. Stable: it is also the order batches are BUILT in, and the LOCAL
+ *  engines must come last at DISPATCH time (see engineBatches). */
+export const ENGINES = ['klein', 'krea', 'nanobanana', 'chatgpt', 'openrouter'];
 
 export const API_ENGINES = ['nanobanana', 'chatgpt', 'openrouter'];
 
+/** Engines that render on the user's own GPU through ComfyUI: free, slower,
+ *  serialized on one GPU, and the ONLY ones allowed to receive 🔞 shots (the
+ *  server refuses NSFW on every API engine). Mirrors
+ *  face_dataset_service.LOCAL_ENGINES — derive from this, never re-list it. */
+export const LOCAL_ENGINES = ['klein', 'krea'];
+
 export const ENGINE_LABELS = {
   klein: 'Klein',
+  krea: 'Krea 2 Edit',
   nanobanana: 'Nano Banana Pro',
   chatgpt: 'ChatGPT',
   openrouter: 'OpenRouter',
@@ -44,6 +51,19 @@ export const ENGINE_ACCENTS = {
     icon: 'text-indigo-300',
     pill: 'bg-indigo-500/25 text-indigo-200',
     dot: 'bg-indigo-400',
+  },
+  /* Violet deliberately sits NEXT to Klein's indigo: both are local-GPU engines,
+     and reading them as a pair is information, not a collision — the icon and
+     the title carry the distinction. Every hue that would have separated them
+     further is already taken (amber/sky/fuchsia) or reserved (green means
+     "kept / free" everywhere else in the app). */
+  krea: {
+    card: 'border-violet-400/60 bg-violet-500/15 ring-1 ring-violet-400/40',
+    title: 'text-violet-200',
+    text: 'text-violet-300',
+    icon: 'text-violet-300',
+    pill: 'bg-violet-500/25 text-violet-200',
+    dot: 'bg-violet-400',
   },
   nanobanana: {
     card: 'border-amber-400/60 bg-amber-500/15 ring-1 ring-amber-400/40',
@@ -82,7 +102,7 @@ export const ENGINE_ACCENTS = {
  *  so a user who points it at a cheaper or dearer slug pays that instead. The
  *  engine card says so — a number here is better than no guard-rail at all, but
  *  it is the only rate in this table that the user can move. */
-export const ENGINE_RATES = { klein: 0, nanobanana: 0.15, chatgpt: 0.17, openrouter: 0.15 };
+export const ENGINE_RATES = { klein: 0, krea: 0, nanobanana: 0.15, chatgpt: 0.17, openrouter: 0.15 };
 
 export const STORAGE_ENGINES = 'datasetGenerators';     // JSON list (new)
 export const STORAGE_PRIMARY = 'datasetGenerator';      // legacy string mirror — NEVER renamed
@@ -173,21 +193,36 @@ export function distributeVariations(variations, engines, mode) {
   return buckets.filter((b) => b.variations.length);
 }
 
-/** Dispatch order for the server: API engines first, local Klein LAST.
+/** Dispatch order for the server: API engines first, the LOCAL ones LAST.
  *  The API batches are background threads that start returning images right
- *  away; Klein holds the single GPU and runs its shots in series, so putting it
- *  first would make the whole batch look frozen. */
+ *  away; a local engine holds the single GPU and runs its shots in series, so
+ *  putting it first would make the whole batch look frozen. Local engines keep
+ *  their canonical order between themselves (a stable sort). */
 export function engineBatches(variations, engines, mode) {
   const batches = distributeVariations(variations, engines, mode);
-  return [...batches].sort((a, b) => (a.generator === 'klein' ? 1 : 0) - (b.generator === 'klein' ? 1 : 0));
+  const local = (g) => (LOCAL_ENGINES.includes(g) ? 1 : 0);
+  return [...batches].sort((a, b) => local(a.generator) - local(b.generator));
 }
 
-/** True when the run mixes the local GPU engine with at least one API engine —
- *  the case where Klein's shots visibly queue behind the API ones. */
-export function kleinQueuesBehindApi(engines) {
+/** True when the run mixes a local GPU engine with at least one API engine —
+ *  the case where the local shots visibly queue behind the API ones. */
+export function localQueuesBehindApi(engines) {
   const list = canonicalEngines(engines);
-  return list.includes('klein') && list.some((e) => API_ENGINES.includes(e));
+  return list.some((e) => LOCAL_ENGINES.includes(e))
+    && list.some((e) => API_ENGINES.includes(e));
 }
+
+/** Every selected engine renders locally — the condition 🔞 shots need (the
+ *  server refuses NSFW on API engines, so a mixed run would fail as a whole).
+ *  False on an empty selection: nothing selected renders nothing. */
+export function localOnly(engines) {
+  const list = canonicalEngines(engines);
+  return list.length > 0 && list.every((e) => LOCAL_ENGINES.includes(e));
+}
+
+/** Back-compat alias — `kleinQueuesBehindApi` was the only name for this and is
+ *  imported elsewhere; it now answers for BOTH local engines. */
+export const kleinQueuesBehindApi = localQueuesBehindApi;
 
 /** How many images the batch will produce: shots × multiplier, per engine. */
 export function totalImages(shotCount, engines, mode, multiplier = 1) {

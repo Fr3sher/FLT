@@ -125,8 +125,8 @@ const TOPICS = [
   // same cost) or sent to ALL of them (compare, then triage — multiplies cost).
   { id: 'dataset-engine-mode', kind: 'setting', title: 'Engines & how they share a batch',
     keywords: ['engine', 'engines', 'multiple engines', 'several engines', 'split',
-      'all engines', 'compare engines', 'klein', 'nano banana', 'chatgpt', 'cost',
-      'mix', 'multi-engine'],
+      'all engines', 'compare engines', 'klein', 'krea', 'krea 2 edit', 'nano banana',
+      'chatgpt', 'cost', 'mix', 'multi-engine', 'local engine'],
     guide: { chapter: 'settings-reference', anchor: 'image-engines' },
     app: { route: '/datasets?section=add' } },
   // Subject type: WHAT the dataset's subject is (human/animal/creature/object/
@@ -346,6 +346,20 @@ const TOPICS = [
       text: 'Build named generation-LoRA presets in Settings → Image engines, then pick one per run.' }),
   setting('klein.generation_steps', 'engines', 'klein-generation', 'Klein generation steps',
     ['klein', 'steps', 'sampler', 'generation', 'quality', 'slower', 'cleaner', 'sampling', '5 steps']),
+  // Krea 2 Identity Edit — the second LOCAL engine. `grounding_px` first: it is
+  // THE consistency ↔ prompt dial, and a bare pixel count means nothing without
+  // that sentence, so it carries the widest keyword set of the four.
+  setting('krea.grounding_px', 'engines', 'krea-grounding', 'Krea 2 Edit reference grounding',
+    ['krea', 'krea 2', 'grounding', 'grounding_px', 'consistency', 'likeness', 'resemblance',
+     'prompt adherence', 'variety', 'identity', 'reference', 'dial', 'slider', 'local engine']),
+  setting('krea.steps', 'engines', 'krea-steps', 'Krea 2 Edit sampler steps',
+    ['krea', 'steps', 'sampler', 'quality', 'slower', 'local engine']),
+  setting('krea.base_model', 'engines', 'krea-base-model', 'Krea 2 Edit base model',
+    ['krea', 'base model', 'turbo', 'raw', 'checkpoint', 'unet', 'diffusion model',
+     'noise', 'biglove', 'incompatible', 'local engine']),
+  setting('krea.identity_lora', 'engines', 'krea-identity-lora', 'Krea 2 Edit identity LoRA',
+    ['krea', 'identity', 'edit lora', 'lora', 'krea2_identity_edit', 'civitai',
+     'node pack', 'comfyui-krea2edit', 'missing', 'local engine']),
   setting('identity_prompts.face', 'engines', 'identity-prompts', 'Identity lock prompts (API engines)',
     ['identity', 'prompt', 'guard', 'lock', 'face', 'reference', 'beautify', 'preserve', 'consistency', 'edit prompt',
      'subject type', 'animal', 'per subject', 'leak', 'tails', 'extra limbs']),

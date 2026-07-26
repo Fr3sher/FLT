@@ -23,9 +23,10 @@ import {
 } from '../../utils/shotImport';
 import {
   ENGINE_ACCENTS, ENGINE_LABELS, billingEngines, canonicalEngines, engineBatches,
-  estimateCost, generateBlockedReason, kleinQueuesBehindApi, readEngines, readMode,
-  totalImages, writeEngines, writeMode,
+  estimateCost, generateBlockedReason, localQueuesBehindApi, localOnly, readEngines,
+  readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
+import { kreaUnavailableReason, groundingDescription } from '../../utils/kreaEngine.js';
 import {
   SUBJECT_TYPES, SUBJECT_TYPE_LABELS, SUBJECT_TYPE_HINTS,
   normalizeSubjectType, framingLabel, defaultPresetKey,
@@ -121,6 +122,21 @@ function GpuIcon({ className }) {
   );
 }
 
+/** Krea 2 Identity Edit: a portrait frame with an identity anchor — it re-stages
+ *  the SAME subject rather than generating a new one. Distinct silhouette from
+ *  the GPU chip so the two local cards never read as the same engine. */
+function IdentityFrameIcon({ className }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} aria-hidden="true" focusable="false">
+      <rect x="4" y="4" width="24" height="24" rx="4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <circle cx="16" cy="13" r="4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M9 24c1.6-3.6 4.1-5.4 7-5.4s5.4 1.8 7 5.4" fill="none"
+        stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="16" cy="13" r="1.2" fill="currentColor" />
+    </svg>
+  );
+}
+
 const MODE_CHOICES = [
   { id: 'split', name: 'Split across engines',
     desc: 'Each shot goes to ONE engine — same image count and cost as a single engine, but a more varied dataset.' },
@@ -212,7 +228,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   const addCustomShot = () => {
     const p = customPrompt.trim();
     if (!p) return;
-    const hot = nsfwMode && kleinOnly;
+    const hot = nsfwMode && localOnlyRun;
     const shot = { id: `custom_${Date.now()}`, label: `${hot ? '🔞' : '✨'} ${p.slice(0, 40)}`,
                    prompt: p, framing: customFraming, nsfw: hot };
     setCustomShots((s) => [...s, shot]);
@@ -357,7 +373,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   const renderUserShot = (c, onRemove, removeTitle, onKeep = null) => {
     const on = selected.has(c.id);
     const done = doneByLabel.get(c.label) || 0;
-    const blocked = c.nsfw && !kleinOnly;   // 🔞 card while an API engine is in the run
+    const blocked = c.nsfw && !localOnlyRun;   // 🔞 card while an API engine is in the run
     const cls = on
       ? 'bg-primary/20 border-primary/50 text-white ring-1 ring-primary/30'
       : done > 0
@@ -429,16 +445,20 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   const isNB = engines.includes('nanobanana');
   const isGPT = engines.includes('chatgpt');
   const isOR = engines.includes('openrouter');
-  // Klein-only affordances (NSFW catalog, Klein tuning panel) light up as soon as
-  // Klein is part of the run — its shots really are rendered locally.
+  // Per-engine affordances (the Klein tuning panel, the Krea one) light up as
+  // soon as that engine is part of the run — its shots really are rendered
+  // locally.
   const isKlein = engines.includes('klein');
+  const isKrea = engines.includes('krea');
   const multiEngine = engines.length > 1;
-  // 🔞 shots stay exactly as strict as before: they only exist when the run is
-  // LOCAL-ONLY. Klein alongside an API engine would either send them to that API
-  // (which the backend refuses, failing the whole run) or need a per-shot routing
-  // rule the cost/count display could not honestly show — so the uncensored
-  // catalog simply stays locked until Klein is the only engine checked.
-  const kleinOnly = isKlein && engines.length === 1;
+  // 🔞 shots stay exactly as strict as before, only the wording of "local"
+  // widened: they exist when EVERY selected engine is local. A local engine
+  // alongside an API one would either send them to that API (which the backend
+  // refuses, failing the whole run) or need a per-shot routing rule the
+  // cost/count display could not honestly show — so the uncensored catalog
+  // stays locked until the run is local-only. Two local engines together are
+  // fine: both accept 🔞.
+  const localOnlyRun = localOnly(engines);
 
   /** Images THIS engine renders in the current run. For an engine that isn't
    *  checked, what it would render if it were picked alone — so the card's price
@@ -465,6 +485,8 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   // this card used to state "gpt-image-2" flatly, which became a lie the moment
   // someone changed it. Blank = the engine's own default, named here.
   const [chatgptImageModel, setChatgptImageModel] = useState('');
+  // Krea's consistency <-> prompt-adherence dial, mirrored from Settings.
+  const [kreaGrounding, setKreaGrounding] = useState(1024);
   useEffect(() => {
     let cancelled = false;
     apiFetch('/api/settings')
@@ -476,6 +498,10 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         setChatgptImageModel((d.config?.engines?.chatgpt_image_model || '').trim());
         // Optional generation-LoRA presets: names + chains for the picker.
         setLoraPresets(sanitizeGenerationLoraPresets(d.config?.klein?.generation_lora_presets));
+        // Krea's one dial. It lives in Settings (it changes the meaning of every
+        // shot in the batch identically, so it is not a per-run argument), and is
+        // MIRRORED here so the workspace can say what the run will actually do.
+        setKreaGrounding(Number(d.config?.krea?.grounding_px) || 1024);
       })
       .catch(() => { /* keep the permissive default on a transient failure */ });
     return () => { cancelled = true; };
@@ -484,8 +510,9 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   const gptAvailable = enabledEngines.includes('chatgpt') && caps.engines.chatgpt;
   const orAvailable = enabledEngines.includes('openrouter') && caps.engines.openrouter;
   const klAvailable = enabledEngines.includes('klein') && caps.engines.klein;
-  const available = { klein: klAvailable, nanobanana: nbAvailable, chatgpt: gptAvailable,
-    openrouter: orAvailable };
+  const krAvailable = enabledEngines.includes('krea') && caps.engines.krea;
+  const available = { klein: klAvailable, krea: krAvailable, nanobanana: nbAvailable,
+    chatgpt: gptAvailable, openrouter: orAvailable };
 
   // The persisted selection can name engines that have since been disabled in
   // Settings (or lost their key/backend): drop those instead of trying to
@@ -496,10 +523,11 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     const usable = engines.filter((e) => available[e]);
     if (usable.length === engines.length) return;
     const first = nbAvailable ? 'nanobanana' : gptAvailable ? 'chatgpt'
-      : orAvailable ? 'openrouter' : klAvailable ? 'klein' : null;
+      : orAvailable ? 'openrouter' : klAvailable ? 'klein'
+      : krAvailable ? 'krea' : null;
     setEngines(usable.length ? usable : (first ? [first] : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engines, nbAvailable, gptAvailable, orAvailable, klAvailable]);
+  }, [engines, nbAvailable, gptAvailable, orAvailable, klAvailable, krAvailable]);
   // Effective ChatGPT lane: the subscription (ChatGPT Plus/Pro image quota) vs the
   // pay-per-use API key. Mirrors the backend "auto = subscription when connected".
   const gptSub = caps.chatgpt_subscription || {};
@@ -531,6 +559,16 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     : !enabledEngines.includes('klein') ? '⚠ Klein is disabled in Settings (engines)'
     : !caps.comfyui?.reachable ? '⚠ Configure ComfyUI in Settings'
     : kleinAssetHint;
+  // Krea has one more failure mode than Klein — a missing CUSTOM-NODE PACK — and
+  // "install a node pack" is a different action from "place a weight file", so
+  // the reason is computed (and unit-tested) rather than collapsed into one
+  // "not available". See utils/kreaEngine.js.
+  const kreaHint = krAvailable ? null : kreaUnavailableReason({
+    enabledInSettings: enabledEngines.includes('krea'),
+    comfyuiReachable: !!caps.comfyui?.reachable,
+    missingAssets: caps.comfyui?.krea_missing,
+    missingNodes: caps.comfyui?.krea_nodes_missing,
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -566,13 +604,13 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   // Switching to an API engine drops any selected NSFW shots (Klein-only) —
   // catalog nsfw_ entries AND 🔞 custom cards alike.
   useEffect(() => {
-    if (kleinOnly) return;
+    if (localOnlyRun) return;
     const hotCustom = new Set(userShots.filter((c) => c.nsfw).map((c) => c.id));
     setSelected((s) => {
       const n = new Set([...s].filter((id) => !id.startsWith('nsfw_') && !hotCustom.has(id)));
       return n.size === s.size ? s : n;
     });
-  }, [kleinOnly, userShots]);
+  }, [localOnlyRun, userShots]);
 
   // "Already in the dataset" per variation label: live images (kept, pending or
   // still generating — not failed/rejected) → the green ✓×N state on the cards.
@@ -711,14 +749,14 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
       .map((e) => ({ label: e.label, prompt: e.prompt, framing: e.framing }));
     // NSFW shots: local Klein only (the toggle is gated on the Klein engine,
     // and the backend refuses them on API engines).
-    if (nsfwMode && kleinOnly) {
+    if (nsfwMode && localOnlyRun) {
       variations.push(...nsfwCatalog.filter((e) => selected.has(e.id))
         .map((e) => ({ label: e.label, prompt: e.prompt, framing: e.framing, nsfw: true })));
     }
     // Custom cards: selectable like catalog shots; 🔞 ones only ride with Klein
     // (the label prefix is what regenerate uses to re-pick the uncensored wrapper).
     variations.push(...userShots
-      .filter((c) => selected.has(c.id) && (kleinOnly || !c.nsfw))
+      .filter((c) => selected.has(c.id) && (localOnlyRun || !c.nsfw))
       .map((c) => ({ label: c.label, prompt: c.prompt, framing: c.framing,
                      ...(c.nsfw ? { nsfw: true } : {}) })));
     if (!variations.length) return;
@@ -800,7 +838,8 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         <span className="text-content-subtle text-[0.625rem]">{SUBJECT_TYPE_HINTS[subject]}</span>
       </div>
 
-      {/* Engine cards — Klein (local GPU), Nano Banana Pro and ChatGPT (APIs).
+      {/* Engine cards — Klein and Krea 2 Edit (local GPU), Nano Banana Pro,
+          ChatGPT and OpenRouter (APIs).
           CHECKBOXES, not a radio group: several engines can run in one batch.
           Each card disables itself with an actionable hint when its engine
           isn't configured/reachable or was turned off in Settings, and carries
@@ -808,7 +847,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
       <div className="flex items-center gap-2">
         <span className="text-content-muted text-[0.6875rem] uppercase">Engines</span>
         <span className="text-content-subtle text-[0.625rem]">
-          where the images are made — pick one or several · Klein runs free on your GPU · APIs bill per image (or use your ChatGPT subscription)
+          where the images are made — pick one or several · Klein and Krea 2 Edit run free on your GPU · APIs bill per image (or use your ChatGPT subscription)
         </span>
         <HelpBadge topic="dataset-engine-mode" />
       </div>
@@ -819,10 +858,13 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         Not the look you wanted (a stylized reference coming out realistic)? Edit the generation prompt in{' '}
         <a href="#/settings/engines" className="text-amber-300 underline decoration-amber-300/50">Settings › Image engines →</a>
       </p>
-      {/* Four cards now. One column on a phone (they stack, nothing is clipped),
-          two from sm, four only from xl — three-across at sm would squeeze each
-          card under ~200 px and wrap every tag onto its own line. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
+      {/* Five cards now, and the column stops at THREE. Tailwind breakpoints read
+          the VIEWPORT, but these cards live in the workspace column next to the
+          sidebar — a `2xl:grid-cols-5` measured on a 1600 px window put five cards
+          in ~700 px (≈130 px each) and wrapped every hint to one word per line.
+          Three-across is wider per card than the four-across this grid shipped
+          with. One column on a phone (nothing is clipped at 400 px), two from sm. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
         <EngineCard id="klein" checked={isKlein} available={klAvailable} generating={generating}
           onToggle={toggleEngine} share={engineShare('klein')}
           icon={<GpuIcon className={`w-9 h-9 shrink-0 ${isKlein ? ENGINE_ACCENTS.klein.icon : 'text-content-subtle'}`} />}
@@ -836,7 +878,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
           hint={klAvailable ? (
             <span className="text-content-subtle text-[0.625rem]">
               Runs on this machine — slower, tunable face fidelity.
-              {kleinQueuesBehindApi(engines) && (
+              {localQueuesBehindApi(engines) && (
                 <> <span className={ENGINE_ACCENTS.klein.text}>
                   Its {engineShare('klein')} shot(s) queue on your GPU, one at a time, after the API ones.
                 </span></>
@@ -846,6 +888,34 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
             <a href="#/setup" onClick={(e) => e.stopPropagation()}
               className="text-amber-300 text-[0.625rem] underline decoration-amber-300/50">
               {kleinHint}
+            </a>
+          )} />
+        {/* Krea 2 Identity Edit — the second LOCAL engine. It keeps the identity
+            from the reference photo ALONE (no character LoRA needed), which is
+            exactly the bootstrap case: a character that has no LoRA yet. */}
+        <EngineCard id="krea" checked={isKrea} available={krAvailable} generating={generating}
+          onToggle={toggleEngine} share={engineShare('krea')}
+          icon={<IdentityFrameIcon className={`w-9 h-9 shrink-0 ${isKrea ? ENGINE_ACCENTS.krea.icon : 'text-content-subtle'}`} />}
+          title={<>Krea 2 Edit <span className="font-normal text-content-subtle">· local</span></>}
+          tags={[
+            <span key="free" className="px-1.5 py-px rounded-full bg-emerald-500/15 border border-emerald-400/40 text-emerald-300 text-[0.625rem]">Free</span>,
+            <span key="gpu" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">Your GPU</span>,
+            <span key="nsfw" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">NSFW OK</span>,
+          ]}
+          hint={krAvailable ? (
+            <span className="text-content-subtle text-[0.625rem]">
+              Identity-preserving edit — strongest likeness from a single reference photo.
+              Keeps the source aspect ratio (shot aspect overrides don&rsquo;t apply).
+              {localQueuesBehindApi(engines) && (
+                <> <span className={ENGINE_ACCENTS.krea.text}>
+                  Its {engineShare('krea')} shot(s) queue on your GPU, one at a time, after the API ones.
+                </span></>
+              )}
+            </span>
+          ) : (
+            <a href="#/setup" onClick={(e) => e.stopPropagation()}
+              className="text-amber-300 text-[0.625rem] underline decoration-amber-300/50">
+              {kreaHint}
             </a>
           )} />
         <EngineCard id="nanobanana" checked={isNB} available={nbAvailable} generating={generating}
@@ -1016,6 +1086,43 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
                 )
               )}
             </div>
+          </div>
+        </details>
+      )}
+
+      {/* Krea tuning — deliberately a READ-OUT, not a second set of sliders.
+          Krea has exactly one dial and it is a SETTING: `grounding_px` changes
+          the meaning of every shot in the batch identically, so a per-run copy
+          would be a second truth to keep in sync (and a value silently different
+          from the one the Settings page shows). What belongs here is knowing
+          what the run is about to do, and one click to change it. */}
+      {isKrea && krAvailable && (
+        <details className="rounded-lg border border-border bg-app/30 open:pb-2">
+          <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
+            🧬 Krea 2 Edit tuning
+            <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
+              reference grounding {groundingDescription(kreaGrounding)}
+            </span>
+          </summary>
+          <div className="px-2.5 pt-1 flex flex-col gap-1.5">
+            <p className="text-content-subtle text-[0.625rem]">
+              <b className="text-content-muted font-semibold">Reference grounding</b> is the
+              consistency ↔ prompt dial: LOW follows the shot description (more variety in pose,
+              outfit and scene, looser likeness), HIGH resembles the reference more closely — and
+              starts copying the very pose and outfit you asked it to change. 1024 px is the
+              recommended balance for people.
+            </p>
+            <p className="text-content-subtle text-[0.625rem]">
+              Identity comes from the reference photo alone — no character LoRA needed. Extra
+              reference images are not used by this engine, and the output keeps the reference&rsquo;s
+              aspect ratio (capped at 2 MP), which is what the model was trained on.
+            </p>
+            <p className="text-content-subtle text-[0.625rem]">
+              Change it in{' '}
+              <a href="#/settings/engines" className="text-amber-300 underline decoration-amber-300/50">
+                Settings › Image engines
+              </a>{' '}— it applies to every Krea run.
+            </p>
           </div>
         </details>
       )}
@@ -1226,7 +1333,11 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
 
       {/* 🔞 NSFW — local Klein only. Uncensored body catalog + free prompt.
           Never offered on the API engines (and the backend refuses them there). */}
-      {kleinOnly && klAvailable && nsfwCatalog.length > 0 && (
+      {/* `localOnlyRun` already means every selected engine is local, and the
+          effect above prunes engines that aren't available — so no second
+          availability test here (the old `&& klAvailable` would have hidden the
+          🔞 catalog on a Krea-only run). */}
+      {localOnlyRun && nsfwCatalog.length > 0 && (
         <div className={`rounded-lg border p-2 flex flex-col gap-2 ${nsfwMode
           ? 'border-rose-500/40 bg-rose-500/5' : 'border-border bg-app/30'}`}>
           <button type="button" onClick={() => setNsfwMode((v) => !v)} aria-pressed={nsfwMode}
@@ -1286,7 +1397,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
           ✨ Custom shot
           <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
-            write your own prompt — it becomes a reusable card in the Custom group above{nsfwMode && kleinOnly ? ' — 🔞 register active' : ''}
+            write your own prompt — it becomes a reusable card in the Custom group above{nsfwMode && localOnlyRun ? ' — 🔞 register active' : ''}
           </span>
         </summary>
         <div className="px-2.5 pt-1 flex flex-col gap-1">

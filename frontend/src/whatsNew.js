@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-krea-2-identity-edit-local-engine',
+    date: '2026-07-26',
+    title: 'A second free engine that keeps a face from ONE photo — Krea 2 Edit',
+    blurb:
+      'Krea 2 Identity Edit joins Klein as a local engine: it holds the face, the body and the permanent markings from a single reference photo, with no character LoRA — which is exactly the problem you have before a LoRA exists. Tick it next to (or instead of) the others; it costs nothing but your GPU time and accepts 🔞 shots. One dial, Reference grounding, decides whether a shot follows your description or resembles the photo more closely. It runs on your own ComfyUI and needs a node pack plus four model files, so if anything is missing the engine card names it — which file, where it goes, and where to get it — instead of greying out.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-26-existing-promoted-images-recover-their-framing',
     date: '2026-07-26',
     title: 'Images already promoted from a Bank take their framing back',

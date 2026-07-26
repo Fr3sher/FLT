@@ -48,7 +48,8 @@ from .face_variations import (CAPTION_PROMPT, CAPTION_PROMPT_BOORU,
                               compose_prompt_suffix, concept_lexical_field,
                               drop_identity_sentences, drop_identity_tags,
                               is_nsfw_label, prompt_by_label, wrap_variation,
-                              wrap_variation_klein, get_identity_prompt,
+                              wrap_variation_klein, wrap_variation_krea,
+                              get_identity_prompt,
                               normalize_subject_type,
                               KLEIN_IMAGE_IMPROVE_PROMPT)
 
@@ -2555,6 +2556,11 @@ def _image_engine(img):
         return None
     if value in API_ENGINES:
         return value
+    # Krea 2 Edit rows store the engine id here, like the API ones: the engine
+    # resolves its base model deterministically at enqueue AND at regenerate
+    # (krea_edit_helper.resolve_krea_unet), so there is no per-row model to keep.
+    if value == KREA_ENGINE:
+        return KREA_ENGINE
     return 'klein'   # a local model file name — the row was rendered on the GPU
 
 
@@ -5031,11 +5037,24 @@ def _sync_generate_activity(dataset_id):
     Called on enqueue, on each completion, and on cancel; the registry TTL is the
     last-resort net. API rows (job_id is NULL) are excluded — those batches own a
     separate begin()/end() 'generate' entry from _run_nanobanana_batch."""
-    pending = (FaceDatasetImage.query
-               .filter_by(dataset_id=dataset_id, status='pending')
-               .filter(FaceDatasetImage.filename.is_(None))
-               .filter(FaceDatasetImage.job_id.isnot(None)).count())
-    dataset_activity.sync_pending(dataset_id, 'generate', pending, engine='klein')
+    local = (FaceDatasetImage.query
+             .filter_by(dataset_id=dataset_id, status='pending')
+             .filter(FaceDatasetImage.filename.is_(None))
+             .filter(FaceDatasetImage.job_id.isnot(None)))
+    pending = local.count()
+    # There are TWO local engines now, and the indicator names one. Both queue on
+    # the same single GPU and complete the same way, so the COUNT is shared; the
+    # label just tells the truth about what is on it. Klein wins a mixed run only
+    # because it is the historical default — a wrong badge is worse than a vague
+    # one, so 'krea' is only claimed when every in-flight local row really is Krea.
+    # NB: `klein_model != 'krea'` alone would DROP the NULL rows (SQL three-valued
+    # logic), i.e. count a legacy Klein row as "not non-Krea" and mislabel the run.
+    engine = 'klein'
+    if pending and not local.filter(db.or_(
+            FaceDatasetImage.klein_model.is_(None),
+            FaceDatasetImage.klein_model != KREA_ENGINE)).count():
+        engine = KREA_ENGINE
+    dataset_activity.sync_pending(dataset_id, 'generate', pending, engine=engine)
 
 
 def generate_variations(user_id, dataset_id, variations, multiplier, klein_model,
@@ -5119,6 +5138,78 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                         klein_model=klein_model,
                         lora_strength=lora_strength, extra_ref_paths=extra_paths,
                         generation_loras=run_loras, sampler_steps=_generation_steps(),
+                        extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
+                                        'variation_label': v.get('label')})
+                except Exception:
+                    img.status = 'failed'
+                    db.session.commit()
+                    raise
+                img.job_id = job_id
+                db.session.commit()
+                ids.append(img.id)
+    finally:
+        _sync_generate_activity(dataset_id)
+    return ids
+
+
+def generate_variations_krea(user_id, dataset_id, variations, multiplier):
+    """Krea 2 Identity Edit fan-out — the second LOCAL engine, same contract as
+    `generate_variations` (Klein): one pending row committed BEFORE its job is
+    enqueued, the whole batch preflighted up front, the created ids returned.
+
+    Deliberately fewer knobs than the Klein path: Krea has no consistency LoRA
+    and no generation-LoRA presets (its identity LoRA IS the pipeline, and
+    stacking untested LoRAs on an edit model is how you get noise). The one dial
+    it does have — `grounding_px` — is a SETTING, not a per-run argument, because
+    it changes the meaning of every shot in the batch identically.
+
+    The row stores the ENGINE ID in `klein_model`, like the API rows do, so the
+    grid badge can say "Krea 2 Edit"; the base model itself is re-resolved
+    deterministically at enqueue and at regenerate."""
+    from . import krea_edit_helper as keh
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    if not ds.ref_filename:
+        raise ValueError('reference image required')
+    # Assets AND custom nodes, before any row exists: a missing piece then
+    # surfaces as one actionable 409 instead of a grid of silently-failing tiles.
+    keh.preflight()
+    mult = max(1, int(multiplier))
+    total = len(variations) * mult
+    if total > MAX_FANOUT:
+        raise ValueError(f'fan-out too large ({total} > {MAX_FANOUT})')
+    in_flight = (FaceDatasetImage.query
+                 .filter_by(dataset_id=dataset_id, status='pending')
+                 .filter(FaceDatasetImage.filename.is_(None)).count())
+    if in_flight + total > MAX_FANOUT:
+        raise ValueError(f'too many generations in flight ({in_flight}), wait or cancel')
+    ref_path = _ref_path(ds)
+    ids = []
+    try:
+        for v in variations:
+            for _ in range(mult):
+                img = FaceDatasetImage(dataset_id=dataset_id, source='generated',
+                                       status='pending', variation_label=v.get('label'),
+                                       framing=v.get('framing'),
+                                       variation_prompt=v['prompt'],
+                                       klein_model=KREA_ENGINE)
+                db.session.add(img)
+                db.session.commit()
+                nsfw = bool(v.get('nsfw')) or is_nsfw_label(v.get('label'))
+                try:
+                    job_id = keh.enqueue_krea_edit(
+                        user_id=str(user_id), source_filename=ds.ref_filename,
+                        source_path=ref_path,
+                        # Suffix applied AT WRAP, like Klein: the row keeps the raw
+                        # catalog prompt so a regenerate re-applies the CURRENT
+                        # suffix exactly once. The label rides along because it
+                        # picks this shot's outfit deterministically.
+                        edit_prompt=wrap_variation_krea(
+                            v['prompt'], nsfw=nsfw, framing=v.get('framing'),
+                            suffix=dataset_prompt_suffix(ds, v.get('framing')),
+                            subject_type=subject_type_of(ds),
+                            label=v.get('label') or ''),
                         extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                                         'variation_label': v.get('label')})
                 except Exception:
@@ -5482,21 +5573,31 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
     if prompt is None:
         raise ValueError('variation prompt unknown')
     requested = (engine or '').strip() or None
-    if requested is not None and requested != 'klein' and requested not in API_ENGINES:
+    if requested is not None and requested not in KNOWN_ENGINES:
         raise ValueError(f'unknown engine: {requested}')
-    target = requested or (img.klein_model if img.klein_model in API_ENGINES else 'klein')
-    if is_nsfw_label(img.variation_label):
-        target = 'klein'              # fail-closed: NSFW never reaches an API engine
+    # A row remembers its origin through `klein_model`: an engine TAG for the API
+    # rows and for Krea, a real model FILE for Klein. Anything that isn't a known
+    # tag is therefore a Klein row.
+    origin = img.klein_model if img.klein_model in KNOWN_ENGINES else 'klein'
+    target = requested or origin
+    if is_nsfw_label(img.variation_label) and target in API_ENGINES:
+        # Fail-closed: NSFW never reaches a third-party API. It stays on whatever
+        # LOCAL engine the row came from (a Krea row keeps Krea) — forcing Klein
+        # here would silently change engine behind the user's back.
+        target = origin if origin in LOCAL_ENGINES else 'klein'
     else:
         # Engines disabled in Settings must not be used even when the row (or a
         # stale workspace selection) points at them: fall back to the default
         # engine, then to the first enabled one. An empty list means "all
-        # enabled" (legacy configs); NSFW above already forced local Klein.
+        # enabled" (legacy configs).
         enabled = [e for e in (cfg.get('engines.enabled') or [])
-                   if e == 'klein' or e in API_ENGINES]
+                   if e in KNOWN_ENGINES]
         if enabled and target not in enabled:
             default = cfg.get('engines.default')
             target = default if default in enabled else enabled[0]
+        # ...and the NSFW clamp must survive that fallback.
+        if is_nsfw_label(img.variation_label) and target in API_ENGINES:
+            target = origin if origin in LOCAL_ENGINES else 'klein'
     # Complete every fallible target-specific preflight before changing either
     # the row or its current file. Klein enqueue is itself part of preparation:
     # if the later DB transition fails, that exact new job is cancelled below.
@@ -5522,6 +5623,24 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
             raise ValueError('reference image file missing')
         aspect = aspect_for_label(img.variation_label, img.framing)
         ref_bytes = _all_ref_bytes(ds)  # principale + extras (multi-références)
+    elif target == KREA_ENGINE:
+        # Krea 2 Identity Edit: same shape as the Klein branch below, minus the
+        # knobs it doesn't have. Its preflight raises KreaModelsMissing HERE,
+        # before the row transition — so the tile keeps its current image.
+        engine = KREA_ENGINE
+        from . import krea_edit_helper as _keh
+        ref_path = os.path.join(_dataset_path(ds.id), ds.ref_filename)
+        new_job_id = _keh.enqueue_krea_edit(
+            user_id=str(user_id), source_filename=ds.ref_filename,
+            source_path=ref_path,
+            edit_prompt=wrap_variation_krea(
+                prompt, nsfw=is_nsfw_label(img.variation_label),
+                framing=img.framing,
+                suffix=dataset_prompt_suffix(ds, img.framing),
+                subject_type=subject_type_of(ds),
+                label=img.variation_label or ''),
+            extra_metadata={'is_dataset': True, 'dataset_id': img.dataset_id,
+                            'variation_label': img.variation_label})
     else:
         try:
             from .klein_edit_helper import enqueue_klein_edit, resolve_generation_lora_preset
@@ -5562,7 +5681,10 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
         if edited:
             img.variation_prompt = stored_prompt
         _clear_watermark_metadata(img)
-        img.klein_model = engine if target in API_ENGINES else model
+        # Engine TAG for the API engines and for Krea (each resolves its own
+        # model); the real model FILE for Klein.
+        img.klein_model = (engine if target in API_ENGINES or target == KREA_ENGINE
+                           else model)
         img.filename = None
         img.caption = None
         img.status = 'pending'
@@ -5689,6 +5811,17 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
 # here is never renamed or reordered.
 API_ENGINES = ('nanobanana', 'chatgpt', 'openrouter')
 _ENGINE_FILE_TAG = {'nanobanana': 'NBFace', 'chatgpt': 'GPTFace', 'openrouter': 'ORFace'}
+
+# The LOCAL engines — they render on the user's own GPU through ComfyUI, cost
+# nothing, and are the only ones allowed to receive NSFW shots. Klein is the
+# historical one; Krea 2 Identity Edit is the second (krea_edit_helper).
+# APPEND-ONLY for the same reason as API_ENGINES: 'krea' is persisted in
+# FaceDatasetImage.klein_model as this row's engine tag.
+LOCAL_ENGINES = ('klein', 'krea')
+KREA_ENGINE = 'krea'
+LOCAL_ENGINE_LABELS = {'klein': 'Klein', 'krea': 'Krea 2 Edit'}
+# Every engine a generate/regenerate request may name.
+KNOWN_ENGINES = LOCAL_ENGINES + API_ENGINES
 
 # Human names for the engines, in the SAME wording as the frontend's ENGINE_LABELS
 # (frontend/src/components/dataset/engineSelection.js). Only used to word messages
