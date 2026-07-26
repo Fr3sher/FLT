@@ -2879,7 +2879,8 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
 def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
-                  source_metadata=None, captions=None, bank_image_ids=None):
+                  source_metadata=None, captions=None, bank_image_ids=None,
+                  framings=None):
     """Normalize (or head-crop) + persist + create import rows (status=keep).
     When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
     must then hold the GPU-exclusive window - and is by construction a face,
@@ -2900,6 +2901,13 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     caption to carry onto the new row (the image-bank promotion path passes the bank
     captions here, so a promoted selection starts already captioned). Empty/None entries
     leave the row uncaptioned. A skipped duplicate simply drops its caption with it.
+
+    ``framings`` is an optional list parallel to ``files_bytes`` — a framing
+    ALREADY known for the blob (the image-bank promotion path passes the framing
+    its own classify pass wrote, so a promoted selection lands counted in the
+    composition instead of sitting at 0 until something re-classifies it). Only
+    the catalog buckets are accepted; anything else lands as None so the dataset
+    classifier can still fill it. Ignored when crop=True (a head crop IS a face).
 
     ``bank_image_ids`` is an optional list parallel to ``files_bytes`` — the
     bank_image each blob came from, recorded on the new row. A blob dropped as a
@@ -2922,9 +2930,19 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     metadata_by_index = list(source_metadata) if source_metadata is not None else []
     captions_by_index = list(captions) if captions is not None else []
     bank_ids_by_index = list(bank_image_ids) if bank_image_ids is not None else []
+    framings_by_index = list(framings) if framings is not None else []
 
     def bank_id_at(i):
         return bank_ids_by_index[i] if i < len(bank_ids_by_index) else None
+
+    def framing_at(i):
+        # A head crop IS a face by construction; otherwise take the caller's value
+        # when it is one of the composition buckets (an 'unknown'/None verdict must
+        # stay NULL so the dataset classifier can still pick the row up).
+        if crop:
+            return 'face'
+        fr = framings_by_index[i] if i < len(framings_by_index) else None
+        return fr if fr in ('face', 'bust', 'body', 'back') else None
 
     ids = []
     failed = 0
@@ -2978,7 +2996,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
         cap = (captions_by_index[index] if index < len(captions_by_index) else None)
         cap = _cap_caption(cap) if (cap or '').strip() else None
         img = FaceDatasetImage(dataset_id=dataset_id, source='import', status='keep',
-                               filename=fn, framing='face' if crop else None,
+                               filename=fn, framing=framing_at(index),
                                upscale_ratio=scale, caption=cap,
                                bank_image_id=bank_id_at(index),
                                source_metadata=_source_metadata_storage(
