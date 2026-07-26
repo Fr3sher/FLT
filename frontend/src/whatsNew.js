@@ -53,12 +53,16 @@ export const WHATS_NEW = [
     title: '⬜ Fixed: the app opening on a completely blank page on Windows',
     blurb:
       "On some Windows machines the server started fine, the browser opened, and you got a white screen — in Firefox and in Chrome alike, with nothing in the log to go on. The cause was outside the app: Windows keeps a registry of file types that any installed program may overwrite, and once it claims the app's script bundle is plain text, the browser refuses to run it. The app no longer asks Windows what its own files are — it states the correct type for every file it serves, so the page loads whatever else is installed on your PC. Found, diagnosed and fixed by gessyoo (GitHub #12).",
+  },
+  {
     id: '2026-07-26-anime-subject-type',
     date: '2026-07-26',
     title: '🎌 Anime characters get their own subject type',
     blurb:
       "Subject type offered Human, Animal, Creature, Object and Other — so a drawn character had to call itself Human, which handed it an identity lock written for photography (\"same skin tone and texture\", \"realistic photographic portrait\") and a shot list of camera-lens conventions. Pick Anime instead and the whole chain changes: the identity lock now protects what actually makes a character recognisable — hair colour and hairstyle, eye shape and iris colour, the signature outfit, the accessories, the distinctive marks — and it protects the art style itself, explicitly refusing to turn your character into a photograph or a 3D render. The shot catalogue is 55 drawn-media shots (bust-up, cowboy shot, expression sheet, and a front/side/back character-sheet turnaround nothing else offered), with four presets including Character sheet. Your existing datasets are untouched, Human included.",
     to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-26-comfyui-custom-folders',
     date: '2026-07-26',
     title: '📂 A ComfyUI running on custom input/output folders is no longer ignored',
@@ -73,6 +77,8 @@ export const WHATS_NEW = [
     blurb:
       "Settings › Overview told you what was missing and then left you to find it: \"✗ Person masks\" was a dead end, and the four generic links underneath sent you to the top of a screen to hunt. Each of the eleven rows is now a link that lands you ON the control — the OpenRouter key field, the ComfyUI URL, the button that installs person masks — with the field scrolled to and highlighted. Rows that only need ComfyUI running now say so in amber instead of showing a red cross, and point at the connection test rather than at an install you have already done.",
     to: '/settings/overview',
+  },
+  {
     id: '2026-07-26-pick-the-model-of-every-api-engine',
     date: '2026-07-26',
     title: '🎛️ Pick the model for Nano Banana and ChatGPT too, not just OpenRouter',
@@ -856,6 +862,8 @@ export const WHATS_NEW = [
     title: '🗃️ A calmer, clearer Bank workspace',
     blurb:
       "The 🗃️ Bank toolbar is reorganized around what you actually do: Launch all and Promote stand out as the two outcomes, the individual analysis passes (Scan, Score, Watermarks, Person, Crops, Caption) sit together below them, and the flag filters are now grouped by Status, Quality, Score, Groups and 📐 Resolution with a live \"N shown of total\" count. Same tools, nothing removed — just far easier to read on a wide screen or a phone.",
+  },
+  {
     id: '2026-07-20-bank-delete-rejected',
     date: '2026-07-20',
     title: '🗑 Delete rejected images from your disk',
