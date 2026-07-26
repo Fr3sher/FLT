@@ -13,6 +13,7 @@ import { summarizeScrapeImport } from '../utils/smallImageRescue';
 import { trainingRunSelection } from '../utils/checkpointBrowser';
 import { refreshDatasetIfActive } from '../utils/datasetRefresh';
 import { ENGINE_LABELS } from '../components/dataset/engineSelection.js';
+import { classifyResultMessage } from '../components/dataset/classifyFramingGate.js';
 
 function post(url, body, isForm) {
   // Routes through the shared fetchWithCsrfRetry: a token that aged out mid-session
@@ -493,11 +494,29 @@ export function useDataset() {
     return d;
   }, [currentId, refresh, toast]);
 
-  const classify = useCallback(() => wrap(async () => {
-    const d = await postJson(`/api/dataset/${currentId}/classify`);
-    if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
-    toast.success(`${d.classified} classified`);
-    await refresh();
+  // `expected` = how many images the caller counted as classifiable. It turns the
+  // silent outcome into a diagnosis: the server answers ok/classified=0 when the
+  // vision backend never replied (Ollama down), and 0 on its own reads as success.
+  // Errors carry their `detail` too — "GPU busy" alone doesn't say training is running.
+  const classify = useCallback((expected = 0) => wrap(async () => {
+    const want = Number.isFinite(Number(expected)) ? Number(expected) : 0;
+    // The route answers only when the whole pass is done, so nothing would refetch
+    // the payload while it runs and its server-side `activity` (done/total) would
+    // surface only on a manual reload. One seeded refresh flips `hasActivity`, and
+    // the generic 3.5 s activity poll then drives the live progress from there.
+    const seed = setTimeout(() => { refresh(currentId); }, 1200);
+    try {
+      const d = await postJson(`/api/dataset/${currentId}/classify`);
+      if (!d.ok) {
+        toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
+        return;
+      }
+      const msg = classifyResultMessage(d.classified, want);
+      (toast[msg.tone] || toast.success)(msg.text);
+      await refresh();
+    } finally {
+      clearTimeout(seed);
+    }
   }), [wrap, currentId, refresh, toast]);
 
   const caption = useCallback((mode) => wrap(async () => {
