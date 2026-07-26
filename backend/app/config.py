@@ -53,9 +53,12 @@ DEFAULTS = {
                 'setup_skipped': False},
     'ollama': {'url': 'http://127.0.0.1:11434', 'vision_model': 'huihui_ai/qwen3-vl-abliterated:8b-instruct',  # -instruct, NOT ':8b' (=thinking): see get_vision_model()
                # How many vision calls a bank pass keeps in flight. 4 is the
-               # measured knee and matches Ollama's own default parallelism;
-               # see services/vision_pool.py for the numbers behind it.
-               'vision_concurrency': 4},
+               # measured knee; see services/vision_pool.py for the numbers.
+               'vision_concurrency': 4,
+               # Seconds an ISOLATED vision call may keep the model resident when
+               # nothing else wants the GPU (0 = always unload, the old
+               # behaviour). See services/vision_keepalive.py.
+               'vision_keep_warm_seconds': 120},
     'aitoolkit': {'dir': '', 'datasets_dir': '', 'output_dir': '', 'hf_home': '',
                   # Explicit interpreter for installs without venv/.venv
                   # (conda, uv, system python). Empty = auto-detect.

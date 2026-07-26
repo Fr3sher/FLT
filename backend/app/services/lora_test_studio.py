@@ -532,8 +532,12 @@ def describe_test_prompt(image_bytes: bytes) -> str:
     """Describe an uploaded image into a ready-to-paste Studio TEST PROMPT via the
     Ollama vision model (the same abliterated Qwen3-VL the app captions with, so NSFW
     passes). Resizes to <=1024 long side (like captioning) before the call, force-starts
-    a stopped LOCAL Ollama, and unloads the model right after (keep_alive=0) so ComfyUI
-    gets its VRAM back for the next generation.
+    a stopped LOCAL Ollama. Whether the model stays resident afterwards is decided by
+    CONTENTION (services/vision_keepalive.py): with a generation queued or a training
+    running, ComfyUI gets its VRAM back immediately, exactly as before; on an otherwise
+    idle card the model is leased warm so describing several images in a row doesn't pay
+    the 12.8 s cold load every time. The lease is revoked the moment the queue picks up
+    a job.
 
     Raises ValueError on a missing / oversized / unreadable (non-image) upload, and
     RuntimeError when Ollama is unavailable or rejects the request (its own reason is
@@ -547,9 +551,10 @@ def describe_test_prompt(image_bytes: bytes) -> str:
     except Exception as e:
         raise ValueError('unreadable image — expected a webp, png or jpg file') from e
     from .vision_ollama import describe_image_ollama
+    from .vision_keepalive import keep_alive_for_isolated_call
     text = describe_image_ollama(
-        webp, STUDIO_DESCRIBE_PROMPT,
-        num_predict=500, auto_start_local=True, keep_alive=0)
+        webp, STUDIO_DESCRIBE_PROMPT, num_predict=500, auto_start_local=True,
+        keep_alive=keep_alive_for_isolated_call())
     text = (text or '').strip().strip('"').strip()
     if not text:
         raise RuntimeError(

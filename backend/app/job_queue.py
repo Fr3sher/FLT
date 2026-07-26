@@ -282,6 +282,15 @@ class JobQueueManager:
             return True  # Job was cancelled/claimed while we were selecting
         db.session.refresh(job)
 
+        # A ComfyUI job is about to load models: hand back the vision model's
+        # 7.5 GB if an isolated call leased it warm. No live lease = a monotonic
+        # clock read and nothing else, so this is safe on the queue's hot path.
+        try:
+            from .services.vision_keepalive import revoke as _revoke_vision
+            _revoke_vision('ComfyUI job starting')
+        except Exception:
+            logger.exception('job_queue: vision keep-warm revoke failed')
+
         try:
             workflow = json.loads(job.workflow_data or '{}')
             prompt_id = _submit(workflow, job.job_id)

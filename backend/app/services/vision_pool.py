@@ -46,9 +46,15 @@ logger = logging.getLogger(__name__)
 # 4 workers 20.3 s (2.03x), 6 workers 18.2 s (2.27x), 8 workers 17.3 s (2.39x).
 # Everything past 4 buys single-digit percentages while per-call latency climbs
 # roughly linearly (1.7 s -> 3.3 s at 4, 5.1 s at 8) — and that latency is
-# exactly the time a Stop has to wait for the calls already in flight. 4 also
-# matches the parallelism Ollama grants itself by default, so the default
-# configuration doesn't hand the server more than it will actually run at once.
+# exactly the time a Stop has to wait for the calls already in flight.
+#
+# Correction to an earlier note here: this does NOT "match Ollama's own default
+# parallelism". Ollama's `server/sched.go` keeps a deny-list of model families
+# that are forced to `numParallel = 1` regardless of `OLLAMA_NUM_PARALLEL`, and
+# `qwen3vl` is on it — so the server runs our calls one at a time. The measured
+# 2.03x is therefore NOT GPU parallelism; it is the overlap of the parts that
+# aren't GPU work (HTTP round-trip, base64 handling, request preparation). The
+# number stands, the explanation didn't.
 DEFAULT_VISION_CONCURRENCY = 4
 # Hard ceiling for the configured value. Nothing breaks above it — Ollama just
 # queues — but it would trade Stop responsiveness for no throughput, so the

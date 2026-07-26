@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-vision-model-stays-warm-when-nothing-else-needs-the-gpu',
+    date: '2026-07-26',
+    title: '⚡ One-off vision jobs stop paying a 13-second model load every time',
+    blurb:
+      'Loading the vision model takes about 13 seconds; describing an image once it is loaded takes half a second. One-off jobs — the automatic head crop when you add a reference photo, Describe in Test Studio — used to unload it the instant they finished, so cropping five references in a row paid that load five times. The model now stays loaded for a couple of minutes, but only while nothing else wants the graphics card: with a generation queued or a training run going, it still unloads immediately, and a lease already granted is handed back the moment a generation or a training starts. New setting in Settings → Local tools if you want it longer, shorter, or off.',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-26-cloud-run-survives-a-restart-after-submit',
     date: '2026-07-26',
     title: '☁️ Restarting the app no longer destroys a cloud run that was training',
