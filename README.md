@@ -17,7 +17,7 @@ just the actual clicks.
 
 https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
 
-The useful part of LoRA training isn't only the training — it's building a clean, varied, well-captioned image set. That job is normally scattered across a scraper, an image editor, a captioning script, and training configs. LoRA Dataset Studio puts the whole pipeline behind one UI: source a character from reference photos, import or scrape material for a concept or a style, triage a giant unsorted folder down to its keepers, curate and caption, scrub watermarks, train locally or in the cloud, then rank the resulting checkpoints in a test studio — without ever leaving the page.
+The useful part of LoRA training isn't only the training — it's building a clean, varied, well-captioned image set. That job is normally scattered across a scraper, an image editor, a captioning script, and training configs. LoRA Dataset Studio puts the whole pipeline behind one UI: **source** a character from reference photos, **import** or **scrape** material for a concept or a style, **triage** a giant unsorted folder down to its keepers, **curate** and **caption**, **scrub watermarks**, **train** locally or in the cloud, then **rank** the resulting checkpoints in a test studio — without ever leaving the page.
 
 <p align="center">
   <img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace with a progress rail down the left mapping each stage — reference, generate, curate, caption, train — and the training panel expanded" width="820">
