@@ -22,6 +22,9 @@ import { useFocusTrap } from '../../hooks/useFocusTrap'
 import {
   createSession, currentId, isFinished, progress, back, decide, skip, setShuffle,
 } from './bankReview.js'
+import {
+  DETAIL_CAVEAT, PROVENANCE_FLAG_LABEL, detailSummary, originHint, originLabel,
+} from './bankProvenance.js'
 
 // How many upcoming images we pull metadata for in one go (the decision helpers
 // below the image). The grid page only holds the ids it rendered.
@@ -30,18 +33,35 @@ const META_WINDOW = 40
 const FLAG_TEXT = {
   blur: '🌫 Blurry', noise: '📺 Noisy', uniform: '⬜ Flat', small: '📐 Small',
   unreadable: '❌ Unreadable', low_aesthetic: '💔 Low aesthetic', nsfw: '🔞 NSFW',
-  watermark: '🚩 Watermark',
+  watermark: '🚩 Watermark', ...PROVENANCE_FLAG_LABEL,
+}
+
+// Origin chip colours, one per state. 'unknown' is deliberately the quiet grey
+// of a non-answer rather than a warning colour: it is an absence of evidence.
+const ORIGIN_CLASS = {
+  ai: 'bg-violet-500/25 text-violet-100',
+  camera: 'bg-emerald-500/25 text-emerald-100',
+  unknown: 'bg-white/10 text-white/60',
 }
 
 function Facts({ img }) {
   if (!img) return <span className="text-xs text-white/40">Reading image details…</span>
-  const chip = (key, text, cls) => (
-    <span key={key} className={`rounded px-1.5 py-px text-[11px] font-medium ${cls}`}>{text}</span>
+  const chip = (key, text, cls, title) => (
+    <span key={key} title={title}
+      className={`rounded px-1.5 py-px text-[11px] font-medium ${cls}`}>{text}</span>
   )
+  const detail = detailSummary(img)
+  const origin = originLabel(img)
+  const hint = originHint(img)
   return (
     <div className="flex flex-wrap items-center justify-center gap-1.5">
       <span className="max-w-[22rem] truncate text-xs text-white/70" title={img.name}>{img.name}</span>
       {chip('res', `${img.width || '?'}×${img.height || '?'}`, 'bg-white/10 text-white/80')}
+      {detail && chip('detail', detail.soft ? `🫧 ~${detail.real} px real` : '🫧 full detail',
+        detail.soft ? 'bg-amber-500/20 text-amber-100' : 'bg-white/10 text-white/60',
+        detail.soft ? `${detail.text}. ${DETAIL_CAVEAT}` : DETAIL_CAVEAT)}
+      {origin && chip('origin', `${origin.icon} ${origin.label}`, ORIGIN_CLASS[origin.state],
+        `${origin.detail}${hint ? ` ${hint}` : ''}`)}
       {img.aesthetic_score != null
         && chip('aes', `✨ ${img.aesthetic_score.toFixed(1)}`, 'bg-white/10 text-amber-200')}
       {img.nsfw_score != null

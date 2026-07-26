@@ -166,7 +166,18 @@ DEFAULTS = {
     'bank': {'sharpness_min': 100.0, 'noise_max': 15.0, 'uniformity_min': 12.0,
              'dup_distance': 8, 'min_side': 768, 'face_threshold': 0.45,
              'aesthetic_min': 5.0, 'nsfw_max': 0.5, 'style_threshold': 0.6,
-             'semantic_dup_threshold': 0.96},
+             'semantic_dup_threshold': 0.96,
+             # detail_min: effective resolution (0..1 of the stored size) below
+             #   which an image is flagged 'soft_detail' — its pixels promise more
+             #   picture than they deliver. 0.72 was picked on a real 36 000-image
+             #   bank: it selects the softest ~3%, and sits below the 10th
+             #   percentile of images measured to be genuinely full-resolution, so
+             #   a sharp photo does not trip it. Raise it to be pickier.
+             'detail_min': 0.72,
+             # bars_max: fraction of the frame allowed to be flat black letterbox
+             #   before the 'bars' flag. 0.04 ~ a thin band; it caught ~4% of the
+             #   reference bank (screenshots of videos, padded stills).
+             'bars_max': 0.04},
     'masks': {'python': ''},
     # Bank ✨ Score pass interpreter (CLIP aesthetic/NSFW stack). Auto-provisioned
     # by the bank_scoring installer into its own venv — declared here so a

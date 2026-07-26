@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-bank-real-detail-and-origin',
+    date: '2026-07-27',
+    title: '\u{1F5C3}️ The bank now tells you when an image’s size is a bluff, and where it came from',
+    blurb:
+      'A picture enlarged from 512 to 2048 walks into a dataset claiming 2048, and the LoRA learns interpolated mush. The quality scan now also measures how far real detail actually goes and says so in plain pixels — "2048 px stored · ~512 px of real detail" — with a \u{1F9C7} Soft detail filter for the worst of them. It is a score, not an accusation: a soft focus or a heavy denoise reads the same way, so it points you at images to look at rather than deciding for you. The same pass reads the file’s own metadata and sorts the bank by \u{1F50E} Origin into \u{1F916} AI, \u{1F4F7} Camera and ❔ Unknown — three answers, never two, because scrapers and chat apps strip metadata and a silent file is genuinely unknown, not "definitely a real photo". Two more free filters come along: \u{1F39E} Black bars for video screenshots, and the JPEG quality of the last save. All of it is plain CPU work with no extra install, and a bank you already scanned picks the new numbers up on its next \u{1F50D} Scan — no full rescan.',
+    to: '/settings/captioning',
+  },
+  {
     id: '2026-07-26-classify-framing-button',
     date: '2026-07-26',
     title: '\u{1F4D0} Classify framing is now a button, under the Composition bar it fixes',

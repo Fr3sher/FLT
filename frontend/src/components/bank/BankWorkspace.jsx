@@ -21,18 +21,27 @@ import { openerLabel } from './scoringPython.js'
 import { VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
 // Ordered zone model + the "what's next" accent, both pure/testable.
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
+// Provenance wording (effective resolution, origin, black bars) — pure/testable.
+import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
 
 const PAGE_SIZE = 120
 
 const FLAG_LABEL = {
   blur: '🌫 Blurry', noise: '📺 Noisy', uniform: '⬜ Flat',
   small: '📐 Small', unreadable: '❌ Unreadable',
+  // Provenance pass — same CPU scan, no extras needed.
+  ...PROVENANCE_FLAG_LABEL,
   // V2 scoring flags (aesthetic · NSFW · watermark passes).
   low_aesthetic: '💔 Low aesthetic', nsfw: '🔞 NSFW', watermark: '🚩 Watermark',
 }
+const FLAG_HINT = {
+  soft_detail: 'The picture stops before the pixels do — usually an enlargement. '
+    + 'A soft or out-of-focus shot reads the same, so check before mass-rejecting.',
+  bars: 'Flat black letterbox/pillarbox bars — video screenshots and padded stills.',
+}
 // Quality flags the CPU scan produces vs the ones the ML scoring/watermark
 // passes add — auto-reject only offers a flag whose pass has actually run.
-const QUALITY_REJECT_FLAGS = ['blur', 'noise', 'uniform', 'small']
+const QUALITY_REJECT_FLAGS = ['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars']
 const SCORE_REJECT_FLAGS = ['low_aesthetic', 'nsfw', 'watermark']
 // Resolution tiers — ids + labels MUST mirror backend _RES_BUCKETS (order and
 // megapixel bands). Rendered as a dedicated chip row so a mixed dump can be
@@ -46,6 +55,10 @@ const RES_BUCKETS = [
 ]
 // Framing buckets — ids MUST mirror backend _FRAMING_KEYS. Face/bust/body/back
 // are the character composition axes; 'unknown' is a parseable-but-unclassed shot.
+// Origin states — ids MUST mirror backend ORIGINS. THREE, never two: 'unknown'
+// is the honest answer for any file whose metadata was stripped (which is most
+// of them) and it has to be visible and selectable as its own pile.
+const ORIGIN_BUCKETS = ORIGIN_CHIPS
 const FRAMING_BUCKETS = [
   { id: 'face', label: '😀 Face' },
   { id: 'bust', label: '👤 Bust' },
@@ -279,6 +292,8 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
           + (img.nsfw_score != null ? ` · NSFW ${Math.round(img.nsfw_score * 100)}%` : '')
           + (img.face_cluster ? ` · person #${img.face_cluster}` : '')
           + (img.framing ? ` · ${img.framing}` : '')
+          + (detailSummary(img)?.soft ? ` · only ~${detailSummary(img).real} px of real detail` : '')
+          + (img.origin && img.origin !== 'unknown' ? ` · ${img.origin}` : '')
           + (img.style_cluster ? ` · style #${img.style_cluster}` : '')
           + (img.semantic_dup_group ? ` · same shot #${img.semantic_dup_group}` : '')
           + (img.caption ? `\n${img.caption}` : '')}
@@ -296,6 +311,10 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
         {img.flags.map((f) => badge(FLAG_LABEL[f]?.slice(0, 2) || f, 'bg-black/60 text-amber-200', f))}
         {img.face_cluster != null && badge(`👤${img.face_cluster}`, 'bg-black/60 text-sky-200')}
         {img.framing && badge(`📐${img.framing}`, 'bg-black/60 text-teal-200')}
+        {/* Only the PROVEN states get a badge. Stamping ❔ on the 80% of files
+            whose metadata was stripped would be noise, not information. */}
+        {img.origin === 'ai' && badge('🤖', 'bg-black/60 text-violet-200')}
+        {img.origin === 'camera' && badge('📷', 'bg-black/60 text-emerald-200')}
         {img.style_cluster != null && badge(`🎨${img.style_cluster}`, 'bg-black/60 text-fuchsia-200')}
         {img.dup_group != null && badge(`≈${img.dup_group}`, 'bg-black/60 text-fuchsia-200')}
         {img.semantic_dup_group != null && badge(`✂${img.semantic_dup_group}`, 'bg-black/60 text-orange-200')}
@@ -321,6 +340,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [payload, setPayload] = useState(null)
   const [filter, setFilter] = useState({ status: null, flag: null, cluster: null,
     style: null, subfolder: null, search: null, sort: 'default', resBucket: null,
+    origin: null,
     framing: null })
   const [searchText, setSearchText] = useState('')
   const [subfolders, setSubfolders] = useState([])
@@ -411,6 +431,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     if (f.resBucket) params.res_bucket = f.resBucket
     // Framing bucket (face/bust/body/back/unknown) — a facet like the flags.
     if (f.framing) params.framing = f.framing
+    // Origin state (ai/camera/unknown) — a facet like the flags.
+    if (f.origin) params.origin = f.origin
     return params
   }, [])
 
@@ -658,6 +680,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // active one, so a chip you're filtering on never vanishes mid-review).
   const shownFramings = FRAMING_BUCKETS.filter(
     (b) => (framingCounts[b.id] || 0) > 0 || filter.framing === b.id)
+  // Origin chips appear as soon as the quality scan has measured anything. All
+  // three are shown together once any is non-zero: hiding 'ai' at 0 would read as
+  // "no AI images here", when what it means is "none that still carry metadata".
+  const originCounts = payload?.origins || {}
+  const originMeasured = ORIGIN_BUCKETS.reduce((n, b) => n + (originCounts[b.id] || 0), 0)
   const visionReady = !!caps.ollama?.vision_model_ready
   // The explicit lane only spells acts out with an uncensored (abliterated) vision
   // model. We can't prove abliteration, but the common builds name themselves — a soft
@@ -966,10 +993,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </FilterGroup>
 
           <FilterGroup label="Quality">
-            {['blur', 'noise', 'uniform', 'small', 'unreadable'].map((f) => (
+            {['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars', 'unreadable'].map((f) => (
               <Chip key={f} active={filter.flag === f}
                 onClick={() => setF({ flag: filter.flag === f ? null : f })}
-                title="Sorted worst-first">
+                title={FLAG_HINT[f] || 'Sorted worst-first'}>
                 {FLAG_LABEL[f]} {flags[f] ?? 0}
               </Chip>
             ))}
@@ -1017,6 +1044,28 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   onClick={() => setF({ resBucket: filter.resBucket === b.id ? null : b.id })}
                   title="Filter the grid to this resolution tier (megapixels = width×height)">
                   {b.label} {resBuckets[b.id] ?? 0}
+                </Chip>
+              ))}
+            </FilterGroup>
+          )}
+
+          {/* Origin — ai / camera / unknown, read off the file's own metadata by
+              the quality scan. 'Unknown' is the usual answer and is deliberately
+              shown next to the other two: silence is not evidence of anything. */}
+          {originMeasured > 0 && (
+            <FilterGroup label="🔎 Origin">
+              {ORIGIN_BUCKETS.map((b) => (
+                <Chip key={b.id} active={filter.origin === b.id}
+                  onClick={() => setF({ origin: filter.origin === b.id ? null : b.id })}
+                  title={b.id === 'unknown'
+                    ? 'No metadata left in the file — the normal case for anything '
+                      + 'scraped or sent through a chat app. NOT evidence that it is '
+                      + 'a real photo.'
+                    : (b.id === 'ai'
+                      ? 'The file still carries generation metadata (ComfyUI workflow, '
+                        + 'A1111 parameters, or a C2PA "generated" marker).'
+                      : 'The file still carries camera EXIF (make, model or exposure).')}>
+                  {b.label} {originCounts[b.id] ?? 0}
                 </Chip>
               ))}
             </FilterGroup>

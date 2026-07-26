@@ -49,6 +49,7 @@ from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
 from . import bank_jobs, trash
 from .face_dataset_service import _dhash, _hamming, import_images
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
+from .image_provenance import ORIGINS, provenance_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +470,13 @@ def image_flags(row: BankImage, th: dict) -> list:
             flags.append('uniform')
         if row.width and row.height and min(row.width, row.height) < th['min_side']:
             flags.append('small')
+        # Effective resolution — the picture stops before the pixels do. Same
+        # read-time-verdict philosophy as blur: raw score in, threshold applied
+        # here, so retuning detail_min re-sorts the bank with no rescan.
+        if row.detail_ratio is not None and row.detail_ratio < th['detail_min']:
+            flags.append('soft_detail')
+        if row.bars_ratio is not None and row.bars_ratio > th['bars_max']:
+            flags.append('bars')
     # V2 scoring flags — derived from the persisted scores against the live
     # thresholds too, but NOT gated on the quality state (a watermarked or NSFW
     # image can be perfectly sharp). Only present once the relevant pass has run.
@@ -522,6 +530,9 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'aesthetic_score': row.aesthetic_score, 'nsfw_score': row.nsfw_score,
         'style_cluster': row.style_cluster, 'watermark_state': row.watermark_state,
         'watermark_clean_method': row.watermark_clean_method,
+        'detail_ratio': row.detail_ratio, 'bars_ratio': row.bars_ratio,
+        'jpeg_quality': row.jpeg_quality,
+        'origin': row.origin, 'origin_evidence': row.origin_evidence,
         'subfolder': _subfolder_of(row.relpath),
         'flags': image_flags(row, th),
         'dup_group': row.dup_group,
@@ -556,11 +567,18 @@ def _flag_filter(flag: str, th: dict):
         'uniform': BankImage.uniformity_score < th['uniformity_min'],
         'small': or_(BankImage.width < th['min_side'],
                      BankImage.height < th['min_side']),
+        # NULL-safe: a row scanned before the provenance pass existed carries no
+        # score, and "not measured" must never read as "below threshold".
+        'soft_detail': and_(BankImage.detail_ratio.isnot(None),
+                            BankImage.detail_ratio < th['detail_min']),
+        'bars': and_(BankImage.bars_ratio.isnot(None),
+                     BankImage.bars_ratio > th['bars_max']),
     }.get(flag)
     return (ok & crit) if crit is not None else None
 
 
-_QUALITY_FLAGS = ('blur', 'noise', 'uniform', 'small', 'unreadable')
+_QUALITY_FLAGS = ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars',
+                  'unreadable')
 # V2 score-derived flags. Kept separate from _QUALITY_FLAGS so the "flagged" /
 # "clean" quality aggregate stays about the CPU quality pass, while these count
 # and filter independently (each only meaningful once its pass has run).
@@ -605,6 +623,20 @@ def _framing_counts(bank_id, extra_crit=None) -> dict:
         q = q.filter(extra_crit)
     got = {k: n for k, n in q.group_by(BankImage.framing).all()}
     return {k: int(got.get(k, 0)) for k in _FRAMING_KEYS}
+
+
+def _origin_counts(bank_id) -> dict:
+    """Per-state image counts for the 🔎 Origin chips in ONE GROUP BY.
+
+    Every state of ORIGINS is always present with a real count, INCLUDING
+    'unknown' — which is the honest majority answer on any scraped or chat-sourced
+    bank (measured: 3000/3000 on a real Telegram export) and has to be visible as
+    such. Rows with a NULL origin (scanned before this pass existed, or
+    unreadable) are excluded: they are "not measured", a different thing again."""
+    q = (db.session.query(BankImage.origin, func.count(BankImage.id))
+         .filter(BankImage.bank_id == bank_id, BankImage.origin.isnot(None)))
+    got = {k: n for k, n in q.group_by(BankImage.origin).all()}
+    return {k: int(got.get(k, 0)) for k in ORIGINS}
 
 
 def _subfolder_of(relpath: str) -> str:
@@ -685,6 +717,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
         crit = _flag_filter(flag, th)
         flags[flag] = base.filter(crit).count() if crit is not None else 0
     res_buckets = _res_bucket_counts(bank_id)
+    origins = _origin_counts(bank_id)
     dup_rows = (db.session.query(BankImage.dup_group, func.count(BankImage.id))
                 .filter(BankImage.bank_id == bank_id,
                         BankImage.dup_group.isnot(None))
@@ -741,7 +774,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
         'counts': counts, 'flags': flags, 'res_buckets': res_buckets,
-        'framing': framing, 'dup': dup,
+        'framing': framing, 'origins': origins, 'dup': dup,
         'semantic_dup': semantic_dup,
         'clusters': clusters, 'faces_scanned': faces_scanned,
         'style_clusters': style_clusters,
@@ -835,7 +868,7 @@ def _preview_ids(bank_id, limit=PREVIEW_COUNT) -> list:
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
-                ids=None, offset=0, limit=200) -> dict | None:
+                origin=None, ids=None, offset=0, limit=200) -> dict | None:
     """One PAGE of the bank grid (a 9 000-image bank must never ship whole).
     Filters compose: status ∩ flag ∩ cluster ∩ dup-group ∩ style ∩ subfolder ∩ search.
     ``search`` is a plain full-text term matched (case-insensitive LIKE) against the
@@ -886,7 +919,11 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         q = q.filter(or_(*crits))
     elif flag == 'clean':
         q = q.filter(BankImage.quality_state == 'ok')
-        for f in ('blur', 'noise', 'uniform', 'small'):
+        # Every quality flag except 'unreadable' (that one IS the quality_state
+        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
+        # from a build that predates one of these scores still counts as clean
+        # for it instead of dropping out of the chip entirely.
+        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
             q = q.filter(~_flag_filter(f, th))
     elif flag == 'dups':
         q = q.filter(BankImage.dup_group.isnot(None))
@@ -908,6 +945,8 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                  'noise': BankImage.noise_score.desc(),
                  'uniform': BankImage.uniformity_score.asc(),
                  'small': BankImage.width.asc(),
+                 'soft_detail': BankImage.detail_ratio.asc(),
+                 'bars': BankImage.bars_ratio.desc(),
                  'unreadable': BankImage.id.asc()}[flag]
     elif flag in _SCORE_FLAGS:
         crit = _flag_filter(flag, th)
@@ -929,6 +968,11 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         # One framing bucket (face/bust/body/back/unknown) — composes with every
         # other facet. An unknown/absent value simply doesn't filter.
         q = q.filter(BankImage.framing == framing)
+    if origin in ORIGINS:
+        # One provenance state. 'unknown' is a real, selectable answer — it is
+        # what a stripped file honestly is, and the user must be able to see that
+        # pile rather than have it silently merged into "not AI".
+        q = q.filter(BankImage.origin == origin)
     if subfolder is not None:
         # '' scopes to root-level files; any other value to that top-level folder
         # and everything nested under it. startswith() escapes LIKE metachars.
@@ -1023,7 +1067,8 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     image_id, relpath = item
     path = os.path.join(src_root, relpath)
     out = {'id': image_id, 'quality_state': 'unreadable', 'width': None,
-           'height': None, 'file_size': None, 'dhash': None, 'metrics': None}
+           'height': None, 'file_size': None, 'dhash': None, 'metrics': None,
+           'provenance': None}
     try:
         out['file_size'] = os.path.getsize(path)
     except OSError:
@@ -1042,6 +1087,11 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
             im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
             im.load()
             out['metrics'] = quality_metrics(im)
+            # Provenance rides along on the SAME decode — re-opening the file for
+            # it would double the I/O of a 36 000-image pass for nothing. It reads
+            # the drafted image (native pixels up to ANALYSIS_MAX_SIDE*2), which is
+            # what the effective-resolution measure needs: it crops, never resizes.
+            out['provenance'] = provenance_metrics(im)
             out['dhash'] = f'{_dhash(im):016x}'
             tpath = thumbs / f'{image_id}.webp'
             if not tpath.is_file():
@@ -1078,7 +1128,18 @@ def _scan_pool(bank_id, rescan):
     q = (BankImage.query.filter_by(bank_id=bank_id)
          .filter(BankImage.status != 'reject'))
     if not rescan:
-        q = q.filter(BankImage.quality_state.is_(None))
+        # Never-scanned rows, PLUS rows a previous build scanned before the
+        # provenance signals existed. Retrofitting the bank the user already has
+        # is the point: telling them "only images scanned from now on get an
+        # effective resolution" would leave a 36 000-image bank permanently half
+        # measured, with no way to fix it short of a full rescan of everything.
+        # `origin` is the sentinel because it is the one signal that always lands
+        # on a readable file (one of ai/camera/unknown, never NULL) — keying off
+        # detail_ratio would re-pick flat images forever, since those legitimately
+        # measure nothing.
+        q = q.filter(or_(BankImage.quality_state.is_(None),
+                         and_(BankImage.quality_state == 'ok',
+                              BankImage.origin.is_(None))))
     return q
 
 
@@ -1138,6 +1199,13 @@ def _scan_job(bank_id, rescan):
                         row.blur_score = res['metrics']['blur_score']
                         row.noise_score = res['metrics']['noise_score']
                         row.uniformity_score = res['metrics']['uniformity_score']
+                    if res['provenance']:
+                        p = res['provenance']
+                        row.detail_ratio = p['detail_ratio']
+                        row.bars_ratio = p['bars_ratio']
+                        row.jpeg_quality = p['jpeg_quality']
+                        row.origin = p['origin']
+                        row.origin_evidence = p['origin_evidence']
                     # An unreadable file can never be promoted — auto-reject it
                     # (only over 'pending': a manual decision is never flipped).
                     if res['quality_state'] == 'unreadable' and row.status == 'pending':
@@ -1566,7 +1634,11 @@ def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
         q = q.filter(or_(*crits))
     elif flag == 'clean':
         q = q.filter(BankImage.quality_state == 'ok')
-        for f in ('blur', 'noise', 'uniform', 'small'):
+        # Every quality flag except 'unreadable' (that one IS the quality_state
+        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
+        # from a build that predates one of these scores still counts as clean
+        # for it instead of dropping out of the chip entirely.
+        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
             q = q.filter(~_flag_filter(f, th))
     elif flag == 'dups':
         q = q.filter(BankImage.dup_group.isnot(None))
