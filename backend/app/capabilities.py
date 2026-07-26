@@ -24,7 +24,17 @@ _cache = None
 _cache_ts = 0.0
 
 _IMPORT_TTL = 600
-_import_cache = {}  # key -> (ts, ok)
+# How long an UNKNOWN verdict (the probe never answered) is remembered. Short,
+# because it must re-try soon against a warm import — but not zero: the Bank
+# panel polls its readiness every ~2 s, and an uncached unknown meant a fresh
+# 90 s `import torch` subprocess on EVERY poll.
+_UNKNOWN_TTL = 60
+# Budget for one cold import probe. Aligned with services.scoring_python
+# .PROBE_TIMEOUT (90 s), which the repo already documents as the honest floor
+# for a cold `import torch` behind an antivirus: at 60 s the SAME interpreter
+# answered 'CUDA' to one probe and 'no answer' to the other.
+_IMPORT_TIMEOUT = 90
+_import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
 
 _ZIMAGE_RE = re.compile(r'z[ -]?image', re.IGNORECASE)
 # Aligned with klein_edit_helper / utils.comfyui (was missing '.sft', so the
@@ -42,7 +52,7 @@ def _http_ok(url, timeout=3) -> bool:
         return False
 
 
-def _import_ok(python: str, module_expr: str, timeout=60):
+def _import_ok(python: str, module_expr: str, timeout=_IMPORT_TIMEOUT):
     """True/False = the import deterministically succeeded/failed. None = TIMEOUT —
     unknown, NOT a proven absence. The very first `import rembg` after an install
     compiles numba/scikit-image caches while the antivirus scans 40 MB of fresh
@@ -57,19 +67,34 @@ def _import_ok(python: str, module_expr: str, timeout=60):
         return False
 
 
-def _cached_import(key: str, python: str, module_expr: str) -> bool:
+def _cached_import_state(key: str, python: str, module_expr: str):
+    """Three-valued, cached import probe: True / False / None.
+
+    None means the probe DID NOT ANSWER — a cold-import timeout, not a proven
+    absence. Callers that only gate a feature can flatten it to False
+    (_cached_import); callers whose wrong answer costs something real — the
+    GPU-exclusive window — must be able to tell the two apart.
+
+    Both verdicts are cached, with very different lifetimes: a decided answer
+    for _IMPORT_TTL (a venv does not change between two probes), an unknown for
+    _UNKNOWN_TTL so it re-tries soon against a now-warm import WITHOUT spawning
+    a fresh 90 s subprocess on every 2 s poll of the Bank panel."""
     now = time.time()
     cache_key = f'{key}:{python}:{module_expr}'
     cached = _import_cache.get(cache_key)
-    if cached is not None and now - cached[0] < _IMPORT_TTL:
-        return cached[1]
+    if cached is not None:
+        ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
+        if now - cached[0] < ttl:
+            return cached[1]
     ok = _import_ok(python, module_expr)
-    if ok is None:
-        # Timeout → report not-ready NOW but don't poison the cache: the next
-        # probe re-tries against a warm import instead of a 600 s false ✗.
-        return False
     _import_cache[cache_key] = (now, ok)
     return ok
+
+
+def _cached_import(key: str, python: str, module_expr: str) -> bool:
+    """The boolean gate: an unknown reads as not-ready (nothing is offered on a
+    capability we could not prove), but it is no longer re-probed on every call."""
+    return _cached_import_state(key, python, module_expr) is True
 
 
 def probe_gemini() -> dict:
@@ -473,11 +498,22 @@ def bank_scoring_gpu_available() -> bool:
     and blocks a training start for the whole pass. The stock extra installs
     CPU-only torch, so this is False until the user puts a CUDA build in that
     interpreter — and a pass that never touches the GPU must never hold it.
-    Same cached subprocess probe as the import checks (exit 0 == available)."""
+
+    UNKNOWN is NOT False here. 'the probe did not answer' and 'torch has no
+    CUDA' used to collapse into the same answer, and they have opposite costs:
+    the child decides on its own with `torch.cuda.is_available()`, so on a
+    machine that HAS a card an unanswered probe means we may be leaving the GPU
+    unprotected while the pass takes it — ComfyUI still loaded, a training start
+    still allowed. So an unknown resolves to 'is there a card at all' (cached
+    nvidia-smi read): a card-less machine still never holds a window it cannot
+    use, and a machine with one is protected until the probe answers."""
     python = cfg.get('bank_scoring.python') or sys.executable
-    return _cached_import(
+    state = _cached_import_state(
         'bank_scoring_gpu', python,
         'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)')
+    if state is None:
+        return gpu_vram_gb() is not None
+    return state
 
 
 def probe_masks() -> dict:

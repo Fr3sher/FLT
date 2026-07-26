@@ -65,6 +65,14 @@ export const WHATS_NEW = [
   {
   },
   {
+    id: '2026-07-26-score-gpu-check-stops-guessing-and-stops-repeating',
+    date: '2026-07-26',
+    title: '⚡ ✨ Score stops mistaking a slow answer for "no GPU here"',
+    blurb:
+      'To know whether a scoring pass will use your card, the app starts your scoring Python and asks it. On a cold machine — a big PyTorch, an antivirus reading every DLL — that question can take longer than the minute it was given, and the app filed the silence as "this Python has no CUDA". Two costs followed: the pass took the card without reserving it, so ComfyUI stayed loaded and a training start was still allowed against it; and because a non-answer was never remembered, opening a bank re-asked the same slow question every couple of seconds. The check now gets the same 90 seconds the interpreter picker already used, remembers "did not answer" for a minute instead of re-asking, and treats it as "assume the card is in use" on a machine that has one — rather than as a no.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-26-reinstall-never-writes-into-a-borrowed-python',
     date: '2026-07-26',
     title: '🔒 Reinstall no longer writes into the Python you only lent us',

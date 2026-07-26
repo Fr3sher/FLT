@@ -330,8 +330,13 @@ def test_an_install_that_works_today_keeps_working_untouched(sp, app):
     with app.app_context():
         assert (cfg.get('bank_scoring.python') or '') == ''
         seen = {}
+        # the CUDA question goes through the three-valued probe (unknown has to
+        # stay distinguishable from 'no CUDA'), the readiness one through the
+        # boolean gate — both must resolve the SAME interpreter.
         with patch.object(capabilities, '_cached_import',
-                          lambda key, python, expr: seen.setdefault(key, python) and False):
+                          lambda key, python, expr: seen.setdefault(key, python) and False), \
+                patch.object(capabilities, '_cached_import_state',
+                             lambda key, python, expr: seen.setdefault(key, python) and False):
             capabilities.probe_bank_scoring()
             capabilities.bank_scoring_gpu_available()
         assert seen['bank_scoring'] == sys.executable
