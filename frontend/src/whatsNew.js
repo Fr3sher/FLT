@@ -63,8 +63,6 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
-  },
-  {
     id: '2026-07-26-exported-shots-keep-their-nsfw-flag',
     date: '2026-07-26',
     title: '🔞 Exporting your shot catalog no longer strips the explicit flag',
