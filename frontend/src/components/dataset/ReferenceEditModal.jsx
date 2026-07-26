@@ -1,5 +1,6 @@
 /** ✦ Edit the reference photo with a prompt (+ optional extra reference images),
- * via ChatGPT or Nano Banana.
+ * via any of the API engines (ChatGPT, Nano Banana Pro, OpenRouter — the list is
+ * DERIVED from EDIT_ENGINES, never spelled out here).
  *
  * The edit runs as a SERVER background job — slow (1-3 min) and PAID, so it must
  * not ride the client's fetch (a backgrounded mobile tab would kill it and lose
@@ -12,9 +13,10 @@
  * just closes and LEAVES the job running (rediscovered on reopen). Modal idiom
  * mirrors CropModal: role=dialog, Escape closes, initial focus. */
 import { useEffect, useRef, useState } from 'react';
-import { EDIT_ENGINES, editBlockedReason, batchLiveNote, editPhase } from './referenceEdit';
+import {
+  EDIT_ENGINES, ENGINE_LABELS, editBlockedReason, batchLiveNote, editPhase,
+} from './referenceEdit';
 
-const ENGINE_LABEL = { chatgpt: 'ChatGPT', nanobanana: 'Nano Banana' };
 const MAX_EDIT_REFS = 3;
 
 export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
@@ -168,7 +170,7 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                   aria-pressed={engine === e}
                   className={`px-2.5 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 ${engine === e
                     ? 'bg-indigo-500 text-white' : 'bg-surface-raised text-content-muted hover:bg-surface'}`}>
-                  {ENGINE_LABEL[e]}
+                  {ENGINE_LABELS[e] || e}
                 </button>
               ))}
             </div>

@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-edit-the-reference-with-openrouter',
+    date: '2026-07-26',
+    title: '✦ Edit your reference photo with OpenRouter too',
+    blurb:
+      "The ✦ Edit button on the reference card only offered ChatGPT and Nano Banana Pro, so if OpenRouter was the account you actually pay for, retouching your reference meant opening a second one. OpenRouter is now a third choice in the modal, using the model you set in Settings › Image engines — the same one your variations run on. Everything else is unchanged: your reference and any extra images you drop in are all sent along so the face stays the same person, you get the Before/After, and you Keep or Discard. If the model you configured does not accept reference images, the failure now says so in OpenRouter's own words instead of looking like a refused prompt.",
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-26-blank-page-on-windows-fixed',
     date: '2026-07-26',
     title: '⬜ Fixed: the app opening on a completely blank page on Windows',

@@ -1,5 +1,8 @@
 import { useRef, useState } from 'react';
 import IdentityPromptModal from './IdentityPromptModal';
+// Engine names come from the derived edit list — spelling them out here is how
+// this tooltip ended up naming two engines while a third could already edit.
+import { editEngineNames } from './referenceEdit';
 
 // Cap identique à MAX_EXTRA_REFS côté backend (face_dataset_service).
 const MAX_EXTRA_REFS = 3;
@@ -40,7 +43,7 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
             )}
             {refFilename && onEditRef && (
               <button type="button" onClick={onEditRef} disabled={busy}
-                title="Edit the reference with a prompt (ChatGPT or Nano Banana) — compare before/after, then Keep or Discard"
+                title={`Edit the reference with a prompt (${editEngineNames()}) — compare before/after, then Keep or Discard`}
                 className="px-2.5 py-1 rounded-lg bg-surface-raised text-content text-xs disabled:opacity-40">✦ Edit</button>
             )}
             <label className="flex items-center gap-1 text-[0.625rem] text-content-muted cursor-pointer"

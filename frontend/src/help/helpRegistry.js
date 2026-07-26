@@ -481,8 +481,8 @@ const TOPICS = [
 
   // ---- Action topics (kind 'action') -------------------------------------
   action('action-edit-reference', 'Edit the reference photo',
-    ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'background', 'glasses',
-     'retouch', 'before', 'after', 'keep', 'discard'],
+    ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'openrouter', 'background',
+     'glasses', 'retouch', 'before', 'after', 'keep', 'discard'],
     '/datasets?section=add', 'using-the-app',
     'the-character-walkthrough-reference-photo-trained-lora'),
   action('action-watermark-clean', 'Find & clean watermarks',

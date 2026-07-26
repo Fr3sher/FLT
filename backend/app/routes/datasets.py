@@ -377,9 +377,6 @@ def dataset_ref_recrop_auto(dataset_id):
     return jsonify(resp)
 
 
-_EDIT_ENGINES = ('chatgpt', 'nanobanana')       # Klein excluded from ref editing
-
-
 @bp.post('/dataset/<int:dataset_id>/ref/edit')
 def dataset_ref_edit(dataset_id):
     """START a background reference-edit job and return AT ONCE (202). The edit is
@@ -387,13 +384,20 @@ def dataset_ref_edit(dataset_id):
     mobile tab kill it ('Failed to fetch') AND lose the paid result. Now the worker
     fills a server-side CANDIDATE and the client rediscovers it through the dataset
     payload's `reference_edit` (survives a tab sleep and a reload). The uploaded
-    images are read HERE (snapshot in the request thread), never in the worker."""
+    images are read HERE (snapshot in the request thread), never in the worker.
+
+    Editable engines are svc.API_ENGINES, DERIVED — not a second hardcoded list.
+    The edit dispatch (svc._edit_engine_call) is engine-parametric over that same
+    tuple, so a private copy here is a route that refuses an engine the service
+    already supports: exactly what kept OpenRouter out of the ✦ Edit modal after
+    it shipped for generation. Klein stays excluded for free — it is the local GPU
+    engine and has never been in API_ENGINES."""
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     prompt = (request.form.get('prompt') or '').strip()
     engine = (request.form.get('engine') or '').strip()
-    if engine not in _EDIT_ENGINES:
-        return jsonify({'error': 'pick ChatGPT or Nano Banana'}), 400
+    if engine not in svc.API_ENGINES:
+        return jsonify({'error': svc.edit_engine_choice_message()}), 400
     # Transient edit-reference images added in the modal — ride along as identity
     # anchors for THIS call only, never persisted as dataset extra refs.
     extra_bytes = [f.read() for f in request.files.getlist('ref') if f and f.filename]

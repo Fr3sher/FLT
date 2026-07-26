@@ -2293,11 +2293,13 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
     Ref list sent to the engine: the primary reference FIRST (ChatGPT's
     /images/edits treats image[0] as the edit base), then the dataset's extra refs
     and any transient edit-reference images the user added in the modal — all ride
-    along as identity anchors so the edit keeps the same face. Klein is not an
-    option here. Raises ValueError for a bad engine / empty prompt / missing
-    reference (the route maps it to 400/404)."""
+    along as identity anchors so the edit keeps the same face. Every API engine
+    forwards the WHOLE list (OpenRouter as `input_references`); a model that takes
+    fewer says so in its own error rather than having some silently dropped here.
+    Klein is not an option. Raises ValueError for a bad engine / empty prompt /
+    missing reference (the route maps it to 400/404)."""
     if engine not in API_ENGINES:
-        raise ValueError('pick ChatGPT or Nano Banana')
+        raise ValueError(edit_engine_choice_message())
     prompt = (prompt or '').strip()
     if not prompt:
         raise ValueError('describe the edit first')
@@ -2336,6 +2338,15 @@ def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs
                 return
             except SubscriptionUnavailable as e:
                 reference_edit_jobs.set_failed(dataset_id, token, f'chatgpt: {e}')
+                return
+            except EngineError as e:
+                # A NAMED engine failure (no key, rejected key, no credits, unknown
+                # model, a model that won't take reference images). The message is
+                # already user-facing and actionable, so it is surfaced verbatim —
+                # loudly, with the engine named — instead of a stack trace. Matters
+                # most for OpenRouter, whose model is free text in Settings: a slug
+                # that can't edit must say so, not look like a refused prompt.
+                reference_edit_jobs.set_failed(dataset_id, token, f'{engine}: {e}')
                 return
             if out is None:
                 reference_edit_jobs.set_failed(
@@ -5599,8 +5610,27 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
 API_ENGINES = ('nanobanana', 'chatgpt', 'openrouter')
 _ENGINE_FILE_TAG = {'nanobanana': 'NBFace', 'chatgpt': 'GPTFace', 'openrouter': 'ORFace'}
 
+# Human names for the engines, in the SAME wording as the frontend's ENGINE_LABELS
+# (frontend/src/components/dataset/engineSelection.js). Only used to word messages
+# — the ids above are the persisted values. A contract test pins ids AND labels
+# across the two languages, so neither side can grow an engine on its own.
+API_ENGINE_LABELS = {'nanobanana': 'Nano Banana Pro', 'chatgpt': 'ChatGPT',
+                     'openrouter': 'OpenRouter'}
+
+
+def edit_engine_choice_message():
+    """The refusal for a non-editable engine, DERIVED from API_ENGINES: "pick Nano
+    Banana Pro, ChatGPT or OpenRouter". Hardcoding the sentence is how the previous
+    one ("pick ChatGPT or Nano Banana") kept naming two engines after a third
+    became editable — a message that lies is worse than no message."""
+    names = [API_ENGINE_LABELS.get(e, e) for e in API_ENGINES]
+    if not names:
+        return 'no image engine can edit the reference'
+    head, last = names[:-1], names[-1]
+    return 'pick ' + (f"{', '.join(head)} or {last}" if head else last)
+
 from .chatgpt_image import SubscriptionQuotaExceeded, SubscriptionUnavailable
-from .engine_errors import EngineFatal
+from .engine_errors import EngineError, EngineFatal
 
 _QUOTA_MSG = ('chatgpt: subscription image quota reached — remaining rows were '
               'stopped; rerun in API-key mode or wait for your plan quota to reset')

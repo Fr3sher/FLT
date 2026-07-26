@@ -21,11 +21,16 @@ captioning rules and a few guards change with the dataset kind.
    style; you can change it later).
 2. **Upload the reference photo.** The app head-crops it automatically; use the
    crop editor (or *Reset to auto*) if the framing is off. Up to 3 extra angles
-   can be added for multi-view consistency.
-3. **Generate variations** — pick an engine (Nano Banana, ChatGPT, or local
-   Klein) and fire the **variation catalog**: 53 shots across expression,
-   angle, lighting, framing, outfit and background, each wrapped in an identity
-   guard so the face stays the same person.
+   can be added for multi-view consistency. **✦ Edit** retouches the reference
+   itself from a prompt ("plain studio-grey background", "add glasses") through
+   any of the API engines — **Nano Banana Pro, ChatGPT or OpenRouter**, the same
+   three that generate — and shows you a Before/After to Keep or Discard. The
+   local Klein engine cannot edit a reference. Each edit is a paid API call, on
+   the engine you picked, with the model set in *Settings › Image engines*.
+3. **Generate variations** — pick an engine (Nano Banana Pro, ChatGPT,
+   OpenRouter, or local Klein) and fire the **variation catalog**: 53 shots
+   across expression, angle, lighting, framing, outfit and background, each
+   wrapped in an identity guard so the face stays the same person.
 4. **Import** your own photos too (drag & drop) — each is auto-cropped to the
    face on the way in.
 5. **Auto-classify framing.** A local vision model tags every image

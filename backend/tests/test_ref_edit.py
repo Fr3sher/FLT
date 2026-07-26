@@ -294,11 +294,106 @@ def test_route_discard_clears(client, monkeypatch):
 
 
 def test_route_edit_bad_engine_400(client, monkeypatch):
+    """Klein stays out of reference editing ON PURPOSE (local GPU engine, not an
+    API one) — and the refusal must NAME the engines that do work, derived from
+    API_ENGINES rather than a sentence that rots when a fourth engine lands."""
     did = _create_with_ref(client, monkeypatch, 'Jay', 'zchar_jay')
     resp = client.post(f'/api/dataset/{did}/ref/edit',
                        data={'prompt': 'x', 'engine': 'klein'},
                        content_type='multipart/form-data')
     assert resp.status_code == 400
+    msg = resp.get_json()['error']
+    assert msg == svc.edit_engine_choice_message()
+    for engine in svc.API_ENGINES:
+        assert svc.API_ENGINE_LABELS[engine] in msg
+    assert 'Klein' not in msg
+
+
+def test_route_edit_openrouter_sends_every_reference_with_the_configured_model(
+        app, client, monkeypatch):
+    """OpenRouter is a first-class edit engine (it was left out of ✦ Edit when the
+    engine shipped for generation only). Two things are pinned here, both of them
+    money-shaped: the edit uses the model configured in Settings — never a slug
+    hardcoded on the edit path — and EVERY reference travels (the dataset one plus
+    the anchors added in the modal), because dropping some silently would return a
+    face the user didn't ask for. The transport is stubbed: no call, no dollar."""
+    from app import config as cfg
+    from app.services import openrouter
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'sk-or-v1-testkeyvalue0123456789')
+    with app.app_context():
+        cfg.save_config({'engines': {'openrouter_model': 'acme/pixel-forge-1'}})
+
+    did = _create_with_ref(client, monkeypatch, 'Ora', 'zchar_ora')
+    sent = {}
+
+    class _Resp:
+        status_code = 200
+        text = ''
+
+        @staticmethod
+        def json():
+            import base64
+            return {'data': [{'b64_json': base64.b64encode(_webp((9, 9, 9))).decode(),
+                              'media_type': 'image/webp'}]}
+
+    def _fake_post(url, **kwargs):
+        sent['url'] = url
+        sent['json'] = kwargs.get('json')
+        return _Resp()
+
+    monkeypatch.setattr(openrouter.requests, 'post', _fake_post)
+    monkeypatch.setattr(svc.threading, 'Thread', _SyncThread)      # worker inline
+
+    resp = client.post(
+        f'/api/dataset/{did}/ref/edit',
+        data={'prompt': 'add glasses', 'engine': 'openrouter',
+              'ref': (io.BytesIO(_png()), 'anchor.png')},
+        content_type='multipart/form-data')
+
+    assert resp.status_code == 202
+    payload = client.get(f'/api/dataset/{did}').get_json()['reference_edit']
+    assert payload['status'] == 'ready' and payload['candidate_filename']
+    assert sent['url'] == 'https://openrouter.ai/api/v1/images'
+    assert sent['json']['model'] == 'acme/pixel-forge-1'
+    # dataset reference + the modal anchor: both, in input_references.
+    assert len(sent['json']['input_references']) == 2
+    assert all(r['image_url']['url'].startswith('data:image/')
+               for r in sent['json']['input_references'])
+
+
+def test_route_edit_openrouter_names_a_model_that_cannot_take_references(
+        app, client, monkeypatch):
+    """Not every OpenRouter model accepts reference images, and the model is free
+    text in Settings. The failure has to be LOUD and NAMED — the engine's own words
+    about the reference count — not a mute 'empty response' the user reads as a
+    content refusal on their prompt."""
+    from app.services import openrouter
+
+    monkeypatch.setenv('OPENROUTER_API_KEY', 'sk-or-v1-testkeyvalue0123456789')
+    did = _create_with_ref(client, monkeypatch, 'Nope', 'zchar_nope')
+
+    class _Refused:
+        status_code = 400
+        text = ''
+
+        @staticmethod
+        def json():
+            return {'error': {'code': 400, 'message': 'this model takes no image input'}}
+
+    # Two POSTs happen (the aspect_ratio retry); both refuse.
+    monkeypatch.setattr(openrouter.requests, 'post', lambda url, **k: _Refused())
+    monkeypatch.setattr(svc.threading, 'Thread', _SyncThread)
+
+    client.post(f'/api/dataset/{did}/ref/edit',
+                data={'prompt': 'x', 'engine': 'openrouter',
+                      'ref': (io.BytesIO(_png()), 'anchor.png')},
+                content_type='multipart/form-data')
+
+    err = client.get(f'/api/dataset/{did}').get_json()['reference_edit']['error']
+    assert err.startswith('openrouter: ')
+    assert 'this model takes no image input' in err
+    assert 'may accept fewer' in err          # the reference-count hint, not silence
 
 
 def test_route_edit_missing_dataset_404(client):
