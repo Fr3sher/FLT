@@ -60,8 +60,14 @@ DEFAULTS = {
                   # Explicit interpreter for installs without venv/.venv
                   # (conda, uv, system python). Empty = auto-detect.
                   'python': ''},
+    # `enabled` is the ENGINE CATALOG as well as the default selection: adding an
+    # engine here is what makes it reach existing installs (see _merge_new_engines
+    # and LEGACY_KNOWN_ENGINES below). `known` is not a setting — it is the ledger
+    # of which engines the app offered the last time the user picked, written by
+    # save_config; [] means "no ledger yet".
     'engines': {'default': 'chatgpt',
                 'enabled': ['nanobanana', 'chatgpt', 'openrouter', 'klein'],
+                'known': [],
                 # chatgpt_auth: 'auto' = subscription when connected, else API key.
                 'chatgpt_auth': 'auto',            # auto|api|subscription
                 'chatgpt_subscription_model': 'gpt-5.4-mini',   # Codex router model (image model is gpt-image-2 regardless)
@@ -252,6 +258,93 @@ def _deep_merge(base, override):
             out[k] = copy.deepcopy(v)
     return out
 
+# --- engines added by an update --------------------------------------------
+# _deep_merge REPLACES lists (it only recurses into dicts), which is right for
+# every other list we store — but engines.enabled doubles as "which engines
+# exist", so a config saved before an engine shipped pinned its owner to the old
+# catalogue forever: the more someone used the app, the fewer new engines they
+# got, with no hint one existed. New SCALAR keys never had this problem, they
+# fall back to their default; this is a list-only failure mode.
+#
+# The whole difficulty is telling "this engine didn't exist when I saved" from
+# "I unchecked this on purpose" — blindly adding back what's missing would undo
+# an explicit choice, which is worse than the bug. So a save records the
+# catalogue the choice was made from (engines.known), and only engines absent
+# from that ledger are merged in on read. Configs written before the ledger
+# existed have no such record, but we know from the shipping history exactly
+# which engines they could have been offered:
+LEGACY_KNOWN_ENGINES = ('nanobanana', 'chatgpt', 'klein')
+# ^ never extend this tuple. A new engine goes in DEFAULTS['engines']['enabled']
+# and nowhere else; adding it here would mean "everyone has already seen it",
+# i.e. exactly the bug this fixes.
+#
+# Only ONE key in DEFAULTS is a list of choices (engines.enabled) — the other
+# list, klein.generation_lora_presets, is pure user data with an empty default
+# and nothing to merge. Hence a named, tested helper rather than a framework;
+# a second list-of-choices key should reuse the same known/enabled shape.
+
+
+def _clean_engines(seq):
+    return [e for e in (seq or []) if isinstance(e, str) and e]
+
+
+def _engine_catalog(*groups):
+    """Every engine this build knows about, in DEFAULTS order, plus any extra
+    (older or hand-written) names the caller passes — nothing is ever dropped."""
+    out = list(DEFAULTS['engines']['enabled'])
+    for group in groups:
+        for e in _clean_engines(group):
+            if e not in out:
+                out.append(e)
+    return out
+
+
+def _merge_new_engines(conf: dict, user: dict) -> dict:
+    """Add engines that appeared since the user's saved selection (in place).
+
+    Read-time only — the config file is never rewritten, so the fix applies to
+    every existing install without a migration, and a downgrade still finds what
+    it wrote. `user` is the raw file: an absent engines.enabled means the user
+    never expressed a choice and already sits on the full default catalogue.
+
+    Doubles as the shape guard for this section — config.json is hand-editable
+    and a string where a list belongs would otherwise reach every consumer."""
+    eng = conf.get('engines')
+    if not isinstance(eng, dict):
+        eng = conf['engines'] = copy.deepcopy(DEFAULTS['engines'])
+    if not isinstance(eng.get('enabled'), list):
+        eng['enabled'] = list(DEFAULTS['engines']['enabled'])
+    saved = ((user or {}).get('engines') or {})
+    saved = saved.get('enabled') if isinstance(saved, dict) else None
+    if not isinstance(saved, list):
+        return conf
+    enabled = _clean_engines(eng.get('enabled'))
+    if not enabled:
+        # An empty list reads as "no restriction" downstream (face_dataset_service);
+        # filling it in would turn that into a real, restrictive selection.
+        eng['enabled'] = enabled
+        return conf
+    known = ((user or {}).get('engines') or {}).get('known')
+    known = _clean_engines(known) if isinstance(known, list) else []
+    known = known or list(LEGACY_KNOWN_ENGINES)
+    eng['enabled'] = enabled + [e for e in DEFAULTS['engines']['enabled']
+                                if e not in known and e not in enabled]
+    eng['known'] = _engine_catalog(known, eng['enabled'])
+    return conf
+
+
+def _stamp_known_engines(merged: dict, partial: dict) -> dict:
+    """Record the catalogue a selection was made from, on the saves that carry
+    one. Only then: a save of some unrelated section must not certify that its
+    author ever saw the engines they don't have enabled."""
+    incoming = (partial or {}).get('engines')
+    eng = merged.get('engines')
+    if not isinstance(incoming, dict) or 'enabled' not in incoming or not isinstance(eng, dict):
+        return merged
+    eng['known'] = _engine_catalog(eng.get('known'), eng.get('enabled'))
+    return merged
+
+
 MIGRATED_LORA_PRESET_NAME = 'My LoRAs'
 
 def _migrate_klein_loras(conf: dict, convert: bool = True) -> dict:
@@ -315,7 +408,10 @@ def load_config(force=False) -> dict:
                 user = json.loads(p.read_text(encoding='utf-8'))
             except (OSError, ValueError):
                 user = {}
-        _cache = _migrate_klein_loras(_deep_merge(DEFAULTS, user))
+        if not isinstance(user, dict):
+            user = {}
+        _cache = _merge_new_engines(
+            _migrate_klein_loras(_deep_merge(DEFAULTS, user)), user)
         return copy.deepcopy(_cache)
 
 def save_config(partial: dict) -> dict:
@@ -331,9 +427,12 @@ def save_config(partial: dict) -> dict:
         # convert=False when this save explicitly carries the presets: the
         # client already speaks the preset format, so a legacy key left in the
         # file must not resurrect a preset the user just deleted — only purge.
-        merged = _migrate_klein_loras(
+        if not isinstance(current, dict):
+            current = {}
+        merged = _stamp_known_engines(_migrate_klein_loras(
             _deep_merge(current, partial or {}),
-            convert='generation_lora_presets' not in ((partial or {}).get('klein') or {}))
+            convert='generation_lora_presets' not in ((partial or {}).get('klein') or {})),
+            partial)
         tmp = p.with_suffix('.json.tmp')
         tmp.write_text(json.dumps(merged, indent=2, ensure_ascii=False), encoding='utf-8')
         tmp.replace(p)

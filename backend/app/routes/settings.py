@@ -629,8 +629,12 @@ def diagnostic():
         'disk': _disk_free(),
         'secrets_present': _secret_presence(),
         'capabilities': {
+            # Every engine the build knows about — the formatter already prints
+            # openrouter, so leaving it out of the payload made every report say
+            # "openrouter=no" no matter how it was configured.
             'engines': {'nanobanana': bool(e.get('nanobanana')),
                         'chatgpt': bool(e.get('chatgpt')),
+                        'openrouter': bool(e.get('openrouter')),
                         'klein': bool(e.get('klein'))},
             'comfyui_reachable': bool(comfy.get('reachable')),
             'klein_model': bool((comfy.get('models') or {}).get('klein')),

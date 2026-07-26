@@ -79,7 +79,7 @@ Good to know: in subscription mode you get up to **5 reference images** per gene
 ### Engines
 
 - **Default engine** → `engines.default`. Which engine is preselected in the workspace. One of `nanobanana`, `chatgpt`, `openrouter`, `klein`. Default **`chatgpt`**.
-- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all four** enabled. Untick an engine you never use to declutter the generator picker. If you upgraded from a build that predates the OpenRouter engine and had ever saved your settings, your stored list still holds the old three — tick **OpenRouter** here once and it appears in the workspace.
+- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all four** enabled. Untick an engine you never use to declutter the generator picker. An engine added by a later update is offered here automatically, even on an install whose settings were saved long before it existed — while an engine you unticked on purpose stays unticked, because the app records which engines it was showing you at the moment you chose.
 
 #### Using several engines in one batch
 
@@ -433,7 +433,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `aitoolkit.hf_home` | Override for the Hugging Face cache directory ai-toolkit uses. |
 | `aitoolkit.python` | Full path to the Python interpreter to run ai-toolkit with. Empty = auto-detect a `venv/`/`.venv/` next to `run.py`; set it for conda/uv/system-Python and portable/embedded (`python_embeded`) installs that have no venv folder. |
 | `engines.default` | Default image-generation engine selected in the UI (`nanobanana`, `chatgpt`, `openrouter`, or `klein`). |
-| `engines.enabled` | List of engines shown as options in the UI. |
+| `engines.enabled` | List of engines shown as options in the UI. Doubles as the engine catalogue: an engine added by an update is merged into a stored list on read, so a new engine reaches installs that already have saved settings. An engine you removed yourself is never added back. |
+| `engines.known` | Not a setting — the ledger of which engines the app was offering the last time this list was saved. It is what tells "this engine did not exist yet" apart from "I unticked it". Written automatically; `[]` (or absent) means the app assumes the pre-OpenRouter trio. Delete it to be re-offered every engine. |
 | `engines.chatgpt_auth` | Which credential the ChatGPT engine uses: `auto` (subscription when connected, else API key), `api`, or `subscription`. |
 | `engines.openrouter_model` | Image model slug the OpenRouter engine requests. Free text; blank = `google/gemini-3-pro-image`. Must accept reference images. |
 | `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`); the image model stays `gpt-image-2` regardless. |

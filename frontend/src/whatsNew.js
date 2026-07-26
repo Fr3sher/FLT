@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-new-engines-reach-existing-installs',
+    date: '2026-07-26',
+    title: '🆕 An engine added by an update now shows up even if you already saved your settings',
+    blurb:
+      "If you had ever opened Settings and hit Save, your list of image engines was frozen at whatever existed that day — so OpenRouter shipped and simply never appeared for you, with nothing on screen hinting it was there. The longer you had used the app, the more you missed. Engines added by an update are now offered to everyone, existing installs included: open Settings › Image engines and OpenRouter is waiting, unticked engines still unticked. An engine you deliberately switched off stays off — the app remembers which engines you were shown when you made that choice, so only genuinely new ones are added, and nothing you set is overwritten.",
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-26-ai-toolkit-without-a-venv-is-a-supported-install',
     date: '2026-07-26',
     title: '🐍 An ai-toolkit installed without a venv is set up in one click',

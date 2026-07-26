@@ -573,3 +573,31 @@ def test_update_progress_endpoint_returns_state(client, monkeypatch):
                         lambda: {'phase': 'downloading', 'downloaded': 10, 'total': 100})
     d = client.get('/api/update/progress').get_json()
     assert d['phase'] == 'downloading' and d['downloaded'] == 10 and d['total'] == 100
+
+
+def test_settings_offers_an_engine_added_by_an_update(client, tmp_path, monkeypatch):
+    """End to end over HTTP: someone who saved their settings back when only
+    three engines existed opens Settings after updating and is OFFERED the new
+    one — the checkbox list is rendered from this payload."""
+    import json
+    import app.config as _cfg
+    (tmp_path / 'config.json').write_text(
+        json.dumps({'engines': {'enabled': ['nanobanana', 'chatgpt', 'klein']}}),
+        encoding='utf-8')
+    monkeypatch.setattr(_cfg, '_cache', None)
+    enabled = client.get('/api/settings').get_json()['config']['engines']['enabled']
+    assert 'openrouter' in enabled
+    assert enabled[:3] == ['nanobanana', 'chatgpt', 'klein']
+
+
+def test_unchecking_an_engine_over_the_api_sticks(client, monkeypatch):
+    """The counter-test over HTTP: the SPA saves the full config it was shown,
+    minus the engine the user just unchecked. It must not reappear on reload."""
+    import app.config as _cfg
+    monkeypatch.setattr(_cfg, '_cache', None)
+    shown = client.get('/api/settings').get_json()['config']['engines']
+    kept = [e for e in shown['enabled'] if e != 'openrouter']
+    r = client.put('/api/settings', json={'config': {'engines': dict(shown, enabled=kept)}})
+    assert r.status_code == 200
+    monkeypatch.setattr(_cfg, '_cache', None)
+    assert client.get('/api/settings').get_json()['config']['engines']['enabled'] == kept
