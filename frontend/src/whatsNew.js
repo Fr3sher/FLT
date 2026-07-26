@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-promoted-images-count-in-composition',
+    date: '2026-07-26',
+    title: 'Images promoted from a Bank now count in the dataset Composition',
+    blurb:
+      'The Composition bar in Add images only tallies images whose framing is known, and a promotion left that field empty \u2014 so a dataset built from a Bank read "Composition (0)" even with the shots sitting right there, then briefly showed real numbers while a generation was in flight (those images do carry a framing) and dropped back to 0 when it stopped. A promotion now carries over the framing the Bank\u0027s own \u{1F4D0} Classify framing pass already worked out, so the counts and the "missing" advice are right the moment the images land. Reported by axelf_ (Discord).',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-26-resume-keeps-its-lora',
     date: '2026-07-26',
     title: '▶ Continue now resumes the LoRA you picked — at the rank it was trained with',

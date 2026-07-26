@@ -3680,7 +3680,7 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
             if bank_jobs.cancelled(job):
                 break
             chunk = rows[c0:c0 + _PROMOTE_CHUNK]
-            blobs, chunk_rows, caps = [], [], []
+            blobs, chunk_rows, caps, frms = [], [], [], []
             for r in chunk:
                 # RESOLVED path: a watermark-cleaned image must reach the dataset
                 # cleaned, otherwise the two cleaning levels were run for nothing.
@@ -3692,12 +3692,17 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
                     # Carry the bank caption onto the dataset image (parallel to blobs),
                     # so a captioned selection lands already captioned.
                     caps.append(r.caption)
+                    # Carry the framing the bank's classify pass already wrote, so
+                    # the dataset's Composition counter is right the moment the
+                    # promotion lands (it only tallies rows that HAVE a framing).
+                    frms.append(r.framing)
                 except (OSError, TypeError):
                     failed += 1
             if blobs:
                 new_ids, bad = import_images(
                     user_id, dataset_id, blobs, dedupe=True, stats=stats,
-                    captions=caps, bank_image_ids=[r.id for r in chunk_rows])
+                    captions=caps, bank_image_ids=[r.id for r in chunk_rows],
+                    framings=frms)
                 imported += len(new_ids)
                 failed += bad
                 # The dataset row now carries the link back (import_images writes
