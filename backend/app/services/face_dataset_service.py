@@ -2738,8 +2738,16 @@ def detect_head_bbox(image_bytes):
     # fmt='json' forces Ollama's grammar mode: the model must emit a JSON object from
     # the first token, so reasoning-prone (abliterated) checkpoints can't ramble a
     # <think> trace past num_predict and never reach the coords (a silent-None cause).
+    #
+    # keep_alive is decided by CONTENTION, not by this call site (see
+    # services/vision_keepalive.py). This is the burst case the policy exists for:
+    # cropping five references in a row used to pay the 12.8 s cold load five times
+    # because each upload is its own isolated call. When the card is contended — or
+    # when the signal can't be read — the policy returns 0 and nothing changes.
+    from .vision_keepalive import keep_alive_for_isolated_call
     raw = describe_image_ollama(image_bytes, HEAD_BBOX_PROMPT, num_predict=400,
-                                prefer_json=True, fmt='json')
+                                prefer_json=True, fmt='json',
+                                keep_alive=keep_alive_for_isolated_call())
     try:
         s = raw.index('{')
         obj = json.loads(raw[s:raw.index('}', s) + 1])

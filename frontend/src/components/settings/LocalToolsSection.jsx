@@ -269,6 +269,32 @@ export default function LocalToolsSection(props) {
             parallel requests, and it makes Stop take a few seconds longer.
           </p>
         </div>
+        <div>
+          <label htmlFor="ollama-vision-keep-warm" className="block text-sm font-medium text-content">
+            Keep the vision model warm
+          </label>
+          <select
+            id="ollama-vision-keep-warm"
+            value={String(config.ollama.vision_keep_warm_seconds ?? 120)}
+            onChange={(e) => setField('ollama', 'vision_keep_warm_seconds', Number(e.target.value))}
+            className={INPUT_CLASS}
+          >
+            <option value="0">Off — unload after every single image</option>
+            <option value="60">1 minute</option>
+            <option value="120">2 minutes — recommended</option>
+            <option value="300">5 minutes</option>
+            <option value="600">10 minutes</option>
+          </select>
+          <p className="mt-1 text-xs text-content-muted">
+            Loading the vision model takes about 13 seconds; describing an image once
+            it's loaded takes half a second. One-off jobs — the automatic head crop on a
+            reference photo, Describe in Test Studio — used to unload it straight away,
+            so doing several in a row paid that load every time. The app now keeps it
+            loaded for this long, but only while nothing else needs the graphics card,
+            and hands the memory straight back the moment a generation or a training run
+            starts. Set it to Off if your card is tight on memory.
+          </p>
+        </div>
       </Card>
 
       <Card

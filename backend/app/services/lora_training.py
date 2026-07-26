@@ -4695,6 +4695,14 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         for key, value in identity.items():
             queue_manager._set_system_state(
                 key, value, ttl_seconds=_TRAIN_STATE_TTL)
+        # ai-toolkit is about to claim the card. Give back the vision model's
+        # 7.5 GB if an isolated call leased it warm (no-op without a live lease).
+        try:
+            from .vision_keepalive import revoke as _revoke_vision
+            _revoke_vision('training starting')
+        except Exception:
+            logger.warning('vision keep-warm revoke failed before training start',
+                           exc_info=True)
         logf = None
         try:
             logf = open(log_path, 'w', encoding='utf-8')
