@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-existing-promoted-images-recover-their-framing',
+    date: '2026-07-26',
+    title: 'Images already promoted from a Bank take their framing back',
+    blurb:
+      'Carrying the framing across a promotion fixes what you promote from now on — it does nothing for what is already in your datasets. So the next start repairs those too, where it honestly can: an image that still carries the link to the Bank image it came from takes back that verdict and starts counting in the Composition bar. That link only exists for promotions made since the 25 July update, so older datasets will not change — those images stay blank on purpose, and 📐 Classify framing is what fills them in. It is a recovery, never a guess: an image you classified yourself is never touched, and a Bank verdict that was never worked out (or came back "unknown") leaves the image blank rather than inventing a bucket. Nothing to click, it runs once. Reported by axelf_ (Discord).',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-26-promoted-images-count-in-composition',
     date: '2026-07-26',
     title: 'Images promoted from a Bank now count in the dataset Composition',
