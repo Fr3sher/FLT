@@ -46,3 +46,36 @@ export function sharedFilesWarning(preview) {
 export function sharedFileCount(preview) {
   return (preview?.shared || []).reduce((n, s) => n + (Number(s?.files) || 0), 0)
 }
+
+/** May the delete confirmation arm — and what to say while it may not.
+ *
+ *  A destructive control has to fail CLOSED when its evidence is missing. Every
+ *  warning in this dialog is MADE of the preview: which other bank loses files,
+ *  and whether they land somewhere recoverable. With no preview, all of that
+ *  simply does not render — the ⚠ banner vanishes, the destination silently
+ *  falls back to "deleted for good", and the button arms anyway. That is the
+ *  protection disappearing at the exact moment it could not do its job, so the
+ *  button stays disabled until the answer is in.
+ *
+ *  Returns {ready, state: 'checking'|'failed'|'ready', title, text}. */
+export function deletePreviewState(preview) {
+  if (preview?.failed) {
+    return {
+      ready: false,
+      state: 'failed',
+      title: '⚠ Could not check what this delete would do',
+      text: 'The app could not ask where these files would go, nor whether another '
+        + 'bank shares them. Nothing is deleted while that is unknown — close this, '
+        + 'make sure the app is still running, and open it again.',
+    }
+  }
+  if (!preview) {
+    return {
+      ready: false,
+      state: 'checking',
+      title: 'Checking what this delete would do…',
+      text: 'Asking where the files would go, and whether another bank shares them.',
+    }
+  }
+  return { ready: true, state: 'ready', title: '', text: '' }
+}

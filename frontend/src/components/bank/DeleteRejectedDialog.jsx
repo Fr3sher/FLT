@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import {
-  deleteDestination, isRecoverable, sharedFileCount, sharedFilesWarning,
+  deleteDestination, deletePreviewState, isRecoverable, sharedFileCount,
+  sharedFilesWarning,
 } from './bankOverlap'
 
 /** 🗑 Delete rejected from disk — the ONE bank action that writes to the source
@@ -31,9 +32,12 @@ export default function DeleteRejectedDialog({ bankId, count, sourcePath, onClos
   const shared = sharedFilesWarning(preview)
   const sharedCount = sharedFileCount(preview)
   const destination = deleteDestination(preview?.mode)
+  // No preview = no ⚠ banner, no verified destination. The button must not arm
+  // on evidence that never arrived (see deletePreviewState).
+  const check = deletePreviewState(preview)
 
   const run = async () => {
-    if (busy || !armed) return
+    if (busy || !armed || !check.ready) return
     setBusy(true)
     try {
       const d = await postJson(`/api/bank/${bankId}/delete-rejected`, {})
@@ -62,11 +66,21 @@ export default function DeleteRejectedDialog({ bankId, count, sourcePath, onClos
             This removes {count} rejected file{count === 1 ? '' : 's'} from your disk.
           </p>
           <p className="text-rose-200/90">
-            Every image currently marked ✕ rejected leaves its source folder for{' '}
-            <span className="font-semibold">{destination}</span>. Kept and undecided
-            images are left untouched.
+            Every image currently marked ✕ rejected leaves its source folder{' '}
+            {check.ready
+              ? <>for <span className="font-semibold">{destination}</span></>
+              : <span className="font-semibold">— where to is still being checked</span>}
+            . Kept and undecided images are left untouched.
           </p>
         </div>
+        {!check.ready && (
+          <div className={`rounded-md border p-3 text-sm space-y-1 ${check.state === 'failed'
+            ? 'border-amber-500/60 bg-amber-500/10 text-amber-200'
+            : 'border-border bg-surface-raised text-content-muted'}`}>
+            <p className="font-semibold">{check.title}</p>
+            <p className="text-xs">{check.text}</p>
+          </div>
+        )}
         {shared && (
           <div className="rounded-md border border-amber-500/60 bg-amber-500/10 p-3 text-sm text-amber-200 space-y-1">
             <p className="font-semibold">
@@ -93,9 +107,12 @@ export default function DeleteRejectedDialog({ bankId, count, sourcePath, onClos
             className="rounded-md border border-border px-3 py-1.5 text-sm text-content hover:bg-surface-raised">
             Cancel
           </button>
-          <button type="button" onClick={run} disabled={busy || !armed}
+          <button type="button" onClick={run} disabled={busy || !armed || !check.ready}
+            title={check.ready ? undefined : check.title}
             className="rounded-md bg-rose-600 px-4 py-1.5 text-sm font-semibold text-white hover:bg-rose-500 disabled:opacity-40">
-            {busy ? 'Deleting…' : `Delete ${count} file${count === 1 ? '' : 's'}`}
+            {busy ? 'Deleting…'
+              : check.state === 'checking' ? 'Checking…'
+                : `Delete ${count} file${count === 1 ? '' : 's'}`}
           </button>
         </div>
       </div>

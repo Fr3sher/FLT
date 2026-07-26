@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
-  deleteDestination, isRecoverable, overlapNotice, sharedFileCount, sharedFilesWarning,
+  deleteDestination, deletePreviewState, isRecoverable, overlapNotice, sharedFileCount,
+  sharedFilesWarning,
 } from './bankOverlap.js';
 
 test('a permanent delete is never described as recoverable', () => {
@@ -55,4 +57,36 @@ test('sharedFileCount totals across banks and survives junk', () => {
   assert.equal(sharedFileCount({ shared: [{ files: 3 }, { files: 4 }] }), 7);
   assert.equal(sharedFileCount({ shared: [{ files: 'x' }] }), 0);
   assert.equal(sharedFileCount(null), 0);
+});
+
+// ── The destructive button fails CLOSED when its evidence is missing ─────────
+
+test('deletePreviewState: no preview yet -> not ready, and it says it is checking', () => {
+  const s = deletePreviewState(null);
+  assert.equal(s.ready, false);
+  assert.equal(s.state, 'checking');
+  assert.match(s.title, /Checking/);
+});
+
+test('deletePreviewState: a FAILED preview never arms the button', () => {
+  const s = deletePreviewState({ failed: true });
+  assert.equal(s.ready, false);
+  assert.equal(s.state, 'failed');
+  // and it says so out loud — the old code dropped the ⚠ banner in silence
+  assert.match(s.title, /Could not check/);
+  assert.match(s.text, /Nothing is deleted/);
+});
+
+test('deletePreviewState: a real preview arms, even with nothing shared', () => {
+  assert.equal(deletePreviewState({ mode: 'trash', shared: [] }).ready, true);
+  assert.equal(deletePreviewState({ mode: 'delete' }).state, 'ready');
+});
+
+test('the delete dialog wires the fail-closed check into the destructive button', () => {
+  const src = fs.readFileSync(new URL('./DeleteRejectedDialog.jsx', import.meta.url), 'utf8');
+  // armed alone is not enough: the preview has to have landed
+  assert.match(src, /disabled=\{busy \|\| !armed \|\| !check\.ready\}/);
+  assert.match(src, /if \(busy \|\| !armed \|\| !check\.ready\) return/);
+  // and an unverified destination is never asserted as fact
+  assert.match(src, /still being checked/);
 });

@@ -63,6 +63,14 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
+    id: '2026-07-26-delete-rejected-waits-for-its-own-check',
+    date: '2026-07-26',
+    title: '🗑 Delete rejected now waits for its own safety check before it will run',
+    blurb:
+      'Before that button deletes anything, the app asks where the files would go and whether another bank shares them — that is where the "⚠ Another bank uses these files" warning comes from. If that question failed, or simply had not come back yet, the warning quietly did not appear, the dialog claimed the files were "deleted for good", and the button armed anyway: the protection vanished exactly when it could not do its job. The delete button now stays disabled until the check has answered, says which of the two it is waiting on, and never states a destination it has not verified.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-26-stop-during-a-watermark-pass-loses-nothing',
     date: '2026-07-26',
     title: '🛑 Stopping a watermark pass no longer costs you a cleaned image',
