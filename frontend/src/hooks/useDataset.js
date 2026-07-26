@@ -592,6 +592,11 @@ export function useDataset() {
         const { kind, detail } = d.scoring_error;
         toast.error(kind === 'unavailable'
           ? 'Face scoring is not installed — run the Quality tools step in Setup.'
+          // The scorer can't read this KIND of image (a drawn face): the server's
+          // sentence already explains it and names the way out — pass it through
+          // verbatim rather than paraphrasing it into "failed".
+          : kind === 'subject_not_photographic'
+            ? detail
           : kind === 'ref_unusable'
             ? `The reference photo is not usable for scoring: ${detail}`
             : `Face scoring failed: ${detail}`);

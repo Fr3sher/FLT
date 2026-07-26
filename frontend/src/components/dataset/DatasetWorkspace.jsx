@@ -9,6 +9,7 @@ import ImportDropzone from './ImportDropzone';
 import ConceptSourcesPanel from './ConceptSourcesPanel';
 import BankImportPanel from './BankImportPanel';
 import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
+import { faceAnalysisState } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
 import SmallImageRescueReview from './SmallImageRescueReview';
 import CaptionToolsBar from './CaptionToolsBar';
@@ -181,6 +182,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const toast = useToast();
   const { caps, refresh: refreshCaps } = useCapabilities();
   const d = ds.data;
+  // 🎭 Analyze faces: state + tooltip derived from the SERVER's verdict
+  // (`face_scoring_blocked`, a sentence or null) — see faceScoringGate.js. The UI
+  // never decides on its own which subjects InsightFace can read.
+  const faceAnalysis = faceAnalysisState({
+    blockedReason: d?.face_scoring_blocked,
+    hasRef: !!d?.ref_filename,
+    busy: ds.busy,
+  });
   const [cropImg, setCropImg] = useState(null);
   const [captionOptionsOpen, setCaptionOptionsOpen] = useState(false);
   // Frozen snapshot of the flagged queue when review mode opens (null = closed).
@@ -1015,6 +1024,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   kleinAvailable={Boolean(caps.engines?.klein)}
                   eligibilityImages={images}
                   nonces={ds.nonces} faceThresholds={d.face_thresholds} datasetKind={d.kind || 'character'}
+                  faceScoringBlocked={d.face_scoring_blocked}
                   dualCaptions={Boolean(d.dual_captions)} />
               )}
             </div>
@@ -1113,13 +1123,20 @@ export default function DatasetWorkspace({ ds, onBack }) {
               <div className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2">
                 {!isConceptual && (
                   <button id="ds-curation-face-analysis" type="button" data-workspace-focus
-                    onClick={ds.analyzeFaces} disabled={ds.busy || !d.ref_filename}
-                    title={d.ref_filename ? "Scores each image's facial resemblance vs the reference (deletes nothing)" : "Set a reference photo first"}
+                    onClick={ds.analyzeFaces} disabled={faceAnalysis.disabled}
+                    title={faceAnalysis.title}
                     className="px-3 py-1.5 rounded-lg bg-surface text-content text-sm disabled:opacity-40 border border-border scroll-mt-20">
                     {ds.analyzing
                       ? `🎭 Analyzing…${act?.kind === 'analyze_faces' && act.total ? ` ${act.done}/${act.total}` : ''}`
                       : '🎭 Analyze faces'}
                   </button>
+                )}
+                {/* A greyed button whose reason lives in a tooltip is invisible on a
+                    phone (no hover) — the pass must SAY why it can't run, in place. */}
+                {!isConceptual && faceAnalysis.blocked && (
+                  <p className="m-0 basis-full text-sky-300/90 text-[0.6875rem]">
+                    ℹ {d.face_scoring_blocked}
+                  </p>
                 )}
                 <div id="ds-curation-watermarks" tabIndex={-1}
                   className="flex items-center gap-2 flex-wrap scroll-mt-20">

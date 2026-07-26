@@ -2355,6 +2355,13 @@ def score_faces(user_id, dataset_id, family=None) -> dict:
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    # Third InsightFace lane, same single rule (fds.face_scoring_block_reason).
+    # Returned in the shape the panel already renders (scoring_error) so the button
+    # explains itself instead of scoring 0 cells in green.
+    blocked = fds.face_scoring_block_reason(ds)
+    if blocked:
+        return {'scored': 0, 'total': 0, 'ranking': [],
+                'scoring_error': {'kind': 'subject_not_photographic', 'detail': blocked}}
     if not ds.ref_filename:
         raise ValueError('reference photo missing')
     ref_path = fds._ref_path(ds)

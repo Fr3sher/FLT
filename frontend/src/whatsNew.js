@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-face-scoring-off-for-anime',
+    date: '2026-07-26',
+    title: '🎭 Face scoring no longer pretends to read a drawn face',
+    blurb:
+      "Analyze faces uses InsightFace, a model trained on photographs. Run it on an anime dataset and it mostly detects nothing — so the pass finished quietly, sprayed grey \"no face detected\" tiles across the grid, and left you wondering what you had done wrong. On a dataset whose subject type is Anime the pass now stands down and says why, in place: face similarity needs a photographic face, it cannot read a drawn one. Same story for Best epoch and for scoring Test Studio cells, which were ranking checkpoints on a number nobody could measure. Auto-triage also steps aside there, because it batch-flips keep/reject from those scores. Nothing is deleted: any score from an earlier run is still in the database, and setting the subject type back to Human brings the whole thing back exactly as it was.",
+    to: '/datasets?section=curation',
+  },
+  {
     id: '2026-07-26-edit-the-reference-with-openrouter',
     date: '2026-07-26',
     title: '✦ Edit your reference photo with OpenRouter too',

@@ -5300,6 +5300,12 @@ def score_checkpoint_samples(user_id, dataset_id, base_model=_PERSISTED, family=
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    # Same InsightFace lane as the dataset pass -> same single rule. Ranking epochs
+    # by a similarity the model cannot measure would recommend a checkpoint at
+    # random while looking authoritative; `reason` is already what the UI shows.
+    blocked = fds.face_scoring_block_reason(ds)
+    if blocked:
+        return {'available': False, 'reason': blocked}
     if not ds.ref_filename:
         return {'available': False, 'reason': 'this dataset has no reference photo'}
     ref_path = os.path.join(fds._dataset_dir(ds.id), ds.ref_filename)

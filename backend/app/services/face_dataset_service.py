@@ -789,6 +789,35 @@ def subject_type_of(ds) -> str:
     return normalize_subject_type(getattr(ds, 'subject_type', None) if ds else None)
 
 
+# InsightFace/antelopev2 is a detector+embedder trained on PHOTOGRAPHED faces. On a
+# drawn character it detects nothing most of the time, and the rare "detection" is a
+# meaningless cosine — the pass used to fail OPEN: grey tiles or a plausible number,
+# with nothing saying the tool simply cannot read this kind of image.
+# The message states the way out on purpose: there is NO extra setting to force the
+# pass. A knob whose only correct value is "off" is a knob nobody can set right; the
+# subject type IS the switch, it is one click away, and it says what it means. A
+# genuinely photographic dataset mislabelled anime is fixed where the mistake is.
+FACE_SCORING_DRAWN_REASON = (
+    'Face similarity needs a photographic face; it cannot read a drawn one. '
+    'Set the subject type to Human if this dataset is photographic.')
+
+
+def face_scoring_block_reason(ds):
+    """Why InsightFace scoring must NOT run on this dataset, or None to go ahead.
+
+    The SINGLE place the rule lives: the dataset pass, the Studio cell scoring and
+    best-epoch selection all consult this one function, and the dataset payload
+    republishes its result so the UI never re-derives the rule either. A gate
+    posted at four sites would drift; this one cannot.
+
+    Scoped to face SIMILARITY. Head-cropping (`face_crop_to_square_webp` ->
+    `detect_head_bbox`) goes through Qwen3-VL, a general vision model that reads a
+    drawn head perfectly well — it is deliberately NOT gated here."""
+    if subject_type_of(ds) == 'anime':
+        return FACE_SCORING_DRAWN_REASON
+    return None
+
+
 def create_dataset(user_id, name, trigger_word, kind=None, concept_desc=None, train_type=None,
                    fidelity=None, prompt_suffix=None, prompt_suffixes=None, subject_type=None,
                    *, commit=True):
@@ -2571,6 +2600,11 @@ def dataset_payload(user_id, dataset_id):
         # WHAT the subject is (NULL/legacy -> 'human'); drives the generation
         # catalog + identity lock. Orthogonal to `kind`.
         'subject_type': subject_type_of(ds),
+        # Why face-similarity scoring is refused for this dataset (string), or null
+        # to go ahead. Published so the UI disables the button and states the reason
+        # from the SAME rule the server enforces, instead of re-implementing
+        # "subject_type === 'anime'" in JSX and drifting from it later.
+        'face_scoring_blocked': face_scoring_block_reason(ds),
         # Dual long+short captioning toggle (Advanced options) → the caption editor shows
         # the short field only when this is on.
         'dual_captions': dual_captions_enabled(ds),
@@ -4425,6 +4459,16 @@ def analyze_faces(user_id, dataset_id) -> dict:
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    # Checked BEFORE the reference guard on purpose: an anime dataset with no
+    # reference must hear the useful thing ("this tool can't read a drawn face"),
+    # not "set a reference photo first" — which would send the user off to fix
+    # something that would not have helped. Returned as a scoring_error rather
+    # than raised so the existing toast path states the reason instead of the pass
+    # disappearing silently — a refusal that does not explain itself is the very
+    # failure mode this gate exists to remove.
+    blocked = face_scoring_block_reason(ds)
+    if blocked:
+        return {}, {'kind': 'subject_not_photographic', 'detail': blocked}
     if not ds.ref_filename:
         raise ValueError('reference photo missing')
     ref_path = _ref_path(ds)

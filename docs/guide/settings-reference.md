@@ -271,6 +271,16 @@ Two thresholds on the 0–1 face-similarity score (InsightFace), which badge eac
 
 Raise them for a stricter set, lower them if good shots are being flagged too harshly.
 
+**These thresholds do nothing on an Anime dataset.** InsightFace is trained on
+photographs and cannot read a drawn face, so face similarity is refused outright
+when the dataset's **subject type** is *Anime* — the 🎭 Analyze faces button, 🎯
+Auto-triage, Best epoch and the Test Studio's face scoring all say so instead of
+producing numbers nobody could measure. There is no override, on purpose: the
+subject type *is* the switch. If the dataset really is photographic, set it back to
+*Human* and everything scores again — scores from an earlier pass are never
+deleted. Head-cropping a reference is unaffected: it runs on the vision model
+(Qwen3-VL), which reads a drawn head fine.
+
 ### Image bank triage
 
 Thresholds for the **🗃️ Bank** quality flags. Every scanned image stores its

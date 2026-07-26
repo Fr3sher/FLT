@@ -8,6 +8,7 @@ import {
   partitionKleinImproveSelection,
 } from '../../utils/kleinBulkImprove';
 import { useToast } from '../common/Toast';
+import { autoTriageAvailable } from './faceScoringGate.js';
 
 const DEFAULT_GREEN = 0.50;
 
@@ -158,6 +159,11 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                                       mirroringIds, faceThresholds, datasetKind = 'character',
                                       onImproveBatch, kleinAvailable = false,
                                       eligibilityImages, dualCaptions = false,
+                                      // Server's reason why face scoring can't run here
+                                      // (string) or null — auto-triage acts on face
+                                      // scores, so it stands down when they can't be
+                                      // trusted. Existing scores are NOT deleted.
+                                      faceScoringBlocked = null,
                                       activity = null }) {
   const toast = useToast();
   const [selected, setSelected] = useState(() => new Set());
@@ -258,7 +264,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   return (
     <div id="ds-images-review" tabIndex={-1} data-workspace-focus
       className="flex flex-col gap-2 scroll-mt-20">
-      {onBatch && (
+      {onBatch && autoTriageAvailable(faceScoringBlocked) && (
         <AutoTriageBar images={images.filter((image) => !isSmallImageRescueRow(image))}
           datasetId={datasetId} faceThresholds={faceThresholds} onBatch={onBatch} busy={bulkBusy} />
       )}
