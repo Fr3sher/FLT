@@ -4518,6 +4518,10 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     if (queue_manager._get_system_state('training_in_progress', False)
             and _pid_alive(queue_manager._get_system_state('training_pid', None))):
         raise ValueError('a training is already in progress - wait for it to finish or queue this dataset')
+    # Cheap refusal BEFORE the dataset export below: re-exporting a whole dataset
+    # only to reject the launch under the spawn lock would burn minutes of disk
+    # for nothing. The authoritative copy of this check lives in that lock.
+    _assert_no_vision_pass_on_gpu()
     if check_captions:
         assert_trainable(dataset_id, train_type=train_type,
                          allow_caption_mismatch=allow_caption_mismatch,
@@ -4653,6 +4657,10 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             raise ValueError(
                 'a training is already in progress - wait for it to finish or '
                 'queue this dataset')
+        # Authoritative: a vision pass may have grabbed the window during the
+        # export above. Checked under the SAME lock as the live-run test so the
+        # two GPU owners can never both believe they won the card.
+        _assert_no_vision_pass_on_gpu()
         # Provenance registry: record WHICH dataset version this launch trains on
         # only after this request has won the process slot.
         from . import checkpoint_registry
@@ -5060,6 +5068,33 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
             raise ValueError(
                 "MISMATCH_CAPTION: this Z-Image dataset has booru TAG captions, but Z-Image "
                 "expects prose. Re-caption in 'Prose' mode, or force the training.")
+
+
+def _assert_no_vision_pass_on_gpu():
+    """Refuse to start a local training while a vision pass owns the GPU.
+
+    The mirror of gpu_exclusive_vision_window's own 'training is running' check.
+    Until now this half only existed on the QUEUE path (_advance_training_queue
+    skips a due item while `vision_in_progress`); a direct launch — the ▶ button,
+    a retry, a continue — walked straight past it.
+
+    It matters because the two do NOT share the card gracefully. Measured on a
+    24 GB card with ~19 GB already resident: the vision model (7.5 GB with its
+    context) no longer fits, Ollama silently spills ~43 % of it to the CPU, the
+    vision pass runs ~13.5x slower and the resident GPU work drops 20-150x.
+    Nothing raises and nothing OOMs — so a training started here would simply
+    crawl for hours with no error to explain it. Refusing is the kinder failure.
+
+    The flag is TTL-bounded and cleared at startup (recover_stale_vision_window),
+    so this can never latch a training out permanently.
+    """
+    if queue_manager._get_system_state('vision_in_progress', False):
+        from ..gpu_window import GpuBusyError
+        raise GpuBusyError(
+            'a vision pass (captioning, watermark or framing) is using the GPU - '
+            'training would fight it for VRAM instead of failing outright, so it '
+            'has to wait. Stop the pass, or queue this dataset and it will start '
+            'by itself when the pass is done.')
 
 
 def is_local_run_active(dataset_id) -> bool:

@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-training-refused-during-a-vision-pass',
+    date: '2026-07-26',
+    title: '🛑 Starting a training during a captioning or watermark pass now tells you, instead of quietly crawling',
+    blurb:
+      'A vision pass (captioning, watermark or framing) holds the GPU for as long as it runs. Queued trainings already waited their turn, but hitting Train directly went ahead anyway — and because the two do not fail loudly when they overlap, nothing crashed: the graphics card simply ran out of room, part of the vision model spilled onto the processor, and both jobs slowed to a fraction of their normal speed for hours with no error to explain it. Training now refuses with a clear message while a pass is running, and points you at the queue — add the dataset there and it starts on its own the moment the pass finishes.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-26-cloud-run-survives-a-restart-after-submit',
     date: '2026-07-26',
     title: '☁️ Restarting the app no longer destroys a cloud run that was training',
