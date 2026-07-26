@@ -49,6 +49,16 @@ ComfyUI.
 - **Balance the framing.** The app tracks four buckets: **face / bust / body / back**.
   A dataset that is 100% face close-ups produces a LoRA that falls apart on
   full-body prompts — it has never seen the body.
+- **Imported images may have no shot type yet.** Only images imported with the
+  head-crop option on are tagged automatically; a plain drag-and-drop import (the
+  default on body-fidelity datasets) leaves the shot type unknown, and unknown
+  images count for nothing in the Composition bar — a whole import can leave it
+  at 0. **📐 Classify framing (N)**, right under that bar in 📸 Add images, reads
+  those images with the local vision model (Ollama) and sorts each into face /
+  bust / body / back. It needs Ollama running with a vision model pulled
+  (Settings ▸ Local tools); it uses the GPU and waits rather than competing with
+  a training run. Nothing is deleted and images it cannot read stay unknown, so
+  running it again only retries those.
 - **Vary everything except the person:** location, lighting, outfit, pose,
   expression, camera angle. Whatever repeats across images gets baked into the
   LoRA — a repeated background wall becomes part of "the person".

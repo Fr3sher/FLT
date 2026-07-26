@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-classify-framing-button',
+    date: '2026-07-26',
+    title: '\u{1F4D0} Classify framing is now a button, under the Composition bar it fixes',
+    blurb:
+      'Images dropped into a dataset without the head-crop option keep no shot type — which is the default on body-fidelity datasets — and the Composition bar only counts images whose shot type is known. A whole import could therefore read "Composition (0)" with every shot sitting right there, and the pass that sorts them existed with nothing to click. It is now a button in \u{1F4F8} Add images, directly under that bar, and it says how many it will treat: "\u{1F4D0} Classify framing (42)". It only appears when there is something to classify, shows its progress while it runs (a reload finds it again), and when the local vision model is not available it says which part is missing — Ollama not installed, not running, or its model not pulled — with a link straight to Local tools, instead of failing silently. Images it cannot read stay unclassified, so running it again just retries those.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-26-existing-promoted-images-recover-their-framing',
     date: '2026-07-26',
     title: 'Images already promoted from a Bank take their framing back',
