@@ -55,6 +55,14 @@ export const WHATS_NEW = [
     to: '/settings/local-tools',
   },
   {
+    id: '2026-07-26-openrouter-image-engine',
+    date: '2026-07-26',
+    title: '🔀 OpenRouter is now an image engine — one key instead of one per provider',
+    blurb:
+      'Generating a dataset meant an account at Google AND at OpenAI, one key each. If you already pay for OpenRouter — a single balance in front of every provider — there was no way in at all. There is now: paste your OpenRouter key in Settings › Image engines, tick the OpenRouter card in the generator, and it renders alongside (or instead of) the others. It reaches the SAME upstream models, so this changes who bills you, not what the images look like: the default is google/gemini-3-pro-image, exactly the weights the Nano Banana engine calls. The model is a plain text field, so you can point it at gpt-image-2, Seedream, FLUX or anything else OpenRouter serves that accepts reference images, without waiting for an update. When something goes wrong it says which thing — no key, key refused, out of credits, unknown model — and a run that cannot possibly succeed stops instead of paying for the same refusal once per image. Nothing about the existing engines changed. Suggested by jqs (GitHub #13).',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-26-stop-during-a-watermark-pass-loses-nothing',
     date: '2026-07-26',
     title: '🛑 Stopping a watermark pass no longer costs you a cleaned image',

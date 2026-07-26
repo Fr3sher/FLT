@@ -87,6 +87,16 @@ def probe_openai() -> dict:
     return {'ok': key or sub, 'detail': ' + '.join(parts) if parts else 'key missing'}
 
 
+def probe_openrouter() -> dict:
+    """OpenRouter engine readiness. Presence of the key only — same contract as
+    probe_gemini. Deliberately NOT a live call: verifying the key would mean an
+    authenticated request on every capability poll, and OpenRouter bills per
+    request; a key that is set but out of credits is reported at generation time,
+    with the provider's own words."""
+    ok = bool(cfg.secret('OPENROUTER_API_KEY'))
+    return {'ok': ok, 'detail': 'key set' if ok else 'key missing'}
+
+
 def probe_comfyui() -> dict:
     api_url = (cfg.get('comfyui.api_url') or '').rstrip('/')
     if not api_url:
@@ -911,6 +921,7 @@ def probe(force=False) -> dict:
     aitoolkit = probe_aitoolkit()
     gemini = probe_gemini()
     openai_ = probe_openai()
+    openrouter_ = probe_openrouter()
     face_scoring = probe_face_scoring()
     masks = probe_masks()
     bank_scoring = probe_bank_scoring()
@@ -974,6 +985,7 @@ def probe(force=False) -> dict:
         'engines': {
             'nanobanana': gemini['ok'],
             'chatgpt': openai_['ok'],
+            'openrouter': openrouter_['ok'],
             'klein': klein_ready,
         },
         'chatgpt_subscription': {

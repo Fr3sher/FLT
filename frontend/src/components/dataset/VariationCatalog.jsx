@@ -85,6 +85,24 @@ function ChatGptIcon({ className }) {
   );
 }
 
+/** Routing pictogram for the OpenRouter card: one input fanning out to several
+ *  providers — which is exactly what the engine does (one key, many models). */
+function RouterIcon({ className }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} aria-hidden="true" focusable="false">
+      <g stroke="currentColor" strokeWidth="1.8" fill="none" strokeLinecap="round">
+        <line x1="9" y1="16" x2="17" y2="16" />
+        <path d="M17 16 C 21 16, 21 8, 25 8" />
+        <path d="M17 16 C 21 16, 21 24, 25 24" />
+      </g>
+      <circle cx="7" cy="16" r="3" fill="currentColor" />
+      <circle cx="25" cy="8" r="2.4" fill="currentColor" opacity="0.85" />
+      <circle cx="25" cy="16" r="2.4" fill="currentColor" opacity="0.85" />
+      <circle cx="25" cy="24" r="2.4" fill="currentColor" opacity="0.85" />
+    </svg>
+  );
+}
+
 /** Small inline GPU-chip pictogram for the local Klein engine card. */
 function GpuIcon({ className }) {
   return (
@@ -410,6 +428,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
 
   const isNB = engines.includes('nanobanana');
   const isGPT = engines.includes('chatgpt');
+  const isOR = engines.includes('openrouter');
   // Klein-only affordances (NSFW catalog, Klein tuning panel) light up as soon as
   // Klein is part of the run — its shots really are rendered locally.
   const isKlein = engines.includes('klein');
@@ -439,6 +458,9 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   // ChatGPT auth lane (auto|api|subscription) — decides whether the card shows a
   // per-image API price or "uses your ChatGPT subscription quota".
   const [chatgptAuth, setChatgptAuth] = useState('auto');
+  // Which OpenRouter model the run will actually bill: free text in Settings, so
+  // the card names it rather than implying a fixed one.
+  const [openrouterModel, setOpenrouterModel] = useState('');
   useEffect(() => {
     let cancelled = false;
     apiFetch('/api/settings')
@@ -446,6 +468,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         if (cancelled) return;
         setEnabledEngines(d.config?.engines?.enabled || []);
         setChatgptAuth(d.config?.engines?.chatgpt_auth || 'auto');
+        setOpenrouterModel((d.config?.engines?.openrouter_model || '').trim());
         // Optional generation-LoRA presets: names + chains for the picker.
         setLoraPresets(sanitizeGenerationLoraPresets(d.config?.klein?.generation_lora_presets));
       })
@@ -454,8 +477,10 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   }, []);
   const nbAvailable = enabledEngines.includes('nanobanana') && caps.engines.nanobanana;
   const gptAvailable = enabledEngines.includes('chatgpt') && caps.engines.chatgpt;
+  const orAvailable = enabledEngines.includes('openrouter') && caps.engines.openrouter;
   const klAvailable = enabledEngines.includes('klein') && caps.engines.klein;
-  const available = { klein: klAvailable, nanobanana: nbAvailable, chatgpt: gptAvailable };
+  const available = { klein: klAvailable, nanobanana: nbAvailable, chatgpt: gptAvailable,
+    openrouter: orAvailable };
 
   // The persisted selection can name engines that have since been disabled in
   // Settings (or lost their key/backend): drop those instead of trying to
@@ -465,10 +490,11 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   useEffect(() => {
     const usable = engines.filter((e) => available[e]);
     if (usable.length === engines.length) return;
-    const first = nbAvailable ? 'nanobanana' : gptAvailable ? 'chatgpt' : klAvailable ? 'klein' : null;
+    const first = nbAvailable ? 'nanobanana' : gptAvailable ? 'chatgpt'
+      : orAvailable ? 'openrouter' : klAvailable ? 'klein' : null;
     setEngines(usable.length ? usable : (first ? [first] : []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [engines, nbAvailable, gptAvailable, klAvailable]);
+  }, [engines, nbAvailable, gptAvailable, orAvailable, klAvailable]);
   // Effective ChatGPT lane: the subscription (ChatGPT Plus/Pro image quota) vs the
   // pay-per-use API key. Mirrors the backend "auto = subscription when connected".
   const gptSub = caps.chatgpt_subscription || {};
@@ -788,7 +814,10 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         Not the look you wanted (a stylized reference coming out realistic)? Edit the generation prompt in{' '}
         <a href="#/settings/engines" className="text-amber-300 underline decoration-amber-300/50">Settings › Image engines →</a>
       </p>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      {/* Four cards now. One column on a phone (they stack, nothing is clipped),
+          two from sm, four only from xl — three-across at sm would squeeze each
+          card under ~200 px and wrap every tag onto its own line. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
         <EngineCard id="klein" checked={isKlein} available={klAvailable} generating={generating}
           onToggle={toggleEngine} share={engineShare('klein')}
           icon={<GpuIcon className={`w-9 h-9 shrink-0 ${isKlein ? ENGINE_ACCENTS.klein.icon : 'text-content-subtle'}`} />}
@@ -847,6 +876,26 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
             </span>
           ) : (
             <span className="text-amber-300 text-[0.625rem]">⚠ Add an API key or connect a subscription in Settings</span>
+          )} />
+        <EngineCard id="openrouter" checked={isOR} available={orAvailable} generating={generating}
+          onToggle={toggleEngine} share={engineShare('openrouter')}
+          icon={<RouterIcon className={`w-9 h-9 shrink-0 ${isOR ? ENGINE_ACCENTS.openrouter.icon : 'text-content-subtle'}`} />}
+          title={<>OpenRouter <span className="font-normal text-content-subtle">· API</span></>}
+          tags={[
+            <span key="gpu" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">No GPU</span>,
+            <span key="price" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">Your credits</span>,
+            <span key="sfw" className="px-1.5 py-px rounded-full bg-app/60 border border-border text-content-muted text-[0.625rem]">SFW</span>,
+          ]}
+          hint={orAvailable ? (
+            <span className={`text-[0.625rem] ${isOR ? ENGINE_ACCENTS.openrouter.text : 'text-content-subtle'}`}>
+              {/* The model is free text in Settings, so the price here is an
+                  estimate for the DEFAULT one — say so rather than quote a
+                  number the user may have changed under it. */}
+              <span className="break-all">{openrouterModel || 'default model'}</span>
+              {' · '}{engineShare('openrouter')} image(s), billed by OpenRouter at that model&rsquo;s rate
+            </span>
+          ) : (
+            <span className="text-amber-300 text-[0.625rem]">⚠ Add OPENROUTER_API_KEY in Settings</span>
           )} />
       </div>
 

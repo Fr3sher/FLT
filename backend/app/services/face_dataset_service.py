@@ -5566,10 +5566,14 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
 # Both engines share the exact generate_variation contract (refs + prompt +
 # aspect -> bytes|None), so the whole fan-out below is engine-parametric. The
 # filename tag keeps the provenance readable in the dataset folder.
-API_ENGINES = ('nanobanana', 'chatgpt')
-_ENGINE_FILE_TAG = {'nanobanana': 'NBFace', 'chatgpt': 'GPTFace'}
+# APPEND-ONLY: both the engine ids and the file tags are persisted (dataset rows
+# record the engine, and the tag is baked into the filename on disk), so a value
+# here is never renamed or reordered.
+API_ENGINES = ('nanobanana', 'chatgpt', 'openrouter')
+_ENGINE_FILE_TAG = {'nanobanana': 'NBFace', 'chatgpt': 'GPTFace', 'openrouter': 'ORFace'}
 
 from .chatgpt_image import SubscriptionQuotaExceeded, SubscriptionUnavailable
+from .openrouter import OpenRouterFatal
 
 _QUOTA_MSG = ('chatgpt: subscription image quota reached — remaining rows were '
               'stopped; rerun in API-key mode or wait for your plan quota to reset')
@@ -5580,6 +5584,8 @@ _LOST_MSG = ('chatgpt: subscription connection lost — remaining rows stopped; 
 def _api_generate_fn(engine):
     if engine == 'chatgpt':
         from .chatgpt_image import generate_variation
+    elif engine == 'openrouter':
+        from .openrouter import generate_variation
     else:
         from .nanobanana import generate_variation
     return generate_variation
@@ -5672,6 +5678,15 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
             quota_exhausted.set(); stop_msg['text'] = _LOST_MSG
             logger.warning(f"{engine} batch: subscription lost at row {image_id}: {e}")
             fail_reason = _LOST_MSG
+        except OpenRouterFatal as e:
+            # No key, key rejected, no credits, unknown model: every remaining row
+            # would fail on the exact same cause, so stop the batch instead of
+            # asking OpenRouter the same refused question once per image. Reuses
+            # the ChatGPT quota machinery — same need, same shape.
+            msg = f'{engine}: {str(e)[:400]} — remaining rows were stopped'
+            quota_exhausted.set(); stop_msg['text'] = msg
+            logger.warning(f"{engine} batch: fatal at row {image_id}: {e}")
+            fail_reason = msg
         except Exception as e:
             logger.warning(f"{engine} batch: generation error for row {image_id}: {e}")
             fail_reason = f'{engine}: {str(e)[:400]}'

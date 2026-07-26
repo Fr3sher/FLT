@@ -296,9 +296,11 @@ const TOPICS = [
   // ---- Settings: per-field topics (kind 'setting') -----------------------
   // engines
   setting('engines.default', 'engines', 'engine-default', 'Default engine',
-    ['default engine', 'engine', 'preselect', 'nanobanana', 'nano banana', 'chatgpt', 'klein', 'gpt-image']),
+    ['default engine', 'engine', 'preselect', 'nanobanana', 'nano banana', 'chatgpt', 'klein', 'gpt-image',
+     'openrouter']),
   setting('engines.enabled', 'engines', 'engines-enabled', 'Enabled engines',
-    ['enabled engines', 'engine', 'engines', 'show', 'hide', 'generate panel', 'nanobanana', 'chatgpt', 'klein']),
+    ['enabled engines', 'engine', 'engines', 'show', 'hide', 'generate panel', 'nanobanana', 'chatgpt', 'klein',
+     'openrouter']),
   setting('engines.chatgpt_auth', 'engines', 'chatgpt-auth-mode', 'ChatGPT engine auth',
     ['chatgpt', 'auth', 'subscription', 'api key', 'codex', 'oauth', 'openai']),
   setting('klein.generation_lora_presets', 'engines', 'klein-generation-lora-presets', 'Klein generation LoRA presets',
@@ -318,6 +320,12 @@ const TOPICS = [
     ['gemini', 'api key', 'nano banana', 'nanobanana', 'google', 'key']),
   setting('OPENAI_API_KEY', 'engines', 'OPENAI_API_KEY', 'OpenAI API key',
     ['openai', 'api key', 'chatgpt', 'gpt-image', 'gpt', 'key']),
+  setting('OPENROUTER_API_KEY', 'engines', 'OPENROUTER_API_KEY', 'OpenRouter API key',
+    ['openrouter', 'open router', 'api key', 'key', 'credits', 'one key', 'no subscription',
+     'gemini', 'gpt-image', 'seedream', 'flux']),
+  setting('engines.openrouter_model', 'engines', 'engines-openrouter_model', 'OpenRouter model',
+    ['openrouter', 'model', 'slug', 'model slug', 'gemini-3-pro-image', 'gpt-image-2', 'seedream',
+     'flux', 'reference images', 'image model']),
   // scraping
   setting('REDDIT_CLIENT_ID', 'scraping', 'REDDIT_CLIENT_ID', 'Reddit client ID',
     ['reddit', 'client id', 'scrape', '429', 'rate limit', 'quota', 'key']),

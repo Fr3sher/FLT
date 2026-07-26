@@ -33,14 +33,31 @@ The Overview section has **no settings of its own** — it's the at-a-glance das
 
 ## Image engines
 
-This is where you connect the services that *generate* dataset images. The app has three engines: **Nano Banana** (Google Gemini), **ChatGPT** (`gpt-image-2`), and **Klein** (local, via ComfyUI). Klein is configured under **Local tools**; the two API engines are configured here.
+This is where you connect the services that *generate* dataset images. The app has four engines: **Nano Banana** (Google Gemini), **ChatGPT** (`gpt-image-2`), **OpenRouter** (one account in front of many providers), and **Klein** (local, via ComfyUI). Klein is configured under **Local tools**; the three API engines are configured here.
 
 ### API keys
 
 - **Gemini API key** — powers the Nano Banana engine. Paste it here and hit **Test** to confirm the key works. Get one from [aistudio.google.com](https://aistudio.google.com) → *Get API key*.
 - **OpenAI API key** — powers the ChatGPT engine (`gpt-image-2`). **Test** confirms it. This key is **optional if you connect a ChatGPT subscription** below — the subscription lane can run the ChatGPT engine on your plan's image quota instead.
+- **OpenRouter API key** — powers the OpenRouter engine. Get one from [openrouter.ai/keys](https://openrouter.ai/keys). One account and one balance in front of most providers, *including the same models the two engines above call directly* — so it is the way in if you would rather not open an account per provider. **Test** only checks that a key is saved: OpenRouter bills per request, so the app never spends a credit just to light up a checkmark.
 
-Both are write-only secrets: blank once saved, replaced by typing a new value, cleared only via **Remove**.
+All three are write-only secrets: blank once saved, replaced by typing a new value, cleared only via **Remove**.
+
+### OpenRouter model
+
+- **Model slug** → `engines.openrouter_model`. Which image model the OpenRouter engine asks for. Default **`google/gemini-3-pro-image`** — the same weights the Nano Banana engine calls, so switching engine changes who bills you, not what the pictures look like. Leaving the field blank falls back to that default.
+
+It is **free text on purpose**: OpenRouter's image catalogue moves fast (models arrive, get renamed, retire), and a dropdown frozen into a release would eventually lock you out of a model that works. Browse the current list at [openrouter.ai/models](https://openrouter.ai/models?output_modalities=image).
+
+The model **must accept reference images** — the dataset generator always sends your reference photo(s) with the prompt, so a text-only model is not usable here. How many references a model takes varies (roughly 1 to 16 depending on the provider); the app sends every reference you gave it and, if the model refuses the request, says so and mentions the count rather than quietly dropping references you expected to be used.
+
+What OpenRouter does **not** change:
+
+- **Not cheaper by itself.** You still pay per image, at that model's rate, out of your OpenRouter credits.
+- **Not less restricted.** OpenRouter forwards to the same upstream providers, so the same content policies apply. NSFW variations still run on local Klein only.
+- **No subscription lane.** OpenRouter is credit-based; there is no equivalent of the ChatGPT-plan option below.
+
+When a generation fails, the tile names the cause in OpenRouter's own words — no key saved, key rejected, out of credits, unknown model, rate-limited. The four causes that would fail every remaining image identically (no key, rejected key, no credits, unknown model) **stop the rest of the batch** instead of asking the same refused question once per image. The app never falls back to another engine behind your back: if you picked OpenRouter, only OpenRouter is billed.
 
 ### ChatGPT subscription (experimental)
 
@@ -61,12 +78,12 @@ Good to know: in subscription mode you get up to **5 reference images** per gene
 
 ### Engines
 
-- **Default engine** → `engines.default`. Which engine is preselected in the workspace. One of `nanobanana`, `chatgpt`, `klein`. Default **`chatgpt`**.
-- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all three** enabled. Untick an engine you never use to declutter the generator picker.
+- **Default engine** → `engines.default`. Which engine is preselected in the workspace. One of `nanobanana`, `chatgpt`, `openrouter`, `klein`. Default **`chatgpt`**.
+- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all four** enabled. Untick an engine you never use to declutter the generator picker. If you upgraded from a build that predates the OpenRouter engine and had ever saved your settings, your stored list still holds the old three — tick **OpenRouter** here once and it appears in the workspace.
 
 #### Using several engines in one batch
 
-In the workspace the engine cards are **checkboxes**, not a one-of-three choice: tick as many as you want. Each engine has its own colour (Klein indigo, Nano Banana amber, ChatGPT sky) and every generated tile is labelled with the engine that made it, so a mixed batch stays readable.
+In the workspace the engine cards are **checkboxes**, not a one-of-three choice: tick as many as you want. Each engine has its own colour (Klein indigo, Nano Banana amber, ChatGPT sky, OpenRouter fuchsia) and every generated tile is labelled with the engine that made it, so a mixed batch stays readable.
 
 From **two** engines on, a mode appears deciding what "several engines" means:
 
@@ -393,7 +410,7 @@ These have no UI control — they're for advanced users editing `config.json` by
 
 ## config.json key reference (all keys)
 
-A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-editing (copy `config.example.json` to `config.json` first — it's git-ignored, in your data directory). Every key here is documented in full, with defaults and traps, in the sections above; this table is the index. **Secrets** (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `VAST_API_KEY`, optional scraper credentials) live in `.env`, not here.
+A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-editing (copy `config.example.json` to `config.json` first — it's git-ignored, in your data directory). Every key here is documented in full, with defaults and traps, in the sections above; this table is the index. **Secrets** (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`, `VAST_API_KEY`, optional scraper credentials) live in `.env`, not here.
 
 | Key | Meaning |
 |---|---|
@@ -415,9 +432,10 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `aitoolkit.output_dir` | Override for ai-toolkit's output folder (defaults to `<aitoolkit.dir>/output`). |
 | `aitoolkit.hf_home` | Override for the Hugging Face cache directory ai-toolkit uses. |
 | `aitoolkit.python` | Full path to the Python interpreter to run ai-toolkit with. Empty = auto-detect a `venv/`/`.venv/` next to `run.py`; set it for conda/uv/system-Python and portable/embedded (`python_embeded`) installs that have no venv folder. |
-| `engines.default` | Default image-generation engine selected in the UI (`nanobanana`, `chatgpt`, or `klein`). |
+| `engines.default` | Default image-generation engine selected in the UI (`nanobanana`, `chatgpt`, `openrouter`, or `klein`). |
 | `engines.enabled` | List of engines shown as options in the UI. |
 | `engines.chatgpt_auth` | Which credential the ChatGPT engine uses: `auto` (subscription when connected, else API key), `api`, or `subscription`. |
+| `engines.openrouter_model` | Image model slug the OpenRouter engine requests. Free text; blank = `google/gemini-3-pro-image`. Must accept reference images. |
 | `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`); the image model stays `gpt-image-2` regardless. |
 | `captioning.backend` | Caption backend: `auto` (prefer JoyCaption, fall back to Ollama), `joycaption`, `ollama`, or `none`. |
 | `training.default_family` | Default model family preselected for new training runs (`zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, or `anima`). |

@@ -12,12 +12,13 @@ function gateStatus(reachable, complete) {
 
 function imageStep(caps) {
   const e = caps.engines || {}
-  const ready = e.nanobanana || e.chatgpt || e.klein
+  const ready = e.nanobanana || e.chatgpt || e.openrouter || e.klein
   return {
     id: 'image', title: 'Image generation', recommended: true,
-    unlocks: ['Nano Banana (Gemini)', 'ChatGPT (gpt-image-2)', 'Klein (local)'],
+    unlocks: ['Nano Banana (Gemini)', 'ChatGPT (gpt-image-2)', 'OpenRouter', 'Klein (local)'],
     status: ready ? 'ready' : 'available',
-    engines: { nanobanana: !!e.nanobanana, chatgpt: !!e.chatgpt, klein: !!e.klein },
+    engines: { nanobanana: !!e.nanobanana, chatgpt: !!e.chatgpt,
+      openrouter: !!e.openrouter, klein: !!e.klein },
   }
 }
 
@@ -109,7 +110,7 @@ export const COMFYUI_SKIP_LOST = [
 export const COMFYUI_SKIP_KEPT = [
   'Scraping and dataset curation',
   'Captioning (Ollama vision model or the API engines)',
-  'Nano Banana and ChatGPT image engines',
+  'Nano Banana, ChatGPT and OpenRouter image engines',
   'LoRA training — local ai-toolkit and cloud (vast.ai)',
   'Publishing datasets and LoRAs to Hugging Face',
 ]
@@ -269,6 +270,7 @@ export function deriveCapabilitySummary(caps) {
   return [
     { label: 'Nano Banana (Gemini)', ok: !!e.nanobanana },
     { label: 'ChatGPT (gpt-image-2)', ok: !!e.chatgpt },
+    { label: 'OpenRouter', ok: !!e.openrouter },
     { label: 'Klein (local)', ok: !!e.klein,
       ...(!e.klein && comfyOff ? { pending: true, note: NOTE } : {}) },
     { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama) },
@@ -284,7 +286,7 @@ export function deriveCapabilitySummary(caps) {
 
 export function recommendedMet(caps) {
   const e = (caps && caps.engines) || {}
-  return !!(e.nanobanana || e.chatgpt || e.klein)
+  return !!(e.nanobanana || e.chatgpt || e.openrouter || e.klein)
 }
 
 // --- "Install everything" plan -------------------------------------------------

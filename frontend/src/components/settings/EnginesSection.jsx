@@ -13,11 +13,17 @@ const ENGINE_SECRETS = [
   { key: 'GEMINI_API_KEY', label: 'Gemini API key', testTarget: 'gemini', help: 'Powers the Nano Banana engine.' },
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', testTarget: 'openai',
     help: 'Powers the ChatGPT (gpt-image-2) engine. Optional if you connect a ChatGPT subscription below.' },
+  { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', testTarget: 'openrouter',
+    help: 'Powers the OpenRouter engine: one account and one balance in front of the same '
+      + 'upstream image models, including the ones the two engines above call directly. '
+      + 'Test only checks that a key is saved — OpenRouter bills per request, so nothing '
+      + 'is sent until you generate.' },
 ]
 
 const ENGINE_OPTIONS = [
   { id: 'nanobanana', label: 'Nano Banana (Gemini)' },
   { id: 'chatgpt', label: 'ChatGPT (gpt-image-2)' },
+  { id: 'openrouter', label: 'OpenRouter' },
   { id: 'klein', label: 'Klein (ComfyUI, local)' },
 ]
 
@@ -514,6 +520,37 @@ export default function EnginesSection(props) {
     <div className="space-y-6">
       <Card title="API keys" help="Keys are write-only — fields stay blank even when a key is already saved.">
         {ENGINE_SECRETS.map((f) => <SecretField key={f.key} field={f} {...props} />)}
+      </Card>
+
+      {/* Free text, deliberately: OpenRouter's image catalogue changes often
+          (models arrive, get renamed, retire), and a dropdown baked into a build
+          would go stale between releases and lock users out of a model that
+          works. A blank field falls back to the default on the server. */}
+      <Card title="OpenRouter model"
+        help="Which image model the OpenRouter engine asks for. Any image model slug from openrouter.ai works.">
+        <div>
+          <label htmlFor="engines-openrouter_model" className="block text-sm font-medium text-content">
+            Model slug
+          </label>
+          <input
+            id="engines-openrouter_model"
+            type="text"
+            spellCheck="false"
+            autoComplete="off"
+            value={config.engines.openrouter_model ?? ''}
+            onChange={(e) => setField('engines', 'openrouter_model', e.target.value)}
+            placeholder="google/gemini-3-pro-image"
+            className={INPUT_CLASS}
+          />
+          <p className="mt-1 text-xs text-content-muted">
+            Leave blank for <code>google/gemini-3-pro-image</code> — the same weights the Nano
+            Banana engine calls, so switching engine changes who bills you, not the picture.
+            The model must accept reference images: the dataset generator always sends your
+            reference photos with the prompt. Browse the list at{' '}
+            <a href="https://openrouter.ai/models?output_modalities=image" target="_blank" rel="noreferrer"
+              className="text-primary underline">openrouter.ai/models</a>.
+          </p>
+        </div>
       </Card>
 
       <ChatgptSubscriptionCard caps={caps} config={config} setField={setField} refreshCaps={refreshCaps} toast={toast} />

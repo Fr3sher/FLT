@@ -14,6 +14,7 @@ bp = Blueprint('settings', __name__, url_prefix='/api')
 _TEST_TARGETS = {
     'gemini': capabilities.probe_gemini,
     'openai': capabilities.probe_openai,
+    'openrouter': capabilities.probe_openrouter,
     'comfyui': capabilities.probe_comfyui,
     # End-to-end (reachable + vision model pulled), NOT reachability alone: the old
     # reachability-only target returned a green check while the Setup/diagnostic model
@@ -534,7 +535,7 @@ def _recent_generation_errors(scan=40) -> dict:
             low = reason.lower()
             # fail_reason is written as f'{engine}: …' on the generation path, so the
             # engine is the prefix; anything else lands in 'other' (save/queue errors).
-            eng = next((e for e in ('klein', 'chatgpt', 'nanobanana')
+            eng = next((e for e in ('klein', 'chatgpt', 'nanobanana', 'openrouter')
                         if low.startswith(e)), 'other')
             engines.setdefault(eng, reason)  # first hit == most recent for that engine
     except Exception:

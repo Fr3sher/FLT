@@ -55,19 +55,25 @@ export function promptBoxText(value, defaultText) {
    `engines` says which engine family really consumes the prompt, verified in
    face_variations.py: wrap_variation picks face_multi/face_single for the API
    engines, wrap_variation_klein always uses klein_identity. */
+
+/** The engines whose prompts go through wrap_variation, i.e. every API engine.
+ *  Listed once: an engine missing from here would silently be treated as Klein
+ *  by activeExtraRefPromptKey and badge the wrong prompt box. */
+export const API_PROMPT_ENGINES = ['nanobanana', 'chatgpt', 'openrouter'];
+
 export const IDENTITY_PROMPT_FIELDS = [
   {
     key: 'face_single',
     id: 'identity-prompt-face-single',
     label: 'API engine — identity lock (single reference)',
-    engines: ['nanobanana', 'chatgpt'],
-    desc: 'Prepended to every Nano Banana / ChatGPT variation made from ONE reference photo. Tells the model to keep the exact face and take outfit + expression from the description, not the reference.',
+    engines: API_PROMPT_ENGINES,
+    desc: 'Prepended to every Nano Banana / ChatGPT / OpenRouter variation made from ONE reference photo. Tells the model to keep the exact face and take outfit + expression from the description, not the reference.',
   },
   {
     key: 'face_multi',
     id: 'identity-prompt-face-multi',
     label: 'API engine — identity lock (multiple references)',
-    engines: ['nanobanana', 'chatgpt'],
+    engines: API_PROMPT_ENGINES,
     desc: 'Same, but for variations generated from SEVERAL reference photos of the person — tells the model all references are the same person and to use them together.',
   },
   {
@@ -214,7 +220,7 @@ export const EXTRA_REF_PROMPT_KEYS = ['face_multi', 'klein_identity'];
  *  "neither API engine"). */
 export function activeExtraRefPromptKey(generator) {
   const g = String(generator || 'nanobanana').toLowerCase();
-  return g === 'nanobanana' || g === 'chatgpt' ? 'face_multi' : 'klein_identity';
+  return API_PROMPT_ENGINES.includes(g) ? 'face_multi' : 'klein_identity';
 }
 
 /** Same question for a MULTI-engine selection: every key at least one selected

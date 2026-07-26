@@ -19,14 +19,15 @@
 /** Canonical engine order — drives the card order, the primary pick and the
  *  round-robin. Stable: it is also the order batches are BUILT in, and Klein
  *  must come last at DISPATCH time (see engineBatches). */
-export const ENGINES = ['klein', 'nanobanana', 'chatgpt'];
+export const ENGINES = ['klein', 'nanobanana', 'chatgpt', 'openrouter'];
 
-export const API_ENGINES = ['nanobanana', 'chatgpt'];
+export const API_ENGINES = ['nanobanana', 'chatgpt', 'openrouter'];
 
 export const ENGINE_LABELS = {
   klein: 'Klein',
   nanobanana: 'Nano Banana Pro',
   chatgpt: 'ChatGPT',
+  openrouter: 'OpenRouter',
 };
 
 /* Per-engine accent colour. Deliberately NOT green: green already means
@@ -60,11 +61,28 @@ export const ENGINE_ACCENTS = {
     pill: 'bg-sky-500/25 text-sky-200',
     dot: 'bg-sky-400',
   },
+  // Fuchsia is the 4th hue that stays apart from the other three in a dark
+  // theme AND in deuteranopia: indigo and sky are both blue-side but far apart
+  // in lightness, amber is the warm one, fuchsia is the only magenta. Still not
+  // green — green keeps meaning "kept / free" everywhere else.
+  openrouter: {
+    card: 'border-fuchsia-400/60 bg-fuchsia-500/15 ring-1 ring-fuchsia-400/40',
+    title: 'text-fuchsia-200',
+    text: 'text-fuchsia-300',
+    icon: 'text-fuchsia-300',
+    pill: 'bg-fuchsia-500/25 text-fuchsia-200',
+    dot: 'bg-fuchsia-400',
+  },
 };
 
 /** Pay-per-image rate. Klein is local GPU time, hence free; the ChatGPT
- *  subscription lane spends plan quota, not dollars (handled by estimateCost). */
-export const ENGINE_RATES = { klein: 0, nanobanana: 0.15, chatgpt: 0.17 };
+ *  subscription lane spends plan quota, not dollars (handled by estimateCost).
+ *  OpenRouter is an ESTIMATE for its default model (the same Gemini weights
+ *  Nano Banana calls, hence the same rate): the model is free text in Settings,
+ *  so a user who points it at a cheaper or dearer slug pays that instead. The
+ *  engine card says so — a number here is better than no guard-rail at all, but
+ *  it is the only rate in this table that the user can move. */
+export const ENGINE_RATES = { klein: 0, nanobanana: 0.15, chatgpt: 0.17, openrouter: 0.15 };
 
 export const STORAGE_ENGINES = 'datasetGenerators';     // JSON list (new)
 export const STORAGE_PRIMARY = 'datasetGenerator';      // legacy string mirror — NEVER renamed

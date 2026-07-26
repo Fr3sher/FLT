@@ -21,7 +21,14 @@ const KEY_FIELDS = [
     href: 'https://aistudio.google.com/apikey', help: 'Powers Nano Banana.' },
   { key: 'OPENAI_API_KEY', label: 'OpenAI API key', engine: 'chatgpt',
     href: 'https://platform.openai.com/api-keys', help: 'Powers ChatGPT (gpt-image-2).' },
+  { key: 'OPENROUTER_API_KEY', label: 'OpenRouter API key', engine: 'openrouter',
+    href: 'https://openrouter.ai/keys',
+    help: 'Powers the OpenRouter engine — one key and one balance for the same '
+      + 'upstream models. Pick the model in Settings \u203a Image engines.' },
 ]
+
+/** Which capability probe the "Save & test" button runs for each key field. */
+const KEY_TEST_TARGET = { nanobanana: 'gemini', chatgpt: 'openai', openrouter: 'openrouter' }
 
 // Default local vision model + rough VRAM notes surfaced in the wizard. The
 // ABLITERATED Qwen3-VL is required — vanilla qwen3-vl refuses to caption the NSFW
@@ -57,6 +64,7 @@ const STATUS_META = {
 const CAPABILITY_STEP_ID = {
   'Nano Banana (Gemini)': 'image',
   'ChatGPT (gpt-image-2)': 'image',
+  'OpenRouter': 'image',
   'Klein (local)': 'comfyui',
   'Captioning': 'ollama',
   'Auto-framing & head-crop': 'ollama',
@@ -292,7 +300,7 @@ export default function SetupPage() {
                 onChange={(e) => setSecretInputs((p) => ({ ...p, [f.key]: e.target.value }))} />
               <div className="mt-1 flex items-center gap-3">
                 <a href={f.href} target="_blank" rel="noreferrer" className="text-xs text-primary underline">Get a key</a>
-                <button type="button" onClick={() => saveSecretThenTest(f.key, f.engine === 'nanobanana' ? 'gemini' : 'openai')}
+                <button type="button" onClick={() => saveSecretThenTest(f.key, KEY_TEST_TARGET[f.engine])}
                   className="text-xs text-content-muted underline">Save &amp; test</button>
               </div>
             </div>

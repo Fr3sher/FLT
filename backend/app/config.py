@@ -28,8 +28,8 @@ load_dotenv(ENV_PATH)
 # REDDIT_CLIENT_ID / CIVITAI_API_KEY / PEXELS_API_KEY: scraping credentials
 # (Settings > Scraping & sources). Sources read their env var at request time,
 # and set_secrets() stamps os.environ on save, so changes apply without restart.
-SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'HF_TOKEN', 'VAST_API_KEY',
-               'REDDIT_CLIENT_ID', 'CIVITAI_API_KEY', 'PEXELS_API_KEY')
+SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOKEN',
+               'VAST_API_KEY', 'REDDIT_CLIENT_ID', 'CIVITAI_API_KEY', 'PEXELS_API_KEY')
 
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
@@ -60,10 +60,16 @@ DEFAULTS = {
                   # Explicit interpreter for installs without venv/.venv
                   # (conda, uv, system python). Empty = auto-detect.
                   'python': ''},
-    'engines': {'default': 'chatgpt', 'enabled': ['nanobanana', 'chatgpt', 'klein'],
+    'engines': {'default': 'chatgpt',
+                'enabled': ['nanobanana', 'chatgpt', 'openrouter', 'klein'],
                 # chatgpt_auth: 'auto' = subscription when connected, else API key.
                 'chatgpt_auth': 'auto',            # auto|api|subscription
-                'chatgpt_subscription_model': 'gpt-5.4-mini'},   # Codex router model (image model is gpt-image-2 regardless)
+                'chatgpt_subscription_model': 'gpt-5.4-mini',   # Codex router model (image model is gpt-image-2 regardless)
+                # OpenRouter reaches the SAME upstream models as the two other
+                # API engines through one account, so the slug is free text: its
+                # catalogue moves fast and a renamed/retired model must never
+                # require a new release. Default = the Nano Banana weights.
+                'openrouter_model': 'google/gemini-3-pro-image'},
     'captioning': {'backend': 'auto'},                         # auto|joycaption|ollama|none
     'training': {'default_family': 'zimage'},
     # Cloud GPU training (vast.ai). Everything has a sane default: the only
