@@ -5,6 +5,7 @@ import { useToast } from '../components/common/Toast'
 import { useCapabilities } from '../context/CapabilitiesContext'
 import { SETTINGS_SECTIONS, sectionStatus, matchesQuery } from '../components/settings/registry'
 import { SectionHeader } from '../components/settings/primitives'
+import { shouldScrollToSection } from './settingsDeepLink'
 import { HelpBadge } from '../help/HelpMode'
 import { searchHelpTopics, helpTopics } from '../help/helpRegistry'
 import { openCollapsedAncestors, resolveFocusTarget } from '../help/revealTarget'
@@ -221,6 +222,26 @@ export default function SettingsPage() {
   // require-token), rings that gate instead so the deep-link never dead-ends.
   const [searchParams] = useSearchParams()
   const focusId = searchParams.get('focus')
+
+  /* A deep link that names a section must SHOW it, not merely select it. Below
+     `lg` the rail stacks above the panel, so "Settings › Image engines →" left
+     the reader at the top of the page with the section off-screen. */
+  const panelRef = useRef(null)
+  useEffect(() => {
+    const el = panelRef.current
+    if (!el) return undefined
+    const decide = () => shouldScrollToSection({
+      hasSection: Boolean(section), hasFocus: Boolean(focusId), loading,
+      panelTop: el.getBoundingClientRect().top,
+      viewportHeight: window.innerHeight,
+    })
+    // One frame late: the panel has to be laid out before its position means
+    // anything, and the section only renders once the config has arrived.
+    const raf = requestAnimationFrame(() => {
+      if (decide()) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [section, focusId, loading])
   useEffect(() => {
     if (!focusId || loading || !config) return undefined
     const found = resolveFocusTarget(focusId)
@@ -399,7 +420,7 @@ export default function SettingsPage() {
           </nav>
         </aside>
 
-        <div className="mt-2 space-y-6 lg:mt-0">
+        <div ref={panelRef} className="mt-2 scroll-mt-20 space-y-6 lg:mt-0">
           <SectionHeader eyebrow={active.eyebrow} title={active.title} description={active.description}
             badge={<HelpBadge topic={`settings-${activeId}`} />} />
           <ActiveSection {...sectionProps} />
