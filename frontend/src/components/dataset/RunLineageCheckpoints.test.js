@@ -11,6 +11,13 @@ const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), '
 const nodes = fs.readFileSync(new URL('./lineageNodes.jsx', import.meta.url), 'utf8');
 const edges = fs.readFileSync(new URL('./lineageEdges.jsx', import.meta.url), 'utf8');
 const canvas = fs.readFileSync(new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+// …and so are the ACTIONS. The popover (⬇ download, ▶ continue, 📦 deploy,
+// ⏏ undeploy, 🗑 delete, ⓘ details) was ~90 lines inlined in the graph, which is
+// why the canvas had none at all; it now lives in one component on one pure
+// rule set, driven by one hook.
+const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8');
+const popoverRules = fs.readFileSync(new URL('./checkpointPopover.js', import.meta.url), 'utf8');
+const actionsHook = fs.readFileSync(new URL('../../hooks/useCheckpointActions.js', import.meta.url), 'utf8');
 
 test('the drawing is shared with the canvas, not duplicated', () => {
   // Both surfaces IMPORT the card/pill/edges; neither declares its own.
@@ -100,13 +107,55 @@ test('✦ Tidy up exists and is wired to the page, not to a local reset', () => 
   assert.match(page, /del\(`\/api\/dataset\/\$\{id\}\/canvas\/positions`\)/);
 });
 
-test('the graph draws checkpoint pills with a download link (reused endpoint)', () => {
-  assert.match(graph, /CheckpointPill/);
+test('the checkpoint popover is ONE component, hosted by BOTH surfaces', () => {
+  // The rule this whole extraction exists for. A second popover would agree with
+  // the first today and drift on the first change — exactly what happened to the
+  // canvas, which shipped with no actions at all rather than a copy.
+  assert.match(graph, /import CheckpointActionsPopover from '\.\/CheckpointActionsPopover'/);
+  assert.match(canvas, /import CheckpointActionsPopover from '\.\.\/dataset\/CheckpointActionsPopover'/);
+  assert.match(graph, /<CheckpointActionsPopover/);
+  assert.match(canvas, /<CheckpointActionsPopover/);
+  assert.match(popover, /export default function CheckpointActionsPopover\(/);
+  for (const src of [graph, canvas]) {
+    // No host may re-declare the popover, its rows, or its labels.
+    assert.doesNotMatch(src, /function CheckpointActionsPopover\(/);
+    assert.doesNotMatch(src, /<span aria-hidden>▶<\/span> Continue from here/);
+    assert.doesNotMatch(src, /Deploy → \$\{/);
+    assert.doesNotMatch(src, /✓<\/span> Deployed/);
+    assert.doesNotMatch(src, /⏏<\/span>/);
+    assert.doesNotMatch(src, /className="lds-ck-popover/);
+  }
   // download reuses the server-provided url — no url built in the component
-  assert.match(graph, /href=\{openCk\.pill\.download_url\}/);
-  // the popover uses the OPAQUE overlay surface, never the see-through surface
-  assert.match(graph, /bg-surface-overlay/);
-  assert.doesNotMatch(graph, /lds-ck-popover[^]*bg-surface\b(?!-overlay)/);
+  assert.match(popover, /href=\{a\.download\.url\} download/);
+  // the popover uses the OPAQUE overlay surface, never the see-through one
+  assert.match(popover, /lds-ck-popover[^\n]*bg-surface-overlay/);
+});
+
+test('both surfaces place the popover through the PURE geometry, and it never leaves the frame', () => {
+  // Two spaces, one module: world units inside the graph's <svg>, screen pixels
+  // over the zoomed board. Behaviour (flip above, clamp, narrow on a 400-px
+  // screen) is covered in checkpointPopover.test.js — the hosts must USE it.
+  assert.match(graph, /checkpointPopoverPlacement\(openCk\.pill, g\)/);
+  assert.match(canvas, /clampPopoverToViewport\(openCk\.anchor/);
+  assert.match(popoverRules, /export function checkpointPopoverPlacement\(/);
+  assert.match(popoverRules, /export function clampPopoverToViewport\(/);
+  for (const src of [graph, canvas]) assert.doesNotMatch(src, /const POP_W = |POP_H > g\.height/);
+});
+
+test('every popover action is live, or stated with its reason — never a silent dead button', () => {
+  // The "works everywhere" rule, decided in the pure layer so it is testable:
+  // no file on disk, an unlinked cloud run, a run still training, a host with no
+  // continue flow. The component only renders the verdict.
+  assert.match(popover, /checkpointActionModel\(node, pill, \{/);
+  assert.match(popoverRules, /export function deployRefusal\(/);
+  assert.match(popoverRules, /export function downloadRefusal\(/);
+  assert.match(popoverRules, /cloud run is not linked/);
+  // A refused action renders as TEXT, not as a greyed button inviting a click.
+  assert.match(popover, /a\.download\.reason/);
+  assert.match(popover, /a\.deploy\.reason/);
+  assert.match(popover, /a\.continue\.reason/);
+  // The canvas has no resume flow of its own, so it SAYS where the gesture lives.
+  assert.match(canvas, /continueReason="Continue from here/);
 });
 
 test('the graph opens for any run with a checkpoint, not only 2+ run lineages', () => {
@@ -118,12 +167,13 @@ test('the graph opens for any run with a checkpoint, not only 2+ run lineages', 
 
 test('continue-from-checkpoint is cloud-only by default and allows terminal (done OR failed) runs', () => {
   // The rule lives in the JSX-free helper (behaviour covered by
-  // lineageContinue.test.js); the graph must USE it, not re-implement one.
+  // lineageContinue.test.js); the popover must USE it, not re-implement one.
   const rule = fs.readFileSync(new URL('./lineageContinue.js', import.meta.url), 'utf8');
-  assert.match(graph, /import \{ canContinueFromCheckpoint \} from '\.\/lineageContinue\.js'/);
-  assert.match(graph, /canContinueFromCheckpoint\(node, pill, \{/);
+  assert.match(popoverRules, /import \{ canContinueFromCheckpoint \} from '\.\/lineageContinue\.js'/);
+  assert.match(popoverRules, /canContinueFromCheckpoint\(node, pill, \{/);
   // still cloud-only with a run id, unless the mount opted into 'any'
   assert.match(graph, /continueSource = 'cloud'/);
+  assert.match(popoverRules, /continueSource = 'cloud'/);
   assert.match(rule, /node\.source === 'cloud'/);
   assert.match(rule, /node\.run_id != null/);
   // a 'done' run always; a failed/stopped run only when THIS pill is present
@@ -183,23 +233,61 @@ test('the dataset graph renders INLINE inside the manager (no body-portal modal)
   assert.match(panel, /import \{ createPortal \} from 'react-dom'/);
 });
 
-test('a pill can be imported straight from the graph, deployed pills say so', () => {
-  // 📦 Import → loras/<family> uses the CSRF-safe postJson and the list's exact
+test('a pill can be deployed straight from EITHER surface, deployed pills say so', () => {
+  // 📦 Deploy → loras/<family> uses the CSRF-safe postJson and the list's exact
   // payload (via lineageImportPayload); an already-deployed pill shows ✓ Deployed.
-  assert.match(graph, /lineageImportPayload/);
-  assert.match(graph, /train\/import/);
-  assert.match(graph, /postJson\(`\/api\/dataset\/\$\{datasetId\}\/train\/import`/);
-  assert.match(graph, /checkpointDeployed\(openCk\.pill\)/);
-  assert.match(graph, /✓ Deployed/);
-  // after a successful import the lineage is refetched so the pill flips testable
+  // One implementation, in the hook — the canvas is not a second one.
+  assert.match(actionsHook, /lineageImportPayload/);
+  assert.match(actionsHook, /postJson\(`\/api\/dataset\/\$\{datasetId\}\/train\/import`, body\)/);
+  assert.match(popoverRules, /checkpointDeployed\(pill\)/);
+  assert.match(popover, /✓<\/span> Deployed/);
+  for (const src of [graph, canvas]) {
+    assert.match(src, /useCheckpointActions\(\{/);
+    // The POPOVER's deploy goes through the hook, never through a route the host
+    // wrote itself. (The canvas keeps one other import call: the bulk
+    // deploy-then-generate of the ticked picks, which is a different gesture.)
+    assert.match(src, /deployCheckpoint\(/);
+    assert.doesNotMatch(src, /postJson\([^\n]*train\/import`, body\)/);
+  }
+  // after a successful deploy the lineage is re-read so the pill flips testable
+  assert.match(actionsHook, /await onChanged\?\.\(datasetId\)/);
   assert.match(graph, /refetchTree/);
+  assert.match(canvas, /onRefetchDataset\?\.\(datasetId\)/);
 });
 
-test('a preview thumbnail opens LARGE in a lightbox, distinct from the popover', () => {
-  assert.match(graph, /onZoomPreview/);
-  // clicking the thumbnail must NOT open the popover (its own action)
+test('the compact pill COUNTS results instead of showing an illegible thumbnail', () => {
+  // A 14-px image on a 60×20 pill is a coloured smudge, not an image: it says
+  // nothing about the framing or the face while eating the label's width. The
+  // pill signals that results exist and how many; the gallery shows them.
+  assert.doesNotMatch(nodes, /width=\{14\} height=\{14\}/);
+  assert.doesNotMatch(nodes, /Click to view this preview large/);
+  assert.match(nodes, /const count = Number\(preview\?\.count\) \|\| \(preview\?\.url \? 1 : 0\)/);
+  assert.match(nodes, /const resultsChip = \(inline\) =>/);
+  // The chip is INSIDE the pill. The old badge hung at -6 px off the corner, so
+  // two neighbouring pills' badges overlapped each other at 100 % zoom.
+  assert.doesNotMatch(nodes, /right: -6, bottom: -6/);
+  // It always leads somewhere: the gallery when the host has one, else the
+  // lightbox on the preview it holds.
+  assert.match(nodes, /if \(typeof onOpenGallery === 'function'\) onOpenGallery\(pill\);/);
+  assert.match(nodes, /else if \(preview\?\.url\) onZoomPreview\?\./);
+  // Both surfaces now wire the gallery, so the count is never a dead chip.
+  assert.match(graph, /onOpenGallery=\{\(pill\) => setGallery\(/);
+  assert.match(canvas, /onOpenGallery=\{\(recordId, step\) => setGallery\(/);
+  // The big-preview tile KEEPS its image — that one is sized to be judged.
+  assert.match(nodes, /h-full w-full cursor-zoom-in object-cover/);
+});
+
+test('a preview opens LARGE in a lightbox — shared, so the canvas is not a dead click', () => {
+  // On the board the thumbnail was clickable and did nothing: the host passed no
+  // handler. The lightbox is one component now, mounted by both.
+  const lightbox = fs.readFileSync(new URL('./PreviewLightbox.jsx', import.meta.url), 'utf8');
+  assert.match(lightbox, /export default function PreviewLightbox\(/);
   assert.match(nodes, /e\.stopPropagation\(\); onZoomPreview/);
-  assert.match(graph, /bigPreview/);
+  for (const src of [graph, canvas]) {
+    assert.match(src, /<PreviewLightbox target=\{bigPreview\}/);
+    assert.doesNotMatch(src, /aria-modal="true" aria-label=\{`Preview at step/);
+  }
+  assert.match(canvas, /onZoomPreview=\{zoomPreview\}/);
 });
 
 test('a persisted 🔍 Big-previews mode enlarges the generated tiles', () => {
@@ -218,43 +306,93 @@ test('the ◉ Graph button is the prominent (accent) view control', () => {
 });
 
 test('the pill delete aims at what the pill SHOWS — deployed copy vs training save', () => {
-  // The route is NOT hardcoded in the component: it comes from the target the
+  // The route is NOT hardcoded in a component: it comes from the target the
   // helper picks off the pill's deployed state (both routes live in the helper,
-  // unit-tested in lineagePreview.test.js).
-  assert.match(graph, /const target = checkpointDeleteTarget\(node, pill\);/);
-  assert.match(graph, /postJson\(`\/api\/dataset\/\$\{datasetId\}\/\$\{target\.path\}`, target\.body\)/);
+  // unit-tested in lineagePreview.test.js), and ONE hook posts it for both
+  // surfaces.
+  assert.match(actionsHook, /const target = checkpointDeleteTarget\(node, pill\);/);
+  assert.match(actionsHook, /postJson\(`\/api\/dataset\/\$\{datasetId\}\/\$\{target\.path\}`, target\.body\)/);
   const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8');
   assert.match(helpers, /checkpointDeployed\(pill\)/);            // ONE source of truth for "deployed"
   assert.match(helpers, /path: 'train\/checkpoint\/delete'/);      // deployed → the ComfyUI copy
   assert.match(helpers, /path: 'train\/run-checkpoint\/delete'/);  // otherwise → the run's save
   // The BUTTON says which of the two it would delete, right now.
-  assert.match(graph, /\{deleting \? 'Deleting…' : target\.label\}/);
-  assert.match(graph, /title=\{target\.title\}/);
+  assert.match(popover, /\{deleting \? 'Deleting…' : a\.del\.label\}/);
+  assert.match(popover, /title=\{a\.del\.title\}/);
   // Confirmed, with the ★ best-settings pin reaching the confirmation text.
-  assert.match(graph, /describeCheckpointDelete\(node, pill, \{ bestSettingsLora \}\)/);
-  assert.match(graph, /if \(!window\.confirm\(message\)\) return;/);
+  assert.match(actionsHook, /describeCheckpointDelete\(node, pill, \{ bestSettingsLora \}\)/);
+  assert.match(actionsHook, /if \(message && !window\.confirm\(message\)\) return false;/);
+  assert.match(graph, /useCheckpointActions\(\{[^]*?bestSettingsLora/);
   // postJson THROWS on 400/409 — the server's own message must be shown, not eaten.
-  assert.match(graph, /catch \(e\) \{\s*toast\.error\(e\?\.message \|\| 'Delete failed'\);/);
-  // The pill must stop lying: same refetch path the import success uses, so a
+  assert.match(actionsHook, /catch \(e\) \{\s*toast\.error\(e\?\.message \|\| 'Delete failed'\);/);
+  // The pill must stop lying: the same re-read the deploy success uses, so a
   // just-undeployed pill flips to "not deployed" (next click aims at the save).
-  assert.match(graph, /Undeployed from ComfyUI[^]*?refetchTree\(\)/);
+  assert.match(actionsHook, /Undeployed from ComfyUI[^]*?onChanged\?\.\(datasetId\)/);
 });
 
 test('undeploy is EXPLICIT and symmetric with deploy — and never confusable with delete', () => {
   const helpers = fs.readFileSync(new URL('./lineagePreview.js', import.meta.url), 'utf8');
-  // ⏏ Undeploy sits next to "✓ Deployed", where 📦 Import sits when it isn't —
+  // ⏏ Undeploy sits next to "✓ Deployed", where 📦 Deploy sits when it isn't —
   // no longer only reachable through the retreat row.
-  assert.match(graph, /✓<\/span> Deployed/);
-  assert.match(graph, /⏏<\/span> \{deleting \? 'Undeploying…' : undeploy\.label\}/);
-  assert.match(graph, /const undeploy = checkpointUndeployAction\(openCk\.node, openCk\.pill\);/);
+  assert.match(popover, /✓<\/span> Deployed/);
+  assert.match(popover, /⏏<\/span> \{deleting \? 'Undeploying…' : a\.undeploy\.label\}/);
+  assert.match(popoverRules, /undeploy: checkpointUndeployAction\(node, pill\)/);
   // It is DERIVED from the single delete target, so its label can never name one
   // file while the click posts another (the invariant of this popover).
   assert.match(helpers, /export function checkpointUndeployAction[^]*?checkpointDeleteTarget\(node, pill\)/);
   assert.match(helpers, /target\.kind !== 'deployed'\) return null;/);
-  // The 🗑 retreat row is now reserved for the one destructive action: the save.
-  assert.match(graph, /!target \|\| target\.kind !== 'save'\) return null;/);
+  // The 🗑 retreat row is reserved for the one destructive action: the save.
+  assert.match(popoverRules, /del: target && target\.kind === 'save' \? target : null/);
   // Undeploy is presented as REVERSIBLE — the save survives and can be re-deployed.
   assert.match(helpers, /Reversible: the training save is kept/);
+});
+
+test('the detail drawer opens from ⓘ Details, not from touching a card', () => {
+  // It used to spring open on any click on the board, which turned a glance into
+  // a panel to dismiss. It is now one of the popover's actions, filed with the rest.
+  assert.match(popover, /<span aria-hidden>ⓘ<\/span> Details/);
+  assert.match(popover, /onDetails\(node\)/);
+  // On the canvas a card click opens the ACTIONS; the drawer waits to be asked.
+  assert.match(canvas, /onOpenActions\(lane \|\| null, node, null, e\)/);
+  assert.match(canvas, /onDetails=\{\(node\) => setOpenNode\(node\)\}/);
+  assert.doesNotMatch(canvas, /if \(e && e\.shiftKey\)[^]*?\n    setOpenNode\(node\);/);
+  // The pill body opens them too — it used to open the drawer instead.
+  assert.match(canvas, /onOpen=\{\(pill, e\) => onOpenActions\(lane, n\.node, pill, e\)\}/);
+});
+
+test('a generation launched from the board is the BOARD’s state, recoverable', () => {
+  // Reported from real use: closing the settings panel (or leaving the page) lost
+  // the run in flight, because the run id lived in the panel's own hook.
+  const runHook = fs.readFileSync(new URL('../../hooks/useCanvasRun.js', import.meta.url), 'utf8');
+  const studio = fs.readFileSync(new URL('../../hooks/useCanvasStudio.js', import.meta.url), 'utf8');
+  const tracker = fs.readFileSync(new URL('../canvas/CanvasRunTracker.jsx', import.meta.url), 'utf8');
+  // The panel no longer owns the run: it receives the board's tracker.
+  assert.doesNotMatch(studio, /useStudioRun\(/);
+  assert.match(studio, /const runId = tracker\?\.runId \?\? null;/);
+  assert.match(studio, /tracker\?\.adopt\?\.\(d\.run_id/);
+  // …and the board remembers it across a reload, with the checkpoints it hit.
+  assert.match(runHook, /readCanvasRun|writeCanvasRun/);
+  assert.match(canvas, /const tracker = useCanvasRun\(\);/);
+  assert.match(canvas, /<CanvasRunTracker/);
+  // Progress is visible ON the board, in the Studio's own words, with its Stop.
+  assert.match(tracker, /describeCanvasRun\(run\)/);
+  assert.match(tracker, /Stop \(resumable\)/);
+});
+
+test('a finished generation SAYS where the images went, and the board re-reads itself', () => {
+  // The other half of the same report: the images landed in the checkpoint's
+  // gallery and nothing said so — and the board did not even refresh, so the
+  // × N badge only appeared after a full reload.
+  const rules = fs.readFileSync(new URL('../../utils/canvasRunResults.js', import.meta.url), 'utf8');
+  const tracker = fs.readFileSync(new URL('../canvas/CanvasRunTracker.jsx', import.meta.url), 'utf8');
+  assert.match(rules, /export function readyImageCount\(/);
+  assert.match(rules, /export function canvasRunDatasetIds\(/);
+  // Each finished run names its checkpoints, and each one opens its gallery.
+  assert.match(tracker, /onOpenResult\(t\)/);
+  assert.match(canvas, /onOpenResult=\{\(t\) => setGallery\(\{ recordId: t\.recordId, step: t\.step \}\)\}/);
+  // New images ⇒ re-read the lanes they belong to, so the pills show them.
+  assert.match(canvas, /const n = readyImageCount\(tracker\.run\.data\);/);
+  assert.match(canvas, /for \(const id of canvasRunDatasetIds\(trackerTargets\)\)/);
 });
 
 test('the lineage payload carries the deployed copy name from the testable map', () => {
