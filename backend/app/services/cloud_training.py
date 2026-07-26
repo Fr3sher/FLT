@@ -3559,6 +3559,93 @@ def canvas_dataset_index(user_id) -> dict:
     return {'datasets': out}
 
 
+# --- ◉ LoRA Canvas: remembered card positions -------------------------------
+#
+# The canvas draws its trees with the automatic layout and lets the user drag a
+# card off it. These three functions are the whole persistence story: read the
+# board's overrides, upsert some, drop a lane's. Everything about WHICH cards get
+# a row and where they land is decided client-side by the pure placement layer
+# (frontend/src/utils/canvasPlacement.js) — the server stores coordinates and
+# asks no questions, so the geometry stays testable without a browser.
+#
+# Positions are a display preference. A failed write must never interrupt what
+# the user is doing (design: "nothing about the canvas may block the canvas"),
+# which is why these are plain, boring upserts with no side effects.
+
+def canvas_positions(user_id, dataset_ids=None) -> dict:
+    """Every remembered card position of `user_id`, grouped by dataset id.
+
+    One request for the whole board on purpose: the canvas opens on N lanes and
+    N round-trips for a handful of tiny rows would be slower than the genealogy
+    fetches they have to be ready before. `dataset_ids` narrows it when the
+    caller already knows the lanes it wants."""
+    from ..models import CanvasNodePosition
+    owned = {d.id for d in fds.list_datasets(user_id)}
+    if dataset_ids is not None:
+        owned &= {int(i) for i in dataset_ids}
+    if not owned:
+        return {'positions': {}}
+    rows = (CanvasNodePosition.query
+            .filter(CanvasNodePosition.dataset_id.in_(list(owned))).all())
+    out = {}
+    for r in rows:
+        out.setdefault(str(r.dataset_id), []).append(
+            {'record_id': r.record_id, 'x': float(r.x), 'y': float(r.y)})
+    for lane in out.values():
+        lane.sort(key=lambda p: p['record_id'])
+    return {'positions': out}
+
+
+def save_canvas_positions(user_id, dataset_id, positions) -> dict:
+    """Upsert card positions for one lane. Returns how many rows the lane holds.
+
+    Idempotent by (dataset_id, record_id) — the canvas re-sends a position on
+    every drop and re-pins the same coordinates whenever a lane gains a run, so
+    a second identical write must be a no-op rather than a duplicate row.
+    Non-finite coordinates are rejected outright: one NaN stored here would make
+    a card unreachable on every future load, and there is no UI to fix it."""
+    from ..models import CanvasNodePosition
+    if not fds.get_dataset(user_id, dataset_id):
+        raise LookupError('dataset not found')
+    wanted = {}
+    for p in (positions or []):
+        try:
+            rid = int(p['record_id'])
+            x, y = float(p['x']), float(p['y'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not (x == x and y == y and abs(x) != float('inf') and abs(y) != float('inf')):
+            continue
+        wanted[rid] = (x, y)
+    if wanted:
+        existing = {r.record_id: r for r in CanvasNodePosition.query.filter(
+            CanvasNodePosition.dataset_id == dataset_id,
+            CanvasNodePosition.record_id.in_(list(wanted))).all()}
+        for rid, (x, y) in wanted.items():
+            row = existing.get(rid)
+            if row is None:
+                db.session.add(CanvasNodePosition(
+                    dataset_id=dataset_id, record_id=rid, x=x, y=y))
+            else:
+                row.x, row.y = x, y
+        db.session.commit()
+    return {'saved': len(wanted),
+            'total': CanvasNodePosition.query.filter_by(dataset_id=dataset_id).count()}
+
+
+def clear_canvas_positions(user_id, dataset_id) -> dict:
+    """✦ Tidy up for one lane: drop every remembered position so the automatic
+    tree takes over again. The escape hatch — an arrangement tangled over twenty
+    runs has to have a way back that is not "edit the database"."""
+    from ..models import CanvasNodePosition
+    if not fds.get_dataset(user_id, dataset_id):
+        raise LookupError('dataset not found')
+    removed = CanvasNodePosition.query.filter_by(
+        dataset_id=dataset_id).delete(synchronize_session=False)
+    db.session.commit()
+    return {'cleared': int(removed or 0)}
+
+
 def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
               variant=None) -> dict:
     """Live vast.ai offers for THIS dataset+family, grouped by GPU class

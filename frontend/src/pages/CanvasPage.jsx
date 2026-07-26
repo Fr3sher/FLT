@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { apiFetch } from '../api/fetchClient';
+import { apiFetch, del, putJson } from '../api/fetchClient';
 import {
   readSelection, resolveSelection, toggleSelection, writeSelection,
 } from '../utils/canvasSelection';
+import { toOverrideMap } from '../utils/canvasPlacement';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
 import { HelpBadge } from '../help/HelpMode';
@@ -43,8 +44,51 @@ export default function CanvasPage() {
     return () => { alive = false; };
   }, []);
 
+  // Where the user has MOVED cards: {datasetId: {record_id: {x, y}}}. One request
+  // for the whole board — the lanes need their overrides before the first paint,
+  // and these rows are tiny next to the genealogies they precede.
+  const [positions, setPositions] = useState({});
+  useEffect(() => {
+    let alive = true;
+    apiFetch('/api/train/canvas/positions')
+      .then((d) => {
+        if (!alive) return;
+        const next = {};
+        for (const [dsId, rows] of Object.entries(d?.positions || {})) next[dsId] = toOverrideMap(rows);
+        setPositions(next);
+      })
+      // A board that opens in its automatic layout is a far better failure than
+      // a board that does not open: nothing about the canvas may block it.
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  /* Remember a lane's arrangement. Applied to the screen FIRST and sent
+     afterwards, deliberately: a card must follow the finger at the speed of the
+     finger, and a position is a display preference — if the write fails the move
+     stays on screen and the user is not interrupted by a modal to be told the
+     database did not like where they put a rectangle. The next drag re-sends the
+     whole lane, so a lost write heals itself. */
+  const onPinLane = useCallback((datasetId, rows) => {
+    const map = toOverrideMap(rows);
+    setPositions((p) => ({ ...p, [datasetId]: { ...(p[datasetId] || {}), ...map } }));
+    putJson(`/api/dataset/${datasetId}/canvas/positions`, { positions: rows }).catch(() => {});
+  }, []);
+
   const availableIds = useMemo(() => index.datasets.map((d) => d.id), [index.datasets]);
   const selected = useMemo(() => resolveSelection(availableIds, stored), [availableIds, stored]);
+
+  /* ✦ Tidy up: forget every moved card on the VISIBLE board. Scoped to what is
+     on screen — a lane the user unticked is not on the board they are looking
+     at, and silently flattening its arrangement too would be a surprise. */
+  const onTidyUp = useCallback(() => {
+    setPositions((p) => {
+      const next = { ...p };
+      for (const id of selected) delete next[id];
+      return next;
+    });
+    for (const id of selected) del(`/api/dataset/${id}/canvas/positions`).catch(() => {});
+  }, [selected]);
 
   const persist = useCallback((ids) => {
     setStored(ids);
@@ -123,7 +167,10 @@ export default function CanvasPage() {
 
       {index.status === 'loading'
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
-        : <LineageCanvas entries={entries} />}
+        : (
+          <LineageCanvas entries={entries} positions={positions}
+            onPinLane={onPinLane} onTidyUp={onTidyUp} />
+        )}
     </div>
   );
 }

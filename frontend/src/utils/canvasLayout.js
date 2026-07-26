@@ -103,8 +103,15 @@ export const INITIAL_MIN_SCALE = 0.45;
 
 /**
  * The view the board OPENS at: the fit, but never below INITIAL_MIN_SCALE, and
- * top-aligned whenever the content is taller than the frame so you start on the
- * first lane instead of in the middle of nowhere.
+ * ALWAYS top-aligned.
+ *
+ * Top-aligned even when the board is shorter than its frame. Vertically
+ * centring a short board looked tidy on a desktop and was expensive on a phone:
+ * the frame is sized from the viewport, not from the content, so a two-lane
+ * board opened with a third of the frame as empty sky above the first lane —
+ * a third of a 400-px screen spent on nothing before anything is legible.
+ * Horizontal centring stays: the lanes are narrower than they are tall and
+ * there is no equivalent waste.
  */
 export function initialView(world, viewport, { padding = 16 } = {}) {
   const fit = fitView(world, viewport, { padding });
@@ -115,11 +122,10 @@ export function initialView(world, viewport, { padding = 16 } = {}) {
   if (!ww || !wh || !vw || !vh) return fit;
   const scale = clampScale(Math.min(1, Math.max(fit.scale, INITIAL_MIN_SCALE)));
   const w = ww * scale;
-  const h = wh * scale;
   return {
     scale,
     tx: w <= vw ? (vw - w) / 2 : padding,
-    ty: h <= vh ? (vh - h) / 2 : padding,
+    ty: padding,
   };
 }
 

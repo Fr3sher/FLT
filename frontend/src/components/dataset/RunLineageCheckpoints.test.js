@@ -29,15 +29,41 @@ test('the drawing is shared with the canvas, not duplicated', () => {
   assert.match(edges, /export function LineageEdges\(/);
 });
 
-test('the canvas keeps slice-1 scope: no generation, no dragging', () => {
-  // Selecting checkpoints for a batch and moving nodes belong to slices 3 and 2.
+test('the canvas stops at slice-2 scope: it moves cards, it does not generate', () => {
+  // Selecting checkpoints for a batch and generating from them are slice 3.
   // Shipping half of either here is what would make the canvas a dead end.
   assert.doesNotMatch(canvas, /onToggleSelect/);
   assert.doesNotMatch(canvas, /lineage\/previews/);
-  assert.doesNotMatch(canvas, /canvas_node_position/);
   // …and the in-card graph is untouched: it still owns every pill action until
   // the canvas reaches parity.
   assert.match(graph, /onToggleSelect=\{\(pill\) => toggleCk\(/);
+});
+
+test('the canvas moves cards through the PURE placement layer, not by hand', () => {
+  // The whole point of the layer is that "a new run moves nothing" is arithmetic
+  // a test can check without a browser. A component that recomputed positions
+  // inline would put that rule back out of reach.
+  assert.match(canvas, /from '\.\.\/\.\.\/utils\/canvasPlacement'/);
+  assert.match(canvas, /applyPlacement\(/);
+  assert.match(canvas, /pinSnapshot\(/);
+  assert.doesNotMatch(canvas, /function applyPlacement|function pinSnapshot/);
+});
+
+test('the canvas disambiguates the touch gesture with a long press', () => {
+  // Dragging a card and panning the board are the same finger. Without an
+  // explicit delay one of the two becomes impossible on a phone.
+  assert.match(canvas, /LONG_PRESS_MS/);
+  assert.match(canvas, /pointerType !== 'touch'/);
+  assert.match(canvas, /cancelLongPress\(\)/);
+});
+
+test('✦ Tidy up exists and is wired to the page, not to a local reset', () => {
+  const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
+  assert.match(canvas, /Tidy up/);
+  assert.match(canvas, /onClick=\{onTidyUp\}/);
+  // It clears the SERVER's memory of the lane; a client-only reset would come
+  // back on the next reload.
+  assert.match(page, /del\(`\/api\/dataset\/\$\{id\}\/canvas\/positions`\)/);
 });
 
 test('the graph draws checkpoint pills with a download link (reused endpoint)', () => {

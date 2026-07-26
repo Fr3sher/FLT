@@ -621,3 +621,45 @@ class TrainingPreset(db.Model):
     variants = db.Column(db.Text, nullable=True)
     settings = db.Column(db.Text, nullable=False, default='{}')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+
+class CanvasNodePosition(db.Model):
+    """Where the user DRAGGED one run's card on the ◉ LoRA Canvas.
+
+    A display preference, never provenance: moving a card changes nothing about
+    which run continued which — that stays derived from ``parent_record_id`` /
+    ``resumed_from``. One row per (dataset, run); no row at all means "wherever
+    the automatic tree puts it", which is why ``✦ Tidy up`` is simply deleting
+    every row of the lane.
+
+    The rows also do a second, less obvious job. The automatic layout re-centres
+    a parent over its children, so a NEW fork would shove every ancestor
+    sideways and quietly destroy an arrangement the user had built. As soon as a
+    lane holds one dragged card, the canvas writes a row for every OTHER card of
+    that lane too, at the position it already occupied — from then on a new run
+    lands in free space and nothing already on the board moves.
+
+    ⚠️ The ``dataset`` relationship is not decoration. Child models here declare
+    only a table-level ForeignKey, and without a mapper-level relationship the
+    unit of work has no ordering dependency: SQLAlchemy emits
+    ``DELETE FROM face_dataset`` first and a legacy database whose FK lacks
+    ON DELETE CASCADE answers HTTP 500. delete_dataset ALSO deletes these rows
+    explicitly and flushes before the parent — belt and braces, because that bug
+    has already shipped once in this project. New table -> created by
+    db.create_all(), no migration."""
+    __tablename__ = 'canvas_node_position'
+    id = db.Column(db.Integer, primary_key=True)
+    dataset_id = db.Column(
+        db.Integer, db.ForeignKey('face_dataset.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    # The training run's record id (training_run_record.id). Deliberately NOT a
+    # ForeignKey: run records OUTLIVE their dataset (history is kept on purpose,
+    # see delete_dataset), so a constraint here would fight that.
+    record_id = db.Column(db.Integer, nullable=False, index=True)
+    x = db.Column(Float, nullable=False, default=0.0)
+    y = db.Column(Float, nullable=False, default=0.0)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+    dataset = db.relationship('FaceDataset')
+    __table_args__ = (db.UniqueConstraint('dataset_id', 'record_id',
+                                          name='uq_canvas_node_position'),)

@@ -126,10 +126,21 @@ test('content taller than the frame opens at the TOP, not centred', () => {
   assert.equal(open.ty, 16);
 });
 
-test('content that fits is centred', () => {
-  const open = initialView({ width: 200, height: 100 }, { width: 900, height: 500 });
+test('content that fits is centred HORIZONTALLY but still opens at the top', () => {
+  const open = initialView({ width: 200, height: 100 }, { width: 900, height: 500 }, { padding: 16 });
   assert.equal(open.tx, (900 - 200) / 2);
-  assert.equal(open.ty, (500 - 100) / 2);
+  assert.equal(open.ty, 16);
+});
+
+test('a short board on a phone wastes no sky above its first lane', () => {
+  // The frame is sized from the viewport, not from the content, so vertical
+  // centring here spent a third of a 400-px screen on nothing. The first lane
+  // must start within one padding of the top whatever the board's height.
+  const phone = { width: 400, height: 420 };
+  for (const height of [120, 240, 400, 2000]) {
+    const open = initialView({ width: 700, height }, phone, { padding: 16 });
+    assert.equal(open.ty, 16, `board ${height} tall opened at ty=${open.ty}`);
+  }
 });
 
 // ---- zoom / pan ------------------------------------------------------------

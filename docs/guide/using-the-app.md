@@ -508,6 +508,23 @@ to compare their settings side by side, with the differences highlighted — and
 because every dataset is on the same board, those two runs no longer have to
 belong to the same dataset.
 
+**Arranging the board.** Drag a run card and it stays where you put it, across
+reloads. On a phone, moving a card and scrolling the board are the same gesture,
+so a card is picked up with a **long press** — rest your finger on it for a
+moment and it lifts; a finger that slides straight away scrolls as usual.
+
+Once you have moved anything in a lane, that whole lane stops rearranging itself:
+a training run that finishes later lands in free space next to your layout
+instead of pushing everything sideways, which is what would otherwise happen —
+the automatic tree centres each run over its continuations, so one new branch
+re-flows the lane around it. Lanes you have never touched keep following the
+automatic tree, because there is no arrangement to protect there.
+
+**✦ Tidy up** is the way back: it forgets every card you have moved on the lanes
+currently shown and rebuilds the automatic tree. Positions are only ever a
+display preference — moving a card never changes which run continued which, and
+Tidy up never deletes a run, a checkpoint or a note.
+
 The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.
