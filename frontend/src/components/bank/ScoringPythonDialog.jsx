@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import {
-  canSelect, detectionSummary, dialogCopy, enteredNote, missingLabels,
-  sortInterpreters, statusBadge,
+  canSelect, detectionFailure, detectionSummary, dialogCopy, enteredNote,
+  missingLabels, sortInterpreters, statusBadge,
 } from './scoringPython.js'
 
 /** ⚡ Use a GPU Python you already have — the picker behind the "✨ Score runs on
@@ -94,6 +94,8 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
   const nvidia = result ? result.nvidia_present !== false : true
   const copy = dialogCopy(nvidia)
   const entered = loading ? null : enteredNote(result)
+  // "the search broke" and "there is nothing here" are NOT the same screen.
+  const failure = loading ? null : detectionFailure(result)
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Choose the Python that runs Score"
@@ -102,10 +104,22 @@ export default function ScoringPythonDialog({ onClose, onChanged }) {
         <div>
           <h2 className="text-base font-bold text-content">{copy.title}</h2>
           <p className="mt-1 text-sm text-content-muted">{copy.intro}</p>
-          {!loading && (
+          {!loading && !failure && (
             <p className="mt-2 text-xs text-content-subtle">{detectionSummary(rows, nvidia)}</p>
           )}
         </div>
+
+        {failure && (
+          <div className="rounded-md border border-amber-500/60 bg-amber-500/10 p-3 text-sm text-amber-200 space-y-1">
+            <p className="font-semibold">⚠ {failure.title}</p>
+            <p className="text-xs text-amber-200/90">{failure.text}</p>
+            {failure.detail && (
+              <p className="break-all font-mono text-[0.625rem] text-amber-200/70">
+                {failure.detail}
+              </p>
+            )}
+          </div>
+        )}
 
         {error && (
           <p className="rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-300">

@@ -91,6 +91,24 @@ export function detectionSummary(rows, nvidiaPresent = true) {
     + 'If you have another Python with a CUDA PyTorch, enter its path below.'
 }
 
+/** The banner shown when the SEARCH itself broke, not when it found nothing.
+ *
+ *  Those two used to be the same screen: a crash returned an empty list, which
+ *  is also the honest verdict "there is nothing to borrow on this machine".
+ *  Someone reading "No Python interpreters found to check yet" has no reason to
+ *  press ↻ Check again — and retrying is exactly what would fix a transient
+ *  failure. null when the detection ran (whatever it found). */
+export function detectionFailure(result) {
+  if (!result?.detection_failed) return null
+  return {
+    title: 'Could not look for interpreters',
+    text: 'Something went wrong while checking this machine, so the list below is '
+      + 'empty because the search failed — not because there is nothing to find. '
+      + '↻ Check again often clears it.',
+    detail: (result.detection_error || '').trim(),
+  }
+}
+
 /** Title + intro for the dialog, adapted to the machine. Same rule as above: a
  *  machine with no NVIDIA card is never shown a CUDA pitch. */
 export function dialogCopy(nvidiaPresent = true) {

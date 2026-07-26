@@ -130,6 +130,34 @@ def test_detection_lists_a_broken_candidate_as_a_row_not_an_error(sp, app, clien
     assert all(r['status'] == 'unreachable' for r in rows)
 
 
+def test_a_detection_crash_is_told_apart_from_an_empty_machine(sp, app, client):
+    """The endpoint degrades instead of 500ing — but it used to degrade into
+    EXACTLY the payload that means 'nothing to borrow here', so a user could not
+    tell a broken search from an honest empty one and had no reason to retry."""
+    import sys
+    with patch.object(sp, 'detect', side_effect=RuntimeError('detection exploded')):
+        res = client.get('/api/scoring-python')
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body['detection_failed'] is True
+    assert 'exploded' in body['detection_error']
+    assert body['interpreters'] == []
+    # the one thing we know no matter what still comes back, so the panel can
+    # keep saying what the pass runs in today
+    assert body['default_python'] == sys.executable
+
+
+def test_an_empty_machine_is_not_flagged_as_a_failure(sp, app, client):
+    """The other half of the same contract: a genuine 'nothing here' must NOT
+    carry the failure flag, or the warning becomes noise everyone learns to
+    ignore."""
+    with patch.object(sp, 'candidates', lambda: []):
+        res = client.get('/api/scoring-python')
+    body = res.get_json()
+    assert body.get('detection_failed') in (None, False)
+    assert body['interpreters'] == []
+
+
 def test_a_forced_rescan_also_drops_the_capability_caches(sp, app, client, tmp_path):
     """A user who just pip-installed a package clicks ↻. If only our own cache is
     dropped, the capability probes keep saying 'not installed' for ten more

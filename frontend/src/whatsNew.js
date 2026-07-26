@@ -65,6 +65,14 @@ export const WHATS_NEW = [
   {
   },
   {
+    id: '2026-07-26-interpreter-search-says-when-it-broke',
+    date: '2026-07-26',
+    title: '🔎 "No Python found" now means it looked — not that the search broke',
+    blurb:
+      'The ⚡ picker that lets ✨ Score borrow a Python you already have showed the same empty screen in two very different situations: this machine genuinely has nothing to borrow, and the search itself failed. The second one reads as the first, so nobody had any reason to press ↻ Check again — which is exactly what would have fixed it. A failed search now says so, shows what went wrong, and points at the retry.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-26-score-gpu-check-stops-guessing-and-stops-repeating',
     date: '2026-07-26',
     title: '⚡ ✨ Score stops mistaking a slow answer for "no GPU here"',

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import {
   bestUpgrade,
   canSelect,
+  detectionFailure,
   detectionSummary,
   dialogCopy,
   enteredNote,
@@ -154,6 +156,28 @@ test('a freshly checked new interpreter reports its verdict, and silence means s
   assert.match(note.text, /Checked: missing OpenCLIP/);
   assert.equal(enteredNote({ entered_status: '', interpreters: [] }), null);
   assert.equal(enteredNote(null), null);
+});
+
+test('a failed search says so, instead of passing for an empty machine', () => {
+  const f = detectionFailure({ detection_failed: true, detection_error: 'boom', interpreters: [] });
+  assert.match(f.title, /Could not look/);
+  assert.match(f.text, /the search failed/);
+  assert.match(f.text, /Check again/);      // the retry is the whole point
+  assert.equal(f.detail, 'boom');
+});
+
+test('an honestly empty machine is never flagged as a failure', () => {
+  assert.equal(detectionFailure({ interpreters: [] }), null);
+  assert.equal(detectionFailure({ detection_failed: false, interpreters: [] }), null);
+  assert.equal(detectionFailure(null), null);
+});
+
+test('the picker replaces its summary line with the failure banner', () => {
+  const src = fs.readFileSync(new URL('./ScoringPythonDialog.jsx', import.meta.url), 'utf8');
+  // the "No Python interpreters found to check yet" line must not run for a
+  // list that is empty only because the search broke
+  assert.match(src, /!loading && !failure && \(/);
+  assert.match(src, /detectionFailure\(result\)/);
 });
 
 test('the panel names the interpreter in use, and stays quiet on the default', () => {

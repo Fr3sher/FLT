@@ -1,4 +1,6 @@
 """Settings API: config/secrets CRUD + capability probes."""
+import sys
+
 from flask import Blueprint, current_app, jsonify, request
 
 from .. import capabilities
@@ -223,8 +225,14 @@ def scoring_python_list():
     per-dependency verdict — the picker behind "use a GPU Python you already
     have". ``?force=1`` re-probes (after the user pip-installed something);
     ``?path=`` adds a hand-typed interpreter to the list. Read-only: nothing is
-    ever installed into an environment the app did not build. Degrades to an
-    empty list rather than an error, so the panel can never break the page."""
+    ever installed into an environment the app did not build.
+
+    Degrades rather than 500s, so the panel can never break the page — but it
+    says WHICH degradation it is. An empty list is also the legitimate verdict
+    'nothing to borrow on this machine', and returning that shape for a crash
+    left the user with no reason to press '↻ Check again' about a failure that
+    retrying might well fix. `detection_failed` separates the two, and
+    `default_python` stays filled in: it is the one thing we know regardless."""
     from ..services import scoring_python
     force = bool(request.args.get('force'))
     if force:
@@ -236,9 +244,19 @@ def scoring_python_list():
     try:
         return jsonify(scoring_python.detect(
             force=force, extra_path=request.args.get('path') or ''))
-    except Exception:
+    except Exception as e:
         current_app.logger.exception('scoring interpreter detection failed')
-        return jsonify({'selected': '', 'default_python': '', 'interpreters': []})
+        try:
+            selected = (cfg.get('bank_scoring.python') or '').strip()
+        except Exception:      # noqa: BLE001 — a config read that also fails
+            selected = ''
+        return jsonify({
+            'selected': selected,
+            'default_python': sys.executable,
+            'interpreters': [],
+            'detection_failed': True,
+            'detection_error': str(e)[:300],
+        })
 
 
 @bp.post('/scoring-python')
