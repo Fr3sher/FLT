@@ -187,7 +187,7 @@ The card shows Ollama's live state and, when the binary is installed but the ser
 ### ai-toolkit
 
 - **ai-toolkit directory** → `aitoolkit.dir`. The folder containing ai-toolkit's `run.py`. Default **empty**. **Test** validates it and unlocks training + JoyCaption captioning.
-- **Python interpreter (optional)** → `aitoolkit.python`. Default **empty = auto-detect** a `venv/` or `.venv/` next to `run.py`. Fill this with the full path to the right interpreter only if you installed ai-toolkit with **conda, uv or the system Python** (no venv folder for the app to find), e.g. `C:\miniconda3\envs\aitk\python.exe`.
+- **Python interpreter (optional)** → `aitoolkit.python`. Default **empty = auto-detect** a `venv/` or `.venv/` next to `run.py`. Fill this with the full path to the interpreter ai-toolkit should run with whenever there is no venv folder for the app to find — **conda, uv, the system Python**, or a **portable / embedded build** that ships its own `python_embeded\python.exe` (several community install scripts do exactly that). Examples: `C:\miniconda3\envs\aitk\python.exe`, `C:\ai-toolkit\python_embeded\python.exe`. A venv is one way to give ai-toolkit a Python, not a requirement — when Setup finds a plausible interpreter inside the ai-toolkit folder, it offers to fill this in for you in one click.
 
 Under **Advanced: ai-toolkit overrides**, three optional path overrides (all default empty → derived from the ai-toolkit directory):
 
@@ -414,7 +414,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `aitoolkit.datasets_dir` | Override for ai-toolkit's datasets folder (defaults to `<aitoolkit.dir>/datasets`). |
 | `aitoolkit.output_dir` | Override for ai-toolkit's output folder (defaults to `<aitoolkit.dir>/output`). |
 | `aitoolkit.hf_home` | Override for the Hugging Face cache directory ai-toolkit uses. |
-| `aitoolkit.python` | Full path to the Python interpreter to run ai-toolkit with. Empty = auto-detect a `venv/`/`.venv/` next to `run.py`; set it for conda/uv/system-Python installs that have no venv folder. |
+| `aitoolkit.python` | Full path to the Python interpreter to run ai-toolkit with. Empty = auto-detect a `venv/`/`.venv/` next to `run.py`; set it for conda/uv/system-Python and portable/embedded (`python_embeded`) installs that have no venv folder. |
 | `engines.default` | Default image-generation engine selected in the UI (`nanobanana`, `chatgpt`, or `klein`). |
 | `engines.enabled` | List of engines shown as options in the UI. |
 | `engines.chatgpt_auth` | Which credential the ChatGPT engine uses: `auto` (subscription when connected, else API key), `api`, or `subscription`. |

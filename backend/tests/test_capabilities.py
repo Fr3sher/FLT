@@ -261,6 +261,63 @@ def test_probe_aitoolkit_valid(app, tmp_path):
         result = capabilities.probe_aitoolkit()
     assert result['ok'] is True
 
+# ── ai-toolkit without a venv (reported on Reddit by Psyko_2000) ─────────────
+# A community easy-install script sets ai-toolkit up with a `python_embeded`
+# folder and no venv at all. The wizard used to answer "set up its Python venv
+# per the README" — a remedy that install can never follow. The probe must state
+# what it FOUND, and hand back the interpreter sitting right there so the UI can
+# offer it in one click.
+
+def _portable_aitoolkit(tmp_path):
+    root = tmp_path / 'aitoolkit'
+    (root / 'python_embeded').mkdir(parents=True)
+    (root / 'python_embeded' / 'python.exe').write_text('fake')
+    (root / 'run.py').write_text('fake')
+    return root
+
+def test_probe_aitoolkit_finds_a_portable_interpreter_in_the_folder(app, tmp_path):
+    with app.app_context():
+        from app import capabilities, config
+        root = _portable_aitoolkit(tmp_path)
+        config.save_config({'aitoolkit': {'dir': str(root)}})
+        result = capabilities.probe_aitoolkit()
+    assert result['ok'] is False          # nothing is auto-applied
+    assert result['has_run'] is True      # ...but the checkout IS recognised
+    assert result['python_candidates'] == [str(root / 'python_embeded' / 'python.exe')]
+    # The detail names the observation and BOTH ways out — never "a venv is missing".
+    assert 'no Python interpreter found' in result['detail']
+    assert 'Settings' in result['detail']
+    assert 'no venv/.venv' not in result['detail']
+
+def test_probe_aitoolkit_degrades_cleanly_when_nothing_is_there(app, tmp_path):
+    with app.app_context():
+        from app import capabilities, config
+        root = tmp_path / 'aitoolkit'
+        (root / 'toolkit').mkdir(parents=True)     # a checkout, no interpreter anywhere
+        (root / 'run.py').write_text('fake')
+        config.save_config({'aitoolkit': {'dir': str(root)}})
+        result = capabilities.probe_aitoolkit()
+    assert result['ok'] is False
+    assert result['has_run'] is True
+    assert result['python_candidates'] == []      # empty, not a guess
+    assert 'no Python interpreter found' in result['detail']
+
+def test_aitoolkit_candidates_survive_an_unreadable_folder(app, tmp_path):
+    with app.app_context():
+        from app import capabilities
+        assert capabilities.aitoolkit_python_candidates(tmp_path / 'nope') == []
+
+def test_explicit_aitoolkit_python_makes_a_venv_less_install_valid(app, tmp_path):
+    """The one-click offer lands here: saving aitoolkit.python flips the step."""
+    with app.app_context():
+        from app import capabilities, config
+        root = _portable_aitoolkit(tmp_path)
+        config.save_config({'aitoolkit': {
+            'dir': str(root),
+            'python': str(root / 'python_embeded' / 'python.exe')}})
+        result = capabilities.probe_aitoolkit()
+    assert result['ok'] is True
+
 def test_probe_comfyui_unreachable(app):
     with app.app_context():
         from app import capabilities

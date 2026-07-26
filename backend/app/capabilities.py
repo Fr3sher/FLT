@@ -318,10 +318,41 @@ def clear_import_cache() -> None:
     _cache_ts = 0.0
 
 
+# Where an ai-toolkit checkout keeps the Python that runs it. There is NO single
+# answer: the README's `venv/`, a `.venv/`, a conda env, or a portable bundle that
+# ships `python_embeded/python.exe` (a community easy-install script does exactly
+# that — reported on Reddit by Psyko_2000). So we do not guess a layout: we knock
+# on the folder and on each of its immediate sub-folders with every interpreter
+# shape the app already knows (`scoring_python._INTERPRETER_SPOTS`) and keep the
+# ones that answer as a real file. An empty list means "we found nothing here",
+# which is a fact the UI can state honestly — never a claim that a venv is the
+# only way. Nothing is executed and nothing is written; it is a stat() sweep one
+# level deep, computed only for a checkout whose interpreter we could not resolve.
+def aitoolkit_python_candidates(root, limit: int = 4) -> list:
+    from .services.scoring_python import interpreters_in
+    try:
+        root = Path(root)
+        children = sorted(p for p in root.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    out, seen = [], set()
+    for folder in (root, *children[:64]):
+        for cand in interpreters_in(folder):
+            key = os.path.normcase(str(cand))
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(str(cand))
+            if len(out) >= limit:
+                return out
+    return out
+
+
 def probe_aitoolkit() -> dict:
     d = cfg.aitoolkit_path('dir')
     if not d:
-        return {'ok': False, 'detail': 'aitoolkit.dir not configured'}
+        return {'ok': False, 'detail': 'aitoolkit.dir not configured',
+                'has_run': False, 'python_candidates': []}
     venv_python = cfg.aitoolkit_path('venv_python')
     has_run = (d / 'run.py').exists()
     # is_file(), NOT exists(): the training launch gate (lora_training.is_installed)
@@ -330,15 +361,22 @@ def probe_aitoolkit() -> dict:
     # says "not installed". Keep the two in lockstep so the diagnostic never lies.
     ok = has_run and bool(venv_python) and venv_python.is_file()
     if ok:
-        return {'ok': True, 'detail': str(d)}
+        return {'ok': True, 'detail': str(d), 'has_run': True,
+                'python_candidates': []}
     if has_run:
-        # The folder IS an ai-toolkit checkout — only the interpreter is
-        # missing (no venv/.venv: conda/uv/system installs, user-reported).
-        # Name the actionable fix instead of a blanket "invalid dir".
-        return {'ok': False,
-                'detail': (f'ai-toolkit found at {d} but no venv/.venv inside — '
-                           'set its Python interpreter in Settings → Local tools')}
-    return {'ok': False, 'detail': f'invalid aitoolkit dir: {d}'}
+        # The folder IS an ai-toolkit checkout — we just could not see which
+        # Python runs it (conda/uv/system/portable installs all land here).
+        # State the finding and hand over both ways out.
+        found = aitoolkit_python_candidates(d)
+        detail = (f'ai-toolkit found at {d} but no Python interpreter found '
+                  'inside — create a venv there, or set its Python interpreter '
+                  'in Settings → Local tools')
+        if found:
+            detail += f' (candidate: {found[0]})'
+        return {'ok': False, 'detail': detail, 'has_run': True,
+                'python_candidates': found}
+    return {'ok': False, 'detail': f'invalid aitoolkit dir: {d}',
+            'has_run': False, 'python_candidates': []}
 
 
 # JoyCaption's runtime deps that ai-toolkit does NOT ship: the training venv has
@@ -982,6 +1020,11 @@ def probe(force=False) -> dict:
         'aitoolkit': {
             'configured': bool(cfg.get('aitoolkit.dir')),
             'valid': aitoolkit['ok'],
+            # Kept apart so Setup can report what it ACTUALLY found: "this isn't
+            # an ai-toolkit checkout" and "this checkout has no interpreter we
+            # can see" are different problems with different fixes.
+            'dir_valid': bool(aitoolkit.get('has_run')),
+            'python_candidates': list(aitoolkit.get('python_candidates') or []),
         },
         'cloud_training': bool(cfg.secret('VAST_API_KEY')),
         # Publish-to-HF is gated purely on the HF_TOKEN secret being present (the

@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
   deriveSetupSteps, deriveCapabilitySummary, kleinMissingLabels, KLEIN_ASSET_LABELS,
   comfyuiDirVerdict, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT,
+  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS,
 } from './useSetupSteps.js';
+import fs from 'node:fs';
 
 const comfyStep = (comfyui) => deriveSetupSteps({ comfyui }).find((s) => s.id === 'comfyui');
 
@@ -302,4 +304,79 @@ test('capability summary: configured-but-not-running ComfyUI reads as OK with a 
   const on = { comfyui: { dir_valid: true, reachable: true }, engines: { klein: true }, studio_visible: true };
   assert.equal(row(on, 'Klein (local)').ok, true);
   assert.equal(row(on, 'Klein (local)').note, undefined);
+});
+
+
+// ── ai-toolkit setup copy ─────────────────────────────────────────────────────
+// Reported on Reddit by Psyko_2000: an ai-toolkit installed by a community
+// easy-install script ships a `python_embeded` folder and no venv, and the wizard
+// answered "set up its Python venv per the README" — a cause the app never
+// verified, and a remedy that install can never follow. He concluded the app
+// REQUIRED a venv and asked in public, instead of filling the `aitoolkit.python`
+// setting that already existed. These tests lock the CONTENT, since the content
+// is what was false: showing the block proves nothing.
+const trainStep = (aitoolkit) => deriveSetupSteps({ aitoolkit }).find((s) => s.id === 'training');
+const DIR = '/opt/ai-toolkit';
+
+test('a folder with no interpreter reports the FINDING, never "a venv is missing"', () => {
+  const v = aitoolkitVerdict(trainStep({ valid: false, dir_valid: true }), DIR);
+  assert.equal(v.kind, 'no_interpreter');
+  assert.match(v.headline, /no Python interpreter was found/i);
+  assert.match(v.headline, new RegExp(DIR));
+  // The headline must not diagnose a missing venv — that is the claim that was wrong.
+  assert.doesNotMatch(v.headline, /venv/i);
+});
+
+test('both routes are offered, and the existing-interpreter one is not a footnote', () => {
+  const v = aitoolkitVerdict(trainStep({ valid: false, dir_valid: true }), DIR);
+  // Route A: make one.
+  assert.match(v.body, /create a venv/i);
+  // Route B: use the one you already have — named, in the same sentence, with the
+  // real-world shapes spelled out (Psyko_2000's is the portable/embedded one).
+  assert.match(v.body, /already run ai-toolkit with/i);
+  for (const shape of [/conda/i, /\buv\b/i, /system Python/i, /python_embeded/])
+    assert.match(v.body, shape, `the body must name ${shape}`);
+  // And a click that reaches the setting, not just prose about it.
+  assert.equal(v.settingsSection, 'local-tools');
+  assert.match(v.action, /ai-toolkit Python interpreter/);
+  // The section id is a real Settings route, not a hopeful string.
+  const registry = fs.readFileSync(new URL('../components/settings/registry.js', import.meta.url), 'utf8');
+  const known = new Set([...registry.matchAll(/id: '([a-z0-9-]+)'/g)].map((m) => m[1]));
+  assert.ok(known.size >= 8, 'settings registry did not parse');
+  assert.ok(known.has(v.settingsSection));
+});
+
+test('an interpreter found in the folder becomes a one-click offer', () => {
+  const found = ['/opt/ai-toolkit/python_embeded/python.exe'];
+  const v = aitoolkitVerdict(trainStep({ valid: false, dir_valid: true, python_candidates: found }), DIR);
+  assert.deepEqual(v.candidates, found);
+  // ...and the prose still stands on its own when nothing was found.
+  const bare = aitoolkitVerdict(trainStep({ valid: false, dir_valid: true }), DIR);
+  assert.deepEqual(bare.candidates, []);
+  assert.ok(bare.body.length > 80);
+});
+
+test('a folder that is not an ai-toolkit checkout gets its own, different answer', () => {
+  const v = aitoolkitVerdict(trainStep({ valid: false, dir_valid: false }), DIR);
+  assert.equal(v.kind, 'not_a_checkout');
+  assert.match(v.headline, /run\.py/);
+  // Not the interpreter story: that would send the user to the wrong setting.
+  assert.doesNotMatch(v.body, /interpreter/i);
+});
+
+test('the first-install steps do not define a working ai-toolkit as "has a venv"', () => {
+  const all = AITOOLKIT_INSTALL_STEPS.map((s) => s.text).join(' ');
+  assert.match(all, /venv/);              // still the documented happy path
+  assert.match(all, /conda/i);            // but not the only one
+  assert.match(all, /portable/i);
+  assert.match(all, /ai-toolkit Python interpreter/);
+  assert.ok(AITOOLKIT_INSTALL_STEPS.some((s) => s.command), 'the clone command survives');
+});
+
+test('SetupPage renders the verdict instead of hardcoding the old sentence', () => {
+  const page = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+  assert.doesNotMatch(page, /set up its Python venv per the README/);
+  assert.doesNotMatch(page, /set up its venv per its README/);
+  assert.match(page, /aitoolkitVerdict\(step, dir\)/);
+  assert.match(page, /<SettingsLink section=\{verdict\.settingsSection\}/);
 });

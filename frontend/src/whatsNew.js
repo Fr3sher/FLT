@@ -47,6 +47,14 @@ import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-ai-toolkit-without-a-venv-is-a-supported-install',
+    date: '2026-07-26',
+    title: '🐍 An ai-toolkit installed without a venv is set up in one click',
+    blurb:
+      "Plenty of ai-toolkit installs have no venv at all — the popular easy-install script ships a python_embeded folder instead, and conda, uv and system-Python setups have nothing to find either. Setup used to answer those with \"set up its Python venv per the README\", which named a cause it had never checked and a fix those installs can never follow; more than one person concluded the app required a venv. It now says what it actually found — no Python interpreter in that folder — and offers both real ways out: create a venv, or keep the Python you already run ai-toolkit with. Better still, when an interpreter is sitting in that folder the wizard spots it and applies it with a single button. Thanks to Psyko_2000 (Reddit) for reporting it.",
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-26-stop-during-a-watermark-pass-loses-nothing',
     date: '2026-07-26',
     title: '🛑 Stopping a watermark pass no longer costs you a cleaned image',
