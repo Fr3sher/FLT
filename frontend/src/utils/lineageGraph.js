@@ -99,8 +99,13 @@ function indexTree(tree) {
 
 /** Cubic-bezier path from a point on the parent (card edge OR a checkpoint pill)
  *  to a child card's left edge, with horizontal tangents so the curve leaves and
- *  arrives flat — the smooth "flowing" connector, not a kinked polyline. */
-function edgePath(x1, y1, x2, y2) {
+ *  arrives flat — the smooth "flowing" connector, not a kinked polyline.
+ *
+ *  Exported because the ◉ Canvas re-draws these curves after a card is dragged:
+ *  the endpoints move with their node, and re-deriving them from the finished
+ *  `d` string (or keeping a second copy of this formula) is how two renderings
+ *  of the same edge start to drift. */
+export function edgePath(x1, y1, x2, y2) {
   const mx = x1 + (x2 - x1) / 2;
   return `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`;
 }
@@ -251,6 +256,11 @@ export function buildLineageGraph(tree, { bigPreviews = false } = {}) {
       superseded: !!e.superseded,
       onSpine: spine.has(e.parent) && spine.has(e.child),
       anchoredStep,
+      // The RAW endpoints alongside the path: (x1,y1) belongs to the parent's
+      // cell, (x2,y2) to the child's. The canvas moves a card and needs to
+      // rebuild the curve from the two points that moved with it — parsing them
+      // back out of `d` would be a second, silently divergent source of truth.
+      x1, y1, x2, y2,
       d: edgePath(x1, y1, x2, y2),
     });
   }

@@ -27,7 +27,8 @@ from urllib.parse import urlsplit
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from ..extensions import db
-from ..models import FaceDataset, FaceDatasetImage, LoraTestImage
+from ..models import (CanvasNodePosition, FaceDataset, FaceDatasetImage,
+                      LoraTestImage)
 from .. import config as cfg
 from . import dataset_activity, reference_edit_jobs, trash
 from .dataset_storage import dataset_path, ensure_dataset_dir
@@ -1607,6 +1608,13 @@ def delete_dataset(user_id, dataset_id):
         pass
     imgs = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).all()
     studio_rows = LoraTestImage.query.filter_by(dataset_id=dataset_id).all()
+    # ◉ LoRA Canvas card positions. The model declares a relationship() to
+    # face_dataset so the unit of work orders the DELETEs, but a mapper-level
+    # dependency only covers rows that are IN the session — so they are loaded
+    # and deleted explicitly here like every other child, and flushed before the
+    # parent below. A dataset must never fail to delete over a display
+    # preference: that exact bug already answered HTTP 500 once in this project.
+    canvas_rows = CanvasNodePosition.query.filter_by(dataset_id=dataset_id).all()
     dataset_path = _dataset_path(dataset_id)
     trashed_path = None
     try:
@@ -1631,6 +1639,8 @@ def delete_dataset(user_id, dataset_id):
         # db.create_all(). New databases also have ON DELETE CASCADE as a guard.
         for cell in studio_rows:
             db.session.delete(cell)
+        for pos in canvas_rows:
+            db.session.delete(pos)
         # Force the child DELETEs to reach the DB BEFORE the parent's. The child
         # models declare only a table-level ForeignKey (no relationship()), so the
         # unit of work has no ordering dependency between them and would otherwise

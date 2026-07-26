@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/cloud',
   },
   {
+    id: '2026-07-26-canvas-move-cards',
+    date: '2026-07-26',
+    title: 'Arrange the Canvas the way you think about your runs',
+    blurb:
+      'Run cards on the Canvas can now be dragged, and they stay where you put them — after a reload, and after the next training finishes. That second part is the real change: the automatic tree centres every run over its continuations, so a new branch used to re-flow the whole lane and quietly undo any layout you had in mind. Once you have moved something in a lane, a run that finishes later lands in free space beside your arrangement and nothing else moves. On a phone, hold a card for a moment to pick it up (a finger that slides straight away still scrolls the board). Changed your mind? ✦ Tidy up forgets every card you moved on the lanes on screen and rebuilds the automatic tree — positions are only ever a display preference, never provenance.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-26-lora-canvas',
     date: '2026-07-26',
     title: '◉ Your whole training history on one board',

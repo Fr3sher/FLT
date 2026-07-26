@@ -1676,6 +1676,38 @@ def train_canvas_datasets():
     return jsonify(ct.canvas_dataset_index(LOCAL_USER))
 
 
+@bp.get('/train/canvas/positions')
+def train_canvas_positions():
+    """◉ LoRA Canvas: every remembered card position, grouped by dataset id.
+    One request for the whole board — the lanes need their overrides before the
+    first paint, and N round-trips for a few dozen tiny rows would cost more
+    than the genealogy fetches they precede."""
+    return jsonify(ct.canvas_positions(LOCAL_USER))
+
+
+@bp.put('/dataset/<int:dataset_id>/canvas/positions')
+def dataset_canvas_positions_save(dataset_id):
+    """Remember where cards sit in ONE lane. Body: {positions:[{record_id,x,y}]}.
+    Upsert, so re-sending the same coordinates is a no-op — the canvas re-pins a
+    lane whenever it gains a run."""
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ct.save_canvas_positions(
+            LOCAL_USER, dataset_id, data.get('positions')))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
+@bp.delete('/dataset/<int:dataset_id>/canvas/positions')
+def dataset_canvas_positions_clear(dataset_id):
+    """✦ Tidy up one lane: forget every dragged position and fall back to the
+    automatic tree."""
+    try:
+        return jsonify(ct.clear_canvas_positions(LOCAL_USER, dataset_id))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
 @bp.get('/dataset/<int:dataset_id>/train/lineage')
 def dataset_train_dataset_lineage(dataset_id):
     """🌳 Genealogy forest of ALL this dataset's runs (every launch + its

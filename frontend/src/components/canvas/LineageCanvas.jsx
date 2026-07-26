@@ -5,12 +5,14 @@ import {
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
   stackLanes, viewTransform, zoomAt,
 } from '../../utils/canvasLayout';
+import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from '../dataset/lineageEdges';
 import { noteBadge, toggleDiffSelection } from '../dataset/lineageDetail.js';
 import { removeRunFromTree } from '../../utils/runDeletable.js';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
+import { HelpBadge } from '../../help/HelpMode';
 
 /* ◉ The LoRA Canvas surface — every selected dataset's genealogy on ONE board,
    with zoom and pan.
@@ -20,18 +22,33 @@ import LineageDiffPanel from '../dataset/LineageDiffPanel';
    each dataset's tree is still utils/lineageGraph.js. What is new here is only
    the surface: several trees stacked into lanes, and a viewport you can move.
 
-   Slice 1 deliberately stops there. Nodes do not move yet (slice 2) and nothing
-   generates from here yet (slice 3), so a checkpoint pill opens its run's
-   inspector rather than pretending to offer actions it cannot perform — a dead
-   click would be worse than no click. The in-card graph keeps every one of those
-   actions until the canvas actually reaches parity.
+   Slice 2 adds direct manipulation: cards can be dragged, and where they land is
+   remembered (utils/canvasPlacement.js + the canvas_node_position table).
+   Nothing generates from here yet (slice 3), so a checkpoint pill opens its
+   run's inspector rather than pretending to offer actions it cannot perform — a
+   dead click would be worse than no click. The in-card graph keeps every one of
+   those actions until the canvas actually reaches parity.
 
    Gestures: wheel (or trackpad pinch, which arrives as ctrl+wheel) zooms around
-   the pointer; dragging the background pans; two fingers pinch-zoom. Dragging a
-   NODE is not a gesture yet, so the background drag is unambiguous — the touch
-   long-press that will disambiguate it belongs to slice 2. */
+   the pointer; dragging the background pans; two fingers pinch-zoom; dragging a
+   card moves it.
+
+   ⚠️ Moving a card and moving the view are the SAME physical gesture. With a
+   mouse, hit-testing settles it: the press either landed on a card or it did
+   not. On touch there is nothing to hit-test with — a finger on a card could
+   mean either — so the finger PANS by default and only starts moving the card
+   after a long press, which is the gesture every touch UI already uses for
+   "pick this up". Moving before the press completes cancels it, so a flick that
+   happens to start on a card still scrolls the board. */
 
 const ZOOM_STEP = 1.25;
+// How long a finger must rest on a card before it picks it up. Long enough not
+// to fire on a flick that starts on a card, short enough not to feel broken.
+const LONG_PRESS_MS = 420;
+// Screen pixels of travel before a press counts as a drag. Below it the gesture
+// is still a click, so inspecting a run never depends on holding perfectly
+// still — and a 2-px twitch must not write a position to the database.
+const DRAG_SLOP = 4;
 
 /** One dataset's title strip above its tree. Inside the zoomed world, so it
  *  scales with the board it labels — a lane whose name floated at a constant
@@ -63,7 +80,7 @@ function LaneHeader({ lane }) {
 }
 
 /** One dataset's tree, drawn exactly as the in-card graph draws it. */
-function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf }) {
+function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId }) {
   const g = lane.graph;
   if (!g || !g.nodes.length) return null;
   return (
@@ -82,7 +99,15 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf }) {
             x={n.x} y={n.y} width={CARD_W} height={n.cellH}
             onPointerEnter={() => onHover(n.node.record_id)}
             onPointerLeave={() => onHover(null, n.node.record_id)}>
-            <div style={{ position: 'relative', width: CARD_W, height: n.cellH }}>
+            {/* data-canvas-node is the hit-test handle: the pointer handlers on
+                the frame read the lane + run off it to know WHAT was grabbed,
+                without every card needing its own listener. */}
+            <div data-canvas-node="" data-dataset-id={lane.datasetId} data-record-id={n.node.record_id}
+              style={{ position: 'relative', width: CARD_W, height: n.cellH,
+                ...(liftedId === n.node.record_id
+                  ? { filter: 'drop-shadow(0 6px 14px rgba(0,0,0,0.55))', opacity: 0.92 }
+                  : null) }}
+              className={liftedId === n.node.record_id ? 'lds-gnode-lifted' : undefined}>
               <GraphCard node={noteOf(n.node)} lit={isLit(n.node.record_id)}
                 annotated={noteBadge(noteOf(n.node))}
                 compareRole={diffRole(n.node.record_id)}
@@ -102,7 +127,7 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf }) {
   );
 }
 
-export default function LineageCanvas({ entries }) {
+export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp }) {
   const frameRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -123,9 +148,47 @@ export default function LineageCanvas({ entries }) {
     return { ...e, graph: buildLineageGraph(tree) };
   }), [entries, deletedIds]);
 
-  const world = useMemo(() => stackLanes(shown.map((e) => ({
+  // --- placement: the automatic tree ⊕ what the user moved ------------------
+  // A drag is applied as a temporary override on top of the stored map, over a
+  // BASELINE captured when the drag started. The baseline matters: dropping a
+  // single override onto an otherwise-automatic lane would make that lane
+  // "arranged" halfway through the gesture, and applyPlacement would treat every
+  // other card as a new arrival to slide out of the way. Freezing the lane at
+  // the moment the finger lands keeps the rest of the board perfectly still.
+  const [drag, setDrag] = useState(null);   // {datasetId, recordId, x, y, baseline}
+
+  const placed = useMemo(() => shown.map((e) => {
+    if (!e.graph) return e;
+    let ov = positions?.[e.datasetId] || {};
+    if (drag && drag.datasetId === e.datasetId) {
+      ov = { ...drag.baseline, [drag.recordId]: { x: drag.x, y: drag.y } };
+    }
+    return { ...e, graph: applyPlacement(e.graph, ov) };
+  }), [shown, positions, drag]);
+
+  // A lane that gained a run since it was arranged reports the new card's spot;
+  // persisting it is what makes "a new run moves nothing" survive the NEXT
+  // reload too. Guarded by a seen-set so a failed write cannot become a loop.
+  const pinned = useRef(new Set());
+  useEffect(() => {
+    for (const lane of placed) {
+      const pins = lane.graph?.pendingPins;
+      if (!pins?.length) continue;
+      const key = `${lane.datasetId}:${pins.map((p) => p.record_id).join(',')}`;
+      if (pinned.current.has(key)) continue;
+      pinned.current.add(key);
+      onPinLane?.(lane.datasetId, pins);
+    }
+  }, [placed, onPinLane]);
+
+  const world = useMemo(() => stackLanes(placed.map((e) => ({
     ...e, width: e.graph?.width || 0, height: e.graph?.height || 0,
-  }))), [shown]);
+  }))), [placed]);
+
+  // The latest placement, for the pointer handlers (which must not re-bind on
+  // every board change just to read a card's current position).
+  const placedRef = useRef(placed);
+  useEffect(() => { placedRef.current = placed; }, [placed]);
 
   // Measure the frame. The board is fitted to it, so an unmeasured frame would
   // mean an invisible board on first paint.
@@ -202,24 +265,84 @@ export default function LineageCanvas({ entries }) {
     return { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
   };
 
+  // --- node dragging ---------------------------------------------------------
+  const dragRef = useRef(null);      // {datasetId, recordId, sx, sy, ox, oy, moved}
+  const longPress = useRef(null);    // touch: the pending pick-up
+  const suppressClick = useRef(false);
+
+  const cancelLongPress = () => {
+    if (longPress.current) { clearTimeout(longPress.current); longPress.current = null; }
+  };
+
+  /** Pick a card up: freeze its lane as it looks RIGHT NOW, then follow the
+   *  pointer. `origin` is the screen point the gesture started from. */
+  const beginDrag = useCallback((datasetId, recordId, origin) => {
+    const lane = placedRef.current.find((l) => l.datasetId === datasetId);
+    const n = lane?.graph?.nodes.find((x) => x.node.record_id === recordId);
+    if (!n) return;
+    dragRef.current = { datasetId, recordId, sx: origin.x, sy: origin.y,
+      ox: n.x, oy: n.y, x: n.x, y: n.y, moved: false };
+    setDrag({ datasetId, recordId, x: n.x, y: n.y,
+      baseline: toOverrideMap(pinSnapshot(lane.graph, recordId, n.x, n.y)) });
+    pan.current = null;
+  }, []);
+
   const onPointerDown = useCallback((e) => {
-    // A press on a card or a pill is an inspection, never a pan.
-    if (e.target.closest?.('.lds-gcard') || e.target.closest?.('.lds-ckpill-wrap')) return;
-    pointers.current.set(e.pointerId, localPoint(e));
+    suppressClick.current = false;
+    // A press on a pill is an inspection, never a drag or a pan.
+    if (e.target.closest?.('.lds-ckpill-wrap')) return;
+    const card = e.target.closest?.('[data-canvas-node]');
+    const at = localPoint(e);
+    if (card && e.pointerType !== 'touch') {
+      // Mouse / pen: the press landed on a card, so it IS the card that moves.
+      frameRef.current?.setPointerCapture?.(e.pointerId);
+      beginDrag(Number(card.dataset.datasetId), Number(card.dataset.recordId), at);
+      return;
+    }
+    pointers.current.set(e.pointerId, at);
     frameRef.current?.setPointerCapture?.(e.pointerId);
     if (pointers.current.size === 2) {
       const [a, b] = [...pointers.current.values()];
       pinch.current = { dist: pinchDistance(a, b), scale: viewRef.current.scale };
       pan.current = null;
+      cancelLongPress();
     } else if (pointers.current.size === 1) {
-      pan.current = { ...localPoint(e), tx: viewRef.current.tx, ty: viewRef.current.ty };
+      pan.current = { ...at, tx: viewRef.current.tx, ty: viewRef.current.ty };
+      if (card) {
+        // Touch on a card: pan for now, pick the card up if the finger stays.
+        const dsId = Number(card.dataset.datasetId);
+        const recId = Number(card.dataset.recordId);
+        longPress.current = setTimeout(() => {
+          longPress.current = null;
+          beginDrag(dsId, recId, at);
+        }, LONG_PRESS_MS);
+      }
     }
     frameRef.current?.classList.add('is-grabbing');
-  }, []);
+  }, [beginDrag]);
 
   const onPointerMove = useCallback((e) => {
+    const d = dragRef.current;
+    if (d) {
+      const p = localPoint(e);
+      const scale = clampScale(viewRef.current.scale);
+      const dx = (p.x - d.sx) / scale;
+      const dy = (p.y - d.sy) / scale;
+      if (!d.moved && Math.hypot(p.x - d.sx, p.y - d.sy) < DRAG_SLOP) return;
+      d.moved = true;
+      d.x = Math.max(0, d.ox + dx);
+      d.y = Math.max(0, d.oy + dy);
+      setDrag((cur) => (cur ? { ...cur, x: d.x, y: d.y } : cur));
+      return;
+    }
     if (!pointers.current.has(e.pointerId)) return;
+    const prev = pointers.current.get(e.pointerId);
     pointers.current.set(e.pointerId, localPoint(e));
+    // A finger that travels is scrolling the board, not picking a card up.
+    if (longPress.current && prev) {
+      const p = localPoint(e);
+      if (Math.hypot(p.x - prev.x, p.y - prev.y) > DRAG_SLOP) cancelLongPress();
+    }
     if (pointers.current.size >= 2 && pinch.current) {
       const [a, b] = [...pointers.current.values()];
       const dist = pinchDistance(a, b);
@@ -236,6 +359,20 @@ export default function LineageCanvas({ entries }) {
   }, [applyView]);
 
   const endPointer = useCallback((e) => {
+    cancelLongPress();
+    const d = dragRef.current;
+    if (d) {
+      dragRef.current = null;
+      // Only a gesture that actually MOVED writes anything: a plain click on a
+      // card must stay a click, and must not turn its lane into an arranged one
+      // behind the user's back.
+      if (d.moved) {
+        suppressClick.current = true;
+        const lane = placedRef.current.find((l) => l.datasetId === d.datasetId);
+        if (lane?.graph) onPinLane?.(d.datasetId, pinSnapshot(lane.graph, d.recordId, d.x, d.y));
+      }
+      setDrag(null);
+    }
     pointers.current.delete(e.pointerId);
     frameRef.current?.releasePointerCapture?.(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
@@ -243,7 +380,7 @@ export default function LineageCanvas({ entries }) {
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, []);
+  }, [onPinLane]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -276,6 +413,10 @@ export default function LineageCanvas({ entries }) {
   }, []);
 
   const onNodeClick = useCallback((node, e) => {
+    // A drop lands on the card it moved, so the browser fires a click right
+    // after it. Swallow exactly that one — otherwise every move would also open
+    // the inspector.
+    if (suppressClick.current) { suppressClick.current = false; return; }
     if (e && e.shiftKey) {
       setSelectedForDiff((sel) => toggleDiffSelection(sel, node.record_id));
       return;
@@ -300,6 +441,9 @@ export default function LineageCanvas({ entries }) {
 
   const pct = Math.round(clampScale(view.scale) * 100);
   const empty = !world.lanes.length;
+  // Has anything on the visible board been moved? Drives ✦ Tidy up: a button
+  // that clears nothing should say so by being disabled, not by doing nothing.
+  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0);
 
   return (
     <>
@@ -324,8 +468,20 @@ export default function LineageCanvas({ entries }) {
           className="flex h-9 items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content">
           Fit
         </button>
+        {/* The way out of an arrangement that got away from you. Twenty runs
+            later a hand-tidied board can be a knot, and "move them all back by
+            hand" is not an answer — this drops every remembered position and
+            hands the board to the automatic tree again. */}
+        <button type="button" onClick={onTidyUp} disabled={!arranged}
+          title={arranged
+            ? 'Forget every moved card and rebuild the automatic tree'
+            : 'Nothing has been moved yet'}
+          className="flex h-9 items-center gap-1 rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40">
+          <span aria-hidden>✦</span> Tidy up
+        </button>
+        <HelpBadge topic="canvas-arrange" />
         <span className="ml-auto hidden text-content-subtle text-[0.625rem] sm:inline">
-          Drag to pan · wheel to zoom · click a run to inspect · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run to inspect · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -358,7 +514,8 @@ export default function LineageCanvas({ entries }) {
               <div key={lane.datasetId}>
                 <LaneHeader lane={lane} />
                 <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
-                  onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf} />
+                  onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}
+                  liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null} />
               </div>
             ))}
           </div>
