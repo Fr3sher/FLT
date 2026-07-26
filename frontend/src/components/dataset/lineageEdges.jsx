@@ -27,9 +27,15 @@ export function LineageEdgeDefs() {
         <stop offset="0" stopColor="#6366f1" stopOpacity="0.6" />
         <stop offset="1" stopColor="#a5b4fc" stopOpacity="0.98" />
       </linearGradient>
+      {/* A superseded branch is DIMMER than the trunk, not invisible. It used to
+          fade in from 12% opacity — and the half that fades in is exactly the half
+          that leaves the parent, so on a dark screen at reduced brightness (a phone)
+          the edge read as absent and the continuation looked unlinked. It is the
+          most informative edge on the graph (the parent kept saves past this point),
+          so it now starts at a legible floor and ends nearly opaque. */}
       <linearGradient id="lds-edge-super" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stopColor="#f59e0b" stopOpacity="0.12" />
-        <stop offset="1" stopColor="#fbbf24" stopOpacity="0.5" />
+        <stop offset="0" stopColor="#f59e0b" stopOpacity="0.55" />
+        <stop offset="1" stopColor="#fbbf24" stopOpacity="0.95" />
       </linearGradient>
       <filter id="lds-edge-glow" x="-20%" y="-40%" width="140%" height="180%">
         <feGaussianBlur stdDeviation="2.2" result="b" />
@@ -54,10 +60,17 @@ export function LineageEdges({ edges, isLit }) {
           as a lit ribbon. Drawn first, then the crisp cores on top. */}
       <g fill="none" strokeLinecap="round" aria-hidden>
         {edges.map((e) => {
-          if (!(e.onSpine || (lit(e.parentId) && lit(e.childId))) || e.superseded) return null;
+          if (!(e.onSpine || (lit(e.parentId) && lit(e.childId)))) return null;
+          // A superseded edge on the trunk gets its halo too — in its OWN amber, so
+          // it still reads "this branch left saves behind" while being as findable
+          // as any other trunk hop. Skipping it entirely was why the one edge users
+          // most need to see (a resume from below the parent's end) was the one they
+          // could not find.
           return (
             <path key={`glow-${e.parentId}-${e.childId}`}
-              d={e.d} stroke="url(#lds-edge-spine)" strokeWidth="5"
+              d={e.d}
+              stroke={`url(#${e.superseded ? 'lds-edge-super' : 'lds-edge-spine'})`}
+              strokeWidth="5"
               opacity="0.5" filter="url(#lds-edge-glow)" />
           );
         })}
@@ -72,7 +85,12 @@ export function LineageEdges({ edges, isLit }) {
               className="lds-ledge"
               d={e.d}
               stroke={`url(#${grad})`}
-              strokeWidth={spine ? 2.6 : 1.5}
+              strokeWidth={spine ? 2.6 : e.superseded ? 2.2 : 1.5}
+              /* ⚠️ `.lds-ledge` sets stroke-dasharray in CSS for the draw-in
+                 animation, and a CSS declaration beats a presentation attribute:
+                 this dash never actually renders. A superseded branch therefore
+                 reads by its amber colour, which is why that colour has to be
+                 legible on its own (see the gradient above). */
               strokeDasharray={e.superseded ? '2 4' : undefined}
               pathLength="1"
               style={{ '--draw-delay': `${Math.min(i, 10) * 60 + 120}ms` }} />

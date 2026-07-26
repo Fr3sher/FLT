@@ -233,6 +233,53 @@ test('edge falls back to the card edge when no pill matches the resume step', ()
   assert.ok(Math.abs(Number(start[1]) - (parent.x + CARD_W)) < 0.01); // card right edge
 });
 
+test('a resume whose source pill is GONE is still a drawn, superseded edge', () => {
+  /* The Estelle shape: a 3500-step parent whose saves past 2000 were cleaned,
+     and a child that resumed at 2500. The pill it resumed from no longer
+     exists — the edge must still leave the parent CARD (never vanish), and stay
+     flagged superseded so the renderer paints it in its own colour. Reported as
+     "the edge is missing"; it was there, just painted at 12% opacity. */
+  const g = buildLineageGraph({
+    root_id: 1, current_id: 2,
+    nodes: [
+      { record_id: 1, parent_record_id: null, steps: 3500,
+        checkpoints: [ck(1500), ck(2000)] },
+      { record_id: 2, parent_record_id: 1, resumed_from: 2500, steps: 3000,
+        is_current: true, checkpoints: [ck(2750), ck(3000)] },
+    ],
+    edges: [{ parent: 1, child: 2, resumed_from: 2500, superseded: true }],
+  });
+  assert.equal(g.edges.length, 1);
+  const edge = g.edges[0];
+  assert.equal(edge.superseded, true);
+  assert.equal(edge.anchoredStep, null);          // no pill to anchor on
+  assert.equal(edge.onSpine, true);               // root → current
+  assert.ok(/^M[\d.]+,[\d.]+ C/.test(edge.d));    // a real path, not empty
+  const parent = g.nodes.find((n) => n.node.record_id === 1);
+  const start = edge.d.match(/^M([\d.]+),/);
+  assert.ok(Math.abs(Number(start[1]) - (parent.x + CARD_W)) < 0.01);
+});
+
+test('a flat edge never has a zero-height bounding box', () => {
+  /* An objectBoundingBox gradient — which is what every lineage edge is painted
+     with — is not rendered when the geometry's bbox has zero height. A plain
+     parent→child chain is exactly horizontal, so its edge disappeared entirely.
+     The path must therefore end at a different y than it started. */
+  const g = buildLineageGraph({
+    root_id: 1, current_id: 2,
+    nodes: [
+      { record_id: 1, parent_record_id: null },
+      { record_id: 2, parent_record_id: 1, is_current: true },
+    ],
+    edges: [{ parent: 1, child: 2 }],
+  });
+  const m = g.edges[0].d.match(
+    /^M([\d.]+),([\d.]+) C([\d.]+),([\d.]+) ([\d.]+),([\d.]+) ([\d.]+),([\d.]+)$/);
+  const [y1, y2] = [Number(m[2]), Number(m[8])];
+  assert.notEqual(y1, y2);
+  assert.ok(Math.abs(y2 - y1) <= 1);                   // …and imperceptibly so
+});
+
 // --- 🔍 big-preview mode (adaptive geometry) --------------------------------
 
 test('graphMetrics: compact is the default, big enlarges the tiles', () => {

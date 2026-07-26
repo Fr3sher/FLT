@@ -3226,6 +3226,11 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
         if rec is not None:
             c['version'] = rec.version
             c['source'] = rec.source
+            # The record that PRODUCED this file. A continuation resolves its
+            # lineage parent (and the LoRA geometry it must keep) from HERE —
+            # `run_id` below is a cloud id for a cloud record, which is not a
+            # record key and cannot be used for either.
+            c['record_id'] = rec.id
             c['trained_at'] = rec.created_at.isoformat() if rec.created_at else None
             # Run identity for the ☁/💻 #N chip + deep-link on the local group
             # header — the same run the deployed file will be tagged with.
@@ -3244,6 +3249,40 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
                 c['step'] = rec.steps
     out.sort(key=lambda c: (c['step'], bool(c.get('final'))))
     return out
+
+
+def resume_source_checkpoint(checkpoints, step):
+    """The save a resume at `step` actually loads, out of a list_checkpoints()
+    list — so a continuation can read ITS provenance (`record_id`) and ITS
+    geometry instead of guessing from the lane. Ties (a numbered save and the
+    bare final at the same step) prefer the numbered file, the same rule every
+    ▶ Continue path already uses. None when nothing sits at that step."""
+    matches = [c for c in (checkpoints or []) if c.get('step') == step]
+    if not matches:
+        return None
+    return min(matches, key=lambda c: bool(c.get('final')))
+
+
+def describe_geometry_conflict(parent_geometry, rank, alpha):
+    """Message for "you cannot continue THESE weights at THAT rank", or None when
+    the shapes agree (or the parent's geometry was never recorded).
+
+    A LoRA's rank and alpha size its matrices: rank-32 weights simply do not load
+    into a rank-64 network. So on a resume the geometry is a property of the
+    checkpoint, never a setting to re-pick — and when the two disagree the launch
+    must say so BEFORE renting anything, not train a fresh LoRA the user believes
+    is a continuation."""
+    geo = parent_geometry or {}
+    want_r, want_a = geo.get('rank'), geo.get('alpha')
+    bad = ((want_r is not None and rank is not None and int(want_r) != int(rank))
+           or (want_a is not None and alpha is not None and int(want_a) != int(alpha)))
+    if not bad:
+        return None
+    return (f'this checkpoint was trained at rank {want_r} / alpha {want_a}, and '
+            f'this run would use rank {rank} / alpha {alpha}. A LoRA\'s rank is '
+            'fixed by its weights — continuing it at another rank cannot load '
+            'them. Set rank and alpha back in Training settings, or start a '
+            'fresh run instead of continuing.')
 
 
 def checkpoint_file_path(user_id, dataset_id, filename, base_model=_PERSISTED,
@@ -4850,6 +4889,33 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         # Ties (a numbered save and the bare final at the same step): prefer the
         # numbered file — it carries a clean step and is never the run's live final.
         chosen = min(matches, key=lambda c: bool(c.get('final')))
+    # Lineage: the record this continuation resumes FROM is the record that
+    # PRODUCED the file being loaded (list_checkpoints stamps `record_id` on every
+    # save), NOT merely the newest record of the lane. One lane holds several runs,
+    # and their saves coexist in the same run dir: attributing the child to the
+    # newest record drew an edge to a run whose weights were never touched — and,
+    # worse, one whose rank could differ, which is what makes the graph's claim
+    # physically impossible. Falls back to the lane's newest record when the file
+    # carries no stamp (pre-registry saves). Best-effort like all provenance — a
+    # resolution failure leaves the edge NULL and NEVER blocks the continuation.
+    from . import checkpoint_registry
+    _src_ck = resume_source_checkpoint(cks, resume_step)
+    try:
+        _parent = checkpoint_registry.record_by_id((_src_ck or {}).get('record_id'))
+        if _parent is None:
+            _parent = checkpoint_registry.newest_record_for(dataset_id, fam, base or '', var)
+    except Exception:
+        _parent = None
+    # …and the geometry those weights were trained with is not negotiable. The
+    # local lane trains from the dataset's PERSISTED settings, so it cannot quietly
+    # inherit the parent's rank without rewriting the user's own settings behind
+    # their back (the cloud lane can — it carries a per-run snapshot). Refuse
+    # loudly, here: nothing has been archived, persisted or launched yet.
+    _conflict = describe_geometry_conflict(
+        checkpoint_registry.network_geometry(_parent),
+        _lora_rank(ds, fam), _lora_alpha_eff(ds, _lora_rank(ds, fam), fam))
+    if _conflict:
+        raise ValueError(_conflict)
     try:
         extra = max(100, int(extra_steps))
     except (TypeError, ValueError):
@@ -4882,17 +4948,6 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # explicit server-side acknowledgement.
     launch_allow_unverified = (allow_unverified_weights
                                or not needs_explicit_z_recipe)
-    # Lineage: the record this continuation resumes FROM is the newest record of
-    # this exact lane (dataset+family+base+variant). Resolved BEFORE launch_training
-    # registers the child, so the child's parent_record_id points at the true
-    # predecessor. Best-effort like all provenance — a resolution failure (no prior
-    # record, or a queue-thread call outside the app context) leaves the edge NULL
-    # and NEVER blocks the continuation.
-    from . import checkpoint_registry
-    try:
-        _parent = checkpoint_registry.newest_record_for(dataset_id, fam, base or '', var)
-    except Exception:
-        _parent = None
     res = launch_training(user_id, dataset_id, steps=resume_step + extra, check_captions=False,
                           base_model=base, variant=var, train_type=fam,
                           masked=masked,
