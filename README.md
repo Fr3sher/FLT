@@ -759,6 +759,9 @@ Under the hood: the app has **no user accounts**, so on `127.0.0.1` (the default
 
 ## Troubleshooting
 
+**The page is completely blank (Windows), in every browser, with a healthy server log**
+Windows stores the content type of each file extension in its registry (`HKEY_CLASSES_ROOT\<ext>\Content Type`), and any installed program is free to overwrite it. When `.js` there says `text/plain`, the browser downloads the app's bundle and then refuses to execute it — a white page, and not one line of error on either side. Fixed since the wave of 2026-07-26: the app now states the content type of every file it serves instead of asking the registry, so nothing installed on the machine can silence the frontend. If you are on an older build, update and restart. Reported, diagnosed and fixed by [gessyoo](https://github.com/perfectgf/lora-dataset-studio/issues/12).
+
 **`npm install` fails with `Cannot find module @rollup/rollup-<platform>-...`**
 A known npm bug ([npm/cli#4828](https://github.com/npm/cli/issues/4828)) can make `package-lock.json` "remember" the platform it was generated on. Fix: run `npm i -D @rollup/rollup-<your-platform>` for your OS/arch, or delete `frontend/node_modules` and `frontend/package-lock.json` and run `npm install` again on the target platform.
 

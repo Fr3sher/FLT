@@ -1,5 +1,6 @@
 import os
 import logging
+import mimetypes
 import sqlite3
 import json
 from pathlib import Path
@@ -11,6 +12,68 @@ from . import config as cfg
 
 FRONTEND_DIST = cfg.REPO_ROOT / 'frontend' / 'dist'
 logger = logging.getLogger(__name__)
+
+# --- Content types for our own static files ---------------------------------
+# Flask/Werkzeug label every file they send with `mimetypes.guess_type()`. On
+# Windows that module seeds itself from the registry
+# (HKEY_CLASSES_ROOT\<ext>\Content Type), which ANY installed program is free to
+# overwrite — so the type a browser is told depends on what else happens to be on
+# the machine. When `.js` has been rewritten to `text/plain`, the browser refuses
+# to execute the bundle and the app opens on a blank page with nothing at all in
+# the server log. Reported, diagnosed AND fixed by gessyoo (GitHub #12); the same
+# lottery has been observed hitting `.mjs` on a different machine, so this is not
+# one broken PC.
+#
+# The cure is to never ask the registry what our own files are. Every value below
+# is the standard one — the very value Python's built-in table carries when no
+# registry is involved — so on a healthy machine (and on Linux/macOS) this pins
+# what was already being served and changes nothing observable. It only ever
+# repairs a downgrade; it never invents a type for an extension we don't ship.
+_STATIC_MIME_TYPES = {
+    '.html': 'text/html',
+    '.js': 'text/javascript',      # RFC 9239; browsers execute this and
+    '.mjs': 'text/javascript',     # application/javascript identically
+    '.css': 'text/css',
+    '.json': 'application/json',
+    '.map': 'application/json',     # source maps: devtools-only, never executed
+    '.svg': 'image/svg+xml',
+    '.webp': 'image/webp',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.avif': 'image/avif',
+    '.ico': 'image/vnd.microsoft.icon',
+    '.woff': 'font/woff',
+    '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf',
+    '.otf': 'font/otf',
+    '.wasm': 'application/wasm',
+    '.txt': 'text/plain',
+}
+
+
+def pin_static_mime_types():
+    """Force the standard content type for every extension the frontend ships.
+
+    `mimetypes.add_type(..., strict=True)` writes into the same table
+    `guess_type()` reads, and it is applied AFTER the registry has been loaded
+    (`add_type` initialises the database first, then overwrites the entry), so
+    the pinned value wins over whatever the registry said. Verified rather than
+    assumed — see backend/tests/test_static_mime_types.py.
+
+    Idempotent and called twice on purpose: at import time (so ANY entry point —
+    backend/run.py, the packaged launcher, a WSGI server, a test importing
+    create_app — is covered without having to remember) and again from
+    create_app(), because a `mimetypes.init()` executed later by any other
+    library rebuilds that table from the registry and would silently drop the
+    pins.
+    """
+    for ext, ctype in _STATIC_MIME_TYPES.items():
+        mimetypes.add_type(ctype, ext, strict=True)
+
+
+pin_static_mime_types()
 
 _DEFAULT_DATASET_ARCHIVE_MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024
 _DEFAULT_DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES = 1024 * 1024
@@ -207,6 +270,9 @@ def _cleanup_orphaned_lora_test_images():
                        cancelled_jobs)
 
 def create_app(config_object=None):
+    # Re-assert the static content types: cheap, idempotent, and it survives a
+    # `mimetypes.init()` run by any library imported since this module loaded.
+    pin_static_mime_types()
     app = Flask(__name__, static_folder=None)
     data_dir = Path(os.environ.get('LDS_DATA_DIR', str(cfg.REPO_ROOT / 'data')))
     data_dir.mkdir(parents=True, exist_ok=True)

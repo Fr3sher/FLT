@@ -48,6 +48,13 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-blank-page-on-windows-fixed',
+    date: '2026-07-26',
+    title: '⬜ Fixed: the app opening on a completely blank page on Windows',
+    blurb:
+      "On some Windows machines the server started fine, the browser opened, and you got a white screen — in Firefox and in Chrome alike, with nothing in the log to go on. The cause was outside the app: Windows keeps a registry of file types that any installed program may overwrite, and once it claims the app's script bundle is plain text, the browser refuses to run it. The app no longer asks Windows what its own files are — it states the correct type for every file it serves, so the page loads whatever else is installed on your PC. Found, diagnosed and fixed by gessyoo (GitHub #12).",
+  },
+  {
     id: '2026-07-26-capability-rows-are-doors',
     date: '2026-07-26',
     title: '🚪 Every line of the Capabilities list now takes you to the thing that turns it on',
