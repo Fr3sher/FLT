@@ -53,6 +53,12 @@ export const WHATS_NEW = [
     title: '⬜ Fixed: the app opening on a completely blank page on Windows',
     blurb:
       "On some Windows machines the server started fine, the browser opened, and you got a white screen — in Firefox and in Chrome alike, with nothing in the log to go on. The cause was outside the app: Windows keeps a registry of file types that any installed program may overwrite, and once it claims the app's script bundle is plain text, the browser refuses to run it. The app no longer asks Windows what its own files are — it states the correct type for every file it serves, so the page loads whatever else is installed on your PC. Found, diagnosed and fixed by gessyoo (GitHub #12).",
+    id: '2026-07-26-anime-subject-type',
+    date: '2026-07-26',
+    title: '🎌 Anime characters get their own subject type',
+    blurb:
+      "Subject type offered Human, Animal, Creature, Object and Other — so a drawn character had to call itself Human, which handed it an identity lock written for photography (\"same skin tone and texture\", \"realistic photographic portrait\") and a shot list of camera-lens conventions. Pick Anime instead and the whole chain changes: the identity lock now protects what actually makes a character recognisable — hair colour and hairstyle, eye shape and iris colour, the signature outfit, the accessories, the distinctive marks — and it protects the art style itself, explicitly refusing to turn your character into a photograph or a 3D render. The shot catalogue is 55 drawn-media shots (bust-up, cowboy shot, expression sheet, and a front/side/back character-sheet turnaround nothing else offered), with four presets including Character sheet. Your existing datasets are untouched, Human included.",
+    to: '/datasets?section=add',
   },
   {
     id: '2026-07-26-capability-rows-are-doors',

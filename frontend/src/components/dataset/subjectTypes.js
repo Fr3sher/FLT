@@ -6,10 +6,13 @@
 // never change — only the header WORDING adapts so "Bust" never shows for a dog
 // or a car.
 
-export const SUBJECT_TYPES = ['human', 'animal', 'creature', 'object', 'other'];
+// APPEND-ONLY, mirroring the backend tuple: `subject_type` is a stored value and
+// this array is also the render order of the chips.
+export const SUBJECT_TYPES = ['human', 'animal', 'creature', 'object', 'other', 'anime'];
 
 export const SUBJECT_TYPE_LABELS = {
   human: 'Human', animal: 'Animal', creature: 'Creature', object: 'Object', other: 'Other',
+  anime: 'Anime',
 };
 
 // One-line hint shown under the selector, per type.
@@ -19,6 +22,7 @@ export const SUBJECT_TYPE_HINTS = {
   creature: 'A fictional being or character — face, bust, full-body, rear.',
   object: 'A product or object — front, angle, detail and rear views.',
   other: 'Anything else — angles, framings and detail shots.',
+  anime: 'A drawn anime or manga character — keeps the art style, hair, eyes and signature outfit.',
 };
 
 const FRAMING_HEADERS = {
@@ -27,6 +31,9 @@ const FRAMING_HEADERS = {
   creature: { face: 'Face', bust: 'Bust', body: 'Full body', back: 'Rear' },
   object: { face: 'Detail', bust: 'Angle', body: 'Full', back: 'Rear' },
   other: { face: 'Detail', bust: 'Medium', body: 'Full', back: 'Rear' },
+  // The vocabulary of the medium: a drawn character is framed "bust-up" and
+  // "cowboy shot", never "bust" and "body".
+  anime: { face: 'Face', bust: 'Bust-up', body: 'Full body', back: 'Rear' },
 };
 
 export function normalizeSubjectType(v) {

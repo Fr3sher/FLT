@@ -95,6 +95,11 @@ const SUBJECT_NOUNS = {
   creature: { one: 'the creature', kind: 'creature', trait: 'body form, texture and features' },
   object: { one: 'the object', kind: 'object', trait: 'shape, colour and materials' },
   other: { one: 'the subject', kind: 'subject', trait: 'shape, colours and details' },
+  // A drawn character's "traits" are design choices, not physical ones — and the
+  // art style is one of them, which is why this lock also has to forbid the
+  // photorealism every other lock asks for.
+  anime: { one: 'the character', kind: 'character',
+    trait: 'hair, eyes, signature outfit, accessories and drawn art style' },
 };
 
 /** The three editable identity fields, worded for `subjectType`. Keys, ids and
@@ -134,7 +139,7 @@ export function identityPromptFields(subjectType) {
    quality instruction, identical in all five default tables. */
 
 /** Which subject types own their own copy of the identity locks. */
-export const PROMPT_SUBJECT_TYPES = ['human', 'animal', 'creature', 'object', 'other'];
+export const PROMPT_SUBJECT_TYPES = ['human', 'animal', 'creature', 'object', 'other', 'anime'];
 
 /** The kinds scoped per subject — mirrors backend PER_SUBJECT_PROMPT_KINDS. */
 export const PER_SUBJECT_PROMPT_KINDS = ['face_single', 'face_multi', 'klein_identity'];

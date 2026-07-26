@@ -93,5 +93,14 @@ test('field wording follows the subject; keys and ids never do', () => {
 });
 
 test('the subject list mirrors the backend SUBJECT_TYPES', () => {
-  assert.deepEqual(PROMPT_SUBJECT_TYPES, ['human', 'animal', 'creature', 'object', 'other']);
+  assert.deepEqual(PROMPT_SUBJECT_TYPES, ['human', 'animal', 'creature', 'object', 'other', 'anime']);
+});
+
+test('the anime fields are worded for a drawn character, not a photographed face', () => {
+  const anime = identityPromptFields('anime');
+  assert.deepEqual(anime.map((f) => f.id), IDENTITY_PROMPT_FIELDS.map((f) => f.id));
+  const text = anime.map((f) => `${f.label} ${f.desc}`).join(' ');
+  assert.match(text, /signature outfit/i);
+  assert.match(text, /art style/i);
+  assert.ok(!/exact face/i.test(text));
 });

@@ -7,8 +7,10 @@ import {
   normalizeSubjectType, framingHeaders, framingLabel, defaultPresetKey,
 } from './subjectTypes.js';
 
-test('the five subject types match the backend and all have a label + hint', () => {
-  assert.deepEqual(SUBJECT_TYPES, ['human', 'animal', 'creature', 'object', 'other']);
+test('the subject types match the backend and all have a label + hint', () => {
+  // Order matters as much as membership: these are STORED values and the chip
+  // order. 'anime' is appended last (see backend test_anime_subject_type.py).
+  assert.deepEqual(SUBJECT_TYPES, ['human', 'animal', 'creature', 'object', 'other', 'anime']);
   for (const st of SUBJECT_TYPES) {
     assert.ok(SUBJECT_TYPE_LABELS[st], `label for ${st}`);
     assert.ok(SUBJECT_TYPE_HINTS[st], `hint for ${st}`);
@@ -34,6 +36,8 @@ test('every subject type relabels the four internal framings', () => {
   assert.equal(framingLabel('animal', 'face'), 'Head');
   assert.equal(framingLabel('animal', 'bust'), 'Half-body');
   assert.equal(framingLabel('object', 'body'), 'Full');
+  // A drawn character is framed in the vocabulary of the medium.
+  assert.equal(framingLabel('anime', 'bust'), 'Bust-up');
 });
 
 test('defaultPresetKey picks the right preset per subject type', () => {

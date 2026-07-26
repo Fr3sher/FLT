@@ -1,4 +1,4 @@
-"""Subject-type selector (Human / Animal / Creature / Object / Other) — pure module.
+"""Subject-type selector (Human / Animal / Creature / Object / Other / Anime) — pure module.
 
 A dataset declares WHAT its subject is; the generation prompts stop assuming a
 person. Two load-bearing invariants guard the feature:
@@ -19,7 +19,11 @@ from app.services import face_variations as fv
 # --- normalize / registry ----------------------------------------------------
 
 def test_subject_types_registry():
-    assert fv.SUBJECT_TYPES == ('human', 'animal', 'creature', 'object', 'other')
+    # APPEND-ONLY: `subject_type` is a stored column, so this asserts the ORDER as
+    # well as the membership. A new type is added at the tail ('anime', the drawn
+    # character type — see test_anime_subject_type.py); an existing one is never
+    # renamed or moved.
+    assert fv.SUBJECT_TYPES == ('human', 'animal', 'creature', 'object', 'other', 'anime')
     assert set(fv._SUBJECT_CATALOGS) == set(fv.SUBJECT_TYPES)
 
 
@@ -78,7 +82,12 @@ def test_non_human_identity_defaults():
 
 
 def test_non_human_locks_drop_human_face_vocabulary():
-    """An animal/object lock must not talk about jawline/skin tone/facial identity."""
+    """An animal/object lock must not talk about jawline/skin tone/facial identity.
+
+    'anime' is deliberately EXCLUDED from this loop: a drawn character legitimately
+    has a skin tone (a flat cel colour that is part of the design), so this regex
+    does not describe it. Its equivalent guard — no photorealism, and the drawn
+    traits named instead — lives in test_anime_subject_type.py."""
     human_only = re.compile(r'jawline|skin tone|facial identity|facial expression|beautify, slim', re.I)
     for st in ('animal', 'object', 'creature', 'other'):
         for kind in ('face_single', 'face_multi', 'klein_identity'):
@@ -169,7 +178,7 @@ def test_wrap_variation_klein_uses_subject_noun_and_lock():
 # --- catalogs ----------------------------------------------------------------
 
 def test_non_human_catalog_shape():
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         cat = fv.variation_catalog(st)
         assert cat and cat is not fv.VARIATION_CATALOG
         ids = [e['id'] for e in cat]
@@ -182,7 +191,7 @@ def test_non_human_catalog_shape():
 def test_non_human_catalogs_are_not_outfit_expression_augmented():
     """The outfit/expression bake is a HUMAN concern — it must never touch an
     animal/object catalog (an object has no outfit or expression)."""
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         for e in fv.variation_catalog(st):
             assert fv.OUTFIT_VARY not in e['prompt'], (st, e['id'])
             assert fv.EXPRESSION_NEUTRAL not in e['prompt'], (st, e['id'])
@@ -197,7 +206,8 @@ def test_all_catalog_prompts_and_labels_are_english():
         r'\b(objet|corps|visage|debout|assis|couch\w+|derriere|tete|cote)\b', re.I)
     # Non-human catalogs only: the human catalog legitimately carries the English
     # loanword "café" (its own test guards its French), and is byte-frozen here.
-    non_human = (fv.ANIMAL_CATALOG + fv.CREATURE_CATALOG + fv.OBJECT_CATALOG + fv.OTHER_CATALOG)
+    non_human = (fv.ANIMAL_CATALOG + fv.CREATURE_CATALOG + fv.OBJECT_CATALOG
+                 + fv.OTHER_CATALOG + fv.ANIME_CATALOG)
     for e in non_human:
         text = f"{e['prompt']} {e['label']}"
         assert not accents.search(text), f"Accented French in {e['id']}: {text!r}"
@@ -205,7 +215,7 @@ def test_all_catalog_prompts_and_labels_are_english():
 
 
 def test_no_nsfw_catalog_for_non_human_types():
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         assert fv.nsfw_variation_catalog(st) == []
 
 
@@ -225,7 +235,7 @@ def test_labels_globally_unique():
 def test_non_human_labels_resolve_via_union():
     """A stored non-human label recovers its prompt/aspect from the union (the path
     regenerate uses when the raw prompt is missing), and is never mistaken for NSFW."""
-    for st in ('animal', 'object', 'creature', 'other'):
+    for st in ('animal', 'object', 'creature', 'other', 'anime'):
         for e in fv.variation_catalog(st):
             assert fv.prompt_by_label(e['label']) == e['prompt'], e['id']
             assert fv.aspect_for_label(e['label'], e['framing']) == fv.aspect_for_entry(e), e['id']
@@ -235,7 +245,7 @@ def test_non_human_labels_resolve_via_union():
 # --- presets -----------------------------------------------------------------
 
 def test_non_human_presets_resolve_and_have_meta():
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         presets = fv.presets_for(st)
         assert presets, st
         meta = fv.preset_meta_for(st)

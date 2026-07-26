@@ -104,7 +104,7 @@ Pick **Style** at creation. What changes:
 ## Your own shot catalog (JSON import)
 
 The workspace ships a built-in shot catalog per subject type (53 shots for a
-human, ~59 for an animal, and so on). If you want shots nobody wrote for you —
+human, ~59 for an animal, 55 for an anime character, and so on). If you want shots nobody wrote for you —
 40 breed-specific poses for a dog, a product line's signature angles — you don't
 have to type them one at a time. Open **📥 Shot catalog (JSON)** under the shot
 grid.

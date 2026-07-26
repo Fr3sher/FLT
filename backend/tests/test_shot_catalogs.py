@@ -16,7 +16,7 @@ def test_non_human_catalogs_are_deep_enough_and_cover_every_framing():
     """The first drafts shipped 10-16 shots against 53 for a human — not enough to
     build a varied dataset. Each type now carries a real spread, and every framing
     of the stored enum is represented so composition targets stay reachable."""
-    minimums = {'animal': 45, 'creature': 32, 'object': 26, 'other': 20}
+    minimums = {'animal': 45, 'creature': 32, 'object': 26, 'other': 20, 'anime': 40}
     for st, low in minimums.items():
         catalog = fv.variation_catalog(st)
         assert len(catalog) >= low, (st, len(catalog))
@@ -28,7 +28,7 @@ def test_non_human_catalogs_never_get_the_human_outfit_expression_directives():
     """_augment_prompt is a HUMAN concern (an animal wears no outfit, an object has
     no expression) and is deliberately not run on these catalogs — including on the
     entries added later."""
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         for e in fv.variation_catalog(st):
             assert fv.OUTFIT_VARY not in e['prompt'], e['id']
             assert fv.EXPRESSION_NEUTRAL not in e['prompt'], e['id']
@@ -46,7 +46,7 @@ def test_curated_presets_stay_affordable_and_balanced():
     queue (and, on an API engine, bill) up to 59 images in one click. Each preset is
     a deliberate composition now: bounded, and the balanced ones cover all four
     framings."""
-    for st in ('animal', 'creature', 'object', 'other'):
+    for st in ('animal', 'creature', 'object', 'other', 'anime'):
         for name, ids in fv.presets_for(st).items():
             assert 8 <= len(ids) <= 26, (st, name, len(ids))
             assert len(ids) == len(set(ids)), (st, name)      # no shot queued twice
@@ -59,7 +59,7 @@ def test_curated_presets_stay_affordable_and_balanced():
 
 def test_all_catalog_labels_includes_every_catalog_and_the_legacy_aliases():
     labels = set(fv.all_catalog_labels())
-    for st in ('human', 'animal', 'creature', 'object', 'other'):
+    for st in ('human', 'animal', 'creature', 'object', 'other', 'anime'):
         for e in fv.variation_catalog(st):
             assert e['label'] in labels, e['id']
     for e in fv.NSFW_VARIATION_CATALOG:
