@@ -525,6 +525,41 @@ currently shown and rebuilds the automatic tree. Positions are only ever a
 display preference — moving a card never changes which run continued which, and
 Tidy up never deletes a run, a checkpoint or a note.
 
+**Generating from the board.** Every checkpoint pill carries a small **✓** box.
+Tick one and the run settings open beside the board: the prompt, the seed, the
+format, the steps, the engine settings — the Test Studio's own panel, not a
+lookalike, so anything the Test Studio can do the board can do too.
+
+What the board adds is that your picks do not have to belong to the same
+dataset. Tick a checkpoint in one lane and two in another and they run together
+on one shared prompt and one shared seed, which is the only honest way to
+compare LoRAs against each other.
+
+Two things it will tell you rather than fail at:
+
+- **A checkpoint that is not in ComfyUI yet** is still pickable. The button then
+  says what it is about to do — *"Deploy 2 checkpoints, then generate"* — and
+  waits for you. Nothing is copied into your ComfyUI folder by a button that did
+  not announce it, and if a copy fails, nothing generates: half a comparison
+  answers a different question than the one you asked.
+- **Two different families in one selection** (say Krea and Z-Image) is refused,
+  and it says which two. This is not a restriction we chose: those families do
+  not share a base model or a workflow, so there is no single run that can render
+  both. Unpick one family and the button comes back.
+
+**The gallery under a checkpoint.** Images pile up. A checkpoint that has
+produced more than one shows a small **× N** badge; clicking it opens everything
+that checkpoint ever made, newest first — from the board, from the Test Studio,
+from a comparison run, it does not matter. Regenerating no longer replaces what
+was there.
+
+Which image belongs to which checkpoint is recorded when the image is generated.
+Images made before that was recorded are matched back where the evidence allows
+it (the run tag the deploy stamps into the LoRA's name); those that cannot be
+traced are **counted and left out** rather than shown under a checkpoint they
+might not belong to. The gallery says how many those are — they are still in the
+Test Studio, they simply have no node to sit under.
+
 The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.

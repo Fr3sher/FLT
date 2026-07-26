@@ -20,6 +20,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from sqlalchemy import func
+
 from .. import config as cfg
 from ..extensions import db
 from ..models import CloudTrainingRun
@@ -3170,28 +3172,132 @@ def _testable_for_record(dataset_id, family, record_id) -> dict:
 
 
 def checkpoint_previews_for(record_id) -> dict:
-    """{step: {status, url, seed}} for a run's inline-generated previews. Each
-    stored pointer resolves LIVE to its reused LoraTestImage: 'done' with a served
-    url once the file exists, 'failed' if the cell failed, else 'pending' (the job
-    is still in the serial queue). A dangling pointer (image row gone) is dropped
-    so the node never claims a preview it can't show."""
+    """{step: {status, url, seed, count}} for a run's checkpoints. Each stored
+    pointer resolves LIVE to its reused LoraTestImage: 'done' with a served url
+    once the file exists, 'failed' if the cell failed, else 'pending' (the job is
+    still in the serial queue). A dangling pointer (image row gone) is dropped so
+    the node never claims a preview it can't show.
+
+    Previews ACCUMULATE, so a checkpoint can hold several rows: the NEWEST one
+    that still resolves is the thumbnail. `count` is not that list's length — it
+    counts every finished test image linked to the checkpoint, wherever it came
+    from (Test Studio, canvas, comparison grid), which is what the gallery under
+    the node opens on."""
     from ..models import CheckpointPreview, LoraTestImage
-    rows = CheckpointPreview.query.filter_by(record_id=record_id).all()
-    if not rows:
+    # Newest first, so the first resolvable row per step is the one shown.
+    rows = (CheckpointPreview.query.filter_by(record_id=record_id)
+            .order_by(CheckpointPreview.id.desc()).all())
+    counts = dict(db.session.query(LoraTestImage.step, func.count(LoraTestImage.id))
+                  .filter(LoraTestImage.record_id == record_id,
+                          LoraTestImage.status == 'done',
+                          LoraTestImage.filename.isnot(None))
+                  .group_by(LoraTestImage.step).all())
+    if not rows and not counts:
         return {}
     img_ids = [r.lora_test_image_id for r in rows if r.lora_test_image_id]
     imgs = ({i.id: i for i in LoraTestImage.query
              .filter(LoraTestImage.id.in_(img_ids)).all()} if img_ids else {})
     out = {}
     for r in rows:
+        if r.step in out:
+            continue                      # an older preview of the same checkpoint
         img = imgs.get(r.lora_test_image_id)
         if img is None:
             continue
         status = img.status if img.status in ('pending', 'done', 'failed') else 'pending'
         url = (f'/api/dataset/{r.dataset_id}/img/{img.filename}'
                if status == 'done' and img.filename else None)
-        out[r.step] = {'status': status, 'url': url, 'seed': r.seed}
+        out[r.step] = {'status': status, 'url': url, 'seed': r.seed,
+                       'count': int(counts.get(r.step) or 0)}
+    # A checkpoint generated from the Test Studio has images but never a preview
+    # pointer. It still has a gallery — the node must say so.
+    for step, n in counts.items():
+        if step is None or step in out:
+            continue
+        out[step] = {'status': None, 'url': None, 'seed': None, 'count': int(n)}
     return out
+
+
+def canvas_generate(user_id, selections, **knobs) -> dict:
+    """◉ Launch from the LoRA Canvas: the EXACT Test-Studio engine, told which
+    checkpoints to run by the pills the user ticked instead of by a picker.
+
+    `selections` = [{dataset_id, checkpoint, record_id, step}] — possibly across
+    SEVERAL datasets, which is the point of the canvas
+    (``LoraTestImage.run_id`` has always grouped cells of different datasets).
+    Every other setting rides through untouched to ``create_comparison_run``,
+    because it IS the same call the comparison grid makes: no second engine, so
+    no drift between the two screens.
+
+    Mixing FAMILIES is refused by the engine itself (one run = one base + one
+    workflow) and the message travels back to the button.
+
+    After the cells are created, one ``CheckpointPreview`` per distinct
+    (record, step) points the node at what it just launched, so the pill shows
+    ◌ rendering and then the picture. It is an INSERT, not an update: previews
+    accumulate, and the older ones stay in the checkpoint's gallery."""
+    from ..models import CheckpointPreview, LoraTestImage
+    from . import lora_test_studio as studio
+
+    res = studio.create_comparison_run(user_id, selections, **knobs)
+    ids = res.get('ids') or []
+    if ids:
+        rows = LoraTestImage.query.filter(LoraTestImage.id.in_(ids)).all()
+        seen = set()
+        # Ordered by id so "the preview" is the first cell of the launch, a
+        # stable choice rather than whatever the query happened to return first.
+        for row in sorted(rows, key=lambda r: r.id):
+            if row.record_id is None or row.step is None:
+                continue                  # an unattributed pick has no node to sit under
+            key = (row.record_id, row.step)
+            if key in seen:
+                continue
+            seen.add(key)
+            db.session.add(CheckpointPreview(
+                record_id=row.record_id, step=row.step, dataset_id=row.dataset_id,
+                lora_test_image_id=row.id, prompt=row.prompt or '', seed=row.seed))
+        db.session.commit()
+    return res
+
+
+def checkpoint_gallery(record_id, step, limit=120) -> dict:
+    """Every finished image this checkpoint ever produced, newest first — the
+    gallery the canvas opens under a node.
+
+    The source is the LINK written at generation time
+    (``lora_test_image.record_id`` / ``.step``), so it holds whatever made the
+    image: an inline canvas preview, a Test-Studio grid cell, a comparison run.
+    Nothing is parsed out of a filename here — that is the whole point of the
+    columns.
+
+    `unlinked` is the honest footnote: images that exist but carry no link (they
+    predate the columns and their filename did not attribute itself). They are
+    NOT shown under a checkpoint they might not belong to; the number is
+    reported so the gap is stated instead of looking like an empty history."""
+    from ..models import LoraTestImage
+    q = (LoraTestImage.query
+         .filter(LoraTestImage.record_id == record_id,
+                 LoraTestImage.step == step,
+                 LoraTestImage.status == 'done',
+                 LoraTestImage.filename.isnot(None))
+         .order_by(LoraTestImage.id.desc()))
+    total = q.count()
+    rows = q.limit(max(1, min(int(limit or 120), 500))).all()
+    from .checkpoint_link_backfill import unlinked_count
+    return {
+        'record_id': record_id, 'step': step, 'count': total,
+        'unlinked': unlinked_count(),
+        'images': [{
+            'id': r.id,
+            'dataset_id': r.dataset_id,
+            'url': f'/api/dataset/{r.dataset_id}/img/{r.filename}',
+            'rating': r.rating,
+            'prompt': r.prompt,
+            'seed': r.seed,
+            'strength': r.strength,
+            'created_at': r.created_at.isoformat() if r.created_at else None,
+        } for r in rows],
+    }
 
 
 def generate_checkpoint_previews(user_id, dataset_id, checkpoints, prompt=None,
@@ -3241,19 +3347,24 @@ def generate_checkpoint_previews(user_id, dataset_id, checkpoints, prompt=None,
     # the route maps it to the same structured error the Studio already returns.
     result = studio.create_run(
         user_id, dataset_id, checkpoints=[fn for _, _, fn in resolved],
-        strengths=[1.0], seed=seed, prompt=prompt, family=fam, count=1)
+        strengths=[1.0], seed=seed, prompt=prompt, family=fam, count=1,
+        # The caller KNOWS which lineage checkpoint each file is — it was just
+        # resolved above — so every cell records it rather than the app deriving
+        # it back from the filename later.
+        origins={fn: {'record_id': rid, 'step': step} for rid, step, fn in resolved})
     ids = result.get('ids') or []
     run_seed = result.get('seed', seed)
     # Single base model × single strength × count=1 → cells are 1:1 with `resolved`
     # in order; zip guards against any engine-side short count (never a wrong link).
+    #
+    # A NEW row per generation: previews accumulate (the unique constraint that
+    # forced one row per checkpoint was lifted — see
+    # services.checkpoint_preview_migration). Regenerating an epoch used to
+    # re-point the single row and the earlier image became unreachable.
     for (rid, step, _fn), img_id in zip(resolved, ids):
-        row = CheckpointPreview.query.filter_by(record_id=rid, step=step).first()
-        if row is None:
-            row = CheckpointPreview(record_id=rid, step=step, dataset_id=dataset_id)
-            db.session.add(row)
-        row.lora_test_image_id = img_id
-        row.prompt = prompt or ''
-        row.seed = run_seed
+        db.session.add(CheckpointPreview(
+            record_id=rid, step=step, dataset_id=dataset_id,
+            lora_test_image_id=img_id, prompt=prompt or '', seed=run_seed))
     db.session.commit()
     return {'queued': len(resolved), 'skipped': skipped, 'needs_setup': False,
             'seed': run_seed}
@@ -3388,11 +3499,14 @@ def _lineage_node(rec, crun, requested_id, failed_local_id):
     for _ck in (node.get('checkpoints') or []):
         _step = _ck.get('step')
         _ck['note'] = _cnotes.get(_step, '')
-        # `preview_*` render the inline thumbnail (or its pending/failed state).
+        # `preview_*` render the inline thumbnail (or its pending/failed state);
+        # `preview_count` is the SIZE of the checkpoint's gallery — every image it
+        # ever produced, from any surface — which the pill shows as a × N badge.
         _pv = _cprev.get(_step)
         if _pv:
             _ck['preview_url'] = _pv.get('url')
             _ck['preview_status'] = _pv.get('status')
+            _ck['preview_count'] = _pv.get('count') or 0
     return node
 
 

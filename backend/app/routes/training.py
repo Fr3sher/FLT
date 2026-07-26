@@ -1676,6 +1676,61 @@ def train_canvas_datasets():
     return jsonify(ct.canvas_dataset_index(LOCAL_USER))
 
 
+@bp.post('/train/canvas/generate')
+def train_canvas_generate():
+    """◉ Generate from the LoRA Canvas — the same Test-Studio engine, driven by
+    the checkpoints ticked on the board instead of by a picker. Body:
+    {selections:[{dataset_id, checkpoint, record_id, step}], …every Studio
+    setting}. Selections MAY span several datasets (that is the point of the
+    canvas); they may NOT span several families — the engine refuses, and the
+    reason travels back so the button can say it. Same gates as the other launch
+    routes: ComfyUI not set up → 409/503, missing models/nodes → the actionable
+    409 the Studio already returns."""
+    from ._common import (_require_comfyui, _studio_arch_mismatch_response,
+                          _studio_missing_response)
+    gate = _require_comfyui()
+    if gate:
+        return gate
+    d = request.get_json(silent=True) or {}
+    try:
+        res = ct.canvas_generate(
+            LOCAL_USER, d.get('selections') or [],
+            strengths=d.get('strengths') or [1.0],
+            seed=d.get('seed'), prompt=d.get('prompt'), z_model=d.get('z_model'),
+            aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
+            steps2_list=d.get('steps2'), count=d.get('count'),
+            permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),
+            rebalance=d.get('rebalance'),
+            rebalance_strength=d.get('rebalance_strength'),
+            negative=d.get('negative'), sampler=d.get('sampler'),
+            scheduler=d.get('scheduler'), weight_dtype=d.get('weight_dtype'),
+            enhancer=d.get('enhancer'), enhancer_strength=d.get('enhancer_strength'),
+            detail_amount=d.get('detail_amount'),
+            resolution_tier=d.get('resolution_tier'),
+            resolution_multiplier=d.get('resolution_multiplier'),
+            init_image=d.get('init_image'), denoise=d.get('denoise'))
+    except Exception as e:
+        from ..services.lora_test_studio import StudioArchMismatch, StudioAssetsMissing
+        if isinstance(e, StudioArchMismatch):
+            return _studio_arch_mismatch_response(e)
+        if isinstance(e, StudioAssetsMissing):
+            return _studio_missing_response(e)
+        return _map_error(e)
+    return jsonify({'ok': True, **{k: res[k]
+                                   for k in ('created', 'seed', 'count', 'run_id')}})
+
+
+@bp.get('/train/checkpoint/<int:record_id>/<int:step>/images')
+def train_checkpoint_images(record_id, step):
+    """🖼 Everything this checkpoint ever generated, newest first — the gallery
+    the ◉ Canvas opens under a node. Reads the link written at generation time,
+    so it holds images made from any surface (Test Studio, canvas, comparison
+    grid). Open like the other Runs-hub reads; a checkpoint with no image simply
+    answers an empty list plus the `unlinked` counter."""
+    return jsonify(ct.checkpoint_gallery(
+        record_id, step, limit=request.args.get('limit', default=120, type=int)))
+
+
 @bp.get('/train/canvas/positions')
 def train_canvas_positions():
     """◉ LoRA Canvas: every remembered card position, grouped by dataset id.

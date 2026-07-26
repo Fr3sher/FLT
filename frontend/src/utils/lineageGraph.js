@@ -226,6 +226,12 @@ export function buildLineageGraph(tree, { bigPreviews = false } = {}) {
         // every deployed pill a dead end no matter what the server sent.
         deployed_filename: c.deployed_filename || null,
         preview_url: c.preview_url || null, preview_status: c.preview_status || null,
+        // How many images this checkpoint has produced IN TOTAL — the × N badge
+        // that opens its gallery. This layer builds the pill objects the renderers
+        // actually read, so a field it does not copy simply does not exist on
+        // screen no matter what the server sends (which is how this one first
+        // shipped invisible).
+        preview_count: c.preview_count || 0,
         x: x + dx, y: y + dy, w: m.pillW, h: m.pillH, isResumeSource: false };
     });
     pillsByNode.set(node.record_id, cks);

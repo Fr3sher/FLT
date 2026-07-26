@@ -157,6 +157,11 @@ _SCHEMA_ADDITIONS = (
     ('training_preset', 'variants', 'TEXT'),
     ('lora_test_image', 'error', 'TEXT'),
     ('lora_test_image', 'resolution_multiplier', 'REAL'),
+    # WHICH checkpoint produced this image, written at generation time instead of
+    # re-parsed from the filename on every render. Existing rows stay NULL until
+    # services.checkpoint_link_backfill attributes the ones it can prove.
+    ('lora_test_image', 'record_id', 'INTEGER'),
+    ('lora_test_image', 'step', 'INTEGER'),
     # Bank V2 scoring pass — the image_bank/bank_image tables shipped in the Beta,
     # so these columns need the additive path (db.create_all never ALTERs an
     # existing table).
@@ -191,6 +196,7 @@ _INDEX_ADDITIONS = (
     ('bank_image', 'semantic_dup_group'),
     ('bank_image', 'style_cluster'),
     ('bank_image', 'framing'),
+    ('lora_test_image', 'record_id'),
 )
 
 
@@ -357,6 +363,20 @@ def create_app(config_object=None):
         # invisible — once, best-effort (see services.framing_backfill).
         from .services.framing_backfill import run_if_needed as _framing_backfill
         _framing_backfill()
+        # Let a checkpoint KEEP every preview it is given instead of one (the
+        # canvas shows a gallery under each node). Recreating the table is the
+        # only step of that feature that can lose rows silently, so it is guarded
+        # by a before/after row count and leaves the original in place on any
+        # doubt (see services.checkpoint_preview_migration).
+        from .services.checkpoint_preview_migration import (
+            run_if_needed as _lift_preview_constraint)
+        _lift_preview_constraint()
+        # Attach the test images already on disk to the checkpoint that produced
+        # them, from the evidence only — the rest stays honestly unlinked
+        # (see services.checkpoint_link_backfill).
+        from .services.checkpoint_link_backfill import (
+            run_if_needed as _checkpoint_link_backfill)
+        _checkpoint_link_backfill()
         # Vision requests are process-local, while their mutual-exclusion flag is
         # persisted in SQLite. A killed captioning request therefore cannot still
         # be running after boot; clear its stale flag immediately instead of

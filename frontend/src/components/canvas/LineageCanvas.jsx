@@ -9,9 +9,18 @@ import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPl
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from '../dataset/lineageEdges';
 import { noteBadge, toggleDiffSelection } from '../dataset/lineageDetail.js';
+import { lineageImportPayload } from '../dataset/lineagePreview.js';
 import { removeRunFromTree } from '../../utils/runDeletable.js';
+import {
+  canvasCheckpointKey, describeCanvasLaunch, isCanvasCheckpointSelected,
+  pruneCanvasSelection, refreshCanvasSelection, toggleCanvasCheckpoint,
+} from '../../utils/canvasGeneration';
+import { postJson } from '../../api/fetchClient';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
+import CanvasGenerationPanel from './CanvasGenerationPanel';
+import CheckpointGalleryPanel from './CheckpointGalleryPanel';
+import { useToast } from '../common/Toast';
 import { HelpBadge } from '../../help/HelpMode';
 
 /* ◉ The LoRA Canvas surface — every selected dataset's genealogy on ONE board,
@@ -22,12 +31,16 @@ import { HelpBadge } from '../../help/HelpMode';
    each dataset's tree is still utils/lineageGraph.js. What is new here is only
    the surface: several trees stacked into lanes, and a viewport you can move.
 
-   Slice 2 adds direct manipulation: cards can be dragged, and where they land is
-   remembered (utils/canvasPlacement.js + the canvas_node_position table).
-   Nothing generates from here yet (slice 3), so a checkpoint pill opens its
-   run's inspector rather than pretending to offer actions it cannot perform — a
-   dead click would be worse than no click. The in-card graph keeps every one of
-   those actions until the canvas actually reaches parity.
+   Slice 2 added direct manipulation: cards can be dragged, and where they land
+   is remembered (utils/canvasPlacement.js + the canvas_node_position table).
+
+   Slice 3 makes the board GENERATE. Ticking a pill adds that checkpoint to a
+   run; picks may come from several lanes at once, which is the whole reason the
+   board holds every dataset. The settings are not a canvas invention — the
+   panel is the Test Studio's own RunSetupPanel on the Test Studio's own hooks
+   (see hooks/useCanvasStudio), so the two screens are one implementation. Each
+   pill also carries a × N badge opening the gallery of everything that
+   checkpoint ever produced.
 
    Gestures: wheel (or trackpad pinch, which arrives as ctrl+wheel) zooms around
    the pointer; dragging the background pans; two fingers pinch-zoom; dragging a
@@ -80,7 +93,8 @@ function LaneHeader({ lane }) {
 }
 
 /** One dataset's tree, drawn exactly as the in-card graph draws it. */
-function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId }) {
+function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId,
+  isPicked, onTogglePick, onOpenGallery }) {
   const g = lane.graph;
   if (!g || !g.nodes.length) return null;
   return (
@@ -115,9 +129,16 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
               {n.checkpoints.map((p) => (
                 <CheckpointPill key={`${p.step}-${p.filename ?? p.x}`}
                   pill={p} offX={p.x - n.x} offY={p.y - n.y}
-                  preview={p.preview_status || p.preview_url
-                    ? { status: p.preview_status, url: p.preview_url } : null}
-                  onOpen={() => onNodeClick(n.node, null)} />
+                  selected={isPicked(lane.datasetId, n.node.record_id, p.step)}
+                  preview={p.preview_status || p.preview_url || p.preview_count
+                    ? { status: p.preview_status, url: p.preview_url,
+                      count: p.preview_count || 0 } : null}
+                  onOpen={() => onNodeClick(n.node, null)}
+                  // A checkpoint still on disk is pickable even when it is not in
+                  // ComfyUI yet: the launch button then offers to deploy it first.
+                  selectable={p.present !== false}
+                  onToggleSelect={() => onTogglePick(lane, n.node, p)}
+                  onOpenGallery={() => onOpenGallery(n.node.record_id, p.step)} />
               ))}
             </div>
           </foreignObject>
@@ -127,7 +148,9 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
   );
 }
 
-export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp }) {
+export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
+  onRefetchDataset }) {
+  const toast = useToast();
   const frameRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -429,6 +452,99 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp 
     return i === 0 ? 'A' : i === 1 ? 'B' : null;
   }, [selectedForDiff]);
 
+  // --- generation: the checkpoints ticked on the board -----------------------
+  // A LIST, not a set: the first pick anchors the settings panel's dataset, so
+  // the order the user clicked in is meaningful (see utils/canvasGeneration).
+  const [picks, setPicks] = useState([]);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [gallery, setGallery] = useState(null);   // {recordId, step} | null
+
+  const isPicked = useCallback(
+    (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
+
+  const onTogglePick = useCallback((lane, node, pill) => {
+    setPicks((cur) => toggleCanvasCheckpoint(cur, {
+      datasetId: lane.datasetId,
+      datasetName: lane.name,
+      recordId: node.record_id,
+      step: pill.step,
+      family: node.train_type,
+      deployed: pill.testable === true,
+      // What create_comparison_run validates against: the name of the COPY in
+      // ComfyUI, not the run-folder save.
+      filename: pill.deployed_filename || null,
+      // Kept with the pick so "deploy, then generate" needs no second lookup —
+      // the exact body the flat checkpoint list sends.
+      importPayload: lineageImportPayload(node, pill),
+    }));
+    setPanelOpen(true);
+  }, []);
+
+  // Picks whose pill is no longer on the board (its dataset was unticked, its run
+  // deleted) are dropped: a launch must never fire on a checkpoint the user can
+  // no longer see.
+  const liveKeys = useMemo(() => {
+    const s = new Set();
+    for (const e of placed) {
+      for (const n of (e.graph?.nodes || [])) {
+        for (const p of n.checkpoints) {
+          s.add(canvasCheckpointKey(e.datasetId, n.node.record_id, p.step));
+        }
+      }
+    }
+    return s;
+  }, [placed]);
+  useEffect(() => {
+    setPicks((cur) => {
+      const next = pruneCanvasSelection(cur, liveKeys);
+      return next.length === cur.length ? cur : next;
+    });
+  }, [liveKeys]);
+
+  /* Deploy the picks that are not in ComfyUI yet, then hand back the SAME picks
+     with their fresh deployed state. Announced by the button before it runs
+     ("Deploy 2 checkpoints, then generate") — nothing lands on the user's disk
+     from a button that did not say so. A failure returns null and the launch is
+     abandoned: half a comparison answers a different question than the one asked. */
+  const handleDeploy = useCallback(async (needed) => {
+    try {
+      for (const e of needed) {
+        if (!e.importPayload) {
+          throw new Error(`Run #${e.recordId} step ${e.step} has no file to deploy`);
+        }
+        await postJson(`/api/dataset/${e.datasetId}/train/import`, e.importPayload);
+      }
+      toast.success(`${needed.length} checkpoint(s) deployed to ComfyUI`);
+    } catch (err) {
+      toast.error(err?.message || 'Deploy failed — nothing was generated');
+      return null;
+    }
+    // Re-read the lanes so the freshly deployed pills come back testable, with
+    // the deployed copy's real name.
+    const ids = [...new Set(needed.map((e) => e.datasetId))];
+    const fresh = new Map();
+    for (const id of ids) {
+      try {
+        const tree = await onRefetchDataset?.(id);
+        for (const node of (tree?.nodes || [])) {
+          for (const c of (node.checkpoints || [])) {
+            fresh.set(canvasCheckpointKey(id, node.record_id, c.step),
+              { deployed: c.testable === true, filename: c.deployed_filename || null });
+          }
+        }
+      } catch { /* the import already happened server-side; the pick keeps its state */ }
+    }
+    const refreshed = refreshCanvasSelection(picks, (e) => fresh.get(
+      canvasCheckpointKey(e.datasetId, e.recordId, e.step)) || null);
+    // Write it back to the BOARD's selection, not only to the launch in flight.
+    // Without this the chips kept reading "to deploy" after a successful deploy
+    // and the button kept offering to do it again — a lie about what is on disk.
+    setPicks(refreshed);
+    return refreshed;
+  }, [picks, onRefetchDataset, toast]);
+
+  const launchVerdict = describeCanvasLaunch(picks);
+
   const noteOf = useCallback((node) => noteEdits[node.record_id] || node, [noteEdits]);
   const handleNodeChanged = useCallback((updated) => {
     setNoteEdits((m) => ({ ...m, [updated.record_id]: updated }));
@@ -480,8 +596,25 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp 
           <span aria-hidden>✦</span> Tidy up
         </button>
         <HelpBadge topic="canvas-arrange" />
+        {/* 🎨 The board's own launch button. It carries the pick count so the
+            settings panel can be closed without losing sight of what is queued
+            up — at 400 px the panel covers the board, and closing it is normal. */}
+        <button type="button" onClick={() => setPanelOpen((v) => !v)}
+          aria-pressed={panelOpen}
+          title={picks.length
+            ? `${picks.length} checkpoint(s) picked — open the run settings`
+            : 'Tick checkpoints on the board, then set the run up here'}
+          className={'flex h-9 items-center gap-1 rounded-md border px-3 text-[0.6875rem] font-semibold '
+            + (picks.length
+              ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
+              : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+          <span aria-hidden>🎨</span> Generate
+          {picks.length > 0 && (
+            <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
+          )}
+        </button>
         <span className="ml-auto hidden text-content-subtle text-[0.625rem] sm:inline">
-          Drag a run to move it · drag the background to pan · wheel to zoom · click a run to inspect · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run to inspect · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -515,7 +648,9 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp 
                 <LaneHeader lane={lane} />
                 <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
                   onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}
-                  liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null} />
+                  liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null}
+                  isPicked={isPicked} onTogglePick={onTogglePick}
+                  onOpenGallery={(recordId, step) => setGallery({ recordId, step })} />
               </div>
             ))}
           </div>
@@ -534,6 +669,33 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp 
       ) : (
         <LineageDetailPanel node={openNode} onClose={() => setOpenNode(null)}
           onNodeChanged={handleNodeChanged} onNodeDeleted={handleNodeDeleted} />
+      )}
+
+      {/* 🎨 The run settings — the Test Studio's own panel, on the Test Studio's
+          own hooks. Only the checkpoints differ: they are the ticked pills. */}
+      {panelOpen && (
+        <CanvasGenerationPanel
+          selection={picks}
+          onToggle={(entry) => setPicks((cur) => toggleCanvasCheckpoint(cur, entry))}
+          onClear={() => setPicks([])}
+          onDeploy={handleDeploy}
+          onClose={() => setPanelOpen(false)} />
+      )}
+
+      {/* 🖼 Everything one checkpoint ever produced. */}
+      <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)} />
+
+      {/* An untouched board with picks waiting: say so, because the settings panel
+          may be closed and the ✓ boxes are small. Also the only place the
+          mixed-family refusal is visible without opening the panel. */}
+      {!panelOpen && picks.length > 0 && (
+        <p className={'mt-2 rounded-lg border px-3 py-1.5 text-[0.6875rem] '
+          + (launchVerdict.blocked
+            ? 'border-amber-400/40 bg-amber-500/10 text-amber-100 '
+            : 'border-indigo-400/40 bg-indigo-500/10 text-indigo-100 ')}>
+          {picks.length} checkpoint{picks.length > 1 ? 's' : ''} picked
+          {launchVerdict.reason ? ` — ${launchVerdict.reason}` : ''}
+        </p>
       )}
     </>
   );

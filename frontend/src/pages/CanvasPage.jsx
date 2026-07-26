@@ -90,6 +90,17 @@ export default function CanvasPage() {
     for (const id of selected) del(`/api/dataset/${id}/canvas/positions`).catch(() => {});
   }, [selected]);
 
+  /* Re-read ONE lane from the server and put it back on the board. Used after a
+     deploy launched from the canvas: the pills of that dataset have to come back
+     `testable`, with the name of the copy that now sits in ComfyUI. Returns the
+     fresh tree so the caller can read it directly instead of racing the state
+     update it just triggered. */
+  const onRefetchDataset = useCallback(async (id) => {
+    const tree = await apiFetch(`/api/dataset/${id}/train/lineage`);
+    setTrees((t) => ({ ...t, [id]: { status: 'ready', tree, error: null } }));
+    return tree;
+  }, []);
+
   const persist = useCallback((ids) => {
     setStored(ids);
     writeSelection(typeof localStorage !== 'undefined' ? localStorage : null, ids);
@@ -169,7 +180,8 @@ export default function CanvasPage() {
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
-            onPinLane={onPinLane} onTidyUp={onTidyUp} />
+            onPinLane={onPinLane} onTidyUp={onTidyUp}
+            onRefetchDataset={onRefetchDataset} />
         )}
     </div>
   );
