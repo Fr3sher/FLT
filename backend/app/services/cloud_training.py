@@ -338,11 +338,45 @@ def latest_run_for(dataset_id, train_type=None):
     return newest
 
 
+# A monitor state write that loses a race for the SQLite write lock must not
+# kill a run that is burning rented GPU time. The DB is opened WAL with
+# busy_timeout=5000 (app/__init__.py), so a writer only ever sees 'database is
+# locked' when another writer held the lock for more than five seconds — a
+# captioning batch, a bank import, a big dataset write. That happened on
+# 2026-07-26: two monitors had just created their job on the pod and died on
+# `_set(status='training')` with `sqlite3.OperationalError: database is locked`,
+# three minutes into runs that then sat abandoned for an hour of paid 5090 time
+# (runs #106 and #107). The lock is transient by nature, so the commit is
+# retried instead of being fatal.
+_COMMIT_RETRIES = 4
+_COMMIT_RETRY_BASE_SECONDS = 0.5
+
+
+def _is_locked_error(exc):
+    return 'database is locked' in str(exc).lower()
+
+
 def _set(run, **fields):
-    for k, v in fields.items():
-        setattr(run, k, v)
-    run.updated_at = datetime.utcnow()
-    db.session.commit()
+    """Write monitor state, surviving a transient SQLite write-lock loss.
+
+    A failed commit leaves the session with a pending rollback and — once
+    rolled back — the instance reverted to its stored values, so the fields are
+    re-applied on every attempt rather than set once up front."""
+    for attempt in range(_COMMIT_RETRIES):
+        for k, v in fields.items():
+            setattr(run, k, v)
+        run.updated_at = datetime.utcnow()
+        try:
+            db.session.commit()
+            return
+        except Exception as e:                    # noqa: BLE001 - re-raised below
+            if attempt == _COMMIT_RETRIES - 1 or not _is_locked_error(e):
+                raise
+            logger.warning('run %s: SQLite write lock busy (attempt %s/%s) — '
+                           'retrying the state write', getattr(run, 'id', '?'),
+                           attempt + 1, _COMMIT_RETRIES)
+            db.session.rollback()
+            _sleep(_COMMIT_RETRY_BASE_SECONDS * (2 ** attempt))
 
 
 def _reconcile_before_launch(app):

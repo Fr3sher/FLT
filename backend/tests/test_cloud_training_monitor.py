@@ -753,6 +753,68 @@ def test_rescue_download_accepts_synced_save_completion_stays_strict(ct, app, tm
         assert ct._try_download_checkpoint(run, _BoomRemote()) is False
 
 
+def test_set_survives_a_transient_sqlite_write_lock(ct, app, monkeypatch):
+    """A monitor state write that loses the SQLite write lock retries.
+
+    Regression: two runs created their job on the pod, then died committing
+    status='training' with 'database is locked' three minutes in, and sat
+    abandoned for an hour of paid GPU time before an app restart resubmitted
+    the job and hit the pod's 409 on the duplicate name."""
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(ct, '_sleep', lambda s: None)
+    with app.app_context():
+        run = ct.CloudTrainingRun(dataset_id=1, status='provisioning',
+                                  job_name='j', vast_label='lds-1')
+        ct.db.session.add(run)
+        ct.db.session.commit()
+
+        real_commit = ct.db.session.commit
+        calls = {'n': 0}
+
+        def flaky_commit():
+            calls['n'] += 1
+            if calls['n'] <= 2:
+                raise OperationalError('UPDATE cloud_training_run ...', {},
+                                       Exception('database is locked'))
+            return real_commit()
+
+        monkeypatch.setattr(ct.db.session, 'commit', flaky_commit)
+        ct._set(run, status='training', phase_detail='Job queued on the pod',
+                remote_job_id='j-1')
+        monkeypatch.undo()
+
+        fresh = ct.CloudTrainingRun.query.get(run.id)
+        assert calls['n'] == 3                    # two refusals, then the write
+        assert fresh.status == 'training'         # fields survived the rollback
+        assert fresh.remote_job_id == 'j-1'
+        assert fresh.phase_detail == 'Job queued on the pod'
+
+
+def test_set_still_raises_on_a_non_lock_database_error(ct, app, monkeypatch):
+    """Only the transient lock is retried — a real failure must stay loud."""
+    from sqlalchemy.exc import OperationalError
+
+    monkeypatch.setattr(ct, '_sleep', lambda s: None)
+    with app.app_context():
+        run = ct.CloudTrainingRun(dataset_id=1, status='provisioning',
+                                  job_name='j', vast_label='lds-1')
+        ct.db.session.add(run)
+        ct.db.session.commit()
+
+        calls = {'n': 0}
+
+        def broken_commit():
+            calls['n'] += 1
+            raise OperationalError('UPDATE cloud_training_run ...', {},
+                                   Exception('no such column: nope'))
+
+        monkeypatch.setattr(ct.db.session, 'commit', broken_commit)
+        with pytest.raises(OperationalError):
+            ct._set(run, status='training')
+        assert calls['n'] == 1                    # no retry storm
+
+
 def test_cloud_progress_shape_matches_local(ct, app, client, monkeypatch):
     destroyed = []
     remote = FakeRemote(polls_to_complete=3)

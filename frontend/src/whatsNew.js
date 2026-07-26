@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-cloud-run-survives-a-busy-database',
+    date: '2026-07-26',
+    title: '💾 A busy database no longer abandons a cloud run you are paying for',
+    blurb:
+      'A cloud run records its progress in the local database as it goes. When something else was writing heavily at the same time — a captioning batch, a large import — that write could be refused, and the run died on the spot, three minutes in, while the rented GPU kept billing until someone noticed. Those writes now wait their turn and retry instead of killing the run.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-26-vision-model-stays-warm-when-nothing-else-needs-the-gpu',
     date: '2026-07-26',
     title: '⚡ One-off vision jobs stop paying a 13-second model load every time',
