@@ -63,6 +63,16 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
+  },
+  {
+    id: '2026-07-26-reinstall-never-writes-into-a-borrowed-python',
+    date: '2026-07-26',
+    title: '🔒 Reinstall no longer writes into the Python you only lent us',
+    blurb:
+      'When you point ✨ Score at a Python you already have — ai-toolkit\'s, ComfyUI\'s, a conda env — the picker promises those environments are checked, never changed. The Install / ↻ Reinstall button in Setup ▸ Quality tools did not keep that promise: it took your borrowed interpreter as its install target and pip-installed torch, OpenCLIP, Transformers and timm straight into the environment that runs your training. It now refuses, installs nothing, and prints the exact command if you do want those packages there. Clearing the setting ("Back to the app default") makes the button build the app\'s own environment again, as before.',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-26-delete-rejected-waits-for-its-own-check',
     date: '2026-07-26',
     title: '🗑 Delete rejected now waits for its own safety check before it will run',

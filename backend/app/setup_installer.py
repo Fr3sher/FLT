@@ -1075,10 +1075,13 @@ def _ensure_bank_scoring_env(action) -> str:
 
 def _run_bank_scoring(action) -> int:
     """Install the bank-scoring stack (CPU torch + open_clip + transformers + timm)
-    into a dedicated 3.10-3.12 interpreter — NEVER the Flask venv. Auto-provisions a
-    managed venv when nothing is configured; respects a user-set bank_scoring.python.
-    Verifies the import at the end so a pip-success-but-import-fail never reports a
-    ready capability over a silent ✗ (same honesty gate as the watermark install)."""
+    into the app's OWN bank-scoring venv — never the Flask venv, and never an
+    environment the app did not build. Auto-provisions the managed venv when nothing
+    is configured; a bank_scoring.python pointing anywhere else is a BORROWED
+    interpreter (that is what the ⚡ picker writes) and is refused with the command
+    to run by hand. Verifies the import at the end so a pip-success-but-import-fail
+    never reports a ready capability over a silent ✗ (same honesty gate as the
+    watermark install)."""
     managed_python = _bank_scoring_env_python()
     configured = (cfg.get('bank_scoring.python') or '').strip()
     rebuild_managed = (bool(configured) and _same_path(configured, managed_python)
@@ -1100,14 +1103,33 @@ def _run_bank_scoring(action) -> int:
                 _append(action, line)
             return 1
     managed = _same_path(python, managed_python)
+    if not managed:
+        # bank_scoring.python is ALSO what the "use a GPU Python you already
+        # have" picker writes, and that picker promises, twice, that borrowed
+        # environments "are checked, never changed". Installing here would put
+        # torch + open_clip + transformers + timm into the user's ai-toolkit or
+        # ComfyUI venv — the environment that runs their training or their
+        # generation — which is precisely the promise we made not to break.
+        # Same refusal as the Flask venv: name the target, hand over the
+        # command, install nothing.
+        for line in (
+            'bank_scoring.python points at an environment this app did not create,',
+            'so nothing was installed into it — borrowed environments are checked,',
+            'never changed. To add the scoring packages there yourself, run:',
+            f'  "{python}" -m pip install {" ".join(_BANK_SCORING_PKGS)}',
+            'Or clear bank_scoring.python (⚡ picker ▸ "Back to the app default")',
+            'and click Install again — the app then builds its own environment.',
+        ):
+            _append(action, line)
+        return 1
+    # Past this point the target is always the app-managed venv.
     _append(action, f'target interpreter: {python}')
-    if managed:
-        _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu)')
-        rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
-                               '--index-url', _TORCH_CPU_INDEX])
-        if rc != 0:
-            _append(action, f'torch install failed (rc={rc}) — see the log above')
-            return rc
+    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu)')
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
+                           '--index-url', _TORCH_CPU_INDEX])
+    if rc != 0:
+        _append(action, f'torch install failed (rc={rc}) — see the log above')
+        return rc
     _append(action, f"installing {', '.join(_BANK_SCORING_PKGS)}")
     rc = _run_pip(action, [python, '-m', 'pip', 'install', *_BANK_SCORING_PKGS])
     if rc == 0 and not _verify_bank_scoring_import(action, python):
