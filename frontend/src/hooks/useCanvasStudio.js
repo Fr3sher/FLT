@@ -7,7 +7,9 @@
  *   useLoraTestStudio(anchorDataset)  → the SETTINGS payload `d`
  *                                       (models, aspects, cfg/steps choices,
  *                                        recent prompts, always-on LoRAs)
- *   useStudioRun(runId)               → the LIVE state of the launch
+ *   tracker (useCanvasRun)            → the LIVE state of the launch, owned by
+ *                                       the BOARD so it survives this panel
+ *                                       being closed and the page reloaded
  *   launch()                          → POST /api/train/canvas/generate
  *                                       instead of the per-dataset route,
  *                                       because a canvas run may span datasets
@@ -31,18 +33,22 @@ import { useCallback, useState } from 'react';
 import { useToast } from '../components/common/Toast';
 import { postJson } from './useDataset';
 import { useLoraTestStudio } from './useLoraTestStudio';
-import { useStudioRun } from './useStudioRun';
 import { canvasRunSelections, canvasUndeployed } from '../utils/canvasGeneration';
 
-export function useCanvasStudio(selection, family, { onDeploy } = {}) {
+export function useCanvasStudio(selection, family, { onDeploy, tracker } = {}) {
   const toast = useToast();
   const anchorId = selection?.[0]?.datasetId ?? null;
   // The settings payload comes from ONE dataset — the first pick. Everything it
   // offers (bases, formats, cfg/steps ladders) is a property of the FAMILY, and
   // the launch is single-family by construction, so it describes every pick.
   const base = useLoraTestStudio(anchorId, family);
-  const [runId, setRunId] = useState(null);
-  const run = useStudioRun(runId);
+  // ⚠️ The run in flight belongs to the BOARD (useCanvasRun), not to this hook.
+  // It used to live here, which meant closing the settings panel destroyed the
+  // only handle on a generation that was still running — reopening it showed the
+  // form again while ComfyUI was busy. The board owns the id, remembers it across
+  // a reload, and polls it once for both surfaces.
+  const runId = tracker?.runId ?? null;
+  const run = tracker?.run ?? { data: null };
   const [launching, setLaunching] = useState(false);
 
   const launch = useCallback(async (
@@ -80,7 +86,13 @@ export function useCanvasStudio(selection, family, { onDeploy } = {}) {
         aspects, cfgs, steps: stepsList, steps2: steps2List, count, ...genSettings,
       });
       if (d.ok) {
-        setRunId(d.run_id);
+        // The board adopts the run WITH the checkpoints it was launched on —
+        // that pairing is what lets it say, once the images land, which pill's
+        // gallery they went into. Without it a finished run ends in silence.
+        tracker?.adopt?.(d.run_id, picks.map((e) => ({
+          datasetId: e.datasetId, recordId: e.recordId, step: e.step,
+          datasetName: e.datasetName || null,
+        })));
         toast.success(`${d.created} generation(s) queued (seed ${d.seed}${d.count > 1 ? ` ×${d.count}` : ''})`);
       } else {
         toast.error(d.error || 'Unexpected error');
@@ -89,7 +101,7 @@ export function useCanvasStudio(selection, family, { onDeploy } = {}) {
     } finally {
       setLaunching(false);
     }
-  }, [selection, onDeploy, toast]);
+  }, [selection, onDeploy, toast, tracker]);
 
   // The payload RunSetupPanel reads: the anchor's SETTINGS, the canvas run's LIVE
   // state, and the ticked pills standing in for the picker's checkpoint list.

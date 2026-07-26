@@ -48,6 +48,38 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-canvas-checkpoint-actions',
+    date: '2026-07-27',
+    title: 'Click a checkpoint on the LoRA Canvas and act on it — download, deploy, undeploy, delete',
+    blurb:
+      'On the board a checkpoint could only be ticked. It now opens the same actions the graph inside a run card has always had: ⬇ Download, 📦 Deploy → loras/…, ⏏ Undeploy, and the 🗑 delete that names exactly which file it removes. It is literally the same popover, so the two screens can never drift apart. When an action is not possible the reason is written where the button would be — a save that left the disk, a cloud run this machine has no link to — instead of a button that does nothing.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-canvas-details-on-demand',
+    date: '2026-07-27',
+    title: 'The run details drawer waits to be asked',
+    blurb:
+      'Touching a run on the canvas used to throw the configuration drawer open, so glancing at the board meant closing a panel. Clicking a run — or a checkpoint — now opens its actions, and the drawer is one of them: ⓘ Details, filed with deploy and the rest. Shift-click still compares two runs, and dragging a card still just moves it.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-canvas-generation-visible',
+    date: '2026-07-27',
+    title: 'A generation launched from the board can be found again — and it says where the images went',
+    blurb:
+      'Launch from the canvas and the progress now lives on the board itself: "1 generating · 0 queued", with its Stop. Close the settings panel, change page, reload — it is still there when you come back, instead of showing you an empty form while ComfyUI was still working. When it finishes it names the checkpoints it filled, and each one opens its gallery in a click. The board also refreshes itself as the images land, so the count on the checkpoint appears without a reload.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-checkpoint-pill-readable',
+    date: '2026-07-27',
+    title: 'Checkpoints now say how many images they made, instead of showing an unreadable one',
+    blurb:
+      'A checkpoint carried a 14-pixel copy of its last image. At that size a picture tells you nothing — not the framing, not the outfit, not whether the face holds — and the little counter next to it overlapped the neighbouring checkpoint\'s. Both are gone. A checkpoint now carries a clean 🖼 N chip: how many images it has produced, and one click to open them at a size where they can actually be judged. Turn on 🔍 Big previews in a run\'s graph when you want the images on the board itself.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-26-classify-framing-button',
     date: '2026-07-26',
     title: '\u{1F4D0} Classify framing is now a button, under the Composition bar it fixes',

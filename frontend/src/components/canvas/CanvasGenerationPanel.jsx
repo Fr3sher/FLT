@@ -89,10 +89,10 @@ function CanvasCheckpointRecap({ selection, onToggle, onClear }) {
   );
 }
 
-export default function CanvasGenerationPanel({ selection, onToggle, onClear, onDeploy, onClose }) {
+export default function CanvasGenerationPanel({ selection, onToggle, onClear, onDeploy, onClose, tracker }) {
   const family = canvasFamily(selection);
   const verdict = describeCanvasLaunch(selection);
-  const studio = useCanvasStudio(selection, family, { onDeploy });
+  const studio = useCanvasStudio(selection, family, { onDeploy, tracker });
   const pinned = useMemo(
     () => (studio.data?.checkpoints || []).map((c) => c.filename), [studio.data]);
   // Namespaced per FAMILY, never per dataset: a canvas run is cross-dataset by

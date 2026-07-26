@@ -18,7 +18,16 @@ import {
 import { postJson } from '../../api/fetchClient';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
+import CheckpointActionsPopover from '../dataset/CheckpointActionsPopover';
+import PreviewLightbox from '../dataset/PreviewLightbox';
+import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
+import { useCheckpointActions } from '../../hooks/useCheckpointActions';
+import { useCanvasRun } from '../../hooks/useCanvasRun';
+import { canvasRunDatasetIds, readyImageCount } from '../../utils/canvasRunResults';
+import { loraFolderLabel } from '../../utils/checkpointBrowser';
+import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
+import CanvasRunTracker from './CanvasRunTracker';
 import CheckpointGalleryPanel from './CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
 import { HelpBadge } from '../../help/HelpMode';
@@ -94,7 +103,7 @@ function LaneHeader({ lane }) {
 
 /** One dataset's tree, drawn exactly as the in-card graph draws it. */
 function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId,
-  isPicked, onTogglePick, onOpenGallery }) {
+  isPicked, onTogglePick, onOpenGallery, onOpenActions, onZoomPreview }) {
   const g = lane.graph;
   if (!g || !g.nodes.length) return null;
   return (
@@ -133,7 +142,13 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
                   preview={p.preview_status || p.preview_url || p.preview_count
                     ? { status: p.preview_status, url: p.preview_url,
                       count: p.preview_count || 0 } : null}
-                  onOpen={() => onNodeClick(n.node, null)}
+                  // The pill's BODY opens its actions — download, continue,
+                  // deploy/undeploy, delete, details — the same popover the
+                  // in-card graph has always had. It used to open the detail
+                  // drawer instead, which is how the board ended up with a panel
+                  // nobody asked for and no actions at all.
+                  onOpen={(pill, e) => onOpenActions(lane, n.node, pill, e)}
+                  onZoomPreview={onZoomPreview}
                   // A checkpoint still on disk is pickable even when it is not in
                   // ComfyUI yet: the launch button then offers to deploy it first.
                   selectable={p.present !== false}
@@ -315,6 +330,10 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
     // A press on a pill is an inspection, never a drag or a pan.
     if (e.target.closest?.('.lds-ckpill-wrap')) return;
     const card = e.target.closest?.('[data-canvas-node]');
+    // A press on the bare board dismisses an open popover. A press on a card
+    // does not: its own click decides (open another one, or toggle this one
+    // shut), and closing here first would make that click reopen it.
+    if (!card) setOpenCk(null);
     const at = localPoint(e);
     if (card && e.pointerType !== 'touch') {
       // Mouse / pen: the press landed on a card, so it IS the card that moves.
@@ -435,17 +454,39 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
     else setHoverId(id);
   }, []);
 
+  // The open actions popover: { lane, node, pill, anchor } | null. `pill` is null
+  // when a run CARD was clicked — the same popover, with only its run-level rows.
+  const [openCk, setOpenCk] = useState(null);
+  const closePopover = useCallback(() => setOpenCk(null), []);
+  const [bigPreview, setBigPreview] = useState(null);
+  const zoomPreview = useCallback((url, step) => setBigPreview({ url, step }), []);
+
+  const onOpenActions = useCallback((lane, node, pill, e) => {
+    const anchor = { x: e?.clientX ?? 0, y: e?.clientY ?? 0 };
+    setOpenCk((cur) => (cur && cur.node.record_id === node.record_id
+      && (cur.pill?.step ?? null) === (pill?.step ?? null)
+      ? null                                   // clicking the same target closes it
+      : { lane, node, pill: pill || null, anchor }));
+  }, []);
+
   const onNodeClick = useCallback((node, e) => {
     // A drop lands on the card it moved, so the browser fires a click right
     // after it. Swallow exactly that one — otherwise every move would also open
-    // the inspector.
+    // the popover.
     if (suppressClick.current) { suppressClick.current = false; return; }
     if (e && e.shiftKey) {
       setSelectedForDiff((sel) => toggleDiffSelection(sel, node.record_id));
       return;
     }
-    setOpenNode(node);
-  }, []);
+    // A card click opens the ACTIONS, not the detail drawer. The drawer used to
+    // spring open on any click, which turned a glance at the board into a panel
+    // to dismiss; it now comes from the ⓘ Details button, filed with deploy and
+    // the rest. The lane is resolved from the card, since the card component
+    // itself knows nothing about lanes.
+    const lane = placedRef.current.find(
+      (l) => (l.graph?.nodes || []).some((x) => x.node.record_id === node.record_id));
+    onOpenActions(lane || null, node, null, e);
+  }, [onOpenActions]);
 
   const diffRole = useCallback((id) => {
     const i = selectedForDiff.indexOf(id);
@@ -545,6 +586,48 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
 
   const launchVerdict = describeCanvasLaunch(picks);
 
+  /* --- checkpoint actions: THE shared ones ---------------------------------
+     Deploying and deleting from the board run the exact routes, payloads and
+     confirmation the in-card graph runs (hooks/useCheckpointActions). A lane is
+     re-read afterwards so the pill stops making a claim about the disk that
+     stopped being true — a just-deployed pill flips to ✓ Deployed, a deleted
+     save's pill disappears.
+
+     ⚠️ `bestSettingsLora` is not passed: the board's dataset index does not carry
+     the ★ pin, so a canvas delete of the pinned LoRA is confirmed without the ⚠
+     line the dataset panel shows. The deletion itself is identical (same route,
+     same trash, recoverable); only that extra warning is missing. */
+  const onCheckpointChanged = useCallback(
+    async (datasetId) => { await onRefetchDataset?.(datasetId); }, [onRefetchDataset]);
+  const { importing, deleting, deployCheckpoint, deleteCheckpoint } = useCheckpointActions({
+    onChanged: onCheckpointChanged,
+  });
+  const handleDeployCheckpoint = useCallback(async (node, pill) => {
+    if (await deployCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);
+  }, [deployCheckpoint, openCk]);
+  const handleDeleteCheckpoint = useCallback(async (node, pill) => {
+    if (await deleteCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);
+  }, [deleteCheckpoint, openCk]);
+
+  /* --- the generation in flight, owned by the BOARD -------------------------
+     Not by the settings panel: closing that panel used to destroy the run id, so
+     a launch could only be watched at the moment it was fired. */
+  const tracker = useCanvasRun();
+  const trackerTargets = tracker.targets;
+  // New images = new × N badges and new thumbnails on the pills, which come from
+  // the LINEAGE, not from the run. Without this re-read the board looked exactly
+  // as it did before the launch until a full reload — the images were there, and
+  // nowhere to be seen.
+  const seenReady = useRef(0);
+  useEffect(() => {
+    const n = readyImageCount(tracker.run.data);
+    if (n <= seenReady.current) return;
+    seenReady.current = n;
+    for (const id of canvasRunDatasetIds(trackerTargets)) {
+      Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
+    }
+  }, [tracker.run.data, trackerTargets, onRefetchDataset]);
+
   const noteOf = useCallback((node) => noteEdits[node.record_id] || node, [noteEdits]);
   const handleNodeChanged = useCallback((updated) => {
     setNoteEdits((m) => ({ ...m, [updated.record_id]: updated }));
@@ -614,7 +697,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           )}
         </button>
         <span className="ml-auto hidden text-content-subtle text-[0.625rem] sm:inline">
-          Drag a run to move it · drag the background to pan · wheel to zoom · click a run to inspect · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run or a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -623,6 +706,18 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           </button>
         )}
       </div>
+
+      {/* 🎨 The generation in flight, ON the board. Visible with the settings
+          panel closed, and after a reload — which is the whole point: a launch
+          you can only watch at the second you fired it is a launch you cannot
+          come back to. Its finished state names where the images went. */}
+      <CanvasRunTracker
+        run={tracker.run.data} targets={trackerTargets}
+        onStop={() => tracker.run.cancel?.()}
+        onResume={() => tracker.run.resume?.()}
+        onOpenPanel={() => setPanelOpen(true)}
+        onOpenResult={(t) => setGallery({ recordId: t.recordId, step: t.step })}
+        onDismiss={tracker.forget} />
 
       <div
         ref={frameRef}
@@ -650,12 +745,46 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
                   onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}
                   liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null}
                   isPicked={isPicked} onTogglePick={onTogglePick}
+                  onOpenActions={onOpenActions} onZoomPreview={zoomPreview}
                   onOpenGallery={(recordId, step) => setGallery({ recordId, step })} />
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* ◉ THE checkpoint actions — the very component the in-card graph draws,
+          floated over the board instead of inside an <svg>. Fixed and at a
+          CONSTANT size: a popover that scaled with the board would be unreadable
+          at the zoom levels the board is actually useful at, and it must never
+          be clipped by the frame it hangs over. clampPopoverToViewport keeps it
+          inside the window on a 400-px screen, flipping above the click when
+          there is no room below and narrowing rather than pushing the page
+          sideways. */}
+      {openCk && (() => {
+        const box = clampPopoverToViewport(openCk.anchor, {
+          width: typeof window !== 'undefined' ? window.innerWidth : 400,
+          height: typeof window !== 'undefined' ? window.innerHeight : 800,
+        }, { width: POPOVER_W, height: POPOVER_H });
+        return (
+          <div style={{ position: 'fixed', left: box.left, top: box.top, width: box.width, zIndex: 60 }}>
+            <CheckpointActionsPopover
+              node={openCk.node} pill={openCk.pill}
+              runLabel={runIdentityLabel(openCk.node)}
+              folderLabel={loraFolderLabel(openCk.node.train_type)}
+              // The board has no resume flow of its own: continuing a run is the
+              // Runs hub's (cloud) or the dataset panel's (local) gesture, each
+              // with its own dialog. Rather than a button that would go nowhere,
+              // the row says where the gesture lives.
+              continueReason="Continue from here: open this run from the Runs page (cloud) or the dataset’s Checkpoints panel (local)"
+              importing={importing} deleting={deleting}
+              onDeploy={handleDeployCheckpoint}
+              onDelete={handleDeleteCheckpoint}
+              onDetails={(node) => setOpenNode(node)}
+              onClose={closePopover} />
+          </div>
+        );
+      })()}
 
       {/* One drawer at a time: two picked runs → the compare diff, otherwise the
           single-run inspector. Both are the EXISTING panels, hosted unchanged —
@@ -679,11 +808,16 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           onToggle={(entry) => setPicks((cur) => toggleCanvasCheckpoint(cur, entry))}
           onClear={() => setPicks([])}
           onDeploy={handleDeploy}
+          tracker={tracker}
           onClose={() => setPanelOpen(false)} />
       )}
 
       {/* 🖼 Everything one checkpoint ever produced. */}
       <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)} />
+
+      {/* 🔍 A pill's preview, full-screen. The thumbnail was already clickable on
+          the board and did nothing at all — the host passed no handler. */}
+      <PreviewLightbox target={bigPreview} onClose={() => setBigPreview(null)} />
 
       {/* An untouched board with picks waiting: say so, because the settings panel
           may be closed and the ✓ boxes are small. Also the only place the

@@ -122,8 +122,12 @@ test('the cloud lane posts the local checkpoint to the continue-local endpoint',
 test('a ◉ Graph checkpoint pill opens the cloud Continue dialog pre-filled', () => {
   const graph = fs.readFileSync(new URL('./RunLineageGraph.jsx', import.meta.url), 'utf8');
   const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8');
-  // the graph surfaces a "continue from here" action, threaded through the tree
-  assert.match(graph, /onContinueCheckpoint\(openCk\.node,\s*openCk\.pill\)/);
+  // the graph surfaces a "continue from here" action, threaded through the tree.
+  // The action itself lives in the SHARED popover now (one popover for the graph
+  // and the canvas); the graph's job is to hand it the mount's handler.
+  const popover = fs.readFileSync(new URL('./CheckpointActionsPopover.jsx', import.meta.url), 'utf8');
+  assert.match(graph, /onContinue=\{typeof onContinueCheckpoint === 'function' \? onContinueCheckpoint : undefined\}/);
+  assert.match(popover, /onClick=\{\(\) => \{ onContinue\(node, pill\); onClose\?\.\(\); \}\}/);
   assert.match(tree, /onContinueCheckpoint=\{onContinueCheckpoint\}/);
   // the Runs page maps a pill to the run and opens the dialog on that step
   assert.match(cloud, /continueFromCheckpoint/);

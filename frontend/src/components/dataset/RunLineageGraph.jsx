@@ -4,17 +4,18 @@ import { GraphCard, CheckpointPill } from './lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from './lineageEdges';
 import LineageDetailPanel from './LineageDetailPanel';
 import LineageDiffPanel from './LineageDiffPanel';
+import CheckpointActionsPopover from './CheckpointActionsPopover';
+import PreviewLightbox from './PreviewLightbox';
+import CheckpointGalleryPanel from '../canvas/CheckpointGalleryPanel';
+import { checkpointPopoverPlacement, POPOVER_H, POPOVER_W } from './checkpointPopover.js';
 import { noteBadge, toggleDiffSelection } from './lineageDetail.js';
 import { removeRunFromTree } from '../../utils/runDeletable.js';
-import { canContinueFromCheckpoint } from './lineageContinue.js';
 import { postJson } from '../../api/fetchClient';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
-import { useToast } from '../common/Toast';
+import { useCheckpointActions } from '../../hooks/useCheckpointActions';
 import {
   checkpointKey, toggleCheckpointSelection, selectedCheckpointRefs,
   describePreviewSelection, parseSeedInput,
-  checkpointDeployed, lineageImportPayload,
-  checkpointDeleteTarget, checkpointUndeployAction, describeCheckpointDelete,
 } from './lineagePreview.js';
 
 /* ◉ Graph view of a run's lineage — the showcase rendering. A tidy left-to-right
@@ -36,7 +37,6 @@ const MAX_H = 560;       // the panel never grows taller than this before it pan
 
 export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
   continueSource = 'cloud', refetchTree, bestSettingsLora = null }) {
-  const toast = useToast();
   // Runs removed in-session (a gone run deleted from the detail panel) drop from
   // the graph without a full refetch; children re-root via removeRunFromTree.
   const [deletedIds, setDeletedIds] = useState([]);
@@ -62,12 +62,13 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
   // The open checkpoint popover: { node, pill } | null.
   const [openCk, setOpenCk] = useState(null);
   const closePopover = useCallback(() => setOpenCk(null), []);
-  // 📦 Deploying a checkpoint straight from its pill popover (Import → loras/…).
-  const [importing, setImporting] = useState(false);
-  // 🗑 Trashing a checkpoint from that same popover (destructive → confirmed).
-  const [deleting, setDeleting] = useState(false);
   // A preview thumbnail opened LARGE in a lightbox: { url, step } | null.
   const [bigPreview, setBigPreview] = useState(null);
+  // 🖼 The gallery of ONE checkpoint: { recordId, step } | null. The compact pill
+  // no longer carries a 14-px thumbnail (illegible at that size, and its badge
+  // collided with the neighbouring pill's); it carries a results COUNT, and this
+  // is where the count leads — the images at a size where they can be judged.
+  const [gallery, setGallery] = useState(null);
   const zoomPreview = useCallback((url, step) => setBigPreview({ url, step }), []);
   // The Lab detail panel's open node (click a run card to inspect its config).
   const [openNode, setOpenNode] = useState(null);
@@ -83,6 +84,12 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
     setOpenNode(node);
     if (typeof onSelect === 'function') onSelect(node);   // keep the Runs-hub jump
   }, [onSelect]);
+  // ⓘ Details, from the shared popover: the same drawer, opened because it was
+  // asked for. This mount ALSO keeps opening it on a card click — its cards
+  // double as the Runs-hub jump, and taking that away would be a regression on a
+  // surface nobody complained about. The canvas, whose cards do nothing else,
+  // routes the click to the popover instead.
+  const handleOpenDetails = useCallback((node) => setOpenNode(node), []);
   // record_id -> node, so the two picked ids resolve to the nodes the diff reads.
   const nodeById = useMemo(() => {
     const m = new Map();
@@ -154,63 +161,25 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
     return stillPending;
   }, []);
 
-  // 📦 Import → loras/<family>: deploy THIS checkpoint into ComfyUI straight from
-  // its pill, closing the see-it → use-it loop without leaving the graph. Uses
-  // postJson (CSRF header + one-shot refresh) — a bare fetch is rejected 400 by
-  // Flask-WTF, the same trap that broke browser Generate. The payload mirrors the
-  // flat checkpoint list EXACTLY (a cloud pill rides its cloud_run_id). On success
-  // we refetch the lineage so the freshly-deployed pill flips to `testable` (✓
-  // Deployed + eligible for inline Generate).
+  // 📦 Deploy and 🗑/⏏ delete are the SHARED checkpoint actions (they run the
+  // same routes, with the same payloads and the same confirmation, on the LoRA
+  // Canvas). All this mount adds is what "re-read the lineage" means here: a
+  // refetch whose fresh preview state is merged into the overlay, so a
+  // just-deployed pill flips to ✓ Deployed without a reload.
+  const onCheckpointChanged = useCallback(async () => {
+    if (typeof refetchTree !== 'function') return;
+    const t = await refetchTree();
+    if (t) mergeFromTree(t);
+  }, [refetchTree, mergeFromTree]);
+  const { importing, deleting, deployCheckpoint, deleteCheckpoint } = useCheckpointActions({
+    onChanged: onCheckpointChanged, bestSettingsLora,
+  });
   const handleImport = useCallback(async (node, pill) => {
-    const body = lineageImportPayload(node, pill);
-    if (datasetId == null || !body) return;
-    setImporting(true);
-    try {
-      const d = await postJson(`/api/dataset/${datasetId}/train/import`, body);
-      toast.success(d?.note || `LoRA imported: ${d?.dest || pill.filename}`);
-      setOpenCk(null);
-      if (typeof refetchTree === 'function') {
-        try { const t = await refetchTree(); if (t) mergeFromTree(t); } catch { /* the list still updated server-side */ }
-      }
-    } catch (e) {
-      toast.error(e?.message || 'Import failed');
-    } finally {
-      setImporting(false);
-    }
-  }, [datasetId, refetchTree, mergeFromTree, toast]);
-
-  // 🗑 ONE delete action per pill, aimed at WHAT THE PILL SHOWS: a deployed pill
-  // removes its ComfyUI copy (the run's save stays), a plain pill deletes the
-  // training save itself. Deletion is therefore progressive — undeploy first,
-  // then the same action reaches the raw save. The target (route + body + label)
-  // comes from checkpointDeleteTarget, which reads the SAME `testable` flag that
-  // decides "✓ Deployed" vs "Import → loras/…", so the button can't aim at one
-  // file while the popover claims the other. postJson THROWS on 400/409 (e.g.
-  // the server's "this dataset is training right now"), so the catch shows the
-  // server's own words. On success the lineage is refetched: the deployed pill
-  // flips to not-deployed (next click aims at the save), a deleted save's pill
-  // disappears — never a stale claim until the next reload.
+    if (await deployCheckpoint(datasetId, node, pill)) setOpenCk(null);
+  }, [deployCheckpoint, datasetId]);
   const handleDeleteCheckpoint = useCallback(async (node, pill) => {
-    const target = checkpointDeleteTarget(node, pill);
-    if (datasetId == null || !target) return;
-    const { message } = describeCheckpointDelete(node, pill, { bestSettingsLora });
-    if (!window.confirm(message)) return;
-    setDeleting(true);
-    try {
-      await postJson(`/api/dataset/${datasetId}/${target.path}`, target.body);
-      toast.success(target.kind === 'deployed'
-        ? `Undeployed from ComfyUI — the training save is kept, you can deploy it again: ${target.filename}`
-        : `Training save moved to the trash: ${target.filename}`);
-      setOpenCk(null);
-      if (typeof refetchTree === 'function') {
-        try { const t = await refetchTree(); if (t) mergeFromTree(t); } catch { /* it is deleted server-side */ }
-      }
-    } catch (e) {
-      toast.error(e?.message || 'Delete failed');
-    } finally {
-      setDeleting(false);
-    }
-  }, [datasetId, bestSettingsLora, refetchTree, mergeFromTree, toast]);
+    if (await deleteCheckpoint(datasetId, node, pill)) setOpenCk(null);
+  }, [deleteCheckpoint, datasetId]);
 
   const handleGenerate = useCallback(async () => {
     const refs = selectedCheckpointRefs(selectedCk, pillByKey);
@@ -259,15 +228,6 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
   }, [selectedCk, pillByKey, datasetId, genSeed, genPrompt, g.nodes, refetchTree, mergeFromTree]);
 
   useLayoutEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
-  // Esc closes the preview lightbox from anywhere (a window listener, not div
-  // focus — the backdrop div isn't reliably focused when the image is clicked).
-  useLayoutEffect(() => {
-    if (!bigPreview) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') setBigPreview(null); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [bigPreview]);
 
   // Fit horizontally to the panel, shrinking no further than MIN_SCALE (then the
   // panel pans). Re-measured on resize so it always poses well in a screenshot.
@@ -331,13 +291,6 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
 
   const vw = g.width * scale, vh = g.height * scale;
   const capped = Math.min(vh, MAX_H);
-  // Can this checkpoint be continued from? The rule lives in lineageContinue.js
-  // (JSX-free, unit-tested): cloud runs only by default — the Runs hub's gate,
-  // untouched — and, when the mount passes continueSource="any" (the dataset
-  // panel, which resumes locally), a local run's present save as well.
-  const canContinue = (node, pill) => canContinueFromCheckpoint(node, pill, {
-    continueSource, hasHandler: typeof onContinueCheckpoint === 'function',
-  });
 
   return (
     <>
@@ -440,6 +393,7 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
                     big={bigPreviews}
                     onOpen={(pill) => setOpenCk({ node: n.node, pill })}
                     onToggleSelect={(pill) => toggleCk(n.node.record_id, pill)}
+                    onOpenGallery={(pill) => setGallery({ recordId: n.node.record_id, step: pill.step })}
                     onZoomPreview={zoomPreview} />
                 ))}
               </div>
@@ -447,104 +401,29 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
           ))}
         </g>
 
-        {/* Actions popover — drawn last so it sits above every node. OPAQUE
-            surface (bg-surface-overlay) so the graph behind never shows through.
-            Flips ABOVE the pill when there's no room below (bottom rows), and is
-            clamped horizontally, so the scroll panel never clips it. */}
+        {/* Actions popover — drawn last so it sits above every node. THE shared
+            checkpoint popover (CheckpointActionsPopover), the very same component
+            the LoRA Canvas floats over its board: one set of actions, one set of
+            labels, one place where "which file does this delete" is decided.
+            Only the PLACEMENT is this surface's own — inside the <svg>, in world
+            units, flipped above the pill when there is no room below and clamped
+            horizontally so the scroll panel never clips it. */}
         {openCk && (() => {
-          // Height budget grew with the 🗑 row, so the flip-above / clamp
-          // geometry still keeps the whole popover inside the scroll panel.
-          const POP_W = 210, POP_H = 182;
-          // A deployed pill's ONE action on its ComfyUI copy, shown as ⏏ Undeploy
-          // next to "✓ Deployed" (see below) instead of buried in the 🗑 row.
-          const undeploy = checkpointUndeployAction(openCk.node, openCk.pill);
-          const below = openCk.pill.y + openCk.pill.h + 4;
-          const py = below + POP_H > g.height ? Math.max(0, openCk.pill.y - POP_H - 4) : below;
-          const px = Math.max(0, Math.min(openCk.pill.x, g.width - POP_W));
+          const at = checkpointPopoverPlacement(openCk.pill, g);
           return (
           <foreignObject className="lds-gnode overflow-visible"
-            x={px} y={py} width={POP_W + 10} height={POP_H + 8}>
-            <div className="lds-ck-popover w-[210px] rounded-lg border border-indigo-400/40 bg-surface-overlay p-2 shadow-xl"
-              onPointerDown={(e) => e.stopPropagation()}>
-              <div className="mb-1.5 flex items-center gap-1.5">
-                <span className="text-content text-[0.6875rem] font-semibold tabular-nums">
-                  Step {openCk.pill.step.toLocaleString()}
-                </span>
-                {openCk.pill.final && (
-                  <span className="rounded bg-emerald-500/15 px-1 py-px text-emerald-200 text-[0.5rem] font-semibold uppercase">final</span>
-                )}
-                <button type="button" onClick={closePopover}
-                  className="ml-auto text-content-subtle hover:text-content text-[0.75rem]" aria-label="Close">✕</button>
-              </div>
-              <div className="flex flex-col gap-1">
-                {openCk.pill.download_url ? (
-                  <a href={openCk.pill.download_url} download
-                    onClick={closePopover}
-                    className="flex items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-600/15 px-2 py-1 text-emerald-100 text-[0.6875rem] font-medium no-underline hover:bg-emerald-600/25">
-                    <span aria-hidden>⬇</span> Download
-                  </a>
-                ) : (
-                  <span className="rounded-md border border-border bg-app/40 px-2 py-1 text-content-subtle text-[0.625rem]">
-                    Download unavailable for this save
-                  </span>
-                )}
-                {canContinue(openCk.node, openCk.pill) && (
-                  <button type="button"
-                    onClick={() => { onContinueCheckpoint(openCk.node, openCk.pill); closePopover(); }}
-                    className="flex items-center gap-1.5 rounded-md border border-indigo-400/40 bg-indigo-500/15 px-2 py-1 text-indigo-100 text-[0.6875rem] font-medium hover:bg-indigo-500/25">
-                    <span aria-hidden>▶</span> Continue from here
-                  </button>
-                )}
-                {/* 📦 Import → loras/<family>: deploy on the spot. A deployed pill
-                    shows "✓ Deployed" — and, right beside it, the SYMMETRIC ⏏
-                    Undeploy, framed as what it is: reversible (the training save
-                    stays, so the pill goes straight back to offering Import). It
-                    aims at the same ComfyUI copy the 🗑 row used to hide, which is
-                    why that row only appears for the save (below). Only importable
-                    pills (a file + a resolvable run) offer the Import button. */}
-                {checkpointDeployed(openCk.pill) ? (
-                  <div className="flex items-center gap-1">
-                    <span className="flex flex-1 items-center gap-1.5 rounded-md border border-emerald-500/40 bg-emerald-600/10 px-2 py-1 text-emerald-200 text-[0.6875rem] font-medium">
-                      <span aria-hidden>✓</span> Deployed
-                    </span>
-                    {undeploy && (
-                      <button type="button" disabled={deleting}
-                        onClick={() => handleDeleteCheckpoint(openCk.node, openCk.pill)}
-                        title={undeploy.title}
-                        className="flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-600/5 px-2 py-1 text-emerald-200/90 text-[0.6875rem] font-medium hover:bg-emerald-600/20 disabled:cursor-not-allowed disabled:opacity-50">
-                        <span aria-hidden>⏏</span> {deleting ? 'Undeploying…' : undeploy.label}
-                      </button>
-                    )}
-                  </div>
-                ) : lineageImportPayload(openCk.node, openCk.pill) ? (
-                  <button type="button" disabled={importing}
-                    onClick={() => handleImport(openCk.node, openCk.pill)}
-                    title={`Deploy this checkpoint into ComfyUI's ${loraFolderLabel(openCk.node.train_type)} folder so you can test and generate with it`}
-                    className="flex items-center gap-1.5 rounded-md border border-primary/40 bg-primary/20 px-2 py-1 text-white text-[0.6875rem] font-medium hover:bg-primary/30 disabled:cursor-not-allowed disabled:opacity-50">
-                    <span aria-hidden>📦</span> {importing ? 'Importing…' : `Import → ${loraFolderLabel(openCk.node.train_type)}`}
-                  </button>
-                ) : null}
-                {/* 🗑 The one truly DESTRUCTIVE action — deleting the training
-                    save — so it stays VISUALLY IN RETREAT below a hairline: a
-                    quiet text row, not a fourth coloured button one clicks by
-                    reflex. While the pill is deployed there is no save to offer
-                    yet (undeploy first — same progressive order as before), and
-                    the ComfyUI copy is handled above by ⏏ Undeploy; the row is
-                    therefore drawn only for kind==='save'. Its LABEL still names
-                    exactly the file the click deletes. */}
-                {(() => {
-                  const target = checkpointDeleteTarget(openCk.node, openCk.pill);
-                  if (!target || target.kind !== 'save') return null;
-                  return (
-                    <button type="button" disabled={deleting}
-                      onClick={() => handleDeleteCheckpoint(openCk.node, openCk.pill)}
-                      title={target.title}
-                      className="mt-1 flex items-center gap-1.5 border-t border-border px-2 pt-1.5 pb-0.5 text-left text-content-subtle text-[0.625rem] hover:text-rose-300 disabled:cursor-not-allowed disabled:opacity-50">
-                      <span aria-hidden>🗑</span> {deleting ? 'Deleting…' : target.label}
-                    </button>
-                  );
-                })()}
-              </div>
+            x={at.x} y={at.y} width={POPOVER_W + 10} height={POPOVER_H + 8}>
+            <div style={{ width: POPOVER_W }}>
+              <CheckpointActionsPopover
+                node={openCk.node} pill={openCk.pill}
+                continueSource={continueSource}
+                folderLabel={loraFolderLabel(openCk.node.train_type)}
+                importing={importing} deleting={deleting}
+                onContinue={typeof onContinueCheckpoint === 'function' ? onContinueCheckpoint : undefined}
+                onDeploy={handleImport}
+                onDelete={handleDeleteCheckpoint}
+                onDetails={handleOpenDetails}
+                onClose={closePopover} />
             </div>
           </foreignObject>
           );
@@ -564,21 +443,12 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
         onNodeChanged={handleNodeChanged} onNodeDeleted={handleNodeDeleted} />
     )}
     {/* 🔍 Preview lightbox — a checkpoint's generated image LARGE, so epochs read
-        in ComfyUI spirit (the pill thumbnails are only 14px). Esc / backdrop /
-        image click closes. Fixed + high z-index so it floats over everything. */}
-    {bigPreview && (
-      <div role="dialog" aria-modal="true" aria-label={`Preview at step ${bigPreview.step}`}
-        className="fixed inset-0 z-[9997] flex flex-col items-center justify-center bg-black/90 p-4"
-        onClick={() => setBigPreview(null)}>
-        <button type="button" onClick={(e) => { e.stopPropagation(); setBigPreview(null); }}
-          title="Close (Esc)" aria-label="Close preview"
-          className="absolute top-3 right-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
-        <img src={bigPreview.url} alt={`Generated preview at step ${bigPreview.step}`}
-          onClick={(e) => e.stopPropagation()}
-          className="max-h-[88vh] max-w-full select-none rounded-lg object-contain shadow-2xl" />
-        <span className="mt-2 text-white/70 text-[0.75rem] tabular-nums">Step {bigPreview.step.toLocaleString?.() ?? bigPreview.step} · click outside or Esc to close</span>
-      </div>
-    )}
+        in ComfyUI spirit (the pill thumbnails are only 14px). Shared with the
+        canvas, where the same thumbnail used to be clickable and do nothing. */}
+    <PreviewLightbox target={bigPreview} onClose={() => setBigPreview(null)} />
+    {/* 🖼 Everything one checkpoint ever produced — the same panel the canvas
+        opens, so the results of a generation are reachable from either surface. */}
+    <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)} />
     </>
   );
 }
