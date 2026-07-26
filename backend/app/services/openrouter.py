@@ -48,6 +48,7 @@ import logging
 import requests
 
 from .. import config as cfg
+from .engine_errors import EngineError, EngineFatal
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +69,12 @@ _NO_KEY = ('no OpenRouter API key saved — add OPENROUTER_API_KEY in '
            'Settings > Image engines')
 
 
-class OpenRouterError(RuntimeError):
+class OpenRouterError(EngineError):
     """A named OpenRouter failure. The message is user-facing and never carries
     the API key."""
 
 
-class OpenRouterFatal(OpenRouterError):
+class OpenRouterFatal(OpenRouterError, EngineFatal):
     """A failure that would repeat identically on every remaining row of a batch
     (missing/rejected key, no credits, unknown model). The fan-out stops the run
     on this rather than paying for the same refusal N times."""

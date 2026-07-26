@@ -103,8 +103,11 @@ export function SecretField({
 }) {
   const f = field
   return (
-    <div className="flex items-end gap-3">
-      <div className="flex-1">
+    // flex-wrap + a full-width first child under `sm`: on a phone the Test and
+    // Remove buttons drop to their own line instead of squeezing the key input
+    // down to a few characters. From `sm` up it is the historical single row.
+    <div className="flex flex-wrap items-end gap-x-3 gap-y-2">
+      <div className="w-full sm:w-auto sm:flex-1">
         <div className="flex items-center justify-between">
           <label htmlFor={f.key} className="block text-sm font-medium text-content">{f.label}</label>
           <StatusBadge ok={!!secretsPresence[f.key]} />

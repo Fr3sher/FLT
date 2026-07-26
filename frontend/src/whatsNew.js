@@ -54,6 +54,12 @@ export const WHATS_NEW = [
     blurb:
       "Settings › Overview told you what was missing and then left you to find it: \"✗ Person masks\" was a dead end, and the four generic links underneath sent you to the top of a screen to hunt. Each of the eleven rows is now a link that lands you ON the control — the OpenRouter key field, the ComfyUI URL, the button that installs person masks — with the field scrolled to and highlighted. Rows that only need ComfyUI running now say so in amber instead of showing a red cross, and point at the connection test rather than at an install you have already done.",
     to: '/settings/overview',
+    id: '2026-07-26-pick-the-model-of-every-api-engine',
+    date: '2026-07-26',
+    title: '🎛️ Pick the model for Nano Banana and ChatGPT too, not just OpenRouter',
+    blurb:
+      "OpenRouter let you type any model you liked, while Nano Banana and ChatGPT were stuck on whatever the release hardcoded — a newer, cheaper or better model meant waiting for an update. All three now have a plain text field, side by side in Settings › Image engines › Image models. Leave a field blank and nothing changes: that engine keeps the exact model it has always used. And when a model does not work out, the failed tile now says why in the provider's own words — unknown model, key refused, a model that will not take your reference photos — instead of the old catch-all about a content-policy refusal, and the run stops on the first one rather than paying for the same refusal once per image. Two things worth knowing before you type: every model here must accept reference images, because the generator always sends your reference photos with the prompt; and on OpenAI, gpt-image-2 is the only model that works without organization verification — a newer slug answers 403 and that is the model talking, not your key.",
+    to: '/settings/engines',
   },
   {
     id: '2026-07-26-new-engines-reach-existing-installs',

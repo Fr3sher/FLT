@@ -350,6 +350,13 @@ const TOPICS = [
   setting('engines.openrouter_model', 'engines', 'engines-openrouter_model', 'OpenRouter model',
     ['openrouter', 'model', 'slug', 'model slug', 'gemini-3-pro-image', 'gpt-image-2', 'seedream',
      'flux', 'reference images', 'image model']),
+  setting('engines.nanobanana_model', 'engines', 'engines-nanobanana_model', 'Nano Banana (Gemini) model',
+    ['nano banana', 'nanobanana', 'gemini', 'model', 'image model', 'gemini-3-pro-image',
+     'change model', 'choose model', 'reference images', 'NANOBANANA_MODEL']),
+  setting('engines.chatgpt_image_model', 'engines', 'engines-chatgpt_image_model', 'ChatGPT (OpenAI) image model',
+    ['chatgpt', 'openai', 'gpt-image', 'gpt-image-2', 'gpt-image-1.5', 'model', 'image model',
+     'change model', 'choose model', '403', 'organization verification', 'verified',
+     'reference images', 'CHATGPT_IMAGE_MODEL']),
   // scraping
   setting('REDDIT_CLIENT_ID', 'scraping', 'REDDIT_CLIENT_ID', 'Reddit client ID',
     ['reddit', 'client id', 'scrape', '429', 'rate limit', 'quota', 'key']),

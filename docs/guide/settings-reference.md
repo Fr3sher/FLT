@@ -39,7 +39,7 @@ If nothing on the grid tells you where to start, the line at the bottom opens th
 
 ## Image engines
 
-This is where you connect the services that *generate* dataset images. The app has four engines: **Nano Banana** (Google Gemini), **ChatGPT** (`gpt-image-2`), **OpenRouter** (one account in front of many providers), and **Klein** (local, via ComfyUI). Klein is configured under **Local tools**; the three API engines are configured here.
+This is where you connect the services that *generate* dataset images. The app has four engines: **Nano Banana** (Google Gemini), **ChatGPT** (OpenAI), **OpenRouter** (one account in front of many providers), and **Klein** (local, via ComfyUI). Each of the three API engines lets you choose which model it asks for — see *Image models* below. Klein is configured under **Local tools**; the three API engines are configured here.
 
 ### API keys
 
@@ -49,13 +49,32 @@ This is where you connect the services that *generate* dataset images. The app h
 
 All three are write-only secrets: blank once saved, replaced by typing a new value, cleared only via **Remove**.
 
-### OpenRouter model
+### Image models
 
-- **Model slug** → `engines.openrouter_model`. Which image model the OpenRouter engine asks for. Default **`google/gemini-3-pro-image`** — the same weights the Nano Banana engine calls, so switching engine changes who bills you, not what the pictures look like. Leaving the field blank falls back to that default.
+One field per API engine — you choose the model each one asks for:
 
-It is **free text on purpose**: OpenRouter's image catalogue moves fast (models arrive, get renamed, retire), and a dropdown frozen into a release would eventually lock you out of a model that works. Browse the current list at [openrouter.ai/models](https://openrouter.ai/models?output_modalities=image).
+- **Nano Banana (Gemini) model** → `engines.nanobanana_model`. Blank = **`gemini-3-pro-image`**, the model this engine has always used.
+- **ChatGPT (OpenAI) image model** → `engines.chatgpt_image_model`. Blank = **`gpt-image-2`**, the model this engine has always used.
+- **OpenRouter model slug** → `engines.openrouter_model`. Blank = **`google/gemini-3-pro-image`** — the same weights the Nano Banana engine calls, so switching engine changes who bills you, not what the pictures look like.
 
-The model **must accept reference images** — the dataset generator always sends your reference photo(s) with the prompt, so a text-only model is not usable here. How many references a model takes varies (roughly 1 to 16 depending on the provider); the app sends every reference you gave it and, if the model refuses the request, says so and mentions the count rather than quietly dropping references you expected to be used.
+All three are **free text on purpose**: providers publish image models far faster than this app publishes releases, and a dropdown frozen into a build would be out of date the day it shipped and would lock you out of a model that works. Leaving a field blank keeps that engine's historical model, so a field appearing here changes nothing about your results.
+
+**Where the value comes from**, in order:
+
+1. what you type in this field;
+2. the `NANOBANANA_MODEL` / `CHATGPT_IMAGE_MODEL` environment variable, if you had set one (these existed before the fields did — your choice is still honoured, and is only overridden when you actually type a slug here);
+3. the built-in default above.
+
+A model typed here applies to the **next generation** — no restart.
+
+The model **must accept reference images** — the dataset generator always sends your reference photo(s) with the prompt, so a text-to-image-only model is not usable here. When a provider refuses one, the failed tile names the model and repeats the provider's own reason (unknown model, model that will not take image input, key rejected, organization not verified), and the run **stops** instead of asking the same refused question once per image. What no app can catch for you is a model that *accepts* the references and then ignores them: if generated faces stop resembling your subject right after a model change, change it back.
+
+Two provider-specific traps:
+
+- **OpenAI: `gpt-image-2` is the only current model usable without organization verification.** `gpt-image-1.5` and `chatgpt-image-latest` answer **403** until your OpenAI organization is verified — that is the *model* refusing, not your key. The failed tile says so and names the model to fall back to.
+- The ChatGPT **subscription** lane ignores this field: it renders through OpenAI's own image tool on whatever model your plan serves. `engines.chatgpt_subscription_model` is a different setting again — the Codex *router* model of that lane, which decides nothing about the pixels.
+
+How many references a model takes varies (roughly 1 to 16 depending on the provider); the app sends every reference you gave it and, if the model refuses the request, says so and mentions the count rather than quietly dropping references you expected to be used.
 
 What OpenRouter does **not** change:
 
@@ -365,7 +384,7 @@ These have no UI control — they're for advanced users editing `config.json` by
 
 | Key | Default | Role |
 |---|---|---|
-| `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane. The image model stays `gpt-image-2` regardless — this is not the image model. |
+| `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane — not the image model. The subscription lane renders on whatever image model your plan serves; the API-key lane's image model is `engines.chatgpt_image_model`. |
 
 **Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
 
@@ -443,7 +462,9 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `engines.known` | Not a setting — the ledger of which engines the app was offering the last time this list was saved. It is what tells "this engine did not exist yet" apart from "I unticked it". Written automatically; `[]` (or absent) means the app assumes the pre-OpenRouter trio. Delete it to be re-offered every engine. |
 | `engines.chatgpt_auth` | Which credential the ChatGPT engine uses: `auto` (subscription when connected, else API key), `api`, or `subscription`. |
 | `engines.openrouter_model` | Image model slug the OpenRouter engine requests. Free text; blank = `google/gemini-3-pro-image`. Must accept reference images. |
-| `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`); the image model stays `gpt-image-2` regardless. |
+| `engines.nanobanana_model` | Image model the Nano Banana engine requests. Free text; blank = the `NANOBANANA_MODEL` environment variable if set, else `gemini-3-pro-image`. Must accept reference images. |
+| `engines.chatgpt_image_model` | Image model the ChatGPT engine requests on the **API-key** lane. Free text; blank = the `CHATGPT_IMAGE_MODEL` environment variable if set, else `gpt-image-2` (the only model that needs no OpenAI organization verification). Must accept reference images. The subscription lane ignores it. |
+| `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`) — not an image model. |
 | `captioning.backend` | Caption backend: `auto` (prefer JoyCaption, fall back to Ollama), `joycaption`, `ollama`, or `none`. |
 | `training.default_family` | Default model family preselected for new training runs (`zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, or `anima`). |
 | `cloud.max_concurrent_runs` | Simultaneous cloud pods allowed (default `1`, 1–10). Also in Settings → Training. |

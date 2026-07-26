@@ -461,6 +461,10 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   // Which OpenRouter model the run will actually bill: free text in Settings, so
   // the card names it rather than implying a fixed one.
   const [openrouterModel, setOpenrouterModel] = useState('');
+  // Same for the ChatGPT API lane, whose model is free text in Settings too:
+  // this card used to state "gpt-image-2" flatly, which became a lie the moment
+  // someone changed it. Blank = the engine's own default, named here.
+  const [chatgptImageModel, setChatgptImageModel] = useState('');
   useEffect(() => {
     let cancelled = false;
     apiFetch('/api/settings')
@@ -469,6 +473,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         setEnabledEngines(d.config?.engines?.enabled || []);
         setChatgptAuth(d.config?.engines?.chatgpt_auth || 'auto');
         setOpenrouterModel((d.config?.engines?.openrouter_model || '').trim());
+        setChatgptImageModel((d.config?.engines?.chatgpt_image_model || '').trim());
         // Optional generation-LoRA presets: names + chains for the picker.
         setLoraPresets(sanitizeGenerationLoraPresets(d.config?.klein?.generation_lora_presets));
       })
@@ -870,9 +875,12 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
           ]}
           hint={gptAvailable ? (
             <span className={`text-[0.625rem] ${isGPT ? ENGINE_ACCENTS.chatgpt.text : 'text-content-subtle'}`}>
+              {/* The subscription lane renders on the plan's own image model and
+                  ignores the Settings field, so only the API lane names it. */}
               {gptViaSub
                 ? `gpt-image-2 · uses your ChatGPT ${gptPlanLabel} quota`
-                : `gpt-image-2 · ${engineShare('chatgpt')} image(s) ≈ $${(engineShare('chatgpt') * 0.17).toFixed(2)}`}
+                : <><span className="break-all">{chatgptImageModel || 'gpt-image-2'}</span>
+                    {` · ${engineShare('chatgpt')} image(s) ≈ $${(engineShare('chatgpt') * 0.17).toFixed(2)}`}</>}
             </span>
           ) : (
             <span className="text-amber-300 text-[0.625rem]">⚠ Add an API key or connect a subscription in Settings</span>

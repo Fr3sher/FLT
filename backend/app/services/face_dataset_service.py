@@ -5600,7 +5600,7 @@ API_ENGINES = ('nanobanana', 'chatgpt', 'openrouter')
 _ENGINE_FILE_TAG = {'nanobanana': 'NBFace', 'chatgpt': 'GPTFace', 'openrouter': 'ORFace'}
 
 from .chatgpt_image import SubscriptionQuotaExceeded, SubscriptionUnavailable
-from .openrouter import OpenRouterFatal
+from .engine_errors import EngineFatal
 
 _QUOTA_MSG = ('chatgpt: subscription image quota reached — remaining rows were '
               'stopped; rerun in API-key mode or wait for your plan quota to reset')
@@ -5705,11 +5705,14 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
             quota_exhausted.set(); stop_msg['text'] = _LOST_MSG
             logger.warning(f"{engine} batch: subscription lost at row {image_id}: {e}")
             fail_reason = _LOST_MSG
-        except OpenRouterFatal as e:
-            # No key, key rejected, no credits, unknown model: every remaining row
-            # would fail on the exact same cause, so stop the batch instead of
-            # asking OpenRouter the same refused question once per image. Reuses
-            # the ChatGPT quota machinery — same need, same shape.
+        except EngineFatal as e:
+            # No key, key rejected, no credits, unknown or unusable model: every
+            # remaining row would fail on the exact same cause, so stop the batch
+            # instead of asking the provider the same refused question once per
+            # image. Reuses the ChatGPT quota machinery — same need, same shape.
+            # Raised by all three API engines (see services/engine_errors.py):
+            # the model of each is user-editable, and a wrong slug must fail once,
+            # loudly, not N times in a row.
             msg = f'{engine}: {str(e)[:400]} — remaining rows were stopped'
             quota_exhausted.set(); stop_msg['text'] = msg
             logger.warning(f"{engine} batch: fatal at row {image_id}: {e}")

@@ -70,12 +70,29 @@ DEFAULTS = {
                 'known': [],
                 # chatgpt_auth: 'auto' = subscription when connected, else API key.
                 'chatgpt_auth': 'auto',            # auto|api|subscription
-                'chatgpt_subscription_model': 'gpt-5.4-mini',   # Codex router model (image model is gpt-image-2 regardless)
+                # The Codex ROUTER model of the subscription lane — NOT the image
+                # model. The image model of the API-key lane is
+                # engines.chatgpt_image_model (below); the subscription lane
+                # renders on whatever OpenAI's image_generation tool serves that
+                # plan (gpt-image-2 today) and takes no model from us. Two
+                # different settings — never merged.
+                'chatgpt_subscription_model': 'gpt-5.4-mini',
                 # OpenRouter reaches the SAME upstream models as the two other
                 # API engines through one account, so the slug is free text: its
                 # catalogue moves fast and a renamed/retired model must never
                 # require a new release. Default = the Nano Banana weights.
-                'openrouter_model': 'google/gemini-3-pro-image'},
+                'openrouter_model': 'google/gemini-3-pro-image',
+                # Nano Banana / ChatGPT image models. Free text for the same
+                # reason as OpenRouter's, but DEFAULTED TO BLANK, unlike it:
+                # NANOBANANA_MODEL and CHATGPT_IMAGE_MODEL environment variables
+                # already existed and some installs set them. A literal default
+                # here would be a non-blank cfg.get() that silently outranked
+                # that env var. Blank means "not chosen", so the documented
+                # order holds: setting > environment variable > built-in default
+                # (services/nanobanana.DEFAULT_MODEL and
+                # services/chatgpt_image.DEFAULT_IMAGE_MODEL).
+                'nanobanana_model': '',
+                'chatgpt_image_model': ''},
     'captioning': {'backend': 'auto'},                         # auto|joycaption|ollama|none
     'training': {'default_family': 'zimage'},
     # Cloud GPU training (vast.ai). Everything has a sane default: the only
