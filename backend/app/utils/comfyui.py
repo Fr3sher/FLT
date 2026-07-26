@@ -335,14 +335,30 @@ def apply_optimal_sampler_params(workflow: dict, model_filename: str | None) -> 
 
 # --- Workflow Loading ---
 
+# Workflow templates, cached by (path, mtime_ns, size) — a grid re-reads the SAME
+# template once per cell (a 50-cell Studio run = 50 disk reads + 50 INFO log lines).
+# We cache the raw TEXT, not the parsed dict: every caller MUTATES the graph it gets
+# back, so each call must still receive its own fresh object (json.loads = the copy).
+# The mtime/size key means editing a workflow file on disk is picked up immediately.
+_workflow_text_cache = {}
+
+
 def load_workflow_local(file_path):
     """Charge un fichier JSON de workflow ComfyUI et retourne les données parsées, ou None en cas d'erreur."""
     import json
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
-            workflow_data = json.load(f)
-        current_app.logger.info(f"Successfully loaded workflow from {file_path}")
-        return workflow_data
+        st = os.stat(file_path)
+        key = os.path.abspath(file_path)
+        stamp = (st.st_mtime_ns, st.st_size)
+        cached = _workflow_text_cache.get(key)
+        if cached and cached[0] == stamp:
+            text = cached[1]
+        else:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                text = f.read()
+            _workflow_text_cache[key] = (stamp, text)
+            current_app.logger.info(f"Successfully loaded workflow from {file_path}")
+        return json.loads(text)
     except FileNotFoundError:
         current_app.logger.error(f"ERROR: Workflow JSON file not found at {file_path}")
         return None
@@ -615,6 +631,12 @@ def fetch_output_image_bytes(filename, subfolder='', timeout=30):
         return None
 
 
+# /object_info is the heaviest probe in the app (megabytes of node schemas). Short
+# TTL cache so one user action never pays for it twice. See fetch_object_info_classes.
+_OBJECT_INFO_TTL = 60
+_object_info_cache = {"data": None, "timestamp": 0, "key": None}
+
+
 def fetch_object_info_classes(timeout=8):
     """Set of node `class_type` names the target ComfyUI exposes = the KEYS of
     `GET /object_info`. Used by the Studio preflight to tell a required CUSTOM
@@ -624,15 +646,30 @@ def fetch_object_info_classes(timeout=8):
 
     Returns None (not an empty set) on any failure so the caller can distinguish
     'ComfyUI didn't answer, can't verify nodes' (fail-open) from 'the graph uses
-    a node ComfyUI doesn't have'."""
+    a node ComfyUI doesn't have'.
+
+    Cached for `_OBJECT_INFO_TTL` seconds per API address: /object_info is the single
+    heaviest probe in the app (measured 8.8 MB / ~5 s on a node-rich install) and ONE
+    Studio run asks for it twice (grid preflight + per-run class resolution). The node
+    set only changes when ComfyUI restarts or a pack is installed; the refresh-models
+    button (`clear_model_caches`) drops the cache, so a freshly installed node is
+    visible on demand rather than after the TTL."""
+    addr = api_address()
+    now = time.time()
+    if (_object_info_cache["data"] is not None and _object_info_cache["key"] == addr
+            and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
+        return _object_info_cache["data"]
     try:
-        resp = requests.get(urljoin(api_address(), '/object_info'), timeout=timeout)
+        resp = requests.get(urljoin(addr, '/object_info'), timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
-        return set(data.keys()) if isinstance(data, dict) else None
+        classes = set(data.keys()) if isinstance(data, dict) else None
     except Exception as e:
         logger.warning(f"fetch_object_info_classes failed: {e}")
-        return None
+        return None      # a failed probe is never cached (fail-open, retried at once)
+    if classes is not None:
+        _object_info_cache.update(data=classes, timestamp=now, key=addr)
+    return classes
 
 
 def free_comfyui_vram(worker_url=None):
@@ -1161,7 +1198,8 @@ def clear_model_caches() -> None:
     user as "models still not found" right after they pointed the app at ComfyUI).
     SRC exposed `invalidate_model_caches`; this app dropped that helper, so the
     caches were never invalidated on config change until now."""
-    for c in (_checkpoint_models_cache, _zimage_models_cache, _krea_models_cache):
+    for c in (_checkpoint_models_cache, _zimage_models_cache, _krea_models_cache,
+              _object_info_cache):   # a newly installed node pack must show up NOW
         c["data"] = None
         c["timestamp"] = 0
         if "key" in c:

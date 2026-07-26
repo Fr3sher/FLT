@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-26-test-studio-starts-a-grid-faster',
+    date: '2026-07-26',
+    title: '⚡ "Run the test" starts your grid in a fraction of the time',
+    blurb:
+      'Launching a Test Studio grid used to re-read the workflow template, re-scan your LoRA folder and write to the database three separate times for every single cell — 150 database writes for a 50-cell grid — and it asked ComfyUI for its full node list twice (that answer weighs about 9 MB here: 4.8 seconds each time). A cell is now one single write, the folder is scanned once, and the node list is fetched once and reused. Measured on a 50-cell grid: the database work dropped from 150 writes to 50 and the launch itself from 129 ms to 56 ms, on top of the ~4.8 s saved on the duplicate ComfyUI probe. Fewer rapid-fire writes also means a grid launch no longer competes with a cloud run recording its progress.',
+    to: '/studio',
+  },
+  {
     id: '2026-07-26-cloud-run-survives-a-busy-database',
     date: '2026-07-26',
     title: '💾 A busy database no longer abandons a cloud run you are paying for',

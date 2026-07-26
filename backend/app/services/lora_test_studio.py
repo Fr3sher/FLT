@@ -958,16 +958,58 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
     return _resolve_workflow_node_classes(workflow, available_classes)
 
 
-def _enqueue_cell(user_id, dataset_id, workflow, prompt) -> str:
+def _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=None, commit=True) -> str:
     """Enqueue one cell as a normal (serialized) image job. Free: never
     debited - the failure path in job_queue skips the refund for
-    is_lora_test jobs exactly like is_dataset (no credit minting)."""
-    job_id = str(uuid.uuid4())
+    is_lora_test jobs exactly like is_dataset (no credit minting).
+
+    `job_id` lets the caller mint the id BEFORE inserting its own row (so the row
+    carries its job_id from the start instead of being re-written afterwards) and
+    `commit=False` keeps the queue row in the caller's open transaction — together
+    they turn a cell into ONE commit instead of three."""
+    job_id = job_id or str(uuid.uuid4())
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=workflow, prompt=prompt, job_id=job_id,
                           metadata={'model_name': 'zimage_lora_test',
                                     'is_lora_test': True,
-                                    'dataset_id': dataset_id})
+                                    'dataset_id': dataset_id},
+                          commit=commit)
+    return job_id
+
+
+def _persist_and_enqueue_cell(img, user_id, dataset_id, prompt, build_workflow) -> str:
+    """Insert ONE grid cell and its queue job in a SINGLE transaction, and return
+    its job_id.
+
+    Why one commit and not zero (a single commit for the whole grid): a grid is
+    enqueued cell by cell and an enqueue failure at cell 20/50 must LEAVE the 19
+    already-queued cells in the database — a batch commit would roll their rows back
+    while their jobs stay in the queue (orphan jobs, ghost tiles). Why not three
+    (the historical shape: insert row, enqueue, re-write row with its job_id): each
+    commit takes SQLite's write lock, and a 50-cell grid firing 150 of them back to
+    back is exactly the profile that starves a concurrent writer into
+    'database is locked'.
+
+    On failure the half-built transaction is rolled back (dropping the queue row that
+    may already have been staged) and the cell is re-inserted as 'failed' with the
+    reason, so the caller's `raise` still surfaces a visible, explained tile."""
+    job_id = str(uuid.uuid4())
+    img.job_id = job_id
+    db.session.add(img)
+    try:
+        workflow = build_workflow()
+        _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=job_id, commit=False)
+        db.session.commit()
+    except Exception as e:
+        # rollback expunges the pending cell + job rows; the cell object goes back to
+        # transient and can be re-added as the failed marker.
+        db.session.rollback()
+        img.job_id = None
+        img.status = 'failed'
+        img.error = str(e)[:400] or 'enqueue failed'   # say WHY, not a mute red tile
+        db.session.add(img)
+        db.session.commit()
+        raise
     return job_id
 
 
@@ -1395,9 +1437,9 @@ def _batch_lora_label(row):
 def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None) -> dict:
     """Validate + materialize the grid and enqueue every cell.
 
-    Each row is committed BEFORE its enqueue (anti-orphan rule of the dataset
-    fan-out); an enqueue failure marks that row 'failed' and re-raises -
-    already-enqueued cells keep their jobs. Returns {'created', 'seed', 'count', 'ids'}."""
+    Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
+    an enqueue failure marks that row 'failed' and re-raises - already-enqueued cells
+    keep their rows AND their jobs. Returns {'created', 'seed', 'count', 'ids'}."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -1551,30 +1593,21 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
                                     resolution_tier=knobs['resolution_tier'],
                                     resolution_multiplier=knobs['resolution_multiplier'],
                                     init_image=knobs['init_image'], denoise=knobs['denoise'])
-                db.session.add(img)
-                db.session.commit()
-                try:
-                    workflow = _build_cell_workflow(user_id, checkpoint, strength,
-                                                    prompt, cell_seed, zm, allowed,
-                                                    width=width, height=height,
-                                                    cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
-                                                    dataset_id=dataset_id,
-                                                    train_type=run_family, extra_loras=wf_extra,
-                                                    rebalance=cell_rebalance,
-                                                    negative=knobs['negative'], sampler=knobs['sampler'],
-                                                    scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                                    enhancer_strength=knobs['enhancer_strength'],
-                                                    detail_amount=knobs['detail_amount'],
-                                                    trigger_word=ds.trigger_word,
-                                                    available_classes=available_classes)
-                    job_id = _enqueue_cell(user_id, dataset_id, workflow, prompt)
-                except Exception as e:
-                    img.status = 'failed'
-                    img.error = str(e)[:400] or 'enqueue failed'  # say WHY, not a mute red tile
-                    db.session.commit()
-                    raise
-                img.job_id = job_id
-                db.session.commit()
+                _persist_and_enqueue_cell(
+                    img, user_id, dataset_id, prompt,
+                    lambda: _build_cell_workflow(user_id, checkpoint, strength,
+                                                 prompt, cell_seed, zm, allowed,
+                                                 width=width, height=height,
+                                                 cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
+                                                 dataset_id=dataset_id,
+                                                 train_type=run_family, extra_loras=wf_extra,
+                                                 rebalance=cell_rebalance,
+                                                 negative=knobs['negative'], sampler=knobs['sampler'],
+                                                 scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                                 enhancer_strength=knobs['enhancer_strength'],
+                                                 detail_amount=knobs['detail_amount'],
+                                                 trigger_word=ds.trigger_word,
+                                                 available_classes=available_classes))
                 ids.append(img.id)
     logger.info(f"lora-test: run dataset {dataset_id} -> {len(ids)} cellule(s) "
                 f"({len(valid_models)} modèle(s)), base seed {seed} ×{count}")
@@ -1675,14 +1708,28 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # toute ligne → 409 actionnable.
     _preflight_checkpoint_arch(run_type,
                                [s.get('checkpoint') for s in selections if s.get('checkpoint')])
+    # Un dataset = UN scan de LoRA. `list_test_checkpoints` walks the family's whole
+    # LoRA folder (and stats every match): its result only depends on (dataset, family),
+    # so a 24-cell grid over 8 checkpoints of the same dataset re-scanned that folder 9
+    # times for one identical answer. Memoised for the duration of THIS call only — the
+    # deployed set can change between two runs.
+    _ckpt_memo = {}
+
+    def _dataset_and_checkpoints(ds_id):
+        """(dataset, allowed checkpoint filenames) for this run's family, scanned once."""
+        if ds_id not in _ckpt_memo:
+            _ds = fds.get_dataset(user_id, ds_id)
+            _allowed = {c['filename'] for c in list_test_checkpoints(_ds, run_type)} if _ds else set()
+            _ckpt_memo[ds_id] = (_ds, _allowed)
+        return _ckpt_memo[ds_id]
+
     # Preflight (même contrat que create_run) : le ComfyUI cible peut-il vraiment
     # exécuter le workflow de cette famille ? On vérifie sur la 1re sélection valable
     # (le run est mono-famille) AVANT de créer les lignes → un seul 409 actionnable.
     for _sel in selections:
-        _pf_ds = fds.get_dataset(user_id, _sel.get('dataset_id'))
+        _pf_ds, _pf_allowed = _dataset_and_checkpoints(_sel.get('dataset_id'))
         if not _pf_ds:
             continue
-        _pf_allowed = {c['filename'] for c in list_test_checkpoints(_pf_ds, run_type)}
         _pf_cp = _sel.get('checkpoint')
         if _pf_cp in _pf_allowed:
             _preflight_run(user_id, run_type, _pf_cp, [z_model], _pf_allowed,
@@ -1696,10 +1743,9 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     run_id = uuid.uuid4().hex
     ids = []
     for sel in selections:
-        ds = fds.get_dataset(user_id, sel.get('dataset_id'))
+        ds, allowed = _dataset_and_checkpoints(sel.get('dataset_id'))
         if not ds:
             raise ValueError(f"dataset {sel.get('dataset_id')} not found")
-        allowed = {c['filename'] for c in list_test_checkpoints(ds, run_type)}
         checkpoint = sel.get('checkpoint')
         if checkpoint not in allowed:
             raise ValueError(f'unknown checkpoint for {ds.name}: {checkpoint}')
@@ -1725,25 +1771,21 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                                     resolution_tier=knobs['resolution_tier'],
                                     resolution_multiplier=knobs['resolution_multiplier'],
                                     init_image=knobs['init_image'], denoise=knobs['denoise'])
-                db.session.add(img); db.session.commit()
-                try:
-                    workflow = _build_cell_workflow(user_id, cp, strength, cell_prompt,
-                                                    cell_seed, z_model, allowed, width=width,
-                                                    height=height, cfg=cell_cfg, steps=cell_steps,
-                                                    steps2=cell_steps2, dataset_id=ds.id,
-                                                    train_type=run_type, extra_loras=wf_extra,
-                                                    rebalance=cell_rebalance,
-                                                    negative=knobs['negative'], sampler=knobs['sampler'],
-                                                    scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                                    enhancer_strength=knobs['enhancer_strength'],
-                                                    detail_amount=knobs['detail_amount'],
-                                                    trigger_word=ds.trigger_word,
-                                                    available_classes=available_classes)
-                    job_id = _enqueue_cell(user_id, ds.id, workflow, cell_prompt)
-                except Exception as e:
-                    img.status = 'failed'; img.error = str(e)[:400] or 'enqueue failed'
-                    db.session.commit(); raise
-                img.job_id = job_id; db.session.commit(); ids.append(img.id)
+                _persist_and_enqueue_cell(
+                    img, user_id, ds.id, cell_prompt,
+                    lambda: _build_cell_workflow(user_id, cp, strength, cell_prompt,
+                                         cell_seed, z_model, allowed, width=width,
+                                         height=height, cfg=cell_cfg, steps=cell_steps,
+                                         steps2=cell_steps2, dataset_id=ds.id,
+                                         train_type=run_type, extra_loras=wf_extra,
+                                         rebalance=cell_rebalance,
+                                         negative=knobs['negative'], sampler=knobs['sampler'],
+                                         scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                         enhancer_strength=knobs['enhancer_strength'],
+                                         detail_amount=knobs['detail_amount'],
+                                         trigger_word=ds.trigger_word,
+                                         available_classes=available_classes))
+                ids.append(img.id)
     logger.info(f"lora-test: comparison run {run_id} -> {len(ids)} cellule(s), {len(selections)} LoRA, seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
 

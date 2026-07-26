@@ -282,3 +282,68 @@ def test_apply_optimal_sampler_params_uses_code_defaults(app):
         assert inputs["scheduler"] == "ddim_uniform"
         assert inputs["cfg"] == 1.0
         assert inputs["steps"] == 20  # steps intentionally left untouched
+
+
+def test_object_info_classes_cached_between_calls_and_droppable(app, monkeypatch):
+    """/object_info is the heaviest probe in the app (measured 8.8 MB / ~4.8 s on a
+    node-rich install) and ONE Studio run asks for it twice (grid preflight + per-run
+    class resolution). The short TTL cache must serve the second ask without a request,
+    a FAILED probe must never be cached (fail-open, retried at once), and the
+    refresh-models path must drop it so a freshly installed node pack shows up."""
+    from app.utils import comfyui
+    calls = []
+
+    class _Resp:
+        def __init__(self, payload):
+            self._p = payload
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self._p
+
+    def fake_get(url, timeout=None):
+        calls.append(url)
+        return _Resp({'KSampler': {}, 'LoraLoader': {}})
+
+    with app.app_context():
+        comfyui.clear_model_caches()
+        monkeypatch.setattr(comfyui.requests, 'get', fake_get)
+        assert comfyui.fetch_object_info_classes() == {'KSampler', 'LoraLoader'}
+        assert comfyui.fetch_object_info_classes() == {'KSampler', 'LoraLoader'}
+        assert len(calls) == 1                     # second ask served from the cache
+        comfyui.clear_model_caches()
+        assert comfyui.fetch_object_info_classes() == {'KSampler', 'LoraLoader'}
+        assert len(calls) == 2                     # cache dropped -> refetched
+
+        def boom(url, timeout=None):
+            calls.append(url)
+            raise OSError('comfy down')
+        comfyui.clear_model_caches()
+        monkeypatch.setattr(comfyui.requests, 'get', boom)
+        assert comfyui.fetch_object_info_classes() is None
+        assert comfyui.fetch_object_info_classes() is None
+        assert len(calls) == 4                     # failures are retried, never cached
+        comfyui.clear_model_caches()
+
+
+def test_load_workflow_local_caches_by_mtime_but_hands_out_private_copies(app, tmp_path):
+    """A grid loads the SAME template once per cell; the cache kills those re-reads.
+    Every caller MUTATES the graph it receives, so each call must still get its own
+    object — and editing the file on disk must be picked up (mtime/size key)."""
+    import json
+    import os
+    from app.utils.comfyui import load_workflow_local
+    wf = tmp_path / 'wf.json'
+    wf.write_text(json.dumps({'1': {'inputs': {'seed': 1}}}), encoding='utf-8')
+    with app.app_context():
+        a = load_workflow_local(str(wf))
+        a['1']['inputs']['seed'] = 999             # callers mutate what they get
+        b = load_workflow_local(str(wf))
+        assert b['1']['inputs']['seed'] == 1       # untouched by the previous caller
+        assert b is not a
+        wf.write_text(json.dumps({'1': {'inputs': {'seed': 42}}}), encoding='utf-8')
+        os.utime(wf, (0, 0))                       # force a different mtime stamp
+        assert load_workflow_local(str(wf))['1']['inputs']['seed'] == 42
+        assert load_workflow_local(str(tmp_path / 'nope.json')) is None

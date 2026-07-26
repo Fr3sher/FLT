@@ -166,15 +166,22 @@ def test_create_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
         monkeypatch.setattr(comfyui_utils, '_zimage_models_cache', {'data': None, 'timestamp': 0})
         ds = svc.create_dataset(LOCAL_USER, 'S2', 's')
         monkeypatch.setattr(lts, '_build_cell_workflow', lambda *a, **k: {'1': {}})
-        # create_run calls queue_manager.add_job through lts._enqueue_cell, which
-        # generates its own job_id and returns THAT (ignoring add_job's return value)
-        # -- patch _enqueue_cell itself so the assertion below can pin the job_id.
-        monkeypatch.setattr(lts, '_enqueue_cell', lambda *a, **k: 'job-xyz')
+        # The cell row now carries the job_id it was CREATED with (the id is minted
+        # before the insert, so row + queue job land in one commit) -- capture what
+        # the enqueue was handed and assert the row matches it.
+        seen = []
+
+        def fake_enqueue(user_id, dataset_id, workflow, prompt, job_id=None, commit=True):
+            seen.append(job_id)
+            return job_id
+        monkeypatch.setattr(lts, '_enqueue_cell', fake_enqueue)
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
         out = lts.create_run(LOCAL_USER, ds.id, [ck], [1.0], prompt='p', count=1)
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
         assert out['created'] == len(rows) >= 1
-        assert all(r.job_id == 'job-xyz' and r.status == 'pending' for r in rows)
+        assert seen and all(j for j in seen)
+        assert sorted(r.job_id for r in rows) == sorted(seen)
+        assert all(r.status == 'pending' for r in rows)
 
 
 def test_create_run_with_resolution_tier_resolves_dims_via_lifted_resolution_module(app, monkeypatch, tmp_path):
@@ -298,35 +305,127 @@ def test_aspect_dims_applies_multiplier():
     assert _aspect_dims('1:1', 'zimage', None, 1.9) == _aspect_dims('1:1', 'zimage', None, 1.0)
 
 
-def test_create_comparison_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
-    """Same commit-before-enqueue anti-orphan guarantee as create_run, exercised
-    on the multi-LoRA comparison path (its own row-commit + enqueue loop)."""
-    from app.services import lora_test_studio as lts, face_dataset_service as svc
-    from app.models import LoraTestImage
+def _studio_fixture(tmp_path, monkeypatch, name, trigger, steps=(2000,)):
+    """A configured ComfyUI tree + a dataset whose trigger matches `steps` checkpoints.
+    Returns (dataset, [checkpoint filenames])."""
+    from app.services import face_dataset_service as svc
     from app.config import LOCAL_USER
     from app import config
+    base = tmp_path / 'Comfy'
+    lora_dir = base / 'models' / 'loras' / 'z image'
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    cks = []
+    for st in steps:
+        fn = f'lora_{trigger}_{st:09d}.safetensors'
+        (lora_dir / fn).write_bytes(_ST)
+        cks.append('z image\\' + fn)
+    unet_dir = base / 'models' / 'unet' / 'z image'
+    unet_dir.mkdir(parents=True, exist_ok=True)
+    (unet_dir / 'zmodel.safetensors').write_bytes(_ST)
+    config.save_config({'comfyui': {'base_dir': str(base)}})
+    import app.utils.comfyui as comfyui_utils
+    monkeypatch.setattr(comfyui_utils, '_zimage_models_cache', {'data': None, 'timestamp': 0})
+    return svc.create_dataset(LOCAL_USER, name, trigger), cks
+
+
+def test_create_comparison_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
+    """Same anti-orphan guarantee as create_run on the multi-LoRA comparison path:
+    every created cell is COMMITTED, already carrying the job_id its enqueue used."""
+    from app.services import lora_test_studio as lts
+    from app.models import LoraTestImage
+    from app.config import LOCAL_USER
     with app.app_context():
-        base = tmp_path / 'Comfy'
-        lora_dir = base / 'models' / 'loras' / 'z image'
-        lora_dir.mkdir(parents=True)
-        ck = 'z image\\lora_c_000002000.safetensors'
-        (lora_dir / 'lora_c_000002000.safetensors').touch()
-        unet_dir = base / 'models' / 'unet' / 'z image'
-        unet_dir.mkdir(parents=True)
-        (unet_dir / 'zmodel.safetensors').write_bytes(_ST)
-        config.save_config({'comfyui': {'base_dir': str(base)}})
-        import app.utils.comfyui as comfyui_utils
-        monkeypatch.setattr(comfyui_utils, '_zimage_models_cache', {'data': None, 'timestamp': 0})
-        ds = svc.create_dataset(LOCAL_USER, 'C', 'c')
+        ds, cks = _studio_fixture(tmp_path, monkeypatch, 'C', 'c')
+        seen = []
+
+        def fake_enqueue(user_id, dataset_id, workflow, prompt, job_id=None, commit=True):
+            seen.append(job_id)
+            return job_id
         monkeypatch.setattr(lts, '_build_cell_workflow', lambda *a, **k: {'1': {}})
-        monkeypatch.setattr(lts, '_enqueue_cell', lambda *a, **k: 'job-cmp')
+        monkeypatch.setattr(lts, '_enqueue_cell', fake_enqueue)
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
-        out = lts.create_comparison_run(LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': ck}],
+        out = lts.create_comparison_run(LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': cks[0]}],
                                         [1.0], prompt='p', count=1)
         rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
         assert out['created'] == len(rows) >= 1
-        assert all(r.job_id == 'job-cmp' and r.status == 'pending' and r.run_id == out['run_id']
-                  for r in rows)
+        assert seen and all(j for j in seen)
+        assert sorted(r.job_id for r in rows) == sorted(seen)
+        assert all(r.status == 'pending' and r.run_id == out['run_id'] for r in rows)
+
+
+def test_comparison_run_failure_keeps_previous_cells_and_marks_the_failed_one(app, monkeypatch, tmp_path):
+    """THE invariant behind 'one commit per cell, not zero': an enqueue that blows up
+    on cell N must leave the N-1 already-queued cells in the DB WITH their job_id
+    (their ComfyUI jobs exist - rolling their rows back would orphan them), and cell N
+    persisted as 'failed' with the reason. Cell N must NOT keep a job_id: its queue row
+    was rolled back with it."""
+    from app.services import lora_test_studio as lts
+    from app.models import LoraTestImage, ImageGenerationQueue
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds, cks = _studio_fixture(tmp_path, monkeypatch, 'F', 'f')
+        calls = {'n': 0}
+        real_enqueue = lts._enqueue_cell
+
+        def flaky_enqueue(user_id, dataset_id, workflow, prompt, job_id=None, commit=True):
+            calls['n'] += 1
+            if calls['n'] == 3:              # blow up on the THIRD of five cells
+                raise RuntimeError('comfy exploded')
+            return real_enqueue(user_id, dataset_id, workflow, prompt,
+                                job_id=job_id, commit=commit)
+        monkeypatch.setattr(lts, '_build_cell_workflow', lambda *a, **k: {'1': {}})
+        monkeypatch.setattr(lts, '_enqueue_cell', flaky_enqueue)
+        monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
+        monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
+        monkeypatch.setattr(lts, '_preflight_run', lambda *a, **k: None)
+        with pytest.raises(RuntimeError, match='comfy exploded'):
+            lts.create_comparison_run(LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': cks[0]}],
+                                      [0.6, 0.8, 1.0, 1.2, 1.4], prompt='p', count=1)
+        rows = LoraTestImage.query.filter_by(dataset_id=ds.id).order_by(LoraTestImage.id).all()
+        assert len(rows) == 3                       # the 2 survivors + the failed one
+        queued = {j.job_id for j in ImageGenerationQueue.query.all()}
+        for r in rows[:2]:
+            assert r.status == 'pending' and r.job_id and r.job_id in queued
+        assert rows[2].status == 'failed' and 'comfy exploded' in (rows[2].error or '')
+        assert rows[2].job_id is None
+        assert len(queued) == 2                     # no job without its cell row
+
+
+def test_comparison_run_writes_one_transaction_per_cell_and_scans_loras_once(app, monkeypatch, tmp_path):
+    """Perf contract of the Studio launch: a grid must cost ONE commit per cell (not
+    the historical three) and ONE LoRA-folder scan per (dataset, family) - not one per
+    selection. 3 selections x 2 strengths = 6 cells => 6 commits, 1 scan."""
+    from app.services import lora_test_studio as lts
+    from app.config import LOCAL_USER
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session
+    with app.app_context():
+        ds, cks = _studio_fixture(tmp_path, monkeypatch, 'P', 'p', steps=(1000, 2000, 3000))
+        scans = {'n': 0}
+        real_list = lts.list_test_checkpoints
+
+        def counting_list(_ds, family=None):
+            scans['n'] += 1
+            return real_list(_ds, family)
+        monkeypatch.setattr(lts, 'list_test_checkpoints', counting_list)
+        monkeypatch.setattr(lts, '_build_cell_workflow', lambda *a, **k: {'1': {}})
+        monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
+        monkeypatch.setattr(lts, '_preflight_run', lambda *a, **k: None)
+        monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
+        commits = {'n': 0}
+
+        def _count(_session):
+            commits['n'] += 1
+        event.listen(Session, 'after_commit', _count)
+        try:
+            out = lts.create_comparison_run(
+                LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': c} for c in cks],
+                [0.8, 1.0], prompt='p', count=1)
+        finally:
+            event.remove(Session, 'after_commit', _count)
+        assert out['created'] == 6
+        assert commits['n'] == 6, f'expected 1 commit per cell, got {commits["n"]}'
+        assert scans['n'] == 1, f'expected 1 LoRA scan for the dataset, got {scans["n"]}'
 
 
 def test_rate_image_accepts_only_valid_ratings(app):
