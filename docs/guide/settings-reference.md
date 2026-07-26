@@ -39,7 +39,7 @@ If nothing on the grid tells you where to start, the line at the bottom opens th
 
 ## Image engines
 
-This is where you connect the services that *generate* dataset images. The app has four engines: **Nano Banana** (Google Gemini), **ChatGPT** (OpenAI), **OpenRouter** (one account in front of many providers), and **Klein** (local, via ComfyUI). Each of the three API engines lets you choose which model it asks for — see *Image models* below. Klein is configured under **Local tools**; the three API engines are configured here.
+This is where you connect the services that *generate* dataset images. The app has five engines: **Nano Banana** (Google Gemini), **ChatGPT** (OpenAI), **OpenRouter** (one account in front of many providers), and two that run locally through ComfyUI — **Klein** and **Krea 2 Edit**. Each of the three API engines lets you choose which model it asks for — see *Image models* below. ComfyUI itself is configured under **Local tools**; the API keys and the two local engines' own knobs are configured here.
 
 ### API keys
 
@@ -79,7 +79,7 @@ How many references a model takes varies (roughly 1 to 16 depending on the provi
 What OpenRouter does **not** change:
 
 - **Not cheaper by itself.** You still pay per image, at that model's rate, out of your OpenRouter credits.
-- **Not less restricted.** OpenRouter forwards to the same upstream providers, so the same content policies apply. NSFW variations still run on local Klein only.
+- **Not less restricted.** OpenRouter forwards to the same upstream providers, so the same content policies apply. NSFW variations still run on a local engine only.
 - **No subscription lane.** OpenRouter is credit-based; there is no equivalent of the ChatGPT-plan option below.
 
 When a generation fails, the tile names the cause in OpenRouter's own words — no key saved, key rejected, out of credits, unknown model, rate-limited. The four causes that would fail every remaining image identically (no key, rejected key, no credits, unknown model) **stop the rest of the batch** instead of asking the same refused question once per image. The app never falls back to another engine behind your back: if you picked OpenRouter, only OpenRouter is billed.
@@ -103,12 +103,12 @@ Good to know: in subscription mode you get up to **5 reference images** per gene
 
 ### Engines
 
-- **Default engine** → `engines.default`. Which engine is preselected in the workspace. One of `nanobanana`, `chatgpt`, `openrouter`, `klein`. Default **`chatgpt`**.
-- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all four** enabled. Untick an engine you never use to declutter the generator picker. An engine added by a later update is offered here automatically, even on an install whose settings were saved long before it existed — while an engine you unticked on purpose stays unticked, because the app records which engines it was showing you at the moment you chose.
+- **Default engine** → `engines.default`. Which engine is preselected in the workspace. One of `nanobanana`, `chatgpt`, `openrouter`, `klein`, `krea`. Default **`chatgpt`**.
+- **Enabled engines** → `engines.enabled`. Checkboxes deciding which engines appear as options at all. Default: **all five** enabled. Untick an engine you never use to declutter the generator picker. An engine added by a later update is offered here automatically, even on an install whose settings were saved long before it existed — while an engine you unticked on purpose stays unticked, because the app records which engines it was showing you at the moment you chose.
 
 #### Using several engines in one batch
 
-In the workspace the engine cards are **checkboxes**, not a one-of-three choice: tick as many as you want. Each engine has its own colour (Klein indigo, Nano Banana amber, ChatGPT sky, OpenRouter fuchsia) and every generated tile is labelled with the engine that made it, so a mixed batch stays readable.
+In the workspace the engine cards are **checkboxes**, not a one-of-five choice: tick as many as you want. Each engine has its own colour (Klein indigo, Krea 2 Edit violet, Nano Banana amber, ChatGPT sky, OpenRouter fuchsia) and every generated tile is labelled with the engine that made it, so a mixed batch stays readable.
 
 From **two** engines on, a mode appears deciding what "several engines" means:
 
@@ -121,11 +121,38 @@ Split gives you a more varied dataset for the price you already pay; All engines
 
 Good to know:
 
-- **The cost shown is the whole run's.** Klein contributes nothing (it's your GPU) and neither does ChatGPT on the subscription lane.
-- **Klein runs last and in series.** The API batches start immediately in the background; the local GPU handles its own shots one at a time behind them. The Klein card says so while a mixed run is being set up.
+- **The cost shown is the whole run's.** The two local engines contribute nothing (it's your GPU) and neither does ChatGPT on the subscription lane.
+- **The local engines run last and in series.** The API batches start immediately in the background; the local GPU handles its own shots one at a time behind them. The Klein and Krea cards say so while a mixed run is being set up.
 - **There is a cap per batch** (60 images in flight on one dataset). A run over it is refused *before* it starts, with the number named — switch to Split, untick an engine, or select fewer shots.
-- **🔞 NSFW shots stay local-only.** The uncensored catalog unlocks only when Klein is the **sole** ticked engine, because those shots must never reach a third-party API.
+- **🔞 NSFW shots stay local-only.** The uncensored catalog unlocks only when **every** ticked engine is local (Klein, Krea 2 Edit, or both), because those shots must never reach a third-party API.
 - **Regenerating one tile** (🔄) uses the **first** ticked engine, not all of them.
+
+### Krea 2 Edit (local)
+
+The second local engine. Where Klein *restages* your reference with a general instruction-edit model, **Krea 2 Identity Edit** is trained specifically to keep an identity: from a **single** reference photo it holds the face, the body and the permanent markings while changing the angle, framing, light, background and clothes — **with no character LoRA**. That is what makes it useful *before* a LoRA exists, which is the whole point of building a dataset.
+
+It is not installed by the app. It needs, inside your own ComfyUI:
+
+- the **[comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit)** custom-node pack in `custom_nodes/` (no Python dependencies), then a ComfyUI restart;
+- a **Krea 2 Raw or Turbo** base model under a `krea`-named folder in `models/diffusion_models` (or `models/unet`);
+- the **Krea 2 Identity Edit LoRA** in `models/loras`;
+- the **Qwen3-VL 4B** text encoder in `models/text_encoders` and the **Qwen Image VAE** in `models/vae`.
+
+The engine card in the workspace names whichever of these is still missing, one actionable line at a time, and the app never guesses a download URL for weights it cannot verify. Every path above is found by *searching* your ComfyUI model roots — including any `extra_model_paths.yaml` roots — so a non-standard layout works untouched.
+
+Settings:
+
+- **Reference grounding** → `krea.grounding_px`. Range `512`–`1536`, default **`1024`**. **The** dial of this engine: the resolution your reference is shown to the model's vision encoder at. **Lower** = it follows the shot description (more variety in pose, outfit and scene, looser likeness). **Higher** = it resembles the reference more closely, and starts copying the very pose and outfit you asked it to change. The node's own default is 768; 1024+ is recommended for people, and a character dataset is people.
+- **Sampler steps** → `krea.steps`. Default **`10`**, the value the model's own reference workflow uses. More is slower and rarely better on this pipeline.
+- **Base model file** → `krea.base_model`. Blank (default) = the app picks a Krea 2 **Turbo** then **Raw** build from your ComfyUI. Set it only if you own several. Checkpoints that merely carry "krea" in their name but are not Krea 2 bases are **skipped on purpose** — the identity LoRA renders pure noise on them, which looks like a broken app rather than a wrong file.
+- **Identity edit LoRA** → `krea.identity_lora`. Path relative to `models/loras`; if nothing is there under that name the app searches your LoRA folders for a `krea2_identity_edit` file, so a renamed download still works.
+
+Two behaviours worth knowing before you build a dataset with it:
+
+- **The output keeps the reference's aspect ratio** (capped at 2 MP). The shot catalog's aspect overrides do **not** apply to this engine — the model was trained on same-size pairs and preservation degrades when the frame changes shape.
+- **Extra reference images are ignored.** Identity comes from the primary reference alone. Klein and the API engines still use your extra refs.
+
+Outfits and expressions are steered differently here than on the other engines: this model preserves anything it is not *positively* told to change, so the catalog's "a different outfit (not the one in the reference)" phrasing is rewritten at generation time into a concrete garment ("wearing a red knit sweater"), picked from the shot's own name — so outfits genuinely differ across the dataset while regenerating one shot reproduces its own.
 
 ### Klein generation LoRA presets (optional)
 

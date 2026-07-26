@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import re
+import zlib
 
 # Verrou d'identité renforcé (deep-research 2026-06-14, source primaire Google AI) :
 # nommer les traits + interdire l'embellissement améliore la cohérence du visage.
@@ -545,6 +546,123 @@ _HAS_OUTFIT = re.compile(
 _HAS_EXPRESSION = re.compile(
     r'\b(expression|smil\w*|serious|laugh\w*|surprised|pensive|grin\w*|'
     r'frown\w*|smirk\w*|pout\w*)\b', re.I)
+
+
+# --- Krea 2 Identity Edit wrapper --------------------------------------------
+# MEASURED on a live install (2026-07-25), single reference photo, NO character
+# LoRA:
+#   ✅ identity holds by itself — forehead/neck tattoos, five piercings, hoop
+#      earrings, body morphology, all carried from the one reference;
+#   ✅ the requested FRAMING is honoured (a real full-length shot when asked),
+#      which the API-engine wrapper never managed on this model — that wrapper
+#      leads with preservation ("change nothing"), and Krea answered with a
+#      close-up whatever the shot asked for. So Krea reuses the KLEIN wrapper's
+#      shape: imperative command first, full intended result, then the identity
+#      lock. Same model class (instruction edit + reference grounding), same
+#      winning structure.
+#   ⚠️ the OUTFIT never changed, and the TATTOOS were REDRAWN each time (same
+#      spirit, different design) — the two things this wrapper has to fix.
+#
+# Krea reuses the `klein_identity` editable lock deliberately: it is the "local
+# edit engine" identity lock, already per-subject-type and already overridable in
+# Settings. A second copy of the same sentence would be one more thing for the
+# user to keep in sync, for no behavioural gain.
+
+# The model PRESERVES anything it is not positively ordered to change, so a
+# NEGATION is a no-op on it. These rules turn the catalog's negative outfit
+# phrasings into a concrete positive garment (see krea_edit_helper.outfit_for:
+# deterministic per shot label, so outfits vary across the dataset but a
+# regenerate of one shot reproduces its own). Applied at WRAP time only — the
+# stored `variation_prompt` keeps the raw catalog text, so the other engines are
+# untouched and a regenerate re-applies the current rules exactly once.
+_KREA_OUTFIT_GENERIC = (
+    re.compile(r'\bcasual clothes different from the reference outfit\b', re.I),
+    re.compile(r'\bdifferent outfit\b', re.I),
+)
+# Leftover negations after a NAMED garment ("wearing a jacket different from the
+# reference outfit") — the garment already carries the intent, the negation only
+# spends tokens on something this model ignores.
+_KREA_NEGATION = re.compile(r',?\s*different from the reference (?:image|outfit)\b', re.I)
+# EXPRESSION_NEUTRAL carries the same kind of dead negation. Not separately
+# measured — same mechanism, and dropping the clause loses nothing positive.
+_KREA_EXPRESSION_NEGATION = re.compile(
+    r',?\s*not copying the expression from the reference image\b', re.I)
+
+# Permanent markings were redrawn on every render (measured). A dataset built
+# from that teaches the LoRA an AVERAGE tattoo — the exact failure mode a
+# character LoRA must not have. This is a positive, explicit hold order. NOT yet
+# verified to fix it (no GPU run was allowed in this pass): it is a reasoned
+# counter-measure, and it costs nothing when the subject has no markings.
+KREA_MARKINGS_LOCK = (
+    "Reproduce every permanent marking exactly as it appears in the reference "
+    "image — tattoos with the same design, same placement and same size, and the "
+    "same scars, moles and piercings. Do not redraw, restyle or move them. ")
+
+
+# Concrete garments the negation is replaced BY. The pick is deterministic on the
+# shot label via crc32 — NOT hash(), whose PYTHONHASHSEED randomisation would give
+# the same shot a different outfit on every app restart. Three properties at once:
+# outfits genuinely differ across the dataset, one shot regenerates identically,
+# and no randomness ever leaks into a stored prompt.
+KREA_OUTFIT_PALETTE = (
+    'a plain white cotton t-shirt',
+    'a red knit sweater',
+    'a navy blue zip hoodie',
+    'a beige linen shirt',
+    'a black fitted turtleneck',
+    'an olive green utility jacket',
+    'a grey marl sweatshirt',
+    'a burgundy long-sleeve top',
+    'a light blue denim shirt',
+    'a mustard yellow cardigan',
+    'a dark green flannel shirt',
+    'a cream ribbed knit top',
+)
+
+
+def krea_outfit_for(label: str) -> str:
+    """A concrete garment for a shot label — stable across runs and processes."""
+    key = (label or '').encode('utf-8', 'replace')
+    return KREA_OUTFIT_PALETTE[zlib.crc32(key) % len(KREA_OUTFIT_PALETTE)]
+
+
+def krea_outfit_directive(prompt: str, label: str = '') -> str:
+    """Rewrite the catalog's NEGATIVE outfit/expression clauses into positive
+    ones for Krea. Idempotent (the substituted text contains none of the
+    patterns) and a no-op on any prompt that never carried them — which is every
+    non-human catalog, since `_augment_prompt` only runs on the human one."""
+    p = prompt or ''
+    garment = f'wearing {krea_outfit_for(label)}'
+    p = p.replace(OUTFIT_VARY, garment)
+    for rx in _KREA_OUTFIT_GENERIC:
+        p = rx.sub(garment, p)
+    p = _KREA_NEGATION.sub('', p)
+    p = _KREA_EXPRESSION_NEGATION.sub('', p)
+    return p
+
+
+def wrap_variation_krea(prompt: str, nsfw: bool = False, framing: str | None = None,
+                        suffix: str = '', subject_type: str = 'human',
+                        label: str = '') -> str:
+    """Full Krea 2 Identity Edit prompt for one shot.
+
+    Same four-part structure as `wrap_variation_klein` (command → full intended
+    result → identity lock → rendering tail), plus the two Krea-specific fixes:
+    the outfit negation becomes a concrete garment, and permanent markings get an
+    explicit hold order. `label` selects that garment deterministically — pass
+    the variation label so the same shot always renders the same outfit."""
+    st = normalize_subject_type(subject_type)
+    noun = _KLEIN_SUBJECT_NOUN.get(st, 'subject')
+    detail = _KLEIN_FRAMING_DETAIL_BY_SUBJECT.get(st, _KLEIN_FRAMING_DETAIL).get(framing or '', '')
+    medium = _KLEIN_MEDIUM.get(st, _KLEIN_MEDIUM_DEFAULT)
+    nsfw_tail, sfw_tail = _KLEIN_RENDER_TAIL.get(st, _KLEIN_RENDER_TAIL_DEFAULT)
+    ending = nsfw_tail if nsfw else sfw_tail
+    body = krea_outfit_directive(_append_suffix(prompt, suffix), label)
+    return (
+        f"Create a new {medium} of the same {noun} as the reference image: {body}. "
+        + (f"{detail} " if detail else "")
+        + KREA_MARKINGS_LOCK
+        + f"{get_identity_prompt('klein_identity', st)} {ending}")
 
 
 def _e(i, axis, framing, label, prompt, co=False, cb=False, aspect=None):

@@ -1084,6 +1084,18 @@ def probe(force=False) -> dict:
                    and bool(_keh.resolve_klein_vae())
                    and bool(_keh.resolve_klein_text_encoder())
                    and not klein_blocking_invalid)
+    # Krea 2 Identity Edit — the second LOCAL engine. Readiness is honest and
+    # four-part (base model + identity LoRA + text encoder + VAE) AND depends on
+    # a custom-node pack, unlike Klein whose graph is core-nodes-only. Both gaps
+    # are published separately so the engine card can name the RIGHT one: "install
+    # the node pack" and "place the LoRA here" are different actions.
+    # Disk scan = cheap listdir, network-free. The node probe is /object_info,
+    # cached and fail-OPEN (unreachable ComfyUI reports no missing node here —
+    # `reachable` already says that, and two red flags for one cause is noise).
+    from .services import krea_edit_helper as _krh
+    krea_missing = _krh.krea_missing_assets()
+    krea_nodes_missing = _krh.krea_missing_nodes() if comfy['ok'] else []
+    krea_ready = comfy['ok'] and not krea_missing and not krea_nodes_missing
     base_dir = cfg.get('comfyui.base_dir') or ''
     comfy_dir = resolve_comfyui_base(base_dir)
     # Conscious "continue without ComfyUI" skip (Setup wizard). DERIVED, not just the
@@ -1111,6 +1123,7 @@ def probe(force=False) -> dict:
             'chatgpt': openai_['ok'],
             'openrouter': openrouter_['ok'],
             'klein': klein_ready,
+            'krea': krea_ready,
         },
         'chatgpt_subscription': {
             'connected': sub_status['connected'],
@@ -1135,6 +1148,11 @@ def probe(force=False) -> dict:
             # (subset of klein_model / klein_text_encoder / klein_vae / klein_lora).
             # Empty required-trio => the Klein engine is asset-ready.
             'klein_missing': klein_missing,
+            # Krea 2 Edit gaps, kept apart from Klein's: asset KEYS not on disk
+            # (krea_edit_helper.KREA_ASSETS) and the custom-node class_types this
+            # ComfyUI doesn't expose. Empty + empty => the engine is ready.
+            'krea_missing': krea_missing,
+            'krea_nodes_missing': krea_nodes_missing,
             # Klein assets PRESENT on disk but not real, loadable weights:
             # [{asset, filename, verdict, blocking, reason}]. Distinct from
             # klein_missing (the file exists, it just can't load) — drives the Setup

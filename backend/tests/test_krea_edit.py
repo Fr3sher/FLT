@@ -1,0 +1,533 @@
+"""Krea 2 Identity Edit — the second LOCAL generation engine.
+
+WHAT THESE TESTS ARE FOR
+------------------------
+The engine was validated by hand on ONE machine, against ONE ComfyUI. Everything
+that made it work there is a fact about that install: a `Krea` folder, a
+`krea2_identity_edit_v1_2.safetensors`, a node pack, a Qwen3-VL encoder sitting
+next to two other Qwen encoders that would silently produce garbage. Nobody else
+has that machine. So these tests pin the parts that have to survive a DIFFERENT
+install: resolution (canonical first, narrow tokens after, never a blind guess,
+never an incompatible base), preflight (say what is missing, do not crash and do
+not invent a downloader), the graph wiring (both custom nodes, grounded negative,
+cfg 1), the output geometry (source aspect, ≤ 2 MP) and the prompt rewriting
+(positive garments instead of negations the model ignores).
+
+NOTHING here renders anything: not one GPU second, not one paid call.
+"""
+import importlib
+import os
+
+import pytest
+
+from app.services import face_variations as fv
+
+
+# --- fixtures ---------------------------------------------------------------
+
+def _fresh_config(monkeypatch, tmp_path):
+    monkeypatch.setenv('LDS_DATA_DIR', str(tmp_path / 'data'))
+    monkeypatch.setenv('LDS_CONFIG', str(tmp_path / 'config.json'))
+    monkeypatch.setenv('LDS_ENV', str(tmp_path / '.env'))
+    import app.config as config
+    importlib.reload(config)
+    return config
+
+
+def _comfy_tree(tmp_path):
+    """A minimal ComfyUI models/ tree, empty. Tests fill in only what they mean
+    to test — an install that has nothing must be a supported state, not a crash."""
+    base = tmp_path / 'Comfy'
+    for sub in ('diffusion_models', 'unet', 'loras', 'text_encoders', 'vae'):
+        (base / 'models' / sub).mkdir(parents=True, exist_ok=True)
+    return base
+
+
+def _write(path, size=16):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b'\0' * size)
+    return path
+
+
+@pytest.fixture
+def krea(monkeypatch, tmp_path):
+    """krea_edit_helper bound to a throwaway ComfyUI tree + throwaway config."""
+    config = _fresh_config(monkeypatch, tmp_path)
+    base = _comfy_tree(tmp_path)
+    config.save_config({'comfyui': {'base_dir': str(base)}})
+    from app.services import comfy_model_paths
+    comfy_model_paths.clear_cache()
+    import app.services.krea_edit_helper as keh
+    importlib.reload(keh)
+    keh._nodes_ok_until = 0.0
+    yield keh, base, config
+    comfy_model_paths.clear_cache()
+
+
+# --- base model resolution --------------------------------------------------
+
+def test_no_krea_model_at_all_resolves_to_none_not_a_wrong_file(krea, tmp_path):
+    """An install with other families' models must report 'missing', never hand a
+    foreign checkpoint to the loader: missing produces an actionable message,
+    wrong produces noise the user blames the app for."""
+    keh, base, _ = krea
+    _write(base / 'models' / 'diffusion_models' / 'flux-2-klein-9b-fp8.safetensors')
+    assert keh.resolve_krea_unet() is None
+    assert 'krea_model' in keh.krea_missing_assets()
+
+
+def test_base_model_is_returned_with_its_subfolder_prefix(krea):
+    keh, base, _ = krea
+    _write(base / 'models' / 'diffusion_models' / 'Krea' / 'krea2_turbo_fp8.safetensors')
+    assert keh.resolve_krea_unet() == os.path.join('Krea', 'krea2_turbo_fp8.safetensors')
+
+
+def test_a_flat_install_with_no_krea_subfolder_still_resolves(krea):
+    """Stability-Matrix / flat layouts drop the file straight into
+    diffusion_models/. os.path.join('', name) == name is exactly what the loader
+    wants for a root-level file."""
+    keh, base, _ = krea
+    _write(base / 'models' / 'diffusion_models' / 'krea2_raw_fp8.safetensors')
+    assert keh.resolve_krea_unet() == 'krea2_raw_fp8.safetensors'
+
+
+def test_turbo_wins_over_raw_and_the_choice_is_deterministic(krea):
+    keh, base, _ = krea
+    d = base / 'models' / 'diffusion_models' / 'Krea'
+    _write(d / 'krea2_raw_fp8.safetensors')
+    _write(d / 'krea2_turbo_fp8.safetensors')
+    first = keh.resolve_krea_unet()
+    assert first.endswith('krea2_turbo_fp8.safetensors')
+    assert keh.resolve_krea_unet() == first, 'a regenerate must reproduce the render'
+
+
+def test_the_incompatible_biglove_base_is_never_picked(krea):
+    """MEASURED: the identity LoRA renders PURE NOISE on BigLoveKreaEdit1. It
+    carries 'krea' in its name, so a naive scan would select it on a shared
+    ComfyUI and the user would see noise with no explanation."""
+    keh, base, _ = krea
+    d = base / 'models' / 'diffusion_models' / 'Krea'
+    _write(d / 'BigLoveKreaEdit1_fp8mixed.safetensors')
+    assert keh.resolve_krea_unet() is None
+    assert 'krea_model' in keh.krea_missing_assets()
+    # ...but a real base alongside it is found, and it is the one picked.
+    _write(d / 'krea2_turbo_fp8.safetensors')
+    assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
+
+
+def test_an_explicit_base_model_setting_wins_and_a_stale_one_degrades(krea):
+    keh, base, config = krea
+    d = base / 'models' / 'diffusion_models' / 'Krea'
+    _write(d / 'krea2_turbo_fp8.safetensors')
+    _write(d / 'krea2_raw_fp8.safetensors')
+    config.save_config({'krea': {'base_model': 'krea2_raw_fp8.safetensors'}})
+    assert keh.resolve_krea_unet().endswith('krea2_raw_fp8.safetensors')
+    # A setting pointing at a file that is no longer there must NOT block the
+    # engine — it falls back to automatic resolution with a log line.
+    config.save_config({'krea': {'base_model': 'deleted_yesterday.safetensors'}})
+    assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
+
+
+# --- encoder / VAE: the narrow-token discipline ------------------------------
+
+def test_the_text_encoder_never_matches_a_bare_qwen(krea):
+    """Three different Qwen encoders live in the same folder on a shared install.
+    Klein's qwen_3_8b and Qwen-Image's qwen_2.5_vl produce incompatible
+    embeddings — picking one would die at sampling on a shape mismatch."""
+    keh, base, _ = krea
+    te = base / 'models' / 'text_encoders'
+    _write(te / 'qwen_3_8b_fp8mixed.safetensors')
+    _write(te / 'qwen_2.5_vl_7b_fp8_scaled.safetensors')
+    assert keh.resolve_krea_text_encoder() is None
+    _write(te / 'qwen3vl_4b_fp8_scaled.safetensors')
+    assert keh.resolve_krea_text_encoder() == 'qwen3vl_4b_fp8_scaled.safetensors'
+
+
+def test_the_vae_never_matches_kleins(krea):
+    keh, base, _ = krea
+    _write(base / 'models' / 'vae' / 'flux2-vae.safetensors')
+    assert keh.resolve_krea_vae() is None
+    _write(base / 'models' / 'vae' / 'qwen_image_vae.safetensors')
+    assert keh.resolve_krea_vae() == 'qwen_image_vae.safetensors'
+
+
+def test_the_identity_lora_is_found_even_when_renamed_or_moved(krea):
+    keh, base, _ = krea
+    loras = base / 'models' / 'loras'
+    assert keh.resolve_krea_identity_lora() == (None, None)
+    # Not at the configured path, and renamed — the by-name scan still finds it.
+    _write(loras / 'edits' / 'krea2_identity_edit_v1.3.safetensors')
+    rel, path = keh.resolve_krea_identity_lora()
+    assert rel == os.path.join('edits', 'krea2_identity_edit_v1.3.safetensors')
+    assert os.path.isfile(path)
+    # The canonical location wins once it exists.
+    _write(loras / 'krea' / 'krea2_identity_edit_v1_2.safetensors')
+    rel, _ = keh.resolve_krea_identity_lora()
+    assert rel == os.path.join('krea', 'krea2_identity_edit_v1_2.safetensors')
+
+
+def test_extra_model_paths_roots_are_searched_like_comfyui_does(krea, tmp_path):
+    """The engine must work on an install whose models live outside the ComfyUI
+    folder — that is the whole point of extra_model_paths.yaml."""
+    keh, base, _ = krea
+    external = tmp_path / 'A_drive' / 'models'
+    _write(external / 'diffusion_models' / 'Krea' / 'krea2_turbo_fp8.safetensors')
+    _write(external / 'loras' / 'krea2_identity_edit_v1_2.safetensors')
+    (base / 'extra_model_paths.yaml').write_text(
+        'mine:\n'
+        f'  base_path: {external.parent.as_posix()}\n'
+        '  diffusion_models: models/diffusion_models\n'
+        '  loras: models/loras\n', encoding='utf-8')
+    from app.services import comfy_model_paths
+    comfy_model_paths.clear_cache()
+    assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
+    assert keh.resolve_krea_identity_lora()[0] is not None
+
+
+# --- preflight: say what's missing, never crash, never invent an installer ---
+
+def _install_everything(base):
+    _write(base / 'models' / 'diffusion_models' / 'Krea' / 'krea2_turbo_fp8.safetensors')
+    _write(base / 'models' / 'loras' / 'krea' / 'krea2_identity_edit_v1_2.safetensors')
+    _write(base / 'models' / 'text_encoders' / 'qwen3vl_4b_fp8_scaled.safetensors')
+    _write(base / 'models' / 'vae' / 'qwen_image_vae.safetensors')
+
+
+def test_an_empty_install_lists_every_gap_instead_of_raising_on_the_first(krea):
+    keh, _base, _ = krea
+    assert set(keh.krea_missing_assets()) == set(keh.KREA_REQUIRED)
+
+
+def test_preflight_raises_with_both_halves_and_stays_actionable(krea, monkeypatch):
+    keh, base, _ = krea
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes', lambda *a, **k: set())
+    with pytest.raises(keh.KreaModelsMissing) as exc:
+        keh.preflight()
+    assert set(exc.value.missing) == set(keh.KREA_REQUIRED)
+    assert set(exc.value.missing_nodes) == set(keh.KREA_NODE_CLASSES)
+    # Every missing asset can be turned into a "place it HERE, get it THERE" line.
+    for entry in keh.missing_file_entries(exc.value.missing):
+        assert entry['path'] and entry['kind'] and entry['source'].startswith('http')
+    for hint in keh.krea_node_hints(exc.value.missing_nodes):
+        assert hint['pack'] and hint['url'].startswith('https://')
+
+
+def test_the_node_probe_fails_OPEN_when_comfyui_cannot_be_reached(krea, monkeypatch):
+    """A transient probe failure must never look like a missing node pack — the
+    user would be sent to install something they already have."""
+    keh, _base, _ = krea
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes', lambda *a, **k: None)
+    assert keh.krea_missing_nodes() == []
+
+
+def test_a_complete_install_preflights_clean(krea, monkeypatch):
+    keh, base, _ = krea
+    _install_everything(base)
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
+                        lambda *a, **k: set(keh.KREA_NODE_CLASSES) | {'KSampler'})
+    assert keh.krea_missing_assets() == []
+    keh.preflight()   # must not raise
+
+
+# --- output geometry --------------------------------------------------------
+
+@pytest.mark.parametrize('w,h', [(4000, 3000), (1024, 1024), (832, 1216), (5000, 1000)])
+def test_output_keeps_the_source_aspect_under_two_megapixels(w, h):
+    from app.services import krea_edit_helper as keh
+    ow, oh = keh.fit_output_size(w, h)
+    assert ow * oh <= 2_100_000, 'the model drifts above ~2 MP'
+    assert ow % 16 == 0 and oh % 16 == 0, 'the latent grid is 16-aligned'
+    assert abs((ow / oh) - (w / h)) / (w / h) < 0.05, 'aspect must be preserved'
+
+
+def test_a_small_source_is_never_upscaled_into_invented_detail():
+    from app.services import krea_edit_helper as keh
+    assert keh.fit_output_size(512, 512) == (512, 512)
+
+
+def test_an_unreadable_size_degrades_to_a_square_instead_of_crashing():
+    from app.services import krea_edit_helper as keh
+    assert keh.fit_output_size(0, 0) == (1024, 1024)
+    assert keh.fit_output_size(None, 'x') == (1024, 1024)
+
+
+# --- the graph --------------------------------------------------------------
+
+def _graph():
+    from app.services import krea_edit_helper as keh
+    return keh.build_workflow('ref.png', 'a prompt', unet='Krea/base.safetensors',
+                              clip='te.safetensors', vae='vae.safetensors',
+                              lora_name='krea/id.safetensors', width=1024, height=1024,
+                              seed=7)
+
+
+def test_both_custom_nodes_are_present_and_the_negative_is_grounded_too():
+    """MEASURED: with a plain CLIPTextEncode the reference has NO effect — the
+    encoder never sees the image. The pack's own workflow grounds the negative
+    branch as well, and so do we."""
+    g = _graph()
+    classes = [n['class_type'] for n in g.values()]
+    assert classes.count('Krea2EditGroundedEncode') == 2
+    assert 'Krea2EditModelPatch' in classes
+    assert 'CLIPTextEncode' not in classes
+    encodes = [n for n in g.values() if n['class_type'] == 'Krea2EditGroundedEncode']
+    assert all('image' in n['inputs'] for n in encodes), 'both branches see the reference'
+    assert sorted(n['inputs']['prompt'] for n in encodes) == ['', 'a prompt']
+
+
+def test_the_identity_lora_sits_between_the_unet_and_the_patch():
+    g = _graph()
+    lora = next(k for k, n in g.items() if n['class_type'] == 'LoraLoaderModelOnly')
+    unet = next(k for k, n in g.items() if n['class_type'] == 'UNETLoader')
+    patch = next(k for k, n in g.items() if n['class_type'] == 'Krea2EditModelPatch')
+    sampler = next(k for k, n in g.items() if n['class_type'] == 'KSampler')
+    assert g[lora]['inputs']['model'] == [unet, 0]
+    assert g[patch]['inputs']['model'] == [lora, 0]
+    assert g[sampler]['inputs']['model'] == [patch, 0]
+
+
+def test_the_sampler_settings_are_the_measured_ones():
+    g = _graph()
+    ks = next(n for n in g.values() if n['class_type'] == 'KSampler')['inputs']
+    assert ks['cfg'] == 1.0, 'guidance-distilled: any other cfg is a mistake'
+    assert (ks['sampler_name'], ks['scheduler']) == ('euler', 'simple')
+    assert ks['steps'] == 10
+
+
+def test_the_clip_loader_asks_for_the_krea2_type():
+    g = _graph()
+    clip = next(n for n in g.values() if n['class_type'] == 'CLIPLoader')
+    assert clip['inputs']['type'] == 'krea2'
+
+
+def test_no_loader_value_is_ever_hardcoded_in_the_graph_builder():
+    """Every model name in the built graph must be one the CALLER passed, i.e.
+    one a resolver produced. This is the invariant that keeps the engine working
+    on an install that looks nothing like the one it was written on."""
+    g = _graph()
+    names = {n['inputs'].get(k) for n in g.values()
+             for k in ('unet_name', 'clip_name', 'vae_name', 'lora_name')
+             if n['inputs'].get(k)}
+    assert names == {'Krea/base.safetensors', 'te.safetensors', 'vae.safetensors',
+                     'krea/id.safetensors'}
+
+
+# --- settings ---------------------------------------------------------------
+
+def test_grounding_is_clamped_and_snapped_and_junk_degrades_to_the_default(krea):
+    keh, _base, config = krea
+    assert keh.grounding_px() == 1024
+    config.save_config({'krea': {'grounding_px': 700}})
+    assert keh.grounding_px() == 704, 'snapped to the 64px patch grid'
+    config.save_config({'krea': {'grounding_px': 99999}})
+    assert keh.grounding_px() == keh.GROUNDING_PX_MAX
+    config.save_config({'krea': {'grounding_px': 'a lot'}})
+    assert keh.grounding_px() == 1024
+
+
+# --- prompt: negations the model ignores become positive directives ---------
+
+def test_the_default_outfit_negation_becomes_a_concrete_garment():
+    """MEASURED: the outfit NEVER changed. The catalog says "a different casual
+    everyday outfit … (not the outfit from the reference image)" and this model
+    preserves whatever it is not positively ordered to change."""
+    prompt = 'upper body portrait, front view, ' + fv.OUTFIT_VARY
+    out = fv.krea_outfit_directive(prompt, 'bust_front')
+    assert fv.OUTFIT_VARY not in out
+    assert 'not the outfit' not in out
+    assert any(g in out for g in fv.KREA_OUTFIT_PALETTE)
+
+
+def test_outfits_differ_across_shots_but_a_shot_always_gets_the_same_one():
+    """The two properties a dataset needs at once: variety between images, and a
+    regenerate that reproduces its own image."""
+    labels = [e['label'] for e in fv.VARIATION_CATALOG]
+    picks = [fv.krea_outfit_for(l) for l in labels]
+    assert len(set(picks)) > 1, 'a single garment everywhere is the bug being fixed'
+    assert picks == [fv.krea_outfit_for(l) for l in labels], 'must be stable'
+    # Stable ACROSS PROCESSES too: hash() would be randomised by PYTHONHASHSEED.
+    assert fv.krea_outfit_for('Bust, front') == fv.KREA_OUTFIT_PALETTE[
+        __import__('zlib').crc32(b'Bust, front') % len(fv.KREA_OUTFIT_PALETTE)]
+
+
+def test_a_named_garment_keeps_its_name_and_only_loses_the_dead_negation():
+    out = fv.krea_outfit_directive(
+        'upper body portrait, wearing a jacket different from the reference outfit, urban', 'x')
+    assert 'wearing a jacket' in out
+    assert 'different from the reference' not in out
+
+
+def test_the_expression_negation_is_dropped_but_the_intent_is_kept():
+    out = fv.krea_outfit_directive('close-up, ' + fv.EXPRESSION_NEUTRAL, 'x')
+    assert 'a calm neutral facial expression' in out
+    assert 'not copying the expression' not in out
+
+
+def test_the_rewrite_is_idempotent_and_a_no_op_on_non_human_catalogs():
+    once = fv.krea_outfit_directive('bust, ' + fv.OUTFIT_VARY, 'lbl')
+    assert fv.krea_outfit_directive(once, 'lbl') == once
+    animal = 'full body from head to tail, standing on grass, daylight'
+    assert fv.krea_outfit_directive(animal, 'lbl') == animal
+
+
+def test_the_wrapper_is_instruction_first_and_locks_permanent_markings():
+    """MEASURED: the framing WAS honoured with this shape (the API-engine wrapper
+    put preservation first and returned a close-up whatever the shot asked). And
+    the tattoos were REDRAWN every render, which a LoRA would learn as an average
+    tattoo — hence the explicit hold order."""
+    out = fv.wrap_variation_krea('full body shot, standing', framing='body',
+                                 label='Body standing, front')
+    assert out.startswith('Create a new photograph of the same person')
+    assert 'ENTIRE body visible from head to toe' in out
+    assert 'same design, same placement and same size' in out
+    # The identity lock is the SHARED, user-editable klein_identity one — not a
+    # second copy the user would have to keep in sync.
+    assert fv.get_identity_prompt('klein_identity', 'human') in out
+
+
+def test_the_wrapper_respects_the_subject_type_and_the_nsfw_switch():
+    anime = fv.wrap_variation_krea('close-up', framing='face', subject_type='anime',
+                                   label='Face front')
+    # The MEDIUM word of the opening command switches; the anime lock's own
+    # "don't turn it into a photograph" clause legitimately says the word again.
+    assert anime.startswith('Create a new illustration of the same character')
+    assert 'Anime illustration, same art style as the reference' in anime
+    nsfw = fv.wrap_variation_krea('full body', framing='body', nsfw=True, label='x')
+    assert 'SFW' not in nsfw and 'Explicit nudity is allowed' in nsfw
+
+
+def test_the_dataset_suffix_is_spliced_once_into_the_description():
+    out = fv.wrap_variation_krea('close-up portrait', framing='face',
+                                 suffix='shot on 35mm film', label='x')
+    assert out.count('shot on 35mm film') == 1
+
+
+# --- engine identity: ids and labels agree with the frontend -----------------
+
+def test_the_local_engine_ids_and_labels_match_the_frontend():
+    """Same seam as test_engine_lists_contract, for the LOCAL engines: the ids
+    are persisted in FaceDatasetImage.klein_model and both sides word user-facing
+    messages from the labels."""
+    import re
+    from pathlib import Path
+    from app.services import face_dataset_service as svc
+    js = (Path(__file__).resolve().parents[2] / 'frontend' / 'src' / 'components'
+          / 'dataset' / 'engineSelection.js')
+    if not js.exists():
+        pytest.skip('frontend source not present')
+    src = js.read_text(encoding='utf-8')
+    m = re.search(r'export const LOCAL_ENGINES\s*=\s*\[(.*?)\];', src, re.S)
+    assert m, 'LOCAL_ENGINES declaration not found in engineSelection.js'
+    assert tuple(re.findall(r"'([^']+)'", m.group(1))) == svc.LOCAL_ENGINES
+    labels = dict(re.findall(
+        r"(\w+):\s*'([^']*)'",
+        re.search(r'export const ENGINE_LABELS\s*=\s*\{(.*?)\};', src, re.S).group(1)))
+    for engine in svc.LOCAL_ENGINES:
+        assert labels.get(engine) == svc.LOCAL_ENGINE_LABELS[engine], engine
+
+
+def test_krea_is_a_known_engine_the_routes_accept():
+    from app.services import face_dataset_service as svc
+    assert 'krea' in svc.KNOWN_ENGINES and 'krea' in svc.LOCAL_ENGINES
+    assert 'krea' not in svc.API_ENGINES
+
+
+# --- route: the 409 is the ONLY thing standing between a fresh install and a
+#     grid of silently-failing tiles, so it is pinned end to end -------------
+
+def test_generating_on_krea_without_the_weights_answers_one_actionable_409(client):
+    """Nothing installed: ONE 409 whose message says where each file goes and
+    where it comes from — and NOT a single row created. Nothing is downloaded:
+    unlike Klein's public direct links these have no verified URL, and a fake
+    installer would be worse than an honest message."""
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'K', 'trigger_word': 'ktrig'}).get_json()['id']
+    r = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'krea',
+                            'variations': [{'label': 'Bust, front', 'framing': 'bust',
+                                            'prompt': 'upper body portrait'}]}],
+        'multiplier': 1})
+    assert r.status_code == 409
+    body = r.get_json()
+    assert body['ok'] is False
+    msg = body['error']
+    assert 'models/loras' in msg and 'models/vae' in msg
+    assert 'https://' in msg and 'Then retry' in msg
+    assert set(body['krea_missing']['assets']) >= {'krea_model', 'krea_identity_lora'}
+    for f in body['krea_missing']['files']:
+        assert f['path'] and f['kind'] and f['source']
+    # Nothing was created: a preflight that leaves half a batch behind is worse
+    # than no preflight at all.
+    assert client.get(f'/api/dataset/{ds}').get_json()['images'] == []
+
+
+def test_a_missing_node_pack_is_named_in_the_same_409(client, monkeypatch):
+    """The other half of the same message. Separate test because an unreachable
+    ComfyUI fails the node probe OPEN (which the default test env is) — here the
+    probe answers, and answers that the pack is absent."""
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
+                        lambda *a, **k: {'KSampler'})
+    from app.services import krea_edit_helper as keh
+    monkeypatch.setattr(keh, '_nodes_ok_until', 0.0, raising=False)
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'KN', 'trigger_word': 'kntrig'}).get_json()['id']
+    r = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'krea',
+                            'variations': [{'label': 'Bust, front', 'framing': 'bust',
+                                            'prompt': 'upper body portrait'}]}]})
+    assert r.status_code == 409
+    body = r.get_json()
+    assert 'comfyui-krea2edit' in body['error'] and 'github.com' in body['error']
+    assert 'restart ComfyUI' in body['error']
+    assert set(body['krea_missing']['nodes']) == set(keh.KREA_NODE_CLASSES)
+    assert body['krea_missing']['node_packs'], 'name the pack, not just the class'
+
+
+def test_an_unknown_engine_is_still_refused(client):
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'K2', 'trigger_word': 'k2trig'}).get_json()['id']
+    r = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'kreaa', 'variations': [{'label': 'x',
+                                                                  'prompt': 'p'}]}]})
+    assert r.status_code == 400
+    assert 'unknown engine' in r.get_json()['error']
+
+
+def test_nsfw_shots_are_allowed_on_krea_and_still_refused_on_an_api_engine(client):
+    """The NSFW rule is "local only", not "Klein only" — widening it must not
+    open the API lane by accident."""
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'K3', 'trigger_word': 'k3trig'}).get_json()['id']
+    shot = [{'label': 'nsfw_x', 'framing': 'body', 'prompt': 'p', 'nsfw': True}]
+    api = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'chatgpt', 'variations': shot}]})
+    assert api.status_code == 400
+    assert 'local engine only' in api.get_json()['error']
+    # Krea gets past the NSFW gate and stops on its OWN preflight (409), which is
+    # the proof it was never refused for being NSFW.
+    local = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'krea', 'variations': shot}]})
+    assert local.status_code == 409
+    assert 'krea_missing' in local.get_json()
+
+
+def test_capabilities_publishes_the_krea_engine_and_its_gaps(client):
+    caps = client.get('/api/capabilities').get_json()
+    assert 'krea' in caps['engines']
+    assert caps['engines']['krea'] is False, 'nothing installed in the test env'
+    assert 'krea_missing' in caps['comfyui'] and 'krea_nodes_missing' in caps['comfyui']
+
+
+def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein():
+    """`klein_model` carries an engine TAG for API + Krea rows and a model FILE
+    for Klein ones. A wrong badge is worse than none."""
+    from app.services import face_dataset_service as svc
+
+    class Row:
+        def __init__(self, value):
+            self.klein_model = value
+
+    assert svc._image_engine(Row('krea')) == 'krea'
+    assert svc._image_engine(Row('chatgpt')) == 'chatgpt'
+    assert svc._image_engine(Row('Krea\\krea2_turbo_fp8.safetensors')) == 'klein'
+    assert svc._image_engine(Row(None)) is None

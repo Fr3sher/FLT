@@ -508,6 +508,43 @@ def _klein_missing_response(missing, missing_nodes=None):
                     'klein_nodes_missing': missing_nodes}), 409
 
 
+def _krea_missing_response(e):
+    """Turn a KreaModelsMissing into a structured 409.
+
+    The generate route's client surfaces `error` as a toast, so that STRING has
+    to be actionable on its own — it names the node pack, every missing weight,
+    the exact path it belongs at and where to get it. The itemized payload uses
+    the same `{files, nodes, node_packs}` vocabulary as `_studio_missing_response`
+    (path/kind/class_type/pack/url/search) so a future banner can render both
+    engines with one component, but it is published under its OWN key: claiming
+    to be a `studio_missing` would make the Studio banner announce a "test
+    pipeline" failure for a generation engine.
+
+    NO auto-download, unlike Klein's 409: Klein's assets are public
+    direct-download Hugging Face files wired into setup_installer, while Krea 2
+    Edit needs a git-cloned node pack and weights this app has no verified direct
+    URL for. Inventing an installer would be worse than saying where to get each
+    piece — so every gap is named with its expected path inside the user's own
+    ComfyUI and the page it comes from."""
+    from ..services import krea_edit_helper as keh
+    files = keh.missing_file_entries(e.missing)
+    node_packs = keh.krea_node_hints(e.missing_nodes)
+    parts = ["Krea 2 Edit can't run yet."]
+    if e.missing_nodes:
+        parts.append(
+            f"Install the “{keh.KREA_NODE_PACK['pack']}” custom-node pack "
+            f"({keh.KREA_NODE_PACK['url']}) into ComfyUI/custom_nodes and restart "
+            f"ComfyUI — it provides {', '.join(e.missing_nodes)}.")
+    for f in files:
+        parts.append(f"Missing {f['kind']}: place it at {f['path']} inside your "
+                     f"ComfyUI folder (from {f['source']}).")
+    parts.append('Then retry the generation.')
+    return jsonify({'ok': False, 'error': ' '.join(parts),
+                    'krea_missing': {'assets': e.missing, 'files': files,
+                                     'nodes': e.missing_nodes,
+                                     'node_packs': node_packs}}), 409
+
+
 def _autostart_optional_klein():
     """Fire-and-forget: fetch any still-missing OPTIONAL Klein asset (the
     consistency LoRA) after a successful generate, so it's present next time.
@@ -547,7 +584,7 @@ def _parse_engine_batches(data):
         variations = entry.get('variations') or []
         # Every entry is checked — not just the first one — or an unknown engine
         # could ride along behind a valid one.
-        if generator != 'klein' and generator not in svc.API_ENGINES:
+        if generator not in svc.KNOWN_ENGINES:
             raise ValueError(f'unknown engine: {generator}')
         if not isinstance(variations, list):
             raise ValueError('engine_batches variations must be a list')
@@ -574,8 +611,8 @@ def dataset_generate(dataset_id):
         if generator in svc.API_ENGINES and any(
                 v.get('nsfw') or is_nsfw_label(v.get('label')) for v in variations):
             return jsonify({'ok': False,
-                            'error': 'NSFW variations run on the local Klein engine only — '
-                                     'switch the generator to Klein.'}), 400
+                            'error': 'NSFW variations run on a local engine only — '
+                                     'switch the generator to Klein or Krea 2 Edit.'}), 400
     # Klein node preflight (once per request — /object_info is large, so never
     # per-tile): if the workflow needs a custom node this ComfyUI lacks, answer
     # one actionable 409 instead of a grid of tiles each failing ComfyUI
@@ -599,6 +636,15 @@ def dataset_generate(dataset_id):
         missing_assets = keh.klein_missing_assets()
         if missing_nodes or any(a in missing_assets for a in keh.KLEIN_REQUIRED):
             return _klein_missing_response(missing_assets, missing_nodes)
+    # Same rule for the second LOCAL engine: weights AND the custom-node pack are
+    # checked once, up front, so a mixed run can't bill an API batch and only
+    # then discover Krea can't render its share.
+    if any(g == 'krea' for g, _ in batches):
+        from ..services import krea_edit_helper as keh2
+        try:
+            keh2.preflight()
+        except keh2.KreaModelsMissing as e:
+            return _krea_missing_response(e)
     created, per_engine = 0, {}
     try:
         # The per-engine calls each enforce MAX_FANOUT on their own share, which
@@ -615,6 +661,12 @@ def dataset_generate(dataset_id):
                 ids = svc.generate_variations_nanobanana(
                     current_app._get_current_object(), LOCAL_USER, dataset_id,
                     variations, multiplier, engine=generator)
+            elif generator == 'krea':
+                # Second LOCAL path (Krea 2 Identity Edit): GPU-bound like Klein,
+                # free, NSFW-capable. Its one dial (grounding_px) is a setting,
+                # not a per-run argument — see krea_edit_helper.grounding_px.
+                ids = svc.generate_variations_krea(LOCAL_USER, dataset_id,
+                                                   variations, multiplier)
             else:
                 ids = svc.generate_variations(LOCAL_USER, dataset_id,
                                               variations, multiplier,
@@ -629,8 +681,11 @@ def dataset_generate(dataset_id):
             per_engine[generator] = per_engine.get(generator, 0) + len(ids)
     except Exception as e:
         from ..services.klein_edit_helper import KleinModelsMissing
+        from ..services.krea_edit_helper import KreaModelsMissing
         if isinstance(e, KleinModelsMissing):  # a required Klein model isn't installed
             return _klein_missing_response(e.missing)
+        if isinstance(e, KreaModelsMissing):   # asset or node pack absent — no auto-fetch
+            return _krea_missing_response(e)
         return _map_error(e)
     return jsonify({'ok': True, 'created': created, 'per_engine': per_engine})
 
@@ -1088,7 +1143,16 @@ def dataset_image_regenerate(image_id):
         # which doesn't touch ComfyUI): surface a missing custom node as one 409
         # instead of a silent failed re-roll. Fail-open if /object_info is down;
         # combined with the model scan (same rationale as the batch generate).
-        if engine not in svc.API_ENGINES:
+        if engine == 'krea':
+            # Krea's own preflight (weights + node pack). Explicit engine only:
+            # when none is given the service picks the row's origin, and its
+            # KreaModelsMissing is mapped below.
+            from ..services import krea_edit_helper as krh
+            try:
+                krh.preflight()
+            except krh.KreaModelsMissing as e:
+                return _krea_missing_response(e)
+        elif engine not in svc.API_ENGINES:
             from ..services import klein_edit_helper as keh
             missing_nodes = keh.klein_missing_nodes()
             if missing_nodes:
@@ -1101,8 +1165,11 @@ def dataset_image_regenerate(image_id):
                                       app=current_app._get_current_object())
     except Exception as e:
         from ..services.klein_edit_helper import KleinModelsMissing
+        from ..services.krea_edit_helper import KreaModelsMissing
         if isinstance(e, KleinModelsMissing):
             return _klein_missing_response(e.missing)  # auto-download, tell them to retry
+        if isinstance(e, KreaModelsMissing):
+            return _krea_missing_response(e)
         return _map_error(e)
     if job_id is None:
         return jsonify({'error': 'not found'}), 404
