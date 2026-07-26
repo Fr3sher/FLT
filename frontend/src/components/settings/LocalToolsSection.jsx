@@ -1,6 +1,10 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { INPUT_CLASS, Card, TextField, TestResult, TestButton, SecretField } from './primitives'
-import { postJson } from '../../api/fetchClient'
+import { postJson, apiFetch } from '../../api/fetchClient'
+import {
+  COMFY_FOLDER_FIELDS, comfyFolderField, folderPlaceholder, folderEffective,
+  folderWarning, detectedSuggestion, foldersQuery, hasAnyOverride,
+} from './comfyFolders'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
    your private custom-base repos — it lives with the ComfyUI card because that's
@@ -77,6 +81,110 @@ function OllamaStatus({ caps, refreshCaps, toast }) {
   )
 }
 
+/* The four ComfyUI folder overrides. They have always been honoured by the backend but
+   had no field anywhere, so a ComfyUI started with --input-directory/--output-directory
+   looked like it was being ignored (reported on Discord by vykas22).
+
+   Two things make them safe to use rather than a leap of faith: an empty field shows
+   the DERIVED path it actually falls back to, and a path that isn't on disk says so —
+   both resolved by the backend with the same function the app itself uses, so the
+   preview cannot drift from the real behaviour. Debounced so typing a path doesn't
+   fire a request per keystroke. */
+function ComfyFolderOverrides({ config, setField }) {
+  const comfy = config.comfyui
+  const [state, setState] = useState({ folders: {}, detected: {} })
+  const query = foldersQuery(comfy)
+
+  useEffect(() => {
+    let alive = true
+    const t = setTimeout(async () => {
+      try {
+        const r = await apiFetch(`/api/setup/comfyui-folders?${query}`)
+        if (alive) setState((prev) => ({ folders: r.folders || {}, detected: prev.detected }))
+      } catch { /* preview only — never block the form on it */ }
+    }, 350)
+    return () => { alive = false; clearTimeout(t) }
+  }, [query])
+
+  // Ask the running ComfyUI what it was launched with, once per mount. It answers from
+  // its own command line (/system_stats), so a hit is a fact, not a layout guess; no
+  // answer simply means nothing is offered and the manual fields stand alone.
+  useEffect(() => {
+    let alive = true
+    ;(async () => {
+      try {
+        const r = await apiFetch(`/api/setup/comfyui-folders?${foldersQuery(comfy, { detect: true })}`)
+        if (alive) setState((prev) => ({ ...prev, detected: r.detected || {} }))
+      } catch { /* ComfyUI down: no suggestions, nothing broken */ }
+    })()
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const anyDetected = COMFY_FOLDER_FIELDS.some((f) => detectedSuggestion(f, state.detected, comfy[f.key]))
+  // The four ids below are written out literally, not mapped: the help-registry
+  // contract test discovers Settings ids by scanning this file for id="…", and a
+  // computed id would silently escape the "every setting has a help topic" check.
+  const rowProps = { comfy, setField, state }
+
+  return (
+    <details className="rounded-lg border border-border p-3" open={hasAnyOverride(comfy) || anyDetected}>
+      <summary className="cursor-pointer text-sm font-medium text-content-muted">
+        Advanced: ComfyUI folder overrides
+      </summary>
+      <div className="mt-3 space-y-4">
+        <p className="text-xs text-content-muted">
+          Leave these empty unless ComfyUI was started with its own folders (
+          <code>--output-directory</code>, <code>--input-directory</code>,{' '}
+          <code>--models-directory</code>). Each field shows the folder the app uses
+          while it is empty.
+        </p>
+        <ComfyFolderRow {...rowProps} fieldKey="output_dir" id="comfyui-output-dir" />
+        <ComfyFolderRow {...rowProps} fieldKey="input_dir" id="comfyui-input-dir" />
+        <ComfyFolderRow {...rowProps} fieldKey="models_dir" id="comfyui-models-dir" />
+        <ComfyFolderRow {...rowProps} fieldKey="loras_dir" id="comfyui-loras-dir" />
+      </div>
+    </details>
+  )
+}
+
+function ComfyFolderRow({ comfy, setField, state, fieldKey, id }) {
+  const field = comfyFolderField(fieldKey)
+  const info = state.folders[fieldKey]
+  const suggestion = detectedSuggestion(field, state.detected, comfy[fieldKey])
+  return (
+    <TextField
+      id={id}
+      label={field.label}
+      value={comfy[fieldKey]}
+      onChange={(v) => setField('comfyui', fieldKey, v)}
+      placeholder={folderPlaceholder(field)}
+      help={field.help}
+      warn={folderWarning(info)}
+    >
+      {folderEffective(info) && (
+        <p className="mt-1 break-all text-xs text-content-muted">
+          Currently using <code className="text-content">{folderEffective(info)}</code>
+        </p>
+      )}
+      {suggestion && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+          <span className="min-w-0 break-all text-xs text-content-muted">
+            ComfyUI is running with <code className="text-sky-300">{suggestion}</code>
+          </span>
+          <button
+            type="button"
+            onClick={() => setField('comfyui', fieldKey, suggestion)}
+            className="shrink-0 rounded-md border border-sky-400/40 px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-400/10"
+          >
+            Use this
+          </button>
+        </div>
+      )}
+    </TextField>
+  )
+}
+
 export default function LocalToolsSection(props) {
   const { config, setField, testResults, recordTestResult, saveConfigSection, caps, refreshCaps, toast } = props
   return (
@@ -105,8 +213,9 @@ export default function LocalToolsSection(props) {
           value={config.comfyui.base_dir}
           onChange={(v) => setField('comfyui', 'base_dir', v)}
           placeholder="C:\ComfyUI"
-          help="Used to derive the output/input/models/loras folders unless overridden."
+          help="Used to derive the output/input/models/loras folders unless overridden below."
         />
+        <ComfyFolderOverrides config={config} setField={setField} />
         <SecretField field={HF_SECRET} {...props} />
       </Card>
 

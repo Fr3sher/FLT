@@ -209,7 +209,10 @@ Where you point the app at the local programs that unlock the full pipeline: **C
 
 - **ComfyUI API URL** → `comfyui.api_url`. The HTTP endpoint of your running ComfyUI. Default **`http://127.0.0.1:8188`**. **Test** confirms it answers.
 - **ComfyUI install directory** → `comfyui.base_dir`. The folder that contains `models/`, `output/`, `input/`. Default **empty**. This is what lets the app scan your checkpoints and LoRAs — set the API URL alone and there's nothing to scan. If you point it at a `..._windows_portable` folder, the app auto-corrects to the `ComfyUI` sub-folder inside it. In the **Setup wizard** this field is checked as you type: a wrong, empty or missing folder gets a specific reason, and pointing at the launcher/parent folder offers the real ComfyUI inside it in one click.
+- **Advanced: ComfyUI folder overrides** → `comfyui.output_dir`, `comfyui.input_dir`, `comfyui.models_dir`, `comfyui.loras_dir`. All default **empty**, and empty is what you want unless ComfyUI runs on folders of its own — a ComfyUI started with `--output-directory`, `--input-directory` or `--models-directory` does *not* keep its files under the install directory, so without an override here the app reads and writes in the wrong place. Each field **shows the folder it falls back to while empty**, computed with the very function the app uses at runtime, so the effective path is never something you have to work out; a path that isn't on disk is flagged in amber rather than failing silently mid-generation. If ComfyUI is running, the app asks it which folders it was launched with (it reports its own command line via `/system_stats`) and offers them in one click — nothing is ever guessed from a folder layout, so no suggestion appears when ComfyUI is unreachable, predates that field, or was started with no custom folders.
 - **Hugging Face token** → `HF_TOKEN` (secret, no Test button). Only needed to auto-download **license-gated** models — notably the Klein fp8 weights. Read access is enough for accepted gated models.
+
+**Overrides and `extra_model_paths.yaml`.** These two mechanisms stack rather than compete. `comfyui.models_dir`/`comfyui.loras_dir` set the app's *default* model roots; `extra_model_paths.yaml` is read **in addition**, from `<comfyui.base_dir>/extra_model_paths.yaml` — the same place ComfyUI itself looks. The yaml is therefore always located from the install directory, never from a models override, so the two can't end up pointing at different trees. For models and LoRAs the yaml usually already does the job; the override is for the case where the models folder itself moved.
 
 **Continuing without ComfyUI.** Leaving the install directory empty in the Setup wizard is a deliberate choice: it shows what turns off (local Klein generation including the NSFW lane, Klein watermark cleaning, the Test Studio, training on your own ComfyUI base models, and the on-disk LoRA preset picker) versus what stays on (scraping, curation, captioning, the API image engines, ai-toolkit/cloud training, Hugging Face publishing), then remembers the skip (`comfyui.setup_skipped`) so it stops nagging. Entering a directory at any point cancels the skip automatically and turns those features back on — the flag never hides a real problem with a ComfyUI you *have* configured.
 
@@ -378,14 +381,7 @@ Separate from everything above: these live **per dataset**, in the **⚙ Dataset
 
 These have no UI control — they're for advanced users editing `config.json` by hand (copy `config.example.json` to `config.json` first). Most people never touch them; the defaults are tuned. Values below are the shipped defaults.
 
-**ComfyUI folder overrides** — explicit paths that override the folders otherwise derived from `comfyui.base_dir`:
-
-| Key | Default | Role |
-|---|---|---|
-| `comfyui.output_dir` | `''` | Override ComfyUI's output folder. |
-| `comfyui.input_dir` | `''` | Override ComfyUI's input folder. |
-| `comfyui.models_dir` | `''` | Override the models folder scanned for checkpoints/UNETs. |
-| `comfyui.loras_dir` | `''` | Override the LoRA folder. |
+*(The four ComfyUI folder overrides used to live here. They are now editable in **Settings → Local tools → ComfyUI → Advanced: ComfyUI folder overrides** — see that section above. Values set by hand in `config.json` are unaffected: the same keys, read the same way, now simply shown in the app.)*
 
 **Engines:**
 
@@ -452,10 +448,10 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
 | `comfyui.base_dir` | ComfyUI install directory, used to derive `output`/`input`/`models`/`loras` dirs if those aren't set explicitly. |
-| `comfyui.output_dir` | Explicit override for ComfyUI's output folder. |
-| `comfyui.input_dir` | Explicit override for ComfyUI's input folder. |
-| `comfyui.models_dir` | Explicit override for ComfyUI's models folder (used to scan available checkpoints/UNETs). |
-| `comfyui.loras_dir` | Explicit override for ComfyUI's LoRA folder. |
+| `comfyui.output_dir` | Explicit override for ComfyUI's output folder. Set it when ComfyUI runs with `--output-directory`. Editable in Settings → Local tools. |
+| `comfyui.input_dir` | Explicit override for ComfyUI's input folder. Set it when ComfyUI runs with `--input-directory`. Editable in Settings → Local tools. |
+| `comfyui.models_dir` | Explicit override for ComfyUI's models folder (used to scan available checkpoints/UNETs). `extra_model_paths.yaml` is still read on top of it. Editable in Settings → Local tools. |
+| `comfyui.loras_dir` | Explicit override for ComfyUI's LoRA folder. Editable in Settings → Local tools. |
 | `ollama.url` | Base URL of your Ollama instance (default `http://127.0.0.1:11434`). |
 | `ollama.vision_model` | Ollama vision model used for auto-classify and auto head-crop (default `huihui_ai/qwen3-vl-abliterated:8b-instruct`, the uncensored **abliterated** build — use the Instruct, not Thinking, variant). |
 | `ollama.vision_concurrency` | How many images a bank vision pass (watermark / framing / captions) sends to Ollama at once (default `4`, clamped to 1-16). Higher overlaps more waiting; `1` restores the old one-at-a-time behaviour. |

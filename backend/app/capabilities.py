@@ -912,6 +912,94 @@ def classify_comfyui_dir(path: str) -> dict:
     return {'status': 'not_comfyui', 'resolved': str(p), 'suggestion': ''}
 
 
+def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> dict:
+    """Resolve the four ComfyUI working folders for a candidate (possibly unsaved)
+    ComfyUI section, and say for each one where the path came from and whether it is
+    actually there. Feeds the Settings preview so an override is never a leap of
+    faith: an empty field SHOWS the derived path it falls back to, and a typed path
+    that does not exist says so instead of failing silently at generation time.
+
+    Returns {<config key>: {kind, source, resolved, exists}} where
+      source ∈ 'override' (the field is filled) | 'derived' (from the install dir)
+               | 'unset'  (no install dir and no override — nothing to resolve).
+    Read-only, a handful of stat calls, never raises."""
+    overrides = overrides or {}
+    out = {}
+    for kind in cfg.COMFY_DIR_KINDS:
+        key, _sub = cfg._COMFY_DERIVED[kind]
+        explicit = str(overrides.get(key) or '').strip()
+        p = cfg.resolve_comfyui_dir(kind, base_dir, explicit)
+        resolved = str(p) if p else ''
+        try:
+            exists = bool(resolved) and Path(resolved).is_dir()
+        except OSError:
+            exists = False
+        out[key] = {'kind': kind,
+                    'source': 'override' if explicit else ('derived' if resolved else 'unset'),
+                    'resolved': resolved, 'exists': exists}
+    return out
+
+
+# ComfyUI takes its custom folders on the COMMAND LINE only (--input-directory,
+# --output-directory, --models-directory); there is no config file to read. It does,
+# however, echo its own argv back in /system_stats.system.argv, so the running
+# instance can be ASKED what it was started with instead of guessing a layout.
+_COMFY_ARGV_FLAGS = {'--output-directory': 'output_dir', '--input-directory': 'input_dir',
+                     '--models-directory': 'models_dir'}
+
+
+def parse_comfy_argv_dirs(argv) -> dict:
+    """Extract the folder overrides ComfyUI was launched with from its own argv.
+
+    Both argparse spellings are accepted (`--input-directory X` and
+    `--input-directory=X`). RELATIVE paths are deliberately DROPPED: they resolve
+    against ComfyUI's working directory, which we do not know, and this app never
+    guesses a path by convention. `--base-directory` is likewise not turned into
+    input/output suggestions — the install-directory field already derives those, and
+    inventing them here would be a layout assumption, not an answer. Never raises."""
+    out = {}
+    if not isinstance(argv, (list, tuple)):
+        return out
+    items = [str(a) for a in argv]
+    for i, tok in enumerate(items):
+        flag, _, inline = tok.partition('=')
+        key = _COMFY_ARGV_FLAGS.get(flag)
+        if not key:
+            continue
+        value = inline if inline else (items[i + 1] if i + 1 < len(items) else '')
+        value = value.strip().strip('"')
+        # A following token that is itself a flag means the value was missing.
+        if not value or (not inline and value.startswith('-')):
+            continue
+        try:
+            if not os.path.isabs(value):
+                continue
+        except (OSError, ValueError):
+            continue
+        out[key] = os.path.normpath(value)
+    return out
+
+
+def detect_comfyui_folders(timeout=3) -> dict:
+    """Ask the RUNNING ComfyUI which custom folders it was started with.
+    NETWORK — one short GET, kept out of probe() like comfyui_runtime_info.
+
+    Returns {} when ComfyUI is not configured, not reachable, too old to echo its
+    argv (the field landed in 2025 releases), or simply started with no custom
+    folder flags. An empty dict means "nothing to offer", never "use the defaults" —
+    the caller leaves the manual field alone. Never raises."""
+    api = (cfg.get('comfyui.api_url') or '').rstrip('/')
+    if not api:
+        return {}
+    try:
+        r = requests.get(f'{api}/system_stats', timeout=timeout)
+        if r.status_code != 200:
+            return {}
+        return parse_comfy_argv_dirs(((r.json() or {}).get('system') or {}).get('argv'))
+    except Exception:
+        return {}
+
+
 def _detect_comfyui() -> dict:
     out = {}
     if _http_ok(f'{_COMFYUI_DEFAULT_URL}/history'):

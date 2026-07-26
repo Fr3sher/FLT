@@ -501,13 +501,33 @@ def delete_secrets(names) -> None:
 _COMFY_DERIVED = {'output': ('output_dir', 'output'), 'input': ('input_dir', 'input'),
                   'models': ('models_dir', 'models'), 'loras': ('loras_dir', 'models/loras')}
 
-def comfyui_dir(kind: str):
-    key, sub = _COMFY_DERIVED[kind]
-    explicit = get(f'comfyui.{key}') or ''
+# Stable display order for the four override fields (Settings, docs, API payload).
+COMFY_DIR_KINDS = ('output', 'input', 'models', 'loras')
+
+
+def resolve_comfyui_dir(kind: str, base_dir: str, explicit: str = ''):
+    """Pure resolution of one ComfyUI folder: an explicit override wins, else it is
+    derived from the install directory. Kept separate from `comfyui_dir` (which reads
+    live config) so the Settings screen can PREVIEW the very same computation on
+    unsaved field values — what the user is shown is then, by construction, what the
+    app will use. Reported from Discord (vykas22): a ComfyUI launched with
+    --input-directory/--output-directory looked like it was ignored, because the four
+    override keys existed but had no field anywhere in the app.
+
+    Whitespace-only is treated as empty: a stray space used to resolve to Path(' ')
+    and silently shadow the derived folder."""
+    _, sub = _COMFY_DERIVED[kind]
+    explicit = (explicit or '').strip()
     if explicit:
         return Path(explicit)
-    base = get('comfyui.base_dir') or ''
+    base = (base_dir or '').strip()
     return Path(base) / Path(sub) if base else None
+
+
+def comfyui_dir(kind: str):
+    key, _ = _COMFY_DERIVED[kind]
+    return resolve_comfyui_dir(kind, get('comfyui.base_dir') or '',
+                               get(f'comfyui.{key}') or '')
 
 def aitoolkit_path(kind: str):
     root = get('aitoolkit.dir') or ''

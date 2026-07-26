@@ -59,6 +59,12 @@ export const WHATS_NEW = [
     blurb:
       "Subject type offered Human, Animal, Creature, Object and Other — so a drawn character had to call itself Human, which handed it an identity lock written for photography (\"same skin tone and texture\", \"realistic photographic portrait\") and a shot list of camera-lens conventions. Pick Anime instead and the whole chain changes: the identity lock now protects what actually makes a character recognisable — hair colour and hairstyle, eye shape and iris colour, the signature outfit, the accessories, the distinctive marks — and it protects the art style itself, explicitly refusing to turn your character into a photograph or a 3D render. The shot catalogue is 55 drawn-media shots (bust-up, cowboy shot, expression sheet, and a front/side/back character-sheet turnaround nothing else offered), with four presets including Character sheet. Your existing datasets are untouched, Human included.",
     to: '/datasets?section=add',
+    id: '2026-07-26-comfyui-custom-folders',
+    date: '2026-07-26',
+    title: '📂 A ComfyUI running on custom input/output folders is no longer ignored',
+    blurb:
+      "If you start ComfyUI with --input-directory or --output-directory, the app looked like it never got the message: it kept reading and writing under the install directory, and there was nowhere on screen to tell it otherwise. Settings › Local tools › ComfyUI now has an \"Advanced: ComfyUI folder overrides\" block with the four folders — output, input, models, LoRAs. Each empty field shows the exact path it falls back to, so you can see what the app will use instead of guessing, and a path that isn't on disk is called out in amber rather than failing silently mid-generation. Better still, if ComfyUI is running the app asks it which folders it was launched with and offers them in one click. Thanks to vykas22 (Discord) for the report.",
+    to: '/settings/local-tools',
   },
   {
     id: '2026-07-26-capability-rows-are-doors',

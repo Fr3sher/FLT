@@ -25,6 +25,28 @@ def setup_validate_comfyui_dir():
     return jsonify(capabilities.classify_comfyui_dir(request.args.get('path', '')))
 
 
+@bp.get('/comfyui-folders')
+def setup_resolve_comfyui_folders():
+    """Resolve the four ComfyUI working folders (output/input/models/loras) for the
+    values currently TYPED in Settings, without saving anything, so each override
+    field can show the effective path it falls back to and flag one that is not on
+    disk. `?base_dir=` plus optional `?output_dir=&input_dir=&models_dir=&loras_dir=`.
+
+    `?detect=1` additionally asks the running ComfyUI which custom folders it was
+    launched with (its own argv, via /system_stats) so the UI can offer them in one
+    click. That is one short network call, hence opt-in; `detected` is {} whenever
+    ComfyUI is unreachable, too old to report its argv, or was started with no
+    custom folder flags — never a guessed path."""
+    base_dir = request.args.get('base_dir', '')
+    overrides = {k: request.args.get(k, '') for k in
+                 ('output_dir', 'input_dir', 'models_dir', 'loras_dir')}
+    payload = {'folders': capabilities.classify_comfyui_folders(base_dir, overrides),
+               'detected': {}}
+    if request.args.get('detect'):
+        payload['detected'] = capabilities.detect_comfyui_folders()
+    return jsonify(payload)
+
+
 @bp.post('/install/<action>')
 def start_install(action):
     if action not in setup_installer.INSTALL_ACTIONS:

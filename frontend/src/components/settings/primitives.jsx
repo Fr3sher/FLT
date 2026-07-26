@@ -77,7 +77,11 @@ export function Card({ title, help, children, id }) {
   )
 }
 
-export function TextField({ id, label, value, onChange, placeholder, help }) {
+/* `warn` (optional): an amber note UNDER the input, for a value that saves fine but
+   will not work — a folder that isn't on disk, say. Distinct from `help` (above the
+   input, always-on guidance) so a real problem can't read as documentation.
+   `children` renders after it, for a field that needs its own action button. */
+export function TextField({ id, label, value, onChange, placeholder, help, warn, children }) {
   return (
     <div>
       <label htmlFor={id} className="block text-sm font-medium text-content">{label}</label>
@@ -90,6 +94,12 @@ export function TextField({ id, label, value, onChange, placeholder, help }) {
         placeholder={placeholder}
         className={INPUT_CLASS}
       />
+      {warn && (
+        <p className="mt-1 break-words text-xs text-amber-400">
+          <span aria-hidden="true">⚠</span> {warn}
+        </p>
+      )}
+      {children}
     </div>
   )
 }
