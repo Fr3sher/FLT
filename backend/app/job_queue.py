@@ -173,6 +173,20 @@ def _execution_error_detail(status) -> str | None:
     return None
 
 
+# Every LOCAL engine that renders a dataset variation links its result back
+# through the same callback, so this is a SET rather than one hardcoded name.
+# It is a set because of how it broke: Krea 2 Edit shipped stamping its own
+# `krea_identity_edit_dataset`, the dispatch below still tested only Klein's
+# name, and twelve images were generated, paid for in GPU time, marked done in
+# the queue — and never attached to their rows. The tile stayed at 0/12 forever
+# with nothing in the logs, because nothing had failed. A new engine must be
+# added HERE, and the contract test that walks this set is what says so.
+DATASET_IMAGE_JOB_NAMES = frozenset({
+    'klein_edit_dataset',           # Klein (FLUX.2)
+    'krea_identity_edit_dataset',   # Krea 2 Identity Edit
+})
+
+
 def _dispatch_completion(job, filename, failed):
     """Route a finished job to whichever service created it, per its metadata.
     A callback crash must never take down the worker thread."""
@@ -189,7 +203,7 @@ def _dispatch_completion(job, filename, failed):
             reason = job.error_message if job.error_message != 'generation failed' else None
             lora_test_studio.link_completed_test_image(job.job_id, filename,
                                                        failed=failed, reason=reason)
-        elif md.get('model_name') == 'klein_edit_dataset':
+        elif md.get('model_name') in DATASET_IMAGE_JOB_NAMES:
             from .services import face_dataset_service
             # The bare fallback 'generation failed' is LESS useful than the tile's
             # own default (which points at the server log) — only pass real detail.
