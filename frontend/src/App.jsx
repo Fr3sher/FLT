@@ -159,11 +159,7 @@ function NavBar() {
       {/* Bank sits right after Datasets: it FEEDS them (triage a big unsorted
           folder, then promote the keepers into a dataset). */}
       <NavLink to="/bank" className={navItemClass} onClick={() => setOpen(false)}>
-        <span className="inline-flex items-center gap-1"><span aria-hidden>🗃️</span> Bank
-          {/* The Beta chip is the first thing to go when the bar is tight: it is
-              a nuance, not a destination. */}
-          <span className="hidden lg:inline px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none">Beta</span>
-        </span>
+        <span className="inline-flex items-center gap-1"><span aria-hidden>🗃️</span> Bank</span>
       </NavLink>
       {/* Unified runs hub (cloud + local history) — useful as soon as ANY
           training path exists, not just the cloud one. */}
@@ -178,7 +174,13 @@ function NavBar() {
           other, across every dataset at once. */}
       {(caps.cloud_training || caps.training_visible) && (
         <NavLink to="/canvas" className={navItemClass} onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1"><span aria-hidden>◉</span> Canvas</span>
+          <span className="inline-flex items-center gap-1"><span aria-hidden>◉</span> Canvas
+            {/* The Beta chip marks the newest surface, not the oldest: the Bank
+                has been in daily use for weeks, the canvas ships today. It is
+                the first thing to go when the bar is tight — a nuance, not a
+                destination. */}
+            <span className="hidden lg:inline px-1 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.5625rem] font-semibold uppercase tracking-wide leading-none">Beta</span>
+          </span>
         </NavLink>
       )}
       {caps.studio_visible && (

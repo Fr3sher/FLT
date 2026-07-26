@@ -99,6 +99,7 @@ export default function CanvasPage() {
       <header className="mb-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold text-content">
           <span aria-hidden>◉</span> LoRA Canvas
+          <span className="px-1.5 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.625rem] font-semibold uppercase tracking-wide">Beta</span>
           <HelpBadge topic="page-canvas" />
         </h1>
         <p className="mt-1 text-content-muted text-[0.75rem]">
