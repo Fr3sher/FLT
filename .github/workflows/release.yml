@@ -91,7 +91,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # The ZIP updates only from release to release, a git clone updates from
+          # every commit - people cannot guess that, so every release says it.
+          # --notes is PREPENDED to --generate-notes (gh documents that ordering).
+          $preamble = Get-Content .github/RELEASE_PREAMBLE.md -Raw
           gh release create "${{ github.ref_name }}" `
             "packaging/dist/LoRA-Dataset-Studio-windows.zip" `
             --title "LoRA Dataset Studio ${{ github.ref_name }}" `
+            --notes "$preamble" `
             --generate-notes

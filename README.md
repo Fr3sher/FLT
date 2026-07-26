@@ -637,6 +637,12 @@ cd lora-dataset-studio
 start.bat
 ```
 
+**Prefer the clone if you can — the two do not update the same way.** From a git
+checkout, **Update & restart** runs `git pull --ff-only`, so you get every fix the
+moment it lands, often days before it is packaged into a release. From the ZIP, the
+same button compares the latest release tag to your version, so a fix shipped today
+reaches you whenever the next release is cut. Everything else is identical.
+
 ### Option 2 — manual venv (any OS)
 
 Clone/download the source, open a terminal in its root, then run:
