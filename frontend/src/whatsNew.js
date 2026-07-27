@@ -48,6 +48,16 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-compare-an-improvement-with-its-original',
+    date: '2026-07-27',
+    title: 'Improved an image? Now you can see it next to the original before deciding',
+    blurb:
+      'Klein\'s ✨ Upscale & improve never touches your image: it adds a candidate beside it and waits for your verdict. But the full-screen viewer only ever showed ONE image, so judging that candidate meant memorising the original and bouncing back and forth in the grid. Open a candidate now and it carries ⧉ Compare with original: the view splits into two named panes — Original and Improved — side by side on a wide screen, stacked on a phone, where two half-width thumbnails would have proved nothing. Both panes are the same size and both images are fitted inside them, so you are looking at the same scale and the same framing even though the improved one has four times the pixels; comparing at different scales proves nothing either. For the same reason click-to-zoom is deliberately off inside the comparison and the hint says so — at 100 % the two images cover different parts of the subject. Leave the comparison and 100 % is back exactly as before. The automatic small-image rescue of scraped photos gets the same button, since it is the same question. And when the original has been deleted or purged there is no dead button: a short note says why.',
+    to: '/datasets?section=images',
+  },
+  {
+  },
+  {
     id: '2026-07-27-canvas-run-card-opens-everything',
     date: '2026-07-27',
     title: 'Click a run on the Canvas to see everything it made, step by step — with its notes and settings',
@@ -68,8 +78,7 @@ export const WHATS_NEW = [
     title: 'Links that promise one setting now drop you on that setting',
     blurb:
       'The little "Adjust improve strength →" under Upscale & improve used to open Image engines at the top and leave you scrolling a long page looking for four number boxes. It now lands directly on them, highlighted — and opens the collapsed block around a setting when there is one. Same for "Which model writes them, and how" (the captioning backend), "Source credentials" (the scraper keys card) and the Setup wizard\'s "Set the interpreter in Settings ▸ Local tools" (that exact field). One link still points at a whole section on purpose: "Defaults & cloud limits" names two settings that live in two different cards, and picking one would send half of you to the wrong one.',    to: '/settings/engines',  },
-  {
-    id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
+  {    id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
     date: '2026-07-27',
     title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',
     blurb:
