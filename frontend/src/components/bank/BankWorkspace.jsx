@@ -37,8 +37,13 @@ const FLAG_LABEL = {
 const FLAG_HINT = {
   soft_detail: 'The picture stops before the pixels do — usually an enlargement. '
     + 'A soft or out-of-focus shot reads the same, so check before mass-rejecting.',
-  bars: 'Flat black letterbox/pillarbox bars — video screenshots and padded stills.',
+  bars: 'Flat black letterbox/pillarbox bars — video screenshots and padded stills. '
+    + 'A dark-themed screenshot reads the same, so check before mass-rejecting.',
 }
+// These two are measurements of PROVENANCE, not quality verdicts, which is why
+// the overnight pipeline does not offer them (backend PIPELINE_REJECT_FLAGS) and
+// why the standalone button prints their caveat instead of hiding it in a
+// tooltip. Here you can see the count, undo, and look at the pile first.
 // Quality flags the CPU scan produces vs the ones the ML scoring/watermark
 // passes add — auto-reject only offers a flag whose pass has actually run.
 const QUALITY_REJECT_FLAGS = ['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars']
@@ -1148,15 +1153,26 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   Rejects the UNDECIDED images with these flags. Your manual ✓/✕ are never changed;
                   everything stays reversible (nothing is deleted from disk).
                 </p>
+                {/* The caveat is printed, not left in a title= tooltip: soft_detail
+                    and bars are provenance HINTS, not verdicts, and this is the one
+                    screen that offers to act on them in bulk. A tooltip is invisible
+                    on a phone and to anyone who does not hover. */}
                 {[...QUALITY_REJECT_FLAGS, ...availableScoreFlags].map((f) => (
-                  <label key={f} className="flex items-center gap-2 text-sm text-content">
-                    <input type="checkbox" checked={rejectFlags.has(f)}
-                      onChange={(e) => setRejectFlags((prev) => {
-                        const next = new Set(prev)
-                        if (e.target.checked) next.add(f); else next.delete(f)
-                        return next
-                      })} />
-                    {FLAG_LABEL[f]} <span className="text-content-subtle">({flags[f] ?? 0} flagged)</span>
+                  <label key={f} className="block text-sm text-content">
+                    <span className="flex items-center gap-2">
+                      <input type="checkbox" checked={rejectFlags.has(f)}
+                        onChange={(e) => setRejectFlags((prev) => {
+                          const next = new Set(prev)
+                          if (e.target.checked) next.add(f); else next.delete(f)
+                          return next
+                        })} />
+                      {FLAG_LABEL[f]} <span className="text-content-subtle">({flags[f] ?? 0} flagged)</span>
+                    </span>
+                    {FLAG_HINT[f] && (
+                      <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-amber-200/80">
+                        ⚠ {FLAG_HINT[f]}
+                      </span>
+                    )}
                   </label>
                 ))}
                 <button type="button" onClick={applyAutoReject} disabled={!rejectFlags.size}
