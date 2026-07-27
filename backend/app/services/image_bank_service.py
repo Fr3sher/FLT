@@ -1770,32 +1770,11 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
     return {'results': results, 'image_ids': [ids[k] for k in keep],
             'pool': len(ids), 'ref_id': int(ref_id)}
 def _trash_or_remove(path: str) -> str:
-    """Get a source file out of the user's folder, keeping it recoverable.
-
-    Order of preference: the OS trash (send2trash — real, familiar, restores in
-    place), then the app's own trash (a MOVE into data/trash, recoverable until
-    the user empties it from Settings). A permanent unlink is the last resort,
-    when neither can take the file. send2trash is an OPTIONAL dependency and is
-    absent from a default install, so the app trash is the branch most people
-    actually get — deleting thousands of a user's own photos with no way back
-    was never an acceptable default. Returns the mode used:
-    'trash' | 'app_trash' | 'delete'."""
-    try:
-        from send2trash import send2trash   # optional dependency
-    except Exception:
-        pass
-    else:
-        send2trash(path)
-        return 'trash'
-    try:
-        trash.send_to_trash(path, context='bank-rejected')
-        return 'app_trash'
-    except OSError:
-        # Cross-device copy refused, locked file, unwritable trash… the file is
-        # still in the user's folder at this point, so a plain remove is the only
-        # way to honour the request. It raises on its own failure.
-        os.remove(path)
-        return 'delete'
+    """Get a rejected source file out of the user's folder, keeping it
+    recoverable (OS trash → app trash → permanent unlink). The policy itself is
+    app-wide and lives in ``services.trash``; this is the bank's entry point into
+    it, kept as a name because the tests and the delete sweep both address it."""
+    return trash.dispose(path, context='bank-rejected')
 
 
 def _bank_folders(user_id, exclude_id=None) -> list:
@@ -1882,13 +1861,9 @@ def rejected_delete_preview(user_id, bank_id) -> dict | None:
 
 
 def _delete_mode() -> str:
-    """Where a deleted source file WOULD go, without deleting anything: mirrors
-    _trash_or_remove's preference order so the confirmation can say it."""
-    try:
-        import send2trash          # noqa: F401  (probe only)
-    except Exception:
-        return 'app_trash'
-    return 'trash'
+    """Where a deleted source file WOULD go, without deleting anything, so the
+    confirmation can say it. Same probe as ``services.trash.disposal_mode``."""
+    return trash.disposal_mode()
 
 
 def delete_rejected(user_id, bank_id) -> dict:

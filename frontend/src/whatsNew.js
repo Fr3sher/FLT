@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-delete-images-from-checkpoint-gallery',
+    date: '2026-07-27',
+    title: 'Throw away the misses without leaving the board',
+    blurb:
+      'The 🖼 gallery under a checkpoint could only show what that epoch produced — and a checkpoint you keep testing ends up holding thirty-odd renders, most of them tries you never want to see again. It deletes now: hit Select in the panel header, tap the misses (several at once), then 🗑 Delete. Nothing is destroyed on a stray tap — outside Select mode a tap still just zooms — and nothing is destroyed for good either: the files go to your system Recycle Bin, or to the app’s own Trash under Settings ▸ Storage when that is not available, and the confirmation tells you which one BEFORE you click. It also tells you the part that would otherwise be a nasty surprise: these are the same rows as the Test Studio grid, so they leave both places at once.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-27-remove-run-takes-everything',
     date: '2026-07-27',
     title: 'Removing a run now clears everything it left behind — and tells you what that is first',

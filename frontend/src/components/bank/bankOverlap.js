@@ -8,18 +8,10 @@
  * facts into the sentences that have to be said BEFORE that click.
  */
 
-/** Where a delete run's files end up, in the user's words. Mirrors the backend's
- *  preference order (OS trash → the app's own trash → a permanent unlink). */
-export function deleteDestination(mode) {
-  if (mode === 'trash') return 'your system Recycle Bin'
-  if (mode === 'app_trash') return "the app's Trash (Settings ▸ Storage)"
-  return 'nowhere — they are deleted for good'
-}
-
-/** true when the files can still be brought back after the run. */
-export function isRecoverable(mode) {
-  return mode === 'trash' || mode === 'app_trash'
-}
+/* Where the files end up is not a bank question — every destructive
+ * confirmation in the app says it, so the sentence lives in utils and is
+ * re-exported here for the callers (and tests) that already address it. */
+export { deleteDestination, isRecoverable } from '../../utils/deletionWording.js'
 
 /** The one-line notice for a bank created over a folder another bank already
  *  covers — or null when there is nothing to say. */

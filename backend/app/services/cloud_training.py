@@ -3305,9 +3305,13 @@ def checkpoint_gallery(record_id, step, limit=120) -> dict:
     total = q.count()
     rows = q.limit(max(1, min(int(limit or 120), 500))).all()
     from .checkpoint_link_backfill import unlinked_count
+    from . import trash
     return {
         'record_id': record_id, 'step': step, 'count': total,
         'unlinked': unlinked_count(),
+        # Where a deleted image WOULD land, resolved the same way the deletion
+        # resolves it, so the confirmation never promises the wrong thing.
+        'delete_mode': trash.disposal_mode(),
         'images': [{
             'id': r.id,
             'dataset_id': r.dataset_id,
@@ -3319,6 +3323,127 @@ def checkpoint_gallery(record_id, step, limit=120) -> dict:
             'created_at': r.created_at.isoformat() if r.created_at else None,
         } for r in rows],
     }
+
+
+def delete_checkpoint_images(record_id, step, image_ids) -> dict:
+    """🗑 Delete generated images from a checkpoint's gallery — file AND row.
+
+    These rows ARE the Test Studio's cells: one image lives in exactly one place
+    in the database and is shown by two surfaces. So "remove it from this
+    gallery" and "delete it" cannot both be true, and hiding it here while it
+    stays in the Studio grid would only move the confusion. The gallery deletes
+    for real, and the confirmation says the Test Studio loses them too — the
+    consequence is stated BEFORE the click, not discovered after it.
+
+    Nothing is destroyed outright: the file goes through ``trash.dispose`` (OS
+    recycle bin → the app's own trash → a permanent unlink only if both refuse),
+    exactly like the bank's rejected sweep. ``checkpoint_gallery`` reports the
+    mode up front and this returns the mode actually used.
+
+    Scoped to the checkpoint: an id that is not linked to (record_id, step) is
+    refused, so this route cannot be turned into "delete any image by id".
+
+    Degrades instead of failing, because the gallery of a real install is never
+    tidy:
+      • a row still generating keeps its file (skipped 'generating') — cancelling
+        someone's running job is not what a delete click asked for;
+      • a row whose file is already gone from disk still loses its row;
+      • a file another surviving row also points at is unlinked from THIS row but
+        left on disk (no surface loses a picture it still lists);
+      • a file that cannot be moved keeps its row, so it stays visible and
+        retryable rather than vanishing from the UI while it sits on disk.
+
+    ``CheckpointPreview`` rows pointing at a deleted image are removed in the
+    same transaction. The reader already drops a dangling pointer, but leaving
+    one behind means a checkpoint silently falls back to an older preview with no
+    trace of why — and the row would outlive every image it could ever resolve.
+
+    Returns {'mode', 'deleted', 'trashed', 'already_absent', 'rows_removed',
+    'previews_removed', 'dataset_ids', 'skipped': [{'id', 'reason'}]}."""
+    from ..models import CheckpointPreview, LoraTestImage
+    from . import trash
+    wanted = []
+    for i in (image_ids or []):
+        try:
+            wanted.append(int(i))
+        except (TypeError, ValueError):
+            continue
+    out = {'mode': None, 'deleted': 0, 'trashed': 0, 'already_absent': 0,
+           'rows_removed': 0, 'previews_removed': 0, 'dataset_ids': [],
+           'skipped': []}
+    if not wanted:
+        return out
+    rows = (LoraTestImage.query
+            .filter(LoraTestImage.record_id == record_id,
+                    LoraTestImage.step == step,
+                    LoraTestImage.id.in_(wanted)).all())
+    found = {r.id for r in rows}
+    for i in wanted:
+        if i not in found:
+            # Either a stale gallery (already deleted elsewhere) or an id that
+            # belongs to another checkpoint. Same answer: not ours to delete.
+            out['skipped'].append({'id': i, 'reason': 'not_in_gallery'})
+
+    # A file can be pointed at by more than one row (a preview reuses an existing
+    # cell). Only unlink from disk what nothing else still lists.
+    keys = {(r.dataset_id, r.filename) for r in rows if r.filename}
+    still_used = set()
+    if keys:
+        others = (LoraTestImage.query
+                  .filter(LoraTestImage.dataset_id.in_({k[0] for k in keys}),
+                          LoraTestImage.filename.in_({k[1] for k in keys}),
+                          LoraTestImage.id.notin_(list(found))).all())
+        still_used = {(o.dataset_id, o.filename) for o in others}
+
+    remove_ids, modes_used, datasets = [], set(), set()
+    disposed = set()                       # (dataset_id, filename) done this pass
+    for row in rows:
+        if row.status not in ('done', 'failed', 'cancelled'):
+            out['skipped'].append({'id': row.id, 'reason': 'generating'})
+            continue
+        datasets.add(row.dataset_id)
+        if not row.filename:
+            # A failed/cancelled cell never wrote a file: only the row goes.
+            remove_ids.append(row.id)
+            continue
+        key = (row.dataset_id, row.filename)
+        path = os.path.join(fds._dataset_path(row.dataset_id), row.filename)
+        if key in still_used or key in disposed:
+            remove_ids.append(row.id)      # someone else still shows this picture
+            continue
+        if not os.path.exists(path):
+            out['already_absent'] += 1
+            remove_ids.append(row.id)
+            continue
+        try:
+            mode = trash.dispose(path, context=f'checkpoint-{record_id}-{step}')
+        except OSError as e:
+            out['skipped'].append({'id': row.id, 'reason': str(e)})
+            continue
+        disposed.add(key)
+        modes_used.add(mode)
+        if mode == 'delete':
+            out['deleted'] += 1
+        else:
+            out['trashed'] += 1            # OS trash or app trash — recoverable
+        remove_ids.append(row.id)
+
+    if remove_ids:
+        out['previews_removed'] = CheckpointPreview.query.filter(
+            CheckpointPreview.lora_test_image_id.in_(remove_ids)
+        ).delete(synchronize_session=False)
+        LoraTestImage.query.filter(
+            LoraTestImage.id.in_(remove_ids)).delete(synchronize_session=False)
+        out['rows_removed'] = len(remove_ids)
+        db.session.commit()
+    out['dataset_ids'] = sorted(datasets)
+    # Report the WORST outcome: one permanently removed file makes the whole run
+    # 'delete', whatever the rest did. The UI wording follows this.
+    for mode in ('delete', 'app_trash', 'trash'):
+        if mode in modes_used:
+            out['mode'] = mode
+            break
+    return out
 
 
 def generate_checkpoint_previews(user_id, dataset_id, checkpoints, prompt=None,

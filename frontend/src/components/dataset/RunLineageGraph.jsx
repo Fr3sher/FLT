@@ -448,7 +448,8 @@ export default function RunLineageGraph({ tree, onSelect, onContinueCheckpoint,
     <PreviewLightbox target={bigPreview} onClose={() => setBigPreview(null)} />
     {/* 🖼 Everything one checkpoint ever produced — the same panel the canvas
         opens, so the results of a generation are reachable from either surface. */}
-    <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)} />
+    <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
+      onDeleted={() => { Promise.resolve(refetchTree?.()).catch(() => {}); }} />
     </>
   );
 }

@@ -814,8 +814,13 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           onClose={() => setPanelOpen(false)} />
       )}
 
-      {/* 🖼 Everything one checkpoint ever produced. */}
-      <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)} />
+      {/* 🖼 Everything one checkpoint ever produced. Deleting from it re-reads the
+          affected lanes: the pills carry a results COUNT and a thumbnail, and
+          without this the board keeps advertising images that no longer exist. */}
+      <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
+        onDeleted={(ids) => (ids || []).forEach((id) => {
+          Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
+        })} />
 
       {/* 🔍 A pill's preview, full-screen. The thumbnail was already clickable on
           the board and did nothing at all — the host passed no handler. */}
