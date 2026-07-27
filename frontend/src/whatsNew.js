@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-face-mask-preview-progress',
+    date: '2026-07-27',
+    title: 'The face-mask preview now shows what it is doing, and you can walk away from it',
+    blurb:
+      'Previewing what "Mask faces" would cover used to say "Looking for faces…" and nothing else, for as long as it took — and the longest part happens before the first image is even looked at, while the face detector loads (or, on a fresh install, downloads a few hundred megabytes). You now get the stage by name and a counter that climbs image by image, so a slow run no longer looks like a crashed one. If it does fail — detector missing, model that will not load, the pass dying — it says so instead of spinning forever, and finding no face at all is reported as the ordinary result it is. The detection also runs on the server now: leaving the training panel and coming back picks the same pass back up rather than starting a second one, and the last preview is still on screen when you return. If your kept images changed in the meantime, it tells you the preview is out of date instead of passing it off as current.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',

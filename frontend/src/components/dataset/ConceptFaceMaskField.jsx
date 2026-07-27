@@ -14,10 +14,51 @@
    The overlay idiom (normalised coords -> percentage-positioned absolute divs over
    a relative wrapper) is the one WatermarkRegionEditor already uses; the geometry
    lives in utils/faceMaskBox.js, mirrored from the Python that paints the real mask. */
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { postJson } from '../../hooks/useDataset';
 import { HelpBadge } from '../../help/HelpMode';
 import { boxStyle, coverageFraction, MAX_COVERAGE } from '../../utils/faceMaskBox';
+import {
+  previewError, previewPercent, previewProgressValue, previewRunning, previewStatusLabel,
+} from '../../utils/faceMaskProgress';
+
+const previewUrl = (datasetId) => `/api/dataset/${datasetId}/train/face-mask-preview`;
+// Fast enough that the count visibly moves, cheap enough to leave running: the
+// endpoint reads an in-memory snapshot and stats the kept files.
+const POLL_MS = 800;
+
+/* The bar itself. `role="progressbar"` with live values while there is a count,
+   and an aria-live status line otherwise — during the model load there is
+   genuinely nothing to measure, and announcing a fake 0% would be a lie a screen
+   reader cannot see through. The text alone must carry the whole story. */
+function PreviewProgress({ job }) {
+  const value = previewProgressValue(job);
+  const percent = previewPercent(job);
+  return (
+    <div className="mt-1.5">
+      <p aria-live="polite" className="text-[0.6875rem] text-content-muted">
+        {previewStatusLabel(job)}
+      </p>
+      <div
+        role="progressbar"
+        aria-label="Face detection progress"
+        {...(value
+          ? { 'aria-valuenow': value.done, 'aria-valuemin': 0, 'aria-valuemax': value.total }
+          : {})}
+        className="mt-1 h-1.5 w-full max-w-xs overflow-hidden rounded-full bg-surface-raised"
+      >
+        {/* Indeterminate is drawn FULL WIDTH and dimmed-pulsing, never as a
+            partial fill: a third-full bar during the model load would read as
+            "33% done", which is the same lie as the frozen 0/N it replaces. */}
+        <div
+          className={value ? 'h-full rounded-full bg-indigo-500'
+            : 'h-full w-full rounded-full bg-indigo-500/40 animate-pulse'}
+          style={value ? { width: `${percent}%` } : undefined}
+        />
+      </div>
+    </div>
+  );
+}
 
 const imageUrl = (datasetId, filename) =>
   `/api/dataset/${datasetId}/img/${encodeURIComponent(filename)}`;
@@ -63,30 +104,67 @@ export default function ConceptFaceMaskField({
   datasetId, enabled, supported, conceptConflict, faceCapability, expandDefault, onToggle,
 }) {
   const [preview, setPreview] = useState(null);
+  const [job, setJob] = useState(null);
   const [expand, setExpand] = useState(expandDefault ?? 2);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  const expandTouched = useRef(false);
+
+  /* Adopt a server snapshot. The detection is a SERVER-side job, so this is what
+     makes leaving the page free: on mount we ask what is running and what was
+     already computed, and the panel comes back exactly as it was instead of
+     offering a fresh pass over the same images. */
+  const adopt = useCallback((d) => {
+    if (!d || !d.ok) return;
+    setJob(d.job || null);
+    if (d.result) {
+      setPreview(d.result);
+      // The slider is the user's; only seed it from the server before they touch it.
+      if (typeof d.result.expand === 'number' && !expandTouched.current) {
+        setExpand(d.result.expand);
+      }
+    }
+    setErr(previewError(d.job) || null);
+  }, []);
+
+  const running = previewRunning(job);
+
+  // Mount + poll. One effect: the mount read and the poll read the same endpoint,
+  // so rebinding to a pass started before this component existed is the same code
+  // path as watching one it started itself.
+  useEffect(() => {
+    if (!supported || !datasetId) return undefined;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await fetch(previewUrl(datasetId), { credentials: 'include' });
+        if (!r.ok || !alive) return;
+        adopt(await r.json());
+      } catch { /* a blip just means "ask again next tick" */ }
+    };
+    tick();
+    if (!running) return () => { alive = false; };
+    const id = setInterval(tick, POLL_MS);
+    return () => { alive = false; clearInterval(id); };
+  }, [supported, datasetId, running, adopt]);
+
   if (!supported) return null;          // concept datasets only
 
   const runPreview = async () => {
-    setBusy(true);
     setErr(null);
-    try {
-      const d = await postJson(`/api/dataset/${datasetId}/train/face-mask-preview`, { limit: 6 });
-      if (d && d.ok) {
-        setPreview(d);
-        if (typeof d.expand === 'number') setExpand(d.expand);
-      } else {
-        setErr((d && d.error) || 'preview failed');
-      }
-    } catch {
-      setErr('preview failed');
-    } finally {
-      setBusy(false);
+    // Optimistic, so the first frame after the click already says something —
+    // the server answers in milliseconds but the phase it reports is the truth.
+    setJob({ phase: 'starting', done: 0, total: 0, error: null, finished: false });
+    const d = await postJson(previewUrl(datasetId), { limit: 6 });
+    if (d && d.ok) {
+      adopt(d);
+    } else {
+      setJob(null);
+      setErr((d && d.error) || 'preview failed');
     }
   };
 
   const cov = preview?.coverage;
+  const samples = preview?.samples || [];
   // A partially masked set is worse than a consistently unmasked one, so this is a
   // warning, not a statistic. Only meaningful once at least one face was found.
   const partial = cov && cov.masked > 0 && cov.masked < cov.total;
@@ -142,15 +220,36 @@ export default function ConceptFaceMaskField({
 
       {enabled && faceCapability !== false && (
         <div className="mt-1">
-          <button type="button" onClick={runPreview} disabled={busy}
+          <button type="button" onClick={runPreview} disabled={running}
             className="min-h-8 rounded-lg border border-border bg-surface px-2.5 text-[0.6875rem] font-semibold text-content hover:bg-surface-raised disabled:opacity-50">
-            {busy ? 'Looking for faces…' : preview ? 'Refresh preview' : '👁 Preview the mask'}
+            {running ? 'Looking for faces…' : preview ? 'Refresh preview' : '👁 Preview the mask'}
           </button>
-          {err && <span className="ml-2 text-amber-300 text-[0.6875rem]">{err}</span>}
+          {running && <PreviewProgress job={job} />}
+          {err && !running && (
+            <p role="alert" className="mt-1 text-amber-300 text-[0.6875rem] leading-relaxed">
+              ⚠️ {err}
+            </p>
+          )}
 
           {preview && (
             <div className="mt-2 rounded-lg border border-border bg-app/40 p-2">
-              {cov && (
+              {/* A preview describes the exact kept set it was computed from. Once
+                  that set moves, showing it as fresh would be worse than showing
+                  nothing — the boxes would be drawn from photos that are no longer
+                  in the run. So it is kept visible and clearly labelled, never
+                  quietly. */}
+              {preview.stale && (
+                <p role="status" className="mb-1.5 rounded-md bg-amber-500/10 px-2 py-1 text-[0.6875rem] leading-relaxed text-amber-300">
+                  ⚠️ Your kept images changed since this preview ran, so it no longer
+                  describes what would be trained. Refresh it.
+                </p>
+              )}
+              {cov && cov.total === 0 && (
+                <p className="text-[0.6875rem] text-content-muted">
+                  No kept images to look at yet — keep a few shots first, then preview.
+                </p>
+              )}
+              {cov && cov.total > 0 && (
                 <p className={`text-[0.6875rem] ${partial ? 'text-amber-300' : 'text-content-muted'}`}>
                   {partial && '⚠️ '}
                   Masked on {cov.masked} of {cov.total} image{cov.total > 1 ? 's' : ''}
@@ -161,10 +260,11 @@ export default function ConceptFaceMaskField({
                     + 'so they end up over-represented.'}
                 </p>
               )}
+              {samples.length > 0 && (
               <label className="mt-2 flex items-center gap-2 flex-wrap text-[0.6875rem] text-content-muted">
                 <span className="shrink-0">Head coverage</span>
                 <input type="range" min="1" max="3" step="0.1" value={expand}
-                  onChange={(e) => setExpand(parseFloat(e.target.value))}
+                  onChange={(e) => { expandTouched.current = true; setExpand(parseFloat(e.target.value)); }}
                   aria-label="Preview head coverage"
                   className="w-32 accent-indigo-500" />
                 <span className="tabular-nums text-content">×{expand.toFixed(1)}</span>
@@ -172,15 +272,20 @@ export default function ConceptFaceMaskField({
                   preview only — save it in Settings ▸ Training
                 </span>
               </label>
+              )}
               {/* 400px-first: one column on a phone, more as the panel widens. */}
-              <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
-                {preview.samples.map((s) => (
-                  <SamplePreview key={s.image_id} datasetId={datasetId} sample={s} expand={expand} />
-                ))}
-              </div>
-              <p className="mt-1.5 text-[0.625rem] leading-tight text-content-subtle">
-                Images where no face was found are shown first — those are the ones worth looking at.
-              </p>
+              {samples.length > 0 && (
+                <>
+                  <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {samples.map((s) => (
+                      <SamplePreview key={s.image_id} datasetId={datasetId} sample={s} expand={expand} />
+                    ))}
+                  </div>
+                  <p className="mt-1.5 text-[0.625rem] leading-tight text-content-subtle">
+                    Images where no face was found are shown first — those are the ones worth looking at.
+                  </p>
+                </>
+              )}
             </div>
           )}
         </div>
