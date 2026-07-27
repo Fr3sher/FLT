@@ -158,7 +158,10 @@ const fullCaps = () => ({
   python: { ml_supported: true },
   face_scoring: true, masks: true, watermark_inpaint: true,
   ollama: { reachable: true, vision_model_ready: true, vision_model: 'qwen3-vl:8b' },
-  comfyui: { dir_valid: true, klein_missing: [] },
+  // reachable matters for the Krea node pack: an unreachable ComfyUI's node probe
+  // fails open, so "nothing missing" from a stopped ComfyUI must not read as
+  // "the pack is installed".
+  comfyui: { dir_valid: true, reachable: true, klein_missing: [], krea_missing: [] },
 });
 
 test('installAllPlan is empty when everything installable is present', () => {
@@ -216,11 +219,15 @@ const byAction = (cat) => Object.fromEntries(cat.map((c) => [c.action, c]));
 
 test('installCatalog lists every app-installable component, present + available', () => {
   const cat = byAction(installCatalog(fullCaps()));
-  // The eight components the app can install itself (never ComfyUI/Ollama/API keys).
+  // Every component the app can install itself (never ComfyUI/Ollama/API keys).
+  // The Krea 2 Edit rows land here too — the engine's ONE-CLICK install is its own
+  // card, this menu is the per-piece repair path each of them also deserves.
   assert.deepEqual(
     installCatalog(fullCaps()).map((c) => c.action),
     ['face_scoring', 'masks', 'watermark_inpaint', 'ollama_model',
-      'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora'],
+      'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
+      'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
+      'krea_identity_lora'],
   );
   // Everything installed in fullCaps -> every tile present, and available to REINSTALL.
   for (const c of Object.values(cat)) {
@@ -232,7 +239,7 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length === 8 && cat.every((c) => c.available));
+  assert.ok(cat.length === 13 && cat.every((c) => c.available));
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {

@@ -41,8 +41,15 @@ MEASURED CONSTRAINTS (2026-07-25, live install — do not "simplify" these away)
   * `BigLoveKreaEdit1_fp8mixed` renders PURE NOISE with this LoRA (it is not a
     Krea 2 Raw/Turbo checkpoint). It is excluded from base-model resolution.
 
-NOTHING HERE IS AUTO-DOWNLOADED — but that is now a CHOICE, not an impossibility
-(state of the world RE-MEASURED 2026-07-27; read this before re-quoting it).
+EVERY PIECE IS NOW AUTO-INSTALLED (setup_installer: `krea_model`,
+`krea_text_encoder`, `krea_vae`, `krea_identity_lora` and `krea_nodes` — the
+first custom-node pack this app clones). Selecting the engine and pressing
+Generate fires them, exactly like Klein; Setup ▸ Install has the same button.
+This module keeps only the JUDGEMENT (what is missing, what is present but not
+loadable, which node classes are absent) — the fetching lives in setup_installer.
+The state of the world behind that decision, RE-MEASURED 2026-07-27 (read this
+before re-quoting it — the previous version of this paragraph was a photograph of
+one moment that became an architecture decision for weeks):
 
   * The original claim — "weights we have no verified direct URL for" — is
     OBSOLETE. All three Hugging Face pieces live in ONE public, NON-GATED repo,
@@ -56,13 +63,16 @@ NOTHING HERE IS AUTO-DOWNLOADED — but that is now a CHOICE, not an impossibili
   * The node pack declares `dependencies = []`, so installing it is a clone, not
     a pip run.
 
-So the honest summary is: every piece IS automatable, and none of them is behind
-a licence checkbox a human has to tick in a browser. What is missing is the
-DECISION plus one thing the app has no precedent for anywhere — installing a
-ComfyUI custom-node pack. Until that ships, the preflight stays the
-`_studio_missing_response` shape: name every gap, its expected path inside the
-user's ComfyUI, and the page to get it from. Never a silent failure, never an
-inert button, never an invented installer.
+None of it sits behind a licence checkbox a human has to tick in a browser. That
+said, an OPEN download today is not a guarantee: the installer sends a Civitai
+key when the user has one, tries without when they do not, and turns a 401/403
+into instructions — because Civitai gates part of its catalogue with rules that
+have changed before and vary by country.
+
+The preflight still publishes the full `_studio_missing_response` shape (every
+gap, its expected path inside the user's ComfyUI, the page it comes from): a
+machine that cannot download — offline, proxied, no valid ComfyUI folder — must
+still get a complete answer. Never a silent failure, never an inert button.
 
 If you are about to conclude "Krea can't be auto-installed", re-run the
 measurement first — that sentence has already been wrong once, for weeks.
@@ -420,6 +430,35 @@ def krea_missing_nodes():
     if not out:
         _nodes_ok_until = time.time() + _NODES_OK_TTL_S
     return out
+
+
+def clear_nodes_cache():
+    """Drop the success-TTL so the next probe re-asks /object_info. Called right
+    after the node pack is installed: the cache only ever holds a POSITIVE result,
+    but a stale positive would hide a pack the user removed, and clearing costs
+    one probe."""
+    global _nodes_ok_until
+    _nodes_ok_until = 0.0
+
+
+def krea_node_pack_installed():
+    """Is the pack's folder present in this ComfyUI's custom_nodes? Disk-only.
+
+    This is what separates "you have to install the pack" from "the pack is
+    installed, ComfyUI just hasn't been restarted yet" — ComfyUI registers nodes
+    at STARTUP, so /object_info keeps reporting them missing until then, and
+    without this distinction the app would tell someone to install what they just
+    installed. False whenever ComfyUI's folder isn't configured/valid: we then
+    genuinely do not know."""
+    from .. import capabilities
+    r = capabilities.resolve_comfyui_base(cfg.get('comfyui.base_dir') or '')
+    if not r['valid']:
+        return False
+    folder = os.path.join(r['resolved'], 'custom_nodes', KREA_NODE_PACK['pack'])
+    try:
+        return os.path.isdir(folder) and any(os.scandir(folder))
+    except OSError:
+        return False
 
 
 def krea_node_hints(nodes):

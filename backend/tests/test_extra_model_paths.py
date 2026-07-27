@@ -399,10 +399,10 @@ def test_setup_skip_download_when_asset_in_extra_path(app, tmp_path):
               vae: {ext / 'vae'}
               diffusion_models: {ext / 'unet'}
         """)
-        assert setup_installer._klein_present_in_extra('klein_vae') is True
-        assert setup_installer._klein_present_in_extra('klein_model') is True
+        assert setup_installer._download_present_in_extra('klein_vae') is True
+        assert setup_installer._download_present_in_extra('klein_model') is True
         # text-encoder NOT provided -> still needs downloading.
-        assert setup_installer._klein_present_in_extra('klein_text_encoder') is False
+        assert setup_installer._download_present_in_extra('klein_text_encoder') is False
 
 
 # --- The no-break mandate: full Klein resolution WITHOUT yaml == today --------

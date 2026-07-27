@@ -1095,6 +1095,11 @@ def probe(force=False) -> dict:
     from .services import krea_edit_helper as _krh
     krea_missing = _krh.krea_missing_assets()
     krea_nodes_missing = _krh.krea_missing_nodes() if comfy['ok'] else []
+    # Pack ON DISK but not yet exposed by /object_info = "restart ComfyUI", NOT
+    # "install the pack". Now that the app installs the pack itself, telling
+    # someone to install what they just watched install would be the whole
+    # feature failing at the last inch.
+    krea_nodes_installed = _krh.krea_node_pack_installed()
     # Present-but-INVALID, exactly like Klein's: the Krea base sits behind a HF
     # licence gate and the identity LoRA behind a Civitai login, so a browser
     # download without the licence/login saves the HTML gate PAGE as
@@ -1163,6 +1168,7 @@ def probe(force=False) -> dict:
             # ComfyUI doesn't expose. Empty + empty => the engine is ready.
             'krea_missing': krea_missing,
             'krea_nodes_missing': krea_nodes_missing,
+            'krea_nodes_installed': krea_nodes_installed,
             # Krea assets PRESENT on disk but not real, loadable weights — same
             # [{asset, filename, verdict, blocking, reason}] shape as
             # klein_invalid, so one banner covers both engines.

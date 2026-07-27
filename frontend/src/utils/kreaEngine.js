@@ -41,10 +41,19 @@ export const KREA_NODE_PACK_URL = 'https://github.com/lbouaraba/comfyui-krea2edi
 export function kreaUnavailableReason({
   enabledInSettings = true, comfyuiReachable = true,
   missingAssets = [], missingNodes = [], invalidAssets = [],
+  nodePackInstalled = false,
 } = {}) {
   if (!enabledInSettings) return '⚠ Krea 2 Edit is disabled in Settings (engines)';
   if (!comfyuiReachable) return '⚠ Configure ComfyUI in Settings';
   if (Array.isArray(missingNodes) && missingNodes.length) {
+    // The pack is ON DISK but ComfyUI hasn't loaded it: ComfyUI registers custom
+    // nodes at STARTUP only. Now that the app installs the pack itself, this is
+    // the common state right after the install — and telling someone to install
+    // what they just watched install is how a working feature reads as broken.
+    if (nodePackInstalled) {
+      return '⚠ The comfyui-krea2edit node pack is installed but ComfyUI has not loaded '
+        + 'it yet — restart ComfyUI';
+    }
     return '⚠ Install the comfyui-krea2edit node pack in ComfyUI, then restart it';
   }
   const words = kreaMissingLabels(missingAssets);

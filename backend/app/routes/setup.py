@@ -86,6 +86,30 @@ def start_install_all():
     return jsonify(setup_installer.start_all(caps))
 
 
+@bp.get('/install-group/<group>/plan')
+def install_group_plan(group):
+    """What the one-click install for a NAMED group (today: the Krea 2 Edit
+    engine — node pack + four weights) would queue right now. Read-only, so the
+    button can show its own count and stay honest about what is already there."""
+    if group not in setup_installer._INSTALL_GROUPS:
+        return jsonify({'error': f'unknown group: {group}'}), 404
+    # force=True: this plan is read right after the ComfyUI folder is saved, and a
+    # 30 s-stale probe would answer "nothing to install" for a machine that has
+    # nothing installed — the exact opposite of the truth.
+    return jsonify({'plan': setup_installer.install_group_plan(
+        group, capabilities.probe(force=True))})
+
+
+@bp.post('/install-group/<group>')
+def start_install_group(group):
+    """Install a whole engine in one click without dragging it into the
+    unattended 'Install everything' plan — a second local engine is ~20 GB, so it
+    downloads when it is ASKED for, not by default."""
+    if group not in setup_installer._INSTALL_GROUPS:
+        return jsonify({'error': f'unknown group: {group}'}), 404
+    return jsonify(setup_installer.start_group(group, capabilities.probe(force=True)))
+
+
 @bp.get('/install-all/status')
 def install_all_status():
     """Batched status for the actions the caller is tracking (?actions=a,b,c) — one poll
