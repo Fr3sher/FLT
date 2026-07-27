@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-hugging-face-token-reaches-training',
+    date: '2026-07-27',
+    title: 'Gated models train again — your Hugging Face login is no longer lost on the way',
+    blurb:
+      'Training on a license-gated base (Krea 2, FLUX.1-dev, FLUX.2 Klein) could die on "401 — you must have access to it and be authenticated", even for people who were signed in and could download the very same weights by hand. Cause: training runs with its own Hugging Face cache folder, and that override also hid the login `hf auth login` had written — so the download went out with no token at all. Now the token from Settings ▸ API keys is handed to the trainer explicitly, and if you have none saved there, the login already on your machine is found and used instead of being shadowed. And when Hugging Face does refuse, the failure block finally tells you which of the two problems you have: 401 means it saw no valid token (paste one in Settings), 403 means your token is fine but the model licence has not been accepted yet (open the model page and accept it). Those have opposite fixes and the raw error text conflates them. Reported by SurpassHR (GitHub).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-27-stop-responds-while-a-training-starts',
     date: '2026-07-27',
     title: 'Stop answers immediately, even in the seconds a training is starting',
