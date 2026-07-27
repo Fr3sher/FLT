@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-setup-stops-certifying-broken-models',
+    date: '2026-07-28',
+    title: 'Setup no longer says a model is installed when it cannot be loaded',
+    blurb:
+      'A download that stops halfway leaves a file of plausible size that no loader can open. Setup used to tick it as "✓ Installed" purely because it was there, while the Generate page kept the engine greyed out and blamed a "missing model" — for a file sitting in the right folder. Setup now asks the same question the generation page does, and both give the same answer: the file is named, the fault is named (cut short, corrupted, or a licence page saved as weights), and the fix is one button that replaces it instead of reporting "already present" and doing nothing. The same goes for a widget value your ComfyUI does not offer, and for ComfyUI being unreachable — which now reads as "not checked" rather than a tick nobody earned. Reported by zigzag4794.',
+    to: '/setup',
+  },
+  {
     id: '2026-07-27-face-mask-preview-progress',
     date: '2026-07-27',
     title: 'The face-mask preview now shows what it is doing, and you can walk away from it',
