@@ -12,6 +12,11 @@ Public repo — everything here is visible; keep it free of personal data.
   paste-safe (path redaction helpers exist — reuse them).
 - Never write to GitHub (comments, reviews, releases) through a personally
   authenticated `gh`. Reads are fine.
+- `backend/tests/test_no_personal_data.py` enforces the two rules above.
+  Machine paths, emails and tokens are caught everywhere, no setup needed.
+  Names are read from a list kept OUT of the repo (`.privacy-names`, gitignored,
+  or `LDS_PRIVACY_NAMES`) — writing them here to forbid them would publish them;
+  with no list that half SKIPS and says so.
 
 ## Shipping checklist — the tail of EVERY user-visible wave
 
