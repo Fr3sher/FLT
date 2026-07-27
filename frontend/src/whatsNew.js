@@ -48,6 +48,13 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-remove-run-takes-everything',
+    date: '2026-07-27',
+    title: 'Removing a run now clears everything it left behind — and tells you what that is first',
+    blurb:
+      'Deleting a leftover run used to drop the run entry and its notes, and quietly leave the rest: its checkpoint previews, its card position on the canvas, and the provenance link on every image you generated from it. Those strays stayed in the database forever. A removal now clears all of them in one go, and the confirmation counts what it takes before you click — "12 checkpoint notes, 8 preview links, 6 archived source images". Two things it does NOT take: the images you generated stay in the Test Studio (they only lose the link to the run), and an archived source image is freed only when no other run still uses it, so cleaning up one run can never blank another run\'s comparison.',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',
