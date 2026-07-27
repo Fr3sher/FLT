@@ -245,7 +245,6 @@ const TOPICS = [
      'random', 'random order', 'shuffle', 'shuffled', 'sample', 'representative',
      'keyboard', 'shortcut', 'shortcuts', 'hotkey', 'bank', 'triage'],
     '/bank', 'using-the-app', 'review-a-bank-one-image-at-a-time'),
-<<<<<<< HEAD
   action('bank-promote-to-new-bank', 'Promote a shortlist into a new bank',
     ['promote', 'promote to bank', 'new bank', 'second bank', 'split bank', 'split',
      'shortlist', 'candidates', 'subset', 'selection', 'isolate', 'extract',
@@ -253,7 +252,6 @@ const TOPICS = [
      'disk space', 'size', 'weight', 'how big', 'megabytes', 'copy', 'copies',
      'share files', 'bank', 'triage'],
     '/bank', 'using-the-app', 'promote-a-shortlist-into-a-new-bank'),
-=======
   action('bank-sort-grid', 'Sort a bank by score, sharpness or resolution',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'aesthetic', 'aesthetic score', 'score', 'sharpness', 'blur',
@@ -261,7 +259,6 @@ const TOPICS = [
      'review faster', 'grid', 'unscored', 'unscanned', 'not scored', 'greyed out',
      'disabled sort', 'bank', 'triage'],
     '/bank', 'using-the-app', 'sort-a-grid-to-review-faster'),
->>>>>>> worktree-agent-aa43f0b8685df1e7c
   { id: 'page-setup', kind: 'page', title: 'Setup wizard',
     keywords: ['setup', 'wizard', 'onboarding', 'install', 'install everything',
       'install all', 'connect', 'tools'],

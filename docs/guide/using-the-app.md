@@ -447,7 +447,6 @@ after the other:
 The ▶ button on a tile starts the same review **at that image**. A plain click
 on a tile still selects it for the bulk ✓/✕/⬆ bar, so both ways of working stay.
 
-<<<<<<< HEAD
 ## Promote a shortlist into a new bank
 
 **⬆ Promote…** has two destinations, and picking the right one saves you a mess.
@@ -478,7 +477,6 @@ app's own data folder, and deleting the new bank takes them with it.
 If the copy cannot be written — a full disk, a drive pulled out — the new bank is
 **discarded** rather than left holding half the shortlist and looking finished.
 You are told what happened and nothing has changed.
-=======
 ## Sort a grid to review faster
 
 Filters answer *which images*; sorting answers *which one first*. Both grids
@@ -509,7 +507,6 @@ Two things worth knowing:
 In a bank the ordering is done by the database over the *whole* filter, not just
 the page you can see — so **Select all in filter** and **▶ Review one by one**
 walk the same order you are looking at.
->>>>>>> worktree-agent-aa43f0b8685df1e7c
 
 ## Clean the watermarks a bank found
 
