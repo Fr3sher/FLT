@@ -24,6 +24,10 @@ packaging/build/
 packaging/dist/
 packaging/*.spec
 
+# Generated release body (frontend/scripts/releaseNotes.mjs --out) — a build
+# artifact of release.yml, and scratch when you run the generator by hand.
+/release-notes.md
+
 # OS
 .DS_Store
 Thumbs.db
