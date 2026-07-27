@@ -4700,6 +4700,18 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # under `_queue_lock` stays a single short write; the launch path has
     # already lost cloud runs to `database is locked` once.
     from . import checkpoint_registry
+    # Re-ask the cheap question BEFORE the freeze. The same check already runs at
+    # the top of this function, but the dataset export in between takes minutes on
+    # a real dataset — long enough for another launch to have won the process slot.
+    # Without this, that loser still paid for a full freeze (hashing every image,
+    # probing nvidia-smi and the ai-toolkit revision) before the authoritative
+    # check under `_queue_lock` refused it. Two reads of an in-memory flag; the
+    # copy inside the lock stays the authority, this one only saves the work.
+    if (queue_manager._get_system_state('training_in_progress', False)
+            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+        raise ValueError(
+            'a training is already in progress - wait for it to finish or '
+            'queue this dataset')
     _prepared = checkpoint_registry.prepare_launch(
         user_id, dataset_id, base_model=base_model)
     # The authoritative live-run check, identity state and PID publication are
