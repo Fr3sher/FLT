@@ -567,6 +567,15 @@ const TOPICS = [
      'face', 'bust', 'body', 'back', 'sort shots', 'imported', 'import', 'drag and drop',
      'no crop', 'head crop off', 'ollama', 'vision', 'qwen'],
     '/datasets?section=add', 'dataset-guide', '2-how-many-images-and-which-ones'),
+  // Krea's one structural quirk: it reproduces the REFERENCE's aspect ratio, so
+  // a square reference squeezes every body/back shot. Reached from the ⚠ notice
+  // in the generation panel — the only place the trade-off can be acted on.
+  action('krea-reference-shape', 'Krea and the shape of your reference photo',
+    ['krea', 'krea 2', 'krea 2 edit', 'reference', 'reference photo', 'aspect',
+     'aspect ratio', 'shape', 'square', 'portrait', 'landscape', 'crop', 'recrop',
+     'body', 'back', 'full body', 'full length', 'framing', 'cropped', 'tight',
+     'too close', 'zoomed in', 'bust instead of body', '3:4'],
+    '/datasets?section=add', 'using-the-app', 'krea-and-the-shape-of-your-reference-photo'),
   action('action-caption-generate', 'Generate captions',
     ['caption', 'generate', 'joycaption', 'ollama', 'text'],
     '/datasets?section=captions&panel=generate', 'dataset-guide', '3-captions-the-make-or-break-step'),

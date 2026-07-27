@@ -251,6 +251,43 @@ def test_an_unreadable_size_degrades_to_a_square_instead_of_crashing():
     assert keh.fit_output_size(None, 'x') == (1024, 1024)
 
 
+# --- the framing consequence, and the gesture the UI offers for it ----------
+# MEASURED 2026-07-25, same shot / same seed / same graph:
+#   square 1024x1024 reference  -> `body_stand_front` came back a BUST
+#   portrait 835x1024 reference -> full figure down to the calves
+# The cause is right above: the output REPRODUCES the source's aspect ratio, so
+# a full-length pose cannot fit a square and the model resolves the conflict by
+# moving in. The generation panel therefore warns when Krea is picked with a
+# non-portrait reference and body/back shots selected, and offers a 3:4 crop.
+# These two tests pin the claim the UI makes: 3:4 really is portrait output.
+
+def test_a_square_reference_yields_a_square_frame_no_room_for_a_full_figure():
+    from app.services import krea_edit_helper as keh
+    ow, oh = keh.fit_output_size(1024, 1024)
+    assert ow == oh, 'this is the measured bust case — the frame has no vertical room'
+
+
+@pytest.mark.parametrize('w,h', [
+    (1536, 2048),   # a 3:4 crop of a 4 MP phone photo
+    (768, 1024),    # a 3:4 crop of a small reference
+    (600, 800),     # a 3:4 crop of a tiny one (must not be upscaled either)
+    (1080, 1920),   # 9:16 — the taller preset the crop editor also offers
+])
+def test_the_offered_crop_really_produces_a_portrait_output(w, h):
+    """The advisory proposes '✂ Crop reference to 3:4'. If that crop did not
+    actually come back as a portrait frame, the advice would be worse than the
+    problem — so the promise is measured here, not assumed."""
+    from app.services import krea_edit_helper as keh
+    ow, oh = keh.fit_output_size(w, h)
+    assert oh > ow, f'{w}x{h} must stay portrait through the sizing, got {ow}x{oh}'
+    assert abs((ow / oh) - (w / h)) / (w / h) < 0.05, 'the crop ratio is preserved'
+    assert ow % 16 == 0 and oh % 16 == 0
+    assert ow * oh <= 2_100_000
+    # And it stays big enough to be worth training on: a "portrait" that came
+    # back at 300 px would be a technically-correct, useless answer.
+    assert min(ow, oh) >= 512
+
+
 # --- the graph --------------------------------------------------------------
 
 def _graph():

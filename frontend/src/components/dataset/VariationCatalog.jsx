@@ -26,7 +26,7 @@ import {
   estimateCost, generateBlockedReason, localQueuesBehindApi, localOnly, readEngines,
   readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
-import { kreaUnavailableReason, groundingDescription } from '../../utils/kreaEngine.js';
+import { kreaUnavailableReason, groundingDescription, kreaFramingAdvisory } from '../../utils/kreaEngine.js';
 import {
   SUBJECT_TYPES, SUBJECT_TYPE_LABELS, SUBJECT_TYPE_HINTS,
   normalizeSubjectType, framingLabel, defaultPresetKey,
@@ -173,7 +173,7 @@ function EngineCard({ id, checked, available, generating, onToggle, icon, title,
   );
 }
 
-export default function VariationCatalog({ onGenerate, busy, generating = null, hasRef, composition, images = [], bodyFidelity = false, promptSuffix = '', promptSuffixes = null, onSaveSuffixes = null, subjectType = 'human', onSaveSubjectType = null }) {
+export default function VariationCatalog({ onGenerate, busy, generating = null, hasRef, composition, images = [], bodyFidelity = false, promptSuffix = '', promptSuffixes = null, onSaveSuffixes = null, subjectType = 'human', onSaveSubjectType = null, refWidth = null, refHeight = null, onCropRefTo = null }) {
   const toast = useToast();
   const { caps } = useCapabilities();
   const [catalog, setCatalog] = useState([]);
@@ -659,6 +659,20 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     }));
   }, [catalog, nsfwCatalog, customShots, customPresets]);
 
+  // MEASURED: Krea reproduces the REFERENCE's aspect ratio (the edit LoRA was
+  // trained on same-size pairs — krea_edit_helper.fit_output_size), so a square
+  // or landscape reference makes every body/back shot land tighter than asked.
+  // Computed here, from the shots actually ticked, so it appears the moment the
+  // user picks Krea or ticks a wide shot — not after twenty generations. Klein
+  // and the API engines are untouched, so the notice is Krea-only.
+  const kreaAdvisory = useMemo(() => {
+    if (!engines.includes('krea') || !krAvailable) return null;
+    const framingById = new Map([...catalog, ...nsfwCatalog, ...userShots]
+      .map((shot) => [shot.id, shot.framing]));
+    const framings = [...selected].map((id) => framingById.get(id)).filter(Boolean);
+    return kreaFramingAdvisory({ width: refWidth, height: refHeight, framings });
+  }, [engines, krAvailable, catalog, nsfwCatalog, userShots, selected, refWidth, refHeight]);
+
   const toggle = (id) => setSelected((s) => {
     const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n;
   });
@@ -976,6 +990,34 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
             <span className="text-amber-300 text-[0.625rem]">⚠ Add OPENROUTER_API_KEY in Settings</span>
           )} />
       </div>
+
+      {/* Krea + a square/landscape reference = squeezed body & back shots
+          (MEASURED — see utils/kreaEngine.js). Advisory, never a blocker: those
+          shots DO generate, they just land closer in. Shown only when Krea is
+          ticked, the reference is measurable and non-portrait, AND wide shots are
+          actually selected — a face-only run hears nothing. Wraps at 400 px: the
+          count, the sentence, then the action on its own line. */}
+      {kreaAdvisory && (
+        <div role="status"
+          className="rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2 flex flex-col gap-1.5">
+          <span className="text-amber-200 text-xs font-semibold">
+            ⚠ {kreaAdvisory.headline}
+          </span>
+          <span className="text-amber-200/85 text-[0.6875rem] leading-snug">
+            {kreaAdvisory.detail}
+          </span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {onCropRefTo && (
+              <button type="button" onClick={() => onCropRefTo(kreaAdvisory.suggestAspect)}
+                title={`Open the reference crop editor pre-set to ${kreaAdvisory.suggestLabel} — you can still reshape the box`}
+                className="px-2.5 py-1 rounded-lg bg-surface-raised border border-border text-content text-[0.6875rem] font-semibold">
+                ✂ Crop reference to {kreaAdvisory.suggestLabel}
+              </button>
+            )}
+            <HelpBadge topic="krea-reference-shape" />
+          </div>
+        </div>
+      )}
 
       {/* How several engines share the run. Only shown when it can change
           anything (2+ engines): with a single one both modes are identical, and
