@@ -397,6 +397,20 @@ your own images from the training panel.
 Changing these does **not** affect the person-masking used by Character datasets;
 that keeps its own historical weight.
 
+**It needs face detection installed, and that is optional.** The detector is
+InsightFace, the same optional extra face-similarity scoring uses — it is filed
+under the `face_scoring` key (hence `face_scoring.python` and
+`face_scoring.models_root` in *Settings ▸ Local tools*), but nothing installs it
+for you. When it is missing, the **Mask faces** option says so and offers a
+one-click install right there (~400 MB, a few minutes); the rest of the app is
+unaffected and works exactly as before. If you launch a run with **Mask faces**
+still on and the detector absent, the pre-launch report warns that the run would
+train *unmasked* and asks you to confirm — it never blocks, and never trains
+unmasked without telling you first. On a Python outside **3.10–3.12** InsightFace
+publishes no wheels: the option explains that instead of offering an install that
+could only fail, and points at `face_scoring.python` so you can aim it at a
+separate 3.10–3.12 interpreter.
+
 ### Cloud GPU (vast.ai)
 
 - **vast.ai API key** → `VAST_API_KEY` (secret). Add it to unlock **☁️ Train in cloud**. **Test** validates it (and auto-saves it first). The card includes a step-by-step guide to getting the key from [cloud.vast.ai](https://cloud.vast.ai/).

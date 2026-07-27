@@ -599,7 +599,12 @@ const TOPICS = [
   { id: 'training.mask_faces', kind: 'setting', title: 'Mask faces (Concept datasets)',
     keywords: ['mask faces', 'face mask', 'masking', 'concept', 'identity', 'bleed',
       'identity bleed', 'face bleed', 'character lora', 'combine loras', 'act',
-      'anonymise', 'anonymize', 'advanced', 'training'],
+      'anonymise', 'anonymize', 'advanced', 'training',
+      // The optional detector this option depends on. Searching any of these
+      // must land here, because this is where it is now installed from — the
+      // capability is stored as `face_scoring`, but nobody calls it that.
+      'insightface', 'face detection', 'detector', 'install', 'face scoring',
+      'not installed', 'missing', 'onnxruntime', 'ml extras'],
     guide: { chapter: 'dataset-guide', anchor: '8-concept-loras-keeping-faces-out' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'mask-faces-advanced',

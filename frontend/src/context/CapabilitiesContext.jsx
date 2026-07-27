@@ -16,6 +16,10 @@ const EMPTY_CAPS = {
   aitoolkit: { configured: false, valid: false },
   captioners: { joycaption: false, ollama: false },
   face_scoring: false,
+  // Wheel-range verdict for the optional ML extras (insightface/numpy<2 publish
+  // nothing outside 3.10–3.12). Defaults to SUPPORTED on purpose: an unknown
+  // probe must not hide an install button that would have worked.
+  python: { version: '', ml_supported: true, ml_range: '3.10–3.12' },
   masks: false,
   watermark_inpaint: false,
   watermark_allow_crop: true,

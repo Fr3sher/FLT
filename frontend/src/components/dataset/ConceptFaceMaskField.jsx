@@ -17,6 +17,7 @@
 import { useState } from 'react';
 import { postJson } from '../../hooks/useDataset';
 import { HelpBadge } from '../../help/HelpMode';
+import FaceDetectionInstallPrompt from '../setup/FaceDetectionInstallPrompt';
 import { boxStyle, coverageFraction, MAX_COVERAGE } from '../../utils/faceMaskBox';
 
 const imageUrl = (datasetId, filename) =>
@@ -66,16 +67,25 @@ export default function ConceptFaceMaskField({
   const [expand, setExpand] = useState(expandDefault ?? 2);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
+  // The pass failed specifically because InsightFace is missing (server 409 with
+  // reason:'face_scoring'). Reachable when the client's capabilities are stale —
+  // and it is exactly the moment to offer the install rather than report a defeat.
+  const [needsFaceDetection, setNeedsFaceDetection] = useState(false);
   if (!supported) return null;          // concept datasets only
 
   const runPreview = async () => {
     setBusy(true);
     setErr(null);
+    setNeedsFaceDetection(false);
     try {
       const d = await postJson(`/api/dataset/${datasetId}/train/face-mask-preview`, { limit: 6 });
       if (d && d.ok) {
         setPreview(d);
         if (typeof d.expand === 'number') setExpand(d.expand);
+      } else if (d && d.reason === 'face_scoring') {
+        // Turn the diagnosis into an action instead of leaving the user with a
+        // sentence about a module they have no way to name.
+        setNeedsFaceDetection(true);
       } else {
         setErr((d && d.error) || 'preview failed');
       }
@@ -104,11 +114,14 @@ export default function ConceptFaceMaskField({
         <span className="text-content-muted text-[0.75rem]">keep the act, drop the identities</span>
       </label>
 
+      {/* The dependency is DECLARED where it is ticked, and installable from here.
+          It used to point at "the ML extras (Face-similarity scoring) in the Setup
+          tab" — correct, and useless: nobody ticking "Mask faces" would go install
+          a face SCORER. Same install action underneath, named for what it does. */}
       {faceCapability === false && (
-        <span className="text-amber-300 text-[0.6875rem]">
-          ⚠️ Face detection isn&apos;t installed, so faces can&apos;t be found or masked. Install the
-          ML extras from the Setup tab (Face-similarity scoring) to enable this.
-        </span>
+        <FaceDetectionInstallPrompt compact
+          why="Faces have to be found before they can be weighted down, and that
+            detection is an optional extra this install doesn't have yet." />
       )}
 
       <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
@@ -147,6 +160,11 @@ export default function ConceptFaceMaskField({
             {busy ? 'Looking for faces…' : preview ? 'Refresh preview' : '👁 Preview the mask'}
           </button>
           {err && <span className="ml-2 text-amber-300 text-[0.6875rem]">{err}</span>}
+          {needsFaceDetection && (
+            <FaceDetectionInstallPrompt compact
+              why="The preview couldn't run: finding faces needs this optional extra."
+              onInstalled={() => { setNeedsFaceDetection(false); runPreview(); }} />
+          )}
 
           {preview && (
             <div className="mt-2 rounded-lg border border-border bg-app/40 p-2">

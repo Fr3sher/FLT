@@ -4741,6 +4741,40 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
     except Exception:
         pass   # a probe failure must never block or fake a diagnosis
 
+    # 9) Face masking asked for, but the detector isn't installed.
+    #
+    # InsightFace is an OPTIONAL extra by decision (a few hundred MB nobody should
+    # be made to download), so its absence is a NORMAL state, not an anomaly — this
+    # is a warning, never a blocker. What is NOT acceptable is what happened before:
+    # the export silently dropped the masks and the run trained unmasked, with the
+    # user only finding out from a flag on the progress view, GPU-hours in. So the
+    # decision is posed HERE, once, before the launch: install it, or continue
+    # unmasked on purpose.
+    #
+    # The condition distinguishes "impossible for lack of a tool" from "refused BY
+    # DESIGN": face_masking_enabled() already returns False for a Character or a
+    # Style (their identity/rendering must be learned, masking would amputate it),
+    # and slider mode forces it off because the guided slider loss never reads
+    # batch.mask_tensor. Installing InsightFace would change nothing in those cases,
+    # so they stay silent — warning there would be pure noise.
+    if not slider and fds.face_masking_enabled(ds):
+        try:
+            from . import face_mask
+            face_mask_ok = face_mask.is_available()
+        except Exception:
+            face_mask_ok = None      # probe blew up -> say nothing, never block
+        if face_mask_ok is False:
+            warnings.append(
+                'Mask faces is ON, but face detection (InsightFace) is not installed — '
+                'this run would train UNMASKED, with the faces at full loss weight. '
+                'Install it from the Mask faces option in Advanced training options '
+                '(~400 MB, a few minutes), or continue and train unmasked on purpose.')
+            _check('face_mask', 'Face masking ready', 'warn',
+                   'InsightFace is not installed — this run trains unmasked')
+        elif face_mask_ok:
+            _check('face_mask', 'Face masking ready', 'ok',
+                   'InsightFace found — the faces will be weighted down')
+
     # Verdict agrégé pour la pastille : un fail = 🔴, sinon un warn = 🟡, sinon 🟢.
     statuses = {c['status'] for c in checks}
     verdict = ('blocked' if 'fail' in statuses
