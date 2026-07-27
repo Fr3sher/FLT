@@ -395,6 +395,23 @@ const TOPICS = [
     ['identity', 'klein', 'restage', 'face', 'prompt', 'preserve', 'pose']),
   setting('identity_prompts.klein_improve', 'engines', 'identity-prompt-klein-improve', 'Klein improve prompt & toggle',
     ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable']),
+  // The five parts the local-edit prompt is ALSO built from. They used to be
+  // hardcoded, so nobody could search for them; these are the words a user reaches
+  // for when a generated shot is wrong ("why is everyone wearing jeans", "it added
+  // a tattoo", "it never does a full body").
+  setting('identity_prompts.render_tail', 'engines', 'prompt-part-render-tail', 'Klein/Krea rendering tail (SFW & uncensored)',
+    ['render', 'tail', 'ending', 'photograph', 'realistic', 'sfw', 'nsfw', 'uncensored',
+     'nudity', 'clamp', 'illustration', 'anime', 'style', 'klein', 'krea', 'prompt']),
+  setting('identity_prompts.framing_detail', 'engines', 'prompt-part-framing', 'Shot detail per framing (face/bust/body/back)',
+    ['framing', 'shot', 'detail', 'close-up', 'bust', 'full body', 'back', 'lens', '85mm',
+     'composition', 'cropped', 'klein', 'krea', 'prompt', 'head to toe']),
+  setting('identity_prompts.markings_lock', 'engines', 'prompt-part-global', 'Skin hold, outfit & expression directives, garment palette',
+    ['markings', 'skin', 'tattoo', 'scar', 'mole', 'piercing', 'redraw', 'invent',
+     'outfit', 'clothes', 'garment', 'palette', 'wardrobe', 'jeans', 'same outfit',
+     'expression', 'smile', 'neutral', 'krea', 'klein', 'prompt', 'directive']),
+  setting('prompt-preview', 'engines', 'prompt-preview', 'See the prompt an engine actually receives',
+    ['prompt', 'preview', 'composed', 'what is sent', 'debug', 'full prompt', 'inspect',
+     'klein', 'krea', 'nano banana', 'chatgpt', 'openrouter', 'characters']),
   setting('GEMINI_API_KEY', 'engines', 'GEMINI_API_KEY', 'Gemini API key',
     ['gemini', 'api key', 'nano banana', 'nanobanana', 'google', 'key']),
   setting('OPENAI_API_KEY', 'engines', 'OPENAI_API_KEY', 'OpenAI API key',

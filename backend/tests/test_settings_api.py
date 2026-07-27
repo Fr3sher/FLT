@@ -26,14 +26,22 @@ def test_get_settings_masks_secrets(client, monkeypatch):
     assert 'sk-secret' not in str(data)
 
 def test_get_settings_exposes_identity_prompt_defaults(client):
-    """The payload carries the four shipped default prompts read-only, so the UI
-    can show the real default text instead of a blank "leave blank" field."""
+    """The payload carries the shipped default prompts read-only, so the UI can
+    show the real default text instead of a blank "leave blank" field — the four
+    identity locks, and the five other prompt parts that became editable with
+    them (markings lock, the two directives, the garment palette, the rendering
+    tail, the per-framing detail)."""
     from app.services import face_variations as fv
     data = client.get('/api/settings').get_json()
     defaults = data['identity_prompt_defaults']
-    assert defaults == {'face_single': fv.IDENTITY_GUARD, 'face_multi': fv.IDENTITY_GUARD_MULTI,
-                        'klein_identity': fv.IDENTITY_GUARD_KLEIN,
-                        'klein_improve': fv.KLEIN_IMAGE_IMPROVE_PROMPT}
+    assert defaults['face_single'] == fv.IDENTITY_GUARD
+    assert defaults['face_multi'] == fv.IDENTITY_GUARD_MULTI
+    assert defaults['klein_identity'] == fv.IDENTITY_GUARD_KLEIN
+    assert defaults['klein_improve'] == fv.KLEIN_IMAGE_IMPROVE_PROMPT
+    assert set(defaults) == set(fv.IDENTITY_PROMPT_KINDS) | set(fv.PROMPT_PART_KINDS)
+    # Every one of them carries REAL text — an empty default would render as an
+    # empty box the user cannot tell from "nothing is applied here".
+    assert all(v.strip() for v in defaults.values())
 
 
 def test_put_settings_persists_config_and_secret(client, tmp_path):
