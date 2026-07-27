@@ -989,7 +989,10 @@ def test_classify_comfyui_dir_random_folder(tmp_path):
 
 def test_classify_comfyui_dir_blank():
     from app.capabilities import classify_comfyui_dir
-    assert classify_comfyui_dir('') == {'status': 'empty', 'resolved': '', 'suggestion': ''}
+    assert classify_comfyui_dir('') == {'status': 'empty', 'resolved': '', 'suggestion': '',
+                                        # nothing typed -> nothing to probe (see
+                                        # test_comfy_input_folder_handoff.py)
+                                        'input_check': {'path': '', 'ok': None, 'problem': ''}}
     assert classify_comfyui_dir('   ')['status'] == 'empty'
 
 

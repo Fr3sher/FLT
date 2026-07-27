@@ -353,6 +353,13 @@ export default function SetupPage() {
             return (
               <div className="space-y-1.5">
                 <p className={`text-xs ${cls}`}>{glyph} {v.message}</p>
+                {/* Non-blocking: the folder IS a ComfyUI install, but this process
+                    cannot hand files to it (another container, a read-only mount).
+                    Wraps freely — the message names a path and must stay readable
+                    at 400px. */}
+                {v.note && (
+                  <p className="break-words text-xs text-amber-400">⚠ {v.note}</p>
+                )}
                 {v.suggestion && (
                   <button type="button" onClick={() => setField('comfyui', 'base_dir', v.suggestion)}
                     className="rounded-md border border-border-strong px-2.5 py-1 text-xs font-medium text-primary hover:bg-surface-raised">

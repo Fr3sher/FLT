@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-comfyui-input-folder-failures-explained',
+    date: '2026-07-27',
+    title: 'ComfyUI in Docker: the blank 500 on Generate now tells you what went wrong',
+    blurb:
+      'Running ComfyUI in a separate container (or in WSL, or on another machine) could pass every setup check and then fail at the first generation with a bare "500" and no detail. The reason is that the app talks to ComfyUI over TWO channels, and only one is the network: the URL you configure, and the FILESYSTEM — every local engine hands its source image over by copying it into ComfyUI\'s input folder. That folder is not shared between containers by default, so the copy failed and nothing said so. Now that failure names the operation, the folder and the cause, and says what it needs: input/ and output/ must be visible to both sides at the same path. Settings shows the same warning on the folder overrides, and the Setup wizard checks it while you are configuring instead of letting you find out an hour later — as a warning, never a blocker, since mounting the volumes afterwards is perfectly normal. Reported by nofaceman (Discord).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-27-promote-a-bank-selection-into-a-new-bank',
     date: '2026-07-27',
     title: 'Pull a shortlist out of a huge bank — into a new bank, not a dataset',

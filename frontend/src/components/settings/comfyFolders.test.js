@@ -64,6 +64,32 @@ test('a folder that exists, or nothing resolved, says nothing', () => {
   assert.equal(folderWarning(undefined), null)
 })
 
+/* The folder being THERE was only ever half the contract. The app hands ComfyUI its
+   source images by copying them into input/, so a ComfyUI in another container can
+   have a folder that exists and is still unusable from here — the case that used to
+   pass every check and then fail at the first generation with a bare 500 (reported
+   on Discord by nofaceman). The backend writes the sentence (it knows the cause and
+   redacts the path); the field's job is to show it rather than stay green. */
+test('a folder that exists but cannot be written to is reported', () => {
+  const warn = folderWarning({
+    source: 'override', resolved: 'X:\\in', exists: true, usable: false,
+    problem: "ComfyUI's input folder is not writable from LoRA Dataset Studio: X:\\in "
+      + '(PermissionError). If ComfyUI runs in another container, in WSL or on another '
+      + 'machine, this folder must be a shared volume visible to LoRA Dataset Studio '
+      + 'at that exact path — pointing the app at ComfyUI’s URL is not enough.',
+  })
+  assert.match(warn, /not writable/)
+  assert.match(warn, /shared volume/)
+})
+
+test('a usable folder, or one the backend did not probe, stays silent', () => {
+  assert.equal(folderWarning({ source: 'override', resolved: 'X:\\in', exists: true, usable: true, problem: '' }), null)
+  // usable=null (nothing probed) must never be read as "unusable"
+  assert.equal(folderWarning({ source: 'derived', resolved: 'D:\\C\\models', exists: true, usable: null, problem: '' }), null)
+  // an older backend that doesn't send the field at all: no phantom warning
+  assert.equal(folderWarning({ source: 'derived', resolved: 'D:\\C\\models', exists: true }), null)
+})
+
 /* Detection is offered only when ComfyUI actually reported something. */
 test('a detected folder is offered when it differs from what is typed', () => {
   const f = comfyFolderField('input_dir')

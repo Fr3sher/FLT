@@ -81,12 +81,12 @@ from __future__ import annotations
 import logging
 import os
 import random
-import shutil
 import time
 import uuid
 
 from .. import config as cfg
 from . import comfy_model_paths
+from ..utils import comfy_fs
 from ..job_queue import queue_manager
 
 logger = logging.getLogger(__name__)
@@ -665,10 +665,12 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     vae = resolve_krea_vae()
     lora_name, _lora_path = resolve_krea_identity_lora()
 
-    comfy_input_dir = _comfy_input_dir()
+    # Same filesystem hand-off (and the same guard) as the Klein lane: the URL
+    # being up says nothing about ComfyUI's input folder being reachable from here.
+    comfy_input_dir = comfy_fs.ensure_input_usable(_comfy_input_dir())
     uid = uuid.uuid4().hex[:8]
     comfy_input = f'krea_source_{uid}_{source_filename}'
-    shutil.copy2(source_path, os.path.join(comfy_input_dir, comfy_input))
+    comfy_fs.stage_input_copy(source_path, comfy_input, comfy_input_dir)
 
     width, height = fit_output_size(*_source_size(source_path))
     workflow = build_workflow(

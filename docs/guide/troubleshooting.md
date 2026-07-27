@@ -105,6 +105,63 @@ Check **Settings → Local tools → ComfyUI API URL** (default
 firewall or a different bind interface isn't blocking the connection. The
 **Test** button answers immediately.
 
+## ComfyUI runs in another container (or WSL, or another machine) and generation fails
+
+**Symptom:** setup goes green — the ComfyUI URL answers, the install directory is
+accepted — and then every generation fails.
+
+**Why:** the app talks to ComfyUI through **two** channels, and only one of them is
+the network.
+
+1. **The HTTP API** (`Settings → Local tools → ComfyUI API URL`). This is what the
+   *Test* button and the Setup wizard check.
+2. **The filesystem.** Every local engine (Klein, Krea 2 Edit, Klein watermark
+   cleaning) hands ComfyUI its source image by **copying the file into ComfyUI's
+   `input/` folder**, and the result comes back from its `output/` folder. There is
+   no upload over the API on that path.
+
+A ComfyUI in a separate container, in WSL, or on another host does not share those
+folders with the app by default. The URL answers, so everything looks configured —
+and then the copy writes into a folder ComfyUI cannot see, or fails outright.
+
+**What it takes to work:**
+
+- `input/` and `output/` must be visible **to both sides at the same path**. Not
+  "an equivalent folder": the app writes `<input>/edit_source_….png` and then tells
+  ComfyUI to load `edit_source_….png` from *its own* input folder — the two must be
+  the same directory.
+- The app's process must be able to **write** into `input/` (a read-only bind mount
+  is not enough), and ComfyUI must be able to read it.
+- If ComfyUI was started with `--input-directory` / `--output-directory`, set the
+  matching paths in **Settings → Local tools → Advanced: ComfyUI folder overrides**.
+  Those fields take the path **as seen by the app**.
+
+With Docker, that means bind-mounting the same host folders into both containers at
+identical paths, e.g.:
+
+```yaml
+# both services
+volumes:
+  - /srv/comfyui/input:/srv/comfyui/input
+  - /srv/comfyui/output:/srv/comfyui/output
+```
+
+and then pointing the two override fields at `/srv/comfyui/input` and
+`/srv/comfyui/output`. The shipped `docker-compose.yml` deliberately does **not**
+do this: it runs the app in API-only mode, where ComfyUI is out of scope.
+
+**How you'll know:** the failure now says so. Settings flags an override folder it
+cannot write into, the Setup wizard warns while you configure (a warning, never a
+blocker — mounting volumes afterwards is fine), and a generation that cannot reach
+the folder answers with the folder path and the reason instead of a bare `500`.
+Those messages are path-redacted, so they are safe to paste in a help thread.
+
+**Everything else keeps working without shared folders**: the API engines (Gemini,
+ChatGPT, OpenRouter), scraping, curation, captioning through Ollama, training, and
+Hugging Face publishing. Only the ComfyUI-local engines need the filesystem.
+
+*(Reported by nofaceman on Discord.)*
+
 ## Klein engine stays greyed out
 
 Klein needs a reachable ComfyUI **and** the Klein model files (~16 GB VRAM

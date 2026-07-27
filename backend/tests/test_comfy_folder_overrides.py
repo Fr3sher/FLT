@@ -159,7 +159,10 @@ def test_classify_reports_derived_paths_and_existence(tmp_path):
     (base / 'output').mkdir(parents=True)
     r = capabilities.classify_comfyui_folders(str(base), {})
     assert r['output_dir'] == {'kind': 'output', 'source': 'derived',
-                               'resolved': str(base / 'output'), 'exists': True}
+                               'resolved': str(base / 'output'), 'exists': True,
+                               # readable from here — the OTHER half of the contract
+                               # (see test_comfy_input_folder_handoff.py)
+                               'usable': True, 'problem': ''}
     # input/ was never created -> the field must say so rather than look fine
     assert r['input_dir']['source'] == 'derived'
     assert r['input_dir']['exists'] is False
@@ -179,7 +182,8 @@ def test_classify_unset_when_nothing_to_resolve():
     from app import capabilities
     r = capabilities.classify_comfyui_folders('', {})
     for info in r.values():
-        assert info == {'kind': info['kind'], 'source': 'unset', 'resolved': '', 'exists': False}
+        assert info == {'kind': info['kind'], 'source': 'unset', 'resolved': '',
+                        'exists': False, 'usable': None, 'problem': ''}
 
 
 def test_classify_covers_all_four_kinds(tmp_path):

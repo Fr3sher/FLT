@@ -135,26 +135,41 @@ export function comfyuiDirVerdict(check) {
   const c = check || {}
   const resolved = c.resolved || ''
   const suggestion = c.suggestion || ''
+  const note = inputFolderNote(c.input_check)
   switch (c.status) {
     case 'valid':
-      return { tone: 'ok', suggestion: '',
+      return { tone: 'ok', suggestion: '', note,
         message: resolved ? `ComfyUI found at ${resolved}.` : 'ComfyUI found.' }
     case 'nested':
-      return { tone: 'warn', suggestion,
+      return { tone: 'warn', suggestion, note,
         message: `This looks like the launcher/parent folder — did you mean ${suggestion}?` }
     case 'missing':
-      return { tone: 'warn', suggestion: '',
+      return { tone: 'warn', suggestion: '', note: '',
         message: "That folder doesn't exist yet — check the path." }
     case 'empty_dir':
-      return { tone: 'warn', suggestion: '',
+      return { tone: 'warn', suggestion: '', note: '',
         message: 'That folder is empty — point at the folder that holds main.py and a models/ folder.' }
     case 'not_comfyui':
-      return { tone: 'warn', suggestion: '',
+      return { tone: 'warn', suggestion: '', note: '',
         message: "This folder isn't a ComfyUI install — it must contain main.py and a models/ folder. "
           + 'For the portable build, point at the inner …\\ComfyUI_windows_portable\\ComfyUI.' }
     default:
-      return { tone: 'muted', suggestion: '', message: '' }
+      return { tone: 'muted', suggestion: '', note: '', message: '' }
   }
+}
+
+// The SECOND half of "is this ComfyUI usable": every local engine hands its source
+// image over by COPYING it into ComfyUI's input/ folder. A URL that answers proves
+// nothing about that — with ComfyUI in another container the copy lands nowhere
+// ComfyUI can see, and the first generation used to die on a detail-free 500
+// (reported on Discord by nofaceman). So the wizard says it here, at configuration
+// time. Deliberately a NOTE, never a blocker: mounting the volumes afterwards is a
+// perfectly normal order of operations. Empty string = nothing to say (not probed,
+// or fine). The backend already redacted the path.
+export function inputFolderNote(inputCheck) {
+  const c = inputCheck || {}
+  if (c.ok !== false) return ''
+  return c.problem || 'The app cannot write into ComfyUI’s input folder.'
 }
 
 // ── ai-toolkit: what the wizard says about the folder it was pointed at ───────
