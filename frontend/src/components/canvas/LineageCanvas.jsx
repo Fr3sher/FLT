@@ -24,6 +24,7 @@ import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpo
 import { useCheckpointActions } from '../../hooks/useCheckpointActions';
 import { useCanvasRun } from '../../hooks/useCanvasRun';
 import { canvasRunDatasetIds, readyImageCount } from '../../utils/canvasRunResults';
+import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
@@ -307,6 +308,39 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
   const dragRef = useRef(null);      // {datasetId, recordId, sx, sy, ox, oy, moved}
   const longPress = useRef(null);    // touch: the pending pick-up
   const suppressClick = useRef(false);
+  /* ⚠️ THE press that landed on a card: {datasetId, recordId, at, moved}.
+     A card's own onClick NEVER FIRES on this board, which is why clicking a run
+     used to do nothing at all. onPointerDown calls setPointerCapture on the
+     FRAME (it has to — a drag that leaves the frame must keep receiving moves),
+     and a captured pointer retargets the click that follows to the capturing
+     element. So the click arrives on the frame, the card never hears it, and no
+     amount of handler on the card can change that.
+
+     The gesture therefore answers for itself: the press is remembered here, a
+     travel past DRAG_SLOP marks it as a drag, and a release that never travelled
+     is the click. Same for touch, where the capture is taken too. */
+  const press = useRef(null);
+  // When the gesture has just answered, ignore a DOM click that also arrives
+  // (keyboard Enter, or a browser that did not retarget) — one press, one open.
+  const answeredAt = useRef(0);
+  // The live note edits, for the handlers (which must not re-bind on every save).
+  const noteEditsRef = useRef(noteEdits);
+  useEffect(() => { noteEditsRef.current = noteEdits; }, [noteEdits]);
+
+  /* What a press on a run card DOES. One place for both entry points — the
+     gesture (the real one, see `press`) and the DOM click that still arrives for
+     a keyboard Enter. ⇧ Shift picks the run for the two-run compare; a plain
+     press opens its gallery: every image it made, grouped by step, with its
+     notes and the settings it trained with. */
+  const runCardGesture = useCallback((node, shiftKey) => {
+    if (!node) return;
+    if (shiftKey) {
+      setSelectedForDiff((sel) => toggleDiffSelection(sel, node.record_id));
+      return;
+    }
+    setOpenCk(null);
+    setGallery(runGalleryTarget(noteEditsRef.current[node.record_id] || node));
+  }, []);
 
   const cancelLongPress = () => {
     if (longPress.current) { clearTimeout(longPress.current); longPress.current = null; }
@@ -327,9 +361,14 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
 
   const onPointerDown = useCallback((e) => {
     suppressClick.current = false;
+    press.current = null;
     // A press on a pill is an inspection, never a drag or a pan.
     if (e.target.closest?.('.lds-ckpill-wrap')) return;
     const card = e.target.closest?.('[data-canvas-node]');
+    if (card) {
+      press.current = { datasetId: Number(card.dataset.datasetId),
+        recordId: Number(card.dataset.recordId), at: localPoint(e), moved: false };
+    }
     // A press on the bare board dismisses an open popover. A press on a card
     // does not: its own click decides (open another one, or toggle this one
     // shut), and closing here first would make that click reopen it.
@@ -347,6 +386,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       const [a, b] = [...pointers.current.values()];
       pinch.current = { dist: pinchDistance(a, b), scale: viewRef.current.scale };
       pan.current = null;
+      press.current = null;            // a second finger makes this a pinch
       cancelLongPress();
     } else if (pointers.current.size === 1) {
       pan.current = { ...at, tx: viewRef.current.tx, ty: viewRef.current.ty };
@@ -364,6 +404,14 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
   }, [beginDrag]);
 
   const onPointerMove = useCallback((e) => {
+    // A press that travels is a drag or a pan, never a click — whichever of the
+    // two branches below ends up handling it.
+    if (press.current && !press.current.moved) {
+      const p = localPoint(e);
+      if (Math.hypot(p.x - press.current.at.x, p.y - press.current.at.y) >= DRAG_SLOP) {
+        press.current.moved = true;
+      }
+    }
     const d = dragRef.current;
     if (d) {
       const p = localPoint(e);
@@ -415,6 +463,19 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       }
       setDrag(null);
     }
+    // A press on a card that never travelled IS the click — see `press` above
+    // for why the card's own onClick cannot be relied on here.
+    const p = press.current;
+    press.current = null;
+    if (p && !p.moved && !d?.moved) {
+      const node = placedRef.current
+        .find((l) => l.datasetId === p.datasetId)?.graph?.nodes
+        .find((x) => x.node.record_id === p.recordId)?.node;
+      if (node) {
+        answeredAt.current = Date.now();
+        runCardGesture(node, e.shiftKey);
+      }
+    }
     pointers.current.delete(e.pointerId);
     frameRef.current?.releasePointerCapture?.(e.pointerId);
     if (pointers.current.size < 2) pinch.current = null;
@@ -422,7 +483,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, [onPinLane]);
+  }, [onPinLane, runCardGesture]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -457,6 +518,10 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
   // The open actions popover: { lane, node, pill, anchor } | null. `pill` is null
   // when a run CARD was clicked — the same popover, with only its run-level rows.
   const [openCk, setOpenCk] = useState(null);
+  // 🖼 The open gallery: {recordId, step} for a checkpoint pill, or
+  // {kind:'run', recordId, node} for a whole run card. Declared here because the
+  // card-click handler below opens it.
+  const [gallery, setGallery] = useState(null);
   const closePopover = useCallback(() => setOpenCk(null), []);
   const [bigPreview, setBigPreview] = useState(null);
   const zoomPreview = useCallback((url, step) => setBigPreview({ url, step }), []);
@@ -469,24 +534,21 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       : { lane, node, pill: pill || null, anchor }));
   }, []);
 
+  /* The DOM path into the same gesture — keyboard Enter/Space on a focused card,
+     and any browser that does NOT retarget the click to the capturing frame. The
+     pointer path (endPointer) is the one that fires in practice, so this guards
+     against answering twice; and a click that is only the tail of a drop is
+     swallowed, because a rearrangement of the board must never end with a panel
+     the user did not ask for. Which of the three it is comes from
+     utils/canvasCardClick — testable, unlike this file. */
   const onNodeClick = useCallback((node, e) => {
-    // A drop lands on the card it moved, so the browser fires a click right
-    // after it. Swallow exactly that one — otherwise every move would also open
-    // the popover.
-    if (suppressClick.current) { suppressClick.current = false; return; }
-    if (e && e.shiftKey) {
-      setSelectedForDiff((sel) => toggleDiffSelection(sel, node.record_id));
-      return;
-    }
-    // A card click opens the ACTIONS, not the detail drawer. The drawer used to
-    // spring open on any click, which turned a glance at the board into a panel
-    // to dismiss; it now comes from the ⓘ Details button, filed with deploy and
-    // the rest. The lane is resolved from the card, since the card component
-    // itself knows nothing about lanes.
-    const lane = placedRef.current.find(
-      (l) => (l.graph?.nodes || []).some((x) => x.node.record_id === node.record_id));
-    onOpenActions(lane || null, node, null, e);
-  }, [onOpenActions]);
+    const dragged = suppressClick.current;
+    if (dragged) suppressClick.current = false;
+    if (Date.now() - answeredAt.current < 400) return;   // the gesture answered
+    const action = cardClickAction({ dragged, shiftKey: !!(e && e.shiftKey) });
+    if (action === 'ignored') return;
+    runCardGesture(node, action === 'compare');
+  }, [runCardGesture]);
 
   const diffRole = useCallback((id) => {
     const i = selectedForDiff.indexOf(id);
@@ -498,7 +560,6 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
   // the order the user clicked in is meaningful (see utils/canvasGeneration).
   const [picks, setPicks] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
-  const [gallery, setGallery] = useState(null);   // {recordId, step} | null
 
   const isPicked = useCallback(
     (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
@@ -699,7 +760,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           )}
         </button>
         <span className="ml-auto hidden text-content-subtle text-[0.625rem] sm:inline">
-          Drag a run to move it · drag the background to pan · wheel to zoom · click a run or a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run for all its images, notes and settings · click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -814,10 +875,14 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           onClose={() => setPanelOpen(false)} />
       )}
 
-      {/* 🖼 Everything one checkpoint ever produced. Deleting from it re-reads the
-          affected lanes: the pills carry a results COUNT and a thumbnail, and
-          without this the board keeps advertising images that no longer exist. */}
+      {/* 🖼 Everything one checkpoint — or one whole run — ever produced. Deleting
+          from it re-reads the affected lanes: the pills carry a results COUNT and
+          a thumbnail, and without this the board keeps advertising images that no
+          longer exist. `onDetails` hands the run over to the drawer that owns
+          note EDITING, so the panel can show notes without owning a second
+          editor for them. */}
       <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
+        onDetails={(node) => { setGallery(null); setOpenNode(node); }}
         onDeleted={(ids) => (ids || []).forEach((id) => {
           Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
         })} />

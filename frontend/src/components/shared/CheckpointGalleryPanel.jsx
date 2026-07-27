@@ -1,11 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch, postJson } from '../../api/fetchClient';
 import {
   allGalleryImageIds, galleryDeleteConfirmation, galleryDeleteSummary,
   pruneGallerySelection, toggleGalleryImage,
 } from '../../utils/gallerySelection';
+import {
+  checkpointNotes, defaultOpenGroups, galleryEndpoints, galleryHeading,
+  galleryScope, galleryTargetKey, runGalleryGroups, runGallerySummary,
+  stepGroupLabel, unlinkedNote, visibleGalleryImages,
+} from '../../utils/runGallery';
+import { configRows } from '../dataset/lineageDetail.js';
 
-/* 🖼 Everything one checkpoint ever produced.
+/* 🖼 Everything one checkpoint — or one whole RUN — ever produced.
 
    Images used to be attached to a checkpoint by PARSING the LoRA's filename on
    every render, and a checkpoint could hold exactly one preview — regenerating
@@ -14,21 +20,38 @@ import {
    history, whatever produced it — an inline canvas preview, a Test-Studio grid
    cell, a comparison run.
 
+   ONE panel, two scopes. A click on a run CARD opens the same component with a
+   `{kind:'run'}` target: every step of that run at once, grouped, plus the run's
+   notes and the settings it trained with. A second panel for the run scope would
+   have been two grids over the same rows, two Select modes and two places to
+   keep the delete's promises true — agreeing on the day they shipped and
+   drifting on the first change. Which endpoints, which title and how the groups
+   are laid out all come from utils/runGallery (pure, unit-tested).
+
+   Volume is handled, not hoped for. A run with fourteen checkpoints answers a
+   payload capped per step AND overall, the panel opens the three most-trained
+   groups and folds the rest behind their counts, and every cut is stated: a
+   capped gallery that looks complete lies about the run.
+
    `unlinked` is stated, not hidden. Images generated before the columns existed,
-   whose filename carries no run tag, cannot be attributed to a checkpoint
-   without guessing — so they are not shown under one, and the panel says how
-   many there are. An incomplete history that says so beats a tidy one that lies.
+   whose filename carries no run tag, cannot be attributed without guessing — so
+   they are not shown under one, and the panel says how many there are. An
+   incomplete history that says so beats a tidy one that lies. Images whose name
+   names a RUN but no step are no longer part of that number: they are a real
+   "Step unknown" group, because the run genuinely is known.
 
    🗑 And it deletes. A checkpoint accumulates dozens of renders and most are
    misses; a gallery that can only show them makes the user leave the board to
    clean up. The delete is REAL (the row is the Test Studio's own cell — see
    galleryDeleteConfirmation for the sentences that say so before the click) and
    the file goes to the recycle bin / the app Trash rather than being destroyed.
+   The run scope deletes through the SAME backend function with a wider filter,
+   so nothing about that promise is maintained twice.
 
    Deletion is deliberately UNREACHABLE by accident: it needs Select mode, then a
    pick, then a confirmation. Tapping a tile while scrolling a phone grid can
    never delete anything — outside Select mode a tap only zooms. */
-export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
+export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onDetails }) {
   const [state, setState] = useState({ status: 'loading', data: null, error: null });
   const [zoom, setZoom] = useState(null);
   const [picking, setPicking] = useState(false);
@@ -36,22 +59,38 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState(null);
+  const [openGroups, setOpenGroups] = useState(() => new Set());
+
+  const key = galleryTargetKey(target);
+  const scope = galleryScope(target);
+  const isRun = scope === 'run';
+  const endpoints = galleryEndpoints(target);
+  const heading = galleryHeading(target);
 
   const load = useCallback(() => {
-    if (!target) return Promise.resolve();
-    return apiFetch(`/api/train/checkpoint/${target.recordId}/${target.step}/images`)
+    const ep = galleryEndpoints(target);
+    if (!ep) return Promise.resolve();
+    return apiFetch(ep.list)
       .then((d) => {
         setState({ status: 'ready', data: d, error: null });
+        if (galleryScope(target) === 'run') {
+          // Only on the FIRST read of a target: a refresh after a delete must not
+          // fold back the groups the user opened.
+          setOpenGroups((cur) => (cur.size ? cur : defaultOpenGroups(runGalleryGroups(d))));
+        }
         // A refresh that no longer lists an image must not leave it armed.
-        setSelected((cur) => pruneGallerySelection(cur, d.images));
+        setSelected((cur) => pruneGallerySelection(
+          cur, galleryScope(target) === 'run'
+            ? visibleGalleryImages(runGalleryGroups(d), null)
+            : d.images));
       })
       .catch((e) => {
         setState({
           status: 'error', data: null,
-          error: e?.message || 'Could not load this checkpoint’s images',
+          error: e?.message || 'Could not load these images',
         });
       });
-  }, [target?.recordId, target?.step]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!target) return undefined;
@@ -60,9 +99,10 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
     setSelected(new Set());
     setConfirming(false);
     setNotice(null);
+    setOpenGroups(new Set());
     load();
     return undefined;
-  }, [target?.recordId, target?.step]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [key]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!zoom) return undefined;
@@ -71,14 +111,21 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [zoom]);
 
+  const d = state.data;
+  const groups = useMemo(() => (isRun ? runGalleryGroups(d) : []), [isRun, d]);
+  // What Select mode operates on: only what is LAID OUT. Arming a delete for an
+  // image folded away — or never fetched, past the cap — would delete something
+  // the user cannot see.
+  const images = isRun
+    ? visibleGalleryImages(groups, openGroups)
+    : (d?.images || []);
+
   const runDelete = useCallback(async () => {
-    if (!target || busy) return;
+    if (!endpoints || busy) return;
     const ids = [...selected];
     setBusy(true);
     try {
-      const res = await postJson(
-        `/api/train/checkpoint/${target.recordId}/${target.step}/images/delete`,
-        { image_ids: ids });
+      const res = await postJson(endpoints.remove, { image_ids: ids });
       setNotice({ kind: 'ok', text: galleryDeleteSummary(res) });
       setConfirming(false);
       setSelected(new Set());
@@ -92,24 +139,73 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
     } finally {
       setBusy(false);
     }
-  }, [target, selected, busy, load, onDeleted]);
+  }, [endpoints?.remove, selected, busy, load, onDeleted]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleGroup = useCallback((groupKey) => {
+    setOpenGroups((cur) => {
+      const next = new Set(cur);
+      if (next.has(groupKey)) next.delete(groupKey);
+      else next.add(groupKey);
+      return next;
+    });
+  }, []);
 
   if (!target) return null;
-  const d = state.data;
-  const images = d?.images || [];
   const confirmation = galleryDeleteConfirmation(selected.size, d?.delete_mode);
+  const node = target.node || null;
+  const paramRows = isRun ? configRows(node?.config) : [];
+  const ckNotes = isRun ? checkpointNotes(d, node) : [];
+
+  const tile = (img, altLabel) => {
+    const isPicked = selected.has(img.id);
+    return (
+      <button key={img.id} type="button"
+        data-testid={picking ? 'gallery-pick' : 'gallery-zoom'}
+        onClick={() => (picking
+          ? setSelected((cur) => toggleGalleryImage(cur, img.id))
+          : setZoom(img))}
+        aria-pressed={picking ? isPicked : undefined}
+        title={picking
+          ? (isPicked ? 'Selected — tap to unselect' : 'Tap to select')
+          : `Seed ${img.seed ?? '—'} · strength ${img.strength}`}
+        className={`relative aspect-square overflow-hidden rounded-md border ${isPicked
+          ? 'border-rose-400 ring-2 ring-rose-400/70'
+          : 'border-border hover:border-indigo-400/60'}`}>
+        <img src={img.url} alt={altLabel} loading="lazy"
+          className={`h-full w-full object-cover ${isPicked ? 'opacity-60' : ''}`} />
+        {picking && (
+          // A 24-px tick, not a hairline checkbox: the target has to be hittable
+          // with a thumb on a 400-px grid.
+          <span aria-hidden
+            className={`absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border text-[0.75rem] ${isPicked
+              ? 'border-rose-300 bg-rose-500 text-white'
+              : 'border-white/60 bg-black/50 text-transparent'}`}>✓</span>
+        )}
+        {img.rating === 1 && (
+          <span aria-hidden className="absolute right-0.5 top-0.5 text-[0.625rem]">👍</span>
+        )}
+        {img.rating === -1 && (
+          <span aria-hidden className="absolute right-0.5 top-0.5 text-[0.625rem]">👎</span>
+        )}
+      </button>
+    );
+  };
+
+  // Two columns at 400 px, three from `sm` — thumbnails that stay big enough to
+  // compare on a phone.
+  const GRID = 'grid grid-cols-2 gap-1.5 sm:grid-cols-3';
 
   return (
     <>
       <aside
-        data-testid="checkpoint-gallery-panel"
-        aria-label={`Images generated at step ${target.step}`}
+        data-testid={isRun ? 'run-gallery-panel' : 'checkpoint-gallery-panel'}
+        aria-label={heading.aria}
         className="fixed inset-x-0 bottom-0 z-50 flex max-h-[70vh] flex-col overflow-hidden border-t border-border bg-surface-overlay shadow-xl
                    sm:inset-x-auto sm:left-0 sm:top-0 sm:h-full sm:max-h-none sm:w-[22rem] sm:border-r sm:border-t-0">
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-content">
-            <span aria-hidden>🖼</span> Step {target.step}
-            <span className="font-normal text-content-muted"> · run #{target.recordId}</span>
+            <span aria-hidden>🖼</span> {heading.title}
+            <span className="font-normal text-content-muted"> · {heading.subtitle}</span>
           </h3>
           {/* The gate into deletion. Absent while there is nothing to delete, so
               an empty gallery carries no destructive control at all. */}
@@ -145,7 +241,8 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
               {notice.text}
             </p>
           )}
-          {state.status === 'ready' && (
+
+          {state.status === 'ready' && !isRun && (
             <>
               <p className="m-0 mb-2 text-content-muted text-[0.6875rem]">
                 {d.count === 0
@@ -154,54 +251,130 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
                     ? `Tap the misses, then 🗑 Delete. ${d.count} image${d.count > 1 ? 's' : ''} here.`
                     : `${d.count} image${d.count > 1 ? 's' : ''}, newest first.`}
               </p>
-              {/* Two columns at 400 px, three from `sm` — thumbnails that stay
-                  big enough to compare on a phone. */}
-              <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-3">
-                {images.map((img) => {
-                  const isPicked = selected.has(img.id);
-                  return (
-                    <button key={img.id} type="button"
-                      data-testid={picking ? 'gallery-pick' : 'gallery-zoom'}
-                      onClick={() => (picking
-                        ? setSelected((cur) => toggleGalleryImage(cur, img.id))
-                        : setZoom(img))}
-                      aria-pressed={picking ? isPicked : undefined}
-                      title={picking
-                        ? (isPicked ? 'Selected — tap to unselect' : 'Tap to select')
-                        : `Seed ${img.seed ?? '—'} · strength ${img.strength}`}
-                      className={`relative aspect-square overflow-hidden rounded-md border ${isPicked
-                        ? 'border-rose-400 ring-2 ring-rose-400/70'
-                        : 'border-border hover:border-indigo-400/60'}`}>
-                      <img src={img.url} alt={`Generated at step ${target.step}`}
-                        loading="lazy"
-                        className={`h-full w-full object-cover ${isPicked ? 'opacity-60' : ''}`} />
-                      {picking && (
-                        // A 24-px tick, not a hairline checkbox: the target has to
-                        // be hittable with a thumb on a 400-px grid.
-                        <span aria-hidden
-                          className={`absolute left-1 top-1 flex h-6 w-6 items-center justify-center rounded-full border text-[0.75rem] ${isPicked
-                            ? 'border-rose-300 bg-rose-500 text-white'
-                            : 'border-white/60 bg-black/50 text-transparent'}`}>✓</span>
-                      )}
-                      {img.rating === 1 && (
-                        <span aria-hidden className="absolute right-0.5 top-0.5 text-[0.625rem]">👍</span>
-                      )}
-                      {img.rating === -1 && (
-                        <span aria-hidden className="absolute right-0.5 top-0.5 text-[0.625rem]">👎</span>
-                      )}
-                    </button>
-                  );
-                })}
+              <div className={GRID}>
+                {images.map((img) => tile(img, `Generated at step ${target.step}`))}
               </div>
-              {d.unlinked > 0 && (
-                <p className="m-0 mt-3 border-t border-border pt-2 text-content-subtle text-[0.625rem]">
-                  {d.unlinked} older test image{d.unlinked > 1 ? 's' : ''} could not be traced back
-                  to a checkpoint (generated before the link was recorded, and the file name
-                  says nothing certain). They are kept, just not shown under a node —
-                  they are in the Test Studio.
-                </p>
-              )}
             </>
+          )}
+
+          {state.status === 'ready' && isRun && (
+            <>
+              <p className="m-0 mb-2 text-content-muted text-[0.6875rem]">
+                {picking
+                  ? `Tap the misses, then 🗑 Delete. ${images.length} shown in the open steps.`
+                  : runGallerySummary(d)}
+              </p>
+
+              {/* One foldable section per checkpoint, most-trained first: the end
+                  of training is where over- and under-fitting is judged, so the
+                  panel opens on it. Folded groups still state their count — the
+                  fold hides thumbnails, never information. */}
+              {groups.map((g) => {
+                const open = openGroups.has(g.key);
+                return (
+                  <section key={g.key} data-testid="run-gallery-group"
+                    data-step={g.step == null ? 'unknown' : g.step}
+                    className="mb-2 rounded-lg border border-border">
+                    <button type="button" data-testid="run-gallery-group-toggle"
+                      onClick={() => toggleGroup(g.key)} aria-expanded={open}
+                      className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-app/40">
+                      <span aria-hidden className="shrink-0 text-content-subtle text-[0.625rem]">
+                        {open ? '▾' : '▸'}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-content text-[0.75rem] font-semibold tabular-nums">
+                        {g.label}
+                      </span>
+                      <span className="shrink-0 rounded-full border border-border px-1.5 text-content-muted text-[0.625rem] tabular-nums">
+                        {g.count}
+                      </span>
+                    </button>
+                    {open && (
+                      <div className="px-2 pb-2">
+                        {g.step == null && (
+                          <p className="m-0 mb-1.5 text-content-subtle text-[0.625rem]">
+                            These came from this run — the file name named the run but
+                            not the step, so they sit under no checkpoint.
+                          </p>
+                        )}
+                        <div className={GRID}>
+                          {g.images.map((img) => tile(img, `Generated by run ${target.recordId}`))}
+                        </div>
+                        {g.truncated && (
+                          <p className="m-0 mt-1.5 text-content-subtle text-[0.625rem]">
+                            Newest {g.images.length} of {g.count} — open this checkpoint’s
+                            own gallery from its pill for the rest.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+
+              {/* 📝 The notes, where the images they describe are. They stay
+                  READ-ONLY here: editing lives in the details drawer, which
+                  already owns saving, and two editors over one field is one too
+                  many. A run with no note simply has no section. */}
+              {(node?.note || ckNotes.length > 0) && (
+                <section data-testid="run-gallery-notes"
+                  className="mt-3 border-t border-border pt-2">
+                  <h4 className="m-0 mb-1 text-content text-[0.6875rem] font-semibold">
+                    <span aria-hidden>📝</span> Notes
+                  </h4>
+                  {node?.note && (
+                    <p className="m-0 mb-1.5 whitespace-pre-wrap break-words text-content-muted text-[0.6875rem]">
+                      {node.note}
+                    </p>
+                  )}
+                  {ckNotes.map((c) => (
+                    <p key={c.step}
+                      className="m-0 mb-1 whitespace-pre-wrap break-words text-content-muted text-[0.625rem]">
+                      <span className="font-semibold text-content-subtle tabular-nums">
+                        {stepGroupLabel(c.step)}:
+                      </span>{' '}{c.note}
+                    </p>
+                  ))}
+                </section>
+              )}
+
+              {/* ⚙ What this run trained with — the persisted snapshot the detail
+                  drawer reads. A legacy run that never recorded its settings says
+                  so rather than showing an empty table. */}
+              <section data-testid="run-gallery-settings"
+                className="mt-3 border-t border-border pt-2">
+                <h4 className="m-0 mb-1 text-content text-[0.6875rem] font-semibold">
+                  <span aria-hidden>⚙</span> Training settings
+                </h4>
+                {paramRows.length === 0 ? (
+                  <p className="m-0 text-content-subtle text-[0.625rem]">
+                    This run did not record its settings (it predates the snapshot).
+                  </p>
+                ) : (
+                  <dl className="m-0 grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-x-2 gap-y-0.5">
+                    {paramRows.map((r) => (
+                      <div key={r.label} className="contents">
+                        <dt className="m-0 truncate text-content-subtle text-[0.625rem]">{r.label}</dt>
+                        <dd className="m-0 break-words text-content-muted text-[0.625rem]">{r.value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                )}
+                {typeof onDetails === 'function' && node && (
+                  <button type="button" data-testid="run-gallery-details"
+                    onClick={() => onDetails(node)}
+                    title="Open the full run details, where the notes can be edited"
+                    className="mt-2 rounded-md border border-border px-2 py-1.5 text-content text-[0.625rem] hover:border-indigo-400/50">
+                    <span aria-hidden>ⓘ</span> Full details &amp; edit notes
+                  </button>
+                )}
+              </section>
+            </>
+          )}
+
+          {state.status === 'ready' && d.unlinked > 0 && (
+            <p className="m-0 mt-3 border-t border-border pt-2 text-content-subtle text-[0.625rem]">
+              {unlinkedNote(d.unlinked, scope)}
+            </p>
           )}
         </div>
 
@@ -262,9 +435,10 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted }) {
         <div role="dialog" aria-label="Generated image"
           onClick={() => setZoom(null)}
           className="fixed inset-0 z-[60] flex flex-col items-center justify-center gap-2 bg-black/80 p-3">
-          <img src={zoom.url} alt={`Generated at step ${target.step}`}
+          <img src={zoom.url} alt={`Generated by run ${target.recordId}`}
             className="max-h-[80vh] max-w-full rounded-lg object-contain" />
           <p className="m-0 max-w-full break-words text-center text-white/80 text-[0.6875rem]">
+            {zoom.step != null ? `step ${zoom.step} · ` : ''}
             seed {zoom.seed ?? '—'} · strength {zoom.strength}
             {zoom.prompt ? ` · ${zoom.prompt}` : ''}
           </p>

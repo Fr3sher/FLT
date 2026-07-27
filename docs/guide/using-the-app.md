@@ -653,11 +653,28 @@ zoom, and **Fit** puts the whole board back in view. The board only fits itself
 automatically until you first touch it — after that a dataset finishing its load
 never yanks your view away.
 
-**Reading a run.** Click a run card to open its inspector: the settings it
-trained with, its notes, and a note per checkpoint. **Shift-click two** run cards
-to compare their settings side by side, with the differences highlighted — and
-because every dataset is on the same board, those two runs no longer have to
-belong to the same dataset.
+**Reading a run.** Click a run card to open **everything that run produced**:
+its images grouped by the checkpoint that made them, most-trained step first, so
+you can see where the LoRA stopped getting better without opening one pill at a
+time. Underneath the images are the run's note, its per-checkpoint notes, and the
+settings it trained with. **ⓘ Full details** opens the drawer where those notes
+can be edited.
+
+A run with many checkpoints opens with its three most-trained steps expanded and
+the rest folded behind their image counts — tap a step to unfold it. When a run
+holds more images than one panel should carry, the panel says so rather than
+looking complete; the missing ones are still reachable from each checkpoint's own
+pill and in the Test Studio.
+
+Sometimes a step reads **Step unknown**. Those are older test images whose file
+name identifies the run but not the checkpoint inside it, so they belong to the
+run and to no pill. Images that identify nothing at all are still counted in the
+footnote at the bottom of the panel — they live in the Test Studio.
+
+**Shift-click two** run cards to compare their settings side by side, with the
+differences highlighted — and because every dataset is on the same board, those
+two runs no longer have to belong to the same dataset. Dragging a card to
+rearrange the board never opens the panel.
 
 **Arranging the board.** Drag a run card and it stays where you put it, across
 reloads. On a phone, moving a card and scrolling the board are the same gesture,

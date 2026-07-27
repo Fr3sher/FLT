@@ -352,8 +352,13 @@ test('the detail drawer opens from ⓘ Details, not from touching a card', () =>
   // a panel to dismiss. It is now one of the popover's actions, filed with the rest.
   assert.match(popover, /<span aria-hidden>ⓘ<\/span> Details/);
   assert.match(popover, /onDetails\(node\)/);
-  // On the canvas a card click opens the ACTIONS; the drawer waits to be asked.
-  assert.match(canvas, /onOpenActions\(lane \|\| null, node, null, e\)/);
+  // On the canvas a card click opens the RUN GALLERY — its images by step, its
+  // notes and its settings. It used to open the popover with a single ⓘ Details
+  // row, which is how a card click read as doing nothing; that row's content now
+  // lives IN the panel, and the drawer still waits to be asked (from the panel,
+  // or from a checkpoint pill's popover).
+  assert.match(canvas, /setGallery\(runGalleryTarget\(/);
+  assert.doesNotMatch(canvas, /onOpenActions\(lane \|\| null, node, null, e\)/);
   assert.match(canvas, /onDetails=\{\(node\) => setOpenNode\(node\)\}/);
   assert.doesNotMatch(canvas, /if \(e && e\.shiftKey\)[^]*?\n    setOpenNode\(node\);/);
   // The pill body opens them too — it used to open the drawer instead.
