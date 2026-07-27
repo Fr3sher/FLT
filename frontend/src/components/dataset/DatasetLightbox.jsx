@@ -131,9 +131,11 @@ export default function DatasetLightbox({
         )}
         {/* Its strength, step count and instruction are all editable, and nothing
             here said so — the reported case for making settings discoverable from
-            where the action happens. */}
+            where the action happens. `focus` lands on the strength block itself:
+            a label promising one setting must not leave the reader hunting for it
+            down a long section. */}
         {onImprove && !improvementActive && (
-          <SettingsLink section="engines" className="self-center">
+          <SettingsLink section="engines" focus="klein-improve-strength" className="self-center">
             Adjust improve strength
           </SettingsLink>
         )}

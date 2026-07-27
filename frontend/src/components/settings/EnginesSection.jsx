@@ -534,7 +534,12 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
           much the pass actually changes were hardcoded — including both LoRA
           strengths at 0, which meant the workflow's own realistic LoRA never
           applied. Defaults here are those historical values. */}
-      <div className="border-t border-border pt-4">
+      {/* id spelled out literally: it is the deep-link target of the lightbox's
+          "Adjust improve strength →" link, and the contract tests find targets by
+          scanning this file for id="…". The BLOCK is the target, not one knob:
+          "strength" here is the four values together, and ringing the group is
+          the honest answer to what that label promises. */}
+      <div id="klein-improve-strength" className="scroll-mt-24 border-t border-border pt-4">
         <h4 className="text-sm font-medium text-content">Upscale &amp; improve — strength</h4>
         <p className="mt-1 mb-2 text-xs text-content-muted">
           Output resolution, and how much the pass is allowed to change the image. All four

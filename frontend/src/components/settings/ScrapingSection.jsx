@@ -87,7 +87,11 @@ export default function ScrapingSection(props) {
 
   return (
     <div className="space-y-6">
+      {/* id: the deep-link target of the source picker's "Source credentials →"
+          link. The card, not one key — the label names this card and the three
+          keys inside it are equally the answer. */}
       <Card
+        id="scrape-credentials"
         title="Source credentials"
         help="Credentials used when scanning image sources for concept datasets. Reddit and Civitai keys are optional; Pexels requires its API key. Keys are write-only: fields stay blank even when a key is already saved."
       >

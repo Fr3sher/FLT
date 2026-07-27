@@ -413,6 +413,12 @@ const TOPICS = [
     ['identity', 'klein', 'restage', 'face', 'prompt', 'preserve', 'pose']),
   setting('identity_prompts.klein_improve', 'engines', 'identity-prompt-klein-improve', 'Klein improve prompt & toggle',
     ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable']),
+  // The four knobs behind the lightbox's "Adjust improve strength →". They were
+  // exposed as settings but never registered, so Help search could not reach them
+  // and the link had nothing to aim at.
+  setting('klein.improve_strength', 'engines', 'klein-improve-strength', 'Upscale & improve — strength',
+    ['improve', 'upscale', 'strength', 'megapixels', 'resolution', 'steps',
+     'enhancement lora', 'consistency', 'klein', 'how much', 'change']),
   // The five parts the local-edit prompt is ALSO built from. They used to be
   // hardcoded, so nobody could search for them; these are the words a user reaches
   // for when a generated shot is wrong ("why is everyone wearing jeans", "it added

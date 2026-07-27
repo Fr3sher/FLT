@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-settings-links-land-on-the-setting',
+    date: '2026-07-27',
+    title: 'Links that promise one setting now drop you on that setting',
+    blurb:
+      'The little "Adjust improve strength →" under Upscale & improve used to open Image engines at the top and leave you scrolling a long page looking for four number boxes. It now lands directly on them, highlighted — and opens the collapsed block around a setting when there is one. Same for "Which model writes them, and how" (the captioning backend), "Source credentials" (the scraper keys card) and the Setup wizard\'s "Set the interpreter in Settings ▸ Local tools" (that exact field). One link still points at a whole section on purpose: "Defaults & cloud limits" names two settings that live in two different cards, and picking one would send half of you to the wrong one.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
     date: '2026-07-27',
     title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',
