@@ -38,6 +38,9 @@ import {
   filterImagesByStatus, gridStatusFilterCounts, normalizeGridStatusFilter,
 } from '../../utils/gridStatusFilter';
 import {
+  DEFAULT_DATASET_SORT, datasetSortOptions, normalizeDatasetSort, sortDatasetImages,
+} from '../../utils/gridSort';
+import {
   buildSmallImageRescuePairs,
   filterSmallImageRescueGrid,
   isSmallImageRescueRow,
@@ -65,6 +68,9 @@ const EMPTY_IMAGES = Object.freeze([]);
 // cosmetic: it is the only thing that stops a persisted filter from reading as
 // "my images are gone" when the workspace is reopened.
 const GRID_STATUS_FILTER_KEY = 'datasetGridStatusFilter';
+// Grid ordering (default / face similarity ↓ / ↑) — same persisted-view-preference
+// pattern. The KEY and the stored ids are stable handles: never rename either.
+const GRID_SORT_KEY = 'datasetGridSort';
 
 // Style partagé des items du menu « ⋯ More » du header (actions secondaires).
 const MENU_ITEM = 'w-full flex items-center gap-2 text-left px-2.5 py-1.5 rounded-md text-sm text-content hover:bg-surface-raised disabled:opacity-40';
@@ -122,6 +128,35 @@ function GridStatusFilter({ value, counts, onChange }) {
       })}
       <HelpBadge topic="action-grid-status-filter" />
     </div>
+  );
+}
+
+/* Order the grid on what was MEASURED instead of by arrival date — asked for by
+   nofaceman (Discord). A dataset row carries exactly one such number, the face
+   similarity to the reference, so that is the only thing offered here (the
+   aesthetic/sharpness scores live on bank images, which have their own sort).
+   Sorting NARROWS nothing: it composes with both grid filters, and since the
+   grid derives its tiles AND its "select all" from the same list, the selection
+   follows the order on screen. Unscored images go last, both ways; while nothing
+   is scored the options are greyed out naming the pass to run, rather than
+   silently reordering nothing. `shrink-0` + a bounded width keep it usable when
+   the toolbar wraps at 400 px. */
+function GridSortSelect({ value, images, onChange }) {
+  return (
+    <label className="flex shrink-0 items-center gap-1 text-xs text-content-subtle">
+      Sort
+      <select value={value} onChange={(e) => onChange(e.target.value)}
+        aria-label="Sort the grid"
+        title="Order the images by face similarity to your reference. Unscored images sink to the end."
+        className="max-w-[13rem] rounded-md border border-border bg-surface px-2 py-0.5 text-[0.6875rem] text-content">
+        {datasetSortOptions(images).map((o) => (
+          <option key={o.id} value={o.id} disabled={o.disabled} title={o.title}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <HelpBadge topic="action-grid-sort" />
+    </label>
   );
 }
 
@@ -236,6 +271,19 @@ export default function DatasetWorkspace({ ds, onBack }) {
     try { localStorage.setItem(GRID_STATUS_FILTER_KEY, statusFilter); }
     catch { /* ignore — private mode */ }
   }, [statusFilter]);
+  // Grid sort — PERSISTED like the decision filter: "show me the least-alike
+  // first" is a working mode you keep across reloads, not a one-off lookup. The
+  // stored value is normalised on read, so an id from an older build (or a
+  // hand-edited localStorage) degrades to the default order instead of freezing
+  // the grid on a sort nothing implements.
+  const [gridSort, setGridSort] = useState(() => {
+    try { return normalizeDatasetSort(localStorage.getItem(GRID_SORT_KEY)); }
+    catch { return DEFAULT_DATASET_SORT; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(GRID_SORT_KEY, gridSort); }
+    catch { /* ignore — private mode */ }
+  }, [gridSort]);
   const [searchParams, setSearchParams] = useSearchParams();
   // "Allow auto-crop" is a persisted preference (Settings ▸ Watermark inpainting). The
   // batch Clean bar shows the SAME setting and writes it through here, so there's one
@@ -539,10 +587,12 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // auto-triage and every bulk action operate ONLY on the visible images. The
   // Caption-tools counts keep using the full `images` list (global, never lies).
   // Decision filter first, tag filter on top — the two compose, order-independent.
-  const gridImages = filterImages(
+  // The sort runs LAST and only reorders: membership is entirely the filters'
+  // business, so "shown / total" and every bulk action keep meaning what they say.
+  const gridImages = sortDatasetImages(filterImages(
     filterImagesByStatus(rescueGridImages, statusFilter, statusFilterOpts),
     { excludes: excludeTags, includes: includeTags, mode: effCaptionMode },
-  );
+  ), gridSort);
   const pending = images.filter((i) => i.status === 'pending' && !i.filename
     && !unresolvedRescueIds.has(i.id)).length;
   const triage = images.filter((i) => i.status === 'pending' && i.filename
@@ -1000,8 +1050,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
             </p>
             <div id="gf-images" className="scroll-mt-20 flex flex-col gap-2">
               {rescueGridImages.length > 0 && (
-                <GridStatusFilter value={statusFilter} counts={statusCounts}
-                  onChange={setStatusFilter} />
+                // One wrapping row at 400 px: the decision chips flow, the Sort
+                // control drops onto its own line instead of forcing a scrollbar.
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                  <GridStatusFilter value={statusFilter} counts={statusCounts}
+                    onChange={setStatusFilter} />
+                  <GridSortSelect value={gridSort} images={rescueGridImages}
+                    onChange={setGridSort} />
+                </div>
               )}
               {filtersActive && (
                 <GridFilterBar excludes={excludeTags} includes={includeTags}

@@ -681,6 +681,43 @@ def _res_bucket_counts(bank_id) -> dict:
     return {bid: int(got.get(bid, 0)) for bid, _lo, _hi in _RES_BUCKETS}
 
 
+# --- explicit grid sorts -----------------------------------------------------
+# The grid can ORDER on what the passes already MEASURED, instead of only
+# filtering on it (asked for by nofaceman on Discord). One entry per sortable
+# quantity; the UI offers each in both directions as '<key>_desc' / '<key>_asc'.
+# Ids are user-facing query values — treat them like catalog labels and never
+# rename one without an alias.
+#   res       megapixels (width×height) — the original sort, kept as-is.
+#   aesthetic the ✨ Score pass's 1–10 rating: ↓ surfaces the keepers, ↑ the duds.
+#   sharp     the 🔎 Scan pass's Laplacian variance: ↑ surfaces the blurry misses.
+# Deliberately NOT here: noise / uniformity / bars / detail_ratio / NSFW. Each
+# already has a chip that filters AND orders worst-first, so a sort entry would
+# duplicate an existing gesture — and a fifteen-line menu slows the review down
+# more than the missing order costs.
+_SORT_KEYS = {
+    'aesthetic': lambda: BankImage.aesthetic_score,
+    'sharp': lambda: BankImage.blur_score,
+    'res': lambda: BankImage.width * BankImage.height,
+}
+GRID_SORTS = tuple(f'{k}_{d}' for k in ('res', 'aesthetic', 'sharp')
+                   for d in ('desc', 'asc'))
+
+
+def _sort_order(sort):
+    """The ORDER BY tuple for an explicit grid sort, or None for 'default' and
+    for anything unknown (an unrecognised value must degrade to the server's own
+    order, never 500). Rows the relevant pass never reached carry NULL and sink
+    to the END in BOTH directions — ordering by "is NULL" first (0 before 1)
+    — because a sort that opens on the un-measured pile is worse than no sort.
+    Tie-break on id so a page boundary is stable."""
+    key, _, direction = (sort or '').rpartition('_')
+    if direction not in ('asc', 'desc') or key not in _SORT_KEYS:
+        return None
+    col = _SORT_KEYS[key]()
+    ranked = col.desc() if direction == 'desc' else col.asc()
+    return (col.is_(None).asc(), ranked, BankImage.id.asc())
+
+
 def bank_payload(user_id, bank_id) -> dict | None:
     """Everything the bank workspace needs on one poll: counts, flag totals,
     duplicate/cluster summaries, live job, thresholds."""
@@ -875,9 +912,13 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
     caption AND the relpath — so captions double as searchable tags for a big dump
     ("red dress"), combinable with every other filter. Flag filters sort by the
     relevant score (worst first) so the review reads top-down.
-    ``sort`` ('res_desc'/'res_asc') overrides the order by image resolution
-    (megapixels = width×height, so 900×900 outranks 1200×300); unscanned rows
-    (width/height NULL) always sink to the end. It composes with every filter.
+    ``sort`` (a GRID_SORTS id — resolution / aesthetic / sharpness, each way)
+    overrides that order: resolution ranks on megapixels (width×height, so
+    900×900 outranks 1200×300), aesthetic on the ✨ Score rating, sharpness on
+    the 🔎 Scan Laplacian variance. Rows the matching pass never reached (NULL)
+    always sink to the end, in BOTH directions. It composes with every filter,
+    and — since "Select all in filter" / ▶ Review page this SAME endpoint — the
+    selection walks the order the user is looking at.
     ``res_bucket`` (a _RES_BUCKETS id) narrows to one resolution tier — a
     half-open [lo, hi) megapixel band — and composes with every filter AND the
     sort (the tier + Resolution↑/↓ combo is the mixed-dump cleanup flow).
@@ -999,14 +1040,11 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
             q = q.filter(area >= lo)
         if hi is not None:
             q = q.filter(area < hi)
-    if sort in ('res_desc', 'res_asc'):
-        # Explicit resolution sort wins over the flag worst-first order. Rank by
-        # megapixels (width×height), tie-break on id for a stable page boundary.
-        # Unscanned rows (either dimension NULL → NULL product) sink to the end
-        # in BOTH directions: order by "is NULL" first (0 before 1 in SQLite).
-        area = BankImage.width * BankImage.height
-        area_dir = area.desc() if sort == 'res_desc' else area.asc()
-        order = (area.is_(None).asc(), area_dir, BankImage.id.asc())
+    explicit = _sort_order(sort)
+    if explicit is not None:
+        # An explicit sort (resolution / aesthetic / sharpness) wins over the flag
+        # worst-first order; see _sort_order for the NULL-sinks-last contract.
+        order = explicit
     total = q.count()
     order_by = order if isinstance(order, tuple) else (order,)
     rows = q.order_by(*order_by).offset(max(0, int(offset))) \

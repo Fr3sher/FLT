@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-sort-grids-by-score-and-similarity',
+    date: '2026-07-27',
+    title: 'Sort a bank or a dataset by score, sharpness or face similarity — reviewing gets a lot faster',
+    blurb:
+      'Both grids already measured plenty (aesthetic rating, sharpness, face similarity to your reference) and let you filter on it, but nothing could put the best — or the worst — in front of you first. The bank\'s Sort menu now offers Aesthetic ↓/↑ and Sharpness ↓/↑ next to Resolution, and the dataset grid gains its own Sort with Face similarity ↓/↑. Sorting only reorders: it composes with every filter and chip you already had, and in a bank it is done over the whole filter rather than the page on screen, so "Select all in filter" and ▶ Review walk the same order you see. Images a pass never reached always sink to the end, in both directions — a "worst first" sort that opened on un-analysed images would hide exactly what you asked for. And a sort with no data behind it is greyed out naming the pass to run, instead of silently doing nothing. Suggested by nofaceman (Discord).',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-07-27-hugging-face-token-reaches-training',
     date: '2026-07-27',
     title: 'Gated models train again — your Hugging Face login is no longer lost on the way',

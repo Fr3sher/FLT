@@ -447,6 +447,37 @@ after the other:
 The ▶ button on a tile starts the same review **at that image**. A plain click
 on a tile still selects it for the bulk ✓/✕/⬆ bar, so both ways of working stay.
 
+## Sort a grid to review faster
+
+Filters answer *which images*; sorting answers *which one first*. Both grids
+have a **Sort** control, and it changes nothing but the order — the same images
+match, the counts stay put, and every bulk action keeps operating on exactly
+what the filters left.
+
+In a **bank** (View ▸ Sort, next to the tile size):
+
+- **Resolution ↓ / ↑** — megapixels, so a 900×900 outranks a wider 1200×300.
+- **Aesthetic ↓ / ↑** — the 1–10 rating from **✨ Score**. ↓ puts your keepers on
+  the first page; ↑ puts the duds there, which is usually the faster way to prune.
+- **Sharpness ↓ / ↑** — the Laplacian variance from **🔎 Scan quality**. ↑ brings
+  the blurry misses to you instead of making you hunt for them.
+
+In a **dataset** (above the grid, next to the decision chips): **Face similarity
+↓ / ↑**, the ArcFace cosine against your reference photo computed by **🎭 Analyze
+faces**. ↓ is "who looks most like my subject", ↑ is the shortlist to cut.
+
+Two things worth knowing:
+
+- **Images a pass never reached always go last**, in both directions. An
+  un-analysed image has no score — putting it first would bury the very images
+  you asked to see.
+- **A sort you have no data for is greyed out** and says which pass to run,
+  rather than pretending to reorder. Run the pass, and it lights up.
+
+In a bank the ordering is done by the database over the *whole* filter, not just
+the page you can see — so **Select all in filter** and **▶ Review one by one**
+walk the same order you are looking at.
+
 ## Clean the watermarks a bank found
 
 **🚩 Find watermarks** flags the images carrying an overlaid logo, URL or

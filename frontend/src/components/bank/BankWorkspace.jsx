@@ -23,6 +23,8 @@ import { VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 // Provenance wording (effective resolution, origin, black bars) — pure/testable.
 import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
+// Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
+import { bankSortOptions } from '../../utils/gridSort.js'
 
 const PAGE_SIZE = 120
 
@@ -428,8 +430,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     // whenever it isn't null, empty string included.
     if (f.subfolder != null) params.subfolder = f.subfolder
     if (f.search) params.search = f.search
-    // Resolution sort — sent to the grid AND to fetchAllIds so "Select all in
-    // filter" walks the same order. 'default' keeps the server's flag order.
+    // Grid sort (resolution / aesthetic / sharpness, each way) — sent to the grid
+    // AND to fetchAllIds so "Select all in filter" and > Review walk the SAME
+    // order the user is looking at. 'default' keeps the server's flag order.
     if (f.sort && f.sort !== 'default') params.sort = f.sort
     // Resolution tier — a facet like the flags; also flows to fetchAllIds so
     // "Select all in filter" stays scoped to the active tier.
@@ -1041,7 +1044,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </FilterGroup>
 
           {/* Resolution tiers — one active at a time; re-click clears.
-              Composes with every filter and with the Resolution ↑/↓ sort. */}
+              Composes with every filter and with the Sort menu below. */}
           {shownResBuckets.length > 0 && (
             <FilterGroup label="📐 Resolution">
               {shownResBuckets.map((b) => (
@@ -1096,13 +1099,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <GroupLabel>View</GroupLabel>
           <label className="flex items-center gap-1 text-xs text-content-muted">
             Sort
+            {/* Order the grid on what the passes MEASURED — resolution, aesthetic
+                rating, sharpness — so a review opens on what it is looking for.
+                Images the matching pass never reached sink to the end (never the
+                top), and an entry whose pass has produced nothing yet is greyed
+                out saying which pass to run. The value rides to the server, which
+                sorts in SQL: it applies to the WHOLE filter, not this page, so
+                "Select all in filter" and ▶ Review walk the same order.
+                max-w keeps the control inside a 400 px toolbar. */}
             <select value={filter.sort} onChange={(e) => setSort(e.target.value)}
-              title="Order the grid by image resolution (megapixels). Unscanned images sink to the end."
+              title="Order the grid by resolution, aesthetic rating or sharpness. Images a pass never reached sink to the end."
               aria-label="Sort the grid"
-              className="rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-content">
-              <option value="default">Default</option>
-              <option value="res_desc">Resolution ↓</option>
-              <option value="res_asc">Resolution ↑</option>
+              className="max-w-[11rem] rounded-md border border-border bg-surface px-2 py-0.5 text-xs text-content">
+              {bankSortOptions(counts).map((o) => (
+                <option key={o.id} value={o.id} disabled={o.disabled} title={o.title}>
+                  {o.label}
+                </option>
+              ))}
             </select>
           </label>
           <span className="ml-auto" />
