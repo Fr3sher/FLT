@@ -76,7 +76,8 @@ function Facts({ img }) {
       {(img.flags || []).map((f) => chip(f, FLAG_TEXT[f] || f, 'bg-amber-500/20 text-amber-200'))}
       {img.status === 'keep' && chip('st', '✓ already kept', 'bg-emerald-500/25 text-emerald-200')}
       {img.status === 'reject' && chip('st', '✕ already rejected', 'bg-rose-500/25 text-rose-200')}
-      {img.promoted_dataset_id != null && chip('pr', '⬆ promoted', 'bg-indigo-500/25 text-indigo-200')}
+      {img.promoted_dataset_id != null && chip('pr', '⬆ promoted to a dataset', 'bg-indigo-500/25 text-indigo-200')}
+      {img.promoted_bank_id != null && chip('prb', '⬆ promoted to another bank', 'bg-indigo-500/25 text-indigo-200')}
     </div>
   )
 }

@@ -339,6 +339,44 @@ def bank_promote(bank_id):
                   data.get('image_ids') or [], dataset_id)
 
 
+@bp.post('/bank/<int:bank_id>/promote-to-bank')
+def bank_promote_to_bank(bank_id):
+    """⬆ Promote's SECOND destination: copy the selection into a brand-new bank
+    instead of a dataset — isolating candidates out of a big dump without
+    committing them to a training container. Same shape as /bank/from-dataset:
+    202 + background job, and the new bank's id back so the UI can jump to the
+    bank being filled. Empty image_ids = every kept image.
+
+    The files are COPIED: banks never share theirs, and the app rewrites images
+    in place, so anything cheaper would make the two banks one at the first
+    re-crop. 409 while another pass runs on the SOURCE bank."""
+    data = request.get_json(silent=True) or {}
+    try:
+        new_id = banks.start_bank_promote(_app(), LOCAL_USER, bank_id,
+                                          data.get('image_ids') or [],
+                                          data.get('name'))
+    except bank_jobs.BankJobBusy as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'id': new_id}), 202
+
+
+@bp.get('/bank/<int:bank_id>/selection-size')
+def bank_selection_size(bank_id):
+    """How many images a promotion would copy and what they WEIGH — the number
+    the confirmation shows before the click. ?ids=1,2,3 for a selection, absent
+    for every kept image. Images are ~300 KB apiece so this is usually a
+    footnote; video is three orders of magnitude above, which is exactly why the
+    dialog states the measured figure instead of assuming one."""
+    raw = request.args.get('ids')
+    ids = [int(p) for p in raw.split(',') if p.strip().isdigit()] if raw else []
+    out = banks.selection_size(LOCAL_USER, bank_id, ids)
+    if out is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(out)
+
+
 @bp.get('/bank/<int:bank_id>/promotable')
 def bank_promotable(bank_id):
     """How many kept images 'promote all' would copy into ?dataset_id right now
