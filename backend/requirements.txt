@@ -5,7 +5,7 @@ SQLAlchemy==2.0.45
 Werkzeug==3.1.6
 requests==2.33.0
 python-dotenv==1.2.2
-Pillow==12.2.0
+Pillow==12.3.0
 psutil>=5.9.8
 huggingface-hub>=0.24     # Publish dataset to the HF Hub (pure-python, light): HfApi + upload_folder
 PyYAML>=6.0               # Parse ComfyUI's extra_model_paths.yaml (was only transitive via huggingface-hub); guarded import degrades gracefully if absent
