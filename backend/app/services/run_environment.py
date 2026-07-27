@@ -160,27 +160,50 @@ def torch_info():
 # --- GPU -----------------------------------------------------------------------
 
 def _gpu_probe():
+    # memory.total rides along in the SAME query — it costs nothing extra and it
+    # is what lets the training panel advise "you can turn the memory savers off"
+    # instead of making every user guess what their card takes. nvidia-smi prints
+    # it as "24564 MiB"; anything unparseable is simply absent (never a claim).
     proc = subprocess.run(
-        ['nvidia-smi', '--query-gpu=name,driver_version', '--format=csv,noheader'],
+        ['nvidia-smi', '--query-gpu=name,driver_version,memory.total',
+         '--format=csv,noheader'],
         capture_output=True, text=True, timeout=_SMI_TIMEOUT,
         creationflags=_no_window())
     if proc.returncode != 0:
         return None
     line = ((proc.stdout or '').strip().splitlines() or [''])[0]
-    name, _, driver = line.partition(',')
-    name = name.strip()
+    parts = [p.strip() for p in line.split(',')]
+    name = parts[0] if parts else ''
     if not name:
         return None
     out = {'name': name}
-    if driver.strip():
-        out['driver'] = driver.strip()
+    if len(parts) > 1 and parts[1]:
+        out['driver'] = parts[1]
+    if len(parts) > 2:
+        m = re.search(r'(\d+)', parts[2])
+        if m:
+            # Reported in MiB. Rounded to one decimal GiB — a 24 GB card reports
+            # 24564 MiB (23.99 GiB), so flooring to an int would call it 23.
+            out['vram_gb'] = round(int(m.group(1)) / 1024.0, 1)
     return out
 
 
 def gpu_info():
-    """{'name': 'NVIDIA GeForce RTX 4090', 'driver': '...'} or None (no NVIDIA
-    card, nvidia-smi absent, a cloud launch from a GPU-less machine)."""
+    """{'name': 'NVIDIA GeForce RTX 4090', 'driver': '...', 'vram_gb': 24.0} or
+    None (no NVIDIA card, nvidia-smi absent, a cloud launch from a GPU-less
+    machine). `vram_gb` may be missing on its own if the driver didn't report it —
+    callers must treat an absent value as "unknown", never as "small"."""
     return _memo('gpu', _gpu_probe)
+
+
+def local_vram_gb():
+    """Total VRAM of this machine's first NVIDIA GPU in GiB, or None when it can't
+    be known. The ONLY consumer-facing use is advisory (see the memory-saving
+    levers in lora_training): a None must always degrade to generic guidance, and
+    a detected value never overrides a user's explicit choice."""
+    gpu = gpu_info() or {}
+    v = gpu.get('vram_gb')
+    return v if isinstance(v, (int, float)) and v > 0 else None
 
 
 # --- base-model file identity --------------------------------------------------
@@ -279,6 +302,8 @@ def capture(base_model=None) -> dict:
         env['gpu'] = gpu.get('name')
         if gpu.get('driver'):
             env['gpu_driver'] = gpu['driver']
+        if gpu.get('vram_gb'):
+            env['gpu_vram_gb'] = gpu['vram_gb']
     base = base_model_identity(base_model)
     if base:
         env['base_file'] = base

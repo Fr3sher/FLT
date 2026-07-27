@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-memory-saving-levers',
+    date: '2026-07-27',
+    title: 'A bigger card no longer pays a 24 GB tax — quantisation and low-VRAM streaming are now yours to switch off',
+    blurb:
+      'Every training recipe was tuned so a 12B model fits in 24 GB: the base model and the text encoder are quantised and the trainer streams blocks between CPU and GPU. That is what makes training fit on most cards — and it is pure loss on a card that never needed it, costing precision and a lot of speed. Advanced options → Memory saving now exposes the three switches, and the help line is indexed on YOUR card: a 32 GB GPU is told it can turn them off and roughly what the family needs without them, a 12 GB one is told to leave them on. Nothing changed for anyone who does not touch it — the defaults are exactly what they were, on every family. One honest warning if you go too far: on Windows there is no clean out-of-memory error, the run just crawls for hours while the driver pages to system RAM. Thanks to bobba84 (GitHub) for asking.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',
