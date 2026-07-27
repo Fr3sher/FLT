@@ -27,6 +27,7 @@ import {
   readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
 import { kreaUnavailableReason, groundingDescription, kreaFramingAdvisory } from '../../utils/kreaEngine.js';
+import { comfyEnumUnavailableReason } from '../../utils/comfyEnumSupport.js';
 import {
   SUBJECT_TYPES, SUBJECT_TYPE_LABELS, SUBJECT_TYPE_HINTS,
   normalizeSubjectType, framingLabel, defaultPresetKey,
@@ -555,10 +556,19 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
   const kleinAssetHint = kleinMissingWords.length
     ? `⚠ Klein ${kleinMissingWords.join(' + ')} missing — download it in the Setup step`
     : '⚠ Klein model missing — download it in the Setup step (models/unet/klein/)';
+  // A FOURTH cause, ahead of the weights: ComfyUI is reachable and every file is in
+  // place, but it doesn't offer a widget VALUE the graph pins. That is how the
+  // `beta57` scheduler took Klein out for everyone without the RES4LYF node pack
+  // (reported by IndependentProcess0 on Reddit) while every other check went green.
+  // The shipped graph no longer pins such a value; this stays as the net for the
+  // next one and for user-edited workflow files. Nothing is silently substituted,
+  // so it is said before the click instead of as a raw ComfyUI 400 after it.
+  // See utils/comfyEnumSupport.js.
+  const kleinEnumHint = comfyEnumUnavailableReason(caps.comfyui?.klein_unsupported_enums);
   const kleinHint = klAvailable ? null
     : !enabledEngines.includes('klein') ? '⚠ Klein is disabled in Settings (engines)'
     : !caps.comfyui?.reachable ? '⚠ Configure ComfyUI in Settings'
-    : kleinAssetHint;
+    : kleinEnumHint || kleinAssetHint;
   // Krea has one more failure mode than Klein — a missing CUSTOM-NODE PACK — and
   // "install a node pack" is a different action from "place a weight file", so
   // the reason is computed (and unit-tested) rather than collapsed into one

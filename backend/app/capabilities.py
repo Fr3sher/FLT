@@ -1131,7 +1131,20 @@ def probe(force=False) -> dict:
     klein_invalid = _keh.klein_invalid_assets()
     klein_blocking_invalid = any(
         i['blocking'] and i['asset'] in _keh.KLEIN_REQUIRED for i in klein_invalid)
-    klein_ready = (comfy['ok'] and bool(_keh.resolve_klein_unet())
+    # Capability gap on the graph's WIDGET VALUES, not its nodes. The shipped Klein
+    # workflow used to pin `scheduler: "beta57"`, a value the third-party RES4LYF
+    # pack injects into ComfyUI's CORE list — so a stock install passed every asset
+    # AND node check here, went green, and then refused the very first generation
+    # with a raw ComfyUI 400 (reported by IndependentProcess0 on Reddit). That
+    # value is gone, but the blind spot it exposed is not: this is the net for the
+    # next one, and for a workflow file a user has edited themselves. Nothing is
+    # substituted (a scheduler changes the render), so the gap has to be visible
+    # BEFORE a batch is launched, which means here. /object_info is cached, and
+    # this fails OPEN — an unreachable ComfyUI reports no gap, `reachable` already
+    # says that.
+    klein_unsupported_enums = _keh.klein_unsupported_enums() if comfy['ok'] else []
+    klein_ready = (comfy['ok'] and not klein_unsupported_enums
+                   and bool(_keh.resolve_klein_unet())
                    and bool(_keh.resolve_klein_vae())
                    and bool(_keh.resolve_klein_text_encoder())
                    and not klein_blocking_invalid)
@@ -1214,6 +1227,10 @@ def probe(force=False) -> dict:
             # (subset of klein_model / klein_text_encoder / klein_vae / klein_lora).
             # Empty required-trio => the Klein engine is asset-ready.
             'klein_missing': klein_missing,
+            # Widget values the shipped Klein graph needs that THIS ComfyUI doesn't
+            # offer: [{node_id, class_type, input, value, pack, url}]. Empty on a
+            # capable install AND on an unreachable one (fail-open).
+            'klein_unsupported_enums': klein_unsupported_enums,
             # Krea 2 Edit gaps, kept apart from Klein's: asset KEYS not on disk
             # (krea_edit_helper.KREA_ASSETS) and the custom-node class_types this
             # ComfyUI doesn't expose. Empty + empty => the engine is ready.

@@ -15,6 +15,18 @@ or a future change reintroduces a custom node the target ComfyUI lacks, the rout
 answers one actionable "install pack X, restart ComfyUI" 409 instead of ComfyUI's
 raw 400 'missing_node_type'.
 
+Widget VALUES are part of that portability, and this is where it was missed
+(2026-07-27, reported by IndependentProcess0 on Reddit). Node 77 used to sample
+with `scheduler: "beta57"`, which is NOT a ComfyUI scheduler: the RES4LYF pack
+appends it to the CORE list at import (`SCHEDULER_NAMES.append("beta57")`), so on
+the machine this workflow was captured on even a plain KSampler accepted it — and
+on every install without that pack, generation died with ComfyUI's raw
+"Value not in list: scheduler". The graph contained no third-party NODE, so the
+preflight above saw nothing wrong. It now uses `simple`, which every ComfyUI has
+and which four other shipped graphs already use. Do not "improve" it back to a
+value that works on your machine without checking it against a stock install —
+`backend/tests/test_workflow_portability.py` enforces exactly that, offline.
+
 Lifted from the parent project's app/services/klein_edit_helper.py for LoRA
 Dataset Studio: SRC's module-level COMFYUI_INPUT_DIR/COMFYUI_OUTPUT_DIR constants
 become live `cfg.comfyui_dir(...)` calls (config.json changes take effect without
@@ -441,6 +453,42 @@ def klein_missing_nodes(workflow=None):
     if shipped and not out:
         _nodes_ok_until = time.time() + _NODES_OK_TTL_S
     return out
+
+
+_enums_ok_until = 0.0
+
+
+def klein_unsupported_enums(workflow=None):
+    """[{node_id, class_type, input, value, pack, url}] for every widget value the
+    Klein edit workflow pins that the target ComfyUI does NOT accept. Loads the
+    shipped 'improve skin.json' when no `workflow` is given.
+
+    Sibling of `klein_missing_nodes`, and the gap it leaves: that one compares
+    class_types, so a graph built entirely from CORE nodes passes it — and then
+    dies on a core KSampler because one of its VALUES (the `beta57` scheduler,
+    which the RES4LYF pack registers into core) isn't there. Same probe, same
+    /object_info payload, one level deeper into it.
+
+    Same success-only TTL as the node verdict, and for the same reason: the
+    capabilities probe calls this every 30 s, /object_info is a multi-MB payload,
+    and its own cache is only 60 s — without this the app would re-download it
+    every minute, forever, on a machine that is perfectly fine. Only an
+    "everything supported" verdict is cached; a gap or an unreachable probe is
+    never cached, so installing the missing pack and restarting ComfyUI clears the
+    warning immediately instead of after a delay.
+
+    FAIL-OPEN: [] when /object_info can't be fetched."""
+    global _enums_ok_until
+    from ..utils.comfyui import unsupported_enum_values
+    shipped = workflow is None
+    if shipped:
+        if time.time() < _enums_ok_until:
+            return []
+        workflow = load_workflow_local(str(WORKFLOW_IMPROVE_SKIN_PATH)) or {}
+    found = unsupported_enum_values(workflow)
+    if shipped and not found:
+        _enums_ok_until = time.time() + _NODES_OK_TTL_S
+    return found
 
 
 def format_missing_nodes_message(missing_nodes):

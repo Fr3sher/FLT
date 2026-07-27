@@ -79,10 +79,20 @@ function comfyuiStep(caps) {
   const kleinInvalid = Array.isArray(c.klein_invalid) ? c.klein_invalid : []
   const blockingInvalid = kleinInvalid.filter(
     (i) => i && i.blocking && KLEIN_REQUIRED_ASSETS.includes(i.asset))
+  // Widget values the graph pins that THIS ComfyUI doesn't offer. Every file can be
+  // in place and every node class present, and the first generation still dies on a
+  // raw ComfyUI 400 — that was the `beta57` scheduler, which the RES4LYF pack adds
+  // to ComfyUI's own list (reported by IndependentProcess0 on Reddit). The shipped
+  // graph is clean now; this remains the net. Nothing is substituted (a scheduler
+  // changes the render), so this step is where the user learns it. Empty on a
+  // capable install AND on an unreachable one — the probe fails open.
+  const unsupportedEnums = Array.isArray(c.klein_unsupported_enums)
+    ? c.klein_unsupported_enums : []
   // hasKlein now reflects FULL readiness (all three weights, each a real file), not
   // just the UNET — so the step no longer goes "nothing to do" while the TE/VAE are
   // still missing or while a present asset is actually an unusable stub.
   const hasKlein = missingRequired.length === 0 && blockingInvalid.length === 0
+    && unsupportedEnums.length === 0
   // Which assets to still offer a download for (required trio + recommended LoRA),
   // so each button can grey out on its own once its file lands.
   const kleinMissing = Array.isArray(c.klein_missing)
@@ -97,6 +107,10 @@ function comfyuiStep(caps) {
     unlocks: ['Klein engine', 'Test Studio'],
     status, reachable: !!c.reachable, hasKlein, kleinMissing, kleinInvalid, apiUrl: c.api_url || '',
     skipped,
+    // [{node_id, class_type, input, value, pack, url}] — render with
+    // comfyEnumUnavailableReason(), which names the node pack when we know it and
+    // never invents a ComfyUI version number when we don't.
+    unsupportedEnums,
     // Whether comfyui.base_dir actually points at a ComfyUI install (main.py + models/):
     // a wrong/portable-wrapper path scans an empty models/ and finds no checkpoints.
     // baseDir = the path this verdict was PROBED against — the UI must not show the

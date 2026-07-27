@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
+    date: '2026-07-27',
+    title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',
+    blurb:
+      'If Klein variations or watermark cleaning never worked for you, this was almost certainly why: our Klein workflows asked ComfyUI for a sampling scheduler called "beta57", which ComfyUI does not have. It comes from a community node pack (RES4LYF) that quietly adds it to ComfyUI\'s own list — so the graph ran on the machine it was built on and refused everywhere else, with the real reason buried in ComfyUI\'s console ("Value not in list: scheduler"). Nothing in the workflow hinted at the dependency. Both Klein workflows now use "simple", which every ComfyUI ships and which four of our other workflows already used. Being straight with you: this is a genuine change to how Klein images render, not just a fix — if you were among the few who could already generate, your results will shift a little. That is the deliberate price of everyone running the same pipeline instead of a lucky minority running one nobody else can reproduce. Two safety nets came with it: the app now checks our graphs against what YOUR ComfyUI actually offers and names any missing value (and the pack it comes from) on the Setup screen and the engine card, instead of letting you discover it mid-batch; and a test blocks any future workflow that depends on someone\'s custom nodes without saying so. Reported by IndependentProcess0 (Reddit).',
+    to: '/setup',
+  },
+  {
     id: '2026-07-27-sort-grids-by-score-and-similarity',
     date: '2026-07-27',
     title: 'Sort a bank or a dataset by score, sharpness or face similarity — reviewing gets a lot faster',

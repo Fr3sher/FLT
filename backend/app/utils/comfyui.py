@@ -430,6 +430,29 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
         except Exception as e:
             logger.error(f"Error checking for Ollama dependency: {e}")
 
+    # Capability preflight on the graph itself, LOCAL only. Our workflows pin widget
+    # values (a scheduler, a sampler, a dtype) that a given install only accepts if
+    # it is recent enough or loaded the node pack that registers them. Left alone,
+    # ComfyUI answers a bare 400 whose explanation lives in ComfyUI's console, not
+    # in the app — the report that prompted this (IndependentProcess0, Reddit) is
+    # exactly that. One CACHED /object_info, so no extra request per generation, and
+    # fail-OPEN when the probe is unreachable. Local only: /object_info is fetched
+    # from api_address(), so a remote worker's graph must not be judged against the
+    # local install's capabilities.
+    if is_local:
+        try:
+            unsupported = unsupported_enum_values(prompt_workflow)
+        except Exception as e:                    # a broken probe must never block
+            logger.warning(f"Enum capability preflight skipped: {e}")
+            unsupported = []
+        if unsupported:
+            message = format_unsupported_enums_message(unsupported)
+            logger.error(f"Workflow refused before queuing — {message}")
+            # Same deterministic tag as a ComfyUI 400: retrying or restarting
+            # changes nothing, so the queue must fail the job now, not requalify it
+            # as an outage.
+            return None, f"WORKFLOW_INVALIDE (ComfyUI capability): {message}"
+
     try:
         payload = {"prompt": prompt_workflow, "client_id": client_id}
         headers = {'Content-Type': 'application/json'}
@@ -634,7 +657,94 @@ def fetch_output_image_bytes(filename, subfolder='', timeout=30):
 # /object_info is the heaviest probe in the app (megabytes of node schemas). Short
 # TTL cache so one user action never pays for it twice. See fetch_object_info_classes.
 _OBJECT_INFO_TTL = 60
-_object_info_cache = {"data": None, "timestamp": 0, "key": None}
+_object_info_cache = {"data": None, "timestamp": 0, "key": None, "enums": None}
+
+# Widget inputs whose accepted values describe what a ComfyUI install CAN DO — a
+# capability that depends on its version and on the node packs it loaded — as
+# opposed to what it HAPPENS TO HAVE on disk (`ckpt_name`, `unet_name`,
+# `lora_name`, `clip_name`, `vae_name`, `image`…). Only these are distilled from
+# /object_info and checked against our graphs.
+#
+# The distinction matters and is deliberate: a missing FILE already has its own
+# named error paths (the Setup asset gaps, the auto-download offers) and no
+# amount of updating ComfyUI produces it, while a missing enum VALUE is only ever
+# fixed by updating ComfyUI or installing the pack that registers it. Keeping the
+# file-valued combos out also keeps this list small — the accepted-value arrays
+# for model names are the bulk of an 8.8 MB /object_info payload.
+_VERSION_SENSITIVE_INPUTS = frozenset({
+    'scheduler', 'sampler_name', 'weight_dtype', 'dtype', 'type', 'device',
+    'precision', 'upscale_method', 'downscale_method', 'crop',
+})
+
+# Values our shipped graphs require that a STOCK ComfyUI does not provide, mapped
+# to what actually provides them. Without this the failure message can only say
+# "your ComfyUI doesn't accept this", which sends people to update ComfyUI when
+# updating ComfyUI will never help.
+#
+# `beta57` is the case reported by IndependentProcess0 (Reddit): it is NOT a
+# recent core-ComfyUI scheduler — it is absent from core at every tag up to and
+# including the current one. It is registered by the RES4LYF node pack, which
+# appends it to comfy.samplers.SCHEDULER_HANDLERS/SCHEDULER_NAMES at import time,
+# so once that pack is installed the CORE KSampler accepts it too. That is why it
+# works on an install that has RES4LYF (for unrelated nodes) and fails everywhere
+# else with a plain "Value not in list" on KSampler.
+ENUM_VALUE_SOURCES = {
+    ('scheduler', 'beta57'): ('RES4LYF', 'https://github.com/ClownsharkBatwing/RES4LYF'),
+    ('scheduler', 'bong_tangent'): ('RES4LYF', 'https://github.com/ClownsharkBatwing/RES4LYF'),
+}
+
+
+def _distill_object_info(data):
+    """{class_type: {input_name: frozenset(accepted values)}} for the COMBO inputs
+    named in `_VERSION_SENSITIVE_INPUTS`.
+
+    ComfyUI declares a combo input as `[[<choice>, <choice>, …], {options}]` — the
+    type slot is a literal list of the accepted values. That list is the exact one
+    ComfyUI prints in its "Value not in list" validation error, so comparing our
+    graph against it reproduces ComfyUI's own verdict without a round trip.
+
+    A class with no checkable input maps to an empty dict (it must still appear so
+    the class-presence view keeps every key)."""
+    out = {}
+    for cls, spec in (data or {}).items():
+        combos = {}
+        sections = (spec.get('input') or {}) if isinstance(spec, dict) else {}
+        if isinstance(sections, dict):
+            for section in ('required', 'optional'):
+                decls = sections.get(section)
+                if not isinstance(decls, dict):
+                    continue
+                for name, decl in decls.items():
+                    if name not in _VERSION_SENSITIVE_INPUTS:
+                        continue
+                    choices = decl[0] if isinstance(decl, (list, tuple)) and decl else None
+                    if isinstance(choices, list) and all(isinstance(v, str) for v in choices):
+                        combos[name] = frozenset(choices)
+        out[cls] = combos
+    return out
+
+
+def _fetch_object_info(timeout=8):
+    """(classes, enums) from ONE `GET /object_info`, both served by the same short
+    TTL cache — the payload is the heaviest probe in the app, so the enum check
+    below must never cost a second request. (None, None) on any failure."""
+    addr = api_address()
+    now = time.time()
+    if (_object_info_cache["data"] is not None and _object_info_cache["key"] == addr
+            and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
+        return _object_info_cache["data"], _object_info_cache["enums"]
+    try:
+        resp = requests.get(urljoin(addr, '/object_info'), timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as e:
+        logger.warning(f"fetch_object_info_classes failed: {e}")
+        return None, None    # a failed probe is never cached (fail-open, retried at once)
+    if not isinstance(data, dict):
+        return None, None
+    classes, enums = set(data.keys()), _distill_object_info(data)
+    _object_info_cache.update(data=classes, timestamp=now, key=addr, enums=enums)
+    return classes, enums
 
 
 def fetch_object_info_classes(timeout=8):
@@ -654,22 +764,92 @@ def fetch_object_info_classes(timeout=8):
     set only changes when ComfyUI restarts or a pack is installed; the refresh-models
     button (`clear_model_caches`) drops the cache, so a freshly installed node is
     visible on demand rather than after the TTL."""
-    addr = api_address()
-    now = time.time()
-    if (_object_info_cache["data"] is not None and _object_info_cache["key"] == addr
-            and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
-        return _object_info_cache["data"]
-    try:
-        resp = requests.get(urljoin(addr, '/object_info'), timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        classes = set(data.keys()) if isinstance(data, dict) else None
-    except Exception as e:
-        logger.warning(f"fetch_object_info_classes failed: {e}")
-        return None      # a failed probe is never cached (fail-open, retried at once)
-    if classes is not None:
-        _object_info_cache.update(data=classes, timestamp=now, key=addr)
-    return classes
+    return _fetch_object_info(timeout)[0]
+
+
+def fetch_object_info_enums(timeout=8):
+    """{class_type: {input_name: frozenset(accepted values)}} for the capability
+    inputs (see `_VERSION_SENSITIVE_INPUTS`), from the SAME cached /object_info as
+    `fetch_object_info_classes` — never a second request.
+
+    None (not an empty dict) when the probe failed, so callers can fail OPEN."""
+    return _fetch_object_info(timeout)[1]
+
+
+def unsupported_enum_values(workflow, enums=None):
+    """Every hardcoded widget value in `workflow` that the target ComfyUI does NOT
+    accept: [{node_id, class_type, input, value, pack, url}], sorted stably.
+
+    This is the detection half of the "designed for THIS machine" bug class: our
+    shipped graphs pin a scheduler / sampler / dtype, and an install that doesn't
+    offer that exact value answers a raw ComfyUI 400 the user only ever sees by
+    reading ComfyUI's own console.
+
+    It deliberately does NOT substitute an equivalent value. A scheduler changes
+    the render, so a silent swap would split users into two populations producing
+    different images from the same app and the same settings — divergence nobody
+    can see until they compare screenshots weeks later. One render path for
+    everyone; when it isn't available, say so and stop.
+
+    FAIL-OPEN in both directions:
+      * probe unreachable (`enums` is None) -> [] — never block a working install;
+      * class_type absent from /object_info -> skipped, because that is a MISSING
+        NODE, which the node preflight already reports with the right fix."""
+    if enums is None:
+        enums = fetch_object_info_enums()
+    if not enums:
+        return []
+    out = []
+    for node_id, node in (workflow or {}).items():
+        if not isinstance(node, dict):
+            continue
+        accepted_by_input = enums.get(node.get('class_type'))
+        if not accepted_by_input:
+            continue
+        inputs = node.get('inputs')
+        if not isinstance(inputs, dict):
+            continue
+        for name, value in inputs.items():
+            accepted = accepted_by_input.get(name)
+            # Non-str = a link ([node, slot]) or a number, never a combo choice.
+            if accepted is None or not isinstance(value, str) or value in accepted:
+                continue
+            pack, url = ENUM_VALUE_SOURCES.get((name, value), (None, None))
+            out.append({'node_id': str(node_id), 'class_type': node.get('class_type'),
+                        'input': name, 'value': value, 'pack': pack, 'url': url})
+    out.sort(key=lambda i: (i['input'], i['value'], i['node_id']))
+    return out
+
+
+def format_unsupported_enums_message(items):
+    """One paste-safe English sentence for an enum gap: which value is missing,
+    where it comes from when we know, and the action that fixes it.
+
+    Paste-safe = no filesystem path and no personal data — this text is meant to
+    be copied into a Discord/Reddit thread verbatim. Values are de-duplicated:
+    the same scheduler pinned on three nodes is ONE thing to fix."""
+    seen, bits, known_pack = set(), [], False
+    for i in items or []:
+        key = (i.get('input'), i.get('value'))
+        if key in seen:
+            continue
+        seen.add(key)
+        where = f'{i.get("input")} = "{i.get("value")}" (on {i.get("class_type")})'
+        pack, url = i.get('pack'), i.get('url')
+        if pack:
+            known_pack = True
+            where += f' — provided by the {pack} node pack'
+            if url:
+                where += f': {url}'
+        bits.append(where)
+    fix = ("Install that node pack in ComfyUI (ComfyUI-Manager ▸ Install via Git URL), "
+           "then restart ComfyUI." if known_pack else
+           "Update ComfyUI and its node packs (ComfyUI-Manager ▸ Update All), then "
+           "restart ComfyUI.")
+    return ("Your ComfyUI does not offer a value this workflow requires: "
+            + '; '.join(bits) + '. '
+            + "The app will not quietly swap in a different value — that would change "
+              "how your images look compared to everyone else's. " + fix)
 
 
 def free_comfyui_vram(worker_url=None):
@@ -1204,6 +1384,8 @@ def clear_model_caches() -> None:
         c["timestamp"] = 0
         if "key" in c:
             c["key"] = None
+        if "enums" in c:      # the enum view rides the same /object_info payload
+            c["enums"] = None
 
 
 def get_zimage_loras():
