@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-edit-the-reference-for-free-on-your-own-gpu',
+    date: '2026-07-27',
+    title: 'Edit your reference photo for free — Klein and Krea 2 Edit joined ✦ Edit reference',
+    blurb:
+      '✦ Edit reference offered three paid API engines and nothing else, on the one gesture you naturally repeat until it looks right — every "add glasses, no, warmer light, no, plain grey background" cost another API call. Klein and Krea 2 Edit now sit at the top of that list. They render on your own ComfyUI: no key, no bill, nothing leaving your machine, so you can try a prompt ten times. They run as a job on the same queue as your generations, so you can still close the tab and come back to the Before/After. Three things are now said BEFORE you press Generate instead of after a render: what the edit costs (the "paid API call" line no longer appears on a free engine), which reference photos that engine actually uses (Krea edits the main reference only; Klein also takes the dataset\'s extra refs), and — when an engine is not ready on your machine — the one action that fixes it, in the same words the generation panel uses. If you have no ComfyUI at all, the two local engines simply do not appear rather than sitting there greyed out forever.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-27-rerun-upscale-and-improve',
     date: '2026-07-27',
     title: 'Tuned the Upscale & improve settings? Re-run the pass on a tile in one click',

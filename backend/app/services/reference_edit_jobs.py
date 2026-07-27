@@ -9,10 +9,20 @@ payload — which survives a tab sleep AND a reload.
 
 This registry holds ONE pending edit per dataset:
   {status: running|ready|failed, engine, prompt, candidate_filename, error,
-   token, started_at, _touched, _dir}
+   token, started_at, _touched, _dir, _job_id, _act_token}
+
 It is IN-MEMORY only (like dataset_activity) — a job dies with the process, which
 is correct for a transient candidate awaiting Keep. The candidate FILE on disk is
 reclaimed by a TTL sweep so a crashed process never leaks it.
+
+TWO LANES, ONE REGISTRY. An API edit is a blocking call made from a service
+thread, which fills this entry itself. A LOCAL edit (Klein / Krea 2 Edit) is a
+ComfyUI job: it is enqueued on the app's existing image queue and the queue
+worker calls back when it lands — the same waiting path every local generation
+already uses, not a second one. `_job_id` is what lets that callback find its way
+home (``find_by_job``), and `_act_token` is the dataset-activity token the
+callback must close (an API worker closes its own in a ``finally``; a local one
+has no thread left to do it).
 
 Leak-proofing (what replaces the old client-held "browser GC"):
   * Keep      -> promote + delete the candidate file, clear the entry.
@@ -71,12 +81,50 @@ def start(dataset_id, dsdir, engine, prompt):
         _jobs[dataset_id] = {'status': 'running', 'engine': str(engine),
                              'prompt': str(prompt), 'candidate_filename': None,
                              'error': None, 'token': token,
-                             'started_at': now, '_touched': now, '_dir': dsdir}
+                             'started_at': now, '_touched': now, '_dir': dsdir,
+                             '_job_id': None, '_act_token': None}
     # Disk I/O outside the lock.
     if prev and prev.get('candidate_filename') and prev.get('_dir'):
         _unlink(os.path.join(prev['_dir'], prev['candidate_filename']))
     sweep(dsdir)
     return token
+
+
+def attach_job(dataset_id, token, job_id, act_token=None, user_id=None):
+    """Record the ComfyUI queue job (and the dataset-activity token) a LOCAL edit
+    is waiting on. Returns False when the job was already superseded between the
+    enqueue and this call — the caller then cancels the job it just queued rather
+    than leaving a render nobody is waiting for.
+
+    ``user_id`` rides along only so the completion callback can name the candidate
+    file the way the API worker does: it runs in the queue thread, with no request
+    and no idea who owns the dataset."""
+    with _lock:
+        e = _jobs.get(dataset_id)
+        if not e or e['token'] != token:
+            return False
+        e['_job_id'] = str(job_id)
+        e['_act_token'] = act_token
+        e['_user_id'] = user_id
+        e['_touched'] = time.time()
+        return True
+
+
+def find_by_job(job_id):
+    """Resolve a queue job_id back to the edit waiting on it:
+    {dataset_id, token, dir, act_token, engine}, or None when nothing is waiting
+    (discarded, superseded, or purged by the TTL while ComfyUI rendered).
+    Deliberately does NOT touch the TTL — a job that just landed is proof the
+    user is still owed an answer, so ``get`` bumping it is the caller's job."""
+    key = str(job_id)
+    with _lock:
+        for dataset_id, e in _jobs.items():
+            if e.get('_job_id') == key:
+                e['_touched'] = time.time()
+                return {'dataset_id': dataset_id, 'token': e['token'],
+                        'dir': e.get('_dir'), 'act_token': e.get('_act_token'),
+                        'engine': e.get('engine'), 'user_id': e.get('_user_id')}
+    return None
 
 
 def set_ready(dataset_id, token, candidate_filename):
@@ -132,14 +180,31 @@ def peek(dataset_id):
         return _public(e) if e else None
 
 
+def pending_job(dataset_id):
+    """(queue job_id, activity token) of the edit currently registered, both None
+    when there is none or it is an API edit. Read WITHOUT dropping the entry, so
+    a caller about to supersede can cancel the outgoing render first."""
+    with _lock:
+        e = _jobs.get(dataset_id)
+        if not e:
+            return None, None
+        return e.get('_job_id'), e.get('_act_token')
+
+
 def clear(dataset_id, dsdir=None):
     """Drop the entry and (when ``dsdir`` is given) delete its candidate file.
     Idempotent — used by Keep (after commit), Discard, and reference-mutation
-    invalidation (crop/recrop/change)."""
+    invalidation (crop/recrop/change).
+
+    RETURNS the dropped entry (or None). A local edit abandoned while ComfyUI is
+    still rendering leaves a queue job and a dataset-activity token behind, and
+    the caller is the only one that can cancel/close them — dropping the entry
+    silently is how the ✦ badge used to sit there until the TTL."""
     with _lock:
         e = _jobs.pop(dataset_id, None)
     if e and dsdir and e.get('candidate_filename'):
         _unlink(os.path.join(dsdir, e['candidate_filename']))
+    return e
 
 
 def sweep(dsdir):

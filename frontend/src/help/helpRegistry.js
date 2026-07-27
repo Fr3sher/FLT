@@ -606,9 +606,13 @@ const TOPICS = [
 
   // ---- Action topics (kind 'action') -------------------------------------
   action('action-edit-reference', 'Edit the reference photo',
-    ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'openrouter', 'background',
+    ['edit', 'reference', 'prompt', 'chatgpt', 'nano banana', 'openrouter', 'klein',
+     'krea', 'krea 2 edit', 'local', 'free', 'comfyui', 'background',
      'glasses', 'retouch', 'before', 'after', 'keep', 'discard'],
     '/datasets?section=add', 'using-the-app',
+    // No one-time tip on purpose: the modal states the cost, the reference
+    // support and the availability gap PERMANENTLY, next to the control they
+    // apply to. A tip that repeats what is already on screen is noise.
     'the-character-walkthrough-reference-photo-trained-lora'),
   action('action-watermark-clean', 'Find & clean watermarks',
     ['watermark', 'clean', 'find', 'lama', 'klein', 'crop', 'remove'],

@@ -1,27 +1,37 @@
 /** ✦ Edit the reference photo with a prompt (+ optional extra reference images),
- * via any of the API engines (ChatGPT, Nano Banana Pro, OpenRouter — the list is
- * DERIVED from EDIT_ENGINES, never spelled out here).
+ * via any engine the install can run — the list is DERIVED from EDIT_ENGINES and
+ * from `engineOptions`, never spelled out here.
  *
- * The edit runs as a SERVER background job — slow (1-3 min) and PAID, so it must
- * not ride the client's fetch (a backgrounded mobile tab would kill it and lose
- * the paid result). This modal is DRIVEN BY SERVER STATE (`referenceEdit` from the
- * dataset payload): running → spinner, ready → Before/After, failed → error. That
- * makes it restore correctly after a tab sleep, a reload, or a reopen — there is
- * no long client request to lose.
+ * The edit runs as a SERVER background job — slow (1-3 min), and on an API engine
+ * PAID, so it must not ride the client's fetch (a backgrounded mobile tab would
+ * kill it and lose the paid result). This modal is DRIVEN BY SERVER STATE
+ * (`referenceEdit` from the dataset payload): running → spinner, ready →
+ * Before/After, failed → error. That makes it restore correctly after a tab
+ * sleep, a reload, or a reopen — there is no long client request to lose.
+ *
+ * TWO LANES, ONE FORM. The local engines (Klein, Krea 2 Edit) render on the
+ * user's own ComfyUI: free, private, and therefore the sane way to try five
+ * prompts. Three things then differ and every one of them is said BEFORE the
+ * click, not after the render: what it costs (editCostNote), which references it
+ * consumes (editRefNote / acceptsExtraEditRefs), and whether this install can run
+ * it at all (the `blocked` reason on each option).
  *
  * Keep promotes the candidate (atomic on the server); Discard deletes it; the ✕
  * just closes and LEAVES the job running (rediscovered on reopen). Modal idiom
  * mirrors CropModal: role=dialog, Escape closes, initial focus. */
 import { useEffect, useRef, useState } from 'react';
 import {
-  EDIT_ENGINES, ENGINE_LABELS, editBlockedReason, batchLiveNote, editPhase,
+  EDIT_ENGINES, LOCAL_ENGINES, editBlockedReason, batchLiveNote, editPhase,
+  editEngineOptions, editCostNote, editKeepNote, editRefNote, acceptsExtraEditRefs,
 } from './referenceEdit';
 
 const MAX_EDIT_REFS = 3;
 
 export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                                              defaultEngine = 'chatgpt', liveActivity = null,
-                                             referenceEdit = null,
+                                             referenceEdit = null, datasetExtraCount = 0,
+                                             comfyuiConfigured = false, engineAvailable = null,
+                                             engineReason = null,
                                              onEdit, onKeep, onDiscard, onClose }) {
   const [prompt, setPrompt] = useState('');
   const [engine, setEngine] = useState(EDIT_ENGINES.includes(defaultEngine) ? defaultEngine : 'chatgpt');
@@ -52,8 +62,31 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
   }, [onClose, busy]);
   useEffect(() => { if (phase === 'idle') promptRef.current?.focus(); }, [phase]);
 
-  const blocked = editBlockedReason(prompt, engine);
+  // Which engines this install can offer, and why not when it can't. Computed
+  // from the SAME capabilities the generation panel reads, so a missing Krea node
+  // pack is explained here in the words it is explained there.
+  const options = editEngineOptions({
+    comfyuiConfigured, available: engineAvailable || {}, reasonFor: engineReason,
+  });
+  const current = options.find((o) => o.engine === engine) || null;
+  // A stored default pointing at an engine this install dropped (ComfyUI removed,
+  // Klein was the primary) must not leave the form on a phantom selection.
+  useEffect(() => {
+    if (phase !== 'idle') return;
+    if (!options.some((o) => o.engine === engine)) {
+      const fallback = options.find((o) => o.usable) || options[0];
+      if (fallback) setEngine(fallback.engine);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [engine, phase, options.length]);
+
+  const blocked = editBlockedReason(prompt, engine, current?.blocked || null);
   const liveNote = batchLiveNote(liveActivity);
+  const refNote = editRefNote(engine, { datasetExtraCount });
+  const canAddRefs = acceptsExtraEditRefs(engine);
+  // A local engine can't take them: drop what was already staged rather than send
+  // a request the server will (rightly) refuse.
+  useEffect(() => { if (!canAddRefs) setEditRefs([]); }, [canAddRefs]);
 
   const addRefs = (files) => {
     const list = Array.from(files || []).filter((f) => f && f.type.startsWith('image/'));
@@ -105,7 +138,11 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
         {phase === 'running' ? (
           <div className="flex flex-col items-center gap-3 py-8">
             <span className="inline-block w-8 h-8 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin" aria-hidden />
-            <p className="text-content text-sm">Editing the reference… a “high” render can take 1–3 minutes.</p>
+            <p className="text-content text-sm">
+              {LOCAL_ENGINES.includes(referenceEdit?.engine)
+                ? 'Editing the reference on your GPU… it queues behind any generation already running.'
+                : 'Editing the reference… a “high” render can take 1–3 minutes.'}
+            </p>
             <p className="text-content-muted text-[0.6875rem] text-center">
               This runs on the server — you can close this tab and come back; the Before/After will be here.
             </p>
@@ -129,9 +166,11 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                   className="w-full rounded-lg bg-black object-contain max-h-[45vh]" />}
               </figure>
             </div>
+            {/* Worded from the engine that PRODUCED this candidate (the server
+                echoes it back), not from the current toggle: the user may have
+                closed and reopened the modal while it rendered. */}
             <p className="text-[0.6875rem] text-content-muted">
-              Keep replaces the reference — this can’t be undone after you Keep it. It changes
-              only future variations, not images already generated. Discard doesn’t refund the edit.
+              {editKeepNote(referenceEdit?.engine || engine)}
             </p>
             <div className="flex gap-2 justify-end flex-wrap">
               <button type="button" onClick={() => discard(false)} disabled={busy}
@@ -163,20 +202,43 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
                 className="w-full rounded-lg bg-surface-raised border border-border text-content text-sm p-2 resize-y disabled:opacity-40" />
             </label>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-content-subtle text-xs">Engine</span>
-              {EDIT_ENGINES.map((e) => (
-                <button key={e} type="button" onClick={() => setEngine(e)} disabled={busy}
-                  aria-pressed={engine === e}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 ${engine === e
-                    ? 'bg-indigo-500 text-white' : 'bg-surface-raised text-content-muted hover:bg-surface'}`}>
-                  {ENGINE_LABELS[e] || e}
+            {/* Engine pills. `flex-wrap` + `min-w-0` is what keeps five of them on
+                a 400px screen: they wrap onto a second and third row instead of
+                stretching the modal past the viewport. */}
+            <div className="flex items-center gap-1.5 flex-wrap min-w-0">
+              <span className="text-content-subtle text-xs w-full sm:w-auto">Engine</span>
+              {options.map((o) => (
+                <button key={o.engine} type="button" onClick={() => setEngine(o.engine)} disabled={busy}
+                  aria-pressed={engine === o.engine}
+                  title={o.blocked || undefined}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-semibold disabled:opacity-40 ${engine === o.engine
+                    ? 'bg-indigo-500 text-white'
+                    : o.usable
+                      ? 'bg-surface-raised text-content-muted hover:bg-surface'
+                      : 'bg-surface-raised text-content-subtle line-through decoration-1'}`}>
+                  {o.label}
                 </button>
               ))}
             </div>
 
+            {/* An unavailable LOCAL engine is still selectable — picking it is how
+                you find out WHY, and the reason names the one action that fixes
+                it. Greying it out silently was the failure mode this replaces. */}
+            {current?.blocked && (
+              <p className="text-[0.6875rem] text-amber-300 bg-amber-500/10 border border-amber-500/30 rounded-lg px-2.5 py-1.5">
+                {current.blocked}
+              </p>
+            )}
+
+            {refNote && (
+              <p className="text-[0.6875rem] text-content-muted">{refNote}</p>
+            )}
+
             {/* Optional extra reference images — transient inputs to THIS edit only,
-                never saved as the dataset's extra refs. */}
+                never saved as the dataset's extra refs. Hidden entirely for the
+                local engines: their graphs take file paths, so these bytes would
+                be dropped, and an input whose files vanish is worse than none. */}
+            {canAddRefs && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-content-subtle text-xs">Add reference images (optional)</span>
               {editRefs.map((f, i) => (
@@ -196,15 +258,14 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
               <input ref={inpRef} type="file" accept="image/*" multiple className="hidden" disabled={busy}
                 onChange={(e) => { addRefs(e.target.files); e.target.value = ''; }} />
             </div>
+            )}
 
             {phase === 'failed' && referenceEdit?.error && (
               <p className="text-[0.6875rem] text-red-300 bg-red-500/10 border border-red-500/30 rounded-lg px-2.5 py-1.5">
                 {referenceEdit.error}
               </p>
             )}
-            <p className="text-[0.6875rem] text-content-muted">
-              Each edit is a paid API call — Discard doesn’t refund it. A “high” render can take 1–3 minutes.
-            </p>
+            <p className="text-[0.6875rem] text-content-muted">{editCostNote(engine)}</p>
 
             <div className="flex gap-2 justify-end">
               <button type="button" onClick={onClose} disabled={busy}

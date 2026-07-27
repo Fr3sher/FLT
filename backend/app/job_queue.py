@@ -203,6 +203,16 @@ def _dispatch_completion(job, filename, failed):
             reason = job.error_message if job.error_message != 'generation failed' else None
             lora_test_studio.link_completed_test_image(job.job_id, filename,
                                                        failed=failed, reason=reason)
+        elif md.get('is_reference_edit'):
+            # A LOCAL ✦ Edit-reference render (Klein / Krea 2 Edit). Checked
+            # BEFORE the model_name branch below: it rides the very same
+            # enqueue_*_edit helpers, so it carries their model_name — but it has
+            # no FaceDatasetImage row, and link_completed_dataset_image would find
+            # nothing and log a bogus "no row for job".
+            from .services import face_dataset_service
+            reason = job.error_message if job.error_message != 'generation failed' else None
+            face_dataset_service.link_completed_reference_edit(
+                job.job_id, filename, failed=failed, reason=reason)
         elif md.get('model_name') in DATASET_IMAGE_JOB_NAMES:
             from .services import face_dataset_service
             # The bare fallback 'generation failed' is LESS useful than the tile's
