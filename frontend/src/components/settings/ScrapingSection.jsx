@@ -1,4 +1,5 @@
 import { Card, INPUT_CLASS, SecretField } from './primitives'
+import ResetToDefault from './ResetToDefault'
 
 /* Reddit rides an anonymous OAuth token minted with gallery-dl's PUBLIC shared
    client id by default. Reddit's ~1000 requests / 10 min quota is attached to
@@ -114,6 +115,11 @@ export default function ScrapingSection(props) {
             onChange={(e) => props.setField('klein', 'small_image_prompt', e.target.value)}
             placeholder="Empty — reference image only"
             className={`${INPUT_CLASS} min-h-24 resize-y`} />
+          {/* Its default is genuinely EMPTY — there is no shipped rescue prompt
+              behind it — so this resets to no instruction at all, which is
+              exactly what the field means when blank. */}
+          <ResetToDefault label="Small-image rescue instruction" section="klein" field="small_image_prompt"
+            config={props.config} configDefaults={props.configDefaults} setField={props.setField} />
         </div>
       </Card>
     </div>

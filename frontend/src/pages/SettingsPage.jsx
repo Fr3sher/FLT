@@ -66,6 +66,12 @@ export default function SettingsPage() {
   // Same, one set PER SUBJECT TYPE ({human,animal,…}: {kind: text}) — the identity
   // card edits one subject at a time and must show that subject's real default.
   const [promptDefaultsBySubject, setPromptDefaultsBySubject] = useState({})
+  // Read-only shipped defaults of the SCALAR settings (numbers, paths, selects),
+  // the same idea one level up: `config` arrives already merged over them, so
+  // without this the UI could not tell a customised 43 from the shipped 4 and
+  // had no value to offer a per-field "Reset to default". Server-derived on
+  // purpose — see components/settings/resetToDefault.js.
+  const [configDefaults, setConfigDefaults] = useState({})
   const [secretsPresence, setSecretsPresence] = useState({})
   const [secretInputs, setSecretInputs] = useState({})
   const [testResults, setTestResults] = useState({})
@@ -82,6 +88,7 @@ export default function SettingsPage() {
       setRuntime(data.runtime || { host: null, port: null })
       setPromptDefaults(data.identity_prompt_defaults || {})
       setPromptDefaultsBySubject(data.identity_prompt_defaults_by_subject || {})
+      setConfigDefaults(data.config_defaults || {})
       setSecretsPresence(data.secrets)
     } catch (e) {
       toast.error(`Failed to load settings: ${e.message}`)
@@ -292,6 +299,7 @@ export default function SettingsPage() {
     config, setField, secretsPresence, secretInputs, setSecretInputs,
     testResults, recordTestResult, saveSecretIfPending, saveConfigSection, handleDeleteSecret,
     toggleEngine, handleSave, saving, runtime, promptDefaults, promptDefaultsBySubject,
+    configDefaults,
     setIdentityPrompts, caps, refreshCaps: refresh, toast,
   }
 

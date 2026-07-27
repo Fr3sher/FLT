@@ -83,10 +83,15 @@ test('both editing surfaces NAME the subject type they are editing', () => {
   assert.match(modal, /readIdentityPrompt\(prompts, st, f\.key\)/);
 });
 
-test('Klein generation steps are exposed and default to the shipped 5', () => {
+test('Klein generation steps are exposed and follow the shipped default', () => {
   // "is the number of generation steps fixed at 5" (ashish.sinha, Discord) — it was.
   assert.match(engines, /id="klein-generation-steps"/);
-  assert.match(engines, /config\.klein\?\.generation_steps \?\? 5/);
+  // The shipped 5 used to be typed here as `?? 5`, a second copy of
+  // config.DEFAULTS. It now comes from the settings payload, so the field (and
+  // its Reset) can never show a number the backend has moved on from — see
+  // settingDefaults.test.js.
+  assert.match(engines, /defaultValueAt\(configDefaults, 'klein', 'generation_steps'\)/);
+  assert.match(engines, /config\.klein\?\.generation_steps \?\? shipped/);
   assert.match(engines, /setField\('klein', 'generation_steps',/);
   // and it must not oversell itself as an anatomy fix
   assert.match(engines, /not fix a wrong prompt/);

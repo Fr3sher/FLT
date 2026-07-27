@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-reset-any-setting-to-its-default',
+    date: '2026-07-27',
+    title: 'Changed a setting and want it back? Every field now has “Reset to default”',
+    blurb:
+      'Until now only the prompt boxes could be put back to how they shipped. Set “Upscale & improve ▸ Steps” to 43 and there was no way home unless you happened to know the answer was 4 — the app knew, and never told you. Every editable number, path, dropdown and the enabled-engine list now carries a small ↺ Reset to default button, across Image engines, Captioning & quality, Training, Local tools, Server and Maintenance. It only shows up when the field is actually off its default, so it never adds a row of dead buttons to an already busy page. Two details worth knowing: the value it restores comes from the app itself rather than a copy baked into the screen, so when we improve a default in a later release Reset hands you the new one, not the one your version was built with; and on the fields where blank means “work it out yourself” — the engine model slugs, the Krea base model, the dataset images root — Reset empties the box instead of typing today’s answer in, so you keep following our improvements instead of freezing one. Nothing is written until you Save. Reported by the owner.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
     date: '2026-07-27',
     title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',

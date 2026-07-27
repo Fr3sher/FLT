@@ -98,6 +98,15 @@ def _settings_payload() -> dict:
                                             identity_prompt_defaults_by_subject)
     return {
         'config': cfg.load_config(), 'secrets': _secret_presence(),
+        # The shipped default of every config key, for the SCALAR settings what
+        # identity_prompt_defaults is for the prompts: `config` above is already
+        # merged, so a number in it is indistinguishable from the default and the
+        # UI had no way to offer "Reset to default" on a number, a path or a
+        # select. Sent whole and derived from cfg.DEFAULTS (see cfg.defaults) so
+        # the frontend never carries its own copy of a default that could go
+        # stale. No secret lives here — secrets are in .env, and `secrets` above
+        # only reports presence.
+        'config_defaults': cfg.defaults(),
         'identity_prompt_defaults': identity_prompt_defaults(),
         'identity_prompt_defaults_by_subject': identity_prompt_defaults_by_subject(),
         # What THIS running process is actually bound to — run.py stamps these

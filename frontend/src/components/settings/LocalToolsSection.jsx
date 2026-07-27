@@ -5,6 +5,8 @@ import {
   COMFY_FOLDER_FIELDS, comfyFolderField, folderPlaceholder, folderEffective,
   folderWarning, detectedSuggestion, foldersQuery, hasAnyOverride,
 } from './comfyFolders'
+import ResetToDefault from './ResetToDefault'
+import { defaultValueAt } from './settingDefaults.js'
 
 /* HF token is for gated TRAINING bases (Krea 2 / FLUX.1 / FLUX.2 Klein) and reading
    your private custom-base repos — it lives with the ComfyUI card because that's
@@ -186,7 +188,10 @@ function ComfyFolderRow({ comfy, setField, state, fieldKey, id }) {
 }
 
 export default function LocalToolsSection(props) {
-  const { config, setField, testResults, recordTestResult, saveConfigSection, caps, refreshCaps, toast } = props
+  const { config, setField, testResults, recordTestResult, saveConfigSection, caps, refreshCaps, toast,
+          configDefaults } = props
+  // Shipped values come from the server payload, never retyped here.
+  const ollamaDefault = (key) => defaultValueAt(configDefaults, 'ollama', key)
   return (
     <div className="space-y-6">
       <Card
@@ -251,7 +256,7 @@ export default function LocalToolsSection(props) {
           </label>
           <select
             id="ollama-vision-concurrency"
-            value={String(config.ollama.vision_concurrency ?? 4)}
+            value={String(config.ollama.vision_concurrency ?? ollamaDefault('vision_concurrency'))}
             onChange={(e) => setField('ollama', 'vision_concurrency', Number(e.target.value))}
             className={INPUT_CLASS}
           >
@@ -268,6 +273,8 @@ export default function LocalToolsSection(props) {
             Raising it past 4 gains little unless your Ollama is configured for more
             parallel requests, and it makes Stop take a few seconds longer.
           </p>
+          <ResetToDefault label="Images analysed at once" section="ollama" field="vision_concurrency"
+            config={config} configDefaults={configDefaults} setField={setField} />
         </div>
         <div>
           <label htmlFor="ollama-vision-keep-warm" className="block text-sm font-medium text-content">
@@ -275,7 +282,7 @@ export default function LocalToolsSection(props) {
           </label>
           <select
             id="ollama-vision-keep-warm"
-            value={String(config.ollama.vision_keep_warm_seconds ?? 120)}
+            value={String(config.ollama.vision_keep_warm_seconds ?? ollamaDefault('vision_keep_warm_seconds'))}
             onChange={(e) => setField('ollama', 'vision_keep_warm_seconds', Number(e.target.value))}
             className={INPUT_CLASS}
           >
@@ -294,6 +301,8 @@ export default function LocalToolsSection(props) {
             and hands the memory straight back the moment a generation or a training run
             starts. Set it to Off if your card is tight on memory.
           </p>
+          <ResetToDefault label="Keep the vision model warm" section="ollama" field="vision_keep_warm_seconds"
+            config={config} configDefaults={configDefaults} setField={setField} />
         </div>
       </Card>
 
