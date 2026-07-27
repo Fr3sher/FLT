@@ -610,6 +610,58 @@ def test_a_missing_node_pack_is_named_in_the_same_409(client, monkeypatch):
     assert body['krea_missing']['node_packs'], 'name the pack, not just the class'
 
 
+def test_picking_krea_and_pressing_generate_installs_it(client, tmp_path, monkeypatch):
+    """The whole point of the wave: selecting the engine and hitting Generate is
+    the request to install it — the same trigger Klein has had. The 409 must fire
+    the installs itself and SAY so, including the restart nobody can guess."""
+    from app import setup_installer, config
+    base = tmp_path / 'ComfyUI'
+    (base / 'models').mkdir(parents=True)
+    (base / 'main.py').write_text('# fake', encoding='utf-8')
+    config.save_config({'comfyui': {'base_dir': str(base)}})
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
+                        lambda *a, **k: {'KSampler'})
+    from app.services import krea_edit_helper as keh
+    monkeypatch.setattr(keh, '_nodes_ok_until', 0.0, raising=False)
+    started = []
+    monkeypatch.setattr(setup_installer, 'start',
+                        lambda action: started.append(action))
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'KI', 'trigger_word': 'kitrig'}).get_json()['id']
+    r = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'krea',
+                            'variations': [{'label': 'Bust, front', 'framing': 'bust',
+                                            'prompt': 'upper body portrait'}]}]})
+    assert r.status_code == 409
+    body = r.get_json()
+    assert 'krea_nodes' in started
+    assert {'krea_model', 'krea_text_encoder', 'krea_vae',
+            'krea_identity_lora'} <= set(started)
+    assert set(body['downloading']) == set(started)
+    assert 'started downloading' in body['error']
+    assert 'RESTART ComfyUI' in body['error']
+
+
+def test_without_a_comfyui_folder_the_krea_409_still_explains_by_hand(client, monkeypatch):
+    """Nothing can be installed with nowhere to install it — the message then has
+    to keep the manual paths AND say which setting unlocks the automatic path."""
+    monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
+                        lambda *a, **k: {'KSampler'})
+    from app.services import krea_edit_helper as keh
+    monkeypatch.setattr(keh, '_nodes_ok_until', 0.0, raising=False)
+    ds = client.post('/api/dataset/create',
+                     json={'name': 'KJ', 'trigger_word': 'kjtrig'}).get_json()['id']
+    r = client.post(f'/api/dataset/{ds}/generate', json={
+        'engine_batches': [{'generator': 'krea',
+                            'variations': [{'label': 'Bust, front', 'framing': 'bust',
+                                            'prompt': 'upper body portrait'}]}]})
+    body = r.get_json()
+    assert r.status_code == 409
+    assert body['downloading'] == []
+    assert 'Setup ▸ ComfyUI' in body['error']
+    assert 'models/vae' in body['error']       # the by-hand paths survive
+
+
 def test_an_unknown_engine_is_still_refused(client):
     ds = client.post('/api/dataset/create',
                      json={'name': 'K2', 'trigger_word': 'k2trig'}).get_json()['id']

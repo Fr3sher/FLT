@@ -520,29 +520,88 @@ def _krea_missing_response(e):
     to be a `studio_missing` would make the Studio banner announce a "test
     pipeline" failure for a generation engine.
 
-    NO auto-download, unlike Klein's 409: Klein's assets are public
-    direct-download Hugging Face files wired into setup_installer, while Krea 2
-    Edit needs a git-cloned node pack and weights this app has no verified direct
-    URL for. Inventing an installer would be worse than saying where to get each
-    piece — so every gap is named with its expected path inside the user's own
-    ComfyUI and the page it comes from."""
+    AUTO-INSTALLS, exactly like Klein's 409: the four weights are wired into
+    setup_installer and the custom-node pack is git-cloned into this user's own
+    ComfyUI. Selecting the engine and pressing Generate is the intent; the
+    message then reports what is being fetched instead of listing five manual
+    gestures. The manual paths stay in the payload (and in the message when
+    nothing could be started), so a machine that can't download is never left
+    without an answer — and the node pack always adds "restart ComfyUI", which
+    no download can do for the user."""
+    from .. import capabilities, config as cfg
     from ..services import krea_edit_helper as keh
     files = keh.missing_file_entries(e.missing)
     node_packs = keh.krea_node_hints(e.missing_nodes)
+    # Picking the Krea engine and pressing Generate IS the request to install it —
+    # the same intent Klein's 409 acts on. Nothing can be downloaded without a real
+    # ComfyUI tree to put it in, so that case keeps the "configure it first" answer.
+    dir_valid = capabilities.resolve_comfyui_base(cfg.get('comfyui.base_dir') or '')['valid']
+    started = _autostart_krea_install(e.missing, e.missing_nodes) if dir_valid else []
     parts = ["Krea 2 Edit can't run yet."]
+    if not dir_valid:
+        parts.append('Point the app at your ComfyUI install folder in Setup ▸ ComfyUI '
+                     'and the app can install all of this for you; until then, by hand:')
     if e.missing_nodes:
-        parts.append(
-            f"Install the “{keh.KREA_NODE_PACK['pack']}” custom-node pack "
-            f"({keh.KREA_NODE_PACK['url']}) into ComfyUI/custom_nodes and restart "
-            f"ComfyUI — it provides {', '.join(e.missing_nodes)}.")
-    for f in files:
-        parts.append(f"Missing {f['kind']}: place it at {f['path']} inside your "
-                     f"ComfyUI folder (from {f['source']}).")
+        if keh.krea_node_pack_installed():
+            # On disk, absent from /object_info: the ONE thing no installer can do.
+            parts.append(
+                f"The “{keh.KREA_NODE_PACK['pack']}” node pack is already installed but "
+                "ComfyUI has not loaded it — RESTART ComfyUI (it only registers custom "
+                "nodes at startup).")
+        elif 'krea_nodes' in started:
+            parts.append(
+                f"I'm installing the “{keh.KREA_NODE_PACK['pack']}” custom-node pack "
+                "into your ComfyUI — you will have to RESTART ComfyUI once it lands, "
+                "it only loads custom nodes at startup.")
+        else:
+            parts.append(
+                f"Install the “{keh.KREA_NODE_PACK['pack']}” custom-node pack "
+                f"({keh.KREA_NODE_PACK['url']}) into ComfyUI/custom_nodes and restart "
+                f"ComfyUI — it provides {', '.join(e.missing_nodes)}.")
+    downloading = [a for a in started if a != 'krea_nodes']
+    if downloading:
+        names = ', '.join(keh.KREA_ASSETS[a]['kind'] for a in downloading
+                          if a in keh.KREA_ASSETS)
+        parts.append(f"I've started downloading {names} into your ComfyUI folder "
+                     "(~20 GB in total) — watch progress in Setup ▸ ComfyUI.")
+    else:
+        # Nothing could be started: the by-hand answer is still owed in full.
+        for f in files:
+            parts.append(f"Missing {f['kind']}: place it at {f['path']} inside your "
+                         f"ComfyUI folder (from {f['source']}).")
     parts.append('Then retry the generation.')
     return jsonify({'ok': False, 'error': ' '.join(parts),
+                    'downloading': started,
                     'krea_missing': {'assets': e.missing, 'files': files,
                                      'nodes': e.missing_nodes,
                                      'node_packs': node_packs}}), 409
+
+
+def _autostart_krea_install(missing, missing_nodes):
+    """Kick off the installs that close a Krea preflight miss: the node pack (a
+    small git clone) and each missing weight. Returns the action names actually
+    started. Never raises — an install that can't start (already running, disk
+    precondition) is simply absent from the list, and the message degrades to the
+    manual instructions."""
+    from .. import setup_installer
+    from ..services import krea_edit_helper as keh
+    started = []
+    # A pack already ON DISK but not exposed by /object_info needs a ComfyUI
+    # restart, not another install — re-running it would only log "already
+    # installed" and teach the user nothing.
+    want_pack = bool(missing_nodes) and not keh.krea_node_pack_installed()
+    actions = (['krea_nodes'] if want_pack else []) + list(missing or [])
+    for action in actions:
+        if action not in setup_installer.INSTALL_ACTIONS:
+            continue
+        try:
+            setup_installer.start(action)
+            started.append(action)
+        except setup_installer.AlreadyRunning:
+            started.append(action)   # already in flight still counts as "installing"
+        except Exception:
+            pass                     # Precondition (disk) — the message says what to do
+    return started
 
 
 def _autostart_optional_klein():

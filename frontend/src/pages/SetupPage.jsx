@@ -93,8 +93,14 @@ export default function SetupPage() {
   // flashes the welcome screen first; an unknown/absent step falls back to 0.
   const [searchParams] = useSearchParams()
   const [screen, setScreen] = useState(() => {
-    const i = SETUP_STEP_IDS.indexOf(searchParams.get('step'))
-    return i < 0 ? 0 : i + 1                        // welcome=0, tools=1..N
+    const raw = searchParams.get('step')
+    const i = SETUP_STEP_IDS.indexOf(raw)
+    if (i >= 0) return i + 1                        // welcome=0, tools=1..N
+    // The screens that are NOT tool steps are addressable too: the install /
+    // repair menu is where the one-click engine installs live (Krea 2 Edit), and
+    // a help topic pointing at ?step=install must land there, not on welcome.
+    const j = SCREENS.indexOf(raw)
+    return j > 0 ? j : 0
   })
   const [advancing, setAdvancing] = useState(false) // Next is mid save-&-recheck
   const [startingOllama, setStartingOllama] = useState(false) // "Start Ollama" in flight

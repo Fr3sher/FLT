@@ -569,6 +569,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     missingAssets: caps.comfyui?.krea_missing,
     missingNodes: caps.comfyui?.krea_nodes_missing,
     invalidAssets: caps.comfyui?.krea_invalid,
+    nodePackInstalled: caps.comfyui?.krea_nodes_installed,
   });
 
   useEffect(() => {

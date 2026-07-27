@@ -43,10 +43,18 @@
 // =====================================================================
 import { SETTINGS_SECTIONS } from './components/settings/registry.js';
 import { WORKSPACE_SECTIONS } from './components/dataset/workspaceSections.js';
-import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
+import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
+  {
+    id: '2026-07-27-install-krea-in-one-click',
+    date: '2026-07-27',
+    title: 'Krea 2 Edit now installs itself — no more five manual steps',
+    blurb:
+      'Klein has always downloaded itself; Krea 2 Edit asked you to find a GitHub repo, clone it into custom_nodes and hunt down four model files by hand. It does not any more. Setup ▸ Install now has an “Install Krea 2 Edit” button that fetches the comfyui-krea2edit node pack straight into YOUR ComfyUI (git, or a ZIP when git is not installed) plus the base model, the text encoder, the VAE and the identity LoRA — and picking Krea in the workspace and pressing Generate starts the same install for you. Files you already placed yourself are detected and never re-downloaded, and a download that turns out to be a login page instead of weights is now caught and deleted instead of crashing ComfyUI hours later. It stays out of “Install everything” on purpose: it is ~20 GB and Klein alone builds datasets. Setup also stops pretending Krea does not exist: it now has its own rows in the install list and counts as a capability, so the last screen says “11 of 12 ready” instead of congratulating you with “11 of 11” on a machine missing a whole engine. One thing no installer can do for you — ComfyUI only loads custom nodes when it starts, so the node pack shows “⟳ Restart ComfyUI” until you do, then the engine card turns green by itself.',
+    to: '/setup?step=install',
+  },
   {
     id: '2026-07-27-tile-engine-badge-readable',
     date: '2026-07-27',
@@ -1671,7 +1679,7 @@ export function isValidTarget(to) {
   // Overview capability rows use it to open the screen that installs them).
   if (path === '/setup') {
     if (section || panel) return false;
-    return step === null || SETUP_STEP_IDS.includes(step);
+    return step === null || SETUP_DEEP_LINK_STEPS.includes(step);
   }
   if (step) return false; // ?step= is meaningless anywhere but the wizard
 

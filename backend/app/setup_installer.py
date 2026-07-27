@@ -29,6 +29,15 @@ thread and expose their live state for polling. Actions:
   klein_lora         -> download the consistency LoRA into <ComfyUI>/models/loras/klein/
   klein_text_encoder -> qwen_3_8b_fp8mixed into <ComfyUI>/models/text_encoders/
   klein_vae          -> flux2-vae into <ComfyUI>/models/vae/
+  krea_model         -> the Krea 2 Turbo base into <ComfyUI>/models/diffusion_models/krea/
+  krea_text_encoder  -> qwen3vl_4b_fp8_scaled into <ComfyUI>/models/text_encoders/
+  krea_vae           -> qwen_image_vae into <ComfyUI>/models/vae/
+  krea_identity_lora -> the Krea 2 Identity Edit LoRA (Civitai) into
+                        <ComfyUI>/models/loras/krea/
+  krea_nodes         -> git clone (ZIP fallback) the comfyui-krea2edit custom-node pack
+                        into <ComfyUI>/custom_nodes/ — the ONLY action that installs code
+                        rather than weights, and the only one whose success still requires
+                        the user to restart ComfyUI (nodes register at startup only)
 
 No shell, no client-supplied arguments: each action's command/URL/destination is fixed.
 
@@ -105,9 +114,101 @@ _KLEIN_DOWNLOADS = {
     },
 }
 
+# Krea 2 Identity Edit — the SECOND local engine's weights. Same worker, same
+# ".part then rename" streaming, same precondition as Klein: the ONLY thing that
+# was ever missing here was a destination mapping (the engine shipped with a
+# "place these four files yourself" message, i.e. five manual gestures).
+#
+# URL survey 2026-07-27 (anonymous HTTP, no token): the three Hugging Face files
+# live in ONE public repo, `Comfy-Org/Krea-2` (API gated=false), and each
+# `resolve/main/...` answered 200 with the full content-length. Measurements are
+# a photograph of one moment — the worker therefore keeps the SAME 401/403
+# recovery path as Klein, so a future re-gating degrades into actionable steps
+# instead of a bare error.
+#
+# `dest[0]` is 'diffusion_models', NOT 'unet': both are the same ComfyUI folder
+# type, but resolve_krea_unet scans `search_roots('diffusion_models')` for a
+# 'krea'-named subfolder — 'krea' is exactly what it looks for.
+#
+# BASE VARIANT: Turbo, not Raw (~13 GB each, we install ONE). Two reasons, both
+# in the code: krea_edit_helper.build_workflow pins cfg 1.0 / 10 steps /
+# euler+simple — the guidance-distilled few-step regime Turbo IS — and
+# resolve_krea_unet already prefers a 'turbo' build over a 'raw' one, so the file
+# we fetch is the file the resolver would pick anyway. Someone who wants Raw
+# drops it in the same folder and points krea.base_model at it.
+_KREA_DOWNLOADS = {
+    'krea_model': {
+        'url': 'https://huggingface.co/Comfy-Org/Krea-2/resolve/main/diffusion_models/krea2_turbo_fp8_scaled.safetensors',
+        'dest': ('diffusion_models', 'krea', 'krea2_turbo_fp8_scaled.safetensors'),
+        'min_free_gb': 15, 'gated': False, 'min_bytes': 1024 ** 3,
+        'license_url': 'https://huggingface.co/Comfy-Org/Krea-2',
+    },
+    'krea_text_encoder': {
+        # Canonical name — resolve_krea_text_encoder matches it EXACTLY first.
+        'url': 'https://huggingface.co/Comfy-Org/Krea-2/resolve/main/text_encoders/qwen3vl_4b_fp8_scaled.safetensors',
+        'dest': ('text_encoders', 'qwen3vl_4b_fp8_scaled.safetensors'),
+        'min_free_gb': 7, 'gated': False, 'min_bytes': 256 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/Comfy-Org/Krea-2',
+    },
+    'krea_vae': {
+        'url': 'https://huggingface.co/Comfy-Org/Krea-2/resolve/main/vae/qwen_image_vae.safetensors',
+        'dest': ('vae', 'qwen_image_vae.safetensors'),
+        'min_free_gb': 1, 'gated': False, 'min_bytes': 8 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/Comfy-Org/Krea-2',
+    },
+    # The identity LoRA is hosted on Civitai, not Hugging Face — hence `auth`:
+    # the HF bearer token must NEVER be sent to another host, and a Civitai key
+    # (the one the scraper already reads) IS sent when the user has one.
+    #
+    # Whether Civitai serves this file anonymously is NOT something this code
+    # asserts: measured open on 2026-07-27 from one IP, and Civitai gates parts
+    # of its catalogue (NSFW, early access, creator restrictions) with rules that
+    # have changed before and vary by country. So: try without a key, send one
+    # when it exists, and turn a 401/403 into instructions. The filename matches
+    # the krea.identity_lora default so the resolver finds it by canonical name.
+    'krea_identity_lora': {
+        'url': 'https://civitai.com/api/download/models/3139172',
+        'dest': ('loras', 'krea', 'krea2_identity_edit_v1_2.safetensors'),
+        'min_free_gb': 3, 'gated': False, 'auth': 'civitai',
+        'min_bytes': 512 * 1024,
+        'license_url': 'https://civitai.com/models/2761113',
+    },
+}
+
+# Every streamed model download, whatever engine it belongs to. The worker,
+# destination resolution, disk precondition and extra_model_paths de-duplication
+# are engine-agnostic; only the catalog entries differ.
+_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS}
+
+# Custom-node packs the app can install itself. THE ONLY ONE TODAY — and the
+# first git-cloned dependency this app installs at all, so the rules are written
+# down rather than implied:
+#   * the URL is a CONSTANT here, never derived from user input, and the clone
+#     runs as an argument list (no shell) with a timeout;
+#   * the destination is <validated ComfyUI>/custom_nodes/<folder> — resolved
+#     through the same capabilities.resolve_comfyui_base every other install
+#     uses, and REFUSED (never guessed) when no valid ComfyUI is configured;
+#   * an existing folder is left strictly alone (a user may have patched it);
+#   * git may be absent (ZIP installs of ComfyUI have none), so a codeload ZIP
+#     is the fallback — and if both fail the log says what to do by hand;
+#   * ComfyUI only registers nodes at STARTUP, so a successful install reports
+#     "restart ComfyUI", it never claims the engine is ready.
+# `pip`: the pack declares `dependencies = []` (pyproject, checked 2026-07-27),
+# so a clone is enough. We deliberately do NOT pip-install a third-party
+# requirements file into the app's environment — if one appears the log says so
+# and leaves the call to the user.
+_NODE_PACKS = {
+    'krea_nodes': {
+        'pack': 'comfyui-krea2edit',
+        'repo': 'https://github.com/lbouaraba/comfyui-krea2edit',
+        'zip': 'https://codeload.github.com/lbouaraba/comfyui-krea2edit/zip/refs/heads/main',
+        'folder': 'comfyui-krea2edit',
+    },
+}
+
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
-                   'bank_scoring') + tuple(_KLEIN_DOWNLOADS)
+                   'bank_scoring') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -415,13 +516,20 @@ def manual_command(action) -> str:
     if action == 'ollama_model':
         model = (cfg.get('ollama.vision_model') or '').strip() or '<vision-model>'
         return f'ollama pull {model}'
-    if action in _KLEIN_DOWNLOADS:
-        spec = _KLEIN_DOWNLOADS[action]
+    if action in _MODEL_DOWNLOADS:
+        spec = _MODEL_DOWNLOADS[action]
         try:
-            dest = _klein_dest_path(action)
+            dest = _download_dest_path(action)
         except Precondition:
             dest = os.path.join('<ComfyUI>', 'models', *spec['dest'])
         return f'curl -L -o "{dest}" "{spec["url"]}"'
+    if action in _NODE_PACKS:
+        spec = _NODE_PACKS[action]
+        try:
+            dest = _node_pack_dest(action)
+        except Precondition:
+            dest = os.path.join('<ComfyUI>', 'custom_nodes', spec['folder'])
+        return f'git clone --depth 1 {spec["repo"]} "{dest}"'
     return ''
 
 
@@ -451,8 +559,10 @@ def start(action) -> dict:
             raise AlreadyRunning(action)
         if action == 'ollama_model':
             _check_ollama_precondition()
-        if action in _KLEIN_DOWNLOADS:
-            _check_klein_precondition(action)
+        if action in _MODEL_DOWNLOADS:
+            _check_download_precondition(action)
+        if action in _NODE_PACKS:
+            _node_pack_dest(action)      # raises Precondition without a valid ComfyUI
         _runs[action] = _new_run()
         if action in _PIP_ACTIONS and _pip_current is not None:
             # A pip install already owns the worker -> queue this one (FIFO, click
@@ -494,20 +604,33 @@ def _check_ollama_precondition():
         raise Precondition('ollama.vision_model not configured')
 
 
-def _klein_dest_path(action) -> str:
-    """Absolute destination for a Klein download, under the VALIDATED ComfyUI
-    models root. Raises Precondition when base_dir isn't a real install (we must
-    never scatter multi-GB files under a wrong folder)."""
+def _comfyui_root() -> str:
+    """The VALIDATED ComfyUI install root every install writes into. Raises
+    Precondition when base_dir isn't a real install — we must never scatter
+    multi-GB files, nor clone third-party code, under a wrong folder."""
     r = capabilities.resolve_comfyui_base(cfg.get('comfyui.base_dir') or '')
     if not r['valid']:
         raise Precondition('point the app at a valid ComfyUI folder first (Setup, ComfyUI step)')
-    spec = _KLEIN_DOWNLOADS[action]
-    return os.path.join(r['resolved'], 'models', *spec['dest'])
+    return r['resolved']
 
 
-def _check_klein_precondition(action):
-    dest = _klein_dest_path(action)
-    spec = _KLEIN_DOWNLOADS[action]
+def _download_dest_path(action) -> str:
+    """Absolute destination for a model download, under the validated ComfyUI
+    models root."""
+    spec = _MODEL_DOWNLOADS[action]
+    return os.path.join(_comfyui_root(), 'models', *spec['dest'])
+
+
+def _node_pack_dest(action) -> str:
+    """Absolute destination folder for a custom-node pack: THIS install's
+    <ComfyUI>/custom_nodes/<pack folder>. The folder name is a constant from
+    _NODE_PACKS, never anything a request supplied."""
+    return os.path.join(_comfyui_root(), 'custom_nodes', _NODE_PACKS[action]['folder'])
+
+
+def _check_download_precondition(action):
+    dest = _download_dest_path(action)
+    spec = _MODEL_DOWNLOADS[action]
     try:
         free_gb = shutil.disk_usage(os.path.dirname(os.path.dirname(dest))).free / 1e9
         if free_gb < spec['min_free_gb']:
@@ -562,6 +685,15 @@ def _action_needed(action, caps) -> bool:
         # (required trio + recommended LoRA).
         c = caps.get('comfyui') or {}
         return bool(c.get('dir_valid')) and action in (c.get('klein_missing') or [])
+    # The Krea 2 Edit assets are DELIBERATELY absent from this plan even though
+    # they are one-click installable everywhere else. "Install everything" runs
+    # unattended from a Setup button, and Krea is ~20 GB on top of Klein's ~20 —
+    # fetching a SECOND engine nobody asked for is hostile on a metered link or a
+    # small disk. Klein is the app's default engine (the generate route falls back
+    # to it), Krea is an explicit pick. So Krea installs on intent instead: the
+    # per-asset buttons in Setup, the "Install Krea 2 Edit" group button, and the
+    # auto-start when a user actually selects the engine and presses Generate
+    # (routes/datasets._krea_missing_response) — the same trigger Klein has.
     return False
 
 
@@ -582,6 +714,70 @@ def start_all(caps) -> dict:
     (Precondition) is reported as an error row rather than aborting the whole batch. Returns
     the plan + each action's status so the caller can render 'X / N' without re-deriving it."""
     plan = install_all_plan(caps)
+    statuses = {}
+    for action in plan:
+        try:
+            statuses[action] = start(action)
+        except AlreadyRunning:
+            statuses[action] = status(action)
+        except (Precondition, ValueError) as e:
+            statuses[action] = {'state': 'error', 'returncode': None, 'log': [str(e)],
+                                'progress': None, 'waiting_for': None,
+                                'manual_command': manual_command(action)}
+    return {'plan': plan, 'statuses': statuses}
+
+
+# --- Named install groups ------------------------------------------------------
+# One engine = one button, without dragging that engine into the unattended
+# "Install everything" plan. The Krea group is the node pack FIRST (it is a
+# ~1 MB clone; getting it out of the way means the only thing left to wait for is
+# bytes) then the four weights.
+_INSTALL_GROUPS = {
+    'krea': ('krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
+             'krea_identity_lora'),
+}
+
+
+def install_group_plan(group, caps=None) -> list:
+    """The actions a named group would queue: its members MINUS what is already
+    installed, in a fixed order. `caps` is the live capabilities payload (the
+    Krea gaps come from comfyui.krea_missing / krea_nodes_missing /
+    krea_nodes_installed); with none it plans the whole group. Pure."""
+    members = _INSTALL_GROUPS.get(group)
+    if not members:
+        return []
+    if caps is None:
+        return list(members)
+    c = (caps or {}).get('comfyui') or {}
+    if not c.get('dir_valid'):
+        return []                      # nowhere to install into — never guess a path
+    missing_assets = set(c.get('krea_missing') or [])
+    # Does the pack need INSTALLING? Three states, and the difference matters:
+    #   on disk                -> no. Missing nodes then mean a ComfyUI RESTART, and
+    #                             re-running the installer would only log "already
+    #                             installed" and teach the user nothing.
+    #   nodes reported missing -> yes.
+    #   nodes reported present -> no (a pack installed under another folder name,
+    #                             e.g. through the ComfyUI Manager, must not be
+    #                             cloned a second time).
+    #   ComfyUI unreachable    -> the node probe fails OPEN (it reports nothing
+    #                             missing because it could not ask). Not on disk +
+    #                             no answer = install it; a stopped ComfyUI must not
+    #                             silently drop the pack from a one-click install.
+    if c.get('krea_nodes_installed'):
+        needs_pack = False
+    elif c.get('krea_nodes_missing'):
+        needs_pack = True
+    else:
+        needs_pack = not c.get('reachable')
+    return [a for a in members
+            if (a == 'krea_nodes' and needs_pack) or a in missing_assets]
+
+
+def start_group(group, caps=None) -> dict:
+    """Queue every action in install_group_plan. Same fan-out contract as
+    start_all (per-action preconditions, pip FIFO, parallel downloads)."""
+    plan = install_group_plan(group, caps)
     statuses = {}
     for action in plan:
         try:
@@ -623,14 +819,25 @@ def _execute(action):
                 capabilities.clear_import_cache()
             except Exception:
                 logger.debug('probe-cache clear failed after ollama_model', exc_info=True)
-        if action in _KLEIN_DOWNLOADS and rc == 0:
-            # The training-base/model listers cache their scans 5 min — a freshly
-            # downloaded model must show up on the next probe, not in 5 minutes.
+        if (action in _MODEL_DOWNLOADS or action in _NODE_PACKS) and rc == 0:
+            # The training-base/model listers cache their scans 5 min and
+            # /object_info is cached per API address — a freshly downloaded model
+            # (or an installed node pack, once ComfyUI has been restarted) must
+            # show up on the next probe, not after the TTL. clear_model_caches
+            # drops both, which is exactly why a node-pack install calls it too:
+            # otherwise the engine card would keep reporting the OLD node list for
+            # minutes after the restart and look like a failed install.
             try:
                 from .utils import comfyui
                 comfyui.clear_model_caches()
             except Exception:
                 logger.debug('clear_model_caches failed after %s', action, exc_info=True)
+        if action in _NODE_PACKS and rc == 0:
+            try:
+                from .services import krea_edit_helper
+                krea_edit_helper.clear_nodes_cache()
+            except Exception:
+                logger.debug('krea node-cache clear failed after %s', action, exc_info=True)
     except Exception as e:  # never let a worker thread die silently
         _append(action, f'error: {e}')
         _runs[action]['returncode'] = -1
@@ -1197,16 +1404,16 @@ def _run_ml_capability(action) -> int:
                              '-c', str(_ML_REQUIREMENTS), *_flask_pillow_guard(python)])
 
 
-def _klein_present_in_extra(action) -> bool:
-    """Is the Klein asset for `action` already on disk under an extra_model_paths.yaml
+def _download_present_in_extra(action) -> bool:
+    """Is the asset for `action` already on disk under an extra_model_paths.yaml
     root? We still DOWNLOAD into the base is-default tree (dest is unchanged, per the
     "install location doesn't move" rule) — this only skips a redundant multi-GB fetch
     when the file already lives somewhere ComfyUI will load it. Accepts the canonical
     filename AND any earlier default name (`legacy_names`): an install that fetched the
     pre-KV UNET into an extra root still resolves it by name, so it must not re-download.
-    EXTRA roots only (base presence is the os.path.isfile(dest) + _klein_variant_already_present
+    EXTRA roots only (base presence is the os.path.isfile(dest) + _variant_already_present
     checks), so with no yaml this is a no-op and behaviour is identical."""
-    spec = _KLEIN_DOWNLOADS[action]
+    spec = _MODEL_DOWNLOADS[action]
     dest_parts = spec['dest']                 # e.g. ('unet','klein','flux-2-...safetensors')
     comfy_type = dest_parts[0]                # 'unet'|'loras'|'text_encoders'|'vae'
     subdirs = dest_parts[1:-1]                # e.g. ('klein',) for the UNET, () otherwise
@@ -1221,20 +1428,20 @@ def _klein_present_in_extra(action) -> bool:
         return False
 
 
-def _klein_variant_already_present(action):
+def _variant_already_present(action):
     """Basename of a previously-accepted filename for `action` already on disk in the
     BASE dest folder (today: the pre-KV Klein UNET flux-2-klein-9b-fp8.safetensors),
     else None. When the default download filename changes, an install that fetched the
     old one stays valid — both variants resolve by name at generate time — so either
     counts as "already installed" instead of re-fetching ~10 GB. (extra_model_paths
-    roots are covered by _klein_present_in_extra, which accepts the same alternates.)
+    roots are covered by _download_present_in_extra, which accepts the same alternates.)
     None when the spec lists no `legacy_names` (every other action)."""
-    spec = _KLEIN_DOWNLOADS[action]
+    spec = _MODEL_DOWNLOADS[action]
     alts = spec.get('legacy_names') or ()
     if not alts:
         return None
     try:
-        dest_dir = os.path.dirname(_klein_dest_path(action))
+        dest_dir = os.path.dirname(_download_dest_path(action))
     except Precondition:
         return None
     for name in alts:
@@ -1243,29 +1450,118 @@ def _klein_variant_already_present(action):
     return None
 
 
-def _run_klein_download(action) -> int:
-    """Stream one Klein asset into the validated ComfyUI tree. Writes to a .part
-    file then renames (a killed download never leaves a half file the model
-    scanners would pick up). Progress lines land in the ring log (~every 512 MB).
-    An access-denied repo (401/403) with a license_url -> actionable recovery steps, rc 1."""
-    spec = _KLEIN_DOWNLOADS[action]
-    dest = _klein_dest_path(action)
+def _civitai_key():
+    """The Civitai API key, read through the SAME resolver the scraper uses
+    (env CIVITAI_API_KEY > the admin cookies dir > a legacy token file) so there
+    is ONE Civitai credential in the app, not a second competing setting. The
+    scrape package pulls optional dependencies, so an import failure degrades to
+    the Settings-managed secret rather than breaking the download."""
+    try:
+        from .scrape.sources.civitai import civitai_api_key
+        key = civitai_api_key()
+        if key:
+            return key
+    except Exception:
+        logger.debug('civitai_api_key() unavailable — falling back to the stored secret',
+                     exc_info=True)
+    return cfg.secret('CIVITAI_API_KEY') or None
+
+
+def _download_auth(spec):
+    """(headers, provider) for a download. A provider's token is NEVER sent to
+    another host: the HF bearer only goes to Hugging Face URLs, the Civitai key
+    only to Civitai. No credential at all is a legitimate case for both — public
+    files download fine and a 401/403 is handled below."""
+    provider = spec.get('auth', 'hf')
+    token = _civitai_key() if provider == 'civitai' else cfg.secret('HF_TOKEN')
+    return ({'Authorization': f'Bearer {token}'} if token else {}), provider
+
+
+# Where the user creates a credential, per provider, for the 401/403 recovery
+# steps. Same shape as the Hugging Face path that already existed.
+_AUTH_RECOVERY = {
+    'hf': ('Hugging Face', 'https://huggingface.co/settings/tokens', 'HF_TOKEN',
+           'accept the licence on the model page (free), then'),
+    'civitai': ('Civitai', 'https://civitai.com/user/account', 'CIVITAI_API_KEY',
+                'sign in — Civitai requires an account for part of its catalogue '
+                '(NSFW, early access, creator restrictions) — then'),
+}
+
+
+def _verify_downloaded_model(action, dest, spec, provider='hf') -> bool:
+    """Is the file we just wrote actually loadable weights? An auth wall answers
+    200 with an HTML page and the browser filename, which lands as a perfectly
+    named `.safetensors` that ComfyUI then dies on ("Expecting value: line 1
+    column 1"). Header-only check, the same validator the readiness probe uses.
+    A blocking verdict DELETES the file — leaving it would make every later probe
+    report the asset as installed. Advisory `too_small` is logged, not fatal."""
+    try:
+        from .services import model_integrity
+        res = model_integrity.validate_model_file(dest, min_bytes=spec.get('min_bytes'))
+    except Exception:
+        logger.debug('integrity check failed for %s', action, exc_info=True)
+        return True                     # never fail an install on the checker itself
+    if res['ok']:
+        return True
+    if not res['blocking']:
+        _append(action, f"warning: {res['reason']}")
+        return True
+    host, key_url, key_name, _verb = _AUTH_RECOVERY.get(provider, _AUTH_RECOVERY['hf'])
+    _append(action, f"the downloaded file is not usable weights: {res['reason']}")
+    _append(action, f'{host} most likely answered with a login/licence page instead of the '
+                    f'file. Create an API key at {key_url} and paste it as {key_name} in '
+                    'Settings -> API keys, then retry.')
+    _append(action, 'the unusable file has been deleted, so nothing broken is left behind.')
+    try:
+        os.remove(dest)
+    except OSError:
+        pass
+    return False
+
+
+def _krea_asset_already_installed(action) -> bool:
+    """RETROFIT guard: someone who placed a Krea asset by hand, under their own
+    file name, anywhere ComfyUI registers, must not see it re-downloaded. The
+    engine's own resolvers already answer "is this installed?" for exactly the
+    file a generate would load, so we ask them rather than test one hardcoded
+    path. Klein keeps its filename-based checks above (its resolver accepts a
+    wider set and would suppress a legitimate first install)."""
+    if action not in _KREA_DOWNLOADS:
+        return False
+    try:
+        from .services import krea_edit_helper
+        return action not in krea_edit_helper.krea_missing_assets()
+    except Exception:
+        logger.debug('krea presence check failed for %s', action, exc_info=True)
+        return False
+
+
+def _run_model_download(action) -> int:
+    """Stream one model asset (Klein or Krea) into the validated ComfyUI tree.
+    Writes to a .part file then renames (a killed download never leaves a half
+    file the model scanners would pick up), then verifies the result is real
+    weights. Progress lines land in the ring log (~every 512 MB). An
+    access-denied host (401/403) -> actionable recovery steps for THAT provider,
+    rc 1."""
+    spec = _MODEL_DOWNLOADS[action]
+    dest = _download_dest_path(action)
     if os.path.isfile(dest):
         _append(action, f'already present: {dest}')
         return 0
-    variant = _klein_variant_already_present(action)
+    variant = _variant_already_present(action)
     if variant:
-        _append(action, f'already present ({variant}) — an earlier Klein UNET build is '
+        _append(action, f'already present ({variant}) — an earlier build is '
                         'installed and still resolves; skipping download')
         return 0
-    if _klein_present_in_extra(action):
+    if _download_present_in_extra(action):
         _append(action, 'already available via a configured extra_model_paths.yaml root - skipping download')
         return 0
+    if _krea_asset_already_installed(action):
+        _append(action, 'already installed — the engine already resolves this asset from a '
+                        'file you have; skipping download')
+        return 0
     os.makedirs(os.path.dirname(dest), exist_ok=True)
-    headers = {}
-    token = cfg.secret('HF_TOKEN')
-    if token:
-        headers['Authorization'] = f'Bearer {token}'
+    headers, provider = _download_auth(spec)
     _append(action, f"downloading {spec['url']}")
     _append(action, f'-> {dest}')
     part = dest + '.part'
@@ -1274,13 +1570,15 @@ def _run_klein_download(action) -> int:
                           headers=headers, allow_redirects=True) as resp:
             if resp.status_code in (401, 403):
                 if spec.get('gated') or spec.get('license_url'):
-                    # Normally public (KV UNET); a 401/403 here means HF is denying
-                    # access anyway (re-gated, or a stale HF_TOKEN was sent) -> the
-                    # fix is still: accept the licence + provide a valid token.
-                    _append(action, f'HTTP {resp.status_code} - Hugging Face denied access to this file.')
-                    _append(action, f"1. Open {spec['license_url']} and accept the licence (free)")
-                    _append(action, '2. Create a read token at https://huggingface.co/settings/tokens')
-                    _append(action, '3. Paste it as HF_TOKEN in Settings -> API keys, then retry')
+                    # Normally public; a 401/403 here means the host is denying
+                    # access anyway (re-gated, region-restricted, or a stale token
+                    # was sent) -> the fix is: get an account/licence + a valid key.
+                    host, key_url, key_name, verb = _AUTH_RECOVERY.get(
+                        provider, _AUTH_RECOVERY['hf'])
+                    _append(action, f'HTTP {resp.status_code} - {host} denied access to this file.')
+                    _append(action, f"1. Open {spec['license_url']} and {verb} continue")
+                    _append(action, f'2. Create an API key at {key_url}')
+                    _append(action, f'3. Paste it as {key_name} in Settings -> API keys, then retry')
                     _append(action, '   (or download the file manually into the folder above)')
                 else:
                     _append(action, f'HTTP {resp.status_code}')
@@ -1308,6 +1606,8 @@ def _run_klein_download(action) -> int:
             os.remove(part)
             return 1
         os.replace(part, dest)
+        if not _verify_downloaded_model(action, dest, spec, provider):
+            return 1
         _append(action, f'done -> {dest}')
         return 0
     except requests.RequestException as e:
@@ -1317,6 +1617,124 @@ def _run_klein_download(action) -> int:
         except OSError:
             pass
         return 1
+
+
+# --- Custom-node pack install --------------------------------------------------
+# Bounded so a hung network can never wedge the install worker thread.
+_GIT_CLONE_TIMEOUT_S = 300
+_ZIP_TIMEOUT = (10, 120)
+
+
+def _node_pack_already_there(action, dest) -> bool:
+    """A non-empty destination folder means the pack is ALREADY installed (or the
+    user put something of their own there). We never overwrite it: someone may
+    have patched the pack, pinned a commit, or installed it through the ComfyUI
+    Manager. Idempotent by design — re-clicking Install is safe."""
+    try:
+        return os.path.isdir(dest) and any(os.scandir(dest))
+    except OSError:
+        return False
+
+
+def _clone_node_pack(action, spec, dest) -> bool:
+    """git clone --depth 1 into `dest`. False when git is absent or the clone
+    fails (the caller then tries the ZIP). Argument list, no shell, fixed URL."""
+    git = shutil.which('git')
+    if not git:
+        _append(action, 'git is not installed — falling back to a ZIP download')
+        return False
+    _append(action, f"git clone --depth 1 {spec['repo']}")
+    try:
+        proc = subprocess.run([git, 'clone', '--depth', '1', spec['repo'], dest],
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, timeout=_GIT_CLONE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as e:
+        _append(action, f'git clone failed ({e}) — falling back to a ZIP download')
+        return False
+    for line in (proc.stdout or '').splitlines():
+        _append(action, line)
+    if proc.returncode == 0:
+        return True
+    _append(action, f'git clone exited {proc.returncode} — falling back to a ZIP download')
+    shutil.rmtree(dest, ignore_errors=True)     # never leave a half clone behind
+    return False
+
+
+def _zip_node_pack(action, spec, dest) -> bool:
+    """Fallback for installs with no git: fetch GitHub's source ZIP and move its
+    single top-level folder into place. Extracts to a sibling temp folder first,
+    so a failure never leaves a partial pack ComfyUI would try to import."""
+    import tempfile
+    import zipfile
+    _append(action, f"downloading {spec['zip']}")
+    parent = os.path.dirname(dest)
+    os.makedirs(parent, exist_ok=True)
+    tmp_dir = tempfile.mkdtemp(prefix='.lds_nodepack_', dir=parent)
+    archive = os.path.join(tmp_dir, 'pack.zip')
+    try:
+        with requests.get(spec['zip'], stream=True, timeout=_ZIP_TIMEOUT,
+                          allow_redirects=True) as resp:
+            if resp.status_code >= 400:
+                _append(action, f'HTTP {resp.status_code} downloading the ZIP')
+                return False
+            with open(archive, 'wb') as fh:
+                for chunk in resp.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        fh.write(chunk)
+        with zipfile.ZipFile(archive) as zf:
+            zf.extractall(tmp_dir)
+        roots = [n for n in os.listdir(tmp_dir)
+                 if n != 'pack.zip' and os.path.isdir(os.path.join(tmp_dir, n))]
+        if len(roots) != 1:
+            _append(action, f'unexpected ZIP layout ({len(roots)} top-level folders) — '
+                            'install the pack manually, see the link above')
+            return False
+        shutil.move(os.path.join(tmp_dir, roots[0]), dest)
+        return True
+    except (requests.RequestException, OSError, zipfile.BadZipFile) as e:
+        _append(action, f'ZIP install failed: {e}')
+        return False
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+def _run_node_pack(action) -> int:
+    """Install a custom-node pack into THIS user's ComfyUI. git clone first, ZIP
+    fallback, and an explicit "here is what to do by hand" when both fail — never
+    a bare traceback. Success does NOT mean the engine is ready: ComfyUI
+    registers nodes at startup only, so the last line says to restart it."""
+    spec = _NODE_PACKS[action]
+    try:
+        dest = _node_pack_dest(action)
+    except Precondition as e:
+        _append(action, f'{e}')
+        _append(action, "the pack has to go inside YOUR ComfyUI's custom_nodes folder, and "
+                        "the app doesn't know where that is yet — nothing was installed.")
+        return 1
+    if _node_pack_already_there(action, dest):
+        _append(action, f'already installed: {dest}')
+        _append(action, 'left untouched (an existing folder may be a version you chose). '
+                        'If ComfyUI still reports the nodes as missing, restart ComfyUI.')
+        return 0
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    ok = _clone_node_pack(action, spec, dest) or _zip_node_pack(action, spec, dest)
+    if not ok:
+        _append(action, f"couldn't install {spec['pack']} automatically.")
+        _append(action, f"Install it by hand: clone {spec['repo']} into {os.path.dirname(dest)}"
+                        ' (or use the ComfyUI Manager and search for the pack name), then '
+                        'restart ComfyUI.')
+        return 1
+    _append(action, f"installed {spec['pack']} -> {dest}")
+    # The pack declares no dependencies today; if a future version adds some, say
+    # so instead of silently pip-installing third-party requirements into the app.
+    reqs = os.path.join(dest, 'requirements.txt')
+    if os.path.isfile(reqs):
+        _append(action, 'note: this pack now ships a requirements.txt. The app does not '
+                        'install third-party Python packages for you — install them into '
+                        "your ComfyUI's Python if the nodes fail to load.")
+    _append(action, '⚠ RESTART ComfyUI now — it only registers custom nodes at startup, so '
+                    'the engine stays marked "nodes missing" until you do.')
+    return 0
 
 
 def _run_ollama_model(action) -> int:
@@ -1338,7 +1756,8 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
             **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks
             'watermark_inpaint': _run_watermark_inpaint,
             'bank_scoring': _run_bank_scoring,
-            **{a: _run_klein_download for a in _KLEIN_DOWNLOADS}}
+            **{a: _run_model_download for a in _MODEL_DOWNLOADS},
+            **{a: _run_node_pack for a in _NODE_PACKS}}
 # Structural invariant: every whitelisted action MUST have a worker — a missing
 # entry surfaces as a cryptic "error: '<action>'" KeyError at runtime (live
 # repro: scrape_extras was added to INSTALL_ACTIONS but not here).

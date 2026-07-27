@@ -296,12 +296,12 @@ def test_run_scrape_extras_targets_scrape_requirements(monkeypatch):
     assert any('requirements-scrape.txt' in str(part) for part in seen['cmd'])
 
 
-def test_klein_dest_path_under_validated_base(app, tmp_path):
+def test_download_dest_path_under_validated_base(app, tmp_path):
     from app import setup_installer, config
     base = _make_comfyui(tmp_path)
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
-        dest = setup_installer._klein_dest_path('klein_lora')
+        dest = setup_installer._download_dest_path('klein_lora')
     assert dest == str(base / 'models' / 'loras' / 'klein'
                        / 'Flux2-Klein-9B-consistency-V2.safetensors')
 
@@ -314,17 +314,17 @@ def test_klein_model_dest_is_unet_klein(app, tmp_path):
     base = _make_comfyui(tmp_path)
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
-        dest = setup_installer._klein_dest_path('klein_model')
+        dest = setup_installer._download_dest_path('klein_model')
     assert dest.endswith(os.path.join('models', 'unet', 'klein',
                                       'flux-2-klein-9b-kv-fp8.safetensors'))
 
 
-def test_klein_dest_path_requires_valid_comfyui(app, tmp_path):
+def test_download_dest_path_requires_valid_comfyui(app, tmp_path):
     from app import setup_installer, config
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(tmp_path / 'not-comfyui')}})
         with pytest.raises(setup_installer.Precondition):
-            setup_installer._klein_dest_path('klein_lora')
+            setup_installer._download_dest_path('klein_lora')
 
 
 def test_manual_command_klein_lora_is_curl_to_real_url(app, tmp_path):
@@ -349,7 +349,7 @@ def test_manual_command_klein_uses_placeholder_when_unconfigured(app, tmp_path):
     assert 'flux2-vae.safetensors' in cmd
 
 
-def test_run_klein_download_401_logs_recovery_steps(app, tmp_path, monkeypatch):
+def test_run_model_download_401_logs_recovery_steps(app, tmp_path, monkeypatch):
     """The KV UNET is a public download, but if HF ever denies access (re-gated, or
     a stale token was sent) a 401/403 must still log actionable recovery steps —
     that safety net is keyed on the spec's license_url, not the (now-False) gated
@@ -360,7 +360,7 @@ def test_run_klein_download_401_logs_recovery_steps(app, tmp_path, monkeypatch):
         config.save_config({'comfyui': {'base_dir': str(base)}})
         monkeypatch.setattr(setup_installer.requests, 'get', _FakeGet(status=401))
         setup_installer._runs['klein_model'] = setup_installer._new_run()
-        rc = setup_installer._run_klein_download('klein_model')
+        rc = setup_installer._run_model_download('klein_model')
     assert rc == 1
     log = setup_installer._runs['klein_model']['log']
     assert any('denied access' in l for l in log)
@@ -368,7 +368,7 @@ def test_run_klein_download_401_logs_recovery_steps(app, tmp_path, monkeypatch):
     assert any('HF_TOKEN' in l for l in log)
 
 
-def test_run_klein_download_accepts_legacy_unet_variant(app, tmp_path, monkeypatch):
+def test_run_model_download_accepts_legacy_unet_variant(app, tmp_path, monkeypatch):
     """An install that fetched the pre-KV model (flux-2-klein-9b-fp8.safetensors)
     must NOT be told to re-download the KV build: the legacy filename sitting in
     models/unet/klein/ counts as already installed (both resolve by name), so the
@@ -379,35 +379,41 @@ def test_run_klein_download_accepts_legacy_unet_variant(app, tmp_path, monkeypat
         raise AssertionError('network must not be hit when a legacy Klein UNET exists')
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
-        legacy = os.path.join(os.path.dirname(setup_installer._klein_dest_path('klein_model')),
+        legacy = os.path.join(os.path.dirname(setup_installer._download_dest_path('klein_model')),
                               'flux-2-klein-9b-fp8.safetensors')
         os.makedirs(os.path.dirname(legacy), exist_ok=True)
         with open(legacy, 'wb') as f:
             f.write(b'pre-KV klein unet')
         monkeypatch.setattr(setup_installer.requests, 'get', boom)
         setup_installer._runs['klein_model'] = setup_installer._new_run()
-        rc = setup_installer._run_klein_download('klein_model')
+        rc = setup_installer._run_model_download('klein_model')
     assert rc == 0
     assert any('already present' in l and 'flux-2-klein-9b-fp8.safetensors' in l
                for l in setup_installer._runs['klein_model']['log'])
 
 
-def test_run_klein_download_streams_to_part_then_renames(app, tmp_path, monkeypatch):
+def test_run_model_download_streams_to_part_then_renames(app, tmp_path, monkeypatch):
     from app import setup_installer, config
     base = _make_comfyui(tmp_path)
-    payload = b'x' * (10 * 1024 * 1024)
+    # A structurally valid safetensors: the worker now VERIFIES what it wrote
+    # before renaming it in (an auth wall answering 200 with an HTML page used to
+    # land as a perfect-looking weight file), so a blob of 'x' is legitimately
+    # rejected — see test_krea_install.test_a_login_page_served_as_200_is_rejected.
+    import struct
+    _hdr = b'{"__metadata__":{"lds":"test"}}'
+    payload = struct.pack('<Q', len(_hdr)) + _hdr + b'\0' * (10 * 1024 * 1024)
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
         monkeypatch.setattr(setup_installer.requests, 'get', _FakeGet(payload=payload))
         setup_installer._runs['klein_vae'] = setup_installer._new_run()
-        rc = setup_installer._run_klein_download('klein_vae')
-        dest = setup_installer._klein_dest_path('klein_vae')
+        rc = setup_installer._run_model_download('klein_vae')
+        dest = setup_installer._download_dest_path('klein_vae')
     assert rc == 0
     assert os.path.isfile(dest)
     assert not os.path.exists(dest + '.part')   # atomic rename left no partial
 
 
-def test_run_klein_download_sends_bearer_when_token_set(app, tmp_path, monkeypatch):
+def test_run_model_download_sends_bearer_when_token_set(app, tmp_path, monkeypatch):
     from app import setup_installer, config
     base = _make_comfyui(tmp_path)
     cap = {}
@@ -417,24 +423,24 @@ def test_run_klein_download_sends_bearer_when_token_set(app, tmp_path, monkeypat
         monkeypatch.setattr(setup_installer.requests, 'get',
                             _FakeGet(payload=b'z' * 1024, capture=cap))
         setup_installer._runs['klein_model'] = setup_installer._new_run()
-        setup_installer._run_klein_download('klein_model')
+        setup_installer._run_model_download('klein_model')
     assert cap['headers'].get('Authorization') == 'Bearer hf_secret'
 
 
-def test_run_klein_download_skips_when_already_present(app, tmp_path, monkeypatch):
+def test_run_model_download_skips_when_already_present(app, tmp_path, monkeypatch):
     from app import setup_installer, config
     base = _make_comfyui(tmp_path)
     def boom(*a, **k):
         raise AssertionError('network must not be hit when the file already exists')
     with app.app_context():
         config.save_config({'comfyui': {'base_dir': str(base)}})
-        dest = setup_installer._klein_dest_path('klein_lora')
+        dest = setup_installer._download_dest_path('klein_lora')
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, 'wb') as f:
             f.write(b'already downloaded')
         monkeypatch.setattr(setup_installer.requests, 'get', boom)
         setup_installer._runs['klein_lora'] = setup_installer._new_run()
-        rc = setup_installer._run_klein_download('klein_lora')
+        rc = setup_installer._run_model_download('klein_lora')
     assert rc == 0
     assert any('already present' in l for l in setup_installer._runs['klein_lora']['log'])
 
@@ -1142,7 +1148,7 @@ def test_model_download_not_blocked_by_pip_queue(app, tmp_path, monkeypatch):
     with a pip install, never sit in the pip queue."""
     from app import setup_installer, config
     monkeypatch.setattr(setup_installer, '_execute', lambda a: None)
-    monkeypatch.setattr(setup_installer, '_check_klein_precondition', lambda a: None)
+    monkeypatch.setattr(setup_installer, '_check_download_precondition', lambda a: None)
     setup_installer._pip_current = 'masks'   # simulate a pip install already running
     setup_installer._pip_queue.clear()
     base = _make_comfyui(tmp_path)

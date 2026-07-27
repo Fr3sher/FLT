@@ -7,6 +7,13 @@ import { SETTINGS_SECTIONS } from '../components/settings/registry.js'
 
 export const SETUP_STEP_IDS = ['image', 'comfyui', 'ollama', 'quality', 'training']
 
+// Every wizard screen a /setup?step=<id> link may target. The tool steps PLUS
+// 'install' — the install/repair menu is a real destination (the one-click
+// engine installs live there), it just isn't a tool to configure. SetupPage's
+// SCREENS list is the display order; this one is the LINKABLE set, used by the
+// What's-new target validator and the help-registry contract test.
+export const SETUP_DEEP_LINK_STEPS = [...SETUP_STEP_IDS, 'install']
+
 // Tool reachable + its extra piece present -> ready; reachable only -> partial.
 function gateStatus(reachable, complete) {
   if (reachable && complete) return 'ready'
@@ -278,6 +285,12 @@ export function deriveCapabilitySummary(caps) {
   // the pending state — "the install is fine, the process isn't up" is not the
   // same problem as "it isn't installed", so it must not lead to the same page.
   const WAITING = 'comfyui.api_url'
+  // Krea's two distinct "not ready" causes, kept apart because the actions are
+  // different: something is genuinely absent from disk (install it) vs everything
+  // is installed and ComfyUI simply has not loaded the node pack yet (restart).
+  const kreaDiskGap = !!(Array.isArray(cu.krea_missing) && cu.krea_missing.length)
+    || !cu.krea_nodes_installed
+  const kreaRestartPending = kreaNeedsComfyuiRestart(c)
   return [
     { label: 'Nano Banana (Gemini)', ok: !!e.nanobanana, topic: 'GEMINI_API_KEY' },
     { label: 'ChatGPT (gpt-image-2)', ok: !!e.chatgpt, topic: 'engines.chatgpt_auth' },
@@ -285,6 +298,22 @@ export function deriveCapabilitySummary(caps) {
     { label: 'Klein (local)', ok: !!e.klein,
       topic: 'setup-comfyui', waitingTopic: WAITING,
       ...(!e.klein && comfyOff ? { pending: true, note: NOTE } : {}) },
+    // Krea 2 Edit is COUNTED even though it is optional, and even though nothing
+    // else in Setup used to mention it. Leaving it out of the list was worse than
+    // showing it red: the final screen certified "11 of 11 capabilities ready" on
+    // a machine where a whole engine was missing, so the user finished setup
+    // believing there was nothing left — and met a dark engine card weeks later.
+    // A capability that is absent must be VISIBLE and counted, never removed from
+    // the denominator.
+    { label: 'Krea 2 Edit (local)', ok: !!e.krea,
+      topic: 'setup-krea-install', waitingTopic: WAITING,
+      // Two different "not yet": nothing is on disk (a real install to do, so a
+      // plain ✗ pointing at the install screen), or everything is there and only
+      // ComfyUI is down/not restarted — the pending note, which must not read as
+      // "install something".
+      ...(!e.krea && !kreaDiskGap && kreaRestartPending
+        ? { pending: true, note: 'restart ComfyUI to load its nodes' }
+        : !e.krea && !kreaDiskGap && comfyOff ? { pending: true, note: NOTE } : {}) },
     { label: 'Captioning', ok: !!(cap.joycaption || cap.ollama), topic: 'setup-ollama' },
     { label: 'Auto-framing & head-crop', ok: !!(o.reachable && o.vision_model_ready),
       topic: 'setup-ollama' },
@@ -360,6 +389,52 @@ export const INSTALL_ALL_ACTION_LABELS = {
   klein_text_encoder: 'Klein text encoder',
   klein_vae: 'Klein VAE',
   klein_lora: 'Klein consistency LoRA',
+  krea_nodes: 'Krea 2 Edit node pack',
+  krea_model: 'Krea 2 base model (Turbo)',
+  krea_text_encoder: 'Krea 2 text encoder',
+  krea_vae: 'Krea 2 VAE',
+  krea_identity_lora: 'Krea 2 Identity Edit LoRA',
+}
+
+// The Krea 2 Edit engine, installable in ONE click but deliberately NOT part of
+// "Install everything": a second local engine is ~20 GB, and downloading it for
+// someone who never picked it would be hostile. Mirrors the backend's
+// setup_installer._INSTALL_GROUPS['krea'] — node pack first (a ~1 MB clone, so
+// the only thing left to wait for is bytes), then the four weights.
+export const KREA_INSTALL_ORDER = [
+  'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae', 'krea_identity_lora',
+]
+
+/** What the "Install Krea 2 Edit" button would queue for these capabilities —
+ *  the missing pieces only, so a user who already placed some files by hand sees
+ *  a shorter list instead of a re-download. Mirror of
+ *  setup_installer.install_group_plan('krea', caps), which stays the authority.
+ *
+ *  The node pack is queued only when it is neither loaded NOR on disk: on disk
+ *  but not loaded is a ComfyUI RESTART, not an install. */
+export function kreaInstallPlan(caps) {
+  const cu = (caps || {}).comfyui || {}
+  if (!cu.dir_valid) return []
+  const missing = Array.isArray(cu.krea_missing) ? cu.krea_missing : []
+  // On disk -> nothing to install (missing nodes then mean a RESTART). Reported
+  // missing -> install. Reported present -> already there under another folder
+  // name, never clone a duplicate. No answer at all (ComfyUI stopped: the node
+  // probe fails OPEN) -> install it, rather than silently dropping it.
+  const nodesMissing = Array.isArray(cu.krea_nodes_missing) ? cu.krea_nodes_missing : []
+  const needsPack = cu.krea_nodes_installed ? false
+    : (nodesMissing.length ? true : !cu.reachable)
+  return KREA_INSTALL_ORDER.filter(
+    (a) => (a === 'krea_nodes' ? needsPack : missing.includes(a)))
+}
+
+/** The one thing an install cannot do for the user. ComfyUI registers custom
+ *  nodes at STARTUP only, so a pack that is on disk but absent from /object_info
+ *  means "restart ComfyUI" — never "install it", which is what the app said
+ *  before it could install the pack itself. */
+export function kreaNeedsComfyuiRestart(caps) {
+  const cu = (caps || {}).comfyui || {}
+  return !!(cu.krea_nodes_installed
+    && Array.isArray(cu.krea_nodes_missing) && cu.krea_nodes_missing.length)
 }
 
 // Grouped by capability area (ML extras → vision model → Klein weights). The backend
@@ -414,6 +489,13 @@ export function installCatalog(caps) {
   const dirValid = !!cu.dir_valid
   const kleinMissing = Array.isArray(cu.klein_missing) ? cu.klein_missing : []
   const kleinHint = 'Point the app at a valid ComfyUI folder first (the ComfyUI step).'
+  const kreaMissing = Array.isArray(cu.krea_missing) ? cu.krea_missing : []
+  // Present = the folder is there, OR a REACHABLE ComfyUI reports the nodes (a
+  // pack installed under another folder name). An unreachable ComfyUI proves
+  // nothing — its node probe fails open — so it must not read as installed.
+  const kreaNodesPresent = !!cu.krea_nodes_installed
+    || !!(cu.reachable && !(Array.isArray(cu.krea_nodes_missing) && cu.krea_nodes_missing.length))
+  const kreaRestart = kreaNeedsComfyuiRestart(c)
   const item = (action, present, available, hint) => ({
     action, label: INSTALL_ALL_ACTION_LABELS[action] || action,
     present: !!present, available: !!available, hint: available ? '' : hint,
@@ -433,5 +515,21 @@ export function installCatalog(caps) {
         : !modelName ? 'Set a vision model name first (the Captioning step).' : ''),
     ...['klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora'].map(
       (a) => item(a, dirValid && !kleinMissing.includes(a), dirValid, kleinHint)),
+    // Krea 2 Edit. Same per-component repair path as everything else — the group
+    // button above installs the whole engine, this row is for fixing ONE piece.
+    // These rows did not exist at all before: Setup listed four Klein weights and
+    // not one Krea file, so a whole engine was invisible on the screen where the
+    // user decides they are done.
+    {
+      ...item('krea_nodes', dirValid && kreaNodesPresent && !kreaRestart, dirValid, kleinHint),
+      // The one component with a THIRD state. It is on disk but ComfyUI has not
+      // loaded it, so neither badge is true: "✓ Installed" would recreate the very
+      // lie this wave fixes (the app certifying something it cannot see), and
+      // "✗ Not installed" would invite a pointless re-install of a folder the user
+      // just watched appear. The row says what to DO instead.
+      ...(kreaRestart ? { state: 'restart', stateLabel: '⟳ Restart ComfyUI' } : {}),
+    },
+    ...['krea_model', 'krea_text_encoder', 'krea_vae', 'krea_identity_lora'].map(
+      (a) => item(a, dirValid && !kreaMissing.includes(a), dirValid, kleinHint)),
   ]
 }
