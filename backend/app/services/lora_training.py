@@ -4879,6 +4879,22 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             'queue this dataset')
     _prepared = checkpoint_registry.prepare_launch(
         user_id, dataset_id, base_model=base_model)
+    # ai-toolkit is about to claim the card. Give back the vision model's
+    # 7.5 GB if an isolated call leased it warm (no-op without a live lease).
+    #
+    # OUTSIDE `_queue_lock`, and it must stay outside: a live lease makes this an
+    # HTTP POST to Ollama with `timeout=(10, 30)` retried once — up to ~80 s of
+    # blocking. Held under the lock, that froze Stop, enqueue/dequeue and queue
+    # advancement for as long as Ollama took to answer: pressing Stop during a
+    # launch did nothing until the unload returned. Nothing here depends on the
+    # lock (the vision-pass guard already ran above), and the ordering that
+    # matters — VRAM handed back BEFORE Popen — is unchanged.
+    try:
+        from .vision_keepalive import revoke as _revoke_vision
+        _revoke_vision('training starting')
+    except Exception:
+        logger.warning('vision keep-warm revoke failed before training start',
+                       exc_info=True)
     # The authoritative live-run check, identity state and PID publication are
     # one transition under the SAME lock used by Stop and queue advancement.
     # This closes both races: two launches spawning together, and a stale Stop
@@ -4926,14 +4942,6 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         for key, value in identity.items():
             queue_manager._set_system_state(
                 key, value, ttl_seconds=_TRAIN_STATE_TTL)
-        # ai-toolkit is about to claim the card. Give back the vision model's
-        # 7.5 GB if an isolated call leased it warm (no-op without a live lease).
-        try:
-            from .vision_keepalive import revoke as _revoke_vision
-            _revoke_vision('training starting')
-        except Exception:
-            logger.warning('vision keep-warm revoke failed before training start',
-                           exc_info=True)
         logf = None
         try:
             logf = open(log_path, 'w', encoding='utf-8')
