@@ -27,8 +27,8 @@ from urllib.parse import urlsplit
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from ..extensions import db
-from ..models import (CanvasNodePosition, FaceDataset, FaceDatasetImage,
-                      LoraTestImage)
+from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
+                      FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
 from . import dataset_activity, reference_edit_jobs, trash
 from .dataset_storage import dataset_path, ensure_dataset_dir
@@ -1709,6 +1709,9 @@ def delete_dataset(user_id, dataset_id):
     # parent below. A dataset must never fail to delete over a display
     # preference: that exact bug already answered HTTP 500 once in this project.
     canvas_rows = CanvasNodePosition.query.filter_by(dataset_id=dataset_id).all()
+    # 🖼 Pinned-image nodes: same story, same trap. They reference
+    # lora_test_image rows that are being deleted in this very transaction.
+    canvas_imgs = CanvasImageNode.query.filter_by(dataset_id=dataset_id).all()
     dataset_path = _dataset_path(dataset_id)
     trashed_path = None
     try:
@@ -1735,6 +1738,8 @@ def delete_dataset(user_id, dataset_id):
             db.session.delete(cell)
         for pos in canvas_rows:
             db.session.delete(pos)
+        for pin in canvas_imgs:
+            db.session.delete(pin)
         # Force the child DELETEs to reach the DB BEFORE the parent's. The child
         # models declare only a table-level ForeignKey (no relationship()), so the
         # unit of work has no ordering dependency between them and would otherwise

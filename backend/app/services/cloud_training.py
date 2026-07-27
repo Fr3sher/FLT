@@ -3329,7 +3329,29 @@ def _gallery_image(r) -> dict:
         'seed': r.seed,
         'strength': r.strength,
         'step': r.step,
+        # WHICH checkpoint made it. Redundant inside a checkpoint gallery (the
+        # scope already says so) and load-bearing outside one: a pinned canvas
+        # node draws its link to the source pill from these two, so the link
+        # cannot drift from the image.
+        'record_id': r.record_id,
         'created_at': r.created_at.isoformat() if r.created_at else None,
+        # ── What the image was actually MADE with ────────────────────────────
+        # Every one of these was already persisted per cell (for a faithful
+        # resume) and none of it reached the viewer, which on a board whose
+        # whole job is comparing checkpoints is the wrong half to hide: two
+        # renders that differ only by sampler or CFG look like a checkpoint
+        # difference until you can read the settings. Nothing new is computed
+        # here — these are columns, published.
+        'checkpoint': r.checkpoint,
+        'base_model': r.z_model,
+        'negative': r.negative,
+        'cfg': r.cfg,
+        'steps': r.steps,
+        'sampler': r.sampler,
+        'scheduler': r.scheduler,
+        'aspect': r.aspect,
+        'extra_loras': r.extra_loras,
+        'face_score': r.face_score,
     }
 
 
@@ -4161,6 +4183,146 @@ def clear_canvas_positions(user_id, dataset_id) -> dict:
     if not fds.get_dataset(user_id, dataset_id):
         raise LookupError('dataset not found')
     removed = CanvasNodePosition.query.filter_by(
+        dataset_id=dataset_id).delete(synchronize_session=False)
+    db.session.commit()
+    return {'cleared': int(removed or 0)}
+
+
+# 🖼 Bounds for a pinned image node, in the board's WORLD units (a run card is
+# CARD_W = 264 wide, for scale). The floor keeps a node grabbable at any zoom;
+# the ceiling is the one that matters — a node resized to 8 000 px would blow
+# up its lane's extent, and ✦ Fit would then collapse the whole board to a scale
+# where nothing else is readable. Enforced here as well as in the browser: the
+# clamp protects the NEXT load, not just the gesture.
+CANVAS_IMAGE_MIN = 96.0
+CANVAS_IMAGE_MAX = 1400.0
+
+
+def _clamp_image_box(x, y, w, h):
+    """Lane-local geometry, clamped. Returns None for anything unusable —
+    a NaN stored here would make a node unreachable on every future load and
+    there is no UI to fix that."""
+    try:
+        x, y, w, h = float(x), float(y), float(w), float(h)
+    except (TypeError, ValueError):
+        return None
+    for v in (x, y, w, h):
+        if v != v or abs(v) == float('inf'):
+            return None
+    return (max(0.0, x), max(0.0, y),
+            min(CANVAS_IMAGE_MAX, max(CANVAS_IMAGE_MIN, w)),
+            min(CANVAS_IMAGE_MAX, max(CANVAS_IMAGE_MIN, h)))
+
+
+def canvas_image_nodes(user_id, dataset_ids=None) -> dict:
+    """🖼 Every image pinned on the board, grouped by dataset id — geometry AND
+    the image row itself, so a lane can draw its pinned pictures without a
+    second round-trip per node.
+
+    Rows whose image no longer exists are DELETED here rather than returned.
+    That is the answer to the ghost node: an image deleted from a gallery (or
+    with its whole dataset) leaves a row pointing at nothing, and a node that
+    renders a broken picture forever is a bug that only shows up weeks later.
+    The board simply loses it, silently, which is what "the picture is gone"
+    should look like.
+
+    ``visible: false`` rows ARE returned: that is the closed-but-remembered
+    state, and the panel needs it to re-open an image exactly where it was."""
+    from ..models import CanvasImageNode, LoraTestImage
+    owned = {d.id for d in fds.list_datasets(user_id)}
+    if dataset_ids is not None:
+        owned &= {int(i) for i in dataset_ids}
+    if not owned:
+        return {'nodes': {}, 'pruned': 0}
+    rows = (CanvasImageNode.query
+            .filter(CanvasImageNode.dataset_id.in_(list(owned))).all())
+    if not rows:
+        return {'nodes': {}, 'pruned': 0}
+    imgs = {i.id: i for i in LoraTestImage.query.filter(
+        LoraTestImage.id.in_([r.image_id for r in rows]),
+        LoraTestImage.status == 'done',
+        LoraTestImage.filename.isnot(None)).all()}
+    out, pruned = {}, 0
+    for r in rows:
+        img = imgs.get(r.image_id)
+        if img is None:
+            db.session.delete(r)
+            pruned += 1
+            continue
+        out.setdefault(str(r.dataset_id), []).append({
+            'image_id': r.image_id,
+            'x': float(r.x), 'y': float(r.y),
+            'w': float(r.w), 'h': float(r.h),
+            'visible': bool(r.visible),
+            'image': _gallery_image(img),
+        })
+    if pruned:
+        db.session.commit()
+    for lane in out.values():
+        lane.sort(key=lambda n: n['image_id'])
+    return {'nodes': out, 'pruned': pruned}
+
+
+def save_canvas_image_nodes(user_id, dataset_id, nodes) -> dict:
+    """Upsert pinned-image geometry for one lane.
+
+    Body rows are {image_id, x, y, w, h, visible}. Idempotent by
+    (dataset_id, image_id): a drag re-sends the node on every drop, and closing
+    one re-sends it with ``visible: false`` — the row and its geometry survive,
+    which is the entire point (re-opening restores where and how big it was).
+
+    An image that does not belong to this dataset is refused, so a pinned node
+    can never smuggle another dataset's render into this lane."""
+    from ..models import CanvasImageNode, LoraTestImage
+    if not fds.get_dataset(user_id, dataset_id):
+        raise LookupError('dataset not found')
+    wanted = {}
+    for n in (nodes or []):
+        try:
+            iid = int(n['image_id'])
+        except (KeyError, TypeError, ValueError):
+            continue
+        box = _clamp_image_box(n.get('x'), n.get('y'), n.get('w'), n.get('h'))
+        if box is None:
+            continue
+        wanted[iid] = (box, bool(n.get('visible', True)))
+    if not wanted:
+        return {'saved': 0,
+                'total': CanvasImageNode.query.filter_by(dataset_id=dataset_id).count()}
+    legit = {i.id for i in LoraTestImage.query.filter(
+        LoraTestImage.id.in_(list(wanted)),
+        LoraTestImage.dataset_id == dataset_id).all()}
+    existing = {r.image_id: r for r in CanvasImageNode.query.filter(
+        CanvasImageNode.dataset_id == dataset_id,
+        CanvasImageNode.image_id.in_(list(wanted))).all()}
+    saved = 0
+    for iid, ((x, y, w, h), visible) in wanted.items():
+        if iid not in legit:
+            continue
+        row = existing.get(iid)
+        if row is None:
+            db.session.add(CanvasImageNode(
+                dataset_id=dataset_id, image_id=iid, x=x, y=y, w=w, h=h,
+                visible=visible))
+        else:
+            row.x, row.y, row.w, row.h, row.visible = x, y, w, h, visible
+        saved += 1
+    db.session.commit()
+    return {'saved': saved,
+            'total': CanvasImageNode.query.filter_by(dataset_id=dataset_id).count()}
+
+
+def clear_canvas_image_nodes(user_id, dataset_id) -> dict:
+    """Forget every pinned image of one lane — geometry included.
+
+    NOT what ✦ Tidy up calls. Tidy up hands a lane back to the automatic tree,
+    and there is no automatic position for a pinned image to fall back to, so
+    "tidying" one could only mean throwing it away. This exists as the deliberate
+    escape hatch, and nothing invokes it by accident."""
+    from ..models import CanvasImageNode
+    if not fds.get_dataset(user_id, dataset_id):
+        raise LookupError('dataset not found')
+    removed = CanvasImageNode.query.filter_by(
         dataset_id=dataset_id).delete(synchronize_session=False)
     db.session.commit()
     return {'cleared': int(removed or 0)}

@@ -1930,6 +1930,41 @@ def dataset_canvas_positions_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
+@bp.get('/train/canvas/images')
+def train_canvas_images():
+    """🖼 Every image pinned on the ◉ LoRA Canvas, grouped by dataset id, with
+    the image row alongside its geometry — one request for the whole board, like
+    the card positions it sits next to. Rows whose image is gone are pruned
+    server-side rather than answered."""
+    return jsonify(ct.canvas_image_nodes(LOCAL_USER))
+
+
+@bp.put('/dataset/<int:dataset_id>/canvas/images')
+def dataset_canvas_images_save(dataset_id):
+    """Remember pinned images of ONE lane.
+    Body: {nodes:[{image_id,x,y,w,h,visible}]}.
+
+    Closing a pinned image is this call with ``visible: false`` — the geometry
+    stays, so re-opening puts the picture back exactly where and at the size it
+    was closed at."""
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ct.save_canvas_image_nodes(
+            LOCAL_USER, dataset_id, data.get('nodes')))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
+@bp.delete('/dataset/<int:dataset_id>/canvas/images')
+def dataset_canvas_images_clear(dataset_id):
+    """Forget every pinned image of one lane, geometry included. Deliberately
+    NOT what ✦ Tidy up calls — see clear_canvas_image_nodes."""
+    try:
+        return jsonify(ct.clear_canvas_image_nodes(LOCAL_USER, dataset_id))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
 @bp.get('/dataset/<int:dataset_id>/train/lineage')
 def dataset_train_dataset_lineage(dataset_id):
     """🌳 Genealogy forest of ALL this dataset's runs (every launch + its
