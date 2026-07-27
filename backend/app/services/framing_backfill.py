@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+from ..utils.timestamps import utc_stamp
 
 from sqlalchemy import inspect, text
 
@@ -145,7 +145,7 @@ def run_if_needed() -> dict:
             return state                       # already done at this rule version
         filled = backfill_promoted_framings()
         summary_ = {'version': BACKFILL_VERSION, 'framings': filled,
-                    'ran_at': datetime.utcnow().isoformat(timespec='seconds') + 'Z'}
+                    'ran_at': utc_stamp()}
         _save_state(summary_)
         if filled:
             logger.info('framing backfill: recovered %d promoted framing(s)', filled)
