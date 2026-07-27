@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-07-27-mask-faces-installs-its-own-detector',
+    date: '2026-07-27',
+    title: 'Mask faces now installs what it needs, from where you tick it',
+    blurb:
+      'Face masking needs a face detector (InsightFace), and on most installs it simply is not there. Until now the option greyed itself out and sent you to the Setup tab to install something called "Face-similarity scoring" — which nobody ticking Mask faces would ever go looking for. The option now names the missing piece, says what it costs before you click (~400 MB, a few minutes), and installs it in place with a progress bar. It stays entirely optional: nothing downloads on its own, and declining leaves the app exactly as it is with just that one option off. If your Python is outside 3.10–3.12 it says so instead of offering an install that could only fail. And launching a run with Mask faces on while the detector is missing no longer silently trains unmasked — the pre-launch report tells you, and lets you install or continue on purpose.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',

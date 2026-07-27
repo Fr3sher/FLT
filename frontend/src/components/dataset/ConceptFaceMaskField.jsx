@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { postJson } from '../../hooks/useDataset';
 import { HelpBadge } from '../../help/HelpMode';
+import FaceDetectionInstallPrompt from '../setup/FaceDetectionInstallPrompt';
 import { boxStyle, coverageFraction, MAX_COVERAGE } from '../../utils/faceMaskBox';
 import {
   previewError, previewPercent, previewProgressValue, previewRunning, previewStatusLabel,
@@ -147,16 +148,27 @@ export default function ConceptFaceMaskField({
     return () => { alive = false; clearInterval(id); };
   }, [supported, datasetId, running, adopt]);
 
+  // The pass failed specifically because InsightFace is missing (server 409 with
+  // reason:'face_scoring'). Reachable when the client's capabilities are stale —
+  // and it is exactly the moment to offer the install rather than report a defeat.
+  const [needsFaceDetection, setNeedsFaceDetection] = useState(false);
+
   if (!supported) return null;          // concept datasets only
 
   const runPreview = async () => {
     setErr(null);
+    setNeedsFaceDetection(false);
     // Optimistic, so the first frame after the click already says something —
     // the server answers in milliseconds but the phase it reports is the truth.
     setJob({ phase: 'starting', done: 0, total: 0, error: null, finished: false });
     const d = await postJson(previewUrl(datasetId), { limit: 6 });
     if (d && d.ok) {
       adopt(d);
+    } else if (d && d.reason === 'face_scoring') {
+      // Turn the diagnosis into an action instead of leaving the user with a
+      // sentence about a module they have no way to name.
+      setJob(null);
+      setNeedsFaceDetection(true);
     } else {
       setJob(null);
       setErr((d && d.error) || 'preview failed');
@@ -182,11 +194,14 @@ export default function ConceptFaceMaskField({
         <span className="text-content-muted text-[0.75rem]">keep the act, drop the identities</span>
       </label>
 
+      {/* The dependency is DECLARED where it is ticked, and installable from here.
+          It used to point at "the ML extras (Face-similarity scoring) in the Setup
+          tab" — correct, and useless: nobody ticking "Mask faces" would go install
+          a face SCORER. Same install action underneath, named for what it does. */}
       {faceCapability === false && (
-        <span className="text-amber-300 text-[0.6875rem]">
-          ⚠️ Face detection isn&apos;t installed, so faces can&apos;t be found or masked. Install the
-          ML extras from the Setup tab (Face-similarity scoring) to enable this.
-        </span>
+        <FaceDetectionInstallPrompt compact
+          why="Faces have to be found before they can be weighted down, and that
+            detection is an optional extra this install doesn't have yet." />
       )}
 
       <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
@@ -229,6 +244,11 @@ export default function ConceptFaceMaskField({
             <p role="alert" className="mt-1 text-amber-300 text-[0.6875rem] leading-relaxed">
               ⚠️ {err}
             </p>
+          )}
+          {needsFaceDetection && !running && (
+            <FaceDetectionInstallPrompt compact
+              why="The preview couldn't run: finding faces needs this optional extra."
+              onInstalled={() => { setNeedsFaceDetection(false); runPreview(); }} />
           )}
 
           {preview && (
