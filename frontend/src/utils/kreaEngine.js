@@ -57,13 +57,17 @@ export function kreaUnavailableReason({
     return '⚠ Install the comfyui-krea2edit node pack in ComfyUI, then restart it';
   }
   const words = kreaMissingLabels(missingAssets);
-  // NOT "see Setup": the Setup wizard covers Klein only and says nothing about
-  // Krea, so that pointer sent people to a page that never mentions the thing
-  // they were looking for. The Guide chapter below (docs/guide/settings-reference,
-  // shipped in-app) is the one place that lists every Krea path and its source.
+  // This line has now been wrong in BOTH directions, which is why the test next
+  // to it pins the reason rather than the wording. It first said "see Setup"
+  // while Setup covered Klein only and never said the word Krea -- a pointer to
+  // a page about something else. It was then changed to name the Guide, correct
+  // at the time: reading was all a user could do. Since the app installs these
+  // files itself, the Guide is no longer the best answer -- Setup is, because it
+  // now ACTS instead of explaining. The invariant is not "say Setup" or "say
+  // Guide": it is that this message names a place that both exists and covers
+  // Krea. Re-check that before rewording it again.
   if (words.length) {
-    return `⚠ Krea ${words.join(' + ')} missing — the Guide (Settings ▸ Image engines ▸ `
-      + 'Krea 2 Edit) lists where each file goes';
+    return `⚠ Krea ${words.join(' + ')} missing — Setup can download them for you`;
   }
   // Present but NOT weights: an interrupted, proxied or error-page download saves
   // HTML or a half file as .safetensors. The file exists, which is why "missing"

@@ -109,14 +109,17 @@ test('the unavailable reason names the FIRST thing to fix, never just "off"', ()
 });
 
 test('a missing asset points somewhere that actually mentions Krea', () => {
-  // This used to say "see Setup for where to place it". The Setup wizard covers
-  // Klein and does not contain the word Krea anywhere, so the one line the user
-  // had to go on sent them to a page about something else. A dead pointer is
-  // worse than none: it costs a detour and still ends in "missing".
+  // The rule this pins is NOT a specific word. This one line has been wrong
+  // twice: it said "see Setup" when Setup covered Klein only and never
+  // mentioned Krea, then it named the Guide -- right while reading was all a
+  // user could do. Setup installs these files now, so pointing at prose would
+  // send someone to read about a job the app can do for them.
+  // The invariant: name a destination that EXISTS and covers Krea, and prefer
+  // the one that acts over the one that explains.
   const msg = kreaUnavailableReason({ missingAssets: ['krea_model', 'krea_vae'] });
-  assert.doesNotMatch(msg, /Setup/i, 'Setup says nothing about Krea - never send anyone there');
-  assert.match(msg, /Guide/, 'name the place that does list the paths');
-  assert.match(msg, /missing/i, 'still say what is wrong, not only where to read');
+  assert.match(msg, /Setup/, 'Setup now installs these - send people to the button');
+  assert.match(msg, /missing/i, 'still say what is wrong, not only where to go');
+  assert.match(msg, /download|install/i, 'say that it can be done FOR them');
 });
 
 test('a file that is PRESENT but is not weights gets named, not left to ComfyUI', () => {
