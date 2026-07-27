@@ -36,12 +36,17 @@ Reference semantics (verbatim from comfyanonymous/ComfyUI, read 2026-07):
         constant.
 
 Extensions: ComfyUI's ``supported_pt_extensions`` = {.ckpt,.pt,.pt2,.bin,.pth,
-.safetensors,.pkl,.sft}. We list ``{.safetensors, .sft, .gguf}``: the app's
-pipelines only load these, and the app ALREADY lists ``.gguf`` across
-klein_edit_helper + utils/comfyui (ComfyUI-GGUF quantised diffusion models are
-common in this community). Dropping ``.gguf`` to match core ComfyUI would HIDE
-models existing users already see, so we keep it and stay narrow on the rest so
-``picker == probe == resolver``.
+.safetensors,.pkl,.sft}. We list ``{.safetensors, .sft, .gguf}`` and stay narrow
+on the rest so ``picker == probe == resolver``.
+
+``.gguf`` is the exception that is listed but NOT loadable: core ComfyUI has no
+``.gguf`` in ``supported_pt_extensions``, so it never scans such a file in ANY
+model root, and the shipped graphs emit core ``UNETLoader``, which cannot read one
+even when the ComfyUI-GGUF pack is installed (that pack adds a separate
+``UnetLoaderGGUF`` node, which nothing here emits). Dropping it would hide a file
+users can see on disk and turn a nameable problem into a silent absence; keeping
+it is only honest because ``utils.comfyui.unavailable_model_files`` states the
+extension as the cause before a job is queued (naniii2352, Discord).
 
 Degradation is total and silent-safe: no base_dir / no yaml / malformed yaml /
 PyYAML not importable all resolve to "no extra roots" (logged once), never an

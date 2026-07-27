@@ -410,7 +410,11 @@ const TOPICS = [
     ['krea', 'steps', 'sampler', 'quality', 'slower', 'local engine']),
   setting('krea.base_model', 'engines', 'krea-base-model', 'Krea 2 Edit base model',
     ['krea', 'base model', 'turbo', 'raw', 'checkpoint', 'unet', 'diffusion model',
-     'noise', 'biglove', 'incompatible', 'local engine']),
+     'noise', 'biglove', 'incompatible', 'local engine',
+     // A GGUF quantised base is a dead end ComfyUI reports as a bare
+     // "value_not_in_list" — these terms are what someone stuck on it searches for.
+     'gguf', 'quant', 'quantised', 'quantized', 'q4_k_m', 'q8', 'value not in list',
+     'not in list', 'not detecting', 'model not found', 'unet_name', 'safetensors']),
   setting('krea.identity_lora', 'engines', 'krea-identity-lora', 'Krea 2 Edit identity LoRA',
     ['krea', 'identity', 'edit lora', 'lora', 'krea2_identity_edit', 'civitai',
      'node pack', 'comfyui-krea2edit', 'missing', 'local engine']),
@@ -474,7 +478,14 @@ const TOPICS = [
   setting('comfyui.api_url', 'local-tools', 'comfyui-api-url', 'ComfyUI API URL',
     ['comfyui', 'api', 'url', 'klein', 'studio', 'local']),
   setting('comfyui.base_dir', 'local-tools', 'comfyui-base-dir', 'ComfyUI install directory',
-    ['comfyui', 'directory', 'path', 'install', 'base dir', 'models', 'loras']),
+    ['comfyui', 'directory', 'path', 'install', 'base dir', 'models', 'loras',
+     // ComfyUI Desktop keeps a SHARED models folder and one inside its install
+     // directory, so pointing the API address at one install and the models
+     // override at another is easy and silent — the app then lists models the
+     // running ComfyUI does not serve.
+     'comfyui desktop', 'desktop', 'two folders', 'shared models', 'multiple installs',
+     'wrong install', 'value not in list', 'not in list', 'model not found',
+     'models folder', 'override']),
   setting('comfyui.output_dir', 'local-tools', 'comfyui-output-dir', 'ComfyUI output folder override',
     ['comfyui', 'output', 'directory', 'folder', 'override', 'path', 'custom', 'output-directory']),
   setting('comfyui.input_dir', 'local-tools', 'comfyui-input-dir', 'ComfyUI input folder override',
