@@ -1095,7 +1095,17 @@ def probe(force=False) -> dict:
     from .services import krea_edit_helper as _krh
     krea_missing = _krh.krea_missing_assets()
     krea_nodes_missing = _krh.krea_missing_nodes() if comfy['ok'] else []
-    krea_ready = comfy['ok'] and not krea_missing and not krea_nodes_missing
+    # Present-but-INVALID, exactly like Klein's: the Krea base sits behind a HF
+    # licence gate and the identity LoRA behind a Civitai login, so a browser
+    # download without the licence/login saves the HTML gate PAGE as
+    # .safetensors — present, not loadable, and today the only symptom was a raw
+    # ComfyUI "Expecting value: line 1 column 1". Every Krea asset is required
+    # (KREA_REQUIRED == all of them), so any blocking-invalid one keeps the
+    # engine dark; the advisory too_small does not gate.
+    krea_invalid = _krh.krea_invalid_assets()
+    krea_blocking_invalid = any(i['blocking'] for i in krea_invalid)
+    krea_ready = (comfy['ok'] and not krea_missing and not krea_nodes_missing
+                  and not krea_blocking_invalid)
     base_dir = cfg.get('comfyui.base_dir') or ''
     comfy_dir = resolve_comfyui_base(base_dir)
     # Conscious "continue without ComfyUI" skip (Setup wizard). DERIVED, not just the
@@ -1153,6 +1163,10 @@ def probe(force=False) -> dict:
             # ComfyUI doesn't expose. Empty + empty => the engine is ready.
             'krea_missing': krea_missing,
             'krea_nodes_missing': krea_nodes_missing,
+            # Krea assets PRESENT on disk but not real, loadable weights — same
+            # [{asset, filename, verdict, blocking, reason}] shape as
+            # klein_invalid, so one banner covers both engines.
+            'krea_invalid': krea_invalid,
             # Klein assets PRESENT on disk but not real, loadable weights:
             # [{asset, filename, verdict, blocking, reason}]. Distinct from
             # klein_missing (the file exists, it just can't load) — drives the Setup

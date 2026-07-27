@@ -6,7 +6,7 @@ import LineageDetailPanel from './LineageDetailPanel';
 import LineageDiffPanel from './LineageDiffPanel';
 import CheckpointActionsPopover from './CheckpointActionsPopover';
 import PreviewLightbox from './PreviewLightbox';
-import CheckpointGalleryPanel from '../canvas/CheckpointGalleryPanel';
+import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { checkpointPopoverPlacement, POPOVER_H, POPOVER_W } from './checkpointPopover.js';
 import { noteBadge, toggleDiffSelection } from './lineageDetail.js';
 import { removeRunFromTree } from '../../utils/runDeletable.js';

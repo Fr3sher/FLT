@@ -28,7 +28,7 @@ import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
 import CanvasRunTracker from './CanvasRunTracker';
-import CheckpointGalleryPanel from './CheckpointGalleryPanel';
+import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
 import { HelpBadge } from '../../help/HelpMode';
 
@@ -593,14 +593,16 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
      stopped being true — a just-deployed pill flips to ✓ Deployed, a deleted
      save's pill disappears.
 
-     ⚠️ `bestSettingsLora` is not passed: the board's dataset index does not carry
-     the ★ pin, so a canvas delete of the pinned LoRA is confirmed without the ⚠
-     line the dataset panel shows. The deletion itself is identical (same route,
-     same trash, recoverable); only that extra warning is missing. */
+     The ★ pin travels WITH the lane (the dataset index publishes
+     `best_settings_loras`), so the pin handed to the hook is the one belonging to
+     the lane whose popover is open — a board spanning ten datasets must never
+     warn with another dataset's pin. Closed popover → null, and the hook simply
+     falls back to the plain wording. */
   const onCheckpointChanged = useCallback(
     async (datasetId) => { await onRefetchDataset?.(datasetId); }, [onRefetchDataset]);
   const { importing, deleting, deployCheckpoint, deleteCheckpoint } = useCheckpointActions({
     onChanged: onCheckpointChanged,
+    bestSettingsLora: openCk?.lane?.bestSettingsLoras || null,
   });
   const handleDeployCheckpoint = useCallback(async (node, pill) => {
     if (await deployCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);

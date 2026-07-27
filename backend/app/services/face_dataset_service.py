@@ -135,24 +135,47 @@ def _ref_path(ds) -> str:
     return os.path.join(_dataset_dir(ds.id), ds.ref_filename)
 
 
+# (path, mtime_ns, size) -> (w, h) | None. dataset_payload is POLLED, and it
+# measured the reference on every single call: sub-millisecond, but a fresh disk
+# open on a hot path, forever. Keyed on the file's identity rather than its name,
+# so re-cropping the reference (which rewrites the same filename) invalidates the
+# entry by itself — a stale shape here would silence the "your square reference
+# will squeeze the body shots" warning, or raise a false one. Small and bounded:
+# a handful of reference files per install, cleared wholesale when it grows.
+_PIXEL_SIZE_CACHE: dict = {}
+_PIXEL_SIZE_CACHE_MAX = 512
+
+
 def image_pixel_size(path):
     """(w, h) of an image file, or None when it cannot be measured.
 
-    PIL reads the header only — no decode — so this is cheap enough to sit in a
-    polled payload. WHY the payload needs it at all: the Krea 2 Edit engine
+    PIL reads the header only — no decode — and the answer is cached per
+    (path, mtime, size). WHY the payload needs it at all: the Krea 2 Edit engine
     reproduces the REFERENCE's aspect ratio (krea_edit_helper.fit_output_size —
     the edit LoRA was trained on same-size pairs), so a square reference makes
     every `body`/`back` shot come back cropped tighter than asked. The front end
     can only warn about that if it knows the reference's shape, and it has never
     been told. Degrades to None on ANY failure (missing file, exotic format,
-    Pillow absent): an unmeasurable reference must cost a warning, never a 500."""
+    Pillow absent): an unmeasurable reference must cost a warning, never a 500.
+    A file that cannot be stat'ed is measured without caching — never guessed."""
+    try:
+        st = os.stat(path)
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+    if key in _PIXEL_SIZE_CACHE:
+        return _PIXEL_SIZE_CACHE[key]
     try:
         from PIL import Image
         with Image.open(path) as im:
             w, h = im.size
+        size = (int(w), int(h)) if w and h and w > 0 and h > 0 else None
     except Exception:
-        return None
-    return (int(w), int(h)) if w and h and w > 0 and h > 0 else None
+        size = None
+    if len(_PIXEL_SIZE_CACHE) >= _PIXEL_SIZE_CACHE_MAX:
+        _PIXEL_SIZE_CACHE.clear()
+    _PIXEL_SIZE_CACHE[key] = size
+    return size
 
 
 _VALID_STATUS = ('pending', 'keep', 'reject', 'failed')
@@ -2586,6 +2609,7 @@ def _image_engine(img):
 
 
 def dataset_payload(user_id, dataset_id):
+    from . import lora_test_studio as studio
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return None
@@ -2675,6 +2699,11 @@ def dataset_payload(user_id, dataset_id):
         # ★ du workspace ne s'affichait jamais, et le garde-fou « suppression d'un
         # checkpoint référencé » en a besoin.
         'best_settings': _safe_json(ds.best_settings),
+        # The pinned LoRA filenames, FLATTENED out of the per-family map above.
+        # The delete guard-rail used to read `best_settings.lora_filename`, a key
+        # that only exists in the legacy flat shape — so on any dataset pinned
+        # since best settings went per-family the ⚠ warning was silently dead.
+        'best_settings_loras': studio.best_settings_lora_filenames(ds),
         'face_thresholds': {'green': cfg.get('face_scoring.green'), 'orange': cfg.get('face_scoring.orange')},
         'images': [{'id': i.id, 'filename': i.filename, 'source': i.source,
                     # Which engine made this image, when it can be told HONESTLY
@@ -4599,15 +4628,23 @@ def analyze_faces(user_id, dataset_id) -> dict:
         raise RuntimeError('face scoring service not configured/available yet')
     # scoring_error ({kind, detail} | None) remonte jusqu'au toast : un scorer
     # cassé doit dire POURQUOI, pas « 0 analyzed » en vert.
-    # Persistent indicator (survives reload). The scoring is a single CPU subprocess
-    # (opaque — done stays 0 during it, then fills as results are committed); try/
-    # finally clears the indicator even if scoring raises.
+    # Persistent indicator (survives reload). The scoring is a single CPU
+    # subprocess, but NOT an opaque one: it prints "[face] i/N" for every image it
+    # finishes, and the service now streams those into this counter — the bar used
+    # to sit at 0 for the whole (multi-minute) pass and then fill in one jump,
+    # which is indistinguishable from a hung pass. try/finally clears the
+    # indicator even if scoring raises.
     token = dataset_activity.begin(dataset_id, 'analyze_faces', total=len(by_path))
     try:
-        results, scoring_error = score_dataset_faces(ref_path, list(by_path.keys()))
+        results, scoring_error = score_dataset_faces(
+            ref_path, list(by_path.keys()),
+            on_progress=lambda done, total: dataset_activity.progress(
+                token, done=done, total=total))
         counts = {}
+        # The counter is already at N: the persist loop below is a fraction of the
+        # pass (no model load, no inference), so it does NOT bump — doing so would
+        # count every image twice and take the bar past its own total.
         for p, img in by_path.items():
-            dataset_activity.bump(token)
             r = results.get(p)
             if not r:
                 continue

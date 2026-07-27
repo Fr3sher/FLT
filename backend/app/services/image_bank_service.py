@@ -3099,7 +3099,22 @@ PIPELINE_STEPS = ('scan', 'auto_reject', 'score', 'semantic_dedup', 'watermark',
 # Auto-reject inside the pipeline runs right after the quality scan, so it can
 # only act on the CPU-scan flags (and duplicates). The score-derived flags
 # (low_aesthetic/nsfw/watermark) have no data yet at that point.
-PIPELINE_REJECT_FLAGS = _QUALITY_FLAGS
+#
+# NOT every quality flag, though. `soft_detail` and `bars` are excluded ON
+# PURPOSE — they are provenance HINTS, not verdicts, and their own documentation
+# says so: a crisp watermark rescues an enlargement's detail ratio while a
+# motion-blurred native shot sinks it, and `bars` fires on any dark-themed
+# screenshot. The standalone 🧹 Auto-reject button still offers them, because
+# there a human is looking at the flagged count, can undo on the spot, and the
+# hint under the checkbox says "check before mass-rejecting". The pipeline is the
+# opposite situation: unattended, and auto-reject runs FIRST, so anything it
+# drops never reaches the score / watermark / caption passes at all — the mistake
+# becomes invisible instead of reviewable. Offering a non-verdict as an overnight
+# bulk rejection contradicts the measurement it is built on.
+# The pipeline UI never offered these two; this makes the API agree with it.
+_PIPELINE_EXCLUDED_REJECT_FLAGS = ('soft_detail', 'bars')
+PIPELINE_REJECT_FLAGS = tuple(f for f in _QUALITY_FLAGS
+                              if f not in _PIPELINE_EXCLUDED_REJECT_FLAGS)
 
 
 def _sanitize_pipeline_steps(steps) -> list:

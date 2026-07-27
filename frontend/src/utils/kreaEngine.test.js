@@ -108,6 +108,42 @@ test('the unavailable reason names the FIRST thing to fix, never just "off"', ()
   assert.doesNotMatch(assetsOnly, /node pack/);
 });
 
+test('a file that is PRESENT but is not weights gets named, not left to ComfyUI', () => {
+  // The Krea base is behind an HF licence gate and the identity LoRA behind a
+  // Civitai login: a browser download that skipped either saves the HTML gate
+  // page as .safetensors. It exists, so "missing" says nothing — and the only
+  // symptom used to be ComfyUI's raw "Expecting value: line 1 column 1".
+  const gate = kreaUnavailableReason({
+    invalidAssets: [{ asset: 'krea_model', filename: 'krea2_turbo_fp8.safetensors',
+      verdict: 'html_or_text', blocking: true }],
+  });
+  assert.match(gate, /base model/);
+  assert.match(gate, /krea2_turbo_fp8\.safetensors/);
+  assert.match(gate, /web page, not weights/);
+  assert.match(gate, /Delete it and download it again/);
+
+  assert.match(
+    kreaUnavailableReason({
+      invalidAssets: [{ asset: 'krea_identity_lora', filename: 'id.safetensors',
+        verdict: 'truncated_or_garbage', blocking: true }],
+    }),
+    /truncated or corrupt/);
+
+  // An ADVISORY (too_small) is not a reason to refuse the engine.
+  assert.equal(kreaUnavailableReason({
+    invalidAssets: [{ asset: 'krea_vae', filename: 'v.safetensors',
+      verdict: 'too_small', blocking: false }],
+  }), null);
+
+  // A genuinely missing file still comes first: "place it here" beats
+  // "re-download that one".
+  assert.match(kreaUnavailableReason({
+    missingAssets: ['krea_vae'],
+    invalidAssets: [{ asset: 'krea_model', filename: 'k.safetensors',
+      verdict: 'html_or_text', blocking: true }],
+  }), /VAE missing/);
+});
+
 // ── The dial has to MEAN something, not just show a number ───────────────────
 
 test('grounding is described in words at every end of the range', () => {

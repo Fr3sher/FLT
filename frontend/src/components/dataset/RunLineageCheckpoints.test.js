@@ -410,7 +410,24 @@ test('the lineage payload carries the deployed copy name from the testable map',
 });
 
 test('the dataset panel feeds the graph the ★ best-settings pin', () => {
-  assert.match(panel, /bestSettingsLora=\{ds\.data\?\.best_settings\?\.lora_filename \|\| null\}/);
+  // The FLATTENED list, not `best_settings.lora_filename`: the pin has been stored
+  // per family for a while now, so that key only ever matched the legacy flat
+  // shape and the ⚠ warning was silently dead on every modern pin.
+  assert.match(panel, /bestSettingsLora=\{ds\.data\?\.best_settings_loras \|\| null\}/);
+  assert.match(panel, /\(ds\.data\?\.best_settings_loras \|\| \[\]\)/);
   const tree = fs.readFileSync(new URL('./RunLineageTree.jsx', import.meta.url), 'utf8');
   assert.match(tree, /bestSettingsLora=\{bestSettingsLora\}/);
+});
+
+test('the canvas warns before deleting a ★ pinned checkpoint, with ITS lane pin', () => {
+  // The board's dataset index publishes the pin…
+  const svc = fs.readFileSync(new URL('../../../../backend/app/services/cloud_training.py', import.meta.url), 'utf8');
+  assert.match(svc, /'best_settings_loras': studio\.best_settings_lora_filenames\(ds\)/);
+  // …the page puts it on the lane…
+  const page = fs.readFileSync(new URL('../../pages/CanvasPage.jsx', import.meta.url), 'utf8');
+  assert.match(page, /bestSettingsLoras: row\?\.best_settings_loras \|\| \[\]/);
+  // …and the board hands the hook the pin of the lane whose popover is OPEN,
+  // never another dataset's.
+  const canvasSrc = fs.readFileSync(new URL('../canvas/LineageCanvas.jsx', import.meta.url), 'utf8');
+  assert.match(canvasSrc, /bestSettingsLora: openCk\?\.lane\?\.bestSettingsLoras \|\| null/);
 });

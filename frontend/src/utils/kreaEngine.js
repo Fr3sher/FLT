@@ -40,7 +40,7 @@ export const KREA_NODE_PACK_URL = 'https://github.com/lbouaraba/comfyui-krea2edi
  *  file in place. */
 export function kreaUnavailableReason({
   enabledInSettings = true, comfyuiReachable = true,
-  missingAssets = [], missingNodes = [],
+  missingAssets = [], missingNodes = [], invalidAssets = [],
 } = {}) {
   if (!enabledInSettings) return '⚠ Krea 2 Edit is disabled in Settings (engines)';
   if (!comfyuiReachable) return '⚠ Configure ComfyUI in Settings';
@@ -49,6 +49,21 @@ export function kreaUnavailableReason({
   }
   const words = kreaMissingLabels(missingAssets);
   if (words.length) return `⚠ Krea ${words.join(' + ')} missing — see Setup for where to place it`;
+  // Present but NOT weights. The Krea base is behind a Hugging Face licence gate
+  // and the identity LoRA behind a Civitai login, so a browser download that
+  // skipped either one saves the HTML gate PAGE as .safetensors. The file exists,
+  // which is why "missing" says nothing — and without this the only symptom was
+  // ComfyUI's raw "Expecting value: line 1 column 1 (char 0)" at generate time.
+  const broken = (Array.isArray(invalidAssets) ? invalidAssets : []).filter((i) => i && i.blocking);
+  if (broken.length) {
+    const b = broken[0];
+    const what = KREA_ASSET_LABELS[b.asset] || b.asset;
+    const why = b.verdict === 'html_or_text'
+      ? 'it is a web page, not weights — the download skipped the licence/login step'
+      : 'the file is truncated or corrupt';
+    return `⚠ Krea ${what} (${b.filename}) cannot be loaded: ${why}. `
+      + 'Delete it and download it again.';
+  }
   return null;
 }
 

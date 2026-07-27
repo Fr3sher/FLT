@@ -248,6 +248,21 @@ test('describeCheckpointDelete warns on ★ best settings, wording per target', 
   assert.doesNotMatch(plain.message, /BEST SETTINGS/);
 });
 
+test('describeCheckpointDelete warns for a pin held in ANY family', () => {
+  // The pin is stored per family, so the payload hands over a LIST. A dataset
+  // with a winning ZIT combo and a winning SDXL one must be warned about both.
+  const node = { source: 'local', train_type: 'sdxl', variant: 'base', base_model: 'b' };
+  const pill = { step: 1000, filename: 'lora_001000.safetensors', testable: true,
+    deployed_filename: 'sdxl/lora_001000.safetensors' };
+  const list = ['zimage/other_002000.safetensors', 'loras/lora_001000.safetensors'];
+  assert.equal(describeCheckpointDelete(node, pill, { bestSettingsLora: list }).isBest, true);
+  assert.equal(
+    describeCheckpointDelete(node, pill, { bestSettingsLora: ['loras/nope.safetensors'] }).isBest,
+    false);
+  // An empty list is "no pin", not "everything is pinned".
+  assert.equal(describeCheckpointDelete(node, pill, { bestSettingsLora: [] }).isBest, false);
+});
+
 test('describeCheckpointDelete: null when there is nothing to delete', () => {
   assert.equal(describeCheckpointDelete({ source: 'local' }, { step: 1 }), null);
 });

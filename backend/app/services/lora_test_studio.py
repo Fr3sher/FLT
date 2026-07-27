@@ -2369,6 +2369,28 @@ def _best_for_family(ds, family) -> dict | None:
     return _best_map(ds).get((family or 'zimage').lower())
 
 
+def best_settings_lora_filenames(ds) -> list[str]:
+    """Every LoRA filename this dataset pins as a ★ best setting — a LIST, one
+    entry per family, because the pin is stored per family (a dataset can have a
+    winning ZIT combo and a winning SDXL one at the same time).
+
+    This is what the "you are about to delete the pinned LoRA" guard-rail needs.
+    Readers used to reach for `best_settings.lora_filename` straight off the
+    payload, which only ever matched the LEGACY flat format: since the pin became
+    a {family: setting} map that key does not exist any more, so the ⚠ line
+    silently stopped appearing for every modern pin. Going through _best_map
+    covers both shapes at once. Order is deterministic (family order as stored),
+    duplicates collapsed."""
+    out: list[str] = []
+    for setting in _best_map(ds).values():
+        if not isinstance(setting, dict):
+            continue
+        fn = setting.get('lora_filename')
+        if fn and fn not in out:
+            out.append(str(fn))
+    return out
+
+
 def set_best_settings(user_id, dataset_id, checkpoint, strength,
                       z_model=None, cfg=None, steps=None, steps2=None, aspect=None) -> dict:
     """Persiste la config gagnante COMPLÈTE - checkpoint, strength, modèle/cfg/steps(1+2)/

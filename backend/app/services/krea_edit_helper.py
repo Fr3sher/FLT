@@ -298,6 +298,82 @@ def krea_missing_assets():
     return missing
 
 
+# --- Present-but-INVALID assets ---------------------------------------------
+# Exactly Klein's mechanism (klein_edit_helper.klein_invalid_assets), because
+# nothing about the failure is Klein-specific: the Krea 2 base lives behind a
+# licence gate on Hugging Face and the identity LoRA behind a Civitai login, so
+# "downloaded from a browser without accepting the licence" saves the HTML gate
+# PAGE to <name>.safetensors. It passes krea_missing_assets ("the file is there")
+# and then dies at generate time on a raw ComfyUI
+# `UNETLoader: Expecting value: line 1 column 1 (char 0)`. A truncated download
+# is worse still — it renders silently distorted images with no error anywhere.
+#
+# Advisory `too_small` floors: deliberately far under the real sizes so a
+# legitimate file can never trip them. The identity LoRA is genuinely small
+# (tens of MB) and the VAE ~250 MB, so their floors only catch a near-empty stub;
+# the structural cases (HTML page, truncation) need no floor at all.
+KREA_MIN_BYTES = {
+    'krea_model': 1024 ** 3,                # 1 GB   (real ≈ 12-20 GB)
+    'krea_text_encoder': 256 * 1024 ** 2,   # 256 MB (real ≈ 4-5 GB)
+    'krea_vae': 8 * 1024 ** 2,              # 8 MB   (real ≈ 250 MB)
+    'krea_identity_lora': 512 * 1024,       # 512 KB (real ≈ tens of MB)
+}
+
+
+def _abs_under_roots(comfy_type, rel_name):
+    """Absolute path of a <comfy_type>-relative model name under the FIRST search
+    root that holds it, else None. Mirrors how ComfyUI itself resolves a loader
+    value, so the file we validate is exactly the one the loader node would open."""
+    if not rel_name:
+        return None
+    for root in comfy_model_paths.search_roots(comfy_type):
+        cand = os.path.join(root, rel_name)
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _krea_asset_paths():
+    """{KREA_ASSETS key: absolute path} for each Krea asset PRESENT on disk. The
+    resolvers return ComfyUI-relative loader names; this maps each back to the
+    concrete file so model_integrity can read its header. Absent assets are
+    omitted — krea_missing_assets owns 'missing', this owns 'present'."""
+    paths = {}
+    for key, comfy_type, rel in (
+            ('krea_model', 'diffusion_models', resolve_krea_unet()),
+            ('krea_text_encoder', 'text_encoders', resolve_krea_text_encoder()),
+            ('krea_vae', 'vae', resolve_krea_vae())):
+        p = _abs_under_roots(comfy_type, rel)
+        if p:
+            paths[key] = p
+    _rel, lora_path = resolve_krea_identity_lora()
+    if lora_path:
+        paths['krea_identity_lora'] = lora_path
+    return paths
+
+
+def krea_invalid_assets():
+    """Krea assets that ARE on disk under the resolved name but are NOT real,
+    loadable weights — the state BETWEEN 'missing' and 'ready'.
+
+    Returns ``[{asset, filename, verdict, blocking, reason}]``, the same shape
+    klein_invalid_assets publishes, so the front end needs no second format.
+    Header-only + cached (model_integrity), so it is cheap enough for the
+    readiness probe. ``blocking`` True means the file cannot load at all
+    (html_or_text / truncated) → the actionable 'delete & re-download'; False is
+    the advisory ``too_small``."""
+    from . import model_integrity
+    out = []
+    for asset, path in _krea_asset_paths().items():
+        res = model_integrity.validate_model_file(path, min_bytes=KREA_MIN_BYTES.get(asset))
+        if res['ok']:
+            continue
+        out.append({'asset': asset, 'filename': res['filename'],
+                    'verdict': res['verdict'], 'blocking': res['blocking'],
+                    'reason': res['reason']})
+    return out
+
+
 # --- Custom-node preflight ---------------------------------------------------
 # Success-only TTL cache, same contract as klein_missing_nodes: /object_info is
 # the heaviest probe in the app, node packs don't uninstall mid-session, and a

@@ -17,6 +17,7 @@ NOTHING here renders anything: not one GPU second, not one paid call.
 """
 import importlib
 import os
+import struct
 
 import pytest
 
@@ -43,9 +44,17 @@ def _comfy_tree(tmp_path):
     return base
 
 
-def _write(path, size=16):
+# Smallest structurally-valid safetensors header (8-byte LE length + '{}'), so a
+# fixture file reads as REAL (if tiny) weights. Krea now validates the header of
+# every present asset (a licence-gate HTML page saved as .safetensors is the
+# failure this catches), and the readiness gate keys off it — the default here
+# keeps every "asset present" fixture honest without writing multi-GB test data.
+_VALID_ST = struct.pack('<Q', 2) + b'{}'
+
+
+def _write(path, data=_VALID_ST):
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b'\0' * size)
+    path.write_bytes(data)
     return path
 
 
@@ -226,7 +235,51 @@ def test_a_complete_install_preflights_clean(krea, monkeypatch):
     monkeypatch.setattr('app.utils.comfyui.fetch_object_info_classes',
                         lambda *a, **k: set(keh.KREA_NODE_CLASSES) | {'KSampler'})
     assert keh.krea_missing_assets() == []
+    # Valid (if tiny) headers: only the ADVISORY too_small may show up, never a
+    # blocking verdict — an advisory must not keep a working engine dark.
+    assert all(not i['blocking'] for i in keh.krea_invalid_assets())
     keh.preflight()   # must not raise
+
+
+# --- Present-but-INVALID: the state between "missing" and "ready" ------------
+def test_a_licence_gate_page_saved_as_safetensors_is_named_not_silently_run(krea):
+    """The Krea base sits behind a Hugging Face licence gate and the identity
+    LoRA behind a Civitai login: a browser download that skipped either saves the
+    HTML gate PAGE to <name>.safetensors. It is ON DISK, so krea_missing_assets
+    says nothing — and until now the only symptom was ComfyUI's raw
+    `UNETLoader: Expecting value: line 1 column 1 (char 0)` at generate time."""
+    from app.services import model_integrity
+    keh, base, _ = krea
+    _install_everything(base)
+    _write(base / 'models' / 'diffusion_models' / 'Krea' / 'krea2_turbo_fp8.safetensors',
+           data=b'<!doctype html><html>You need to accept the licence</html>')
+    model_integrity.clear_cache()
+    assert 'krea_model' not in keh.krea_missing_assets()      # it IS on disk
+    inv = {i['asset']: i for i in keh.krea_invalid_assets()}
+    assert 'krea_model' in inv
+    assert inv['krea_model']['blocking'] is True
+    assert inv['krea_model']['verdict'] == 'html_or_text'
+    assert 'krea2_turbo_fp8.safetensors' in inv['krea_model']['reason']
+
+
+def test_a_truncated_identity_lora_is_flagged_too(krea):
+    """Not just the base: a half-downloaded LoRA renders SILENTLY distorted
+    images, with no error anywhere to point at."""
+    from app.services import model_integrity
+    keh, base, _ = krea
+    _install_everything(base)
+    _write(base / 'models' / 'loras' / 'krea' / 'krea2_identity_edit_v1_2.safetensors',
+           data=b'\0' * 16)
+    model_integrity.clear_cache()
+    inv = {i['asset']: i for i in keh.krea_invalid_assets()}
+    assert 'krea_identity_lora' in inv and inv['krea_identity_lora']['blocking'] is True
+
+
+def test_invalid_assets_is_empty_on_an_install_with_nothing(krea):
+    """Nothing on disk = 'missing', which krea_missing_assets owns. This one must
+    stay silent rather than double-report every gap."""
+    keh, _base, _ = krea
+    assert keh.krea_invalid_assets() == []
 
 
 # --- output geometry --------------------------------------------------------

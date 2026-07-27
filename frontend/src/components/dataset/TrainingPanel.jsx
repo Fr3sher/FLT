@@ -923,9 +923,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const removeImported = async (filename, label) => {
     // Guard-rail: this LoRA may be the one the Studio's ★ best settings point to —
     // deleting it silently breaks the saved winning combo.
-    const best = ds.data?.best_settings;
-    const isBest = best?.lora_filename
-      && String(best.lora_filename).split(/[\\/]/).pop() === String(filename).split(/[\\/]/).pop();
+    // The pin is stored PER FAMILY, so the payload flattens it to a list — reading
+    // `best_settings.lora_filename` only ever matched the legacy flat shape, which
+    // meant this warning had quietly stopped firing on modern pins.
+    const tail = (s) => String(s).split(/[\\/]/).pop();
+    const isBest = (ds.data?.best_settings_loras || [])
+      .some((p) => tail(p) === tail(filename));
     // It goes to the TRASH (delete_imported_checkpoint), so the confirmation must
     // not claim a permanent deletion — and must say what it does NOT touch.
     const msg = isBest
@@ -2567,7 +2570,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                       // Same ★ best-settings guard-rail as the flat list's 🗑:
                       // the pill's delete warns loudly when it would unpin the
                       // Studio's saved winning combo.
-                      bestSettingsLora={ds.data?.best_settings?.lora_filename || null}
+                      bestSettingsLora={ds.data?.best_settings_loras || null}
                       // Same pill gesture as the Runs hub, served by this panel's
                       // Continue dialog: 'any' lets a local run's save offer it too.
                       // Gated on the checkpoint selection matching Training (the
