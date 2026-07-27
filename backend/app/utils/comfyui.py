@@ -453,6 +453,21 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
             # as an outage.
             return None, f"WORKFLOW_INVALIDE (ComfyUI capability): {message}"
 
+        # Same preflight, one field over: a model FILE name ComfyUI does not list
+        # fails with the identical 400. Reported by naniii2352 (Discord) — a .gguf
+        # no folder could make work, on an install whose API address and models
+        # override pointed at two different ComfyUI trees. Rides the same cached
+        # /object_info, so still zero extra requests per generation.
+        try:
+            unavailable = unavailable_model_files(prompt_workflow)
+        except Exception as e:                    # a broken probe must never block
+            logger.warning(f"Model-file preflight skipped: {e}")
+            unavailable = []
+        if unavailable:
+            message = format_unavailable_models_message(unavailable)
+            logger.error(f"Workflow refused before queuing — {message}")
+            return None, f"WORKFLOW_INVALIDE (ComfyUI capability): {message}"
+
     try:
         payload = {"prompt": prompt_workflow, "client_id": client_id}
         headers = {'Content-Type': 'application/json'}
@@ -657,7 +672,8 @@ def fetch_output_image_bytes(filename, subfolder='', timeout=30):
 # /object_info is the heaviest probe in the app (megabytes of node schemas). Short
 # TTL cache so one user action never pays for it twice. See fetch_object_info_classes.
 _OBJECT_INFO_TTL = 60
-_object_info_cache = {"data": None, "timestamp": 0, "key": None, "enums": None}
+_object_info_cache = {"data": None, "timestamp": 0, "key": None, "enums": None,
+                      "files": None}
 
 # Widget inputs whose accepted values describe what a ComfyUI install CAN DO — a
 # capability that depends on its version and on the node packs it loaded — as
@@ -693,6 +709,42 @@ ENUM_VALUE_SOURCES = {
     ('scheduler', 'bong_tangent'): ('RES4LYF', 'https://github.com/ClownsharkBatwing/RES4LYF'),
 }
 
+# --- Model-FILE inputs: the same check, one field over ----------------------
+# `_VERSION_SENSITIVE_INPUTS` above covers capability VALUES (a scheduler, a
+# dtype). A model FILE NAME that ComfyUI does not list fails identically — same
+# 400, same `value_not_in_list` — but it is deliberately kept in a SECOND view
+# rather than added to the set above, because those file arrays are the bulk of
+# the /object_info payload and the enum cache exists only by dropping them
+# (see test_only_capability_inputs_are_distilled).
+#
+# What makes caching them affordable here is the class allowlist: we distill file
+# lists ONLY for the loader classes our own graphs actually emit, not for every
+# pack installed. `UnetLoaderGGUF` is listed so its presence is observable — NOT
+# because our graphs use it (they do not; see `_GGUF_PACK`).
+_MODEL_FILE_CLASSES = frozenset({
+    'UNETLoader', 'CheckpointLoaderSimple', 'VAELoader', 'CLIPLoader',
+    'DualCLIPLoader', 'LoraLoaderModelOnly', 'LoraLoader', 'ControlNetLoader',
+    'UnetLoaderGGUF', 'UnetLoaderGGUFAdvanced', 'CLIPLoaderGGUF', 'DualCLIPLoaderGGUF',
+})
+_MODEL_FILE_INPUTS = frozenset({
+    'unet_name', 'ckpt_name', 'vae_name', 'clip_name', 'clip_name1', 'clip_name2',
+    'lora_name', 'control_net_name', 'style_model_name',
+})
+
+# Reported by naniii2352 (Discord, displayed name Dexter): a Krea 2 model
+# quantised to GGUF (`krea2_turbo-Q4_K_M.gguf`) that no folder would make work.
+# Core ComfyUI's `folder_paths.supported_pt_extensions` is
+# {.ckpt,.pt,.pt2,.bin,.pth,.safetensors,.pkl,.sft} — `.gguf` is absent, so core
+# never SCANS the file and it can never appear in any core loader's list, in any
+# of the model roots. That is why copying it into all three did nothing.
+#
+# Loading one needs the third-party ComfyUI-GGUF pack, which registers its own
+# `UnetLoaderGGUF` node reading its own `unet_gguf` folder key. Our graphs use
+# core `UNETLoader`, so having the pack installed does NOT help them — the answer
+# is the same either way, which is why the reason is decided from the EXTENSION
+# and never from whether the pack is present.
+_GGUF_PACK = ('ComfyUI-GGUF', 'https://github.com/city96/ComfyUI-GGUF')
+
 
 def _distill_object_info(data):
     """{class_type: {input_name: frozenset(accepted values)}} for the COMBO inputs
@@ -724,27 +776,74 @@ def _distill_object_info(data):
     return out
 
 
+def _normalise_model_name(name):
+    """Comparison key for a ComfyUI model file name.
+
+    ComfyUI joins a subfolder with the HOST's os.sep (backslash on Windows,
+    forward slash in a Linux container) while several of our resolvers
+    backslash-join their own names; Windows model folders are case-insensitive.
+    Comparing raw strings would therefore report a perfectly loadable model as
+    missing on half the installs — a false positive here BLOCKS a working setup,
+    so both separators and case are flattened before deciding."""
+    return name.replace('\\', '/').casefold()
+
+
+def _distill_model_files(data):
+    """{class_type: {input_name: frozenset(names)}} for the FILE inputs of the
+    loader classes we ship (`_MODEL_FILE_CLASSES` / `_MODEL_FILE_INPUTS`), with
+    names normalised by `_normalise_model_name`.
+
+    Restricted to those classes on purpose: this is the half of /object_info the
+    enum view drops wholesale for size, and a node-rich install repeats the same
+    model arrays across hundreds of classes."""
+    out = {}
+    for cls, spec in (data or {}).items():
+        if cls not in _MODEL_FILE_CLASSES:
+            continue
+        combos = {}
+        sections = (spec.get('input') or {}) if isinstance(spec, dict) else {}
+        if isinstance(sections, dict):
+            for section in ('required', 'optional'):
+                decls = sections.get(section)
+                if not isinstance(decls, dict):
+                    continue
+                for name, decl in decls.items():
+                    if name not in _MODEL_FILE_INPUTS:
+                        continue
+                    choices = decl[0] if isinstance(decl, (list, tuple)) and decl else None
+                    if isinstance(choices, list) and all(isinstance(v, str) for v in choices):
+                        combos[name] = frozenset(_normalise_model_name(v) for v in choices)
+        if combos:
+            out[cls] = combos
+    return out
+
+
 def _fetch_object_info(timeout=8):
-    """(classes, enums) from ONE `GET /object_info`, both served by the same short
-    TTL cache — the payload is the heaviest probe in the app, so the enum check
-    below must never cost a second request. (None, None) on any failure."""
+    """(classes, enums, model_files) from ONE `GET /object_info`, all three served
+    by the same short TTL cache — the payload is the heaviest probe in the app, so
+    the checks below must never cost a second request. (None, None, None) on any
+    failure."""
     addr = api_address()
     now = time.time()
     if (_object_info_cache["data"] is not None and _object_info_cache["key"] == addr
             and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
-        return _object_info_cache["data"], _object_info_cache["enums"]
+        return (_object_info_cache["data"], _object_info_cache["enums"],
+                _object_info_cache["files"])
     try:
         resp = requests.get(urljoin(addr, '/object_info'), timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
     except Exception as e:
         logger.warning(f"fetch_object_info_classes failed: {e}")
-        return None, None    # a failed probe is never cached (fail-open, retried at once)
+        # a failed probe is never cached (fail-open, retried at once)
+        return None, None, None
     if not isinstance(data, dict):
-        return None, None
+        return None, None, None
     classes, enums = set(data.keys()), _distill_object_info(data)
-    _object_info_cache.update(data=classes, timestamp=now, key=addr, enums=enums)
-    return classes, enums
+    files = _distill_model_files(data)
+    _object_info_cache.update(data=classes, timestamp=now, key=addr, enums=enums,
+                              files=files)
+    return classes, enums, files
 
 
 def fetch_object_info_classes(timeout=8):
@@ -767,6 +866,15 @@ def fetch_object_info_classes(timeout=8):
     return _fetch_object_info(timeout)[0]
 
 
+def fetch_object_info_model_files(timeout=8):
+    """{class_type: {input_name: frozenset(normalised names)}} for the model-FILE
+    inputs of the loader classes we ship, from the SAME cached /object_info as the
+    class and enum views — never a second request.
+
+    None (not an empty dict) when the probe failed, so callers can fail OPEN."""
+    return _fetch_object_info(timeout)[2]
+
+
 def fetch_object_info_enums(timeout=8):
     """{class_type: {input_name: frozenset(accepted values)}} for the capability
     inputs (see `_VERSION_SENSITIVE_INPUTS`), from the SAME cached /object_info as
@@ -774,6 +882,110 @@ def fetch_object_info_enums(timeout=8):
 
     None (not an empty dict) when the probe failed, so callers can fail OPEN."""
     return _fetch_object_info(timeout)[1]
+
+
+def unavailable_model_files(workflow, files=None):
+    """Every model file name in `workflow` that the target ComfyUI does NOT list:
+    [{node_id, class_type, input, value, reason}], sorted stably.
+    `reason` is 'gguf' or 'not_listed'.
+
+    This is the file half of the "designed for THIS machine" bug class that
+    `unsupported_enum_values` covers for capability values. Both surface as the
+    SAME ComfyUI 400 (`value_not_in_list`) that the user can only decode by
+    reading ComfyUI's own console. Two independent causes reach it:
+
+      * 'gguf'  — a `.gguf` model handed to a CORE loader. Core ComfyUI does not
+        have `.gguf` in `supported_pt_extensions`, so it never scans the file and
+        no folder will ever help. The app itself lists `.gguf` in its pickers
+        (`_MODEL_SUFFIXES`), so it is the app that offers this dead end.
+      * 'not_listed' — the name exists on the disk the APP scanned but not in the
+        list the ComfyUI answering on the port serves. The app lists models with
+        os.listdir; ComfyUI serves them from wherever its own process was
+        configured. With more than one ComfyUI install — ComfyUI Desktop alone
+        declares a shared root AND its install-directory root — those two lists
+        disagree by construction, and no amount of copying reconciles them.
+
+    Extension first: a `.gguf` is reported as such even when some pack DOES list
+    it, because our graphs emit core loaders and would fail regardless.
+
+    FAIL-OPEN in both directions, exactly like the enum check:
+      * probe unreachable (`files` is None) -> [] — never block a working install;
+      * class_type absent from /object_info -> skipped, because that is a MISSING
+        NODE, which the node preflight already reports with the right fix.
+
+    Matching is normalised (`_normalise_model_name`) so a separator or case
+    difference is never mistaken for a missing model."""
+    if files is None:
+        files = fetch_object_info_model_files()
+    if not files:
+        return []
+    out = []
+    for node_id, node in (workflow or {}).items():
+        if not isinstance(node, dict):
+            continue
+        listed_by_input = files.get(node.get('class_type'))
+        if not listed_by_input:
+            continue
+        inputs = node.get('inputs')
+        if not isinstance(inputs, dict):
+            continue
+        for name, value in inputs.items():
+            listed = listed_by_input.get(name)
+            # Non-str = a link ([node, slot]) or a number, never a file name.
+            if listed is None or not isinstance(value, str) or not value:
+                continue
+            is_gguf = value.casefold().endswith('.gguf')
+            if not is_gguf and _normalise_model_name(value) in listed:
+                continue
+            out.append({'node_id': str(node_id), 'class_type': node.get('class_type'),
+                        'input': name, 'value': value,
+                        'reason': 'gguf' if is_gguf else 'not_listed'})
+    out.sort(key=lambda i: (i['input'], i['value'], i['node_id']))
+    return out
+
+
+def format_unavailable_models_message(items):
+    """One paste-safe English sentence for a model-file gap: which file, why this
+    ComfyUI cannot use it, and the action that fixes it.
+
+    Paste-safe = no filesystem path and no personal data — meant to be copied into
+    a Discord/Reddit thread verbatim. Files are de-duplicated: the same model
+    pinned on three nodes is ONE thing to fix.
+
+    Deliberately never says "copy it into the model folder": that is the advice the
+    reporter followed for an hour (into three folders) while neither cause could be
+    fixed that way."""
+    seen, bits, has_gguf, has_missing = set(), [], False, False
+    for i in items or []:
+        key = (i.get('input'), i.get('value'))
+        if key in seen:
+            continue
+        seen.add(key)
+        bits.append(f'{i.get("input")} = "{i.get("value")}" (on {i.get("class_type")})')
+        if i.get('reason') == 'gguf':
+            has_gguf = True
+        else:
+            has_missing = True
+    fixes = []
+    if has_gguf:
+        pack, url = _GGUF_PACK
+        fixes.append(
+            "A .gguf model cannot be loaded by ComfyUI on its own: .gguf is not one "
+            "of the file types ComfyUI reads, so it stays invisible in every model "
+            f"folder — moving it will not help. Loading one needs the {pack} node "
+            f"pack ({url}), and this app's workflows use ComfyUI's standard model "
+            "loader, which cannot read .gguf even once that pack is installed. Use a "
+            ".safetensors build of the model instead.")
+    if has_missing:
+        fixes.append(
+            "This file is on disk where the app looked, but the ComfyUI answering on "
+            "the configured API address does not list it — it is most likely a "
+            "different ComfyUI install. Check that the ComfyUI API address and the "
+            "models folder in Settings point at the SAME install (ComfyUI Desktop "
+            "keeps a shared models folder AND one inside its install directory), "
+            "then restart ComfyUI.")
+    return ("Your ComfyUI does not offer a model file this workflow requires: "
+            + '; '.join(bits) + '. ' + ' '.join(fixes))
 
 
 def unsupported_enum_values(workflow, enums=None):

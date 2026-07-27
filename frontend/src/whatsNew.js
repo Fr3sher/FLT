@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-model-not-in-comfyui-list',
+    date: '2026-07-27',
+    title: 'A model ComfyUI cannot load now says so, instead of a cryptic "value not in list"',
+    blurb:
+      'Picking a model your ComfyUI does not actually accept used to fail with a raw ComfyUI error listing other filenames — no cause, no fix. The app now checks your models against what your ComfyUI publishes, before starting anything, and names the reason. Two cases it can finally explain: a .gguf (quantised) model, which ComfyUI cannot read at all without the ComfyUI-GGUF pack and which the standard loader will never open, so no amount of moving it between folders helps — use a .safetensors build; and a model that is on your disk but belongs to a DIFFERENT ComfyUI install, which happens easily with ComfyUI Desktop since it keeps a shared models folder as well as one in its install directory. Thanks to naniii2352 (Discord) for the report and the digging.',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-27-rerun-upscale-and-improve',
     date: '2026-07-27',
     title: 'Tuned the Upscale & improve settings? Re-run the pass on a tile in one click',

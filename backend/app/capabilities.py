@@ -39,9 +39,13 @@ _import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
 
 _ZIMAGE_RE = re.compile(r'z[ -]?image', re.IGNORECASE)
 # Aligned with klein_edit_helper / utils.comfyui (was missing '.sft', so the
-# picker under-listed vs the resolvers). '.gguf' kept deliberately: the app
-# supports ComfyUI-GGUF quantised diffusion models, and dropping it would hide
-# models existing installs already see (see comfy_model_paths module docstring).
+# picker under-listed vs the resolvers). '.gguf' is listed but NOT loadable by the
+# shipped graphs — they emit core `UNETLoader`, which has no '.gguf' support (core
+# ComfyUI's supported_pt_extensions does not include it) and would need the
+# ComfyUI-GGUF pack's separate `UnetLoaderGGUF` node, which nothing here emits.
+# It stays listed so a .gguf a user already has is not silently invisible; what
+# makes that honest is `utils.comfyui.unavailable_model_files`, which names the
+# extension as the cause before anything is queued (naniii2352, Discord).
 _MODEL_SUFFIXES = ('.safetensors', '.gguf', '.sft')
 
 
