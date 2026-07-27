@@ -212,6 +212,33 @@ Storage follows that split, and nothing was renamed or migrated: the **Human** o
 
 Each field is a plain textarea; there's no Test button — you see the effect on your next generation. If an override ever makes results worse, hit **Restore default**.
 
+### The rest of the prompt (Klein & Krea)
+
+The identity lock is only **one of six** sources a local-edit prompt is assembled from. The other five shipped hardcoded and invisible until this wave — including the one that caused a live incident, where a hold order that *listed* what to preserve ("tattoos, scars, moles…") had the model painting tattoos on subjects who have none. All of them follow the same contract as the locks above: **blank means the shipped default**, non-blank wins, **Restore default** on every box.
+
+Two of them follow the **subject type** chips, because their text genuinely differs per type:
+
+- **Rendering tail (SFW)** → `identity_prompts.render_tail_sfw`. The last thing Klein and Krea read on a safe-for-work shot: the medium and the clamp. For photographic subjects this is `Professional realistic photograph, SFW.`; for **Anime** it asks the model to stay a drawing in the reference's art style.
+- **Rendering tail (uncensored)** → `identity_prompts.render_tail_nsfw`. The same position on an uncensored shot: the SFW clamp is dropped and anatomically correct forms are requested. Only the **local** engines ever see it — the API engines refuse this content.
+- **Shot detail per framing** → `identity_prompts.framing_face` / `.framing_bust` / `.framing_body` / `.framing_back`. Klein and Krea under-fill a short tag prompt and invent the rest, so each shot carries a concrete description of the framing — this is where "85mm portrait lens look" and "the ENTIRE body visible from head to toe" live. If your full-body shots keep coming back cropped, this is the box.
+
+Non-human overrides for those six live under `identity_prompts.by_subject.<type>.<kind>` like the locks; Human keeps the flat key.
+
+Four more are **global** — one text for every subject type, because they have no per-subject meaning (the two directives are only ever injected into human shots):
+
+- **Hold the skin (Krea)** → `identity_prompts.markings_lock`. Sent with every Krea prompt: it forbids adding marks to the skin, and forbids redrawing, restyling, moving or removing the ones the reference already has. ⚠️ **This is the delicate one.** Naming a body feature in this box is enough to make the model paint it — that is exactly what the first version did. Describe what *not* to do, without naming a single feature.
+- **Outfit directive** → `identity_prompts.outfit_vary`. Added to every human shot that does not already name a garment, so clothing comes from the description instead of being copied off the reference (which teaches the LoRA that the person owns one outfit). Note that **Krea replaces it** with a concrete garment from the palette below, so editing this text does not change what Krea sends.
+- **Expression directive** → `identity_prompts.expression_neutral`. Added to every human shot that does not already name an expression, so the reference's smile does not ride on all 40 variations.
+- **Concrete garments** → `identity_prompts.outfit_palette`, **one garment per line**. Krea preserves anything it is not positively ordered to change, so "a different outfit" is a no-op on it; each shot is handed a real garment from this list instead. ⚠️ The garment is chosen from the shot's name **by position in the list**, so **adding or removing a line reshuffles which garment every shot gets** — same shots, different clothes. Editing the wording of one line only affects that line. Clear the box entirely to go back to the shipped list (an empty list never produces a prompt with no outfit in it).
+
+Both directives are baked into the shot catalog and **stored** with each variation, so the override is applied when the prompt is sent rather than when the shot is created — which means an edit reaches datasets you built **before** you made it, on their next generation.
+
+### What actually gets sent
+
+At the bottom of the card, a live preview of the **composed** prompt: pick an engine, a framing and SFW/uncensored, and it shows the full ~1000 characters a real catalog shot would be sent, assembled from every box on the card, **including edits you have not saved yet**. It is composed by the server through the same functions generation uses, so it cannot drift from reality — and it generates nothing: no model is loaded, no GPU is touched, nothing is billed.
+
+It is also the fastest way to answer "why did it do *that*": read the prompt, find the sentence, edit the box it came from.
+
 ## Scraping & sources
 
 Credentials for the built-in web scraper. **All of these apply immediately — no restart** — because sources read their key at request time.
@@ -540,6 +567,12 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `klein.consistency_strength` | Strength (0–1) applied to the Klein consistency LoRA. |
 | `klein.generation_steps` | Sampler steps for Klein **generation** (variations, regenerate, small-image rescue). Default `5` = the value hardcoded in the shipped workflow; 1–50. Not the improve pass (`klein.improve_steps`). |
 | `klein.generation_lora_presets` | Named generation-LoRA stacks (default empty) picked per run in Klein tuning; each has a name and up to 8 `{file, strength}` rows. Managed in Settings → Image engines. |
+| `identity_prompts.markings_lock` | Krea's “hold the skin” order — forbids inventing or redrawing marks. Blank = shipped default. Naming a body feature here summons it. |
+| `identity_prompts.outfit_vary` | The outfit directive injected into every human shot with no named garment. Blank = shipped default. |
+| `identity_prompts.expression_neutral` | The neutral-expression directive injected into every human shot with no named expression. Blank = shipped default. |
+| `identity_prompts.outfit_palette` | Krea's concrete garments, **one per line**. Blank (or nothing but blank lines) = the shipped list. The list's LENGTH decides which shot gets which garment. |
+| `identity_prompts.render_tail_sfw` / `.render_tail_nsfw` | The Klein/Krea rendering tail, SFW and uncensored. Per subject type (`by_subject.<type>.<kind>` for non-human). Blank = shipped default. |
+| `identity_prompts.framing_face` / `.framing_bust` / `.framing_body` / `.framing_back` | The per-framing shot-detail block for Klein/Krea. Per subject type. Blank = shipped default. |
 | `identity_prompts.by_subject.<type>.<kind>` | Identity-lock overrides for a **non-human** subject type (`animal`, `creature`, `object`, `other`) × kind (`face_single`, `face_multi`, `klein_identity`). Human overrides stay on the flat `identity_prompts.<kind>` keys. Blank/absent = the shipped default for that subject. |
 | `klein.small_image_prompt` | Optional shared instruction for scraper rescue and single/bulk image improvement (empty = reference image only). |
 | `updates.repo` | GitHub repo the update checker reads its release feed from (default `perfectgf/lora-dataset-studio`). |

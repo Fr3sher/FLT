@@ -3,9 +3,11 @@ import { apiFetch, postJson } from '../../api/fetchClient'
 import { INPUT_CLASS, Card, StatusBadge, SecretField } from './primitives'
 import KleinLoraCombobox, { useKleinGenerationLoras } from './KleinLoraCombobox'
 import PromptOverrideField from '../common/PromptOverrideField'
+import PromptPreview from './PromptPreview'
 import {
   identityPromptFields, PROMPT_SUBJECT_TYPES,
   readIdentityPrompt, writeIdentityPrompt, subjectHasOverride,
+  GLOBAL_PROMPT_PART_FIELDS, SUBJECT_PROMPT_PART_FIELDS, FRAMING_PROMPT_PART_FIELDS,
 } from '../common/promptOverride.js'
 import { SUBJECT_TYPE_LABELS } from '../dataset/subjectTypes.js'
 
@@ -413,6 +415,86 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
           onChange={(v) => setPrompt(f.key, v)}
         />
       ))}
+
+      {/* The identity locks were one of SIX sources the prompt is built from.
+          The other five shipped hardcoded and invisible; they are edited here,
+          split the same way the storage is — per subject above the line, global
+          below it. The composed preview closes the card, because the whole point
+          of these boxes is to change a part and see the whole move. */}
+      <div id="prompt-part-render-tail" className="border-t border-border pt-4">
+        <h4 className="text-sm font-medium text-content">
+          Klein &amp; Krea — the rest of the prompt ({SUBJECT_TYPE_LABELS[subject]})
+        </h4>
+        <p className="mt-1 mb-3 text-xs text-content-muted">
+          These follow the subject type selected above, like the identity locks: the tail asks
+          an Anime dataset for a drawing and every other type for a photograph.
+        </p>
+        {SUBJECT_PROMPT_PART_FIELDS.map((f) => (
+          <PromptOverrideField
+            key={`${subject}-${f.key}`}
+            id={f.id}
+            label={f.label}
+            desc={f.desc}
+            warn={f.warn}
+            rows={f.rows}
+            value={readIdentityPrompt(ip, subject, f.key)}
+            defaultText={defaults[f.key]}
+            onChange={(v) => setPrompt(f.key, v)}
+            className="mt-3"
+          />
+        ))}
+      </div>
+
+      <div id="prompt-part-framing" className="border-t border-border pt-4">
+        <h4 className="text-sm font-medium text-content">
+          Shot detail per framing ({SUBJECT_TYPE_LABELS[subject]})
+        </h4>
+        <p className="mt-1 mb-1 text-xs text-content-muted">
+          Klein and Krea under-fill a short tag prompt and invent the rest, so each shot carries
+          a concrete description of what the framing should look like. This is where the lens
+          talk (&ldquo;85mm portrait lens look&rdquo;) lives.
+        </p>
+        {/* Four boxes: two columns on a laptop, stacked on a phone. */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          {FRAMING_PROMPT_PART_FIELDS.map((f) => (
+            <PromptOverrideField
+              key={`${subject}-${f.key}`}
+              id={f.id}
+              label={f.label}
+              rows={f.rows}
+              value={readIdentityPrompt(ip, subject, f.key)}
+              defaultText={defaults[f.key]}
+              onChange={(v) => setPrompt(f.key, v)}
+              className="mt-2"
+            />
+          ))}
+        </div>
+      </div>
+
+      <div id="prompt-part-global" className="border-t border-border pt-4">
+        <h4 className="text-sm font-medium text-content">Applied to every subject type</h4>
+        <p className="mt-1 mb-1 text-xs text-content-muted">
+          These four are <strong>not</strong> per subject type: the two directives are only ever
+          injected into human shots, and the skin hold is one sentence about not inventing
+          detail. Editing them here changes them everywhere.
+        </p>
+        {GLOBAL_PROMPT_PART_FIELDS.map((f) => (
+          <PromptOverrideField
+            key={f.key}
+            id={f.id}
+            label={f.label}
+            desc={f.desc}
+            warn={f.warn}
+            rows={f.rows}
+            value={ip[f.key]}
+            defaultText={defaults[f.key]}
+            onChange={(v) => set(f.key, v)}
+            className="mt-3"
+          />
+        ))}
+      </div>
+
+      <PromptPreview subject={subject} identityPrompts={ip} />
 
       <div className="border-t border-border pt-4">
         <p className="mb-2 text-xs text-content-subtle">

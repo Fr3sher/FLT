@@ -21,6 +21,7 @@ export default function PromptOverrideField({
   id,                     // DOM id — also the help-registry focus target
   label,
   desc = null,
+  warn = null,            // a sharp edge shown ABOVE the box, always (not on hover)
   value,                  // the STORED value ('' = following the default)
   defaultText = '',       // the shipped default, read-only, from the settings payload
   onChange,               // receives the NORMALISED value ('' when it equals the default)
@@ -37,6 +38,16 @@ export default function PromptOverrideField({
         {badge}
       </div>
       {desc && <p className="mb-1 text-xs text-content-muted">{desc}</p>}
+      {/* Not a tooltip and not a hover tip: the two fields that carry one can
+          each break generation in a way that looks like a model bug, so the
+          reason has to be readable at the moment of editing — including at
+          400px, where `break-words` keeps a long sentence inside the card. */}
+      {warn && (
+        <p className="mb-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5
+                      text-xs leading-relaxed text-amber-200 break-words">
+          <span aria-hidden="true">⚠ </span>{warn}
+        </p>
+      )}
       <textarea
         id={id}
         rows={rows}

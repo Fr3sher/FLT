@@ -142,7 +142,104 @@ export function identityPromptFields(subjectType) {
 export const PROMPT_SUBJECT_TYPES = ['human', 'animal', 'creature', 'object', 'other', 'anime'];
 
 /** The kinds scoped per subject — mirrors backend PER_SUBJECT_PROMPT_KINDS. */
-export const PER_SUBJECT_PROMPT_KINDS = ['face_single', 'face_multi', 'klein_identity'];
+export const PER_SUBJECT_PROMPT_KINDS = [
+  'face_single', 'face_multi', 'klein_identity',
+  // The rendering tail and the framing detail joined them: anime's tail asks for
+  // an illustration where every photographic type asks for a photograph, and the
+  // framing blocks are six different tables already.
+  'render_tail_sfw', 'render_tail_nsfw',
+  'framing_face', 'framing_bust', 'framing_body', 'framing_back',
+];
+
+/* --- The five parts that used to be hardcoded --------------------------------
+   The identity locks were only ONE of the six sources a local-edit prompt is
+   assembled from. These are the others: they shipped in every prompt with no way
+   to see or change them, and one of them (the markings hold order) caused a live
+   incident. Same storage contract as the locks — blank means "shipped default" —
+   so a field left alone keeps receiving improvements.
+
+   `id` is the DOM id (also the help-registry focus target when a topic points at
+   a single field); `key` mirrors the config key and is NEVER renamed. */
+
+/** Global parts — one text for every subject type. `_augment_prompt` only ever
+ *  runs on the human catalog, so the two directives and the garment list have no
+ *  per-subject meaning to split. */
+export const GLOBAL_PROMPT_PART_FIELDS = [
+  {
+    key: 'markings_lock',
+    id: 'prompt-part-markings-lock',
+    label: 'Local engines — hold the skin (Krea)',
+    engines: ['krea'],
+    rows: 3,
+    desc: 'Sent with every Krea prompt. It stops the model from inventing marks on the skin, or redrawing the ones the reference already has, which is what made tattoos come back different on every shot.',
+    // The incident, in one sentence, at the point of edit. Naming a feature in
+    // this box is what summons it — the earlier wording enumerated "tattoos…"
+    // and the model painted them on subjects who had none.
+    warn: 'Careful with this one. An earlier version listed what to preserve — “tattoos, scars, moles…” — and the model started painting tattoos on people who have none: naming a feature is enough to summon it. Describe what NOT to do (add, redraw, move, remove) without naming a single body feature.',
+  },
+  {
+    key: 'outfit_vary',
+    id: 'prompt-part-outfit-vary',
+    label: 'Every shot — outfit directive',
+    engines: [...API_PROMPT_ENGINES, 'klein'],
+    rows: 3,
+    desc: 'Added to every human shot that does not already name a garment, so the model dresses the subject from the description instead of copying the reference outfit. Krea replaces it with a concrete garment from the palette below, so editing this text does not change what Krea sends.',
+  },
+  {
+    key: 'expression_neutral',
+    id: 'prompt-part-expression-neutral',
+    label: 'Every shot — expression directive',
+    engines: [...API_PROMPT_ENGINES, 'klein'],
+    rows: 3,
+    desc: 'Added to every human shot that does not already name an expression, so the reference’s smile or grimace does not ride on all 40 variations.',
+  },
+  {
+    key: 'outfit_palette',
+    id: 'prompt-part-outfit-palette',
+    label: 'Krea — concrete garments (one per line)',
+    engines: ['krea'],
+    rows: 8,
+    desc: 'Krea keeps whatever it is not positively told to change, so “a different outfit” does nothing on it: each shot is given a real garment from this list instead.',
+    warn: 'The garment is picked from the shot’s name, by position in this list — so ADDING OR REMOVING A LINE reshuffles which garment every shot gets. Same shots, different clothes. Editing the wording of a line only changes that one. Leave the box empty to go back to the shipped list.',
+  },
+];
+
+/** Parts scoped per subject type — shown under the subject chips. */
+export const SUBJECT_PROMPT_PART_FIELDS = [
+  {
+    key: 'render_tail_sfw',
+    id: 'prompt-part-render-tail-sfw',
+    label: 'Local engines — rendering tail (SFW)',
+    engines: ['klein', 'krea'],
+    rows: 2,
+    desc: 'The last thing Klein and Krea read on a safe-for-work shot — the medium and the clamp. This is where “Professional realistic photograph” lives (and, for Anime, the instruction to stay a drawing).',
+  },
+  {
+    key: 'render_tail_nsfw',
+    id: 'prompt-part-render-tail-nsfw',
+    label: 'Local engines — rendering tail (uncensored)',
+    engines: ['klein', 'krea'],
+    rows: 2,
+    desc: 'The same tail on an uncensored shot: it drops the SFW clamp and asks for anatomically correct forms. Only the local engines ever see it — the API engines refuse this content.',
+  },
+];
+
+/** The per-framing detail block, one field per framing. Klein and Krea under-fill
+ *  a terse tag prompt; this is the block that says what the shot should look
+ *  like. The four framings are the internal enum — never renamed. */
+export const FRAMING_PROMPT_PART_FIELDS = [
+  { key: 'framing_face', id: 'prompt-part-framing-face', label: 'Face / close-up' },
+  { key: 'framing_bust', id: 'prompt-part-framing-bust', label: 'Bust / half-length' },
+  { key: 'framing_body', id: 'prompt-part-framing-body', label: 'Full body' },
+  { key: 'framing_back', id: 'prompt-part-framing-back', label: 'From behind' },
+].map((f) => ({ ...f, engines: ['klein', 'krea'], rows: 3 }));
+
+/** Every editable prompt-part key, in the order the card shows them — the list
+ *  the preview panel and the "customised" dot both read, so a field added above
+ *  is never forgotten by one of them. */
+export const PROMPT_PART_KEYS = [
+  ...GLOBAL_PROMPT_PART_FIELDS, ...SUBJECT_PROMPT_PART_FIELDS, ...FRAMING_PROMPT_PART_FIELDS,
+].map((f) => f.key);
 
 function normalizeSubject(subjectType) {
   const s = String(subjectType || 'human').toLowerCase();

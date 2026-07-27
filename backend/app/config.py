@@ -290,8 +290,21 @@ DEFAULTS = {
     # each read with NO fallback to the flat key: an override written on an Animal
     # dataset must never ride on a human generation (reported by ashish.sinha).
     # Empty by default — a subject with no entry follows its shipped default.
+    # The five OTHER prompt parts, hardcoded until this wave and shipped in every
+    # local-edit prompt: markings_lock (the skin hold order), outfit_vary /
+    # expression_neutral (the two directives baked into every human shot),
+    # outfit_palette (the concrete garments, one per LINE), render_tail_sfw /
+    # render_tail_nsfw (the photographic tail) and framing_face|bust|body|back
+    # (the per-framing detail block). Same contract as the four above — '' means
+    # the shipped default — and the same split: the tail and the framing blocks
+    # are per subject (anime's tail asks for an illustration, not a photograph) so
+    # they live under `by_subject` for non-human types; the rest are flat.
     'identity_prompts': {'face_single': '', 'face_multi': '', 'klein_identity': '',
                          'klein_improve': '', 'klein_improve_enabled': True,
+                         'markings_lock': '', 'outfit_vary': '', 'expression_neutral': '',
+                         'outfit_palette': '', 'render_tail_sfw': '', 'render_tail_nsfw': '',
+                         'framing_face': '', 'framing_bust': '', 'framing_body': '',
+                         'framing_back': '',
                          'by_subject': {}},
     # User shot catalogs imported from JSON, {subject_type: [{id,label,prompt,
     # framing,nsfw?}]} — idea by ashish.sinha (Discord): have an LLM write 40 shots

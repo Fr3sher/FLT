@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-see-and-edit-the-whole-prompt',
+    date: '2026-07-27',
+    title: 'See the prompt your engine actually receives — and edit every sentence of it',
+    blurb:
+      'A Klein or Krea prompt is about a thousand characters assembled from six sources, and until now you could see none of it. Settings ▸ Image engines now ends with a live preview of the COMPOSED prompt: pick an engine, a framing and SFW/uncensored, and read the exact text a real shot would be sent — including edits you have not saved yet. It generates nothing and costs nothing. Five more parts became editable next to it, with Restore default on each: the “hold the skin” order Krea sends with every shot, the outfit and expression directives injected into every human shot, the list of concrete garments Krea dresses each shot in, the rendering tail (“Professional realistic photograph” — an illustration on Anime datasets), and the per-framing shot detail, which is the box to open when your full-body shots keep coming back cropped. Leave a box alone and nothing changes: blank still means the shipped text, byte for byte.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',

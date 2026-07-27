@@ -122,6 +122,32 @@ def get_settings():
     return jsonify(_settings_payload())
 
 
+@bp.post('/settings/prompt-preview')
+def post_prompt_preview():
+    """The COMPOSED prompt one engine would receive for one shot — the ~1000
+    characters assembled from the six editable parts, which nothing in the app
+    ever showed. Pure text: it calls the same wrappers generation calls, and
+    starts no job, touches no GPU and spends nothing.
+
+    POST (not GET) because it carries the editor's UNSAVED `identity_prompts`
+    tree: Settings saves on an explicit button, so a preview reading the saved
+    config would show the previous text at exactly the moment the user is editing.
+    Omit `identity_prompts` to preview what is saved. A malformed body degrades to
+    a default preview rather than 400 — this panel is a debugging aid, and a
+    broken one that answers 'error' is worth less than one that answers with the
+    shipped prompt."""
+    from ..services import face_variations as fv
+    body = request.get_json(force=True, silent=True) or {}
+    if not isinstance(body, dict):
+        body = {}
+    overrides = body.get('identity_prompts')
+    return jsonify(fv.compose_preview(
+        body.get('engine'), subject_type=body.get('subject_type') or 'human',
+        framing=body.get('framing') or 'bust', nsfw=bool(body.get('nsfw')),
+        suffix=body.get('suffix') if isinstance(body.get('suffix'), str) else '',
+        overrides=overrides if isinstance(overrides, dict) else None))
+
+
 @bp.put('/settings')
 def put_settings():
     body = request.get_json(force=True, silent=True) or {}

@@ -49,14 +49,21 @@ def test_default_registry_matches_constants():
     assert fv.identity_prompt_default('face_multi') == fv.IDENTITY_GUARD_MULTI
     assert fv.identity_prompt_default('klein_identity') == fv.IDENTITY_GUARD_KLEIN
     assert fv.identity_prompt_default('klein_improve') == fv.KLEIN_IMAGE_IMPROVE_PROMPT
-    assert set(fv.IDENTITY_PROMPT_KINDS) == set(fv._IDENTITY_PROMPT_DEFAULTS)
+    # The registry now also holds the five prompt PARTS that used to be
+    # hardcoded; the four identity kinds keep their exact meaning above.
+    assert (set(fv.IDENTITY_PROMPT_KINDS) | set(fv.PROMPT_PART_KINDS)
+            == set(fv._IDENTITY_PROMPT_DEFAULTS))
 
 
 def test_identity_prompt_defaults_returns_all_four_constants():
     d = fv.identity_prompt_defaults()
-    assert d == {'face_single': fv.IDENTITY_GUARD, 'face_multi': fv.IDENTITY_GUARD_MULTI,
-                 'klein_identity': fv.IDENTITY_GUARD_KLEIN,
-                 'klein_improve': fv.KLEIN_IMAGE_IMPROVE_PROMPT}
+    for kind, const in (('face_single', fv.IDENTITY_GUARD),
+                        ('face_multi', fv.IDENTITY_GUARD_MULTI),
+                        ('klein_identity', fv.IDENTITY_GUARD_KLEIN),
+                        ('klein_improve', fv.KLEIN_IMAGE_IMPROVE_PROMPT)):
+        assert d[kind] == const, kind
+    # ...alongside the five parts that became editable in the same mechanism.
+    assert set(d) == set(fv.IDENTITY_PROMPT_KINDS) | set(fv.PROMPT_PART_KINDS)
     # a copy, not the live registry — a mutating caller cannot corrupt defaults
     d['face_single'] = 'x'
     assert fv.identity_prompt_default('face_single') == fv.IDENTITY_GUARD
@@ -114,7 +121,14 @@ def test_config_defaults_are_additive_and_blank():
     ip = DEFAULTS['identity_prompts']
     assert ip == {'face_single': '', 'face_multi': '', 'klein_identity': '',
                   'klein_improve': '', 'klein_improve_enabled': True,
+                  'markings_lock': '', 'outfit_vary': '', 'expression_neutral': '',
+                  'outfit_palette': '', 'render_tail_sfw': '', 'render_tail_nsfw': '',
+                  'framing_face': '', 'framing_bust': '', 'framing_body': '',
+                  'framing_back': '',
                   'by_subject': {}}
+    # EVERY editable prompt part ships blank: blank is what makes the default path
+    # byte-identical, and a shipped copy of the default text would freeze it.
+    assert all(ip[k] == '' for k in fv.PROMPT_PART_KINDS)
 
 
 # --- D: Klein-improve toggle + override (service path) -----------------------
