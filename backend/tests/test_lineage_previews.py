@@ -86,9 +86,15 @@ def test_final_stepless_deploy_is_joined_to_its_own_run(client, monkeypatch, app
         assert calls['checkpoints'] == [
             f'z image\\lora_nova_Krea-2-Raw_rl{rid}_v2.safetensors']
         # ANOTHER run of the same dataset must NOT inherit it: the tag names rid.
+        # This used to expect {2000: True}: the step-less final was correctly
+        # withheld, but a NUMBERED step deployed by rid still lit up on every
+        # other run that happened to save at 2000. Reported for real — importing
+        # step 2500 of one run turned every run's 2500 green, and that run's
+        # Undeploy would have deleted a file it does not own. Both are withheld
+        # now, for the same reason: the tag names rid.
         other_node = ct._lineage_node(TrainingRunRecord.query.get(oid), None, oid, None)
         assert {c['step']: c['testable']
-                for c in other_node['checkpoints']} == {2000: True, 3500: False}
+                for c in other_node['checkpoints']} == {2000: False, 3500: False}
 
 
 def test_untagged_stepless_deploy_marks_nothing(client, monkeypatch, app):

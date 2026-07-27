@@ -68,8 +68,17 @@ def test_annotate_by_run_joins_each_row_with_ITS_own_run(app, ds, deployed_pool)
             {'step': 4000, 'filename': 'c.safetensors'},          # pre-registry row
         ]
         ct.annotate_deployed_by_run(ds, 'zimage', rows)
-        # the step-named deploy matches every group's step 1000 (it names its step)
-        assert rows[0]['testable'] is True and rows[1]['testable'] is True
+        # The pool holds ONE file, tagged cloud run 7. Run 7 owns it; run 9 does
+        # not — even though both saved at step 1000.
+        #
+        # This used to assert the opposite ("the step-named deploy matches every
+        # group's step 1000"), which is the behaviour a user hit for real:
+        # importing step 2500 of one run turned every run's 2500 "✓ Deployed",
+        # and the wrong run's Undeploy would have deleted a file it does not own.
+        # The test name always said "with ITS own run"; only the assertion
+        # disagreed.
+        assert rows[0]['testable'] is True, 'run 7 owns the deployed file'
+        assert rows[1]['testable'] is False, 'run 9 must not claim run 7 file'
         assert rows[2]['testable'] is False
 
 

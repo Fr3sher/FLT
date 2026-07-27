@@ -3137,11 +3137,24 @@ def _testable_by_step(dataset_id, family, run_tag=None, final_step=None) -> dict
     except Exception:
         return {}
     for c in cands:
-        s = _step_of_testable(c.get('filename'))
+        fn = c['filename']
+        s = _step_of_testable(fn)
         if s is not None:
-            out[s] = c['filename']
+            # A NUMBERED save must belong to the run we are answering for.
+            # Without this, two runs of the same dataset+family that both saved
+            # at step 2500 shared one key: importing run A's 2500 lit up "✓
+            # Deployed" on run B's 2500 too, and B's Undeploy would have removed
+            # A's file. Reported after importing step 2500 of one run and seeing
+            # every other run's 2500 turn green.
+            # Untagged files (imported before run tagging) still match on the
+            # step alone — refusing them would un-deploy every legacy import.
+            if run_tag and run_tag[1]:
+                tag = lt.parse_deployed_run(fn)
+                if tag[1] is not None and tag != tuple(run_tag):
+                    continue
+            out[s] = fn
         else:
-            stepless.append(c['filename'])
+            stepless.append(fn)
     # Deterministic on collision: a file that NAMES the step always wins over a
     # step-less one claiming the same step, and among several step-less deploys
     # of the same run the highest `_v<N>` wins.
