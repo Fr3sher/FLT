@@ -48,6 +48,30 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-lineage-panels-fit-a-phone',
+    date: '2026-07-27',
+    title: 'The run details panel no longer swallows the graph on a phone',
+    blurb:
+      'Tapping a run in the lineage graph opened a fixed-width drawer that covered most of a 400-px screen: you could read the run\'s settings, but not see the run they belonged to. It is now a bottom sheet on a phone — capped at 70% of the height, so the graph stays visible above it — and the same side drawer as before from a tablet up. The checkpoint image gallery already worked this way; the two now match.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-face-scoring-shows-its-progress',
+    date: '2026-07-27',
+    title: 'Face scoring counts up instead of sitting at zero',
+    blurb:
+      'The scorer had been announcing every image it finished all along — nothing was reading it, so a pass over a few hundred images showed 0 for several minutes and then jumped straight to done. That is indistinguishable from a hang, and more than one run got killed for looking stuck. The indicator now moves image by image, so you can tell a slow pass from a dead one.',
+    to: '/datasets?section=curation&panel=face-analysis',
+  },
+  {
+    id: '2026-07-27-krea-names-a-broken-download',
+    date: '2026-07-27',
+    title: 'A half-downloaded Krea model now says so, instead of crashing ComfyUI',
+    blurb:
+      'The Krea 2 base sits behind a Hugging Face licence gate and the identity LoRA behind a Civitai login. Download either from a browser without going through that step and you get the web page saved as a .safetensors file — the right name, the right extension, no weights inside. Setup went green and the first generation died on a raw "Expecting value: line 1 column 1". Krea now checks each file it is about to load, names the broken one and tells you to re-download it. Truncated downloads are caught the same way. Klein has worked like this for a while; Krea now does too.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',
