@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-tile-engine-badge-readable',
+    date: '2026-07-27',
+    title: 'You can read which engine made a photo again, phone and tablet included',
+    blurb:
+      'In the dataset grid, the little "generated · face · Nano Banana Pro" label sat in the same top corner as the 🔄 ✏️ ⇆ ✂ 🗑 buttons. On a narrow tile — a phone, a tablet, or simply the S/M thumbnail sizes — the buttons covered it and the engine name was cut in half, which is exactly the part you need when a batch ran on several engines at once. The label now drops to the bottom-right corner of the thumbnail whenever the top row is too tight, and stays in its usual top-left spot when there is room. It reacts to the THUMBNAIL width, not the window, so large tiles on a phone keep the label at the top and small tiles on a big screen move it down. It never covers the ✓/✕ buttons or the selection tickbox, and hovering it still shows the full text.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-27-remove-run-takes-everything',
     date: '2026-07-27',
     title: 'Removing a run now clears everything it left behind — and tells you what that is first',

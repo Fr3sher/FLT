@@ -6,6 +6,14 @@ import CaptionEditorDialog from './CaptionEditorDialog';
 import PromptEditPopover from './PromptEditPopover';
 import PexelsAttribution from './PexelsAttribution';
 import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
+import { FACE_BADGE_CLASS, PROVENANCE_BADGE_CLASS, TILE_BADGE_STACK_CLASS,
+  WATERMARK_BADGE_CLASS } from './tileBadgeLayout.js';
+
+const DERIVATION_LABEL = {
+  klein_small_image: 'Klein rescue',
+  small_image_source: 'rescue original',
+  klein_image_improve: 'Klein improve',
+};
 
 const STATUS_CLS = {
   keep: 'border-green-500',
@@ -98,6 +106,15 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
   // object-contain (letterboxed on the existing black tile background); S/M
   // stay object-cover so the dense overview grid reads as a clean tiled wall.
   const imgFitCls = tileSize === 'L' ? 'object-contain' : 'object-cover';
+  // Provenance badge text. Kept as data (not inline JSX) so the SAME wording
+  // can go into title/aria-label — the badge is clamped to two lines at the
+  // bottom of a narrow tile, and a truncated engine name must stay readable
+  // on hover and to a screen reader.
+  const originText = DERIVATION_LABEL[img.derivation_kind]
+    || (img.source === 'import' ? 'real' : 'generated');
+  const engineLabel = ENGINE_ACCENTS[img.engine] ? ENGINE_LABELS[img.engine] : null;
+  const provenanceTitle = [originText, img.framing, engineLabel && `made with ${engineLabel}`]
+    .filter(Boolean).join(' · ');
 
   return (
     <div tabIndex={0} aria-label={`${displayLabel(img.variation_label) || 'Dataset image'} card`}
@@ -140,35 +157,35 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
             )}
           </div>
         )}
-        <span className="absolute top-1 left-1 px-1.5 py-0.5 rounded text-[10px] bg-black/60 text-white pointer-events-none">
-          {img.derivation_kind === 'klein_small_image'
-            ? 'Klein rescue'
-            : img.derivation_kind === 'small_image_source'
-              ? 'rescue original'
-              : isImageImproveCandidate
-                ? 'Klein improve'
-              : img.source === 'import' ? 'real' : 'generated'}{img.framing ? ` · ${img.framing}` : ''}
-          {/* Which engine made it — the only way a multi-engine batch is
+        {/* Bottom-anchored badge stack. A container query (index.css) lifts the
+            provenance badge back to the top-left as soon as the TILE — not the
+            window — is wide enough to hold it next to the action buttons. */}
+        <div className={TILE_BADGE_STACK_CLASS}>
+          {wb && (
+            <span className={`${WATERMARK_BADGE_CLASS} bg-black/70 ${wb.cls}`}
+              title={(img.watermark_state === 'detected' && WATERMARK_ROUTE_HINT[img.watermark_route]) || wb.label}>
+              {wb.icon} {wb.text}
+            </span>
+          )}
+          {/* Last child = closest to the bottom edge, and the engine pill names
+              which engine made it — the only way a multi-engine batch is
               comparable ("this one came out of ChatGPT, that one out of
               Klein"). The server sends `engine` ONLY when it can tell for sure,
               so older rows show no pill rather than a made-up one. */}
-          {ENGINE_ACCENTS[img.engine] && (
-            <span className={`ml-1 px-1 rounded ${ENGINE_ACCENTS[img.engine].pill}`}
-              title={`Generated with ${ENGINE_LABELS[img.engine]}`}>
-              {ENGINE_LABELS[img.engine]}
-            </span>
-          )}
-        </span>
+          <span className={`${PROVENANCE_BADGE_CLASS} bg-black/60 text-white`}
+            title={provenanceTitle} aria-label={provenanceTitle}>
+            {originText}{img.framing ? ` · ${img.framing}` : ''}
+            {engineLabel && (
+              <span className={`dataset-tile-badge__engine ml-1 px-1 rounded ${ENGINE_ACCENTS[img.engine].pill}`}>
+                {engineLabel}
+              </span>
+            )}
+          </span>
+        </div>
         {fb && (
-          <span className={`absolute top-6 left-1 px-1.5 py-0.5 rounded text-[10px] bg-black/70 ${fb.cls} pointer-events-none flex items-center gap-0.5`}
+          <span className={`${FACE_BADGE_CLASS} px-1.5 py-0.5 rounded bg-black/70 ${fb.cls}`}
             title={`Resemblance to the reference face — ${fb.label}`}>
             {fb.icon} 🎭 {fb.label}
-          </span>
-        )}
-        {wb && (
-          <span className={`absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] bg-black/70 ${wb.cls} flex items-center gap-0.5`}
-            title={(img.watermark_state === 'detected' && WATERMARK_ROUTE_HINT[img.watermark_route]) || wb.label}>
-            {wb.icon} {wb.text}
           </span>
         )}
         <div className="dataset-grid-item__actions absolute top-1 right-1 flex max-w-[calc(100%_-_0.5rem)] flex-wrap justify-end gap-1">
