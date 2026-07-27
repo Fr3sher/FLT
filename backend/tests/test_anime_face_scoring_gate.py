@@ -159,7 +159,7 @@ def test_the_route_refuses_without_shelling_out(app, client, monkeypatch):
     from app.config import LOCAL_USER
     from app.services import face_dataset_service as svc
 
-    monkeypatch.setattr('app.services.face_similarity.subprocess.run',
+    monkeypatch.setattr('app.services.face_similarity._run_scorer',
                         lambda *a, **k: pytest.fail('no subprocess for an anime dataset'))
     with app.app_context():
         ds, _ = _dataset(svc, LOCAL_USER, 'anime')

@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
+import threading
+from collections import deque
 
 from .. import config as cfg
 
@@ -13,6 +16,16 @@ logger = logging.getLogger(__name__)
 
 # face_score_infer.py vit dans backend/infer/ (pas app/services/).
 _SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'face_score_infer.py')
+
+# The scorer already announces every image it finishes on stderr — nobody read
+# it, so the pass showed 0/N for its whole duration and then jumped to N/N. Same
+# mechanism as the Bank's embedding pass (image_bank_service._PROGRESS_RE over
+# face_embed_infer's "[embed] i/N"): one regex, one drain thread.
+_PROGRESS_RE = re.compile(r'\[face\] (\d+)/(\d+)')
+
+# How long we wait for the child to die after a timeout kill before giving up on
+# joining its reader thread. Short: the pipes are closed by then.
+_JOIN_GRACE_S = 5
 
 
 def _scoring_python() -> str:
@@ -25,11 +38,69 @@ def is_available() -> bool:
     return probe_face_scoring()['ok']
 
 
-def _stderr_tail(proc) -> str:
+def _stderr_tail(lines) -> str:
     """Derniere ligne non vide de stderr — pour un crash Python c'est la ligne
     `SomeError: ...` du traceback, exactement ce qu'un humain veut lire."""
-    return next((ln.strip() for ln in reversed((proc.stderr or '').splitlines())
-                 if ln.strip()), '')
+    return next((ln.strip() for ln in reversed(list(lines or ())) if ln.strip()), '')
+
+
+def _run_scorer(python, payload, timeout, on_progress):
+    """Run face_score_infer, streaming its `[face] i/N` lines to ``on_progress``.
+
+    Returns ``(stdout, stderr_lines, returncode, timed_out)``. Popen rather than
+    subprocess.run for ONE reason: run() only hands the output back once the
+    child has exited, so the progress the scorer prints all along was unreadable
+    until it no longer mattered. stderr is drained by a thread (a full pipe would
+    deadlock the child), stdout is read here; both stay bounded — we keep the last
+    few stderr lines for the error message, nothing else.
+
+    A callback that raises must never take the pass down with it: progress is a
+    display concern, the scoring is the work."""
+    proc = subprocess.Popen(
+        [python, _SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace',
+        creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    lines: deque = deque(maxlen=5)
+
+    def _drain():
+        for line in proc.stderr:
+            line = line.strip()
+            if not line:
+                continue
+            lines.append(line)
+            m = _PROGRESS_RE.search(line)
+            if m and on_progress:
+                try:
+                    on_progress(int(m.group(1)), int(m.group(2)))
+                except Exception:
+                    logger.debug('face progress callback failed', exc_info=True)
+
+    reader = threading.Thread(target=_drain, daemon=True)
+    reader.start()
+    state = {'timed_out': False}
+
+    def _kill():
+        state['timed_out'] = True
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    watchdog = threading.Timer(max(1, int(timeout)), _kill)
+    watchdog.daemon = True
+    watchdog.start()
+    try:
+        try:
+            proc.stdin.write(payload)
+            proc.stdin.close()
+        except OSError:
+            pass        # the child died early — the exit path below reports it
+        stdout = proc.stdout.read()
+        proc.wait()
+    finally:
+        watchdog.cancel()
+        reader.join(timeout=_JOIN_GRACE_S)
+    return stdout, lines, proc.returncode, state['timed_out']
 
 
 # Budget temps par image, en secondes. antelopev2 sur CPU tourne autour de
@@ -50,8 +121,14 @@ def default_timeout(n_images: int) -> int:
                120 + _TIMEOUT_PER_IMAGE_S * max(0, int(n_images or 0)))
 
 
-def score_dataset_faces(ref_path, image_paths, timeout: int | None = None):
+def score_dataset_faces(ref_path, image_paths, timeout: int | None = None,
+                        on_progress=None):
     """Retourne ({path: {state, sim?, det, bbox_frac, yaw}}, error|None).
+
+    `on_progress(done, total)` — optionnel — est appelé à chaque image finie par
+    le scorer, depuis un thread de lecture (donc PAS dans un contexte Flask :
+    n'y touchez qu'à de l'état en mémoire, comme dataset_activity). Sans lui la
+    passe reste exactement ce qu'elle était.
 
     `error` est None quand le scorer a tourne, sinon {'kind', 'detail'} :
     'unavailable' (extras ML absents), 'failed' (subprocess/JSON casse — detail
@@ -70,21 +147,24 @@ def score_dataset_faces(ref_path, image_paths, timeout: int | None = None):
     payload = json.dumps({"ref": ref_path, "images": image_paths,
                           "models_root": cfg.get('face_scoring.models_root') or None})
     try:
-        proc = subprocess.run([_scoring_python(), _SCRIPT], input=payload,
-                              capture_output=True, text=True, encoding='utf-8',
-                              errors='replace', timeout=timeout,
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except (subprocess.TimeoutExpired, OSError) as e:
+        stdout, stderr_lines, returncode, timed_out = _run_scorer(
+            _scoring_python(), payload, timeout, on_progress)
+    except OSError as e:
         logger.warning('face_similarity: subprocess echec : %s', e)
         return {}, {'kind': 'failed', 'detail': str(e)}
-    line = next((ln for ln in reversed((proc.stdout or '').splitlines())
+    if timed_out:
+        logger.warning('face_similarity: timeout apres %ss', timeout)
+        return {}, {'kind': 'failed',
+                    'detail': f'face scoring timed out after {timeout}s '
+                              f'({len(image_paths)} image(s))'}
+    line = next((ln for ln in reversed((stdout or '').splitlines())
                  if ln.strip().startswith('{')), '')
     if not line:
-        tail = _stderr_tail(proc)
+        tail = _stderr_tail(stderr_lines)
         logger.warning('face_similarity: pas de JSON (rc=%s) stderr=%s',
-                       proc.returncode, (proc.stderr or '')[-400:])
+                       returncode, ' | '.join(stderr_lines))
         return {}, {'kind': 'failed',
-                    'detail': tail or f'scorer produced no output (rc={proc.returncode})'}
+                    'detail': tail or f'scorer produced no output (rc={returncode})'}
     try:
         data = json.loads(line)
     except json.JSONDecodeError as e:
