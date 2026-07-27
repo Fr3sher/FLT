@@ -16,6 +16,16 @@ stdin  : {"images": [paths...], "out_dir": path|null, "expand": float}
 stdout : last line = JSON {"ok", "written", "results": {path: {...}}}
 Logs -> stderr.
 
+PROGRESS PROTOCOL (stderr, read by app/services/face_mask.py):
+  `[facemask] phase=<name>` then `[facemask] i/N ...` per image, same idiom as
+  face_score_infer's `[face] i/N`. The phases exist because the per-image counter
+  alone LIES about the wait: importing onnxruntime and preparing antelopev2 costs
+  tens of seconds BEFORE image 1, and a bar frozen at 0/N for that long is
+  indistinguishable from a hang — the exact confusion this reports away. Phases
+  are only named when they really cost: `starting` (interpreter + heavy imports),
+  `downloading` (models absent -> insightface will fetch ~350 MB), `loading`
+  (FaceAnalysis.prepare), `detecting` (the per-image loop).
+
 `out_dir` null = DETECT ONLY (no file written): the preview path asks for the raw
 boxes and grows them client-side, so moving the expand slider redraws instantly
 instead of paying for another InsightFace pass.
@@ -43,6 +53,25 @@ def _log(msg):
     print(msg, file=sys.stderr, flush=True)
 
 
+def _phase(name):
+    """Announce a named stage of the run. Unbuffered: a phase line that arrives
+    after the phase is over is worse than none."""
+    _log(f'[facemask] phase={name}')
+
+
+def _models_present(models_root=None) -> bool:
+    """True when antelopev2's .onnx files are already on disk. Drives the
+    `downloading` phase: insightface silently fetches ~350 MB on first use, and
+    that download looks EXACTLY like a slow detection from the outside. Checks
+    the nested layout too (see _repair_nested_antelopev2) so a fresh auto-extract
+    that has not been flattened yet still counts as present, not as a re-download."""
+    import glob
+    root = models_root or os.path.join(os.path.expanduser('~'), '.insightface')
+    outer = os.path.join(root, 'models', 'antelopev2')
+    return bool(glob.glob(os.path.join(outer, '*.onnx'))
+                or glob.glob(os.path.join(outer, 'antelopev2', '*.onnx')))
+
+
 def dilate_box(box, expand, shift_up=_SHIFT_UP):
     """Grow a face box into a head box. PURE — mirrored verbatim by the frontend
     preview (frontend/src/utils/faceMaskBox.js) so what the user sees drawn is what
@@ -68,6 +97,9 @@ def main() -> int:
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
+    # First line out of the child: everything above is microseconds, everything
+    # below is tens of seconds.
+    _phase('starting')
     try:
         import cv2
         import numpy as np  # noqa: F401 — insightface needs it importable
@@ -86,6 +118,10 @@ def main() -> int:
     except Exception:  # noqa: BLE001 — repair is best-effort, never fatal
         pass
 
+    # Announced BEFORE FaceAnalysis(), because that call is what triggers the
+    # fetch: said afterwards it would arrive several minutes late, on a bar the
+    # user already read as "stuck".
+    _phase('downloading' if not _models_present(models_root) else 'loading')
     try:
         kwargs = {'name': 'antelopev2', 'providers': ['CPUExecutionProvider']}
         if models_root:
@@ -112,6 +148,7 @@ def main() -> int:
         return (app.get(padded) or []), 1.0, pad
 
     results, written = {}, 0
+    _phase('detecting')
     for i, p in enumerate(images, 1):
         try:
             img = cv2.imread(p)
