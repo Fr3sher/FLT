@@ -411,3 +411,43 @@ def test_base_model_identity_is_none_for_the_official_hosted_base(app):
         assert run_environment.base_model_identity('') is None
         assert run_environment.base_model_identity(None) is None
         run_environment.clear_cache()
+
+
+# --- interrupted copies must not eat the ceiling ----------------------------
+
+def test_an_interrupted_copy_neither_counts_nor_survives_the_next_pass(app):
+    """`store` copies to `<blob>.part` then renames, so a crash mid-copy leaves an
+    orphan nothing can ever address (`path_for` only looks for final names). It
+    still counted towards the archive ceiling, so a few interrupted runs quietly
+    shrank the usable archive until the user wiped EVERYTHING with "Clear
+    archive" — good blobs included."""
+    with app.app_context():
+        from app import config as cfg
+        root = run_archive.archive_root()
+        (root / 'ab').mkdir(parents=True, exist_ok=True)
+        orphan = root / 'ab' / 'abcdef.png.part'
+        orphan.write_bytes(b'X' * 4096)
+
+        # It is not archive content: excluded from the size the ceiling reads.
+        assert run_archive.size_bytes(refresh=True) == 0
+
+        src = cfg.dataset_images_root() / 'sweep.png'
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b'REAL PIXELS')
+        out = run_archive.store([(str(src), 'abcdef', 'sweep.png')])
+
+        assert out['added'] == 1
+        assert not orphan.exists(), 'the next pass sweeps what a crash left behind'
+        assert run_archive.path_for('abcdef')
+        assert run_archive.size_bytes(refresh=True) == len(b'REAL PIXELS')
+
+
+def test_the_sweep_never_touches_a_real_blob(app):
+    with app.app_context():
+        from app import config as cfg
+        src = cfg.dataset_images_root() / 'keepme.png'
+        src.parent.mkdir(parents=True, exist_ok=True)
+        src.write_bytes(b'KEEP')
+        run_archive.store([(str(src), 'beef01', 'keepme.png')])
+        assert run_archive.sweep_partials() == 0
+        assert run_archive.path_for('beef01')

@@ -86,15 +86,52 @@ def enabled() -> bool:
     return max_bytes() > 0
 
 
+def sweep_partials() -> int:
+    """Delete leftover `.part` files and return how many went.
+
+    `store` copies to `<blob>.part` then renames, so a crash (or a kill) mid-copy
+    leaves an orphan that nothing will ever finish or address — `path_for` only
+    ever looks for the final names. They still counted towards the ceiling, so a
+    few interrupted runs could quietly shrink the usable archive until the user
+    hit "Clear archive" and wiped everything, including the good blobs. Run at
+    the start of a store pass, where a `.part` can only be stale: the copy that
+    would own one has not started yet, and the pass holds `_lock`.
+
+    Never raises — a failed cleanup must not stop the archiving it precedes."""
+    removed = 0
+    try:
+        for dirpath, _dirs, files in os.walk(_root_only()):
+            for fn in files:
+                if not fn.endswith('.part'):
+                    continue
+                try:
+                    os.remove(os.path.join(dirpath, fn))
+                    removed += 1
+                except OSError:
+                    logger.debug('could not remove the stale %s', fn, exc_info=True)
+    except OSError:
+        logger.debug('could not sweep stale .part files', exc_info=True)
+    if removed:
+        logger.info('run image archive: removed %d interrupted copy/copies', removed)
+        _size_cache['bytes'] = None
+    return removed
+
+
 def size_bytes(refresh=False) -> int:
     """Bytes currently held by the archive. Cached: the Settings card asks for it
-    on every open and walking thousands of small files each time is wasteful."""
+    on every open and walking thousands of small files each time is wasteful.
+
+    `.part` files are EXCLUDED: an interrupted copy is not archive content — it
+    is addressable by nothing and about to be swept — and counting it towards the
+    ceiling would slowly starve the archive on a machine that gets killed a lot."""
     if not refresh and _size_cache['bytes'] is not None:
         return _size_cache['bytes']
     total = 0
     try:
         for dirpath, _dirs, files in os.walk(archive_root()):
             for fn in files:
+                if fn.endswith('.part'):
+                    continue
                 try:
                     total += os.path.getsize(os.path.join(dirpath, fn))
                 except OSError:
@@ -141,6 +178,9 @@ def store(plan) -> dict:
     ceiling = max_bytes()
     archive_root()                      # the one place the folder is created
     with _lock:
+        # Under the lock, so any `.part` present is necessarily an orphan from a
+        # past interrupted pass — this one has not written its own yet.
+        sweep_partials()
         current = size_bytes()
         for src, sig, filename in (plan or ()):
             if not src or not sig:
