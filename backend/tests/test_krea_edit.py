@@ -374,12 +374,19 @@ def test_the_wrapper_is_instruction_first_and_locks_permanent_markings():
     """MEASURED: the framing WAS honoured with this shape (the API-engine wrapper
     put preservation first and returned a close-up whatever the shot asked). And
     the tattoos were REDRAWN every render, which a LoRA would learn as an average
-    tattoo — hence the explicit hold order."""
+    tattoo — hence the explicit hold order.
+
+    That order used to assert its own wording here ('same design, same placement
+    and same size'), which is how it survived long enough to be shipped: the
+    sentence enumerated tattoos, scars, moles and piercings, and the encoder
+    painted them on subjects who had none. The assertion now checks what the
+    order must DO, not the words it uses — the wording itself is pinned by
+    test_the_markings_lock_names_no_feature_it_could_summon."""
     out = fv.wrap_variation_krea('full body shot, standing', framing='body',
                                  label='Body standing, front')
     assert out.startswith('Create a new photograph of the same person')
     assert 'ENTIRE body visible from head to toe' in out
-    assert 'same design, same placement and same size' in out
+    assert fv.KREA_MARKINGS_LOCK.strip() in out
     # The identity lock is the SHARED, user-editable klein_identity one — not a
     # second copy the user would have to keep in sync.
     assert fv.get_identity_prompt('klein_identity', 'human') in out
@@ -531,3 +538,43 @@ def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein():
     assert svc._image_engine(Row('chatgpt')) == 'chatgpt'
     assert svc._image_engine(Row('Krea\\krea2_turbo_fp8.safetensors')) == 'klein'
     assert svc._image_engine(Row(None)) is None
+
+
+# --- The markings hold order must not SUMMON what it protects -----------------
+# Reported by Jeremy within hours of shipping: "why do my Krea 2 generations
+# always add tattoos?". The first version of KREA_MARKINGS_LOCK enumerated the
+# features to preserve ("tattoos with the same design..., scars, moles and
+# piercings") and was assumed to "cost nothing when the subject has no
+# markings". A text encoder does not bind "reproduce X as in the reference": it
+# reads the word and paints it. These tests pin the rule that came out of it.
+
+_SUMMONABLE = ('tattoo', 'scar', 'mole', 'piercing', 'freckle', 'birthmark')
+
+
+def test_the_markings_lock_names_no_feature_it_could_summon():
+    from app.services.face_variations import KREA_MARKINGS_LOCK
+    low = KREA_MARKINGS_LOCK.lower()
+    named = [w for w in _SUMMONABLE if w in low]
+    assert not named, (
+        f'KREA_MARKINGS_LOCK names {named} — on a subject who has none, the '
+        f'encoder paints them. Hold the skin, do not enumerate its features.')
+
+
+def test_the_markings_lock_still_forbids_adding_and_redrawing():
+    """Dropping the enumeration must not drop the protection."""
+    from app.services.face_variations import KREA_MARKINGS_LOCK
+    low = KREA_MARKINGS_LOCK.lower()
+    assert 'do not add' in low, 'nothing forbids inventing new marks'
+    assert 'redraw' in low, 'nothing forbids redrawing the existing ones'
+
+
+def test_no_krea_prompt_names_a_summonable_feature():
+    """The whole composed prompt, not just the constant — a feature named
+    anywhere in it is a feature the model may paint."""
+    from app.services.face_variations import VARIATION_CATALOG, wrap_variation_krea
+    for entry in VARIATION_CATALOG[:12]:
+        prompt = wrap_variation_krea(entry['prompt'], nsfw=False,
+                                     framing=entry.get('framing'),
+                                     label=entry.get('label', '')).lower()
+        named = [w for w in _SUMMONABLE if w in prompt]
+        assert not named, f"shot {entry['id']} names {named} in its Krea prompt"

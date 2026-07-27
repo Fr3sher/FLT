@@ -590,13 +590,22 @@ _KREA_EXPRESSION_NEGATION = re.compile(
 
 # Permanent markings were redrawn on every render (measured). A dataset built
 # from that teaches the LoRA an AVERAGE tattoo — the exact failure mode a
-# character LoRA must not have. This is a positive, explicit hold order. NOT yet
-# verified to fix it (no GPU run was allowed in this pass): it is a reasoned
-# counter-measure, and it costs nothing when the subject has no markings.
+# character LoRA must not have.
+#
+# ⚠️ The first version of this hold order ENUMERATED what to preserve ("tattoos
+# with the same design..., the same scars, moles and piercings"). It was assumed
+# to "cost nothing when the subject has no markings". It cost a great deal: a
+# text encoder does not bind "reproduce X as in the reference" — it reads the
+# word `tattoos`, and paints tattoos. Reported within hours on subjects who have
+# none. Naming a feature summons it; this is the oldest trap in prompting, and
+# the enumeration walked straight into it.
+#
+# So the order now holds the SKIN, without naming a single feature. What is on
+# the reference is carried by the reference conditioning, not by this sentence —
+# whose only job is to forbid invention and redrawing.
 KREA_MARKINGS_LOCK = (
-    "Reproduce every permanent marking exactly as it appears in the reference "
-    "image — tattoos with the same design, same placement and same size, and the "
-    "same scars, moles and piercings. Do not redraw, restyle or move them. ")
+    "Keep the skin exactly as it is in the reference image: do not add anything "
+    "to it, and do not redraw, restyle, move or remove what is already there. ")
 
 
 # Concrete garments the negation is replaced BY. The pick is deterministic on the
