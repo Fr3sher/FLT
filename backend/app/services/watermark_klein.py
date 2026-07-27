@@ -69,6 +69,7 @@ from PIL import Image, ImageDraw, ImageFilter
 from .. import config as cfg
 from . import klein_edit_helper as keh
 from ..job_queue import queue_manager
+from ..utils import comfy_fs
 from ..utils.comfyui import load_workflow_local, fetch_output_image_bytes
 
 logger = logging.getLogger(__name__)
@@ -436,11 +437,21 @@ def _run_klein_job(user_id, crop_img, *, seed, steps=KLEIN_STEPS,
     if any(a in missing for a in keh.KLEIN_REQUIRED):
         raise keh.KleinModelsMissing(missing)
 
-    comfy_input = _comfy_input_dir()
+    # Same filesystem hand-off as the generation lanes (utils/comfy_fs): the crop
+    # is WRITTEN into ComfyUI's input folder, which a container/remote install may
+    # not share. Guarded so the failure names the folder instead of dying on a raw
+    # OSError halfway through a clean.
     uid = uuid.uuid4().hex[:8]
     crop_name = f'wmklein_crop_{uid}.png'
-    crop_path = os.path.join(comfy_input, crop_name)
-    crop_img.convert('RGB').save(crop_path)
+    try:
+        comfy_input = comfy_fs.ensure_input_usable(_comfy_input_dir())
+        crop_path = comfy_fs.stage_input_write(
+            crop_name, lambda p: crop_img.convert('RGB').save(p), comfy_input)
+    except comfy_fs.ComfyFolderUnavailable as exc:
+        # 'unavailable', not 'failed': nothing was attempted on the GPU — Klein
+        # simply cannot be reached over the filesystem from this process. The
+        # message already names the folder and what to do about it.
+        return None, {'kind': 'unavailable', 'detail': str(exc)}
 
     workflow['114']['inputs']['unet_name'] = unet
     workflow['10']['inputs']['vae_name'] = vae

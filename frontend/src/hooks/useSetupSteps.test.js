@@ -121,8 +121,43 @@ test('comfyuiDirVerdict maps each backend status to an actionable message', () =
     assert.equal(comfyuiDirVerdict({ status: s }).suggestion, '');
   }
   // Blank / in-flight / unknown -> muted, nothing to render.
-  assert.deepEqual(comfyuiDirVerdict({ status: 'empty' }), { tone: 'muted', suggestion: '', message: '' });
+  assert.deepEqual(comfyuiDirVerdict({ status: 'empty' }),
+    { tone: 'muted', suggestion: '', note: '', message: '' });
   assert.equal(comfyuiDirVerdict(null).message, '');
+});
+
+/* The wizard used to certify half the contract: it tested the URL and accepted the
+   folder, but never checked that the app can actually PUT a file in ComfyUI's input
+   folder — which is how every local engine hands over its source image. With ComfyUI
+   in a second container that folder isn't shared, setup went green and the first
+   generation died on a detail-free 500 (reported on Discord by nofaceman). */
+test('a valid ComfyUI folder the app cannot write into warns without blocking', () => {
+  const v = comfyuiDirVerdict({
+    status: 'valid', resolved: 'C:/Comfy',
+    input_check: { path: 'C:/Comfy/input', ok: false,
+      problem: "ComfyUI's input folder is not writable from LoRA Dataset Studio: "
+        + 'C:/Comfy/input. If ComfyUI runs in another container, in WSL or on another '
+        + 'machine, this folder must be a shared volume visible to LoRA Dataset Studio '
+        + 'at that exact path.' },
+  });
+  assert.equal(v.tone, 'ok');                 // still a valid install: NOT a blocker
+  assert.match(v.message, /ComfyUI found/);
+  assert.match(v.note, /not writable/);       // ...and the second half is said
+  assert.match(v.note, /shared volume/);
+});
+
+test('a working install, or a backend that says nothing, adds no note', () => {
+  assert.equal(comfyuiDirVerdict({ status: 'valid', resolved: 'C:/Comfy',
+    input_check: { path: 'C:/Comfy/input', ok: true, problem: '' } }).note, '');
+  // ok=null (nothing probed) and a missing field must never read as a failure
+  assert.equal(comfyuiDirVerdict({ status: 'valid', resolved: 'C:/Comfy',
+    input_check: { ok: null, problem: '' } }).note, '');
+  assert.equal(comfyuiDirVerdict({ status: 'valid', resolved: 'C:/Comfy' }).note, '');
+});
+
+test('the wizard renders the input-folder note', () => {
+  const jsx = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+  assert.match(jsx, /v\.note/);
 });
 
 test('skip panel lists what turns off and what stays on', () => {

@@ -62,11 +62,21 @@ export function folderEffective(info) {
  *  reproduce the original bug in a new place (the app looking somewhere the user
  *  never intended, with nothing on screen saying so). */
 export function folderWarning(info) {
-  if (!info || !info.resolved || info.exists) return null
-  if (info.source === 'override') {
-    return `Not found on disk: ${info.resolved} — the folder is used as typed, so generation will fail until it exists.`
+  if (!info || !info.resolved) return null
+  if (!info.exists) {
+    if (info.source === 'override') {
+      return `Not found on disk: ${info.resolved} — the folder is used as typed, so generation will fail until it exists.`
+    }
+    return `Not found on disk: ${info.resolved} — check the ComfyUI install directory above, or set an override here.`
   }
-  return `Not found on disk: ${info.resolved} — check the ComfyUI install directory above, or set an override here.`
+  // Present but not usable FROM HERE — the half the old check certified without
+  // testing. The app hands ComfyUI its source images through the input folder, so a
+  // ComfyUI in another container (folder not shared, or mounted read-only) passed
+  // every green check and then failed at the first generation with a bare 500
+  // (reported on Discord by nofaceman). The backend's sentence already names the
+  // folder, the cause and the shared-volume requirement, and is path-redacted.
+  if (info.usable === false && info.problem) return info.problem
+  return null
 }
 
 /** True when the running ComfyUI reported a folder that differs from what is typed,

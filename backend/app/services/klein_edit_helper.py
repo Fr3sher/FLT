@@ -26,12 +26,12 @@ from __future__ import annotations
 import logging
 import os
 import random
-import shutil
 import time
 import uuid
 
 from .. import config as cfg
 from . import comfy_model_paths
+from ..utils import comfy_fs
 from ..utils.comfyui import load_workflow_local
 from ..job_queue import queue_manager
 
@@ -540,10 +540,14 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     if any(a in missing for a in KLEIN_REQUIRED):
         raise KleinModelsMissing(missing)
 
-    comfy_input_dir = _comfy_input_dir()
+    # The source image reaches ComfyUI over the FILESYSTEM, not the API — see
+    # utils/comfy_fs.py. Staged through the guard so a folder that isn't shared
+    # with ComfyUI's container/host says so (409) instead of raising a bare OSError
+    # the routes can only turn into a detail-free 500 (reported by nofaceman).
+    comfy_input_dir = comfy_fs.ensure_input_usable(_comfy_input_dir())
     uid = uuid.uuid4().hex[:8]
     comfy_input = f"edit_source_{uid}_{source_filename}"
-    shutil.copy2(source_path, os.path.join(comfy_input_dir, comfy_input))
+    comfy_fs.stage_input_copy(source_path, comfy_input, comfy_input_dir)
 
     workflow["52"]["inputs"]["image"] = comfy_input
     # Prompt into the CLIPTextEncode widget directly (node 6). The old RES4LYF
@@ -583,7 +587,7 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
             logger.warning(f"klein multi-ref: extra ref missing on disk: {ref_path}")
             continue
         ref_input = f"edit_ref{i}_{uid}_{os.path.basename(ref_path)}"
-        shutil.copy2(ref_path, os.path.join(comfy_input_dir, ref_input))
+        comfy_fs.stage_input_copy(ref_path, ref_input, comfy_input_dir)
         load_id, scale_id = f"ds_ref{i}_load", f"ds_ref{i}_scale"
         enc_id, lat_id = f"ds_ref{i}_encode", f"ds_ref{i}_latent"
         workflow[load_id] = {"class_type": "LoadImage", "inputs": {"image": ref_input},

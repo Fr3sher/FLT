@@ -18,6 +18,7 @@ from pathlib import Path
 import requests
 
 from . import config as cfg
+from .utils import comfy_fs
 
 _CACHE_TTL = 30
 _cache = None
@@ -884,32 +885,69 @@ def classify_comfyui_dir(path: str) -> dict:
                         but holds no main.py/models/ and no child ComfyUI.
 
     `resolved` is the path a valid/nested verdict would adopt (child for nested,
-    the folder itself otherwise). Pure + never raises — a filesystem hiccup degrades
-    to 'not_comfyui' rather than throwing into the request."""
+    the folder itself otherwise). Never raises — a filesystem hiccup degrades
+    to 'not_comfyui' rather than throwing into the request.
+
+    Every verdict also carries `input_check` = {path, ok, problem}: "this IS a
+    ComfyUI install" was only ever half the question, and the wizard used to
+    certify the half it could see. The other half is whether the app can actually
+    HAND FILES to that install — every local engine copies its source into
+    `input/`. When ComfyUI runs in another container that folder is not shared by
+    default, so the wizard went green and the first generation died on a bare 500
+    (reported on Discord by nofaceman). `ok` is None when there is nothing to probe
+    (no valid folder yet); a False NEVER blocks the wizard — someone may well
+    configure the app before mounting their volumes."""
     raw = (path or '').strip()
     if not raw:
-        return {'status': 'empty', 'resolved': '', 'suggestion': ''}
+        return {'status': 'empty', 'resolved': '', 'suggestion': '',
+                'input_check': _input_check('')}
     p = Path(raw)
     if _is_comfyui_dir(p):
-        return {'status': 'valid', 'resolved': str(p), 'suggestion': ''}
+        return {'status': 'valid', 'resolved': str(p), 'suggestion': '',
+                'input_check': _input_check(str(p))}
     child = p / 'ComfyUI'
     if _is_comfyui_dir(child):
-        return {'status': 'nested', 'resolved': str(child), 'suggestion': str(child)}
+        return {'status': 'nested', 'resolved': str(child), 'suggestion': str(child),
+                'input_check': _input_check(str(child))}
     try:
         exists, is_dir = p.exists(), p.is_dir()
     except OSError:
         exists, is_dir = False, False
     if not exists:
-        return {'status': 'missing', 'resolved': str(p), 'suggestion': ''}
+        return {'status': 'missing', 'resolved': str(p), 'suggestion': '',
+                'input_check': _input_check('')}
     if is_dir:
         try:
             is_empty = not any(p.iterdir())
         except OSError:
             is_empty = False
         if is_empty:
-            return {'status': 'empty_dir', 'resolved': str(p), 'suggestion': ''}
+            return {'status': 'empty_dir', 'resolved': str(p), 'suggestion': '',
+                    'input_check': _input_check('')}
     # A file at that path, or a non-empty folder that simply isn't a ComfyUI checkout.
-    return {'status': 'not_comfyui', 'resolved': str(p), 'suggestion': ''}
+    return {'status': 'not_comfyui', 'resolved': str(p), 'suggestion': '',
+            'input_check': _input_check('')}
+
+
+def _input_check(base_dir: str) -> dict:
+    """Can this process actually put a file in the input/ folder of the ComfyUI at
+    `base_dir`? Honours a SAVED `comfyui.input_dir` override, so the wizard judges
+    the folder the app would really use rather than a layout assumption.
+    {'path','ok','problem'}; ok=None = nothing probed. Never raises."""
+    if not base_dir:
+        return {'path': '', 'ok': None, 'problem': ''}
+    try:
+        override = cfg.get('comfyui.input_dir') or ''
+    except Exception:
+        override = ''
+    try:
+        target = cfg.resolve_comfyui_dir('input', base_dir, override)
+        path = str(target) if target else ''
+        verdict = comfy_fs.probe_folder('input', path)
+    except Exception:
+        return {'path': '', 'ok': None, 'problem': ''}
+    return {'path': comfy_fs.safe_path(path), 'ok': verdict['ok'],
+            'problem': verdict['problem']}
 
 
 def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> dict:
@@ -919,10 +957,18 @@ def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> di
     faith: an empty field SHOWS the derived path it falls back to, and a typed path
     that does not exist says so instead of failing silently at generation time.
 
-    Returns {<config key>: {kind, source, resolved, exists}} where
+    Returns {<config key>: {kind, source, resolved, exists, usable, problem}} where
       source ∈ 'override' (the field is filled) | 'derived' (from the install dir)
                | 'unset'  (no install dir and no override — nothing to resolve).
-    Read-only, a handful of stat calls, never raises."""
+
+    `exists` alone certifies half the contract: a folder can be there and still be
+    unusable from THIS process — the case that costs the most (ComfyUI in another
+    container, an input/ mounted read-only) because the URL test goes green and the
+    first generation dies on a copy. `usable` is the other half: for the folders the
+    app WRITES into it is a real write-then-delete probe, for the others a read
+    check. True/False, or None when there is nothing to probe (no path, or the path
+    is not on disk — `exists` already says that). `problem` is the sentence to show.
+    Read-only apart from the probe file it removes again, never raises."""
     overrides = overrides or {}
     out = {}
     for kind in cfg.COMFY_DIR_KINDS:
@@ -934,9 +980,14 @@ def classify_comfyui_folders(base_dir: str, overrides: dict | None = None) -> di
             exists = bool(resolved) and Path(resolved).is_dir()
         except OSError:
             exists = False
+        usable, problem = None, ''
+        if exists:
+            verdict = comfy_fs.probe_folder(kind, resolved)
+            usable, problem = verdict['ok'], verdict['problem']
         out[key] = {'kind': kind,
                     'source': 'override' if explicit else ('derived' if resolved else 'unset'),
-                    'resolved': resolved, 'exists': exists}
+                    'resolved': resolved, 'exists': exists,
+                    'usable': usable, 'problem': problem}
     return out
 
 
