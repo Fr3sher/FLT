@@ -21,7 +21,8 @@ test('the three facts you actually look for come first, and the seed is copyable
 });
 
 test('a strength of 0 is a fact, not an absence', () => {
-  // `0` is falsy and this is exactly the value on Jeremy's screenshot.
+  // `0` is falsy, and it is a value the run panel really shows — a reported
+  // screenshot had `strength 0`, which the old code dropped from the line.
   assert.equal(imageHeadlineFacts({ seed: 1, strength: 0 })
     .some((f) => f.key === 'strength' && f.value === '0'), true);
   assert.equal(imageHeadlineFacts({ seed: 1, step: 0 })
