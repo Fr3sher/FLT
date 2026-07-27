@@ -111,6 +111,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-07-27-bank-find-by-text',
+    date: '2026-07-27',
+    title: 'Find images in a bank by describing them',
+    blurb:
+      'A new 🔤 Find by text button in the Bank\'s Curate row ranks the images you are currently looking at by how close they are to a phrase — "brunette outdoors, wide shot". It reuses the embeddings ✨ Score already computed, so there is no new model, no download and no GPU work; it even runs while a LoRA trains. Results come back closest-first, and the panel says how far the last result sits from the best, because this is a ranking and not a filter: every image scores something against every phrase. Images that were never scored cannot be found by any phrase, so they are counted and named rather than quietly missing. The first search loads the search model (about ten seconds on the CPU); after that searches are instant, and a phrase you have already used stays free even after a restart. One thing worth knowing before you trust it: it is good at subjects, settings, styles and framing, but it cannot count, it ignores the word "without" — ask for "woman without glasses" and you get glasses — and left/right means nothing to it. Describe what IS in the shot rather than what is missing.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',
