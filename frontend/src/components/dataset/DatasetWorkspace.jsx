@@ -10,7 +10,7 @@ import ImportDropzone from './ImportDropzone';
 import ConceptSourcesPanel from './ConceptSourcesPanel';
 import BankImportPanel from './BankImportPanel';
 import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
-import { faceAnalysisState } from './faceScoringGate.js';
+import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
 import SmallImageRescueReview from './SmallImageRescueReview';
 import CaptionToolsBar from './CaptionToolsBar';
@@ -190,6 +190,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
     blockedReason: d?.face_scoring_blocked,
     hasRef: !!d?.ref_filename,
     busy: ds.busy,
+    // InsightFace/antelopev2 are an optional extra: without them the button used
+    // to look alive and only failed on click. Now it names the gap and links Setup.
+    capable: !!caps?.face_scoring,
+    capsLoading,
   });
   const [cropImg, setCropImg] = useState(null);
   const [captionOptionsOpen, setCaptionOptionsOpen] = useState(false);
@@ -1081,6 +1085,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
                         ds.generate(...args);
                       }}
                       hasRef={!!d.ref_filename} composition={d.composition} images={images}
+                      // Krea reproduces the reference's shape: the panel needs it to
+                      // warn about squeezed body/back shots BEFORE a batch, and a way
+                      // to offer the fix (the same ✂ editor, pre-set to a portrait).
+                      refWidth={d.ref_width} refHeight={d.ref_height}
+                      onCropRefTo={(aspect) => setRefCrop({ aspect })}
                       bodyFidelity={bodyFid}
                       promptSuffix={d.prompt_suffix || ''}
                       promptSuffixes={d.prompt_suffixes || null}
@@ -1135,14 +1144,19 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     className="px-3 py-1.5 rounded-lg bg-surface text-content text-sm disabled:opacity-40 border border-border scroll-mt-20">
                     {ds.analyzing
                       ? `🎭 Analyzing…${act?.kind === 'analyze_faces' && act.total ? ` ${act.done}/${act.total}` : ''}`
-                      : '🎭 Analyze faces'}
+                      : faceAnalysisLabel(d.face_scoring_scope)}
                   </button>
                 )}
                 {/* A greyed button whose reason lives in a tooltip is invisible on a
-                    phone (no hover) — the pass must SAY why it can't run, in place. */}
+                    phone (no hover) — the pass must SAY why it can't run, in place.
+                    When the reason is a missing install, the sentence is also the
+                    way OUT: a link to the Setup step that installs it. */}
                 {!isConceptual && faceAnalysis.blocked && (
                   <p className="m-0 basis-full text-sky-300/90 text-[0.6875rem]">
-                    ℹ {d.face_scoring_blocked}
+                    ℹ {faceAnalysis.reason}
+                    {faceAnalysis.setupRoute && (
+                      <> — <a href={faceAnalysis.setupRoute} className="underline">open Setup</a></>
+                    )}
                   </p>
                 )}
                 <div id="ds-curation-watermarks" tabIndex={-1}
@@ -1730,7 +1744,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
         // back out — not just tighten the already-cropped square. Legacy datasets with
         // no stored original fall back to the cropped ref (can only tighten, as before).
         <CropModal imageUrl={`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_original_filename || d.ref_filename)}`}
-          defaultAspect={1}
+          // 1:1 stays the historical default. `setRefCrop({aspect})` opens the same
+          // editor pre-set to another ratio — how the Krea framing advisory offers
+          // "crop to 3:4" without a second modal. The row of ratio buttons is still
+          // there, so the preset is a starting point, never a lock.
+          defaultAspect={(refCrop && refCrop.aspect) || 1}
           onCancel={() => setRefCrop(false)}
           onConfirm={async (box) => { await ds.cropRef(box); setRefCrop(false); }}
           onReset={d.ref_original_filename

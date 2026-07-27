@@ -134,6 +134,27 @@ def _img_path(img) -> str:
 def _ref_path(ds) -> str:
     return os.path.join(_dataset_dir(ds.id), ds.ref_filename)
 
+
+def image_pixel_size(path):
+    """(w, h) of an image file, or None when it cannot be measured.
+
+    PIL reads the header only — no decode — so this is cheap enough to sit in a
+    polled payload. WHY the payload needs it at all: the Krea 2 Edit engine
+    reproduces the REFERENCE's aspect ratio (krea_edit_helper.fit_output_size —
+    the edit LoRA was trained on same-size pairs), so a square reference makes
+    every `body`/`back` shot come back cropped tighter than asked. The front end
+    can only warn about that if it knows the reference's shape, and it has never
+    been told. Degrades to None on ANY failure (missing file, exotic format,
+    Pillow absent): an unmeasurable reference must cost a warning, never a 500."""
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            w, h = im.size
+    except Exception:
+        return None
+    return (int(w), int(h)) if w and h and w > 0 and h > 0 else None
+
+
 _VALID_STATUS = ('pending', 'keep', 'reject', 'failed')
 MAX_FANOUT = 60
 
@@ -2570,6 +2591,7 @@ def dataset_payload(user_id, dataset_id):
         return None
     imgs = (FaceDatasetImage.query.filter_by(dataset_id=dataset_id)
             .order_by(FaceDatasetImage.id.desc()).all())
+    ref_size = image_pixel_size(_ref_path(ds)) if ds.ref_filename else None
     comp = {'face': 0, 'bust': 0, 'body': 0, 'back': 0}
     # Combien, PAR bucket, sont des crops fortement agrandis (upscale_ratio >=
     # UPSCALE_WARN_THRESHOLD) plutôt que du natif : le compte `comp` seul traite un
@@ -2621,6 +2643,10 @@ def dataset_payload(user_id, dataset_id):
         # from the SAME rule the server enforces, instead of re-implementing
         # "subject_type === 'anime'" in JSX and drifting from it later.
         'face_scoring_blocked': face_scoring_block_reason(ds),
+        # How much work 🎭 Analyze faces actually has: {total, unscored} over the
+        # kept set PLUS the undecided triage pile (FACE_SCORING_STATUSES). Lets the
+        # button name its scope instead of running a mystery pass.
+        'face_scoring_scope': face_scoring_counts(imgs),
         # Dual long+short captioning toggle (Advanced options) → the caption editor shows
         # the short field only when this is on.
         'dual_captions': dual_captions_enabled(ds),
@@ -2631,6 +2657,12 @@ def dataset_payload(user_id, dataset_id):
         'prompt_suffix': ds.prompt_suffix or '',
         'prompt_suffixes': prompt_suffixes_dict(ds),
         'ref_filename': ds.ref_filename,
+        # Pixel size of the ACTIVE reference (the cropped one — that is the file
+        # every engine is handed). Krea 2 Edit reproduces this shape, so the
+        # generation panel uses it to warn, BEFORE a batch, that a square/landscape
+        # reference will squeeze the body & back shots. None when unmeasurable.
+        'ref_width': (ref_size or (None, None))[0],
+        'ref_height': (ref_size or (None, None))[1],
         'ref_original_filename': ds.ref_original_filename or '',
         'ref_extra_filenames': extra_ref_filenames(ds),
         # Per extra ref, the file its ✂ editor must open (full-frame original when
@@ -4494,10 +4526,49 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
 
 
 # --- Face similarity scoring (InsightFace antelopev2, CPU subprocess) -------
+# WHICH ROWS A FACE PASS SCORES.
+#   'keep'    = the curated set. The original (and, until now, the only) scope.
+#   'pending' = the TRIAGE PILE: images that have landed but carry no ✓/✕ yet —
+#               i.e. exactly the freshly GENERATED variations. Those are the ones
+#               whose identity nobody can judge by eye ("is this still her?" on a
+#               grainy party photo is not an eyeball question), and 🎯 Auto-triage
+#               (DatasetGrid.jsx) has ALWAYS selected on `status === 'pending' &&
+#               scorable` — a set this pass could never produce while it filtered
+#               on 'keep' alone. The bar was built against a scope that did not
+#               exist; widening it here is the whole wiring.
+# 'reject'/'failed' stay out: scoring an image the user already threw away, or one
+# with no file, is GPU-free but not free — and it would re-arm auto-triage on rows
+# it must never touch.
+FACE_SCORING_STATUSES = ('keep', 'pending')
+
+
+def face_scoring_counts(imgs):
+    """{'total', 'unscored'} over an ALREADY-LOADED image list — pure, no query,
+    so `dataset_payload` pays nothing for it. `unscored` counts rows the pass has
+    never written a verdict for (face_state is NULL), which is what the button
+    label needs to promise honest work ("Analyze 42 faces") instead of a silent
+    no-op on a dataset that is already fully scored."""
+    rows = [i for i in (imgs or [])
+            if i.filename and i.status in FACE_SCORING_STATUSES]
+    return {'total': len(rows),
+            'unscored': sum(1 for i in rows if i.face_state is None)}
+
+
+def face_scoring_rows(dataset_id):
+    """The rows a face pass would score, straight from the DB."""
+    return (FaceDatasetImage.query
+            .filter(FaceDatasetImage.dataset_id == dataset_id,
+                    FaceDatasetImage.status.in_(FACE_SCORING_STATUSES),
+                    FaceDatasetImage.filename.isnot(None))
+            .all())
+
+
 def analyze_faces(user_id, dataset_id) -> dict:
-    """Score les images GARDEES vs la reference (InsightFace antelopev2, CPU subprocess).
-    Persiste face_score (cosinus brut, None si non note) + face_state. Lot A : AUCUNE
-    suppression. Tourne sur CPU -> pas de fenetre GPU. Retourne {state: count}."""
+    """Score les images GARDEES **et la pile de triage** vs la reference
+    (InsightFace antelopev2, CPU subprocess) — cf. FACE_SCORING_STATUSES.
+    Persiste face_score (cosinus brut, None si non note) + face_state. AUCUNE
+    suppression, aucune decision : la passe ecrit un chiffre, c'est 🎯 Auto-triage
+    qui agit dessus. Tourne sur CPU -> pas de fenetre GPU. Retourne {state: count}."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -4516,8 +4587,7 @@ def analyze_faces(user_id, dataset_id) -> dict:
     ref_path = _ref_path(ds)
     if not os.path.exists(ref_path):
         raise ValueError('reference photo missing')
-    rows = (FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep')
-            .filter(FaceDatasetImage.filename.isnot(None)).all())
+    rows = face_scoring_rows(dataset_id)
     by_path = {}
     for img in rows:
         p = _img_path(img)
