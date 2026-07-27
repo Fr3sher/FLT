@@ -1428,7 +1428,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <span className="text-content-muted text-[0.625rem] uppercase">LoRA type</span>
         {/* Which family is preselected, and the cloud GPU guard-rails (budget,
             price ceiling, stall timeout), are settings — say so where the choice
-            is actually being made. */}
+            is actually being made.
+            No `focus` on purpose: this label names TWO things that live in two
+            different cards (training-default-family, and the cloud limits card
+            above it). Focusing either would ring the wrong half for half the
+            readers, which is worse than landing on the section that holds both. */}
         <SettingsLink section="training" className="order-last ml-auto">
           Defaults &amp; cloud limits
         </SettingsLink>

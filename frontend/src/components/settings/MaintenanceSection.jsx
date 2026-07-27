@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import DiagnosticReport from '../common/DiagnosticReport'
 import { Card, TextField } from './primitives'
+import ResetToDefault from './ResetToDefault'
 import { installMode, zipUpdateHeadline, progressLabel, progressPercent } from './updateStatus'
 import { versionLabel } from '../../utils/versionLabel'
 
@@ -358,7 +359,7 @@ function RunArchiveCard() {
   )
 }
 
-export default function MaintenanceSection({ config, setField }) {
+export default function MaintenanceSection({ config, setField, configDefaults }) {
   return (
     <div className="space-y-6">
       <UpdatesCard />
@@ -371,7 +372,12 @@ export default function MaintenanceSection({ config, setField }) {
           value={config.paths.dataset_images_root}
           onChange={(v) => setField('paths', 'dataset_images_root', v)}
           placeholder="Defaults to data/datasets"
-        />
+        >
+          {/* Default is the EMPTY string ("use data/datasets"), so reset gives
+              the implicit state back instead of writing today's path in. */}
+          <ResetToDefault label="Dataset images root" section="paths" field="dataset_images_root"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        </TextField>
       </Card>
       <DiagnosticReport />
       <LogViewer />

@@ -32,9 +32,14 @@ The big capabilities, each with what's actually inside it. Every block links dow
 
 ### 🎨 Build any dataset — Character, Concept or Style
 
+<details>
+<summary>📸 See the Character / Concept / Style creation panel</summary>
+
 <p align="center">
   <img src="docs/screenshots/01-create.png" alt="New-dataset panel with Character / Concept / Style tabs selected, plus name, trigger word, target model and fidelity fields" width="820">
 </p>
+
+</details>
 
 Four ways to fill a dataset, and one choice at creation that rewires everything downstream.
 
@@ -51,9 +56,14 @@ Four ways to fill a dataset, and one choice at creation that rewires everything 
 
 ### 🗃️ Image bank — a giant unsorted folder becomes a dataset
 
+<details>
+<summary>📸 See the Image bank grid — quality flags, scores and action zones</summary>
+
 <p align="center">
   <img src="docs/screenshots/bank/bank-overview.png" alt="The Image bank: a large grid of thumbnails from an unsorted dump, each tagged with quality flags (blurry, small, near-duplicate) and aesthetic/NSFW score badges, with the Analyse, Filter, Curate and Promote action zones laid out around it" width="820">
 </p>
+
+</details>
 
 Point it at a messy dump of thousands of images and triage it in place. Nothing in your folder is touched unless you explicitly ask — **Delete rejected** is the only action that removes anything, and it tells you where the files will go first.
 
@@ -74,9 +84,14 @@ Point it at a messy dump of thousands of images and triage it in place. Nothing 
 
 ### ✂️ Curate down to the keepers
 
+<details>
+<summary>📸 See the curation grid with framing and face-similarity badges</summary>
+
 <p align="center">
   <img src="docs/screenshots/03-curate.png" alt="Curation grid: each tile of the synthetic demo person carries a framing badge (face / bust / body), a numeric face-similarity score badge in green or orange, a caption line, and keep/reject controls" width="820">
 </p>
+
+</details>
 
 A grid built for real curation work, not a file explorer — with a numeric answer to "is this even the right person?".
 
@@ -93,9 +108,14 @@ A grid built for real curation work, not a file explorer — with a numeric answ
 
 ### 🏷️ Caption for the model
 
+<details>
+<summary>📸 See the caption engine and vocabulary options popover</summary>
+
 <p align="center">
   <img src="docs/screenshots/caption/caption-options.png" alt="The Captions panel with the ⚙️ Options popover open: a caption-engine picker (Auto / JoyCaption / Ollama vision), an Ollama vision-model field with a pull button, a Vocabulary preset selector (Explicit / Clinical / Safe), and a free-text custom-wording box" width="820">
 </p>
+
+</details>
 
 Captions are what training actually reads — written for you in the shape your base model wants.
 
@@ -113,9 +133,14 @@ Captions are what training actually reads — written for you in the shape your 
 
 ### 🧽 Scrub watermarks
 
+<details>
+<summary>📸 See the watermark Review lightbox in action</summary>
+
 <p align="center">
   <img src="docs/screenshots/watermark/watermark-review.png" alt="The watermark Review lightbox: a scraped photo of the synthetic demo person with a red bounding box drawn over an overlaid site logo, the tool's planned action (crop vs inpaint) shown beside it, and a LaMa / Klein engine picker" width="820">
 </p>
+
+</details>
 
 Left in, a site logo is something the LoRA learns. Find → Review → Clean, one image at a time.
 
@@ -131,9 +156,14 @@ Left in, a site logo is something the LoRA learns. Find → Review → Clean, on
 
 ### 🎓 Guided training — local or cloud
 
+<details>
+<summary>📸 See the researched training presets picker</summary>
+
 <p align="center">
   <img src="docs/screenshots/training/training-presets.png" alt="The training panel with the preset picker open, showing the Built-in (researched) group of Character / Style / Concept recipes scoped to the selected family, each with a one-line rationale, above the ⚙ Advanced options section" width="820">
 </p>
+
+</details>
 
 [ai-toolkit](https://github.com/ostris/ai-toolkit) runs underneath; the recommended path needs no config file.
 
@@ -154,9 +184,14 @@ Left in, a site logo is something the LoRA learns. Find → Review → Clean, on
 
 ### 🧬 Experiment Lab — the run family tree
 
+<details>
+<summary>📸 See a run's lineage drawn as a family-tree graph</summary>
+
 <p align="center">
   <img src="docs/screenshots/07-lineage-graph.png" alt="◉ Graph view of a run's lineage: a root Z-Image · turbo run with six saved checkpoints and four continuations laid out left to right, edges anchored on the exact checkpoint each run resumed from, the current run glowing indigo, and two set-aside branches dashed in amber" width="820">
 </p>
+
+</details>
 
 Every continuation and fork drawn as a lineage graph you can inspect, diff, annotate and act on.
 
@@ -175,9 +210,14 @@ Every continuation and fork drawn as a lineage graph you can inspect, diff, anno
 
 ### 🧪 Test Studio — pick the best checkpoint
 
+<details>
+<summary>📸 See the Test Studio comparison grid</summary>
+
 <p align="center">
   <img src="docs/screenshots/studio/studio-grid.png" alt="Test Studio comparison grid: checkpoint rows against strength columns from 0 to 2.0, each cell a generated image of the synthetic demo person, with quick-vote controls and a face-similarity rank alongside" width="820">
 </p>
+
+</details>
 
 A LoRA that's *trained* isn't necessarily a LoRA that's *good*. Compare them on a fixed seed. (Z-Image, SDXL and Krea 2 today.)
 
@@ -363,10 +403,15 @@ Every threshold behind these flags (sharpness, noise, NSFW, same-person similari
 
 The scraper is available in every dataset (and is especially useful for Concept/Style sets). Its **Reddit | Pexels | URL** switch keeps each workflow clear: search Reddit by keyword with an optional community, search Pexels by keyword without constructing a URL, or paste a supported gallery / album / direct-media URL for sources such as Instagram, X/Twitter, Civitai and direct Pexels photos or collections. Switching source does not discard the current result grid, and pagination stays attached to the last search actually launched. Selected frames download **directly into the open dataset**, never a shared pool.
 
+<details>
+<summary>📸 See the scraper panel — Reddit, Pexels or URL search</summary>
+
 <p align="center">
   <img src="docs/screenshots/06-scraper.png" alt="Scraper panel with Reddit, Pexels and URL source modes, a grid of result thumbnails with selection checkboxes, and an import button" width="820">
 </p>
 <p align="center"><em>Choose Reddit, Pexels or URL, launch a search, then pick frames straight into the dataset.</em></p>
+
+</details>
 
 What it does on your behalf:
 
@@ -413,10 +458,15 @@ Captions are what training actually reads — and the right *form* depends on th
 
 Every **generated** tile carries a ✏️ button next to crop and delete. Click it and the exact prompt that produced the image opens in an inline bubble — tweak the wording (*"soft window light,"* *"three-quarter view"*), hit **OK**, and the tile regenerates through the same engine with your edit, re-wrapped in the identity guard so the face is preserved. The edited prompt is saved with the image, so the next regenerate starts where you left off.
 
+<details>
+<summary>📸 See the inline prompt-edit bubble on a generated tile</summary>
+
 <p align="center">
   <img src="docs/screenshots/04-editprompt.png" alt="A generated tile of the synthetic demo person with the edit-prompt bubble open, showing the editable prompt text and OK / Cancel buttons" width="820">
 </p>
 <p align="center"><em>Fix a shot's framing or lighting by editing its prompt in place — no re-typing, no losing the rest of the set.</em></p>
+
+</details>
 
 ---
 
@@ -463,10 +513,15 @@ No local GPU? Add a **vast.ai API key** (Settings → Training, or the setup wiz
 
 **🏋️ Runs** (top nav) collects **cloud and local** training side by side: live step/loss/ETA/samples, the exact recipe and dataset version, **Stop**, cloud **Retry/Continue**, downloads, and **⎘ Share config** — a paste-safe parameter/outcome summary with local paths and keys stripped.
 
+<details>
+<summary>📸 See the Runs hub — cloud and local runs side by side</summary>
+
 <p align="center">
   <img src="docs/screenshots/training/runs-hub.png" alt="The 🏋️ Runs hub listing local 💻 and cloud ☁ training runs side by side, each row showing live step/loss/ETA, sample thumbnails, and Stop / Retry / Continue / Download / Share-config controls" width="820">
 </p>
 <p align="center"><em>Every run, local and cloud, in one place — live progress, the exact settings it used, and one-click Stop / Retry / Continue / Download / Share.</em></p>
+
+</details>
 
 ---
 
@@ -486,6 +541,9 @@ The graph does far more than draw:
 - **Deploy any checkpoint straight from its pill** (📦 Import → ComfyUI), **⬇ download** that exact epoch, or **▶ continue from here** — even from a run that failed at pod teardown but kept its saves.
 - **Import & remove** — a single run opens a lineage the moment it has one saved checkpoint (also from a dataset's Checkpoints & LoRAs panel); older continuations reconnect automatically on first start; runs whose files are gone are tagged, not invented.
 
+<details>
+<summary>📸 See two lineage shapes — a linear chain and a fork</summary>
+
 <p align="center">
   <img src="docs/screenshots/lineage/lineage-01-linear.png" alt="A linear lineage: a Z-Image turbo run continued twice (v1 → v2 → v3), each generation resuming from the previous run's final checkpoint" width="440">
   &nbsp;
@@ -493,25 +551,47 @@ The graph does far more than draw:
 </p>
 <p align="center"><em>Different shapes read at a glance: a linear v1 → v3 chain (left) and a fork where two runs branch from the same checkpoint, the set-aside branch kept dashed (right).</em></p>
 
+</details>
+
+<details>
+<summary>📸 See a run's exact training config in the inspector panel</summary>
+
 <p align="center">
   <img src="docs/screenshots/lineage/lineage-04-inspector.png" alt="A run node clicked open in the graph, with a side panel showing its exact training config: rank 24, alpha 24, learning rate 8e-5, optimizer prodigy, timestep weighting sigmoid, network lora, EMA off — and dot badges marking runs that carry notes" width="820">
 </p>
 <p align="center"><em>Click any run to inspect the exact settings it trained with — and jot notes on runs or checkpoints (● marks the annotated ones).</em></p>
+
+</details>
+
+<details>
+<summary>📸 See two runs diffed side by side</summary>
 
 <p align="center">
   <img src="docs/screenshots/lineage/lineage-05-diff.png" alt="Two runs shift-clicked in the graph, opening a Compare-runs panel that lists their configs in two columns with the six differing rows highlighted: rank 16 → 32, learning rate 1e-4 → 5e-5, optimizer adamw8bit → prodigy, timestep sigmoid → linear, EMA off → on, dataset version 1 → 2" width="820">
 </p>
 <p align="center"><em>Shift-click two runs to diff their configs side by side — only what changed is highlighted.</em></p>
 
+</details>
+
+<details>
+<summary>📸 See the big-preview grid across checkpoints</summary>
+
 <p align="center">
   <img src="docs/screenshots/lineage/lineage-06-previews-grid.png" alt="The lineage graph in big-preview mode: each checkpoint pill shows a large generated-preview tile laid out like a ComfyUI grid, so several epochs of the synthetic demo person can be compared at a glance" width="820">
 </p>
 <p align="center"><em>Generate a same-prompt / same-seed preview per checkpoint and flip on 🔍 big previews to compare epochs like a ComfyUI grid — pick the sweet spot before it overcooks.</em></p>
 
+</details>
+
+<details>
+<summary>📸 See a checkpoint's Download / Import / Continue actions</summary>
+
 <p align="center">
   <img src="docs/screenshots/08-lineage-checkpoint-actions.png" alt="A checkpoint pill's popover open on step 1500, offering Download, Import to ComfyUI and Continue-from-here" width="440">
 </p>
 <p align="center"><em>Every saved checkpoint is actionable: download that exact epoch, deploy it to ComfyUI, or continue a fresh run from it.</em></p>
+
+</details>
 
 ---
 
@@ -598,17 +678,27 @@ On first launch the **Setup** wizard scans your machine, tells you what's alread
 
 The machine scan lists each capability as a **clickable row** that jumps straight to its install step, and the local ML extras install **per capability** rather than all-or-nothing: face scoring, person masks, Bank scoring and watermark inpainting each have their own one-click install, with an **↻ Reinstall** to repair or update just that one. When you're ready, **Install everything** queues every installable component with a live **X / N** progress bar, running heavy installs one at a time so they never clash.
 
+<details>
+<summary>📸 See the Setup wizard's Install everything step</summary>
+
 <p align="center">
   <img src="docs/screenshots/setup/install-everything.png" alt="The Setup wizard's Install everything step: a checklist of installable components (ML extras, Ollama vision model, Klein weights) each with a status, a live X / N progress bar across the top, and a per-item ↻ Reinstall menu" width="820">
 </p>
 <p align="center"><em>Install everything queues every missing component with a live X / N bar; a per-item ↻ Reinstall repairs one without redoing the rest.</em></p>
 
+</details>
+
 The ComfyUI step can place Klein's model, consistency LoRA, text encoder and VAE in the folders the workflows expect. The Klein diffusion model is Black Forest Labs' public **9B KV** build (reference-image KV caching → faster multi-reference editing); the consistency LoRA is a community model by **[dx8152](https://huggingface.co/dx8152/Flux2-Klein-9B-Consistency)** (apache-2.0), recommended for reference edits — not an official Black Forest Labs release. Settings → Maintenance also checks for app updates, links to their details, and can update/restart a git checkout.
+
+<details>
+<summary>📸 See Setup scanning for ComfyUI, Ollama and ai-toolkit</summary>
 
 <p align="center">
   <img src="docs/screenshots/05-setup.png" alt="Setup wizard scanning the machine for ComfyUI, Ollama, and ai-toolkit, each shown with a detected/missing status" width="820">
 </p>
 <p align="center"><em>Setup detects ComfyUI (optional), an Ollama vision model, and ai-toolkit — and helps you install whatever's missing.</em></p>
+
+</details>
 
 ### Option 1 — release ZIP + start.bat (Windows)
 

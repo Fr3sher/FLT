@@ -609,3 +609,52 @@ def test_unchecking_an_engine_over_the_api_sticks(client, monkeypatch):
     assert r.status_code == 200
     monkeypatch.setattr(_cfg, '_cache', None)
     assert client.get('/api/settings').get_json()['config']['engines']['enabled'] == kept
+
+
+# --- config_defaults: the scalar counterpart of identity_prompt_defaults ------
+# The Settings UI offers a per-field "Reset to default" on numbers, paths and
+# selects. The value it resets to MUST come from the server: a literal typed into
+# the JSX would go stale the next time a default moves in config.DEFAULTS, and the
+# button would then restore a number that is no longer the default without saying
+# so. These tests pin that the payload is DERIVED, not a second copy.
+
+def test_get_settings_exposes_the_shipped_config_defaults(client):
+    import app.config as _cfg
+    data = client.get('/api/settings').get_json()
+    d = data['config_defaults']
+    # every section of DEFAULTS is offered, with its shipped value
+    assert set(d) == set(_cfg.DEFAULTS)
+    assert d['klein']['improve_steps'] == _cfg.DEFAULTS['klein']['improve_steps']
+    assert d['krea']['grounding_px'] == _cfg.DEFAULTS['krea']['grounding_px']
+    # blank-means-auto keys keep their EMPTY default: resetting one must write ''
+    # back, not a made-up value that would freeze the field (see the frontend's
+    # resetToDefault.test.js for the UI half of this contract).
+    assert d['engines']['nanobanana_model'] == ''
+    assert d['krea']['base_model'] == ''
+
+
+def test_config_defaults_follows_DEFAULTS_and_is_not_a_frozen_copy(client, monkeypatch):
+    """The regression this whole payload exists to prevent: move a default, and
+    what the UI would reset to moves with it. A hand-maintained copy anywhere
+    between DEFAULTS and the button fails here."""
+    import app.config as _cfg
+    monkeypatch.setitem(_cfg.DEFAULTS['klein'], 'improve_steps', 43)
+    assert client.get('/api/settings').get_json()['config_defaults']['klein']['improve_steps'] == 43
+
+
+def test_config_defaults_is_a_copy_the_caller_cannot_corrupt(client):
+    """Serving the live dict would let any mutation downstream rewrite the app's
+    defaults for the rest of the process."""
+    import app.config as _cfg
+    d = _cfg.defaults()
+    d['klein']['improve_steps'] = 999
+    assert _cfg.DEFAULTS['klein']['improve_steps'] != 999
+
+
+def test_config_defaults_carries_no_secret(client, monkeypatch):
+    """It is a public payload: DEFAULTS holds knobs, never a key."""
+    monkeypatch.setenv('OPENAI_API_KEY', 'sk-secret')
+    data = client.get('/api/settings').get_json()
+    assert 'sk-secret' not in str(data['config_defaults'])
+    # the generated access token lives in the user's config, never in the defaults
+    assert data['config_defaults']['server']['access_token'] == ''

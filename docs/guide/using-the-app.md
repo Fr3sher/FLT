@@ -508,6 +508,36 @@ In a bank the ordering is done by the database over the *whole* filter, not just
 the page you can see — so **Select all in filter** and **▶ Review one by one**
 walk the same order you are looking at.
 
+## Compare an improved image with the original
+
+Two things in the app never overwrite an image — they add a **candidate** next
+to it, and leave the choice to you:
+
+- **✨ Upscale & improve** in the dataset lightbox (a manual Klein pass, 2 MP by
+  default);
+- the automatic **small-image rescue** of scraped images under 768 px.
+
+Open that candidate full screen and it now carries **⧉ Compare with original**.
+The view splits in two named panes — *Original* and *Improved* (or *Klein
+rescue*) — **side by side on a wide screen, stacked on a phone**, where width is
+the scarce axis and two half-width thumbnails would prove nothing.
+
+Both panes are the same size and both images are fitted inside them, so they are
+shown at **the same scale and the same framing** even though the candidate has
+more pixels. That matters: an improve pass rescales to a megapixel budget, and
+two images displayed at different scales cannot be compared honestly.
+
+**Zoom is off inside the comparison**, and the hint under the image says so. At
+100 % a 2 MP result and a 0.5 MP original cover different parts of the subject —
+that is not a comparison. Leave the comparison (⊟) and the usual click-for-100 %
+inspection is back, on whichever image you are looking at.
+
+If the original was deleted, rejected and purged, or simply never recorded (very
+old rows), there is no button — a short amber note says why instead, so a
+missing control can't be mistaken for a bug. Everything else in the lightbox —
+✂ Crop, ⇄ Mirror, ✨ Upscale & improve — is unchanged and still acts on the
+image you opened.
+
 ## Clean the watermarks a bank found
 
 **🚩 Find watermarks** flags the images carrying an overlaid logo, URL or
@@ -653,11 +683,28 @@ zoom, and **Fit** puts the whole board back in view. The board only fits itself
 automatically until you first touch it — after that a dataset finishing its load
 never yanks your view away.
 
-**Reading a run.** Click a run card to open its inspector: the settings it
-trained with, its notes, and a note per checkpoint. **Shift-click two** run cards
-to compare their settings side by side, with the differences highlighted — and
-because every dataset is on the same board, those two runs no longer have to
-belong to the same dataset.
+**Reading a run.** Click a run card to open **everything that run produced**:
+its images grouped by the checkpoint that made them, most-trained step first, so
+you can see where the LoRA stopped getting better without opening one pill at a
+time. Underneath the images are the run's note, its per-checkpoint notes, and the
+settings it trained with. **ⓘ Full details** opens the drawer where those notes
+can be edited.
+
+A run with many checkpoints opens with its three most-trained steps expanded and
+the rest folded behind their image counts — tap a step to unfold it. When a run
+holds more images than one panel should carry, the panel says so rather than
+looking complete; the missing ones are still reachable from each checkpoint's own
+pill and in the Test Studio.
+
+Sometimes a step reads **Step unknown**. Those are older test images whose file
+name identifies the run but not the checkpoint inside it, so they belong to the
+run and to no pill. Images that identify nothing at all are still counted in the
+footnote at the bottom of the panel — they live in the Test Studio.
+
+**Shift-click two** run cards to compare their settings side by side, with the
+differences highlighted — and because every dataset is on the same board, those
+two runs no longer have to belong to the same dataset. Dragging a card to
+rearrange the board never opens the panel.
 
 **Arranging the board.** Drag a run card and it stays where you put it, across
 reloads. On a phone, moving a card and scrolling the board are the same gesture,

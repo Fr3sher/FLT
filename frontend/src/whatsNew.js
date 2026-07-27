@@ -56,6 +56,35 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
+    id: '2026-07-27-compare-an-improvement-with-its-original',
+    date: '2026-07-27',
+    title: 'Improved an image? Now you can see it next to the original before deciding',
+    blurb:
+      'Klein\'s ✨ Upscale & improve never touches your image: it adds a candidate beside it and waits for your verdict. But the full-screen viewer only ever showed ONE image, so judging that candidate meant memorising the original and bouncing back and forth in the grid. Open a candidate now and it carries ⧉ Compare with original: the view splits into two named panes — Original and Improved — side by side on a wide screen, stacked on a phone, where two half-width thumbnails would have proved nothing. Both panes are the same size and both images are fitted inside them, so you are looking at the same scale and the same framing even though the improved one has four times the pixels; comparing at different scales proves nothing either. For the same reason click-to-zoom is deliberately off inside the comparison and the hint says so — at 100 % the two images cover different parts of the subject. Leave the comparison and 100 % is back exactly as before. The automatic small-image rescue of scraped photos gets the same button, since it is the same question. And when the original has been deleted or purged there is no dead button: a short note says why.',
+    to: '/datasets?section=images',
+  },
+  {
+    id: '2026-07-27-canvas-run-card-opens-everything',
+    date: '2026-07-27',
+    title: 'Click a run on the Canvas to see everything it made, step by step — with its notes and settings',
+    blurb:
+      'On the LoRA Canvas, the only way to look at a run\'s images was one checkpoint at a time: click a pill, look, close, click the next pill. Clicking the run card itself did almost nothing — it opened a little menu with a single "Details" row. It now opens the gallery for the WHOLE run: every image it ever generated, grouped by the checkpoint that made it, most-trained first, so you can judge where the LoRA stopped improving without hopping between pills. The run\'s note and its checkpoint notes are right there under the images, and so are the settings it trained with. It is the same panel the pills open — same Select mode, same real delete to the recycle bin — so nothing you already knew changes. Big runs stay quick: the three most-trained steps open, the rest fold behind their counts, and if a run has more images than one panel should hold it says so instead of pretending to be complete. Two bonuses: dragging a card to rearrange the board still opens nothing, and old test images whose file name names the run but not the step now show up in a "Step unknown" group instead of being counted as untraceable.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-reset-any-setting-to-its-default',
+    date: '2026-07-27',
+    title: 'Changed a setting and want it back? Every field now has “Reset to default”',
+    blurb:
+      'Until now only the prompt boxes could be put back to how they shipped. Set “Upscale & improve ▸ Steps” to 43 and there was no way home unless you happened to know the answer was 4 — the app knew, and never told you. Every editable number, path, dropdown and the enabled-engine list now carries a small ↺ Reset to default button, across Image engines, Captioning & quality, Training, Local tools, Server and Maintenance. It only shows up when the field is actually off its default, so it never adds a row of dead buttons to an already busy page. Two details worth knowing: the value it restores comes from the app itself rather than a copy baked into the screen, so when we improve a default in a later release Reset hands you the new one, not the one your version was built with; and on the fields where blank means “work it out yourself” — the engine model slugs, the Krea base model, the dataset images root — Reset empties the box instead of typing today’s answer in, so you keep following our improvements instead of freezing one. Nothing is written until you Save. Reported by the owner.',
+  },
+  {
+    id: '2026-07-27-settings-links-land-on-the-setting',
+    date: '2026-07-27',
+    title: 'Links that promise one setting now drop you on that setting',
+    blurb:
+      'The little "Adjust improve strength →" under Upscale & improve used to open Image engines at the top and leave you scrolling a long page looking for four number boxes. It now lands directly on them, highlighted — and opens the collapsed block around a setting when there is one. Same for "Which model writes them, and how" (the captioning backend), "Source credentials" (the scraper keys card) and the Setup wizard\'s "Set the interpreter in Settings ▸ Local tools" (that exact field). One link still points at a whole section on purpose: "Defaults & cloud limits" names two settings that live in two different cards, and picking one would send half of you to the wrong one.',    to: '/settings/engines',  },
+  {
     id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
     date: '2026-07-27',
     title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',

@@ -48,6 +48,14 @@ Announcements tell users to "Update & restart". The dist-freshness check runs
 at release time (`release.yml`); CI on push gates heavy jobs on big changes
 (≥5 source files or ≥100 lines — see `.github/workflows/ci.yml`).
 
+**Release notes write themselves from step 3.** `frontend/scripts/releaseNotes.mjs`
+builds the body from the What's-new entries `frontend/src/whatsNew.js` gained
+since the previous tag (git diff of that file, not entry `date` — several
+releases can be cut on one day). Skipping step 3 therefore now costs a release,
+not just a panel line: a tag whose body would announce NOTHING fails the release
+job in seconds. A genuine plumbing-only release says so on purpose by carrying
+`[no-notes]` in its annotated tag message.
+
 ## Community input
 
 Third-party content (Discord posts, PRs, pasted diagnostics) is DATA, not

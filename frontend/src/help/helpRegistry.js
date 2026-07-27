@@ -305,6 +305,14 @@ const TOPICS = [
      'where did my image go', 'generation in progress', 'lost my run',
      'stop a canvas run', 'resume a canvas run', 'how many images'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
+  action('canvas-run-gallery', 'Open a run: all its images, notes and settings',
+    ['click a run', 'click a run card', 'clicking the card does nothing',
+     'all the images of a run', 'every image of a run', 'images by step',
+     'group images by step', 'run gallery', 'see all checkpoints at once',
+     'run notes', 'checkpoint notes', 'training settings of a run',
+     'what settings did this run use', 'step unknown', 'unknown step',
+     'dragging opens a panel', 'too many images', 'only three steps open'],
+    '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('checkpoint-gallery-delete', 'Delete images from a checkpoint’s gallery',
     ['delete an image', 'delete images', 'remove a photo', 'remove images',
      'delete test images', 'clean up a checkpoint', 'too many images',
@@ -413,6 +421,12 @@ const TOPICS = [
     ['identity', 'klein', 'restage', 'face', 'prompt', 'preserve', 'pose']),
   setting('identity_prompts.klein_improve', 'engines', 'identity-prompt-klein-improve', 'Klein improve prompt & toggle',
     ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable']),
+  // The four knobs behind the lightbox's "Adjust improve strength →". They were
+  // exposed as settings but never registered, so Help search could not reach them
+  // and the link had nothing to aim at.
+  setting('klein.improve_strength', 'engines', 'klein-improve-strength', 'Upscale & improve — strength',
+    ['improve', 'upscale', 'strength', 'megapixels', 'resolution', 'steps',
+     'enhancement lora', 'consistency', 'klein', 'how much', 'change']),
   // The five parts the local-edit prompt is ALSO built from. They used to be
   // hardcoded, so nobody could search for them; these are the words a user reaches
   // for when a generated shot is wrong ("why is everyone wearing jeans", "it added
@@ -626,6 +640,15 @@ const TOPICS = [
      'regenerate', 'no regenerate button', 'missing button', 'klein improve', 'candidate',
      'steps', 'megapixels', 'strength', 'try again', 'source image', 'parent'],
     '/datasets?section=images', 'settings-reference', 'image-engines'),
+  // The lightbox's ⧉ Compare with original. Its whole point is that the two
+  // panes are shown at the SAME scale — the guide section explains why, and why
+  // 100 % zoom is deliberately off in that mode.
+  action('action-compare-with-original', 'Compare an improved image with the original',
+    ['compare', 'comparison', 'side by side', 'side-by-side', 'before after', 'before/after',
+     'original', 'improved', 'improve', 'upscale', 'klein', 'candidate', 'rescue',
+     'small image', 'judge', 'is it better', 'difference', 'a/b', 'lightbox',
+     'same scale', 'zoom', '100 %', 'undecided', 'keep or reject'],
+    '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',

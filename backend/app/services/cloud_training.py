@@ -3312,16 +3312,118 @@ def checkpoint_gallery(record_id, step, limit=120) -> dict:
         # Where a deleted image WOULD land, resolved the same way the deletion
         # resolves it, so the confirmation never promises the wrong thing.
         'delete_mode': trash.disposal_mode(),
-        'images': [{
-            'id': r.id,
-            'dataset_id': r.dataset_id,
-            'url': f'/api/dataset/{r.dataset_id}/img/{r.filename}',
-            'rating': r.rating,
-            'prompt': r.prompt,
-            'seed': r.seed,
-            'strength': r.strength,
-            'created_at': r.created_at.isoformat() if r.created_at else None,
-        } for r in rows],
+        'images': [_gallery_image(r) for r in rows],
+    }
+
+
+def _gallery_image(r) -> dict:
+    """One image row as the galleries publish it. Extracted so the checkpoint
+    gallery and the run gallery can never drift into two shapes — the panel is
+    ONE component and it reads these keys."""
+    return {
+        'id': r.id,
+        'dataset_id': r.dataset_id,
+        'url': f'/api/dataset/{r.dataset_id}/img/{r.filename}',
+        'rating': r.rating,
+        'prompt': r.prompt,
+        'seed': r.seed,
+        'strength': r.strength,
+        'step': r.step,
+        'created_at': r.created_at.isoformat() if r.created_at else None,
+    }
+
+
+# How many images ONE step contributes to a run gallery, and how many the whole
+# answer may carry. A run with 14 checkpoints × every render it ever got is a
+# payload nobody reads and a grid that stutters on a phone; a per-step slice
+# keeps every checkpoint represented instead of letting the newest one eat the
+# whole budget. Both caps are REPORTED (`truncated`), never silent.
+RUN_GALLERY_PER_STEP = 30
+RUN_GALLERY_LIMIT = 240
+
+
+def run_gallery(record_id, limit=RUN_GALLERY_LIMIT,
+                per_step=RUN_GALLERY_PER_STEP) -> dict:
+    """Everything ONE RUN ever produced, grouped by the checkpoint that made it —
+    the gallery the ◉ Canvas opens on a run card.
+
+    Same link, same rows and the same delete as ``checkpoint_gallery``: this is
+    the checkpoint gallery with its scope widened, not a second reader. A run's
+    images are the union of its checkpoints' images, so two independent readers
+    would be two chances to disagree about what exists.
+
+    Order: **steps descending**, the most-trained checkpoint first. The pill row
+    on the board already reads left-to-right in training order; what the panel is
+    for is judging where the LoRA stopped getting better, and that judgement
+    starts at the end. Inside a step the app's rule is unchanged — newest first.
+
+    ``step: null`` is a real group, LAST: images attributable to this RUN but not
+    to a step (a step-less final save carries the run tag in its name and no
+    step). They used to be counted as "not traced back to a checkpoint", which
+    was true and useless — the run is knowable, so it is stated.
+
+    Counts are exact; the IMAGES are capped per step and overall, and each group
+    says whether it was cut (`truncated`). `count` is always the run's real
+    total.
+
+    The checkpoint NOTES ride along, read from ``checkpoint_note`` rather than
+    from the pills: a note is keyed by (record_id, step) and outlives the file it
+    describes, so a run whose saves have been cleaned off the disk would
+    otherwise show its images and silently lose what was written about them."""
+    from ..models import CheckpointNote, LoraTestImage
+    from .checkpoint_link_backfill import unlinked_count
+    from . import trash
+
+    base = LoraTestImage.query.filter(
+        LoraTestImage.record_id == record_id,
+        LoraTestImage.status == 'done',
+        LoraTestImage.filename.isnot(None))
+    counted = (db.session.query(LoraTestImage.step, func.count(LoraTestImage.id))
+               .filter(LoraTestImage.record_id == record_id,
+                       LoraTestImage.status == 'done',
+                       LoraTestImage.filename.isnot(None))
+               .group_by(LoraTestImage.step).all())
+    # Steps descending, the step-less group last — sorted here rather than in SQL
+    # because NULL ordering is dialect-dependent and this list is a handful long.
+    order = sorted(((s, n) for s, n in counted),
+                   key=lambda t: (t[0] is None, -(t[0] or 0)))
+
+    notes = {n.step: (n.note or '').strip()
+             for n in CheckpointNote.query.filter_by(record_id=record_id).all()
+             if (n.note or '').strip()}
+    cap = max(1, min(int(limit or RUN_GALLERY_LIMIT), 800))
+    per = max(1, min(int(per_step or RUN_GALLERY_PER_STEP), cap))
+    groups, shown, total = [], 0, 0
+    for step, n in order:
+        total += n
+        room = max(0, cap - shown)
+        take = min(per, n, room)
+        rows = []
+        if take:
+            q = base.filter(LoraTestImage.step.is_(None) if step is None
+                            else LoraTestImage.step == step)
+            rows = q.order_by(LoraTestImage.id.desc()).limit(take).all()
+            shown += len(rows)
+        groups.append({
+            'step': step, 'count': n,
+            'truncated': len(rows) < n,
+            'note': notes.get(step) or '',
+            'images': [_gallery_image(r) for r in rows],
+        })
+    return {
+        'record_id': record_id, 'count': total, 'shown': shown,
+        # Every checkpoint note of the run, including the steps that produced no
+        # image at all — those have no group to hang off, and a note nobody can
+        # read is a note that was lost.
+        'checkpoint_notes': [{'step': s, 'note': notes[s]}
+                             for s in sorted(notes, reverse=True)],
+        'truncated': shown < total,
+        'per_step': per, 'limit': cap,
+        # The honest footnote stays: images that carry no link AT ALL, not even a
+        # run. Widening the scope must not make that number disappear.
+        'unlinked': unlinked_count(),
+        'delete_mode': trash.disposal_mode(),
+        'groups': groups,
     }
 
 
@@ -3342,6 +3444,12 @@ def delete_checkpoint_images(record_id, step, image_ids) -> dict:
 
     Scoped to the checkpoint: an id that is not linked to (record_id, step) is
     refused, so this route cannot be turned into "delete any image by id".
+
+    ``step=None`` widens the scope to the WHOLE RUN — every step of it plus the
+    step-less group — which is what the run gallery deletes with. It is the same
+    function on purpose: two delete paths over the same rows would be two places
+    to keep the recycle-bin promise, the shared-file rule and the "generating is
+    never cancelled" rule true, and they would drift.
 
     Degrades instead of failing, because the gallery of a real install is never
     tidy:
@@ -3373,10 +3481,11 @@ def delete_checkpoint_images(record_id, step, image_ids) -> dict:
            'skipped': []}
     if not wanted:
         return out
-    rows = (LoraTestImage.query
-            .filter(LoraTestImage.record_id == record_id,
-                    LoraTestImage.step == step,
-                    LoraTestImage.id.in_(wanted)).all())
+    scoped = LoraTestImage.query.filter(LoraTestImage.record_id == record_id,
+                                        LoraTestImage.id.in_(wanted))
+    if step is not None:
+        scoped = scoped.filter(LoraTestImage.step == step)
+    rows = scoped.all()
     found = {r.id for r in rows}
     for i in wanted:
         if i not in found:
@@ -3416,7 +3525,8 @@ def delete_checkpoint_images(record_id, step, image_ids) -> dict:
             remove_ids.append(row.id)
             continue
         try:
-            mode = trash.dispose(path, context=f'checkpoint-{record_id}-{step}')
+            mode = trash.dispose(path, context=(f'run-{record_id}' if step is None
+                                                else f'checkpoint-{record_id}-{step}'))
         except OSError as e:
             out['skipped'].append({'id': row.id, 'reason': str(e)})
             continue

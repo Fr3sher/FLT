@@ -779,7 +779,8 @@ export default function SetupPage() {
               </button>
             ))}
             {verdict.action && (
-              <SettingsLink section={verdict.settingsSection} tone="warning" className="block">
+              <SettingsLink section={verdict.settingsSection} focus={verdict.settingsFocus}
+                tone="warning" className="block">
                 {verdict.action}
               </SettingsLink>
             )}

@@ -74,7 +74,7 @@ export default function CaptionToolsBar({ images, kind = 'character', mode = 'bo
             case (so “bulldog” also strips “Bulldog” — the same rule as the filter and the word counts below);
             {' '}<span className="text-content-muted font-medium">tag</span> mode treats captions as
             comma-separated tags and matches a whole tag (best for booru / SDXL).
-            {' '}<SettingsLink section="captioning">Which model writes them, and how</SettingsLink>
+            {' '}<SettingsLink section="captioning" focus="captioning-backend">Which model writes them, and how</SettingsLink>
           </p>
           <span className="text-content-subtle text-[0.625rem] uppercase tracking-wide">Find &amp; replace</span>
           <div className="flex items-center gap-2 flex-wrap">

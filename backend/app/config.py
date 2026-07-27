@@ -321,6 +321,23 @@ DEFAULTS = {
 _lock = threading.Lock()
 _cache = None
 
+
+def defaults() -> dict:
+    """A deep COPY of the shipped defaults, for callers that must show the user
+    what a setting would be if they never touched it.
+
+    Exposed over the API (`config_defaults` in the settings payload) so the
+    Settings UI can offer a per-field "Reset to default" without ever holding a
+    second copy of these numbers. A literal typed into the frontend would go
+    stale the next time a default moves here, and the reset button would then
+    quietly restore a value that is no longer the default — a lie the user
+    cannot see. Derived, never duplicated: this is the SAME dict the merge in
+    load_config() uses.
+
+    A copy, not the live object: a caller mutating the returned tree (jsonify
+    does not, but a future one might) must not rewrite the app's defaults."""
+    return copy.deepcopy(DEFAULTS)
+
 def _deep_merge(base, override):
     out = copy.deepcopy(base)
     for k, v in (override or {}).items():

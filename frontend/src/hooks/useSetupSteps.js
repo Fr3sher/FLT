@@ -237,6 +237,10 @@ export function aitoolkitVerdict(step, dir) {
       + 'or uv environment, your system Python, or the python.exe of a portable / '
       + 'embedded build (python_embeded) — and tell the app where it is.',
     action: `Set the interpreter in ${AITOOLKIT_PYTHON_SETTING}`,
+    // The action names ONE field, so the link lands on it (SettingsLink focus →
+    // SettingsPage's ?focus= deep link). Only this verdict carries an action, so
+    // only this one needs a target; the DOM id is LocalToolsSection's.
+    settingsFocus: 'aitoolkit-python',
     candidates: s.pythonCandidates || [],
   }
 }
