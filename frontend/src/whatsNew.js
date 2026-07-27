@@ -55,6 +55,14 @@ export const WHATS_NEW = [
       'Deleting a leftover run used to drop the run entry and its notes, and quietly leave the rest: its checkpoint previews, its card position on the canvas, and the provenance link on every image you generated from it. Those strays stayed in the database forever. A removal now clears all of them in one go, and the confirmation counts what it takes before you click — "12 checkpoint notes, 8 preview links, 6 archived source images". Two things it does NOT take: the images you generated stay in the Test Studio (they only lose the link to the run), and an archived source image is freed only when no other run still uses it, so cleaning up one run can never blank another run\'s comparison.',
   },
   {
+    id: '2026-07-27-klein-outfits-and-skin-hold',
+    date: '2026-07-27',
+    title: 'Klein datasets stop landing in the same jeans — and stop redrawing your tattoos',
+    blurb:
+      'Two fixes that Krea 2 Edit already had are now measured on Klein and shipped there too. Every shot gets a named garment instead of "a different outfit": asked that way, Klein answered three wide shots with three different tops but the same blue jeans and pale sneakers every time — a LoRA trained on that learns the jeans. And the shot keeps its skin: on the outdoor bust, a forehead tattoo simply vanished without the hold order and is fully there with it, same seed. Checked in both directions — on a subject with no markings at all, the hold order invents none. The wardrobe grew from 12 garments to 25, so a 40-shot dataset now spreads over 23 of them instead of repeating one six times. Nothing changes on Nano Banana, ChatGPT or OpenRouter: nothing was measured there.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',

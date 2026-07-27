@@ -5204,7 +5204,10 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                         edit_prompt=wrap_variation_klein(
                             v['prompt'], nsfw=nsfw, framing=v.get('framing'),
                             suffix=dataset_prompt_suffix(ds, v.get('framing')),
-                            subject_type=subject_type_of(ds)),
+                            subject_type=subject_type_of(ds),
+                            # Picks this shot's concrete garment, like the Krea
+                            # path — deterministic, so a regenerate reproduces it.
+                            label=v.get('label') or ''),
                         klein_model=klein_model,
                         lora_strength=lora_strength, extra_ref_paths=extra_paths,
                         generation_loras=run_loras, sampler_steps=_generation_steps(),
@@ -5733,7 +5736,8 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 # CURRENT dataset suffix, applied at wrap: `prompt` is the raw
                 # stored/edited creative prompt, so this is the ONLY application.
                 suffix=dataset_prompt_suffix(ds, img.framing),
-                subject_type=subject_type_of(ds)),
+                subject_type=subject_type_of(ds),
+                label=img.variation_label or ''),
             klein_model=model,
             lora_strength=lora_strength, extra_ref_paths=extra_paths,
             generation_loras=resolve_generation_lora_preset(generation_lora_preset),
