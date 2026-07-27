@@ -27,9 +27,15 @@ function ComparePane({ label, url, alt, accent }) {
         accent ? 'text-indigo-200' : 'text-white/80'}`}>
         {label}
       </figcaption>
-      <div className="flex min-h-0 flex-1 items-center justify-center p-1">
+      <div className="min-h-0 flex-1 p-1">
+        {/* h-full w-full, NOT max-h/max-w: an <img> left at its intrinsic size
+            is capped by max-* but never scaled UP, so a 0.4 MP original
+            rendered small next to a 2 MP result that filled its pane — the two
+            were shown at different scales, which is precisely the comparison
+            this mode must not produce. Filling the box and letting
+            object-contain letterbox makes both fit the SAME box. */}
         <img src={url} alt={`${label} — ${alt}`}
-          className="max-h-full max-w-full select-none object-contain" />
+          className="h-full w-full select-none object-contain" />
       </div>
     </figure>
   );
