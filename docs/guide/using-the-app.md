@@ -508,6 +508,36 @@ In a bank the ordering is done by the database over the *whole* filter, not just
 the page you can see — so **Select all in filter** and **▶ Review one by one**
 walk the same order you are looking at.
 
+## Compare an improved image with the original
+
+Two things in the app never overwrite an image — they add a **candidate** next
+to it, and leave the choice to you:
+
+- **✨ Upscale & improve** in the dataset lightbox (a manual Klein pass, 2 MP by
+  default);
+- the automatic **small-image rescue** of scraped images under 768 px.
+
+Open that candidate full screen and it now carries **⧉ Compare with original**.
+The view splits in two named panes — *Original* and *Improved* (or *Klein
+rescue*) — **side by side on a wide screen, stacked on a phone**, where width is
+the scarce axis and two half-width thumbnails would prove nothing.
+
+Both panes are the same size and both images are fitted inside them, so they are
+shown at **the same scale and the same framing** even though the candidate has
+more pixels. That matters: an improve pass rescales to a megapixel budget, and
+two images displayed at different scales cannot be compared honestly.
+
+**Zoom is off inside the comparison**, and the hint under the image says so. At
+100 % a 2 MP result and a 0.5 MP original cover different parts of the subject —
+that is not a comparison. Leave the comparison (⊟) and the usual click-for-100 %
+inspection is back, on whichever image you are looking at.
+
+If the original was deleted, rejected and purged, or simply never recorded (very
+old rows), there is no button — a short amber note says why instead, so a
+missing control can't be mistaken for a bug. Everything else in the lightbox —
+✂ Crop, ⇄ Mirror, ✨ Upscale & improve — is unchanged and still acts on the
+image you opened.
+
 ## Clean the watermarks a bank found
 
 **🚩 Find watermarks** flags the images carrying an overlaid logo, URL or

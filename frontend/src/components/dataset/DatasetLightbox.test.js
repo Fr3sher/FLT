@@ -19,6 +19,39 @@ test('lightbox exposes an accessible responsive image improvement action', () =>
   assert.match(lightbox, /busy \|\| improvementActive \|\| improveReady \|\| !kleinAvailable/);
 });
 
+// The comparison is what makes an improvement judgeable: before this, the
+// lightbox showed the RESULT alone and the original had to be remembered.
+// node --test cannot render JSX, so the contract is asserted on the source.
+test('a derived image can be inspected next to the original it came from', () => {
+  // Both panes live in ONE grid whose cells are equal, and both images are
+  // object-contain: identical box, identical scale — the only honest way to
+  // compare an upscale against its source (Klein rescales to a pixel budget and
+  // keeps the aspect ratio, so equal boxes means identical framing).
+  assert.match(lightbox, /grid-rows-2 grid-cols-1 sm:grid-rows-1 sm:grid-cols-2/);
+  assert.match(lightbox, /object-contain/);
+  // Real button, pressed state carried by aria (not colour alone).
+  assert.match(lightbox, /aria-pressed=\{comparing\}/);
+  assert.match(lightbox, /Compare with original/);
+  assert.match(lightbox, /Exit comparison/);
+  // Full-width control at phone width, like the other lightbox actions.
+  assert.match(lightbox, /w-full sm:w-auto[^]{0,400}Compare with original/);
+  // Each pane names its side in TEXT.
+  assert.match(lightbox, /compare\.beforeLabel/);
+  assert.match(lightbox, /compare\.afterLabel/);
+  // Zoom is not silently broken: comparison says, in the same hint slot, that
+  // 100 % lives outside the comparison.
+  assert.match(lightbox, /exit comparison to zoom/i);
+  // A vanished original explains itself instead of leaving a dead button.
+  assert.match(lightbox, /compare && !compare\.available/);
+  assert.match(lightbox, /\{compare\.reason\}/);
+});
+
+test('workspace feeds the lightbox the resolved parent of a derived image', () => {
+  assert.match(workspace, /describeDerivedComparison/);
+  assert.match(workspace, /compare=\{viewImgComparison\}/);
+  assert.match(workspace, /parentNonce=/);
+});
+
 test('workspace guards rescue rows and detects a pending improvement child', () => {
   assert.match(workspace, /!viewImgLive\._rescueReviewPreview/);
   assert.match(workspace, /!isSmallImageRescueRow\(viewImgLive\)/);

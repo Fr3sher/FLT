@@ -621,6 +621,15 @@ const TOPICS = [
     ['filter', 'decision', 'undecided', 'awaiting', 'pending', 'kept', 'keep', 'rejected',
      'reject', 'improve', 'candidates', 'klein', 'isolate', 'triage', 'select all', 'grid'],
     '/datasets?section=images', 'dataset-guide', '2-how-many-images-and-which-ones'),
+  // The lightbox's ⧉ Compare with original. Its whole point is that the two
+  // panes are shown at the SAME scale — the guide section explains why, and why
+  // 100 % zoom is deliberately off in that mode.
+  action('action-compare-with-original', 'Compare an improved image with the original',
+    ['compare', 'comparison', 'side by side', 'side-by-side', 'before after', 'before/after',
+     'original', 'improved', 'improve', 'upscale', 'klein', 'candidate', 'rescue',
+     'small image', 'judge', 'is it better', 'difference', 'a/b', 'lightbox',
+     'same scale', 'zoom', '100 %', 'undecided', 'keep or reject'],
+    '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',
