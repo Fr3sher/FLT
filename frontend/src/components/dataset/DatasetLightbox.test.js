@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { canRegenerateGeneric } from './improveRerun.js';
+
 const lightbox = readFileSync(new URL('./DatasetLightbox.jsx', import.meta.url), 'utf8');
 const workspace = readFileSync(new URL('./DatasetWorkspace.jsx', import.meta.url), 'utf8');
 const hook = readFileSync(new URL('../../hooks/useDataset.js', import.meta.url), 'utf8');
@@ -72,7 +74,7 @@ test('dataset hook starts improvement, reports the preserved original, then refr
   assert.match(hook, /`\/api\/dataset\/image\/\$\{imageId\}\/improve`, \{\}/);
   assert.match(hook, /original stays intact while a separate 2 MP candidate is generated for validation/);
   assert.match(hook, /Could not start image improvement/);
-  assert.match(hook, /resolveSmallImageRescue, improveImage, improveBatch, classify/);
+  assert.match(hook, /resolveSmallImageRescue, improveImage, reimproveImage, improveBatch, classify/);
 });
 
 test('the bulk improvement is ONE call that starts a server job, not a per-image loop', () => {
@@ -106,9 +108,14 @@ test('settings separates scraper rescue instructions from manual lightbox improv
 
 test('manual improvement candidates cannot use the unrelated generic regenerate path', () => {
   const gridItem = readFileSync(new URL('./DatasetGridItem.jsx', import.meta.url), 'utf8');
-  assert.match(gridItem, /const isImageImproveCandidate = img\.derivation_kind === 'klein_image_improve'/);
-  assert.match(gridItem, /!isRescueDerived && !isImageImproveCandidate && img\.source === 'generated'/);
+  // The guard moved into improveRerun.js (testable in node --test, which cannot
+  // parse JSX) when the tile gained its own 🔄✨ re-run of the improve pass. Same
+  // meaning, asserted at both ends: the tile delegates, and the decision refuses.
+  assert.match(gridItem, /const isImageImproveCandidate = isImageImproveRow\(img\)/);
+  assert.match(gridItem, /const canRegenerate = canRegenerateGeneric\(img, \{ isRescueDerived \}\)/);
   assert.match(gridItem, /if \(!isImageImproveCandidate && img\.status !== 'reject'/);
+  assert.equal(canRegenerateGeneric({ source: 'generated', filename: 'a.png', status: 'keep',
+    derivation_kind: 'klein_image_improve', parent_image_id: 2 }), false);
 });
 
 test('curation grid and lightbox render the persisted safe Pexels attribution', () => {

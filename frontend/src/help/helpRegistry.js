@@ -635,6 +635,11 @@ const TOPICS = [
     ['filter', 'decision', 'undecided', 'awaiting', 'pending', 'kept', 'keep', 'rejected',
      'reject', 'improve', 'candidates', 'klein', 'isolate', 'triage', 'select all', 'grid'],
     '/datasets?section=images', 'dataset-guide', '2-how-many-images-and-which-ones'),
+  action('action-reimprove-tile', 'Re-run Upscale & improve after changing its settings',
+    ['improve', 'upscale', 'reimprove', 're-improve', 'rerun', 're-run', 'redo', 'again',
+     'regenerate', 'no regenerate button', 'missing button', 'klein improve', 'candidate',
+     'steps', 'megapixels', 'strength', 'try again', 'source image', 'parent'],
+    '/datasets?section=images', 'settings-reference', 'image-engines'),
   // The lightbox's ⧉ Compare with original. Its whole point is that the two
   // panes are shown at the SAME scale — the guide section explains why, and why
   // 100 % zoom is deliberately off in that mode.
