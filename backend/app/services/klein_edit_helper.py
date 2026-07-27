@@ -175,8 +175,16 @@ def resolve_klein_unet(selected=None):
     for sub, names in folders:
         if canonical in names:
             return os.path.join(sub, canonical)
-    sub, names = folders[0]
-    return os.path.join(sub, names[0])
+    # Last-resort pick: only from files a loader can actually OPEN. Listing and
+    # loading are different questions, and conflating them let the Krea resolver
+    # choose a .gguf on its own (see comfy_model_paths.is_loadable_model). An
+    # explicit pick above is still honoured as-is -- if the user names a file,
+    # the failure must be about THEIR file, not silently about another one.
+    for sub, names in folders:
+        for n in names:
+            if comfy_model_paths.is_loadable_model(n):
+                return os.path.join(sub, n)
+    return None
 
 
 def resolve_klein_vae():

@@ -249,6 +249,13 @@ def resolve_krea_unet(selected=None):
                 return os.path.join(sub, bare_pick)
         logger.warning('krea.base_model %r not found under any krea folder — '
                        'falling back to automatic resolution', pick)
+    # Automatic resolution must never PICK a file a loader cannot open: the
+    # token match is on the NAME, and a .gguf named …turbo… would win here.
+    folders = [(sub, [n for n in names if comfy_model_paths.is_loadable_model(n)])
+               for sub, names in folders]
+    folders = [(sub, names) for sub, names in folders if names]
+    if not folders:
+        return None
     for token in ('turbo', 'raw'):
         for sub, names in folders:
             for n in names:

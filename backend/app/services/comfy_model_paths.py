@@ -83,6 +83,28 @@ YAML_FILENAME = 'extra_model_paths.yaml'
 # actually consume, plus .gguf (see module docstring). endswith() takes a tuple.
 _MODEL_EXTENSIONS = ('.safetensors', '.sft', '.gguf')
 
+# What a loader can actually OPEN — the same tuple minus .gguf. Listing and
+# loading are two different questions and conflating them shipped a real bug:
+# a base resolver picks a file by NAME (the first one containing 'turbo'), and
+# `krea2_turbo-Q4_K_M.gguf` contains 'turbo'. So dropping that file into a krea
+# folder was enough for the app to start choosing, on its own, a model ComfyUI
+# cannot read — mid-batch, with no setting touched. Reported by naniii2352
+# (Discord) as "it generated half the images and then started throwing a gguf
+# error"; the batch straddled the moment he copied the file in.
+# Any code that CHOOSES a file must filter on this; code that merely LISTS may
+# use _MODEL_EXTENSIONS so the user still sees what is on disk.
+LOADABLE_MODEL_EXTENSIONS = ('.safetensors', '.sft')
+
+
+def is_loadable_model(name: str) -> bool:
+    """True when a loader node could actually open this file.
+
+    Deliberately a function and not an inline endswith(): every resolver that
+    picks a base model must go through the same predicate, or the next format
+    we list-but-cannot-load repeats this bug somewhere else.
+    """
+    return str(name or '').lower().endswith(LOADABLE_MODEL_EXTENSIONS)
+
 # folder_paths.map_legacy — the canonical alias source (unet↔diffusion_models,
 # clip↔text_encoders). Query and yaml keys are both normalised through it.
 _LEGACY = {'unet': 'diffusion_models', 'clip': 'text_encoders'}
