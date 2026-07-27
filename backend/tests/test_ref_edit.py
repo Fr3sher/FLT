@@ -169,7 +169,7 @@ def test_start_reference_edit_rejects_bad_engine_and_empty_prompt(app):
         ds = svc.create_dataset('local', 'V', 'zchar_v')
         _seed_ref(ds, original=None, cropped=_webp((5, 5, 5)))
         with pytest.raises(ValueError):
-            svc.start_reference_edit(app, 'local', ds.id, 'klein', 'p')
+            svc.start_reference_edit(app, 'local', ds.id, 'midjourney', 'p')
         with pytest.raises(ValueError):
             svc.start_reference_edit(app, 'local', ds.id, 'chatgpt', '   ')
 
@@ -294,19 +294,22 @@ def test_route_discard_clears(client, monkeypatch):
 
 
 def test_route_edit_bad_engine_400(client, monkeypatch):
-    """Klein stays out of reference editing ON PURPOSE (local GPU engine, not an
-    API one) — and the refusal must NAME the engines that do work, derived from
-    API_ENGINES rather than a sentence that rots when a fourth engine lands."""
+    """An engine that does not exist is refused, and the refusal NAMES the ones
+    that do — derived from editable_engines() rather than a sentence that rots
+    when an engine lands. (Klein used to be the fixture here, on the grounds that
+    a local GPU engine could not edit; it can, through the ComfyUI queue, so it is
+    now in the list this message is built from — see
+    test_ref_edit_local_engines.py.)"""
     did = _create_with_ref(client, monkeypatch, 'Jay', 'zchar_jay')
     resp = client.post(f'/api/dataset/{did}/ref/edit',
-                       data={'prompt': 'x', 'engine': 'klein'},
+                       data={'prompt': 'x', 'engine': 'midjourney'},
                        content_type='multipart/form-data')
     assert resp.status_code == 400
     msg = resp.get_json()['error']
     assert msg == svc.edit_engine_choice_message()
-    for engine in svc.API_ENGINES:
-        assert svc.API_ENGINE_LABELS[engine] in msg
-    assert 'Klein' not in msg
+    for engine in svc.editable_engines():
+        assert svc.engine_labels()[engine] in msg
+    assert 'midjourney' not in msg
 
 
 def test_route_edit_openrouter_sends_every_reference_with_the_configured_model(

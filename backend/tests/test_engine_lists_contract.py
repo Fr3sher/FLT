@@ -43,6 +43,26 @@ def _js_api_engines():
     return tuple(re.findall(r"'([^']+)'", m.group(1)))
 
 
+def _js_edit_engines():
+    """EDIT_ENGINES lives in referenceEdit.js and is spelled `[...ENGINES]`, so
+    what has to match is the CANONICAL list it copies."""
+    m = re.search(r'export const ENGINES\s*=\s*\[(.*?)\];', _js_source(), re.S)
+    assert m, 'ENGINES declaration not found in engineSelection.js'
+    return tuple(re.findall(r"'([^']+)'", m.group(1)))
+
+
+def _js_edit_ref_support():
+    """EDIT_REF_SUPPORT in referenceEdit.js: which references each LOCAL engine
+    consumes. Lives in the OTHER file, so it gets its own reader."""
+    path = _JS.parent / 'referenceEdit.js'
+    if not path.exists():
+        pytest.skip(f'frontend source not present ({path.name})')
+    src = path.read_text(encoding='utf-8')
+    m = re.search(r'export const EDIT_REF_SUPPORT\s*=\s*\{(.*?)\};', src, re.S)
+    assert m, 'EDIT_REF_SUPPORT declaration not found in referenceEdit.js'
+    return dict(re.findall(r"(\w+):\s*'([^']*)'", m.group(1)))
+
+
 def _js_engine_labels():
     m = re.search(r'export const ENGINE_LABELS\s*=\s*\{(.*?)\};', _js_source(), re.S)
     assert m, 'ENGINE_LABELS declaration not found in engineSelection.js'
@@ -55,27 +75,52 @@ def test_the_api_engine_ids_are_identical_on_both_sides():
     assert _js_api_engines() == svc.API_ENGINES
 
 
+def test_the_editable_engine_ids_are_identical_on_both_sides():
+    """The set the ✦ Edit modal offers and the set /ref/edit accepts. It is now
+    EVERY engine — the local ones edit through the ComfyUI queue — and the ORDER
+    matters twice over: it is the toggle order in the modal, and it puts the free
+    engines first on a gesture that is billed per press."""
+    assert _js_edit_engines() == svc.editable_engines()
+
+
+def test_the_local_engines_reference_support_matches_on_both_sides():
+    """The UI says at PICK time which reference photos an engine will use; the
+    service is what actually forwards (or doesn't) forward them. Those two
+    claiming different things is the silent drop the whole feature avoids — the
+    user would be told Klein takes the extra angles and get an edit that ignored
+    them, or the reverse."""
+    assert _js_edit_ref_support() == svc.LOCAL_EDIT_REF_SUPPORT
+    # And every local engine has an answer: a new one must not default to "all".
+    for engine in svc.LOCAL_ENGINES:
+        assert engine in svc.LOCAL_EDIT_REF_SUPPORT, engine
+
+
 def test_the_engine_labels_are_worded_identically_on_both_sides():
-    """Both sides word a refusal from these labels ('pick Nano Banana Pro, ChatGPT
-    or OpenRouter'), so the same engine must not be called two different things
-    depending on whether the client or the server said no."""
+    """Both sides word a refusal from these labels ('pick Klein, Krea 2 Edit, Nano
+    Banana Pro, ChatGPT or OpenRouter'), so the same engine must not be called two
+    different things depending on whether the client or the server said no."""
     js = _js_engine_labels()
-    for engine in svc.API_ENGINES:
-        assert js.get(engine) == svc.API_ENGINE_LABELS.get(engine), engine
+    py = svc.engine_labels()
+    for engine in svc.editable_engines():
+        assert js.get(engine) == py.get(engine), engine
 
 
 def test_the_refusal_message_is_derived_from_the_list_not_hardcoded():
-    """The point of deriving: adding an engine to API_ENGINES rewrites the message
-    with no edit anywhere else. Pinned by mutating the tuple, not by pinning the
+    """The point of deriving: adding an engine to a lane rewrites the message with
+    no edit anywhere else. Pinned by mutating the tuple, not by pinning the
     sentence — a pinned sentence is just the old hardcoded list again."""
     msg = svc.edit_engine_choice_message()
-    for engine in svc.API_ENGINES:
-        assert svc.API_ENGINE_LABELS[engine] in msg
+    labels = svc.engine_labels()
+    for engine in svc.editable_engines():
+        assert labels[engine] in msg
 
     real_engines, real_labels = svc.API_ENGINES, svc.API_ENGINE_LABELS
+    real_local, real_local_labels = svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS
     try:
+        svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS = (), {}
         svc.API_ENGINES = ('nanobanana', 'newcomer')
         svc.API_ENGINE_LABELS = dict(real_labels, newcomer='Newcomer')
         assert svc.edit_engine_choice_message() == 'pick Nano Banana Pro or Newcomer'
     finally:
         svc.API_ENGINES, svc.API_ENGINE_LABELS = real_engines, real_labels
+        svc.LOCAL_ENGINES, svc.LOCAL_ENGINE_LABELS = real_local, real_local_labels

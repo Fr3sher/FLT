@@ -386,25 +386,38 @@ def dataset_ref_edit(dataset_id):
     payload's `reference_edit` (survives a tab sleep and a reload). The uploaded
     images are read HERE (snapshot in the request thread), never in the worker.
 
-    Editable engines are svc.API_ENGINES, DERIVED — not a second hardcoded list.
-    The edit dispatch (svc._edit_engine_call) is engine-parametric over that same
-    tuple, so a private copy here is a route that refuses an engine the service
-    already supports: exactly what kept OpenRouter out of the ✦ Edit modal after
-    it shipped for generation. Klein stays excluded for free — it is the local GPU
-    engine and has never been in API_ENGINES."""
+    Editable engines are svc.editable_engines(), DERIVED — not a second hardcoded
+    list. The API dispatch (svc._edit_engine_call) is engine-parametric over
+    API_ENGINES, so a private copy here is a route that refuses an engine the
+    service already supports: exactly what kept OpenRouter out of the ✦ Edit modal
+    after it shipped for generation, and then kept BOTH local engines out of it —
+    the two that cost nothing to run, on the most exploratory gesture in the app.
+
+    A local engine (Klein / Krea 2 Edit) does not block the worker either: it is
+    queued on the ComfyUI job queue and answered by its completion callback. A
+    missing weight or node pack comes back as the same actionable 409 the generate
+    route returns, not as a spinner that dies three minutes later."""
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     prompt = (request.form.get('prompt') or '').strip()
     engine = (request.form.get('engine') or '').strip()
-    if engine not in svc.API_ENGINES:
+    if engine not in svc.editable_engines():
         return jsonify({'error': svc.edit_engine_choice_message()}), 400
     # Transient edit-reference images added in the modal — ride along as identity
-    # anchors for THIS call only, never persisted as dataset extra refs.
+    # anchors for THIS call only, never persisted as dataset extra refs. The local
+    # engines refuse them rather than drop them silently (see
+    # svc.LOCAL_EDIT_REF_SUPPORT); the modal hides the picker for those engines.
     extra_bytes = [f.read() for f in request.files.getlist('ref') if f and f.filename]
     try:
         svc.start_reference_edit(current_app._get_current_object(), LOCAL_USER,
                                  dataset_id, engine, prompt, extra_edit_ref_bytes=extra_bytes)
-    except ValueError as e:
+    except Exception as e:
+        from ..services.klein_edit_helper import KleinModelsMissing
+        from ..services.krea_edit_helper import KreaModelsMissing
+        if isinstance(e, KleinModelsMissing):
+            return _klein_missing_response(e.missing)
+        if isinstance(e, KreaModelsMissing):
+            return _krea_missing_response(e)
         return _map_error(e)
     return jsonify({'ok': True, 'status': 'running'}), 202
 

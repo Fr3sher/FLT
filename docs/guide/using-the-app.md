@@ -23,10 +23,16 @@ captioning rules and a few guards change with the dataset kind.
    crop editor (or *Reset to auto*) if the framing is off. Up to 3 extra angles
    can be added for multi-view consistency. **✦ Edit** retouches the reference
    itself from a prompt ("plain studio-grey background", "add glasses") through
-   any of the API engines — **Nano Banana Pro, ChatGPT or OpenRouter**, the same
-   three that generate — and shows you a Before/After to Keep or Discard. The
-   local Klein engine cannot edit a reference. Each edit is a paid API call, on
-   the engine you picked, with the model set in *Settings › Image engines*.
+   **any engine that generates** — and shows you a Before/After to Keep or
+   Discard. **Klein** and **Krea 2 Edit** run it on your own ComfyUI: free,
+   private, and the sane choice when you expect to retry the prompt a few times;
+   they appear only when your ComfyUI can actually run them, and say what is
+   missing when it nearly can. **Nano Banana Pro, ChatGPT and OpenRouter** charge
+   per edit, on the model set in *Settings › Image engines*. The engines differ in
+   what else they look at: the API ones take the dataset's extra references *and*
+   images you drop into the dialog, Klein takes the dataset's extra references,
+   and Krea edits the main reference only — the dialog says which, before you
+   press Generate.
 3. **Generate variations** — pick an engine (Nano Banana Pro, ChatGPT,
    OpenRouter, or local Klein) and fire the **variation catalog**: 53 shots
    across expression, angle, lighting, framing, outfit and background, each

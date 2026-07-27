@@ -2380,9 +2380,16 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
     along as identity anchors so the edit keeps the same face. Every API engine
     forwards the WHOLE list (OpenRouter as `input_references`); a model that takes
     fewer says so in its own error rather than having some silently dropped here.
-    Klein is not an option. Raises ValueError for a bad engine / empty prompt /
-    missing reference (the route maps it to 400/404)."""
-    if engine not in API_ENGINES:
+
+    LOCAL engines (Klein, Krea 2 Edit) take a different route entirely — see
+    _start_local_reference_edit: no blocking call, a ComfyUI queue job instead.
+    They also take FEWER references (Klein: the dataset's extras, by path; Krea:
+    the primary only), which is a fact of their graphs and is stated in the UI at
+    pick time rather than discovered as a silent drop here.
+
+    Raises ValueError for a bad engine / empty prompt / missing reference (the
+    route maps it to 400/404)."""
+    if engine not in editable_engines():
         raise ValueError(edit_engine_choice_message())
     prompt = (prompt or '').strip()
     if not prompt:
@@ -2392,6 +2399,15 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
         raise ValueError('reference image required')
     if not os.path.exists(_ref_path(ds)):
         raise ValueError('reference image file missing')
+    # Supersede FIRST, whichever lane is starting and whichever was running: a
+    # previous LOCAL edit still on the GPU is no longer wanted, and nothing else
+    # would ever stop it (its callback will find no entry). Switching from Klein
+    # to ChatGPT mid-thought used to leave the render — and its ✦ badge — behind.
+    prev_job, prev_act = reference_edit_jobs.pending_job(dataset_id)
+    _cancel_local_edit_job(prev_job, prev_act)
+    if engine in LOCAL_ENGINES:
+        return _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
+                                           extra_edit_ref_bytes)
     refs = _all_ref_bytes(ds)                       # SNAPSHOT (primary + dataset extras)
     refs.extend(rb for rb in (extra_edit_ref_bytes or []) if rb)
     dsdir = _dataset_dir(dataset_id)
@@ -2402,6 +2418,186 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
         args=(app, user_id, dataset_id, token, act_token, engine, refs, prompt),
         daemon=True).start()
     return token
+
+
+#: Reference images each LOCAL engine actually consumes, so the UI can say it at
+#: pick time. Klein chains the dataset's extra refs as native ReferenceLatent
+#: nodes; Krea's Krea2EditModelPatch takes ONE source (a second slot exists but
+#: what it does to identity has not been measured — see enqueue_krea_edit).
+#: Neither takes the modal's transient uploads: both engines want file PATHS and
+#: the transient images are request-scoped bytes. Refused loudly by the route.
+#: LOAD-BEARING, not documentation: the enqueue below reads it, so a third local
+#: engine cannot be added without deciding what it does with the extra refs. The
+#: values are mirrored in frontend EDIT_REF_SUPPORT (contract-tested), because
+#: the UI has to say this at pick time, not discover it as a silent drop.
+LOCAL_EDIT_REF_SUPPORT = {'klein': 'dataset_only', 'krea': 'primary_only'}
+
+
+def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
+                                extra_edit_ref_bytes=None):
+    """Reference edit on the user's OWN GPU: free, private, no key, no bill — and
+    therefore the lane that makes "try five prompts until it's right" reasonable.
+
+    It does NOT get its own waiting machinery. The edit is enqueued on the app's
+    existing ComfyUI image queue exactly like a generated variation, and the queue
+    worker's completion dispatch calls link_completed_reference_edit when it
+    lands. The registry entry is what the modal polls either way, so the client
+    sees one contract for both lanes (running -> ready|failed).
+
+    Preflight runs BEFORE anything is registered: a missing weight or node pack
+    then surfaces on the click as the SAME actionable 409 the generate route
+    returns (it even starts the download), instead of a spinner that ends in a raw
+    ComfyUI error three minutes later."""
+    if extra_edit_ref_bytes:
+        # Never silently dropped: the modal hides the picker for these engines, so
+        # reaching here means a client that didn't know. Say which engine and why.
+        raise ValueError(
+            f'{engine_labels().get(engine, engine)} renders on your own GPU and cannot take '
+            'the extra reference images added here — remove them, or pick an API engine')
+    dsdir = _dataset_dir(dataset_id)
+    ref_path = _ref_path(ds)
+    if engine == KREA_ENGINE:
+        # Krea checks assets AND the custom-node pack up front; Klein does its own
+        # check inside enqueue_klein_edit (it raises KleinModelsMissing there). The
+        # asymmetry is the helpers', not ours — either way the miss arrives before
+        # any render, as the same 409 the generate route returns.
+        from . import krea_edit_helper as helper
+        helper.preflight()
+
+    token = reference_edit_jobs.start(dataset_id, dsdir, engine, prompt)
+    act_token = dataset_activity.begin(dataset_id, 'edit_reference', total=1, engine=engine)
+    meta = {'is_reference_edit': True, 'dataset_id': dataset_id}
+    try:
+        if engine == KREA_ENGINE:
+            from . import krea_edit_helper as helper
+            job_id = helper.enqueue_krea_edit(
+                user_id=str(user_id), source_filename=ds.ref_filename,
+                source_path=ref_path, edit_prompt=prompt, extra_metadata=meta)
+        else:
+            from .klein_edit_helper import enqueue_klein_edit
+            # The dataset's extra refs DO reach Klein (native ReferenceLatent
+            # chaining) — the same anchors the API lane sends as bytes. Gated on
+            # the table above rather than on the engine name, so the two can't
+            # disagree.
+            extras = ([os.path.join(dsdir, fn) for fn in extra_ref_filenames(ds)]
+                      if LOCAL_EDIT_REF_SUPPORT.get(engine) == 'dataset_only' else [])
+            job_id = enqueue_klein_edit(
+                user_id=str(user_id), source_filename=ds.ref_filename,
+                source_path=ref_path, edit_prompt=prompt, extra_ref_paths=extras,
+                sampler_steps=_generation_steps(), extra_metadata=meta)
+    except Exception as exc:
+        # Nothing queued: drop the entry rather than leave a spinner with no job.
+        reference_edit_jobs.clear(dataset_id, dsdir)
+        dataset_activity.end(act_token)
+        from .klein_edit_helper import KleinModelsMissing
+        from .krea_edit_helper import KreaModelsMissing
+        if isinstance(exc, (KleinModelsMissing, KreaModelsMissing)):
+            # Typed on purpose: the route turns these into the SAME auto-download
+            # 409 the generate path returns. Flattening them to a ValueError would
+            # downgrade "I've started fetching the weight" to a bare 400.
+            raise
+        logger.exception('local reference edit could not be queued (dataset %s)', dataset_id)
+        raise ValueError(f'{engine_labels().get(engine, engine)}: {exc}') from exc
+    if not reference_edit_jobs.attach_job(dataset_id, token, job_id, act_token,
+                                          user_id=str(user_id)):
+        # Superseded between the enqueue and here: cancel the render nobody awaits.
+        _cancel_local_edit_job(job_id, act_token)
+    return token
+
+
+def _cancel_local_edit_job(job_id, act_token=None):
+    """Best-effort cancel of an abandoned local edit + close its activity. Never
+    raises: an un-cancellable job just finishes and finds no entry to fill."""
+    if act_token is not None:
+        dataset_activity.end(act_token)
+    if not job_id:
+        return
+    try:
+        from ..job_queue import queue_manager
+        queue_manager.cancel_job(job_id)
+    except Exception:
+        logger.warning('reference edit: could not cancel queue job %s', job_id, exc_info=True)
+
+
+def link_completed_reference_edit(job_id, filename, failed=False, reason=None):
+    """Queue-worker callback for a LOCAL reference edit: turn the finished ComfyUI
+    output into the candidate the modal is waiting on.
+
+    Symmetric with link_completed_dataset_image, minus the DB row — a reference
+    edit has no FaceDatasetImage; its whole state is the in-memory registry entry.
+    No entry = the user discarded or superseded meanwhile: the output is deleted
+    rather than left in ComfyUI's folder."""
+    entry = reference_edit_jobs.find_by_job(job_id)
+    dataset_id = entry['dataset_id'] if entry else None
+    try:
+        if entry is None:
+            _drop_comfy_output(filename)
+            return
+        if failed:
+            reference_edit_jobs.set_failed(
+                dataset_id, entry['token'],
+                f"{entry['engine']}: {reason or 'the render failed — see 🪵 Server log in Settings'}")
+            return
+        data = _read_comfy_output(filename)
+        if not data:
+            reference_edit_jobs.set_failed(
+                dataset_id, entry['token'],
+                f"{entry['engine']}: the finished image could not be retrieved from ComfyUI "
+                '(not on disk, and the /view API fetch failed)')
+            return
+        # Same naming as the API worker's candidate — the marker is what keeps it
+        # out of the grid and the backups; the owner prefix keeps it recognisable.
+        cand_fn = (f"{entry.get('user_id') or 'local'}"
+                   f'{reference_edit_jobs.CANDIDATE_MARKER}{uuid.uuid4().hex[:8]}.webp')
+        cand_path = os.path.join(entry['dir'], cand_fn)
+        write_image_atomic(cand_path, normalize_to_webp(data))
+        _drop_comfy_output(filename)
+        if not reference_edit_jobs.set_ready(dataset_id, entry['token'], cand_fn):
+            reference_edit_jobs._unlink(cand_path)     # superseded: drop our orphan
+    except Exception as exc:
+        logger.exception('reference edit link failed (job %s)', job_id)
+        if entry is not None:
+            reference_edit_jobs.set_failed(dataset_id, entry['token'],
+                                           f"{entry['engine']}: {exc}")
+    finally:
+        # AFTER set_ready/set_failed, never before: the payload poll stops the
+        # moment activity clears, with ONE final refresh that must already see the
+        # outcome — the same ordering rule as the API worker.
+        if entry is not None:
+            dataset_activity.end(entry['act_token'])
+
+
+def _comfy_output_path(filename):
+    d = _comfy_output_dir()
+    return os.path.join(d, filename) if d and filename else None
+
+
+def _read_comfy_output(filename):
+    """Bytes of a finished ComfyUI output, from disk when we can see its folder,
+    else over the /view API (a custom or unconfigured output path). None when
+    neither works."""
+    p = _comfy_output_path(filename)
+    if p and os.path.exists(p):
+        try:
+            with open(p, 'rb') as fh:
+                return fh.read()
+        except OSError:
+            pass
+    if not filename:
+        return None
+    from ..utils.comfyui import fetch_output_image_bytes
+    return fetch_output_image_bytes(filename)
+
+
+def _drop_comfy_output(filename):
+    """Remove an unlinked ComfyUI output. Only ever called on a file this app just
+    produced for a transient candidate — never on user data."""
+    p = _comfy_output_path(filename)
+    if p and os.path.isfile(p):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
 
 
 def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs, prompt):
@@ -2471,18 +2667,28 @@ def keep_reference_edit(user_id, dataset_id):
     return new_ref
 
 
+def _clear_reference_edit(dataset_id):
+    """Drop the pending edit, delete its candidate, and — for a LOCAL edit still
+    rendering — cancel the ComfyUI job and close its activity. Without the cancel,
+    abandoning a local edit left the GPU busy on a result nobody would ever see
+    and the ✦ activity badge lit until the TTL."""
+    entry = reference_edit_jobs.clear(dataset_id, _dataset_dir(dataset_id))
+    if entry and entry.get('status') == 'running':
+        _cancel_local_edit_job(entry.get('_job_id'), entry.get('_act_token'))
+
+
 def discard_reference_edit(dataset_id):
     """Drop a pending edit (running=abandon OR ready) and delete its candidate
-    file. The engine call already sent is still billed — honesty preserved, no
-    'refund' implied."""
-    reference_edit_jobs.clear(dataset_id, _dataset_dir(dataset_id))
+    file. An API call already sent is still billed — honesty preserved, no
+    'refund' implied; a local render is cancelled, because it can be."""
+    _clear_reference_edit(dataset_id)
 
 
 def invalidate_reference_edit(dataset_id):
     """Drop any pending edit candidate when the reference itself changes
     (crop/recrop/change/keep): a Before/After computed from the OLD reference would
     be a visual lie. Idempotent — a no-op when nothing is pending."""
-    reference_edit_jobs.clear(dataset_id, _dataset_dir(dataset_id))
+    _clear_reference_edit(dataset_id)
 
 
 def commit_edited_reference(user_id, dataset_id, image_bytes):
@@ -5942,12 +6148,33 @@ API_ENGINE_LABELS = {'nanobanana': 'Nano Banana Pro', 'chatgpt': 'ChatGPT',
                      'openrouter': 'OpenRouter'}
 
 
+def engine_labels():
+    """Every engine id -> its human label, both lanes. Merged rather than kept as a
+    third dict: the two halves are already the source of truth for their side."""
+    return dict(LOCAL_ENGINE_LABELS, **API_ENGINE_LABELS)
+
+
+def editable_engines():
+    """Engines /ref/edit accepts, LOCAL ones first (free, on the user's own GPU),
+    then the paid API ones — the canonical order the workspace cards use too.
+
+    A FUNCTION, not a constant: it is derived at call time from the two tuples
+    above, so a lane growing an engine reaches the edit path with no second edit
+    here. Klein and Krea used to be excluded because the edit ran as a blocking
+    provider call and they have no blocking call to make; they now ride the same
+    ComfyUI queue as every other local render, so the exclusion had outlived its
+    reason — and it was the reason the app's only FREE edit lane was invisible."""
+    return tuple(LOCAL_ENGINES) + tuple(API_ENGINES)
+
+
 def edit_engine_choice_message():
-    """The refusal for a non-editable engine, DERIVED from API_ENGINES: "pick Nano
-    Banana Pro, ChatGPT or OpenRouter". Hardcoding the sentence is how the previous
-    one ("pick ChatGPT or Nano Banana") kept naming two engines after a third
-    became editable — a message that lies is worse than no message."""
-    names = [API_ENGINE_LABELS.get(e, e) for e in API_ENGINES]
+    """The refusal for a non-editable engine, DERIVED from editable_engines():
+    "pick Klein, Krea 2 Edit, Nano Banana Pro, ChatGPT or OpenRouter". Hardcoding
+    the sentence is how the previous one ("pick ChatGPT or Nano Banana") kept
+    naming two engines after a third became editable — a message that lies is
+    worse than no message."""
+    labels = engine_labels()
+    names = [labels.get(e, e) for e in editable_engines()]
     if not names:
         return 'no image engine can edit the reference'
     head, last = names[:-1], names[-1]

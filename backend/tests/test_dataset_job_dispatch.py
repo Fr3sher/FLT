@@ -41,6 +41,29 @@ def test_every_local_engine_links_its_finished_image(app, monkeypatch, model_nam
         assert seen['failed'] is False
 
 
+def test_a_reference_edit_job_never_reaches_the_row_linker(app, monkeypatch):
+    """A LOCAL ✦ Edit-reference render rides the same enqueue_*_edit helpers, so it
+    carries the same `model_name` — but it has NO FaceDatasetImage row. It must be
+    routed by its own marker (checked first), or link_completed_dataset_image
+    would hunt for a row that does not exist and log a bogus 'no row for job'
+    while the modal spun forever."""
+    from app import job_queue
+    from app.services import face_dataset_service
+    with app.app_context():
+        job = _job('krea_identity_edit_dataset', job_id='ref-1')
+        job.job_metadata = json.dumps({'model_name': 'krea_identity_edit_dataset',
+                                       'dataset_id': 1, 'is_reference_edit': True})
+        seen = {}
+        monkeypatch.setattr(face_dataset_service, 'link_completed_dataset_image',
+                            lambda *a, **k: seen.update(rows=True))
+        monkeypatch.setattr(face_dataset_service, 'link_completed_reference_edit',
+                            lambda jid, fn, failed=False, reason=None:
+                                seen.update(job_id=jid, filename=fn))
+        job_queue._dispatch_completion(job, 'out_00001_.png', False)
+        assert seen.get('job_id') == 'ref-1'
+        assert 'rows' not in seen
+
+
 def test_the_declared_set_matches_what_the_engines_actually_stamp(app):
     """The set is only useful if it stays in step with the enqueue side, so read
     the stamps from the helpers themselves rather than trusting a literal."""

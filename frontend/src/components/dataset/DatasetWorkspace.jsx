@@ -19,6 +19,7 @@ import { recaptionConfirmation } from './captionCategory';
 import CropModal from './CropModal';
 import ReferenceEditModal from './ReferenceEditModal';
 import { defaultEditEngine } from './referenceEdit';
+import { localEngineUnavailableReason, hasComfyui } from '../../utils/localEngineReason.js';
 import { extraRefCropSource } from './extraRefs';
 import DatasetLightbox from './DatasetLightbox';
 import DatasetSettingsModal from './DatasetSettingsModal';
@@ -1813,7 +1814,16 @@ export default function DatasetWorkspace({ ds, onBack }) {
       )}
       {refEdit && d.ref_filename && (
         <ReferenceEditModal datasetId={d.id} refFilename={d.ref_filename} nonce={ds.refNonce}
-          defaultEngine={defaultEditEngine(window.localStorage)}
+          // The local engines are free but not universal: the modal is handed the
+          // SAME capabilities the generation panel reads, so it can offer them
+          // when this ComfyUI can run them, explain the one missing action when it
+          // nearly can, and drop them entirely on an install that has no ComfyUI.
+          defaultEngine={defaultEditEngine(window.localStorage,
+            (e) => !localEngineUnavailableReason(e, caps))}
+          comfyuiConfigured={hasComfyui(caps)}
+          engineAvailable={caps.engines || {}}
+          engineReason={(e) => localEngineUnavailableReason(e, caps)}
+          datasetExtraCount={(d.ref_extra_filenames || []).length}
           liveActivity={ds.activity} referenceEdit={d.reference_edit}
           onEdit={ds.editReference} onKeep={ds.keepEditedReference} onDiscard={ds.discardEditedReference}
           onClose={() => setRefEdit(false)} />

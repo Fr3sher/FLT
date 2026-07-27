@@ -6,7 +6,6 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import { apiFetch, putJson } from '../../api/fetchClient';
 import ShotIllustration, { contextEmoji } from './ShotIllustration';
 import { displayLabel } from '../../utils/labels';
-import { kleinMissingLabels } from '../../hooks/useSetupSteps';
 import { generationLoraPresetPayload, sanitizeGenerationLoraPresets } from '../../utils/generationLoras';
 import { requestHelpTip } from '../../help/helpTips';
 import { HelpBadge } from '../../help/HelpMode';
@@ -27,7 +26,7 @@ import {
   readMode, totalImages, writeEngines, writeMode,
 } from './engineSelection.js';
 import { kreaUnavailableReason, groundingDescription, kreaFramingAdvisory } from '../../utils/kreaEngine.js';
-import { comfyEnumUnavailableReason } from '../../utils/comfyEnumSupport.js';
+import { kleinUnavailableReason } from '../../utils/localEngineReason.js';
 import {
   SUBJECT_TYPES, SUBJECT_TYPE_LABELS, SUBJECT_TYPE_HINTS,
   normalizeSubjectType, framingLabel, defaultPresetKey,
@@ -546,29 +545,22 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     engines, shotCount: selected.size, mode: engineMode, multiplier,
     maxFanout: Number(caps.max_fanout) || 0,
   });
-  // Klein unavailable has THREE distinct causes — the hint must name the right
-  // one (a reachable ComfyUI with no Klein model used to show "Configure
-  // ComfyUI", sending the user to re-check a step that was already green). When
-  // ComfyUI IS reachable, name the exact missing weight(s) (model / text encoder /
-  // VAE) instead of always blaming the UNET — the old text sent users to
-  // models/unet/klein/ even when the real gap was the TE or VAE.
-  const kleinMissingWords = kleinMissingLabels(caps.comfyui?.klein_missing);
-  const kleinAssetHint = kleinMissingWords.length
-    ? `⚠ Klein ${kleinMissingWords.join(' + ')} missing — download it in the Setup step`
-    : '⚠ Klein model missing — download it in the Setup step (models/unet/klein/)';
-  // A FOURTH cause, ahead of the weights: ComfyUI is reachable and every file is in
-  // place, but it doesn't offer a widget VALUE the graph pins. That is how the
-  // `beta57` scheduler took Klein out for everyone without the RES4LYF node pack
-  // (reported by IndependentProcess0 on Reddit) while every other check went green.
-  // The shipped graph no longer pins such a value; this stays as the net for the
-  // next one and for user-edited workflow files. Nothing is silently substituted,
-  // so it is said before the click instead of as a raw ComfyUI 400 after it.
-  // See utils/comfyEnumSupport.js.
-  const kleinEnumHint = comfyEnumUnavailableReason(caps.comfyui?.klein_unsupported_enums);
+  // Klein unavailable has FOUR distinct causes and the hint must name the right
+  // one — a reachable ComfyUI with no Klein model used to show "Configure
+  // ComfyUI", sending the user to re-check a step that was already green; and the
+  // `beta57` scheduler (a RES4LYF node-pack value the shipped graph pinned,
+  // reported by IndependentProcess0 on Reddit) took Klein out for everyone while
+  // every other check went green. All four now live in
+  // utils/localEngineReason.js, WITH their tests: the ✦ Edit-reference modal
+  // offers Klein too, and one gap explained two different ways in two dialogs is
+  // the same bug as no explanation at all.
   const kleinHint = klAvailable ? null
-    : !enabledEngines.includes('klein') ? '⚠ Klein is disabled in Settings (engines)'
-    : !caps.comfyui?.reachable ? '⚠ Configure ComfyUI in Settings'
-    : kleinEnumHint || kleinAssetHint;
+    : kleinUnavailableReason({
+      enabledInSettings: enabledEngines.includes('klein'),
+      comfyuiReachable: !!caps.comfyui?.reachable,
+      missingAssets: caps.comfyui?.klein_missing,
+      unsupportedEnums: caps.comfyui?.klein_unsupported_enums,
+    });
   // Krea has one more failure mode than Klein — a missing CUSTOM-NODE PACK — and
   // "install a node pack" is a different action from "place a weight file", so
   // the reason is computed (and unit-tested) rather than collapsed into one
