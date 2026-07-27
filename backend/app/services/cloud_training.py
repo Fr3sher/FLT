@@ -853,6 +853,14 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
     # custom-base run keeps its own folder/prefix (combo-hash suffix, exactly
     # like local runs) and Base/De-Turbo cannot share Turbo's run path.
     run_name = lt._run_name(ds, base_model=base_model, family=fam, variant=variant)
+    # Freeze the dataset (manifest + caption text + image content hashes +
+    # environment) BEFORE the reservation lock, exactly like the local path: the
+    # only file I/O of the registration happens here, so the registration itself
+    # stays one short write and neither the reservation window nor the launch
+    # response grows a second writer competing for the database lock.
+    from . import checkpoint_registry
+    _prepared = checkpoint_registry.prepare_launch(
+        user_id, dataset_id, base_model=base_model)
     with _launch_reservation_lock:
         # Authoritative re-check + insert. Keeping the commit inside this
         # process-wide critical section means a second request always sees the
@@ -938,13 +946,13 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                 params['resume_step'] = int(resume_step)
         # Provenance registry (same as local launches): dataset version at
         # launch time, stamped into the params so payloads can expose it.
-        from . import checkpoint_registry
         rec = checkpoint_registry.register_launch(
             user_id, dataset_id, family=fam, source='cloud',
             variant=variant, masked=bool(masked), steps=n_steps,
             cloud_run_id=run.id,
             settings=lt.launch_settings_snapshot(
                 _run_config_dataset(ds, params), fam),
+            prepared=_prepared,
             parent_record_id=parent_record_id, resumed_from=resumed_from)
         if rec is not None:
             params['version'] = rec.version

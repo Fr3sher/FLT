@@ -307,7 +307,13 @@ const TOPICS = [
   action('lineage-compare-runs', 'Compare two runs side by side',
     ['compare runs', 'compare two runs', 'diff', 'difference', 'what changed',
      'side by side', 'shift click', 'lineage compare', 'ab compare', 'settings diff',
-     'which setting changed', 'experiment', 'lab'],
+     'which setting changed', 'experiment', 'lab',
+     // The compare drawer now answers dataset and machine questions too, so the
+     // words a user would actually type for those must reach this topic.
+     'caption changed', 'which captions changed', 'caption diff', 'which images',
+     'image added', 'image removed', 'deleted image', 'which image did i delete',
+     'dataset changed', 'ai-toolkit version', 'torch version', 'cuda', 'gpu',
+     'base model changed', 'snapshot', 'provenance', 'reproduce a run'],
     '/cloud', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   action('lineage-remove-gone-run', 'Remove a gone run from the graph',
     ['remove run', 'delete run', 'gone', 'tidy graph', 'clean up runs',

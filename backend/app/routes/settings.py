@@ -426,6 +426,24 @@ def trash_info():
     return jsonify({'size_bytes': trash.trash_size()})
 
 
+@bp.get('/run-archive')
+def run_archive_info():
+    """Size + ceiling of the training-image archive (the deduplicated copies that
+    let a comparison still SHOW an image deleted since it was trained)."""
+    from ..services import run_archive
+    return jsonify({'size_bytes': run_archive.size_bytes(refresh=True),
+                    'max_bytes': run_archive.max_bytes(),
+                    'enabled': run_archive.enabled()})
+
+
+@bp.post('/run-archive/clear')
+def run_archive_clear():
+    """Drop every archived image. Runs, settings and caption text are in the
+    database and survive; only the ability to LOOK at a since-deleted image goes."""
+    from ..services import run_archive
+    return jsonify({'ok': True, **run_archive.clear()})
+
+
 @bp.post('/trash/open')
 def trash_open():
     """Open the server-resolved trash directory; the client supplies no path."""
