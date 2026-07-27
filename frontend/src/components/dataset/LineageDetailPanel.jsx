@@ -87,7 +87,14 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
   };
 
   return (
-    <div className="fixed right-0 top-0 z-50 flex h-full w-80 flex-col overflow-y-auto border-l border-border bg-surface-overlay p-4 shadow-xl">
+    /* Bottom sheet on a phone, side drawer from `sm` up — the same treatment as
+       CheckpointGalleryPanel. It used to be a hard `w-80` side drawer at every
+       width, which on a 400-px screen covered 80% of the board it is supposed to
+       annotate: you could read the run's settings, but not see the run. Capped at
+       70vh so the graph stays visible above the sheet. Desktop is unchanged. */
+    <div data-testid="lineage-detail-panel" aria-label="Run details"
+      className="fixed inset-x-0 bottom-0 z-50 flex max-h-[70vh] flex-col overflow-y-auto border-t border-border bg-surface-overlay p-4 shadow-xl
+                 sm:inset-x-auto sm:right-0 sm:top-0 sm:h-full sm:max-h-none sm:w-80 sm:border-l sm:border-t-0">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-semibold text-content">
           {/* Same number as the card that opened this panel (see runIdentity). */}
