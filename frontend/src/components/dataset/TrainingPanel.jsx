@@ -6,6 +6,7 @@ import { getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
+import ConceptFaceMaskField from './ConceptFaceMaskField';
 import {
   checkpointSelectionMatchesTraining,
   checkpointVariantLabel,
@@ -435,6 +436,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const advEma = adv?.ema ?? 0;
   const advEmaChoices = adv?.ema_choices ?? [0.99, 0.999];
   const advDualCaptions = Boolean(adv?.dual_captions);
+  // Concept face masking (issue #15). `supported` is the SERVER's answer (concept
+  // only) rather than a second `kind === 'concept'` in JSX that could drift from it.
+  const advMaskFaces = Boolean(adv?.mask_faces);
+  const advMaskFacesSupported = Boolean(adv?.mask_faces_supported);
+  const advMaskFacesConflict = Boolean(adv?.mask_faces_concept_conflict);
   // Memory strategy (issue #14). Tri-state per key: null = "Auto" (the family's
   // calibrated default), true/false = an explicit choice. `advMemEff` is what the
   // run will actually send, so the checkboxes show the truth whether or not the
@@ -2144,6 +2150,17 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                   the ⛶ caption editor. Cloud runs ignore this and train on the long caption only for now.
                 </span>
               </div>
+              {/* Concept face masking — teach the act, not the identities (issue #15,
+                  reported by shivdbz2010). Renders nothing outside a concept dataset. */}
+              <ConceptFaceMaskField
+                datasetId={ds.currentId}
+                enabled={advMaskFaces}
+                supported={advMaskFacesSupported}
+                conceptConflict={advMaskFacesConflict}
+                faceCapability={caps.face_scoring}
+                expandDefault={undefined}
+                onToggle={(v) => saveAdv({ mask_faces: v })}
+              />
               {/* Memory saving — quantisation + low-VRAM streaming (issue #14).
                   The recipes are calibrated for 24 GB; on a bigger card that is a
                   tax nobody asked for. Defaults are UNCHANGED — this only makes

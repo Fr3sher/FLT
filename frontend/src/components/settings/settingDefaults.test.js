@@ -170,6 +170,10 @@ const COVERED = [
   ...['max_concurrent_runs', 'max_price_per_hour', 'monthly_budget_usd', 'stall_timeout_minutes',
     'freeze_watchdog_minutes', 'unreachable_grace_minutes', 'min_reliability']
     .map((k) => ['TrainingSection.jsx', 'cloud', k]),
+  // Concept face masking (issue #15) — both knobs are user-tunable, so both must
+  // have a way back to the shipped value.
+  ['TrainingSection.jsx', 'face_mask', 'expand'],
+  ['TrainingSection.jsx', 'face_mask', 'min_weight'],
   ['LocalToolsSection.jsx', 'ollama', 'vision_concurrency'],
   ['LocalToolsSection.jsx', 'ollama', 'vision_keep_warm_seconds'],
   ['ServerSection.jsx', 'server', 'port'],

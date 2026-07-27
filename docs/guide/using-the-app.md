@@ -99,8 +99,12 @@ the captioner needs to know exactly *what to omit*. What changes vs character:
 - **Captions invert**: they describe everything *except* the concept, so the
   concept is what binds to the trigger. The leak check watches for stray
   descriptions of it.
-- **Masked training is off** (a person mask would erase the very thing you're
+- **Person masking is off** (a person mask would erase the very thing you're
   teaching), and imports keep the full frame instead of head-cropping.
+- **You can mask the faces instead** — the opposite polarity. *Advanced training
+  options ▸ Mask faces* weighs the detected faces down in the loss so the concept
+  learns the act, not the people demonstrating it, and you can preview exactly what
+  it would cover before training. Off by default. See the dataset guide, §8.
 
 ## Style datasets (a global aesthetic)
 

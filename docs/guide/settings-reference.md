@@ -372,6 +372,31 @@ Defaults for new runs, plus everything about the optional cloud training lane.
 
 - **Default training family** → `training.default_family`. The model family preselected when you start a new run. One of `zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, `anima`. Default **`zimage`**. Purely a starting point — you can switch family per run. `anima` trains the open [Anima](https://huggingface.co/circlestone-labs/Anima-Base-v1.0-Diffusers) anime model on its public base (no gated download); it is **local-only** for now (needs an up-to-date ai-toolkit + diffusers — cloud training arrives once the GPU pod image is verified).
 
+### Concept face masking
+
+Used **only** by Concept datasets that switched **Mask faces** on in *Advanced
+training options* (see the dataset guide, §8). It re-weights the training loss over
+detected faces so the concept learns the act rather than the identities in your
+photos — it never alters your images. Both knobs are exposed rather than frozen
+because no published measurement exists for the right value; preview the effect on
+your own images from the training panel.
+
+- **Head coverage (face box ×)** → `face_mask.expand`. Face detection returns a box
+  running from the eyes to the chin; this grows it around its centre (biased upward,
+  to catch hair) into a head. Default **2.0**, clamped to **1.0–3.0**. Higher covers
+  hair and jaw, lower stays tight on the face. 2.0 matches the only published default
+  for this detector/mask combination.
+- **Loss weight kept on faces** → `face_mask.min_weight`. How much the masked area
+  still counts, from 0 (nothing) to 1 (unmasked). Default **0.1**, clamped to
+  **0.05–1.0**. Lower pushes identity out harder. **It deliberately cannot reach
+  zero**: an area worth nothing isn't ignored, it's *unpenalised* — the model may
+  render anything there at no cost, degraded anatomy is reported right below this
+  floor, and a fully masked close-up would divide by zero in the trainer's own mask
+  normalisation and kill the run.
+
+Changing these does **not** affect the person-masking used by Character datasets;
+that keeps its own historical weight.
+
 ### Cloud GPU (vast.ai)
 
 - **vast.ai API key** → `VAST_API_KEY` (secret). Add it to unlock **☁️ Train in cloud**. **Test** validates it (and auto-saves it first). The card includes a step-by-step guide to getting the key from [cloud.vast.ai](https://cloud.vast.ai/).

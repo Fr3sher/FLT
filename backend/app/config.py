@@ -98,6 +98,25 @@ DEFAULTS = {
                 'chatgpt_image_model': ''},
     'captioning': {'backend': 'auto'},                         # auto|joycaption|ollama|none
     'training': {'default_family': 'zimage'},
+    # Concept face masking (opt-in per dataset, Advanced training options). Both
+    # knobs are exposed because NOBODY has measured the right value: no public A/B
+    # of a concept LoRA trained with vs without face masking exists, so shipping a
+    # frozen number would be a guess dressed as a default.
+    #
+    # `expand`: how far the detected FACE box is grown to become a HEAD box.
+    # InsightFace returns eyes-to-chin; untouched it leaks jaw, hair and neck.
+    # 2.0 is the only published default for this exact chain (ai-toolkit-perceptual's
+    # face_suppression_expand, documented "1.8-2.0 = full head coverage").
+    #
+    # `min_weight`: the loss weight left INSIDE the mask (ai-toolkit maps black ->
+    # mask_min_value). NOT zero, on purpose, and the floor below is not cosmetic:
+    #   - a zero-weight region is not "ignored", it is unpenalised — the model may
+    #     put anything there at no cost (OneTrainer discussion #347: phantom limbs,
+    #     edge artefacts), and the only published sweep of this knob (SECourses, 9
+    #     runs) reports "anatomically disproportional" output below 0.1;
+    #   - ai-toolkit divides the mask by its own mean (SDTrainer), so an image
+    #     masked edge to edge at exactly 0.0 divides by zero -> NaN loss -> dead run.
+    'face_mask': {'expand': 2.0, 'min_weight': 0.1},
     # Cloud GPU training (vast.ai). Everything has a sane default: the only
     # required user input is the VAST_API_KEY secret. Values here are knobs
     # for power users / for adjusting after the real-world smoke test.

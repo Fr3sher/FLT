@@ -17,6 +17,8 @@ from .. import config as cfg
 from ..config import LOCAL_USER
 from ..services import cloud_training as ct
 from ..services import face_dataset_service as svc
+from ..services import face_mask
+from ..models import FaceDatasetImage
 from ..services import lora_training as lt
 from ..services import zimage_convert as zc
 from ..utils.comfyui import get_zimage_models, get_checkpoint_models
@@ -445,6 +447,59 @@ def dataset_train_best_epoch(dataset_id):
         return jsonify({'ok': True, **lt.score_checkpoint_samples(LOCAL_USER, dataset_id, **kw)})
     except Exception as e:
         return _map_error(e)
+
+
+@bp.post('/dataset/<int:dataset_id>/train/face-mask-preview')
+def dataset_face_mask_preview(dataset_id):
+    """Detect the faces of the kept set and return them as NORMALISED boxes, so the
+    training panel can draw what face masking would cover before anything is trained.
+
+    Detection only — no generation, no training, nothing written to disk.
+
+    RAW boxes are returned, not grown ones: the expand factor is applied in the
+    browser (utils/faceMaskBox.js mirrors infer/face_mask_infer.dilate_box), so
+    dragging the slider redraws instantly instead of paying for another InsightFace
+    pass. One pass, then the knob is free.
+
+    The SAMPLE is deliberately failure-first: images where no face was found are the
+    instructive ones (profile, cropped, too small) — a preview of successes only
+    would hide exactly what the user needs to see. `coverage` is computed over the
+    WHOLE kept set regardless, because a partially masked set is the bad case."""
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
+    if not svc.is_concept(ds):
+        return jsonify({'ok': False, 'error': 'face masking is for concept datasets'}), 400
+    if not face_mask.is_available():
+        # Degrade by SAYING SO. The option itself is disabled in the UI on the same
+        # capability, so this is the belt to that brace, never a crash.
+        return jsonify({'ok': False, 'error': 'face detection unavailable',
+                        'reason': 'face_scoring'}), 409
+    limit = max(1, min(12, int((request.get_json(silent=True) or {}).get('limit') or 6)))
+    kept = (FaceDatasetImage.query
+            .filter_by(dataset_id=dataset_id, status='keep')
+            .filter(FaceDatasetImage.filename.isnot(None)).all())
+    by_path = {}
+    for img in kept:
+        p = os.path.join(svc._dataset_dir(dataset_id), img.filename)
+        if os.path.isfile(p):
+            by_path[p] = img
+    if not by_path:
+        return jsonify({'ok': True, 'samples': [], 'coverage': face_mask.coverage_summary({})})
+    data = face_mask.detect_faces(list(by_path))
+    if not data:
+        return jsonify({'ok': False, 'error': 'face detection failed'}), 409
+    results = data.get('results') or {}
+    coverage = face_mask.coverage_summary(results)
+    missed = [p for p, r in results.items() if (r or {}).get('state') != 'masked']
+    found = [p for p, r in results.items() if (r or {}).get('state') == 'masked']
+    sample_paths = (missed + found)[:limit]
+    samples = [{'image_id': by_path[p].id, 'filename': by_path[p].filename,
+                'state': (results[p] or {}).get('state'),
+                'boxes': (results[p] or {}).get('boxes') or []}
+               for p in sample_paths if p in by_path]
+    return jsonify({'ok': True, 'samples': samples, 'coverage': coverage,
+                    'expand': face_mask.expand_factor()})
 
 
 @bp.get('/dataset/<int:dataset_id>/train/base-info')
