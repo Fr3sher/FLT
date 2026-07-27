@@ -1312,6 +1312,30 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               )}
             </div>
           )}
+          {/* Gated Hugging Face base: 401 (no valid token) and 403 (licence not
+              accepted) look identical in the raw HF sentence and have OPPOSITE
+              fixes — reported by SurpassHR (GitHub) on Krea 2. Shown above the
+              log with the remedy that matches the status code. */}
+          {view.hfGated && (
+            <div className="mt-1.5 rounded border border-amber-400/40 bg-amber-500/10 p-2 text-amber-100">
+              <div className="font-semibold">{view.hfGated.title}</div>
+              <p className="m-0 mt-0.5 break-words text-amber-200/90">{view.hfGated.message}</p>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1">
+                {view.hfGated.status === 401 && (
+                  <a href="#/settings/local-tools"
+                    className="text-amber-300 underline decoration-amber-300/50">
+                    Settings ▸ API keys →
+                  </a>
+                )}
+                {view.hfGated.repo && (
+                  <a href={view.hfGated.url} target="_blank" rel="noreferrer"
+                    className="min-w-0 break-all text-amber-300 underline decoration-amber-300/50">
+                    {view.hfGated.repo} on Hugging Face →
+                  </a>
+                )}
+              </div>
+            </div>
+          )}
           {view.excerpt && (
             <pre className={`mt-1 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-black/30 p-1.5 font-mono text-[0.625rem] ${
               view.tone === 'error' ? 'text-red-300/90' : 'text-content-muted'}`}>

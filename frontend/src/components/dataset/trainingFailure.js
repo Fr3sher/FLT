@@ -46,10 +46,11 @@ export const GENERIC_CAUSES =
   + 'token (gated models like Krea 2, FLUX.1 and FLUX.2 Klein). Fix the cause '
   + 'above, then Train again.';
 
-/** error = the `training_error` payload ({rc, log_tail, excerpt?, gpu_arch?}).
- *  Returns {title, excerpt, tone, note, causes, gpuArch} or null when there is
- *  nothing to show. `tone` is 'error' (this IS the cause) or 'neutral' (context
- *  only) — the caller styles on it. */
+/** error = the `training_error` payload ({rc, log_tail, excerpt?, gpu_arch?,
+ *  hf_gated?}).
+ *  Returns {title, excerpt, tone, note, causes, gpuArch, hfGated} or null when
+ *  there is nothing to show. `tone` is 'error' (this IS the cause) or 'neutral'
+ *  (context only) — the caller styles on it. */
 export function failureView(error) {
   if (!error) return null;
   const rc = error.rc;
@@ -63,13 +64,18 @@ export function failureView(error) {
   const isCause = kind === 'traceback' || kind === 'error';
   const text = (excerpt ? excerpt.text : error.log_tail) || '';
   const gpu = error.gpu_arch && error.gpu_arch.message ? error.gpu_arch : null;
+  // A gated-base refusal (Krea 2, FLUX.1-dev, FLUX.2 Klein): the backend already
+  // separated 401 "not authenticated" from 403 "licence not accepted", which the
+  // raw Hugging Face sentence conflates into one misleading line.
+  const gated = error.hf_gated && error.hf_gated.message ? error.hf_gated : null;
   return {
     title,
     excerpt: text,
     tone: isCause ? 'error' : 'neutral',
     note: !text ? EMPTY_LOG_NOTE : (isCause ? FULL_LOG_NOTE : NO_ERROR_NOTE),
-    // The GPU verdict is a REAL cause: it takes the place of the generic list.
-    causes: gpu ? '' : GENERIC_CAUSES,
+    // A proven cause takes the place of the generic guesswork list.
+    causes: (gpu || gated) ? '' : GENERIC_CAUSES,
     gpuArch: gpu,
+    hfGated: gated,
   };
 }

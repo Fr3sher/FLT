@@ -11,7 +11,8 @@ harmless huggingface_hub `FutureWarning`. Hours lost on a deprecation notice.
 from unittest.mock import patch
 
 from app.services.training_diagnostics import (
-    CU128_INDEX_URL, MAX_EXCERPT_LINES, extract_error_excerpt, torch_arch_verdict,
+    CU128_INDEX_URL, MAX_EXCERPT_LINES, extract_error_excerpt, gated_repo_verdict,
+    torch_arch_verdict,
 )
 
 # The actual log the user was shown, trimmed. Nothing in it is an error.
@@ -319,3 +320,91 @@ def test_a_legacy_payload_without_an_excerpt_is_re_analysed():
     assert msg.endswith('No error line in the log.')
     msg2 = local_error_message({'rc': 1, 'log_tail': 'boom\nRuntimeError: it died\n'})
     assert msg2 == 'Training crashed (exit code 1). RuntimeError: it died'
+
+
+# --- gated Hugging Face repo: 401 is NOT 403 ------------------------------
+# SurpassHR (GitHub) hit this on Krea 2. huggingface_hub prints the SAME
+# sentence for both statuses — "You must have access to it and be authenticated
+# to access it" — and reading the sentence instead of the code produced a public
+# answer telling him to request access he already had. The two are separated
+# here, on the status code, with opposite remedies.
+
+GATED_401_LOG = (
+    'Running 1 job\n'
+    'Traceback (most recent call last):\n'
+    '  File "~/ai-toolkit/run.py", line 90, in <module>\n'
+    '    main()\n'
+    'huggingface_hub.errors.GatedRepoError: 401 Client Error. (Request ID: Root=1-abc)\n'
+    '\n'
+    'Cannot access gated repo for url '
+    'https://huggingface.co/krea/Krea-2-Turbo/resolve/main/turbo.safetensors.\n'
+    'Access to model krea/Krea-2-Turbo is restricted. You must have access to it and be '
+    'authenticated to access it. Please log in.\n'
+)
+
+GATED_403_LOG = (
+    'huggingface_hub.errors.GatedRepoError: 403 Client Error. (Request ID: Root=1-def)\n'
+    'Cannot access gated repo for url '
+    'https://huggingface.co/black-forest-labs/FLUX.1-dev/resolve/main/flux1-dev.safetensors.\n'
+    'Access to model black-forest-labs/FLUX.1-dev is restricted and you are not in the '
+    'authorized list. Visit https://huggingface.co/black-forest-labs/FLUX.1-dev to ask '
+    'for access.\n'
+)
+
+
+def test_a_401_is_reported_as_not_authenticated_not_as_a_licence_problem():
+    v = gated_repo_verdict(GATED_401_LOG)
+    assert v['status'] == 401
+    assert v['repo'] == 'krea/Krea-2-Turbo'
+    low = v['message'].lower()
+    assert 'not authenticated' in low
+    assert 'settings' in low and 'api keys' in low
+    # It must NOT send the user off to request access again — that was the wrong
+    # answer this whole verdict exists to stop.
+    assert 'accept the model licence' not in low
+    assert 'ask for access' not in low
+
+
+def test_a_403_is_reported_as_a_licence_not_yet_accepted():
+    v = gated_repo_verdict(GATED_403_LOG)
+    assert v['status'] == 403
+    assert v['repo'] == 'black-forest-labs/FLUX.1-dev'
+    assert v['url'] == 'https://huggingface.co/black-forest-labs/FLUX.1-dev'
+    low = v['message'].lower()
+    assert 'accept the model licence' in low
+    assert 'another token will not help' in low
+
+
+def test_a_401_with_a_token_already_saved_says_the_token_was_rejected():
+    v = gated_repo_verdict(GATED_401_LOG, token_configured=True)
+    assert 'rejected' in v['message'].lower()
+    assert 'expired' in v['message'].lower()
+
+
+def test_a_401_with_no_token_saved_says_to_paste_one():
+    v = gated_repo_verdict(GATED_401_LOG, token_configured=False)
+    assert 'no hugging face token is saved' in v['message'].lower()
+
+
+def test_a_log_with_no_gated_refusal_gets_no_verdict():
+    for log in (FUTUREWARNING_LOG, '', None, 'RuntimeError: CUDA out of memory\n',
+                'huggingface_hub.errors.RepositoryNotFoundError: 404 Client Error\n'):
+        assert gated_repo_verdict(log) is None, log
+
+
+def test_the_verdict_never_echoes_a_token():
+    """Training logs get pasted into public help threads verbatim."""
+    leaky = GATED_401_LOG + 'headers: {"Authorization": "Bearer hf_abcdefghijklmnop"}\n'
+    v = gated_repo_verdict(leaky)
+    assert 'hf_abcdefghijklmnop' not in str(v)
+    assert 'hf_abcdefghijklmnop' not in extract_error_excerpt(leaky)['text']
+
+
+def test_the_crash_payload_carries_the_gated_verdict(tmp_path):
+    """End of the chain: what the watcher stores is what the panel renders."""
+    from app.services.lora_training import _crash_payload
+    log = tmp_path / 'training.log'
+    log.write_text(GATED_401_LOG, encoding='utf-8')
+    payload = _crash_payload(str(log), dataset_id=1, rc=1)
+    assert payload['hf_gated']['status'] == 401
+    assert payload['hf_gated']['repo'] == 'krea/Krea-2-Turbo'

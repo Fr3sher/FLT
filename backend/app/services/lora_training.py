@@ -106,6 +106,87 @@ def _jobs_dir():
     return d
 
 
+def _machine_hf_token_files() -> list:
+    """Every place `hf auth login` may have written a token on THIS machine, best
+    first. Mirrors `huggingface_hub.constants` (read from 0.36): `$HF_HOME/token`,
+    `$XDG_CACHE_HOME/huggingface/token`, `~/.cache/huggingface/token`.
+
+    All three are listed rather than only the first: the app's own process may
+    already run with `HF_HOME` pointed at the ai-toolkit cache, while the shell
+    where the user typed `hf auth login` had none — the CLI token is then in the
+    plain default home and only the last candidate finds it.
+
+    Pure string math; huggingface_hub is NOT imported (it lives in the ai-toolkit
+    venv, not necessarily in ours), and no home path is assumed — Linux, macOS
+    and Windows all fall out of `expanduser`."""
+    def _norm(p):
+        return os.path.expanduser(os.path.expandvars(p))
+
+    homes = []
+    env_home = (os.environ.get('HF_HOME') or '').strip()
+    if env_home:
+        homes.append(_norm(env_home))
+    xdg = (os.environ.get('XDG_CACHE_HOME') or '').strip()
+    if xdg:
+        homes.append(os.path.join(_norm(xdg), 'huggingface'))
+    homes.append(os.path.join(_norm('~'), '.cache', 'huggingface'))
+
+    out = []
+    for h in homes:
+        cand = os.path.join(h, 'token')
+        if cand not in out:
+            out.append(cand)
+    return out
+
+
+def training_subprocess_env(hf_home=None) -> dict:
+    """The environment the LOCAL ai-toolkit process is launched with.
+
+    `HF_HOME` routes base/adapter weights onto the configured disk and
+    `PYTHONIOENCODING` keeps unicode logs from dying on cp1252.
+
+    Hugging Face authentication, in the order huggingface_hub itself resolves it:
+
+    1. the token saved in Settings ▸ API keys is injected EXPLICITLY, exactly
+       like the cloud lane does (`cloud_training`) — the local lane used to rely
+       on it happening to sit in this process's `os.environ`, which is an
+       implementation detail of `cfg.secret`, not a contract;
+    2. failing that, whatever the machine already carries is preserved: an
+       `HF_TOKEN` in the environment (ai-toolkit's own `.env`, loaded by its
+       `run.py`, is how this worked for the people it worked for) …
+    3. … and, crucially, the token file `hf auth login` wrote. huggingface_hub
+       reads it at `$HF_HOME/token`, so overriding `HF_HOME` for the cache HID
+       a perfectly valid login and produced a 401 on gated bases (Krea 2,
+       FLUX.1-dev, FLUX.2 Klein) — reported by SurpassHR on GitHub. `HF_TOKEN_PATH`
+       is a separate variable that wins over `HF_HOME`, so we pin it at the real
+       file. Relocating a CACHE must never log the user out.
+
+    Never logs, and never copies a token anywhere but into this env dict.
+    """
+    env = dict(os.environ, HF_HOME=str(hf_home if hf_home is not None else _hf_home()),
+               PYTHONIOENCODING='utf-8')
+    token = (cfg.secret('HF_TOKEN') or '').strip()
+    if token:
+        env['HF_TOKEN'] = token
+        return env
+    if (env.get('HF_TOKEN') or '').strip():
+        return env                                   # already authenticated by env
+    if (env.get('HF_TOKEN_PATH') or '').strip():
+        return env                                   # user pinned it: respect it
+    try:
+        ours = os.path.join(env['HF_HOME'], 'token')
+        # A login made WITH our HF_HOME already resolves — never redirect it away.
+        if os.path.isfile(ours):
+            return env
+        for cand in _machine_hf_token_files():
+            if cand != ours and os.path.isfile(cand):
+                env['HF_TOKEN_PATH'] = cand
+                break
+    except OSError:
+        pass                                         # unreadable home: change nothing
+    return env
+
+
 # ComfyUI-side destinations (deploy target for a trained LoRA, and the SDXL base
 # checkpoint pool). Distinct error message from the aitoolkit accessors above:
 # a dataset can be trainable (aitoolkit OK) while ComfyUI itself is unconfigured,
@@ -4629,12 +4710,22 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
     says so, the GPU-architecture verdict that turns "exited 1" into something
     the user can act on. Best-effort throughout: nothing here may raise inside
     the watcher thread, and an unknown probe adds no key at all."""
-    from ..utils.redact import redact_user_paths
-    from .training_diagnostics import extract_error_excerpt, torch_arch_verdict
+    from ..utils.redact import redact_tokens, redact_user_paths
+    from .training_diagnostics import (extract_error_excerpt, gated_repo_verdict,
+                                       torch_arch_verdict)
     wide = _log_tail(log_path, _ERROR_SCAN_LINES)
     payload = {'dataset_id': dataset_id, 'rc': rc,
-               'log_tail': redact_user_paths(_log_tail(log_path))[-1500:],
+               'log_tail': redact_tokens(redact_user_paths(_log_tail(log_path)))[-1500:],
                'excerpt': extract_error_excerpt(wide)}
+    # A gated-base refusal is a PROVEN cause with a precise remedy — and 401 and
+    # 403 have opposite remedies, which the raw HF sentence conflates.
+    try:
+        gated = gated_repo_verdict(wide, token_configured=bool(cfg.secret('HF_TOKEN')))
+        if gated:
+            payload['hf_gated'] = {k: gated[k] for k in ('status', 'repo', 'url',
+                                                         'title', 'message')}
+    except Exception:
+        pass
     try:
         from .. import capabilities
         arch = torch_arch_verdict(capabilities.aitoolkit_torch_info(),
@@ -4851,9 +4942,9 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # job-config passe en masked training (fond 10 %). OFF ou indispo = historique.
     dataset_folder = export_dataset_to_aitoolkit(user_id, dataset_id, masked=masked)
     config_path = write_job_config(ds, dataset_folder, steps=steps)
-    # HF_HOME route les poids base/adapter sur le disque configuré. PYTHONIOENCODING
-    # évite les crashs cp1252 sur les logs unicode. Jamais shell=True ; args en liste.
-    env = dict(os.environ, HF_HOME=str(_hf_home()), PYTHONIOENCODING='utf-8')
+    # Environnement du sous-process d'entraînement (HF_HOME + auth Hugging Face,
+    # cf. training_subprocess_env). Jamais shell=True ; args en liste.
+    env = training_subprocess_env()
     run_dir = _run_root(ds, base_model=base_model, family=launch_fam, variant=variant)
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = _run_log_path(ds, base_model=base_model, family=launch_fam,

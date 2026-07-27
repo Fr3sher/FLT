@@ -27,7 +27,7 @@ The Blackwell trap was reported by wannadecryptor (Discord, RTX 5070).
 """
 import re
 
-from ..utils.redact import redact_user_paths
+from ..utils.redact import redact_tokens, redact_user_paths
 
 # How many lines of the log the excerpt may show. Small enough to stay readable
 # on a phone, big enough for a real traceback.
@@ -60,7 +60,7 @@ def _clean_lines(log_text):
     of a bar survives, instead of one mile-long line."""
     if not log_text:
         return []
-    text = redact_user_paths(str(log_text))
+    text = redact_tokens(redact_user_paths(str(log_text)))
     text = text.replace('\r\n', '\n').replace('\r', '\n')
     return [line.rstrip() for line in text.split('\n') if line.strip()]
 
@@ -118,6 +118,96 @@ def extract_error_excerpt(log_text, max_lines=MAX_EXCERPT_LINES) -> dict:
 
     # 3) Nothing. Say nothing — the caller shows the tail as context only.
     return {'kind': 'none', 'text': '\n'.join(lines[-max_lines:]), 'headline': ''}
+
+
+# --- gated Hugging Face repo: 401 is NOT 403 -----------------------------------
+# Every family with a license-gated base (Krea 2, FLUX.1-dev, FLUX.2 Klein) dies
+# the same way when the download is refused, and huggingface_hub prints ONE
+# sentence for both cases: "You must have access to it and be authenticated to
+# access it". Those are two different problems with two opposite fixes, and
+# reading the sentence instead of the status code has already produced a wrong
+# public answer (reported by SurpassHR on GitHub, training on Krea 2):
+#
+#   401 Unauthorized -> the request carried NO valid token. Hugging Face cannot
+#                       even tell who is asking. Fix: give the app a token.
+#   403 Forbidden    -> the token IS valid; that account has not accepted the
+#                       licence / is not on the authorized list. Fix: accept the
+#                       licence on the model page. Another token changes nothing.
+_GATED_MARK_RE = re.compile(
+    r'gatedrepoerror|cannot access gated repo|is restricted|'
+    r'must have access to it and be authenticated', re.IGNORECASE)
+_HTTP_STATUS_RE = re.compile(r'\b(401|403)\b[^\n]{0,40}?client\s*error', re.IGNORECASE)
+# "Access to model krea/Krea-2-Turbo is restricted" — the most reliable shape.
+_REPO_TEXT_RE = re.compile(
+    r'access to (?:model|repo(?:sitory)?)\s+([\w.\-]+/[\w.\-]+)', re.IGNORECASE)
+# Fallback: the resolve URL. `settings`/`docs`/... are site pages, not repos.
+_REPO_URL_RE = re.compile(r'huggingface\.co/([\w.\-]+/[\w.\-]+)', re.IGNORECASE)
+_NOT_A_REPO_OWNER = {'settings', 'docs', 'api', 'join', 'login', 'pricing', 'blog'}
+
+GATED_401_TITLE = 'Hugging Face saw no valid token — this is not a licence problem'
+GATED_403_TITLE = 'Your token works — the licence has not been accepted yet'
+
+
+def gated_repo_verdict(log_text, token_configured=None) -> dict | None:
+    """Did this run die on a gated Hugging Face repo, and WHY exactly?
+
+    Returns None when the log shows no gated-repo refusal (never a guess).
+    Otherwise {'status': 401|403, 'repo', 'url', 'title', 'message'} — already
+    path-redacted and token-redacted, and never echoing a token itself.
+
+    `token_configured` (optional) is whether the app HAS a Hugging Face token
+    saved: with one, a 401 means the token was rejected (expired/revoked/typo),
+    which is a different sentence from "you have no token".
+    """
+    lines = _clean_lines(log_text)
+    if not lines:
+        return None
+    text = '\n'.join(lines)
+    if not _GATED_MARK_RE.search(text):
+        return None
+    m = _HTTP_STATUS_RE.search(text)
+    if not m:
+        return None
+    status = int(m.group(1))
+
+    repo = ''
+    hit = _REPO_TEXT_RE.search(text)
+    if hit:
+        repo = hit.group(1)
+    else:
+        for cand in _REPO_URL_RE.findall(text):
+            if cand.split('/', 1)[0].lower() not in _NOT_A_REPO_OWNER:
+                repo = cand
+                break
+    name = repo or 'the base model'
+    url = f'https://huggingface.co/{repo}' if repo else 'the model page on huggingface.co'
+
+    if status == 403:
+        return {
+            'status': 403, 'repo': repo, 'url': url, 'title': GATED_403_TITLE,
+            'message': (
+                f'Hugging Face recognised the token but that account has not been granted '
+                f'access to {name} (HTTP 403 Forbidden). Adding another token will not help. '
+                f'Open {url} while signed in with the SAME account the token belongs to, '
+                f'accept the model licence, wait for it to show as granted, then train again.'),
+        }
+    if token_configured:
+        detail = ('A Hugging Face token IS saved in Settings ▸ API keys, so that token was '
+                  'rejected — typically expired, revoked, or missing read access. Create a '
+                  'fresh read token at https://huggingface.co/settings/tokens, paste it over '
+                  'the old one, then train again.')
+    else:
+        detail = ('No Hugging Face token is saved in Settings ▸ API keys. Create a read token '
+                  'at https://huggingface.co/settings/tokens and paste it there, then train '
+                  'again. (A token from `hf auth login` is picked up too, but only when the '
+                  'CLI ran as the same user as this app.)')
+    return {
+        'status': 401, 'repo': repo, 'url': url, 'title': GATED_401_TITLE,
+        'message': (
+            f'The download of {name} was refused as NOT AUTHENTICATED (HTTP 401). Hugging Face '
+            f'could not tell who was asking, so this says nothing about whether you have been '
+            f'granted access — asking for access again will not fix it. {detail}'),
+    }
 
 
 # --- torch build vs GPU architecture -------------------------------------------
