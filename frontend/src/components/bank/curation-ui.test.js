@@ -28,6 +28,25 @@ test('each curation button feeds its OWN returned ids into the selection view', 
   assert.equal(feeds.length, 2, 'both selectors feed their result into the view');
 });
 
+// "Most diverse" was computed as "most isolated" — the criterion that structurally
+// prefers the meme, the stray photo of someone else and the botched frame. The
+// backend now discounts isolation, and the UI must (a) send that setting, (b) let
+// the user turn it back OFF (the historical behaviour is still one drag away), and
+// (c) SAY what it does — a selector whose meaning changed silently would be worse
+// than the bias it fixes.
+test('🎨 Pick diverse exposes the typicality guard and sends it', () => {
+  assert.match(ws, /const \[diverseTypicality, setDiverseTypicality\] = useState\(0\.5\)/);
+  assert.match(ws, /typicality: diverseTypicality/);
+  // a real, bounded control (0 → 1) the user can drag back to the old behaviour
+  const slider = ws.match(/<input type="range"[^>]*setDiverseTypicality[^>]*\/>/s)
+    || ws.match(/<input type="range" min=\{0\} max=\{1\}[\s\S]{0,240}?\/>/);
+  assert.ok(slider, 'the guard is a slider, not a hidden constant');
+  assert.match(slider[0], /min=\{0\} max=\{1\}/);
+  // and it explains itself, including what OFF means
+  assert.match(ws, /Skip the odd ones out/);
+  assert.match(ws, /pure coverage, exactly like before/);
+});
+
 test('the curated selection actually switches the grid to a ?ids= view (not scattered checkmarks)', () => {
   // showCuratedSelection flips the grid into the selection view, seeded with the
   // ids in the order the backend ranked them, and drives the fetch immediately.

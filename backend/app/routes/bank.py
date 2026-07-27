@@ -505,14 +505,23 @@ def _curation_filters(data):
 def bank_select_diverse(bank_id):
     """Farthest-point selection of the N most VARIED images in the current filter,
     reusing the ✨ Score embeddings (no GPU). Returns the chosen ids for the UI to
-    check — never mutates. 400 with a "run Score first" hint when unscored."""
+    check — never mutates. 400 with a "run Score first" hint when unscored.
+
+    {typicality} (0–1) tempers the sampling so isolated aberrations stop winning
+    on isolation alone; omitted ⇒ the service default, an explicit 0 ⇒ the
+    historical pure farthest-point behaviour."""
     data = request.get_json(silent=True) or {}
     try:
         n = int(data.get('n') or 60)
     except (TypeError, ValueError):
         n = 60
+    typ = data.get('typicality')
     try:
-        out = banks.select_diverse(LOCAL_USER, bank_id, n=n,
+        typ = banks._TYPICALITY_DEFAULT if typ in (None, '') else float(typ)
+    except (TypeError, ValueError):
+        typ = banks._TYPICALITY_DEFAULT
+    try:
+        out = banks.select_diverse(LOCAL_USER, bank_id, n=n, typicality=typ,
                                    filters=_curation_filters(data))
     except ValueError as e:
         return jsonify({'error': str(e)}), 400

@@ -362,6 +362,19 @@ with **no rescan**. (The two exceptions are noted below.)
 
 - **Which Python runs ✨ Score** → `bank_scoring.python`. **Auto-managed:** leave it empty and Setup ▸ Quality tools builds a dedicated environment and fills it in. It carries **CPU-only PyTorch** on purpose (a first install stays small instead of pulling ~2.5 GB of CUDA wheels on machines with no card), which costs roughly **336 ms per image** instead of ~15 ms on a GPU. On a machine that already has a working CUDA PyTorch — ai-toolkit's venv, ComfyUI's, a conda env — you can point Score at it instead: open a bank and click **⚡ Use a GPU Python I already have** under the CPU warning. The picker checks each candidate *package by package* (`torch`, `open_clip`, `transformers`, `timm`, `numpy`, `Pillow`) and **refuses** any interpreter that can't run the whole pass — CUDA alone is not enough, and a missing `open_clip` would only surface an hour into a run. Nothing is ever installed into an environment the app did not build: a missing package is named with the exact command, for you to run. Reversible at any time (**Back to the app default**), and leaving it alone changes nothing — detection is an offer, never a prerequisite. The picker also accepts a path you type: an interpreter **or** the environment folder holding it (venv, conda/miniconda, uv, a portable bundle, the system Python, another disk), spaces and accents included. No torch or CUDA *version* is required — only that the modules import and `torch.cuda.is_available()` is true. On a machine with no NVIDIA card the picker says so and stops suggesting CUDA; it still lets you borrow an interpreter that already has the packages, to avoid installing them twice. The **Install / ↻ Reinstall** button in Setup ▸ Quality tools honours the same rule: while Score is pointed at a borrowed interpreter it installs nothing and prints the `pip install` command instead — clear the setting (**Back to the app default**) if you want the app to build and fill its own environment again. See *Using the app ▸ Make Score use a GPU Python you already have*.
 
+**Not a setting, but it lives with them:** the **🎨 Pick diverse** popover in a
+bank carries a **Skip the odd ones out** slider (0–100%, **default 50%**) next to
+its *How many*. It is a per-click control — chosen where you use it, not stored
+in `config.json` — because it is a property of the selection you are asking for,
+not of the bank. "Most diverse" is farthest-point sampling, which by construction
+favours the most *isolated* images; the slider discounts an image for being alone
+in the bank so memes, screenshots and stray photos of someone else stop winning
+the first picks, while anything as typical as the median of the bank is left
+untouched (it cannot pull the selection towards look-alikes). **0 reproduces the
+pure-coverage behaviour this button had before the slider existed** — the change
+of default does change what a given bank returns. See *Using the app ▸ Curate down
+to the right subset*.
+
 The **✨ Score** pass (aesthetic · NSFW · style) needs the **Bank scoring** extra (Setup ▸ Quality tools); **🚩 Find watermarks** reuses the vision model from **Captioning**. Both are GPU passes, serialized against training and captioning, and detection-only — the bank never edits your source files.
 
 ## Training

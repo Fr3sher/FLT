@@ -1733,17 +1733,110 @@ def _pool_embeddings(bank, emb_by_path, filters):
     return ids, E
 
 
-def select_diverse(user_id, bank_id, n=60, *, filters=None):
-    """Farthest-point sampling over the ✨ Score CLIP embeddings: the ``n`` images
-    of the (filtered) pool that best COVER the visual space — the antidote to a
-    dump of 4 000 near-identical shots. Greedy FPS: seed with the lowest-id row
-    (deterministic), then repeatedly add the point whose nearest already-chosen
-    neighbour is FARTHEST (max-min cosine distance). O(n·m·d) — one (m×d)·(d,)
-    product per pick, ~sub-second even at m=24 000 / n=2 000.
+_TYPICALITY_DEFAULT = 0.5    # see select_diverse — 0 restores pure farthest-point
+_TYPICALITY_K = 10           # neighbours whose mean similarity IS the local density
+_TYPICALITY_BLOCK = 512      # rows per similarity block — NEVER a full (m×m) matrix
+_TYPICALITY_Z = 3.0          # robust deviations below the median density = full penalty
+_TYPICALITY_DECADES = 3.0    # novelty discount at full guard + full penalty: 10⁻³
+_TYPICALITY_MIN_POOL = 32    # under this a median/MAD "tail" is noise — guard off
 
-    Returns {'image_ids': [...] (sorted), 'pool': m, 'requested': n}. Raises
-    ValueError (→400, "run ✨ Score first") when no embedding exists yet, so the UI
-    shows the clear hint instead of an empty, unexplained selection."""
+
+def _isolation_penalty(E, *, k=_TYPICALITY_K, block=_TYPICALITY_BLOCK):
+    """How ALONE each row is, as (m,) floats in [0, 1] — 0 for anything at or above
+    the pool's median local density, 1 for the genuinely isolated tail.
+
+    Local density = mean cosine similarity to the ``k`` nearest OTHER rows (the
+    same cached embeddings the whole curation lane uses). Turning that density
+    into a penalty is done on a ROBUST scale — median and MAD, not min/max — for
+    two reasons that matter here:
+
+      • a single meme in 24 000 photos would own the whole min/max range and
+        squash every real difference to nothing;
+      • everything at or above the median density gets penalty exactly 0, so the
+        normal population of the bank is left strictly untouched. This selector
+        DISCOUNTS the isolated tail, it never REWARDS the centre — which is what
+        keeps a typicality guard from quietly turning "the 60 most varied" into
+        60 look-alikes from the middle of the cloud.
+
+    The ramp is quadratic, so being *slightly* below the median density barely
+    costs anything and only the real tail is hit hard: at 1 robust deviation the
+    penalty is 0.11, at 2 it is 0.44, at 3 and beyond it saturates at 1.
+
+    Memory: the similarity pass runs in row blocks, so peak allocation is
+    (block × m) float32 (~49 MB at m=24 000, measured 148 MB peak including
+    temporaries) instead of the ~2.3 GB a full ``E @ E.T`` would need.
+    Deterministic — median/MAD/partition, no sampling, no RNG.
+
+    Time: this is an exact all-pairs pass, Θ(m²·d) — the same shape of work the
+    semantic-dedup stage already does, and the reason the guard is computed ONLY
+    when it is on. Seconds on a big bank with a normal (BLAS-backed) numpy; a
+    numpy built without an optimised BLAS is ~50× slower and will make the click
+    wait, which is why the button reports that it is working. An approximation
+    (subsampling the reference set) was rejected on purpose: it would make a small
+    but legitimate group — eight shots of one rare outfit — look isolated and get
+    penalised, which is exactly the variety this selector exists to preserve."""
+    import numpy as np
+    m = int(E.shape[0])
+    k = min(int(k), m - 1)
+    if k < 1 or m < _TYPICALITY_MIN_POOL:
+        # Too few rows for a median and a MAD to mean anything: a 12-image pool
+        # has no "isolated tail", only 12 images. Staying out is the honest
+        # answer AND keeps small banks on the historical behaviour.
+        return np.zeros(m, dtype='float32')
+    dens = np.empty(m, dtype='float32')
+    for a in range(0, m, block):
+        S = E[a:a + block] @ E.T             # (b, m) block — never (m, m)
+        rows = np.arange(S.shape[0])
+        S[rows, rows + a] = -np.inf          # a row is not its own neighbour
+        top = np.partition(S, m - k, axis=1)[:, m - k:]
+        dens[a:a + block] = top.mean(axis=1)
+    med = float(np.median(dens))
+    mad = float(np.median(np.abs(dens - med)))
+    scale = 1.4826 * mad                     # MAD → σ-comparable, robust
+    if not (scale > 1e-6):                   # degenerate pool (all alike) ⇒ no tail
+        return np.zeros(m, dtype='float32')
+    z = (med - dens) / scale                 # >0 only BELOW the median density
+    ramp = np.clip(z / _TYPICALITY_Z, 0.0, 1.0)
+    return (ramp * ramp).astype('float32')
+
+
+def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
+                   filters=None):
+    """Farthest-point sampling over the ✨ Score CLIP embeddings, tempered by a
+    TYPICALITY guard: the ``n`` images of the (filtered) pool that best COVER the
+    visual space — the antidote to a dump of 4 000 near-identical shots. Greedy
+    FPS: seed with the lowest-id row (deterministic), then repeatedly add the
+    point whose nearest already-chosen neighbour is FARTHEST (max-min cosine
+    distance). O(n·m·d) — one (m×d)·(d,) product per pick, ~sub-second even at
+    m=24 000 / n=2 000.
+
+    ``typicality`` (0–1) exists because pure max-min distance is, mathematically,
+    the criterion that prefers ISOLATED points: on a collected bank the first
+    picks are therefore structurally biased towards the aberrations (a meme, a
+    photo of someone else, a botched frame) rather than towards variety of the
+    subject. Each candidate's novelty is multiplied by
+    ``10 ** (-3 × typicality × isolation)`` (see ``_isolation_penalty``), so an
+    image still gets picked for the variety it adds, but being alone stops being
+    a quality in itself. The discount is GEOMETRIC on purpose: an aberration's
+    distance advantage over a normal image is a ratio (2–4× in practice, and it
+    grows as the easy variety gets used up), so a merely linear penalty would need
+    a near-maximal setting to ever bite.
+
+      • 0    → EXACTLY the historical behaviour, pick for pick (the guard is not
+               even computed);
+      • 0.5  → the default: a saturated outlier keeps ~3% of its novelty (÷32) —
+               decisively beaten by any genuinely varied shot — while a merely
+               below-average image (penalty 0.11) keeps 68%;
+      • 1    → the isolated tail is all but excluded (÷1000).
+
+    The guard is bounded on BOTH sides: rows at or above the median density are
+    never penalised at all (factor exactly 1.0), so it cannot collapse the
+    selection into look-alikes from the middle of the cloud.
+
+    Returns {'image_ids': [...] (sorted), 'pool': m, 'requested': n,
+    'typicality': w}. Raises ValueError (→400, "run ✨ Score first") when no
+    embedding exists yet, so the UI shows the clear hint instead of an empty,
+    unexplained selection."""
     import numpy as np
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -1753,23 +1846,36 @@ def select_diverse(user_id, bank_id, n=60, *, filters=None):
         raise ValueError('run ✨ Score first — diversity sampling reuses its '
                          'embeddings')
     n = max(1, min(int(n), _CURATION_MAX_N))
+    try:
+        w = 0.0 if typicality is None else float(typicality)
+    except (TypeError, ValueError):
+        w = _TYPICALITY_DEFAULT
+    w = max(0.0, min(1.0, w))
     ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
     m = len(ids)
     if m <= n:                                   # whole pool already fits
-        return {'image_ids': sorted(ids), 'pool': m, 'requested': n}
+        return {'image_ids': sorted(ids), 'pool': m, 'requested': n,
+                'typicality': w}
+    # Novelty multiplier, in (0, 1] — never 0, so the -inf "already chosen"
+    # sentinel below stays -inf (0 × -inf would be a NaN) and so even a fully
+    # penalised row stays a last resort rather than an unpickable one.
+    factor = None
+    if w > 0.0:
+        factor = 10.0 ** (-_TYPICALITY_DECADES * w * _isolation_penalty(E))
     # min_dist[i] = cosine distance from row i to the NEAREST chosen row so far.
     chosen = [0]                                 # seed = lowest id (E[0])
     min_dist = 1.0 - E @ E[0]
-    min_dist[0] = -1.0                           # never re-pick a chosen row
+    min_dist[0] = -np.inf                        # never re-pick a chosen row
     for _ in range(n - 1):
-        nxt = int(np.argmax(min_dist))           # ties → lowest index = lowest id
-        if min_dist[nxt] <= -1.0:                # pool exhausted (all chosen)
+        score = min_dist if factor is None else min_dist * factor
+        nxt = int(np.argmax(score))              # ties → lowest index = lowest id
+        if not np.isfinite(score[nxt]):          # pool exhausted (all chosen)
             break
         chosen.append(nxt)
         min_dist = np.minimum(min_dist, 1.0 - E @ E[nxt])
-        min_dist[nxt] = -1.0
+        min_dist[nxt] = -np.inf
     return {'image_ids': sorted(ids[i] for i in chosen),
-            'pool': m, 'requested': n}
+            'pool': m, 'requested': n, 'typicality': w}
 
 
 def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=None):

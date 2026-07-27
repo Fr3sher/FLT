@@ -168,6 +168,153 @@ def test_diverse_composes_with_filter_and_excludes_rejects(client, tmp_path, app
     assert picked == {'i0.jpg', 'i1.jpg'}
 
 
+# --- diversity: the typicality guard -----------------------------------------
+# Pure farthest-point sampling maximises the distance to what is already chosen,
+# which is EXACTLY the criterion that prefers isolated points: on a collected
+# bank its first picks are the aberrations (a meme, someone else's photo, a
+# botched frame), not the variety of the subject. `typicality` discounts that
+# isolation; 0 must restore the historical selection pick for pick.
+
+def _cloud_with_outliers():
+    """A realistically shaped pool: ONE subject (a shared component every shot has)
+    seen in 4 different settings — 32 images, ~0.75 cosine across settings, ~1.0
+    within one — plus 3 aberrations on their own axes, isolated from the cloud AND
+    from each other (a meme, a screenshot, someone else's photo)."""
+    embs = {}
+    for c in range(4):
+        for j in range(8):
+            v = [0.0] * 9
+            v[0] = 0.87                        # "the subject", in every shot
+            v[1 + c] = 0.5                     # the setting of this cluster
+            v[7] = 0.04 * j                    # tiny intra-cluster wobble
+            v[8] = 0.02 * ((j * 7) % 5)
+            embs[f'c{c}_{j}.jpg'] = _emb(*v)
+    for x in range(3):
+        v = [0.0] * (10 + x)
+        v[9 + x] = 1.0                         # orthogonal to everything else
+        embs[f'x{x}.jpg'] = _emb(*v)
+    return embs
+
+
+def _outlier_bank(client, tmp_path, app):
+    embs = _cloud_with_outliers()
+    bank_id, _ = _mkbank(client, tmp_path, list(embs))
+    _write_score_cache(app, bank_id, embs)
+    return bank_id
+
+
+def test_diverse_without_guard_picks_the_aberrations_first(client, tmp_path, app):
+    """RED, kept as documentation of the flaw: with the guard OFF (typicality=0,
+    i.e. the historical behaviour) asking for 4 "most diverse" spends THREE QUARTERS of the
+    budget on the 3 planted aberrations — they win purely on isolation."""
+    bank_id = _outlier_bank(client, tmp_path, app)
+    body = client.post(f'/api/bank/{bank_id}/select-diverse',
+                       json={'n': 4, 'typicality': 0}).get_json()
+    picked = _names_of(app, bank_id, body['image_ids'])
+    assert {'x0.jpg', 'x1.jpg', 'x2.jpg'} <= picked      # ALL THREE, picks 2-4
+    assert body['typicality'] == 0.0
+
+
+def test_diverse_guard_keeps_the_aberrations_out(client, tmp_path, app):
+    """GREEN: the default guard drops every aberration and spends the whole budget
+    on the subject — while still COVERING it (one image per cluster at least)."""
+    bank_id = _outlier_bank(client, tmp_path, app)
+    body = client.post(f'/api/bank/{bank_id}/select-diverse',
+                       json={'n': 4}).get_json()
+    picked = _names_of(app, bank_id, body['image_ids'])
+    assert not (picked & {'x0.jpg', 'x1.jpg', 'x2.jpg'})
+    assert {nm.split('_')[0] for nm in picked} == {'c0', 'c1', 'c2', 'c3'}
+    assert body['typicality'] == pytest.approx(0.5)      # the shipped default
+
+
+def test_diverse_guard_does_not_collapse_into_look_alikes(client, tmp_path, app):
+    """The opposite trap: a guard cranked to the maximum must NOT return N images
+    from the middle of the cloud. Rows at or above the median density are never
+    penalised, so coverage of the subject survives even at typicality=1."""
+    bank_id = _outlier_bank(client, tmp_path, app)
+    body = client.post(f'/api/bank/{bank_id}/select-diverse',
+                       json={'n': 4, 'typicality': 1}).get_json()
+    picked = _names_of(app, bank_id, body['image_ids'])
+    assert {nm.split('_')[0] for nm in picked} == {'c0', 'c1', 'c2', 'c3'}
+
+
+def _legacy_fps(E, n, np_):
+    """The pre-guard implementation, verbatim, as an independent oracle for the
+    compatibility contract below (an assertion against the new code comparing it
+    to itself would prove nothing)."""
+    chosen = [0]
+    min_dist = 1.0 - E @ E[0]
+    min_dist[0] = -1.0
+    for _ in range(n - 1):
+        nxt = int(np_.argmax(min_dist))
+        if min_dist[nxt] <= -1.0:
+            break
+        chosen.append(nxt)
+        min_dist = np_.minimum(min_dist, 1.0 - E @ E[nxt])
+        min_dist[nxt] = -1.0
+    return chosen
+
+
+def test_diverse_typicality_zero_is_bit_for_bit_the_old_selection(client, tmp_path, app):
+    """THE GOLDEN TEST. typicality=0 must reproduce the historical farthest-point
+    selection EXACTLY — same rows, same order of picking — on a pool with clusters,
+    outliers and near-ties. This is the anti-regression guard of the whole change."""
+    embs = dict(_cloud_with_outliers())
+    rs = np.random.RandomState(7)
+    for k in range(20):                        # plus unstructured noise rows
+        embs[f'r{k:02d}.jpg'] = _emb(*rs.randn(9))
+    bank_id, _ = _mkbank(client, tmp_path, list(embs))
+    _write_score_cache(app, bank_id, embs)
+    with app.app_context():
+        from app.services import image_bank_service as banks
+        bank = banks.get_bank(_uid(), bank_id)
+        ids, E = banks._pool_embeddings(bank, banks._load_score_embeddings(bank), {})
+        for n in (2, 5, 12, 30):
+            expect = [ids[i] for i in _legacy_fps(E, n, np)]
+            got = banks.select_diverse(_uid(), bank_id, n=n, typicality=0)
+            assert got['image_ids'] == sorted(expect), f'n={n}'
+            # …and the guard, when on, is a DIFFERENT answer (else nothing changed)
+            assert banks.select_diverse(_uid(), bank_id, n=6)['image_ids'] \
+                != sorted([ids[i] for i in _legacy_fps(E, 6, np)])
+
+
+def test_diverse_stays_deterministic_with_the_guard(client, tmp_path, app):
+    """Same pool + same n + same typicality ⇒ the same selection, every time —
+    otherwise two datasets curated from one bank stop being comparable."""
+    bank_id = _outlier_bank(client, tmp_path, app)
+    runs = [client.post(f'/api/bank/{bank_id}/select-diverse',
+                        json={'n': 7, 'typicality': 0.45}).get_json()['image_ids']
+            for _ in range(3)]
+    assert runs[0] == runs[1] == runs[2] == sorted(runs[0])
+
+
+def test_isolation_penalty_never_materialises_a_full_matrix(app):
+    """Cost guard: a 24 000-image bank would need ~2.3 GB for a full E @ E.T
+    (24000² × 4 bytes). The density pass must stay blocked — here every matmul it
+    performs is watched, and none may be pool-sized."""
+    from app.services import image_bank_service as banks
+    seen = []
+
+    class Watched(np.ndarray):
+        def __matmul__(self, other):
+            out = np.asarray(self).__matmul__(np.asarray(other))
+            seen.append(out.shape)
+            return out.view(Watched)
+
+    m = banks._TYPICALITY_BLOCK * 3 + 7        # several blocks + a short tail
+    rs = np.random.RandomState(3)
+    E = rs.randn(m, 16).astype('float32')
+    E /= np.linalg.norm(E, axis=1, keepdims=True)
+    pen = banks._isolation_penalty(E.view(Watched))
+    assert pen.shape == (m,) and float(pen.min()) == 0.0
+    assert seen, 'the density pass did compute similarities'
+    assert all(s[0] <= banks._TYPICALITY_BLOCK for s in seen), seen
+    assert max(s[0] * s[1] for s in seen) <= banks._TYPICALITY_BLOCK * m
+    # the same penalties, block size aside — blocking is an implementation detail
+    ref = banks._isolation_penalty(E, block=m)
+    assert np.allclose(pen, ref, atol=1e-6)
+
+
 # --- reference similarity ----------------------------------------------------
 def test_similar_ranks_by_cosine_to_reference(client, tmp_path, app):
     """Top-N most similar to the reference are its near-neighbours; the reference
