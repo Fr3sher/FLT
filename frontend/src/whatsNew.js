@@ -48,12 +48,18 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-reset-any-setting-to-its-default',
+    date: '2026-07-27',
+    title: 'Changed a setting and want it back? Every field now has “Reset to default”',
+    blurb:
+      'Until now only the prompt boxes could be put back to how they shipped. Set “Upscale & improve ▸ Steps” to 43 and there was no way home unless you happened to know the answer was 4 — the app knew, and never told you. Every editable number, path, dropdown and the enabled-engine list now carries a small ↺ Reset to default button, across Image engines, Captioning & quality, Training, Local tools, Server and Maintenance. It only shows up when the field is actually off its default, so it never adds a row of dead buttons to an already busy page. Two details worth knowing: the value it restores comes from the app itself rather than a copy baked into the screen, so when we improve a default in a later release Reset hands you the new one, not the one your version was built with; and on the fields where blank means “work it out yourself” — the engine model slugs, the Krea base model, the dataset images root — Reset empties the box instead of typing today’s answer in, so you keep following our improvements instead of freezing one. Nothing is written until you Save. Reported by the owner.',
+  },
+  {
     id: '2026-07-27-settings-links-land-on-the-setting',
     date: '2026-07-27',
     title: 'Links that promise one setting now drop you on that setting',
     blurb:
-      'The little "Adjust improve strength →" under Upscale & improve used to open Image engines at the top and leave you scrolling a long page looking for four number boxes. It now lands directly on them, highlighted — and opens the collapsed block around a setting when there is one. Same for "Which model writes them, and how" (the captioning backend), "Source credentials" (the scraper keys card) and the Setup wizard\'s "Set the interpreter in Settings ▸ Local tools" (that exact field). One link still points at a whole section on purpose: "Defaults & cloud limits" names two settings that live in two different cards, and picking one would send half of you to the wrong one.',
-    to: '/settings/engines',
+      'The little "Adjust improve strength →" under Upscale & improve used to open Image engines at the top and leave you scrolling a long page looking for four number boxes. It now lands directly on them, highlighted — and opens the collapsed block around a setting when there is one. Same for "Which model writes them, and how" (the captioning backend), "Source credentials" (the scraper keys card) and the Setup wizard\'s "Set the interpreter in Settings ▸ Local tools" (that exact field). One link still points at a whole section on purpose: "Defaults & cloud limits" names two settings that live in two different cards, and picking one would send half of you to the wrong one.',    to: '/settings/engines',
   },
   {
     id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
