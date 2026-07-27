@@ -1585,7 +1585,18 @@ def dataset_train_run_delete(record_id):
     deleted; archived source blobs are freed only when no other run references
     them. A run whose checkpoints are still on disk is refused with 409 (delete
     those first) — never a silent erase. Children that resumed from it are
-    detached, not deleted. Unknown id → 404."""
+    detached, not deleted. Unknown id → 404.
+
+    `?cascade=1` is the OPT-IN destructive mode the run panel's "Delete run"
+    asks for: the checkpoints go to the trash, the generated images with them,
+    then the row. It is a query flag rather than a new default so no existing
+    caller of this route starts shredding files because the semantics moved
+    under it. Even then children are DETACHED, 👍 images and LoRAs already
+    deployed into ComfyUI are KEPT — see services.run_cascade_delete. A dataset
+    that is training right now → 409; a checkpoint that could not be moved →
+    409 with the counts of what did go, and the run row left in place."""
+    if (request.args.get('cascade') or '').lower() in ('1', 'true', 'yes'):
+        return _dataset_train_run_delete_cascade(record_id)
     status = ct.delete_run_record(record_id)
     if status == 'not_found':
         return jsonify({'error': 'unknown run'}), 404
@@ -1596,6 +1607,32 @@ def dataset_train_run_delete(record_id):
         return jsonify({'error': 'This run is still referenced and could not be '
                                  'removed. Refresh and try again.'}), 409
     return jsonify({'ok': True})
+
+
+def _dataset_train_run_delete_cascade(record_id):
+    """The `?cascade=1` branch. Split out so the conservative path above reads
+    exactly as it did — the two modes share a URL, never a body of code.
+
+    A PARTIAL result is an error (409), not a 200 with a sad number: the run row
+    is still there and its remaining weights are still on disk, so telling the
+    user "deleted" would be a lie he only discovers on the next refresh. The
+    message is already path-redacted by the service."""
+    from ..services import run_cascade_delete
+    out = run_cascade_delete.delete_run_cascade(record_id)
+    status = out.get('status')
+    if status == 'not_found':
+        return jsonify({'error': 'unknown run'}), 404
+    if status == 'training':
+        where = ('a cloud pod' if out.get('error') == 'cloud' else 'this dataset')
+        return jsonify({**out, 'error': f'{where} is training right now — stop the '
+                                        'run before deleting it.'}), 409
+    if status == 'partial':
+        return jsonify({**out, 'error': 'Some files could not be removed, so the run '
+                                        'was kept. ' + (out.get('error') or '')}), 409
+    if status == 'conflict':
+        return jsonify({**out, 'error': 'This run is still referenced and could not be '
+                                        'removed. Refresh and try again.'}), 409
+    return jsonify({**out, 'ok': True})
 
 
 @bp.put('/dataset/train/runs/<int:record_id>/note')

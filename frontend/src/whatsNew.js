@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-delete-a-run-and-everything-it-produced',
+    date: '2026-07-27',
+    title: 'Delete a whole run — checkpoints, images and all — from the run panel',
+    blurb:
+      'Getting rid of an abandoned run used to mean deleting its checkpoints one by one, then its images, then the run entry. Open a run on the LoRA Canvas and the panel now ends with a Danger zone: one button deletes the run, its checkpoints and the images it produced. It tells you exactly what goes first — "14 checkpoints · 24.0 GB, 37 images" — and what stays: runs that continued from it are kept as their own roots, images you marked 👍 survive, and LoRAs already deployed into ComfyUI are left alone so your workflows keep working. Files go to the recycle bin. A run that is training right now cannot be deleted, and if a file refuses to move the run is kept rather than half-deleted.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',
