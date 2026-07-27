@@ -580,6 +580,25 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
       text: 'New: train each image on a long AND a short caption (Advanced options → Dual captions) so the LoRA leans less on any single wording.' } },
+  // Concept face masking (issue #15) is a per-DATASET Advanced training option,
+  // so like Dual captions it points at the dataset guide rather than
+  // settings-reference. Its two tuning knobs live in Settings > Training and are
+  // covered by the settings topics below.
+  { id: 'training.mask_faces', kind: 'setting', title: 'Mask faces (Concept datasets)',
+    keywords: ['mask faces', 'face mask', 'masking', 'concept', 'identity', 'bleed',
+      'identity bleed', 'face bleed', 'character lora', 'combine loras', 'act',
+      'anonymise', 'anonymize', 'advanced', 'training'],
+    guide: { chapter: 'dataset-guide', anchor: '8-concept-loras-keeping-faces-out' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'mask-faces-advanced',
+      text: 'New for Concept datasets: mask the faces while training so the concept learns the act, not the people in your photos.' } },
+  setting('face_mask.expand', 'training', 'face-mask-expand', 'Head coverage (face box x)',
+    ['face mask', 'head', 'coverage', 'expand', 'dilate', 'hair', 'jaw', 'concept',
+     'mask faces', 'tight', 'wide']),
+  setting('face_mask.min_weight', 'training', 'face-mask-min-weight',
+    'Loss weight kept on faces',
+    ['face mask', 'weight', 'loss', 'min weight', 'concept', 'mask faces', 'zero',
+     'strength', 'how hard']),
   // Memory saving (quantisation + low-VRAM streaming) is a per-run Advanced
   // training option like Dual captions, so it points at the settings-reference
   // section that documents the Advanced panel rather than a global Settings card.

@@ -102,8 +102,9 @@ Concretely:
 
 **Concept datasets** (training a *thing/style/act*, not a person) invert the rule:
 describe everything **except the concept** — the concept is what must bind to the
-trigger. Keep masked training **off** for concepts (a person mask would erase the
-very thing you're training).
+trigger. Keep *person* masking **off** for concepts — a person mask would erase the
+very thing you're training. Masking **faces** is the opposite polarity and is
+available on purpose: see §8.
 
 **Stopping a run.** Started a big caption pass and realized it's captioning badly,
 or an option was mis-set? A **⏹ Stop** button sits in the captioning progress
@@ -128,7 +129,7 @@ reuse across datasets and share (import/export as JSON).
 | **Resolution** | 768 + 1024 | 768 + 1024 | 768 + 1024 | 768 + 1024 | 768 + 1024 | Multi-scale: holds up from close-up to full-body. |
 | **Save checkpoint** | every 250 | every 250 | every 250 | every 250 | every 250 | More snapshots → better odds one is at the sweet spot. |
 | **Steps** | auto | auto | auto | auto | auto | ~120 × images, clamped 1500–3500. A fixed 3000 overcooks small sets. |
-| **Masked training** | ON | ON | ON | ON | ON | Background weighs only 10% of the loss → identity binds to the person, not the room. OFF for concepts. |
+| **Masked training** | ON | ON | ON | ON | ON | Background weighs only 10% of the loss → identity binds to the person, not the room. OFF for concepts — they have their own face masking instead (§8). |
 
 Rules of thumb:
 
@@ -283,6 +284,44 @@ How the short caption is produced:
 **Local training only for now.** The cloud pod's dataset upload doesn't carry the
 JSON file the short caption is read from, so **cloud runs train on the long
 caption alone** — turning the toggle on simply has no effect there yet.
+
+---
+
+## 8. Concept LoRAs: keeping faces out
+
+A Concept LoRA learns the one thing every image shares. If those images all show
+people, it quietly learns **their faces too** — and when you later stack it with a
+Character LoRA, the two pull against each other over whose face to render. This was
+reported by **shivdbz2010 (GitHub)**.
+
+Turn on **Mask faces** in *Advanced options* on a Concept dataset. Faces are
+detected and **weighed down in the training loss**, so the concept binds to the act
+instead of to the people in your photos.
+
+**Your images are not touched.** Nothing is blurred, pixelated or painted over.
+That distinction matters: a blurred face would *be* what the model is trained to
+reproduce, and the LoRA would learn to render blurry faces. A loss mask says
+"don't correct me here" instead, so nothing at all is learned in that area.
+
+Before you rely on it:
+
+- **Variety beats masking.** The people who maintain these trainers say dataset
+  diversity matters more here. A concept demonstrated by ten different people
+  already dilutes identity; with two, the faces are as constant as the concept and
+  no mask fully compensates.
+- **Preview it.** The training panel draws the mask on your own shots and shows how
+  many images got no face at all. A *partly* masked set is the bad case: the faces
+  left unmasked become the only ones the LoRA still learns faces from, so they end
+  up over-represented.
+- **If your concept lives on the face** — an expression, a mouth, a gaze — masking
+  the head can erase what you're teaching. The app warns when your description says
+  so; it doesn't stop you, because only you know your dataset.
+- **Nobody has measured this.** There's no published before/after of a concept LoRA
+  trained with and without face masking. This gives you the lever, not a promise.
+
+Two knobs live in **Settings ▸ Training**: how far the detected face box is grown
+into a head, and how much the masked area still counts. Neither is zero, on
+purpose — see the settings reference.
 
 ---
 

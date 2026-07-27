@@ -586,6 +586,55 @@ def is_conceptual(ds) -> bool:
     return is_concept(ds) or is_style(ds)
 
 
+def face_masking_enabled(ds) -> bool:
+    """True when a CONCEPT dataset opted into face masking (Advanced training
+    options). Reported by shivdbz2010 (GitHub issue #15): a concept LoRA also
+    learns the faces of its dataset and then fights a character LoRA over the
+    identity; masking the faces teaches the act without the identity.
+
+    OPT-IN, and deliberately stored in the train_settings JSON blob rather than
+    on the request (like dual_captions): `masked` already threads through seven
+    call sites in routes/training.py plus the cloud lane, and a parallel flag
+    would double that. One read, at export time — which also means the local
+    queue, the scheduler, a cloud run and a re-run of an OLD dataset all inherit
+    it without a single extra line, and no existing dataset changes behaviour.
+
+    Concept only. A Character wants its identity learned, and a Style must learn
+    how it renders a face — masking there would amputate the thing being taught."""
+    if not ds or not is_concept(ds):
+        return False
+    raw = getattr(ds, 'train_settings', None)
+    if not raw:
+        return False
+    try:
+        return bool(json.loads(raw).get('mask_faces'))
+    except (ValueError, TypeError):
+        return False
+
+
+# Concept descriptions whose ACT lives on the face. Masking the head then erases
+# the very thing being taught -- the community workflow this feature follows hit
+# exactly this and had to subtract the mouth back out of its face masks. We WARN
+# and let the user decide (they know their dataset); we never block.
+_FACE_ANCHORED = frozenset({
+    'face', 'faces', 'facial', 'head', 'mouth', 'lips', 'lip', 'tongue', 'teeth',
+    'throat', 'chin', 'jaw', 'cheek', 'cheeks', 'eye', 'eyes', 'gaze', 'stare',
+    'staring', 'expression', 'smile', 'smiling', 'grimace', 'ahegao', 'blowjob',
+    'kiss', 'kissing', 'licking', 'lick', 'sucking', 'suck', 'oral', 'deepthroat',
+    'facesitting', 'cum', 'cumshot', 'facial_expression', 'nose', 'ear', 'ears',
+})
+
+
+def concept_face_conflict(ds) -> bool:
+    """True when this concept's own description names the face/mouth/gaze — i.e.
+    when face masking would likely mask away the concept itself. Derived from the
+    dataset's concept_desc, never a global list of 'risky' concepts."""
+    if not ds or not is_concept(ds):
+        return False
+    toks = set(re.split(r'[^a-z]+', (getattr(ds, 'concept_desc', '') or '').lower()))
+    return bool(toks & _FACE_ANCHORED)
+
+
 def dual_captions_enabled(ds) -> bool:
     """True when the dataset opted into ai-toolkit dual long+short captioning (Advanced
     training options). The flag lives in the train_settings JSON blob (like the other
@@ -2674,6 +2723,11 @@ def dataset_payload(user_id, dataset_id):
         # Dual long+short captioning toggle (Advanced options) → the caption editor shows
         # the short field only when this is on.
         'dual_captions': dual_captions_enabled(ds),
+        # Concept face masking (Advanced options) + whether this concept's own
+        # description names the face/mouth/gaze. The second one drives a WARNING,
+        # not a block: only the user knows whether the face carries their concept.
+        'mask_faces': face_masking_enabled(ds),
+        'concept_face_conflict': concept_face_conflict(ds),
         'fidelity': (ds.fidelity or 'face') if not concept else 'face',
         'concept_desc': (ds.concept_desc or '') if concept else '',
         # Creative-direction suffixes (global + per-framing) → settings modal

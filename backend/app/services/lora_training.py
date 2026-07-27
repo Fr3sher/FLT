@@ -35,7 +35,7 @@ from PIL import Image
 from .. import config as cfg
 from ..models import FaceDataset, FaceDatasetImage
 from ..job_queue import queue_manager
-from . import face_dataset_service as fds, trash
+from . import face_dataset_service as fds, face_mask, trash
 from .person_mask import generate_person_masks
 
 logger = logging.getLogger(__name__)
@@ -1689,6 +1689,10 @@ def launch_settings_snapshot(ds, family=None) -> dict:
     # being 1, the runs on either side of the change have to be comparable.
     snap['batch_size'] = 1
     snap['dual_captions'] = bool(s.get('dual_captions'))
+    # Face masking is a per-run FACT, not a preference: two concept runs that
+    # differ only by it are not the same experiment, so it is stamped effective
+    # (concept-only, hence the kind check) exactly like `ema` and the memory keys.
+    snap['mask_faces'] = bool(s.get('mask_faces')) and fds.is_concept(ds)
     # Memory strategy — stamped with its EFFECTIVE value for the same reason as
     # `ema` above: two runs of the same dataset can differ only by these, and a
     # quantised run and a full-precision one are NOT the same experiment. Absent
@@ -1749,6 +1753,12 @@ def effective_train_settings(ds, family=None) -> dict:
             # default OFF. Local training only for now (the cloud pod's dataset upload
             # skips the JSON caption file), so the recipe strips it on the cloud path.
             'dual_captions': bool(s.get('dual_captions')),
+            # Concept face masking (issue #15). `mask_faces` = the stored opt-in;
+            # `mask_faces_supported` = whether this dataset can use it at all
+            # (concept only), so the panel states the reason instead of hiding it.
+            'mask_faces': bool(s.get('mask_faces')) and fds.is_concept(ds),
+            'mask_faces_supported': fds.is_concept(ds),
+            'mask_faces_concept_conflict': fds.concept_face_conflict(ds),
             # --- Memory strategy (issue #14) -----------------------------------
             # `memory_saving` = le choix STOCKÉ par clé (None = « Auto », le panel
             # recoche le défaut de la famille) ; `memory_saving_default` = ce que
@@ -1916,6 +1926,16 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             cur['dual_captions'] = True
         else:
             cur.pop('dual_captions', None)
+    if 'mask_faces' in patch:
+        # Concept face masking (issue #15, shivdbz2010). Same plain-boolean contract
+        # as dual_captions: falsy drops the key, so OFF is byte-identical to a
+        # dataset that never heard of the option. The CONCEPT-only restriction is
+        # enforced where it matters (face_masking_enabled + the export guard), not
+        # here — a preset carrying the key must stay applicable to any dataset.
+        if patch['mask_faces']:
+            cur['mask_faces'] = True
+        else:
+            cur.pop('mask_faces', None)
     for _mk in _MEMORY_SETTING_KEYS:
         if _mk not in patch:
             continue
@@ -1952,7 +1972,7 @@ TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'sample_every', 'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
                       'grad_accum', 'network_type', 'ema', 'dual_captions',
-                      'learning_rate', *_MEMORY_SETTING_KEYS)
+                      'mask_faces', 'learning_rate', *_MEMORY_SETTING_KEYS)
 
 # The ONLY settings a resume/continue may change. ai-toolkit rebuilds the job
 # config from scratch on every launch, so a re-read setting is honored on resume —
@@ -2554,18 +2574,54 @@ def _masks_dir(dataset_folder: str) -> str:
     return f'{dataset_folder}_masks'
 
 
+# Historical person-mask weight (méthode jandordoe). A CONSTANT, not the new
+# configurable knob: `face_mask.min_weight` governs face masking, and letting it
+# silently re-weight every character run's background would be a behaviour change
+# nobody asked for.
+_PERSON_MASK_MIN_VALUE = 0.1
+
+# Written beside the masks by the exporter so `_mask_fields` can tell WHICH mask it
+# is looking at. The two polarities share one folder (ai-toolkit takes a single PNG
+# per image), so the folder alone cannot say whether 'black' means background or
+# face — and they do not want the same weight. ai-toolkit resolves masks by exact
+# `<image basename><ext>` lookup, so this extra file is never mistaken for one.
+_MASK_META_FILENAME = '_mask_meta.json'
+
+
+def _write_mask_meta(masks_dir: str, kind: str, min_value: float) -> None:
+    try:
+        with open(os.path.join(masks_dir, _MASK_META_FILENAME), 'w', encoding='utf-8') as fh:
+            json.dump({'kind': kind, 'mask_min_value': float(min_value)}, fh)
+    except OSError:
+        pass  # best-effort: a missing sidecar degrades to the historical weight
+
+
 def _mask_fields(dataset_folder: str) -> dict:
     """Champs `mask_path`/`mask_min_value` à fusionner dans l'entrée datasets de la
-    job-config SI des masques ont été exportés (masked training, méthode jandordoe :
-    fond pondéré à 10 % de la loss → l'identité se lie au sujet, pas au décor).
+    job-config SI des masques ont été exportés.
+
+    Deux polarités possibles, même dossier :
+      - `person` (méthode jandordoe) : sujet blanc, fond noir pondéré à 10 %.
+      - `face` (issue #15) : visage noir, reste blanc — l'acte s'apprend, pas l'identité.
+    Le poids appliqué vient du sidecar écrit à la génération ; sans sidecar (export
+    d'une version antérieure) on retombe sur le 10 % historique, jamais sur le
+    réglage du masque visage.
     Dossier absent/vide → {} (l'entraînement reste strictement l'historique)."""
     md = _masks_dir(dataset_folder)
     try:
-        if os.path.isdir(md) and any(f.lower().endswith('.png') for f in os.listdir(md)):
-            return {'mask_path': md, 'mask_min_value': 0.1}
+        if not (os.path.isdir(md) and any(f.lower().endswith('.png') for f in os.listdir(md))):
+            return {}
     except OSError:
+        return {}
+    min_value = _PERSON_MASK_MIN_VALUE
+    try:
+        with open(os.path.join(md, _MASK_META_FILENAME), encoding='utf-8') as fh:
+            meta = json.load(fh)
+        if isinstance(meta, dict) and isinstance(meta.get('mask_min_value'), (int, float)):
+            min_value = float(meta['mask_min_value'])
+    except (OSError, ValueError, TypeError):
         pass
-    return {}
+    return {'mask_path': md, 'mask_min_value': min_value}
 
 
 # ai-toolkit reads dual long+short captions ONLY from a JSON caption file (folder_path
@@ -2582,7 +2638,8 @@ def _dual_caption_json_path(dataset_folder) -> str:
     return (str(dataset_folder).rstrip('/\\') + '/' + _DUAL_CAPTION_FILENAME)
 
 
-def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_dir=None) -> str:
+def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_dir=None,
+                                masked_faces: bool = True) -> str:
     """Écrit les images `keep` en paires .png/.txt dans
     DATASETS_DIR/<trigger>. Character/concept = trigger + caption éditée ; Style
     always-on = caption de contenu seule (le trigger interne n'est jamais exporté).
@@ -2599,6 +2656,14 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    # TWO masks exist, of OPPOSITE polarity, and the guard below must not confuse
+    # them (issue #15, shivdbz2010):
+    #   person mask -> subject white, background black. Learn the subject, not the room.
+    #   face mask   -> face black, everything else white. Learn the scene, not the identity.
+    # The historical guard was written when only the first existed, so it read
+    # "concept => no masks at all". A FACE mask does not have the defect it guards
+    # against: it removes the identity and keeps the act. Hence a per-polarity guard.
+    face_masked = bool(masked_faces) and fds.face_masking_enabled(ds)
     if masked and fds.is_conceptual(ds):
         # A person-mask would erase the very thing we want the LoRA to learn (the
         # recurring act for a concept; the whole-image rendering for a style - which
@@ -2606,6 +2671,25 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
         # concept AND style datasets even if the caller/UI asked for it -- server guard.
         logger.info('dataset %s %s -> masked training forced OFF (server guard)',
                     dataset_id, ds.kind)
+        masked = False
+    if face_masked and not fds.is_concept(ds):
+        # Character wants its identity learned; a Style must learn how it renders a
+        # face. Only a concept benefits. face_masking_enabled already refuses both,
+        # this is the belt to its braces (a caller may pass masked_faces=True).
+        logger.info('dataset %s %s -> face masking forced OFF (server guard)',
+                    dataset_id, ds.kind)
+        face_masked = False
+    if face_masked and slider_mode_enabled(ds):
+        # Same reason the person mask is refused in slider mode: the guided slider
+        # loss never reads batch.mask_tensor, so the masks would only burn export time.
+        logger.info('dataset %s -> slider mode: face masking forced OFF (server guard)',
+                    dataset_id)
+        face_masked = False
+    if face_masked and masked:
+        # Belt and braces: one mask PNG per image, so the two polarities cannot
+        # share a folder. Unreachable today (a concept never keeps `masked`), but
+        # the day someone lifts the concept guard this must not silently pick one.
+        logger.info('dataset %s -> face masking wins over person masking', dataset_id)
         masked = False
     if masked and slider_mode_enabled(ds):
         # Slider mode: the guided slider loss never reads the masked-loss path
@@ -2671,18 +2755,45 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
         wrote = int(res.get('written') or 0) if isinstance(res, dict) else 0
         if wrote:
             masked_ok = True
+            _write_mask_meta(masks_out, 'person', _PERSON_MASK_MIN_VALUE)
             logger.info(f'export dataset {dataset_id}: {wrote}/{n} masque(s) personne -> {masks_out}')
         else:
             logger.warning(f'export dataset {dataset_id}: masques indisponibles - training SANS masked loss')
             if os.path.isdir(masks_out):
                 # Failed/incomplete derived mask cache; safe to destroy directly.
                 shutil.rmtree(masks_out, ignore_errors=True)
+    face_masked_ok = False
+    face_coverage = None
+    if face_masked:
+        # Same contract as the person masks: a dict (possibly {}), read the count —
+        # never `if res:`, which a non-empty failure dict would satisfy.
+        res = face_mask.generate_face_masks(exported, masks_out)
+        wrote = int(res.get('written') or 0) if isinstance(res, dict) else 0
+        if wrote:
+            face_masked_ok = True
+            face_coverage = face_mask.coverage_summary(res.get('results') or {})
+            _write_mask_meta(masks_out, 'face', face_mask.min_weight())
+            logger.info('export dataset %s: %s/%s masque(s) visage -> %s (%s)',
+                        dataset_id, wrote, n, masks_out, face_coverage)
+        else:
+            logger.warning('export dataset %s: masques visage indisponibles '
+                           '(insightface absent ?) - training SANS masked loss', dataset_id)
+            if os.path.isdir(masks_out):
+                shutil.rmtree(masks_out, ignore_errors=True)
     # A REQUESTED masked run that produced no masks (rembg missing, or generation
     # crashed at runtime) silently trains UNMASKED. Record it per-run so the live
     # progress view can warn — instead of the fallback being invisible. `masked` is
     # the FINAL intent: concept/style were already forced OFF above (by design), so
     # they never set this flag.
-    queue_manager._set_system_state('training_masks_skipped', bool(masked and not masked_ok),
+    queue_manager._set_system_state('training_masks_skipped',
+                                    bool((masked and not masked_ok)
+                                         or (face_masked and not face_masked_ok)),
+                                    ttl_seconds=_TRAIN_STATE_TTL)
+    # Face-mask COVERAGE is a safety figure, not a statistic: a partially masked set
+    # is the worst case, because the faces that stayed unmasked are then the only
+    # ones carrying loss weight and end up over-represented. Publish it per run so
+    # the progress view can say "masked on 32 of 40" instead of staying silent.
+    queue_manager._set_system_state('training_face_mask_coverage', face_coverage,
                                     ttl_seconds=_TRAIN_STATE_TTL)
     logger.info(f'export dataset {dataset_id} -> {out} ({n} paires)')
     return out

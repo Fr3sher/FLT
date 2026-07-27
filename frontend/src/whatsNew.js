@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-mask-faces-on-concept-loras',
+    date: '2026-07-27',
+    title: 'Concept LoRAs can now leave the faces out',
+    blurb:
+      'A Concept LoRA quietly learns the faces of the people in its dataset, so stacking it with a Character LoRA left the two fighting over whose face to render. Concept datasets now have a Mask faces option in Advanced training options: the detected faces are weighed down in the training loss, so the concept binds to the act instead of to your models. Your images are never altered — nothing is blurred or painted over, which matters, because a blurred face would be exactly what the model learns to reproduce. Preview it on your own shots before training: the mask is drawn over the photos, the head coverage redraws live as you drag it, and images where no face was found are shown first so you can see what would slip through. Two knobs in Settings ▸ Training let you tune how much of the head is covered and how hard identity is pushed out. Off by default, and existing datasets are untouched. Reported by shivdbz2010 (GitHub).',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-27-rerun-upscale-and-improve',
     date: '2026-07-27',
     title: 'Tuned the Upscale & improve settings? Re-run the pass on a tile in one click',
