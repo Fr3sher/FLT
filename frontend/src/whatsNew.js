@@ -71,8 +71,6 @@ export const WHATS_NEW = [
     to: '/datasets?section=training',
   },
   {
-  },
-  {
     id: '2026-07-27-lineage-panels-fit-a-phone',
     date: '2026-07-27',
     title: 'The run details panel no longer swallows the graph on a phone',
