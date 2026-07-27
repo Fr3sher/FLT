@@ -334,8 +334,14 @@ def test_the_gallery_returns_every_image_of_a_checkpoint_newest_first(client, ap
 def test_the_gallery_route_answers_and_an_empty_checkpoint_is_not_an_error(client, app):
     r = client.get('/api/train/checkpoint/424242/1000/images')
     assert r.status_code == 200
-    assert r.get_json() == {'record_id': 424242, 'step': 1000, 'count': 0,
-                            'unlinked': 0, 'images': []}
+    body = r.get_json()
+    # `delete_mode` is where a 🗑 would send these files — announced with the
+    # gallery so the confirmation can name it before arming (see
+    # test_checkpoint_gallery_delete). It depends on whether send2trash is
+    # installed, so only its domain is asserted here.
+    assert body.pop('delete_mode') in ('trash', 'app_trash')
+    assert body == {'record_id': 424242, 'step': 1000, 'count': 0,
+                    'unlinked': 0, 'images': []}
 
 
 def test_the_node_reports_the_newest_preview_and_the_gallery_size(client, app):

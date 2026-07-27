@@ -30,6 +30,25 @@ for (const [name, src] of [['LineageDetailPanel', detail],
   });
 }
 
+/* 🗑 The gallery deletes, and a phone grid is scrolled with the same finger that
+   would tap a tile. So deletion must NEVER be one tap away: it takes Select mode,
+   a pick, then a confirmation. Pinned as text because node --test cannot parse
+   JSX and because a rewrite of the panel would silently drop the guard — the
+   worst possible thing to lose on a destructive control. */
+test('the checkpoint gallery cannot delete on an accidental tap', () => {
+  // A tile only deletes/selects inside `picking`; outside it, a tap zooms.
+  assert.match(gallery, /picking\s*\n?\s*\?\s*setSelected\(\(cur\) => toggleGalleryImage/);
+  // The 🗑 button lives in the Select-mode action bar and needs a selection…
+  assert.match(gallery, /\{picking && state\.status === 'ready' && \(/);
+  assert.match(gallery, /disabled=\{selected\.size === 0 \|\| busy\}/);
+  // …and it opens a confirmation rather than firing the request.
+  assert.match(gallery, /onClick=\{\(\) => setConfirming\(true\)\}/);
+  // Cancel is the focused default in that confirmation.
+  assert.match(gallery, /autoFocus onClick=\{\(\) => setConfirming\(false\)\}/);
+  // The delete request itself never leaves the confirmation.
+  assert.match(gallery, /data-testid="gallery-confirm-delete"[\s\S]{0,120}onClick=\{runDelete\}/);
+});
+
 test('the checkpoint gallery lives in shared/, where both surfaces import it from', () => {
   // It is opened by the canvas board AND by the in-card run graph; sitting in
   // components/canvas/ made the dataset panel import a "canvas" component.
