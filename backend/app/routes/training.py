@@ -1473,6 +1473,40 @@ def dataset_train_run_lineage(record_id):
     return jsonify(tree)
 
 
+@bp.get('/dataset/train/runs/compare')
+def dataset_train_runs_compare():
+    """Everything that differs between two runs: recipe, dataset (added/removed
+    images, edited captions WITH their text, re-edited pixels) and the machine.
+
+    Query: `?a=<record_id>&b=<record_id>`. Deliberately its own read rather than
+    a fatter lineage payload — caption text is kilobytes per run and the graph
+    draws dozens of nodes. Unknown id → 404."""
+    from ..services import run_compare
+    try:
+        a = int(request.args.get('a', ''))
+        b = int(request.args.get('b', ''))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'two run ids are required'}), 400
+    out = run_compare.compare(a, b)
+    if out.get('error'):
+        return jsonify(out), 404
+    return jsonify(out)
+
+
+@bp.get('/dataset/runs/archive/<sig>')
+def dataset_run_archive_blob(sig):
+    """Serve an ARCHIVED training image by its content hash — the only way to
+    look at an image that has since been deleted from its dataset. Unknown or
+    never-archived hash → 404 (the panel then says the picture is unavailable
+    instead of showing a wrong one)."""
+    from flask import send_file
+    from ..services import run_archive
+    path = run_archive.path_for(sig)
+    if not path:
+        return jsonify({'error': 'not archived'}), 404
+    return send_file(path, max_age=31536000)
+
+
 @bp.delete('/dataset/train/runs/<int:record_id>')
 def dataset_train_run_delete(record_id):
     """Remove a GONE run (no checkpoints on disk) from the lineage graph — metadata

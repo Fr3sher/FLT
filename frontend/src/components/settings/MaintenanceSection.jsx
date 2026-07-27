@@ -304,11 +304,66 @@ function TrashCard() {
   )
 }
 
+/* The run image archive: a deduplicated copy of every image a training run was
+   launched on, so a comparison can still SHOW an image that has since been
+   deleted from its dataset. Content-addressed, so an unchanged dataset costs
+   nothing on its second launch — but it is still bytes, so its size is visible
+   and clearable here rather than growing invisibly. */
+function RunArchiveCard() {
+  const [info, setInfo] = useState(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let alive = true
+    apiFetch('/api/run-archive')
+      .then((d) => { if (alive) setInfo(d || null) })
+      .catch(() => { /* best-effort */ })
+    return () => { alive = false }
+  }, [])
+  const fmt = (b) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB`
+    : b >= 1e6 ? `${Math.round(b / 1e6)} MB`
+    : b > 0 ? `${Math.max(1, Math.round(b / 1e3))} KB` : 'empty')
+  const clear = async () => {
+    if (!window.confirm('Delete every archived training image?\n\nYour runs, their settings and their captions are kept — you just lose the ability to look at images that have since been deleted from their dataset.')) return
+    setBusy(true)
+    try {
+      const d = await postJson('/api/run-archive/clear', {})
+      if (d?.ok) setInfo((v) => ({ ...(v || {}), size_bytes: 0 }))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <Card title="Run image archive" help="When a training run is launched, a deduplicated copy of the images it trains on is kept so that comparing two runs can still show an image you have since deleted. Only new or edited images are copied, and the archive stops growing at its ceiling.">
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-sm text-content">
+          <span aria-hidden>🗂</span> Archive size:{' '}
+          <span className="font-semibold tabular-nums">
+            {info == null ? '…' : fmt(info.size_bytes || 0)}
+          </span>
+          {info?.max_bytes ? (
+            <span className="text-content-subtle">
+              {' '}/ {fmt(info.max_bytes)} ceiling
+            </span>
+          ) : null}
+        </span>
+        {info && !info.enabled && (
+          <span className="text-xs text-content-subtle">Archiving is turned off.</span>
+        )}
+        <button type="button" onClick={clear} disabled={busy || !info?.size_bytes}
+          className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-sm font-medium text-red-300 disabled:opacity-40">
+          {busy ? 'Clearing…' : 'Clear archive'}
+        </button>
+      </div>
+    </Card>
+  )
+}
+
 export default function MaintenanceSection({ config, setField }) {
   return (
     <div className="space-y-6">
       <UpdatesCard />
       <TrashCard />
+      <RunArchiveCard />
       <Card title="Data" help="Where dataset images live on disk.">
         <TextField
           id="dataset-images-root"

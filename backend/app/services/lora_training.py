@@ -1470,18 +1470,26 @@ def launch_settings_snapshot(ds, family=None) -> dict:
         if getattr(ds, 'train_te_path', None):
             snap['te_name_or_path'] = ds.train_te_path
     s = _train_settings(ds)
-    for k in ('dropout', 'lr_scheduler', 'warmup', 'grad_accum', 'sample_every'):
+    for k in ('dropout', 'sample_every'):
         if s.get(k):
             snap[k] = s[k]
-    # Recipe levers surfaced only when they deviate from the default (LoRA / EMA off),
-    # so the provenance line and ⎘ Share config stay compact — and the cloud run, which
-    # stamps this same snapshot, carries them too.
-    nt = _network_type_eff(ds)
-    if nt != 'lora':
-        snap['network_type'] = nt
+    # Recipe levers, ALWAYS stamped with their effective value — including the
+    # default. They used to be omitted when they matched the default, which reads
+    # as "compact" until you compare two runs: an absent `ema` was then
+    # indistinguishable from a run recorded before the key existed, so the panel
+    # could not say which of two runs had EMA on — the exact question the EMA
+    # experiment exists to answer. An explicit 'off' costs one line and cannot be
+    # misread. The cloud run stamps this same snapshot.
+    snap['network_type'] = _network_type_eff(ds)
     em = _ema_eff(ds)
-    if em is not None:
-        snap['ema'] = em
+    snap['ema'] = em if em is not None else 'off'
+    snap['lr_scheduler'] = s.get('lr_scheduler') if s.get('lr_scheduler') in _LR_SCHEDULER_CHOICES else 'constant'
+    snap['warmup'] = s.get('warmup') if s.get('warmup') in _WARMUP_CHOICES else 0
+    snap['grad_accum'] = s.get('grad_accum') if s.get('grad_accum') in _GRAD_ACCUM_CHOICES else 1
+    # Fixed at 1 by every family's recipe today. Recorded anyway: the day it stops
+    # being 1, the runs on either side of the change have to be comparable.
+    snap['batch_size'] = 1
+    snap['dual_captions'] = bool(s.get('dual_captions'))
     return snap
 
 
@@ -4686,6 +4694,14 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     log_path = _run_log_path(ds, base_model=base_model, family=launch_fam,
                              variant=variant)
     run_token = secrets.token_hex(16)
+    # Freeze the dataset (manifest + caption text + image content hashes +
+    # environment) BEFORE taking the lock. All of the reading — file hashes,
+    # nvidia-smi, the ai-toolkit revision — happens here so the registration
+    # under `_queue_lock` stays a single short write; the launch path has
+    # already lost cloud runs to `database is locked` once.
+    from . import checkpoint_registry
+    _prepared = checkpoint_registry.prepare_launch(
+        user_id, dataset_id, base_model=base_model)
     # The authoritative live-run check, identity state and PID publication are
     # one transition under the SAME lock used by Stop and queue advancement.
     # This closes both races: two launches spawning together, and a stale Stop
@@ -4702,7 +4718,6 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         _assert_no_vision_pass_on_gpu()
         # Provenance registry: record WHICH dataset version this launch trains on
         # only after this request has won the process slot.
-        from . import checkpoint_registry
         # Honest provenance: a launch waved through despite a readiness blocker
         # records « acknowledged_not_ready » in its settings snapshot (surfaced in
         # the Runs-hub Share config) — discreet, so a thin run is explainable later.
@@ -4712,7 +4727,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         checkpoint_registry.register_launch(
             user_id, dataset_id, family=launch_fam, source='local',
             base_model=base_model or '', variant=variant, masked=bool(masked),
-            steps=int(steps), settings=_launch_settings,
+            steps=int(steps), settings=_launch_settings, prepared=_prepared,
             parent_record_id=parent_record_id, resumed_from=resumed_from)
         queue_manager._set_system_state('training_error', None, ttl_seconds=1)
         identity = {

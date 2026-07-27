@@ -148,7 +148,15 @@ _SCHEMA_ADDITIONS = (
     # NULL: a bank that was promoted before this column existed still relies on
     # its own promoted_dataset_id pointer (see _promotable_query).
     ('face_dataset_image', 'bank_image_id', 'INTEGER'),
+    # Cached image content hash (run snapshots). Existing rows stay NULL and are
+    # hashed on the next launch that includes them — nothing to backfill, and a
+    # database that never gains these columns simply keeps the old behaviour.
+    ('face_dataset_image', 'content_sig', 'VARCHAR(24)'),
+    ('face_dataset_image', 'content_sig_stat', 'VARCHAR(40)'),
     ('training_run_record', 'settings', 'TEXT'),
+    # Full launch freeze: caption text, per-image content hashes, environment.
+    # NULL on every run recorded before it existed — the compare panel says so.
+    ('training_run_record', 'snapshot', 'TEXT'),
     ('training_run_record', 'parent_record_id', 'INTEGER'),
     ('training_run_record', 'resumed_from', 'INTEGER'),
     ('training_run_record', 'lineage_origin', 'VARCHAR(16)'),

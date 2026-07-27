@@ -161,6 +161,15 @@ class FaceDatasetImage(db.Model):
     # intégration prise en charge est Pexels : plateforme, page photo et crédit
     # photographe. Toute écriture passe par la validation stricte du service.
     source_metadata = db.Column(Text, nullable=True)
+    # Cached CONTENT hash of the file (sha1 of its bytes) and the `size:mtime` it
+    # was computed for. The run snapshot needs to know whether the PIXELS changed
+    # between two trainings — a re-crop, a "Reset to auto", a rembg mask or a
+    # scrubbed watermark all keep the same id and filename. Hashing every image
+    # at every launch would put file I/O on the launch path, so it is computed
+    # once and reused while the stat still matches. Purely derived: dropping both
+    # values only costs one re-hash. Additive columns (migration in create_app).
+    content_sig = db.Column(String(24), nullable=True)
+    content_sig_stat = db.Column(String(40), nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
@@ -588,6 +597,15 @@ class TrainingRunRecord(db.Model):
     # launch used (rank/alpha/resolution/optimizer/...) — shown per run on the
     # unified Runs page. NULL on pre-feature rows.
     settings = db.Column(db.Text)
+    # JSON run_snapshot: everything ELSE that defined this launch and that the
+    # manifest could only hash — the caption TEXT of every image, each image's
+    # true content hash, the dataset's kind/fidelity/reference, and the machine
+    # (ai-toolkit revision, torch/CUDA, GPU, identity of the base-model FILE).
+    # Without it a comparison can say "3 captions changed" but never what they
+    # said, and blames the dataset for a gap that came from a trainer upgrade.
+    # NULL on every pre-feature row: that run PREDATES full snapshots, which the
+    # diff states rather than inventing. Additive column (migration in create_app).
+    snapshot = db.Column(db.Text)
     version = db.Column(db.Integer, nullable=False)
     # Lineage (genealogy tree). A CONTINUATION stamps the record it resumed from
     # (parent_record_id) and the step it resumed AT (resumed_from) — the durable,

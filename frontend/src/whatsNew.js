@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/datasets?section=curation',
   },
   {
+    id: '2026-07-27-run-freeze-and-real-compare',
+    date: '2026-07-27',
+    title: 'Comparing two runs now shows what the captions actually said — and which image you deleted',
+    blurb:
+      'Every launch, local or cloud, now freezes the whole thing: the text of every caption, a real content hash of every image, the dataset’s kind and reference photo, and the machine itself — ai-toolkit revision, PyTorch/CUDA, GPU, and the identity of the base-model file. Shift-click two runs and the compare drawer answers in full: which images arrived, which left, which captions were edited with the changed words highlighted word by word, and which images were quietly re-cropped or re-masked behind an unchanged id. Deleted images stay lookable — a deduplicated copy is kept at launch, so "+2 images, 3 captions edited" finally comes with pictures. The recipe table grew up too: steps, base model, masked training, EMA, network type, scheduler and warmup are all compared now, where before three of the most important rows silently matched nothing. Runs trained before today say so instead of pretending nothing changed.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-27-bank-real-detail-and-origin',
     date: '2026-07-27',
     title: '\u{1F5C3}️ The bank now tells you when an image’s size is a bluff, and where it came from',
