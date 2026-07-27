@@ -72,6 +72,29 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-27-canvas-pinned-images',
+    date: '2026-07-27',
+    title: 'Put generated images ON the canvas, next to the checkpoint that made them',
+    blurb:
+      'Comparing two checkpoints meant opening their images one at a time in a modal — never side by side. Open any generated image and hit 📌 Pin to canvas: it becomes a node on the board, joined to its checkpoint by the same connector the board already uses for "this continued from that". Drag it, resize it from its corner, close it with ✕. Closing does not forget anything: pin the same image again and it comes back exactly where you left it, at exactly the size you left it — stored with your card positions, so it follows the dataset from one machine to the next. Arrow keys move a focused image and +/− resize it, so a mouse is not required.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-27-generated-image-facts',
+    date: '2026-07-27',
+    title: 'A generated image now tells you what it was made with — readably',
+    blurb:
+      'The full-screen view used to print step, seed, strength and the whole prompt as one paragraph stretched across your entire screen, with the three numbers you were looking for buried at the front of it. Now the facts are chips, the settings that decided the picture are a table — sampler, scheduler, CFG, steps, base model, LoRA file, always-on LoRAs, format, face similarity, all of it recorded per image and never shown until today — and the prompt is last, folded when it is long. The seed and the prompt copy in one click, because that is what you do with them.',
+  },
+  {
+    id: '2026-07-27-canvas-deployed-at-a-glance',
+    date: '2026-07-27',
+    title: 'See at a glance which checkpoints you can generate from',
+    blurb:
+      'On the LoRA Canvas, whether a checkpoint is deployed to ComfyUI — that is, usable right now — only showed up as small print AFTER you had picked it. Every pill now carries it on its left edge: a solid sky bar means deployed, a dashed grey bar means the file is on your disk but not deployed yet (the 🎨 Generate button deploys it for you). The shape carries the message as much as the colour, a legend sits above the board, and hovering a pill spells it out in words.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',

@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch, del, putJson } from '../api/fetchClient';
+import { buildLineageGraph } from '../utils/lineageGraph';
 import {
   readSelection, resolveSelection, toggleSelection, writeSelection,
 } from '../utils/canvasSelection';
 import { toOverrideMap } from '../utils/canvasPlacement';
+import {
+  defaultImageSpot, toImageNodeMap, visibleImageNodes,
+} from '../utils/canvasImageNodes';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
 import { HelpBadge } from '../help/HelpMode';
@@ -75,6 +79,60 @@ export default function CanvasPage() {
     putJson(`/api/dataset/${datasetId}/canvas/positions`, { positions: rows }).catch(() => {});
   }, []);
 
+  /* The images PINNED on the board, {datasetId: {imageId: node}}.
+     Stored SERVER-SIDE, in canvas_image_node, deliberately next to the card
+     positions rather than in localStorage: the cards already follow the dataset
+     from one machine to the next, and a board whose cards travel while its
+     pictures stay behind is an inconsistency you only discover after you have
+     changed desk. Its own table, so nothing about the existing card rows
+     changes shape -- a user updating into this version finds their cards
+     exactly where they left them. */
+  const [imageNodes, setImageNodes] = useState({});
+  useEffect(() => {
+    let alive = true;
+    apiFetch('/api/train/canvas/images')
+      .then((d) => {
+        if (!alive) return;
+        const next = {};
+        for (const [dsId, rows] of Object.entries(d?.nodes || {})) {
+          next[dsId] = toImageNodeMap(rows);
+        }
+        setImageNodes(next);
+      })
+      // Same rule as the positions: nothing about the canvas may stop the canvas
+      // from opening.
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
+  /* Pin, move, resize or CLOSE one or more images of a lane. Applied to the
+     screen first and sent afterwards, exactly like a card position -- and for
+     the same reason: a picture has to follow the finger at the speed of the
+     finger, and a lost write heals on the next gesture rather than interrupting
+     the user with a modal about a rectangle.
+
+     A closed node keeps its row and its geometry (`visible: false`), which is
+     what makes re-opening it land on the same spot at the same size. */
+  const onSaveImageNodes = useCallback((datasetId, rows) => {
+    setImageNodes((cur) => {
+      const lane = { ...(cur[datasetId] || {}) };
+      for (const r of rows) {
+        const prev = lane[r.image_id];
+        lane[r.image_id] = {
+          imageId: r.image_id, x: r.x, y: r.y, w: r.w, h: r.h,
+          visible: r.visible !== false,
+          image: r.image || prev?.image,
+        };
+      }
+      return { ...cur, [datasetId]: lane };
+    });
+    putJson(`/api/dataset/${datasetId}/canvas/images`, {
+      // `image` is the client's own render payload; the server resolves it from
+      // the id and must not be handed a copy to trust.
+      nodes: rows.map(({ image, ...row }) => row),
+    }).catch(() => {});
+  }, []);
+
   const availableIds = useMemo(() => index.datasets.map((d) => d.id), [index.datasets]);
   const selected = useMemo(() => resolveSelection(availableIds, stored), [availableIds, stored]);
 
@@ -88,7 +146,41 @@ export default function CanvasPage() {
       return next;
     });
     for (const id of selected) del(`/api/dataset/${id}/canvas/positions`).catch(() => {});
-  }, [selected]);
+    /* And the pinned images RE-FLOW rather than being deleted or left behind.
+       Neither of the obvious answers is right: deleting them would make a
+       "rebuild the automatic tree" button destroy content the user placed
+       deliberately, and leaving them alone would strand every picture at
+       coordinates chosen next to a card that has just moved back. So each
+       VISIBLE pin is recomputed to its default spot beside its own card, which
+       is the tidy version of exactly what it was.
+
+       CLOSED pins are not touched: their remembered geometry is a promise
+       ("re-open it where I closed it") and Tidy up is not the place to break
+       it. The re-flow needs the laid-out lane, so it is done here against the
+       automatic tree the board is about to fall back to. */
+    setImageNodes((cur) => {
+      const next = { ...cur };
+      for (const id of selected) {
+        const map = next[id];
+        if (!map) continue;
+        const tree = trees[id]?.tree;
+        const graph = tree ? buildLineageGraph(tree) : null;
+        const taken = [];
+        const lane = { ...map };
+        for (const node of visibleImageNodes(map)) {
+          const spot = defaultImageSpot(graph, node.image?.record_id,
+            node.image?.step, taken);
+          taken.push(spot);
+          lane[node.imageId] = { ...node, ...spot };
+          putJson(`/api/dataset/${id}/canvas/images`, {
+            nodes: [{ image_id: node.imageId, ...spot, visible: true }],
+          }).catch(() => {});
+        }
+        next[id] = lane;
+      }
+      return next;
+    });
+  }, [selected, trees]);
 
   /* Re-read ONE lane from the server and put it back on the board. Used after a
      deploy launched from the canvas: the pills of that dataset have to come back
@@ -185,6 +277,7 @@ export default function CanvasPage() {
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
+            imageNodes={imageNodes} onSaveImageNodes={onSaveImageNodes}
             onPinLane={onPinLane} onTidyUp={onTidyUp}
             onRefetchDataset={onRefetchDataset} />
         )}

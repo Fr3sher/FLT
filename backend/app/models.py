@@ -744,3 +744,50 @@ class CanvasNodePosition(db.Model):
     dataset = db.relationship('FaceDataset')
     __table_args__ = (db.UniqueConstraint('dataset_id', 'record_id',
                                           name='uq_canvas_node_position'),)
+
+
+class CanvasImageNode(db.Model):
+    """🖼 A generated image PINNED onto the ◉ LoRA Canvas, as a node of its own.
+
+    The board compares checkpoints; the thing being compared is the picture. A
+    picture you can only see one at a time, in a modal, is a picture you cannot
+    compare — so an image can be dropped onto the board, moved and resized like
+    any other node, next to the pill that made it.
+
+    Same table shape and the same reasoning as ``CanvasNodePosition``, one row
+    per (dataset, image): coordinates are LANE-LOCAL, the same world units the
+    card positions use, so both live in one coordinate system and one lane
+    extent.
+
+    ⚠️ ``visible`` is the whole feature, not a flag. Closing a pinned image must
+    NOT forget where it was: re-opening it has to put it back exactly where and
+    at the size it was closed at. So the close writes ``visible = False`` and
+    keeps the geometry; only an explicit "forget" would delete the row, and
+    nothing in the UI does that today.
+
+    ``image_id`` is ``lora_test_image.id`` and is deliberately NOT a ForeignKey,
+    for the same reason ``record_id`` above is not one: it is resolved on read
+    and a row whose image no longer exists is DELETED there (see
+    ``canvas_image_nodes``). A constraint would turn "the user deleted that
+    render" into a database error instead of a node quietly leaving the board.
+
+    The link to the source checkpoint is NOT stored: it is read off the image
+    row (``record_id`` / ``step``), so a pinned image can never disagree with
+    the gallery about which checkpoint produced it. New table -> created by
+    db.create_all(), no migration."""
+    __tablename__ = 'canvas_image_node'
+    id = db.Column(db.Integer, primary_key=True)
+    dataset_id = db.Column(
+        db.Integer, db.ForeignKey('face_dataset.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    image_id = db.Column(db.Integer, nullable=False, index=True)
+    x = db.Column(Float, nullable=False, default=0.0)
+    y = db.Column(Float, nullable=False, default=0.0)
+    w = db.Column(Float, nullable=False, default=260.0)
+    h = db.Column(Float, nullable=False, default=260.0)
+    visible = db.Column(db.Boolean, nullable=False, default=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow,
+                           onupdate=datetime.utcnow)
+    dataset = db.relationship('FaceDataset')
+    __table_args__ = (db.UniqueConstraint('dataset_id', 'image_id',
+                                          name='uq_canvas_image_node'),)

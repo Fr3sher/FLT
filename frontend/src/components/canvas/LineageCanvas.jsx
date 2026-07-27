@@ -6,6 +6,11 @@ import {
   stackLanes, viewTransform, zoomAt,
 } from '../../utils/canvasLayout';
 import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
+import {
+  clampImageBox, defaultImageSpot, imageNodeEdges, imageNodeExtent,
+  openGeometry, visibleImageNodes,
+} from '../../utils/canvasImageNodes';
+import { DEPLOY_BAR_CLASS, DEPLOY_LEGEND } from '../../utils/checkpointDeployState';
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from '../dataset/lineageEdges';
 import { noteBadge, toggleDiffSelection } from '../dataset/lineageDetail.js';
@@ -20,6 +25,7 @@ import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
 import CheckpointActionsPopover from '../dataset/CheckpointActionsPopover';
 import PreviewLightbox from '../dataset/PreviewLightbox';
+import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
 import { useCheckpointActions } from '../../hooks/useCheckpointActions';
 import { useCanvasRun } from '../../hooks/useCanvasRun';
@@ -29,6 +35,7 @@ import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
 import CanvasRunTracker from './CanvasRunTracker';
+import CanvasImageNode from './CanvasImageNode';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
 import { HelpBadge } from '../../help/HelpMode';
@@ -164,8 +171,34 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
   );
 }
 
-export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
-  onRefetchDataset }) {
+/** One lane's pinned images, plus the links back to the checkpoints that made
+ *  them. The links are drawn with the SAME connector the tree uses for "this
+ *  continued from that" (components/dataset/lineageEdges) -- the board already
+ *  has a grammar for descent and a second one would only be a second thing to
+ *  learn. Its NEUTRAL variant, not the trunk: a render is evidence about a
+ *  checkpoint, not a step of the training lineage.
+ *
+ *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
+ *  well outside the tree's box and the tree's <svg> is sized to the tree. */
+function LaneImages({ lane, nodes, onGeometry, onClose, onOpen }) {
+  if (!nodes.length) return null;
+  const edges = imageNodeEdges(nodes, lane.graph);
+  return (
+    <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
+      <svg width="1" height="1" className="block overflow-visible" aria-hidden>
+        <LineageEdges edges={edges} isLit={() => false} />
+      </svg>
+      {nodes.map((n) => (
+        <CanvasImageNode key={n.imageId} node={n} datasetId={lane.datasetId}
+          laneName={lane.name} onGeometry={onGeometry} onClose={onClose}
+          onOpen={onOpen} />
+      ))}
+    </div>
+  );
+}
+
+export default function LineageCanvas({ entries, positions, imageNodes, onPinLane,
+  onSaveImageNodes, onTidyUp, onRefetchDataset }) {
   const toast = useToast();
   const frameRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
@@ -220,9 +253,38 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
     }
   }, [placed, onPinLane]);
 
-  const world = useMemo(() => stackLanes(placed.map((e) => ({
-    ...e, width: e.graph?.width || 0, height: e.graph?.height || 0,
-  }))), [placed]);
+  /* The images PINNED on the board. Same coordinate system as the cards
+     (lane-local world units) and the same storage decision: server-side, next
+     to canvas_node_position. A board whose cards follow the dataset from
+     machine to machine while its pictures stay stuck in one browser is a board
+     that is only half yours -- and you find that out on the day you change
+     desk. Geometry mid-gesture is an override on top, exactly like a card drag. */
+  const [imgDrag, setImgDrag] = useState(null);   // {datasetId,imageId,x,y,w,h}
+  const imagesByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) {
+      let list = visibleImageNodes(imageNodes?.[e.datasetId] || {});
+      if (imgDrag && imgDrag.datasetId === e.datasetId) {
+        list = list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n));
+      }
+      out[e.datasetId] = list;
+    }
+    return out;
+  }, [placed, imageNodes, imgDrag]);
+  const imagesRef = useRef(imagesByLane);
+  useEffect(() => { imagesRef.current = imagesByLane; }, [imagesByLane]);
+
+  // A lane has to be big enough to hold its pinned pictures too, or Fit would
+  // crop one off the board with no way back to it.
+  const world = useMemo(() => stackLanes(placed.map((e) => {
+    const ext = imageNodeExtent(imagesByLane[e.datasetId] || []);
+    return {
+      ...e,
+      width: Math.max(e.graph?.width || 0, ext.width),
+      height: Math.max(e.graph?.height || 0, ext.height),
+    };
+  })), [placed, imagesByLane]);
 
   // The latest placement, for the pointer handlers (which must not re-bind on
   // every board change just to read a card's current position).
@@ -306,6 +368,8 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
 
   // --- node dragging ---------------------------------------------------------
   const dragRef = useRef(null);      // {datasetId, recordId, sx, sy, ox, oy, moved}
+  // The pinned image being moved or resized: {datasetId,imageId,mode,sx,sy,box,cur}
+  const imgRef = useRef(null);
   const longPress = useRef(null);    // touch: the pending pick-up
   const suppressClick = useRef(false);
   /* ⚠️ THE press that landed on a card: {datasetId, recordId, at, moved}.
@@ -359,11 +423,66 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
     pan.current = null;
   }, []);
 
+  /** Write one pinned image's geometry back. Applied to the screen first by the
+   *  page and sent afterwards, like a card position: a picture must follow the
+   *  finger at the speed of the finger, and a failed write heals on the next
+   *  gesture. `visible: false` is the CLOSE -- the row and its geometry stay,
+   *  which is what makes "re-open it exactly where I closed it" possible. */
+  const saveImage = useCallback((datasetId, node, box, visible = true) => {
+    onSaveImageNodes?.(datasetId, [{
+      image_id: node.imageId, ...clampImageBox(box), visible, image: node.image,
+    }]);
+  }, [onSaveImageNodes]);
+
+  const beginImage = useCallback((datasetId, imageId, mode, origin) => {
+    const node = (imagesRef.current[datasetId] || []).find((n) => n.imageId === imageId);
+    if (!node) return false;
+    const box = { x: node.x, y: node.y, w: node.w, h: node.h };
+    // `cur` is the live box, kept on the gesture itself: reading it back off the
+    // rendered lane at pointerup would race the last frame of the drag.
+    imgRef.current = { datasetId, imageId, mode, sx: origin.x, sy: origin.y,
+      box, cur: box, moved: false, node };
+    setImgDrag({ datasetId, imageId, ...box });
+    pan.current = null;
+    return true;
+  }, []);
+
   const onPointerDown = useCallback((e) => {
     suppressClick.current = false;
     press.current = null;
     // A press on a pill is an inspection, never a drag or a pan.
     if (e.target.closest?.('.lds-ckpill-wrap')) return;
+    /* A pinned image's own buttons (close, open) answer for themselves.
+       Returning WITHOUT capturing the pointer is the point: a captured pointer
+       retargets the click that follows to the frame, and the button would never
+       hear it -- the same trap the run cards had to work around. */
+    if (e.target.closest?.('[data-canvas-image] button')) return;
+    const imgEl = e.target.closest?.('[data-canvas-image]');
+    if (imgEl) {
+      const dsId = Number(imgEl.dataset.datasetId);
+      const imageId = Number(imgEl.dataset.imageId);
+      const at0 = localPoint(e);
+      // The resize corner is hit-tested BEFORE the pan/drag decision, on every
+      // pointer type: a finger landing on a 28-px corner handle can only mean
+      // one thing, so it must not have to wait out a long press.
+      const resizing = !!e.target.closest?.('[data-canvas-image-resize]');
+      if (resizing || e.pointerType !== 'touch') {
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        if (beginImage(dsId, imageId, resizing ? 'resize' : 'move', at0)) return;
+      } else {
+        // Touch, on the picture itself: the board pans until a LONG PRESS picks
+        // the node up -- the board's existing answer to "a finger on a node
+        // could mean either".
+        pointers.current.set(e.pointerId, at0);
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        pan.current = { ...at0, tx: viewRef.current.tx, ty: viewRef.current.ty };
+        longPress.current = setTimeout(() => {
+          longPress.current = null;
+          beginImage(dsId, imageId, 'move', at0);
+        }, LONG_PRESS_MS);
+        return;
+      }
+    }
     const card = e.target.closest?.('[data-canvas-node]');
     if (card) {
       press.current = { datasetId: Number(card.dataset.datasetId),
@@ -401,7 +520,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       }
     }
     frameRef.current?.classList.add('is-grabbing');
-  }, [beginDrag]);
+  }, [beginDrag, beginImage]);
 
   const onPointerMove = useCallback((e) => {
     // A press that travels is a drag or a pan, never a click — whichever of the
@@ -411,6 +530,21 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       if (Math.hypot(p.x - press.current.at.x, p.y - press.current.at.y) >= DRAG_SLOP) {
         press.current.moved = true;
       }
+    }
+    const gi = imgRef.current;
+    if (gi) {
+      const p = localPoint(e);
+      const s = clampScale(viewRef.current.scale);
+      const dx = (p.x - gi.sx) / s;
+      const dy = (p.y - gi.sy) / s;
+      if (!gi.moved && Math.hypot(p.x - gi.sx, p.y - gi.sy) < DRAG_SLOP) return;
+      gi.moved = true;
+      const box = gi.mode === 'resize'
+        ? clampImageBox({ ...gi.box, w: gi.box.w + dx, h: gi.box.h + dy })
+        : clampImageBox({ ...gi.box, x: gi.box.x + dx, y: gi.box.y + dy });
+      gi.cur = box;
+      setImgDrag({ datasetId: gi.datasetId, imageId: gi.imageId, ...box });
+      return;
     }
     const d = dragRef.current;
     if (d) {
@@ -450,6 +584,18 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
 
   const endPointer = useCallback((e) => {
     cancelLongPress();
+    const gi = imgRef.current;
+    if (gi) {
+      imgRef.current = null;
+      // Only a gesture that actually MOVED writes: a tap on a pinned picture
+      // must not quietly re-save the same coordinates.
+      if (gi.moved) saveImage(gi.datasetId, gi.node, gi.cur);
+      setImgDrag(null);
+      pointers.current.delete(e.pointerId);
+      frameRef.current?.releasePointerCapture?.(e.pointerId);
+      if (pointers.current.size === 0) frameRef.current?.classList.remove('is-grabbing');
+      return;
+    }
     const d = dragRef.current;
     if (d) {
       dragRef.current = null;
@@ -483,7 +629,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, [onPinLane, runCardGesture]);
+  }, [onPinLane, runCardGesture, saveImage]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -701,6 +847,42 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
     setOpenNode(null);
   }, []);
 
+  /* Pin a generated image onto the board -- from its gallery, or from the
+     lightbox that opens over it. An image pinned BEFORE comes back exactly
+     where and how big it was left (openGeometry); one that never was lands
+     beside the card that produced it, sliding down past the pins already
+     there. */
+  const [pinnedZoom, setPinnedZoom] = useState(null);
+  const handlePinImage = useCallback((img) => {
+    const dsId = img?.dataset_id;
+    if (dsId == null || img?.id == null) return;
+    const map = imageNodes?.[dsId] || {};
+    const lane = placedRef.current.find((l) => l.datasetId === dsId);
+    const geo = openGeometry(map, img.id,
+      defaultImageSpot(lane?.graph, img.record_id, img.step, visibleImageNodes(map)));
+    onSaveImageNodes?.(dsId, [{ image_id: img.id, ...geo, visible: true, image: img }]);
+  }, [imageNodes, onSaveImageNodes]);
+
+  // Closing KEEPS the geometry -- that is the whole promise. Only `visible` flips.
+  const handleCloseImage = useCallback((node) => {
+    const dsId = node?.image?.dataset_id;
+    if (dsId == null) return;
+    onSaveImageNodes?.(dsId, [{
+      image_id: node.imageId, x: node.x, y: node.y, w: node.w, h: node.h,
+      visible: false, image: node.image,
+    }]);
+  }, [onSaveImageNodes]);
+
+  // The keyboard path into the same write (arrows / +- on a focused node), so
+  // moving and resizing are not mouse-only gestures.
+  const handleImageGeometry = useCallback((node, box) => {
+    const dsId = node?.image?.dataset_id;
+    if (dsId == null) return;
+    onSaveImageNodes?.(dsId, [{
+      image_id: node.imageId, ...clampImageBox(box), visible: true, image: node.image,
+    }]);
+  }, [onSaveImageNodes]);
+
   const pct = Math.round(clampScale(view.scale) * 100);
   const empty = !world.lanes.length;
   // Has anything on the visible board been moved? Drives ✦ Tidy up: a button
@@ -759,8 +941,26 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
             <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
           )}
         </button>
-        <span className="ml-auto hidden text-content-subtle text-[0.625rem] sm:inline">
-          Drag a run to move it · drag the background to pan · wheel to zoom · click a run for all its images, notes and settings · click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare
+        {/* The colour key. A colour with no legend is a guess, and this one
+            answers the question asked most often on this board: "which of these
+            can I generate from RIGHT NOW?". Each state carries a shape as well
+            as a colour (filled disc vs hollow ring), because roughly one man in
+            twelve reads red and green alike and the theme is dark graphite.
+            It renders from utils/checkpointDeployState, the same source the
+            pills read, so the key cannot drift from what it explains. */}
+        <span data-testid="canvas-deploy-legend"
+          className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
+          {DEPLOY_LEGEND.map((l) => (
+            <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
+              {/* The swatch is the pill's OWN bar class, so the key is drawn by
+                  the thing it explains and cannot drift from it. */}
+              <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
+              {l.label}
+            </span>
+          ))}
+        </span>
+        <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run for all its images, notes and settings · click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare - pin an image from its gallery to put it ON the board
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -804,6 +1004,9 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
             {world.lanes.map((lane) => (
               <div key={lane.datasetId}>
                 <LaneHeader lane={lane} />
+                <LaneImages lane={lane} nodes={imagesByLane[lane.datasetId] || []}
+                  onGeometry={handleImageGeometry} onClose={handleCloseImage}
+                  onOpen={(n) => setPinnedZoom(n.image)} />
                 <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
                   onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}
                   liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null}
@@ -882,6 +1085,7 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
           note EDITING, so the panel can show notes without owning a second
           editor for them. */}
       <CheckpointGalleryPanel target={gallery} onClose={() => setGallery(null)}
+        onPin={handlePinImage}
         onDetails={(node) => { setGallery(null); setOpenNode(node); }}
         onDeleted={(ids) => (ids || []).forEach((id) => {
           Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
@@ -890,6 +1094,12 @@ export default function LineageCanvas({ entries, positions, onPinLane, onTidyUp,
       {/* 🔍 A pill's preview, full-screen. The thumbnail was already clickable on
           the board and did nothing at all — the host passed no handler. */}
       <PreviewLightbox target={bigPreview} onClose={() => setBigPreview(null)} />
+
+      {/* A PINNED image's full record: every setting it was made with, its
+          prompt, and the copy buttons. The node on the board is the picture;
+          the facts stay one click away rather than crammed onto a thumbnail. */}
+      <GeneratedImageLightbox img={pinnedZoom} alt="Pinned generated image"
+        onClose={() => setPinnedZoom(null)} />
 
       {/* An untouched board with picks waiting: say so, because the settings panel
           may be closed and the ✓ boxes are small. Also the only place the
