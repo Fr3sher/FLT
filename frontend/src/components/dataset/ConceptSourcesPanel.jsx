@@ -288,7 +288,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy }) {
         {/* Several sources only return results once their credentials are filled in
             (Reddit client id, Civitai token, Pexels key) — the picker is where that
             becomes relevant, not the Settings page the user is not on. */}
-        <SettingsLink section="scraping" className="order-last ml-auto">
+        <SettingsLink section="scraping" focus="scrape-credentials" className="order-last ml-auto">
           Source credentials
         </SettingsLink>
         <div role="group" aria-label="Scraper source"
