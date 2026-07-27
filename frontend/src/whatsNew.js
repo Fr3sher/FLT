@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-stop-responds-while-a-training-starts',
+    date: '2026-07-27',
+    title: 'Stop answers immediately, even in the seconds a training is starting',
+    blurb:
+      'Starting a run hands the vision model\'s VRAM back to Ollama first. That handover is a network call, and it was made while the training queue was locked — so if Ollama was slow to answer (busy loading a model, for instance), Stop, queueing and un-queueing all sat waiting behind it, for up to a minute and a half in the worst case. Pressing Stop looked like nothing happened. The handover now runs before the queue is locked: it still frees the card before the trainer claims it, but it can no longer freeze the buttons while it waits.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-27-tile-engine-badge-readable',
     date: '2026-07-27',
     title: 'You can read which engine made a photo again, phone and tablet included',

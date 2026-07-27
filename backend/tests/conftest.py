@@ -33,16 +33,27 @@ def _reset_inmemory_registries():
     Clear it around every test so in-memory activity never leaks across cases.
 
     The bank folder-sync cooldowns are process-global for the same reason: bank
-    id 1 of a prior test would make the next test's first walk a no-op."""
+    id 1 of a prior test would make the next test's first walk a no-op.
+
+    The vision keep-warm LEASE is the same kind of global, and the nastiest: any
+    test that crops/uploads through detect_head_bbox grants a 120 s lease, and
+    every later test whose code path is "about to take the GPU" then calls
+    revoke() -> a REAL HTTP POST to whatever answers on the Ollama URL. That is
+    how test_training_queue_atomic failed once in a full suite and never alone:
+    the launch under test paid for a live unload of a machine's actual Ollama,
+    which can take tens of seconds. The suite must never depend on a lease left
+    behind by an earlier test, nor talk to a live Ollama by accident."""
     from app.services import bank_jobs, dataset_activity
-    from app.services import image_bank_service
+    from app.services import image_bank_service, vision_keepalive
     dataset_activity.reset()
     bank_jobs.reset()
     image_bank_service.reset_folder_sync()
+    vision_keepalive.forget_lease()
     yield
     dataset_activity.reset()
     bank_jobs.reset()
     image_bank_service.reset_folder_sync()
+    vision_keepalive.forget_lease()
 
 @pytest.fixture()
 def app(tmp_path, monkeypatch):

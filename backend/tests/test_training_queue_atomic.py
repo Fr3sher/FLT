@@ -409,6 +409,75 @@ def test_stop_waits_until_launch_publishes_the_new_pid(
     assert any('7878' in args for args in killed)
 
 
+def test_vision_revoke_runs_outside_the_queue_lock(app, tmp_path, monkeypatch):
+    """Handing the warm vision model back must NOT happen under `_queue_lock`.
+
+    With a live keep-warm lease, `vision_keepalive.revoke()` is an HTTP POST to
+    Ollama with `timeout=(10, 30)`, retried once — up to ~80 s of blocking. Run
+    under the queue lock, it froze Stop, enqueue/dequeue and queue advancement
+    for that whole time: Stop pressed during a launch did nothing until Ollama
+    answered. It also made this file's launch/Stop test fail in a full suite
+    (an ordinary upload test leaves a 120 s lease behind, and the launch path
+    then pays for a real unload), which no liveness timeout can honestly fix.
+    """
+    from app import config as cfg
+    from app.config import LOCAL_USER
+    from app.services import checkpoint_registry
+    from app.services import face_dataset_service as svc
+    from app.services import lora_training as lt
+    from app.services import vision_keepalive
+
+    root = tmp_path / 'aitoolkit'
+    (root / 'venv' / 'Scripts').mkdir(parents=True)
+    (root / 'venv' / 'Scripts' / 'python.exe').write_text('fake')
+    (root / 'run.py').write_text('fake')
+    with app.app_context():
+        cfg.save_config({'aitoolkit': {'dir': str(root)}})
+        ds = svc.create_dataset(
+            LOCAL_USER, 'Revoke lock', 'revoke_lock', train_type='zimage')
+        dataset_id = ds.id
+        lt._clear_training_identity(ttl_seconds=None)
+
+    lock_free_during_revoke = []
+
+    def probing_revoke(_reason=''):
+        # Another thread — an operator pressing Stop — must be able to take the
+        # queue lock while the (potentially very slow) revoke is in flight.
+        def probe():
+            taken = lt._queue_lock.acquire(timeout=BLOCKED_PROBE)
+            lock_free_during_revoke.append(taken)
+            if taken:
+                lt._queue_lock.release()
+
+        prober = threading.Thread(target=probe)
+        prober.start()
+        prober.join(timeout=LIVENESS)
+        return False
+
+    def fake_popen(_args, **kwargs):
+        kwargs['stdout'].close()
+        return SimpleNamespace(pid=4321)
+
+    monkeypatch.setattr(vision_keepalive, 'revoke', probing_revoke)
+    monkeypatch.setattr(lt, 'assert_free_disk', lambda *_a, **_kw: None)
+    monkeypatch.setattr(lt, 'assert_trainable', lambda *_a, **_kw: None)
+    monkeypatch.setattr(lt, 'preflight_custom_paths', lambda *_a, **_kw: None)
+    monkeypatch.setattr(lt, 'find_run_collision', lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        lt, 'export_dataset_to_aitoolkit', lambda *_a, **_kw: str(tmp_path))
+    monkeypatch.setattr(
+        lt, 'write_job_config', lambda *_a, **_kw: str(tmp_path / 'job.json'))
+    monkeypatch.setattr(
+        checkpoint_registry, 'register_launch', lambda *_a, **_kw: None)
+    monkeypatch.setattr(lt.subprocess, 'Popen', fake_popen)
+    monkeypatch.setattr(lt, '_watch_training', lambda *_a, **_kw: None)
+
+    with app.app_context():
+        lt.launch_training(LOCAL_USER, dataset_id, steps=500, masked=False)
+
+    assert lock_free_during_revoke == [True]
+
+
 def test_queued_continue_replays_captured_base_variant_and_confirmation(monkeypatch):
     from app.services import lora_training as lt
 
