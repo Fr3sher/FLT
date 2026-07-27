@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 
 /* 🔍 A checkpoint's generated preview, LARGE.
 
@@ -8,34 +8,24 @@ import { useEffect } from 'react';
    the thumbnail was clickable and did nothing at all (the host passed no
    handler), which is exactly the silent dead click this app does not ship.
 
-   Esc closes from anywhere through a window listener, not div focus — the
-   backdrop is not reliably focused when the image itself is clicked.
+   It is now a THIN ADAPTER over GeneratedImageLightbox rather than a viewer of
+   its own. The app was carrying four full-screen image viewers, two of which
+   (this one and the gallery's inline zoom) showed the same kind of thing — a
+   generated render — with different metadata and different keyboard handling.
+   One of them now exists, and this passes it the little a pill knows.
+
+   ⚠️ A pill's preview carries no seed and no settings: it is a URL and a step,
+   held by the lineage node, not a gallery row. The facts column therefore shows
+   the step and says the rest is unknown rather than inventing it. The full
+   record is one click away — the pill's 🖼 badge opens the gallery, whose rows
+   are the real thing.
 
    `target` is { url, step } | null. */
 export default function PreviewLightbox({ target, onClose }) {
-  useEffect(() => {
-    if (!target) return undefined;
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [target, onClose]);
-
-  if (!target) return null;
-  const step = target.step?.toLocaleString?.() ?? target.step;
   return (
-    <div role="dialog" aria-modal="true" aria-label={`Preview at step ${target.step}`}
-      data-testid="preview-lightbox"
-      className="fixed inset-0 z-[9997] flex flex-col items-center justify-center bg-black/90 p-4"
-      onClick={onClose}>
-      <button type="button" onClick={(e) => { e.stopPropagation(); onClose?.(); }}
-        title="Close (Esc)" aria-label="Close preview"
-        className="absolute top-3 right-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-lg leading-none text-white hover:bg-white/20">✕</button>
-      <img src={target.url} alt={`Generated preview at step ${target.step}`}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[88vh] max-w-full select-none rounded-lg object-contain shadow-2xl" />
-      <span className="mt-2 text-white/70 text-[0.75rem] tabular-nums">
-        Step {step} · click outside or Esc to close
-      </span>
-    </div>
+    <GeneratedImageLightbox
+      img={target ? { url: target.url, step: target.step } : null}
+      alt={`Generated preview at step ${target?.step}`}
+      onClose={onClose} />
   );
 }
