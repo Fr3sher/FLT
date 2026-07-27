@@ -3710,9 +3710,22 @@ def run_deletion_impact(record_id) -> dict | None:
         released = run_archive.stored_count(_releasable_blob_sigs(rec))
     except Exception:
         released = 0
+    # The CASCADE half of the same preview: what a "delete everything" would take
+    # that the conservative removal would not. Additive — the existing dialog
+    # reads the flat keys and is untouched by it — and self-degrading to a
+    # zeroed block, so a probe that cannot run never breaks the preview.
+    try:
+        from . import run_cascade_delete
+        cascade = run_cascade_delete.cascade_impact(rec.id)
+    except Exception:
+        logger.debug('cascade impact preview failed', exc_info=True)
+        cascade = None
     return {
         'record_id': rec.id,
         'has_saves': _record_checkpoints_on_disk(rec) > 0,
+        'cascade': cascade or {
+            'checkpoints': 0, 'checkpoint_bytes': 0, 'images_deleted': 0,
+            'images_kept_rated': 0, 'deployed_kept': 0, 'training_active': None},
         'notes': _count(CheckpointNote),
         'previews': _count(CheckpointPreview),
         'images_unlinked': _count(LoraTestImage),
@@ -3731,7 +3744,7 @@ def _count_children(rec) -> int:
         return 0
 
 
-def delete_run_record(record_id) -> str:
+def delete_run_record(record_id, cascade=False) -> str:
     """Remove a GONE run from the lineage graph, with EVERYTHING that only
     existed because of it. Five tables carry a `record_id`; leaving three of
     them behind is how a "deleted" run keeps haunting the canvas and the
@@ -3756,6 +3769,14 @@ def delete_run_record(record_id) -> str:
     Guards kept: a run whose checkpoints are still on disk is REFUSED
     ('has_saves') so a recoverable run is never discarded from under the user.
 
+    `cascade=True` is the ONE caller allowed past that guard:
+    ``run_cascade_delete.delete_run_cascade`` has just moved those checkpoints to
+    the trash itself, so re-asking "are they on disk?" would either refuse a
+    deletion whose files are already gone or race a slow filesystem. It is a
+    keyword with a False default so every existing caller keeps the conservative
+    behaviour byte for byte — the cascade is an explicitly requested mode, never
+    a new default that starts destroying files under code that never asked.
+
     Returns 'not_found' | 'has_saves' | 'deleted' | 'conflict'. The FK children
     (no relationship cascade in this schema) are deleted and FLUSHED before the
     parent row so SQLite never raises the repo's "delete 500" IntegrityError; a
@@ -3769,7 +3790,7 @@ def delete_run_record(record_id) -> str:
     rec = db.session.get(TrainingRunRecord, int(record_id))
     if rec is None:
         return 'not_found'
-    if _record_checkpoints_on_disk(rec) > 0:
+    if not cascade and _record_checkpoints_on_disk(rec) > 0:
         return 'has_saves'
     # Computed BEFORE the row is gone — the snapshot that names the blobs lives
     # on the record itself.

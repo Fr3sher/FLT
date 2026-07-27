@@ -10,6 +10,7 @@ import {
   stepGroupLabel, unlinkedNote, visibleGalleryImages,
 } from '../../utils/runGallery';
 import { configRows } from '../dataset/lineageDetail.js';
+import RunDeleteSection from './RunDeleteSection';
 
 /* 🖼 Everything one checkpoint — or one whole RUN — ever produced.
 
@@ -371,6 +372,19 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
             <p className="m-0 mt-3 border-t border-border pt-2 text-content-subtle text-[0.625rem]">
               {unlinkedNote(d.unlinked, scope)}
             </p>
+          )}
+
+          {/* ⚠ Deleting the RUN itself — only in the run scope, and only at the
+              very bottom. In the checkpoint scope the panel is looking at one
+              step, not a run: offering "delete the whole run" there would be a
+              destructive action aimed at something other than what the title
+              says. Its own file (RunDeleteSection) owns the confirmation, the
+              counts and the keyboard behaviour; deleting reuses `onDeleted`,
+              which both hosts already answer by refetching the lane — so the
+              card disappears from the board with no new prop. */}
+          {state.status === 'ready' && isRun && node && (
+            <RunDeleteSection recordId={target.recordId} datasetId={node.dataset_id}
+              onDeleted={onDeleted} onClose={onClose} />
           )}
         </div>
 
