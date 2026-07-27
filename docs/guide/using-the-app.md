@@ -319,6 +319,19 @@ the selection bar offers two selectors that cost no extra GPU time:
   *cover the variety* of what you're looking at (varied angles, outfits, scenes),
   instead of that many near-identical frames. It's the antidote to a dump of
   4 000 shots of the same pose: ask for 60 and you get 60 that actually differ.
+  **Skip the odd ones out** (the slider under the number) is why they are the
+  *right* 60. "Most varied" is computed as "farthest from everything already
+  picked", and the image that is farthest from everything in a collected bank is
+  usually not a nice unusual shot of your subject — it's the meme, the screenshot,
+  the botched frame, the one photo of somebody else. The slider discounts an image
+  for being *alone in the bank*: at the default **50%** an image that resembles
+  nothing else has to be far more interesting than a normal one to earn a slot,
+  and at **100%** it is all but excluded. It never works the other way round —
+  anything as typical as the median of the bank is left completely alone, so this
+  cannot turn your 60 into 60 look-alikes. Set it to **0** for the pure-coverage
+  behaviour the button had before this setting existed. On a very large bank the
+  first click takes a few seconds (it reads every image's neighbourhood once);
+  the button says *Sampling…* while it does.
 - **🎯 Similar to selected** — select **one** image as a reference, and it ranks
   everything by how much it looks like that image and selects the closest N — the
   fast way to pull one person or one look out of a mixed export.

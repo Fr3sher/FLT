@@ -372,6 +372,14 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // Curation popovers ('diverse' | 'similar' | null) and their target counts.
   const [curateOpen, setCurateOpen] = useState(null)
   const [diverseN, setDiverseN] = useState(60)
+  // Typicality guard for 🎨 Pick diverse. Pure farthest-point sampling maximises
+  // the distance to what is already picked — mathematically the criterion that
+  // prefers ISOLATED images, so the first picks used to be the memes and the
+  // stray photos of someone else. 0 = the historical behaviour, on purpose still
+  // reachable; 0.5 = the default (see BANK_TYPICALITY_DEFAULT rationale in the
+  // service docstring).
+  const [diverseTypicality, setDiverseTypicality] = useState(0.5)
+  const [diverseBusy, setDiverseBusy] = useState(false)
   const [similarN, setSimilarN] = useState(60)
   // "Show selected" VIEW: render ONLY the selected ids, in a chosen order.
   // showSelected flips the grid from the facet page to the selection; selectedOrder
@@ -642,11 +650,14 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     refreshImages(filter, 0, { on: true, order })
   }
 
+  // The typicality guard reads the whole pool's neighbourhood before sampling, so
+  // on a big bank this click is no longer instant — say so instead of looking dead.
   const pickDiverse = async () => {
     setCurateOpen(null)
+    setDiverseBusy(true)
     try {
       const d = await postJson(`/api/bank/${bankId}/select-diverse`,
-        { n: diverseN, ...filterParams(filter) })
+        { n: diverseN, typicality: diverseTypicality, ...filterParams(filter) })
       if (!d.image_ids?.length) {   // scored, but the current filter holds nothing
         toast.info('Nothing to sample — no scored images match the current filter.')
         return
@@ -655,6 +666,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       toast.info(`Showing the ${d.image_ids.length} most diverse of ${d.pool}. Review, then ✓ Keep or ⬆ Promote — or “Show all” to leave this view.`)
     } catch (e) {
       toast.error(e?.message || 'Diversity sampling failed.')
+    } finally {
+      setDiverseBusy(false)
     }
   }
 
@@ -1238,14 +1251,14 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="text-xs font-semibold uppercase tracking-wide text-content-subtle">Curate</span>
         <div className="relative">
-          <button type="button" disabled={live || scored === 0}
+          <button type="button" disabled={live || scored === 0 || diverseBusy}
             onClick={() => setCurateOpen((v) => (v === 'diverse' ? null : 'diverse'))}
             aria-expanded={curateOpen === 'diverse'}
             title={scored > 0
               ? 'Pick the N images that best COVER the visual variety of the current filter (varied angles/outfits/scenes) — the fix for a dump of near-identical shots. Reuses the ✨ Score embeddings, no GPU.'
               : 'Run ✨ Score first — diversity sampling reuses its embeddings'}
             className="rounded-md border border-border bg-surface-raised px-2.5 py-0.5 text-xs text-content disabled:opacity-50 hover:bg-surface">
-            🎨 Pick diverse…{scored === 0 && ' (needs Score)'}
+            🎨 Pick diverse…{scored === 0 && ' (needs Score)'}{diverseBusy && ' (sampling…)'}
           </button>
           {curateOpen === 'diverse' && (
             <>
@@ -1262,9 +1275,29 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                     onChange={(e) => setDiverseN(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))}
                     className="w-20 rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content" />
                 </label>
-                <button type="button" onClick={pickDiverse}
-                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white">
-                  Select {diverseN} most diverse
+                {/* Typicality guard — "most diverse" used to mean "most isolated",
+                    which is how a meme or a photo of someone else won the first
+                    picks. Exposed rather than silently changed: 0 is the old
+                    behaviour, to the pick. */}
+                <label className="block space-y-1 text-sm text-content">
+                  <span className="flex items-center justify-between gap-2">
+                    <span>Skip the odd ones out</span>
+                    <span className="tabular-nums text-xs text-content-muted">
+                      {diverseTypicality === 0 ? 'off' : `${Math.round(diverseTypicality * 100)}%`}
+                    </span>
+                  </span>
+                  <input type="range" min={0} max={1} step={0.05} value={diverseTypicality}
+                    onChange={(e) => setDiverseTypicality(Number(e.target.value))}
+                    className="w-full accent-primary" />
+                </label>
+                <p className="text-[11px] leading-snug text-content-muted">
+                  {diverseTypicality === 0
+                    ? 'Off — pure coverage, exactly like before. The most isolated images win the first picks, so memes, wrong-person shots and botched frames tend to come up first.'
+                    : 'Images that look like nothing else in the bank (memes, screenshots, someone else) stop winning on isolation alone. Variety inside your subject is untouched.'}
+                </p>
+                <button type="button" onClick={pickDiverse} disabled={diverseBusy}
+                  className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-60">
+                  {diverseBusy ? 'Sampling…' : `Select ${diverseN} most diverse`}
                 </button>
               </div>
             </>

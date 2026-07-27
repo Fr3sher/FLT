@@ -95,6 +95,14 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-07-27-bank-diverse-skips-the-odd-ones-out',
+    date: '2026-07-27',
+    title: '🎨 Pick diverse stops spending your first picks on memes and strangers',
+    blurb:
+      '"The 60 most diverse" was computed as "the 60 most isolated", and those are not the same thing: the image that is farthest from everything else in a collected bank is usually the botched frame, the meme, or the one photo of somebody else — so the first picks went to exactly what you would have rejected. A new "Skip the odd ones out" slider in the 🎨 Pick diverse popover discounts an image for being alone in the bank, while leaving variety inside your subject completely untouched. HEADS UP: it is ON at 50% by default, so this selection is no longer the same set of images it used to be — set the slider to 0 for the exact previous behaviour, or push it to 100% to be ruthless. No rescan, no GPU: it reuses the ✨ Score embeddings you already have.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
     date: '2026-07-27',
     title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',

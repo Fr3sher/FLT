@@ -228,6 +228,8 @@ const TOPICS = [
       'curate', 'curation', 'diverse', 'diversity', 'variety', 'coverage',
       'most varied', 'farthest point', 'similar', 'similarity', 'reference',
       'looks like', 'find similar', 'pick diverse', 'subset', 'trim down',
+      'skip the odd ones out', 'odd ones out', 'typicality', 'outlier',
+      'outliers', 'odd', 'weird images', 'wrong person', 'meme', 'off topic',
       'show selected', 'selected view', 'show all', 'see selection',
       'delete rejected', 'delete from disk', 'remove from disk', 'trash',
       'free up space', 'permanently delete', 'clean up rejected',
