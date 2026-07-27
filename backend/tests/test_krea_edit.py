@@ -221,6 +221,36 @@ def test_preflight_raises_with_both_halves_and_stays_actionable(krea, monkeypatc
         assert hint['pack'] and hint['url'].startswith('https://')
 
 
+# The three Hugging Face weights all live in ONE public, non-gated Comfy-Org repo
+# (measured 2026-07-27), under the exact canonical filenames the resolvers look
+# for. Pinning the repo here is what stops the `source` links from drifting back
+# to a page the user cannot act on: the previous values pointed at
+# huggingface.co/krea/krea-2 (401 "Invalid username or password" — not a licence
+# gate, a wall) and at Comfy-Org/Qwen-Image_ComfyUI, which holds qwen_2.5_vl_*
+# and NOT the qwen3vl_4b encoder this engine needs — an install that followed
+# that link downloaded a file `resolve_krea_text_encoder` deliberately refuses.
+KREA_WEIGHTS_REPO = 'https://huggingface.co/Comfy-Org/Krea-2'
+# Values that are known-bad: a source must never come back to one of these.
+KREA_DEAD_SOURCES = ('huggingface.co/krea/krea-2', 'Qwen-Image_ComfyUI')
+
+
+def test_every_asset_source_points_at_the_canonical_repo(krea):
+    """A `source` is the ONLY thing a user has to go on when an asset is missing —
+    a link that 401s or that lands in a repo without the file is worse than no
+    link, because it costs a download before the app still says 'missing'."""
+    keh, _base, _ = krea
+    for key in ('krea_model', 'krea_text_encoder', 'krea_vae'):
+        src = keh.KREA_ASSETS[key]['source']
+        assert src.startswith(KREA_WEIGHTS_REPO), (
+            f'{key} source {src!r} is not in the canonical weights repo')
+    # The identity LoRA is the one piece that is NOT on Hugging Face.
+    assert keh.KREA_ASSETS['krea_identity_lora']['source'].startswith(
+        'https://civitai.com/')
+    for meta in keh.KREA_ASSETS.values():
+        for dead in KREA_DEAD_SOURCES:
+            assert dead not in meta['source'], f'{dead} is a dead end for a user'
+
+
 def test_the_node_probe_fails_OPEN_when_comfyui_cannot_be_reached(krea, monkeypatch):
     """A transient probe failure must never look like a missing node pack — the
     user would be sent to install something they already have."""

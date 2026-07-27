@@ -41,12 +41,31 @@ MEASURED CONSTRAINTS (2026-07-25, live install — do not "simplify" these away)
   * `BigLoveKreaEdit1_fp8mixed` renders PURE NOISE with this LoRA (it is not a
     Krea 2 Raw/Turbo checkpoint). It is excluded from base-model resolution.
 
-NOTHING HERE IS AUTO-DOWNLOADABLE (yet). Unlike Klein's assets — public,
-direct-link Hugging Face files wired into `setup_installer` — the Krea 2 pieces
-are a git-cloned node pack and weights we have no verified direct URL for. So the
-preflight is the `_studio_missing_response` shape: name every gap, its expected
-path inside the user's ComfyUI, and the page to get it from. Never a silent
-failure, never an inert button, never an invented installer.
+NOTHING HERE IS AUTO-DOWNLOADED — but that is now a CHOICE, not an impossibility
+(state of the world RE-MEASURED 2026-07-27; read this before re-quoting it).
+
+  * The original claim — "weights we have no verified direct URL for" — is
+    OBSOLETE. All three Hugging Face pieces live in ONE public, NON-GATED repo,
+    `Comfy-Org/Krea-2`, under the exact canonical filenames the resolvers below
+    look for: `diffusion_models/krea2_turbo_fp8_scaled.safetensors` (13.1 GB),
+    `text_encoders/qwen3vl_4b_fp8_scaled.safetensors` (5.2 GB) and
+    `vae/qwen_image_vae.safetensors` (254 MB). Measured: anonymous HTTP 200 on
+    each, no token, `gated=false`.
+  * The identity LoRA (Civitai 2761113) also downloaded anonymously on that date
+    — 307 to a signed CDN URL, then real safetensors bytes, no API key.
+  * The node pack declares `dependencies = []`, so installing it is a clone, not
+    a pip run.
+
+So the honest summary is: every piece IS automatable, and none of them is behind
+a licence checkbox a human has to tick in a browser. What is missing is the
+DECISION plus one thing the app has no precedent for anywhere — installing a
+ComfyUI custom-node pack. Until that ships, the preflight stays the
+`_studio_missing_response` shape: name every gap, its expected path inside the
+user's ComfyUI, and the page to get it from. Never a silent failure, never an
+inert button, never an invented installer.
+
+If you are about to conclude "Krea can't be auto-installed", re-run the
+measurement first — that sentence has already been wrong once, for weeks.
 """
 from __future__ import annotations
 import logging
@@ -84,7 +103,7 @@ KREA_ASSETS = {
     'krea_model': {
         'kind': 'Krea 2 base model (Raw or Turbo)',
         'path': 'models/diffusion_models/Krea/',
-        'source': 'https://huggingface.co/krea/krea-2',
+        'source': 'https://huggingface.co/Comfy-Org/Krea-2/tree/main/diffusion_models',
     },
     'krea_identity_lora': {
         'kind': 'Krea 2 Identity Edit LoRA',
@@ -94,12 +113,12 @@ KREA_ASSETS = {
     'krea_text_encoder': {
         'kind': 'Qwen3-VL 4B text encoder',
         'path': 'models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors',
-        'source': 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI',
+        'source': 'https://huggingface.co/Comfy-Org/Krea-2/tree/main/text_encoders',
     },
     'krea_vae': {
         'kind': 'Qwen Image VAE',
         'path': 'models/vae/qwen_image_vae.safetensors',
-        'source': 'https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI',
+        'source': 'https://huggingface.co/Comfy-Org/Krea-2/tree/main/vae',
     },
 }
 # Every asset is graph-critical: unlike Klein there is no "quality only" piece —
@@ -300,10 +319,13 @@ def krea_missing_assets():
 
 # --- Present-but-INVALID assets ---------------------------------------------
 # Exactly Klein's mechanism (klein_edit_helper.klein_invalid_assets), because
-# nothing about the failure is Klein-specific: the Krea 2 base lives behind a
-# licence gate on Hugging Face and the identity LoRA behind a Civitai login, so
-# "downloaded from a browser without accepting the licence" saves the HTML gate
-# PAGE to <name>.safetensors. It passes krea_missing_assets ("the file is there")
+# nothing about the failure is Klein-specific. The reason WHY was wrong until
+# 2026-07-27: this used to say the Krea 2 base sits behind a Hugging Face licence
+# gate and the identity LoRA behind a Civitai login. Re-measured — neither is
+# true (see the module docstring: both download anonymously). The check stays,
+# because the failure it catches never depended on that story: any interrupted,
+# proxied, rate-limited or error-page download saves HTML or a half file to
+# <name>.safetensors. It passes krea_missing_assets ("the file is there")
 # and then dies at generate time on a raw ComfyUI
 # `UNETLoader: Expecting value: line 1 column 1 (char 0)`. A truncated download
 # is worse still — it renders silently distorted images with no error anywhere.

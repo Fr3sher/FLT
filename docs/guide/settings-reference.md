@@ -134,9 +134,9 @@ The second local engine. Where Klein *restages* your reference with a general in
 It is not installed by the app. It needs, inside your own ComfyUI:
 
 - the **[comfyui-krea2edit](https://github.com/lbouaraba/comfyui-krea2edit)** custom-node pack in `custom_nodes/` (no Python dependencies), then a ComfyUI restart;
-- a **Krea 2 Raw or Turbo** base model under a `krea`-named folder in `models/diffusion_models` (or `models/unet`);
-- the **Krea 2 Identity Edit LoRA** in `models/loras`;
-- the **Qwen3-VL 4B** text encoder in `models/text_encoders` and the **Qwen Image VAE** in `models/vae`.
+- a **Krea 2 Raw or Turbo** base model under a `krea`-named folder in `models/diffusion_models` (or `models/unet`) — from [Comfy-Org/Krea-2 ▸ diffusion_models](https://huggingface.co/Comfy-Org/Krea-2/tree/main/diffusion_models) (public, no account needed; `krea2_turbo_fp8_scaled.safetensors` is the usual pick);
+- the **Krea 2 Identity Edit LoRA** in `models/loras` — from [Civitai](https://civitai.com/models/2761113);
+- the **Qwen3-VL 4B** text encoder in `models/text_encoders` and the **Qwen Image VAE** in `models/vae` — both from the same [Comfy-Org/Krea-2](https://huggingface.co/Comfy-Org/Krea-2) repo, under `text_encoders/` and `vae/`. Keep the filenames as published: `qwen3vl_4b_fp8_scaled.safetensors` and `qwen_image_vae.safetensors`. The other Qwen encoders (`qwen_2.5_vl_*`, `qwen_3_8b_*`) belong to different models and are deliberately never picked up here.
 
 The engine card in the workspace names whichever of these is still missing, one actionable line at a time, and the app never guesses a download URL for weights it cannot verify. Every path above is found by *searching* your ComfyUI model roots — including any `extra_model_paths.yaml` roots — so a non-standard layout works untouched.
 

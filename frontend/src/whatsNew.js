@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-krea-download-links-that-work',
+    date: '2026-07-27',
+    title: 'Setting up Krea 2 Edit: the links now lead to the actual files',
+    blurb:
+      'If you tried to install the Krea 2 Edit engine, two of the three download links the app handed you were dead ends: one asked Hugging Face for an account and refused, the other opened a repository that does not contain the text encoder this engine needs — so you downloaded the wrong Qwen file and the app still said "text encoder missing". All three now point straight at the public Comfy-Org/Krea-2 repository, which holds the base model, the text encoder and the VAE together, with no account and no licence to accept. The Guide (Settings ▸ Image engines ▸ Krea 2 Edit) lists every path and filename in one place, and the engine card sends you there instead of to a Setup page that never mentioned Krea.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-27-see-and-edit-the-whole-prompt',
     date: '2026-07-27',
     title: 'See the prompt your engine actually receives — and edit every sentence of it',

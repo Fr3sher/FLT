@@ -108,10 +108,20 @@ test('the unavailable reason names the FIRST thing to fix, never just "off"', ()
   assert.doesNotMatch(assetsOnly, /node pack/);
 });
 
+test('a missing asset points somewhere that actually mentions Krea', () => {
+  // This used to say "see Setup for where to place it". The Setup wizard covers
+  // Klein and does not contain the word Krea anywhere, so the one line the user
+  // had to go on sent them to a page about something else. A dead pointer is
+  // worse than none: it costs a detour and still ends in "missing".
+  const msg = kreaUnavailableReason({ missingAssets: ['krea_model', 'krea_vae'] });
+  assert.doesNotMatch(msg, /Setup/i, 'Setup says nothing about Krea - never send anyone there');
+  assert.match(msg, /Guide/, 'name the place that does list the paths');
+  assert.match(msg, /missing/i, 'still say what is wrong, not only where to read');
+});
+
 test('a file that is PRESENT but is not weights gets named, not left to ComfyUI', () => {
-  // The Krea base is behind an HF licence gate and the identity LoRA behind a
-  // Civitai login: a browser download that skipped either saves the HTML gate
-  // page as .safetensors. It exists, so "missing" says nothing — and the only
+  // An interrupted, proxied or error-page download saves HTML (or half a file)
+  // as .safetensors. It exists, so "missing" says nothing — and the only
   // symptom used to be ComfyUI's raw "Expecting value: line 1 column 1".
   const gate = kreaUnavailableReason({
     invalidAssets: [{ asset: 'krea_model', filename: 'krea2_turbo_fp8.safetensors',

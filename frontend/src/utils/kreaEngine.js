@@ -48,12 +48,18 @@ export function kreaUnavailableReason({
     return '⚠ Install the comfyui-krea2edit node pack in ComfyUI, then restart it';
   }
   const words = kreaMissingLabels(missingAssets);
-  if (words.length) return `⚠ Krea ${words.join(' + ')} missing — see Setup for where to place it`;
-  // Present but NOT weights. The Krea base is behind a Hugging Face licence gate
-  // and the identity LoRA behind a Civitai login, so a browser download that
-  // skipped either one saves the HTML gate PAGE as .safetensors. The file exists,
-  // which is why "missing" says nothing — and without this the only symptom was
-  // ComfyUI's raw "Expecting value: line 1 column 1 (char 0)" at generate time.
+  // NOT "see Setup": the Setup wizard covers Klein only and says nothing about
+  // Krea, so that pointer sent people to a page that never mentions the thing
+  // they were looking for. The Guide chapter below (docs/guide/settings-reference,
+  // shipped in-app) is the one place that lists every Krea path and its source.
+  if (words.length) {
+    return `⚠ Krea ${words.join(' + ')} missing — the Guide (Settings ▸ Image engines ▸ `
+      + 'Krea 2 Edit) lists where each file goes';
+  }
+  // Present but NOT weights: an interrupted, proxied or error-page download saves
+  // HTML or a half file as .safetensors. The file exists, which is why "missing"
+  // says nothing — and without this the only symptom was ComfyUI's raw
+  // "Expecting value: line 1 column 1 (char 0)" at generate time.
   const broken = (Array.isArray(invalidAssets) ? invalidAssets : []).filter((i) => i && i.blocking);
   if (broken.length) {
     const b = broken[0];
