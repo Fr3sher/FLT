@@ -141,6 +141,11 @@ export default function CanvasPage() {
       name: row?.name || `Dataset ${id}`,
       runs: row?.runs || 0,
       families: row?.families || [],
+      // The ★ pinned LoRA(s) of this dataset, so a delete from the board can warn
+      // that it is about to break the saved winning combo — exactly like the
+      // dataset panel does. Travels on the lane, and the canvas reads the lane of
+      // whichever checkpoint popover is open.
+      bestSettingsLoras: row?.best_settings_loras || [],
       status: state?.status || 'loading',
       error: state?.error || null,
       // The RAW tree, not a laid-out graph: the canvas has to be able to lay it

@@ -3690,6 +3690,7 @@ def canvas_dataset_index(user_id) -> dict:
     Ordered newest-run-first, so the board opens on what was trained recently."""
     from sqlalchemy import func
     from ..models import TrainingRunRecord
+    from . import lora_test_studio as studio
     datasets = {d.id: d for d in fds.list_datasets(user_id)}
     if not datasets:
         return {'datasets': []}
@@ -3717,6 +3718,13 @@ def canvas_dataset_index(user_id) -> dict:
             'runs': int(runs or 0),
             'families': sorted(fams.get(ds_id) or ()),
             'last_run_at': last_at.isoformat() if last_at else None,
+            # The ★ pinned LoRA(s), one per family. Read off the dataset row we
+            # ALREADY hold — no extra query, no disk. Without it a canvas delete
+            # of the pinned checkpoint was confirmed with the plain wording, and
+            # the ⚠ "this is your saved winning combo" line never appeared:
+            # same route, same trash, but the user was not told what they were
+            # about to break.
+            'best_settings_loras': studio.best_settings_lora_filenames(ds),
         })
     out.sort(key=lambda d: (d['last_run_at'] or '', d['id']), reverse=True)
     return {'datasets': out}

@@ -98,3 +98,58 @@ def test_index_endpoint_answers_200(client, app):
     # the canvas fetches genealogies per dataset from the lineage endpoint.
     assert 'checkpoints' not in body['datasets'][0]
     assert 'nodes' not in body['datasets'][0]
+
+
+def test_index_carries_the_star_pinned_loras(app):
+    """The ★ pin travels with the index so a delete FROM THE BOARD can warn that
+    it is about to break the saved winning combo. Stored per family → a list.
+    Without this the canvas confirmed the destructive action with the plain
+    wording and never showed the ⚠ line the dataset panel shows."""
+    import json
+    from app.extensions import db
+    from app.services import cloud_training as ct
+    with app.app_context():
+        ds = _dataset('Pinned')
+        _rec(ds.id, family='zimage')
+        _rec(ds.id, family='sdxl')
+        ds.best_settings = json.dumps({
+            'zimage': {'lora_filename': 'zit/win_002000.safetensors', 'strength': 1.0},
+            'sdxl': {'lora_filename': 'sdxl/win_001000.safetensors', 'strength': 0.9},
+        })
+        db.session.commit()
+        row = ct.canvas_dataset_index('local')['datasets'][0]
+        assert row['best_settings_loras'] == ['zit/win_002000.safetensors',
+                                              'sdxl/win_001000.safetensors']
+
+
+def test_index_pin_reads_the_legacy_flat_best_settings(app):
+    """A database written before best settings went per family stores ONE flat
+    object. It must still produce the warning — a legacy install losing its
+    guard-rail is exactly the failure this fix is about."""
+    import json
+    from app.extensions import db
+    from app.services import cloud_training as ct
+    with app.app_context():
+        ds = _dataset('Legacy')
+        _rec(ds.id)
+        ds.best_settings = json.dumps({'lora_filename': 'old/win_001000.safetensors',
+                                       'strength': 1.0})
+        db.session.commit()
+        row = ct.canvas_dataset_index('local')['datasets'][0]
+        assert row['best_settings_loras'] == ['old/win_001000.safetensors']
+
+
+def test_index_pin_is_empty_and_never_raises_without_one(app):
+    import json
+    from app.extensions import db
+    from app.services import cloud_training as ct
+    with app.app_context():
+        ds = _dataset('Unpinned')
+        _rec(ds.id)
+        assert ct.canvas_dataset_index('local')['datasets'][0]['best_settings_loras'] == []
+        ds.best_settings = 'not json at all'
+        db.session.commit()
+        assert ct.canvas_dataset_index('local')['datasets'][0]['best_settings_loras'] == []
+        ds.best_settings = json.dumps({'zimage': {'strength': 1.0}})   # pinned, no file
+        db.session.commit()
+        assert ct.canvas_dataset_index('local')['datasets'][0]['best_settings_loras'] == []

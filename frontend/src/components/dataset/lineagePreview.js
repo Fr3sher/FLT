@@ -190,13 +190,19 @@ export function checkpointUndeployAction(node, pill) {
 /* Is this checkpoint the one pinned as the dataset's ★ best settings in the Test
    Studio? Compared on the BASENAME, exactly like the flat list's guard-rail: the
    pin stores the deployed LoRA's path, the pill stores the run-dir filename, and
-   the import keeps the name. Unknown pin (not loaded on this mount) → false. */
+   the import keeps the name. Unknown pin (not loaded on this mount) → false.
+
+   `bestSettingsLora` accepts ONE path or a LIST of them: the pin is stored per
+   family, so a dataset trained in two families has two winning LoRAs and both
+   deserve the warning. A single string keeps every existing caller working. */
 export function checkpointIsBestSettings(pill, bestSettingsLora) {
   if (!pill || !bestSettingsLora) return false;
   const tail = (s) => String(s).split(/[\\/]/).pop();
-  const pin = tail(bestSettingsLora);
+  const pins = (Array.isArray(bestSettingsLora) ? bestSettingsLora : [bestSettingsLora])
+    .filter(Boolean).map(tail);
+  if (!pins.length) return false;
   return [pill.deployed_filename, pill.filename]
-    .filter(Boolean).some((f) => tail(f) === pin);
+    .filter(Boolean).some((f) => pins.includes(tail(f)));
 }
 
 /* The confirmation text, which must NAME THE TARGET OF THE MOMENT — the two
