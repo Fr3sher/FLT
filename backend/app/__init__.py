@@ -193,6 +193,10 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'jpeg_quality', 'REAL'),
     ('bank_image', 'origin', 'VARCHAR(8)'),
     ('bank_image', 'origin_evidence', 'VARCHAR(24)'),
+    # ⬆ Promote's second destination: the bank a selection was copied into.
+    # Additive and independent of promoted_dataset_id — a database that never
+    # gains it simply never shows the "promoted to a bank" badge.
+    ('bank_image', 'promoted_bank_id', 'INTEGER'),
     ('image_bank', 'pipeline_report', 'TEXT'),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread

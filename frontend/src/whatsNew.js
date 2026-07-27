@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-promote-a-bank-selection-into-a-new-bank',
+    date: '2026-07-27',
+    title: 'Pull a shortlist out of a huge bank — into a new bank, not a dataset',
+    blurb:
+      'Promoting a selection had exactly one destination: a dataset. But when you dump 9 000 scraped images into a bank and isolate 200 candidates, a dataset is the wrong container — it is the training end of the funnel, and you are not there yet. ⬆ Promote now asks where to send the selection: an existing dataset, or a brand-new image bank you name on the spot. The new bank arrives un-triaged with every bank tool available again (scan, duplicates, framing, captions, review), and the bank you came from keeps all its images, marked as promoted. The files are COPIED on purpose — banks never share, so curating one can never mutate the other — and the dialog tells you how many megabytes that costs for your exact selection before you click, measured, not guessed. If the disk fills up mid-copy the new bank is discarded rather than left half-full and looking finished.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-27-hugging-face-token-reaches-training',
     date: '2026-07-27',
     title: 'Gated models train again — your Hugging Face login is no longer lost on the way',

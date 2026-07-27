@@ -112,7 +112,8 @@ function ProgressBar({ activity, onCancel }) {
             ? `🚀 Launch all — step ${(pipe.index ?? 0) + 1}/${pipe.total_steps} · ${STEP_SHORT[pipe.current] || pipe.current}`
             : ({ scan: 'Quality scan', faces: 'Face pass', score: 'Scoring pass',
               semantic_dedup: 'Crops & variants', watermark: 'Watermark scan',
-              framing: 'Framing pass', caption: 'Captioning', promote: 'Promotion' }[kind] || 'Job') + ' running'}
+              framing: 'Framing pass', caption: 'Captioning', promote: 'Promotion',
+              bank_promote: 'Copying into the new bank' }[kind] || 'Job') + ' running'}
           {' — '}{done}{total ? ` / ${total}` : ''}{detail ? ` · ${detail}` : ''}
         </span>
         {pct != null && (
@@ -312,7 +313,11 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
       <span className="absolute left-1 top-1 flex flex-wrap gap-0.5 max-w-[85%]">
         {img.status === 'keep' && badge('✓', 'bg-emerald-500/80 text-white')}
         {img.status === 'reject' && badge(`✕ ${img.reject_reason || ''}`.trim(), 'bg-rose-500/80 text-white')}
-        {img.promoted_dataset_id != null && badge('⬆', 'bg-indigo-500/80 text-white')}
+        {/* ⬆ = this image left for somewhere: a dataset, another bank, or both.
+            One badge for both destinations — the tile says THAT it went, the
+            tooltip and the review lightbox say where. */}
+        {(img.promoted_dataset_id != null || img.promoted_bank_id != null)
+          && badge('⬆', 'bg-indigo-500/80 text-white')}
         {img.flags.map((f) => badge(FLAG_LABEL[f]?.slice(0, 2) || f, 'bg-black/60 text-amber-200', f))}
         {img.face_cluster != null && badge(`👤${img.face_cluster}`, 'bg-black/60 text-sky-200')}
         {img.framing && badge(`📐${img.framing}`, 'bg-black/60 text-teal-200')}
@@ -1308,9 +1313,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       <ZoneSection zone={promoteZone} accented={activeStep === 'promote'}>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => setPromoteOpen(true)} disabled={live || !canPromote}
-          title={canPromote ? 'Copy the kept selection into a dataset' : 'Keep some images first'}
+          title={canPromote
+            ? 'Copy the kept selection into a dataset — or into a brand-new bank, to keep working on a shortlist apart'
+            : 'Keep some images first'}
           className="rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
-          ⬆ Promote to dataset…
+          ⬆ Promote…
         </button>
         <button type="button" onClick={() => setDeleteRejectedOpen(true)}
           disabled={live || !(counts?.reject > 0)}
@@ -1367,7 +1374,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         <PromoteDialog bankId={bankId}
           selectedIds={[...selected]}
           onClose={() => setPromoteOpen(false)}
-          onStarted={() => { setPromoteOpen(false); refreshPayload() }} />
+          // refreshImages too: a promotion marks the rows it carried, and the ⬆
+          // badge lives on the TILES — refreshing only the counters left the
+          // header saying "3 promoted" over a grid showing none.
+          onStarted={() => { setPromoteOpen(false); refreshPayload(); refreshImages() }} />
       )}
 
       {deleteRejectedOpen && (

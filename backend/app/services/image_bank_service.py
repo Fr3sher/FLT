@@ -541,6 +541,9 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'framing': row.framing,
         'status': row.status, 'reject_reason': row.reject_reason,
         'promoted_dataset_id': promoted,
+        # The OTHER destination. Kept as its own key rather than overloading the
+        # dataset one, which is stored in user databases and read as a dataset id.
+        'promoted_bank_id': row.promoted_bank_id,
         'caption': row.caption,
     }
 
@@ -701,6 +704,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # advertising copies the user had since deleted.
         'promoted': base.filter(or_(
             BankImage.promoted_dataset_id.isnot(None),
+            # ...or into another BANK, the second destination. Counted here so
+            # the "promoted" stat and the ⬆ badge on the tiles never disagree.
+            BankImage.promoted_bank_id.isnot(None),
             BankImage.id.in_(db.session.query(FaceDatasetImage.bank_image_id)
                              .filter(FaceDatasetImage.bank_image_id.isnot(None))),
         )).count(),
@@ -3696,6 +3702,193 @@ def _dataset_import_job(bank_id, src_dir, filenames):
             detail += f', {missing} missing on disk'
         if failed:
             detail += f', {failed} failed'
+        bank_jobs.progress(job, detail=detail)
+    return run
+
+
+# --- ⬆ Promote, second destination: a NEW BANK -------------------------------
+# Promotion used to lead exactly one place: a dataset. A dataset is the strict,
+# training-bound container — isolating 200 candidates out of a 9 000-image dump
+# to keep working on them is a different intent, and forcing it through a dataset
+# commits material the user has not decided on yet.
+#
+# Built on the SAME machinery as "Import to bank" (start_dataset_import): a name,
+# a folder of its own under bank_sources_root, a background job, and the new
+# bank's id back so the UI can jump to it. What is deliberately NOT reused is
+# hardlinking: run_archive.py already settled that question for this app — the
+# app rewrites images IN PLACE (re-crop, "Reset to auto", watermark cleaning) and
+# an in-place rewrite reuses the inode, so two "independent" banks would become
+# one at the first edit. Banks never share their files. It costs the bytes.
+def _promote_source_rows(bank_id, ids) -> list:
+    """The rows a promotion would carry: the explicit selection, or every KEPT
+    image when the selection is empty (same rule as promoting to a dataset).
+
+    Ordered by relpath so the copy, the count and the size preview all describe
+    the same set in the same order."""
+    if ids:
+        wanted = [int(i) for i in ids]
+        rows = []
+        for i0 in range(0, len(wanted), _SQL_IN_CHUNK):
+            rows.extend(BankImage.query.filter(
+                BankImage.bank_id == bank_id,
+                BankImage.id.in_(wanted[i0:i0 + _SQL_IN_CHUNK])).all())
+    else:
+        rows = BankImage.query.filter_by(bank_id=bank_id, status='keep').all()
+    rows.sort(key=lambda r: r.relpath)
+    return rows
+
+
+def selection_size(user_id, bank_id, ids) -> dict | None:
+    """{'count', 'bytes'} for what a promotion would COPY — the honest weight the
+    confirmation shows BEFORE the click.
+
+    Real bytes, not an order of magnitude: today's images average ~300 KB, so
+    200 of them are ~60 MB and nobody needs warning; a video bank is three orders
+    of magnitude above that and the same dialog must not lie about it. Reads the
+    size the scan already recorded (one column, no disk hit), and only stats the
+    watermark-CLEANED blobs, which are what a promotion actually copies for those
+    rows and whose size the column does not describe. None = bank gone."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    rows = _promote_source_rows(bank_id, ids)
+    total = 0
+    for r in rows:
+        if r.watermark_clean_method:
+            try:
+                total += os.path.getsize(resolved_image_path(bank, r))
+                continue
+            except (OSError, TypeError):
+                pass            # fall back to the recorded source size
+        total += int(r.file_size or 0)
+    return {'count': len(rows), 'bytes': total}
+
+
+def start_bank_promote(app, user_id, bank_id, ids, name):
+    """Copy a selection into a BRAND NEW bank named ``name``. 202 + background
+    job, like every other pass; returns the new bank's id so the UI can jump to
+    the bank being filled.
+
+    The job is registered against the SOURCE bank — that is the bank the user is
+    looking at, the one whose rows get marked, and the one a concurrent scan
+    would race. So an already-busy source bank is the established 409, and the
+    progress bar appears where the user clicked.
+
+    Raises ValueError (-> 400) on a missing bank, a blank name or an empty
+    selection, BankJobBusy (-> 409) while another pass runs on the source."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    name = (name or '').strip()
+    if not name:
+        raise ValueError('name is required')
+    rows = _promote_source_rows(bank_id, ids)
+    if not rows:
+        raise ValueError('nothing to promote — keep or select some images first')
+    if len(rows) > BANK_MAX_FILES:
+        raise ValueError(f'too many images (max {BANK_MAX_FILES})')
+    # Checked BEFORE anything is created: bank_jobs.start would raise the same
+    # 409 a moment later, having already left a folder and a row behind.
+    if bank_jobs.running(bank_id):
+        raise bank_jobs.BankJobBusy(bank_jobs.get(bank_id)['kind'])
+    folder = _import_folder_for(name)
+    os.makedirs(folder, exist_ok=True)
+    dest = ImageBank(user_id=user_id, name=name, source_path=folder)
+    db.session.add(dest)
+    db.session.commit()
+    try:
+        bank_jobs.start(app, bank_id, 'bank_promote',
+                        _bank_promote_job(user_id, bank_id, dest.id,
+                                          [r.id for r in rows]),
+                        total=len(rows))
+    except bank_jobs.BankJobBusy:
+        _discard_promoted_bank(user_id, dest.id)   # lost the race: leave nothing
+        raise
+    return dest.id
+
+
+def _discard_promoted_bank(user_id, dest_bank_id):
+    """Unmake a destination bank that never became one. Uncommitted rows are
+    rolled back first, then delete_bank takes the row, the working data and the
+    copy folder (it is under bank_sources_root, so it is OURS to remove)."""
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001 — teardown must not mask the real failure
+        logger.warning('bank promote: rollback failed', exc_info=True)
+    try:
+        delete_bank(user_id, dest_bank_id)
+    except Exception:  # noqa: BLE001
+        logger.warning('bank promote: could not discard the partial bank',
+                       exc_info=True)
+
+
+def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
+    def run(job):
+        src = db.session.get(ImageBank, src_bank_id)
+        dest = db.session.get(ImageBank, dest_bank_id)
+        if not src or not dest:
+            return
+        rows = _promote_source_rows(src_bank_id, ids)
+        bank_jobs.progress(job, done=0, total=len(rows), detail='copying')
+        copied, unreadable = [], 0
+        for r in rows:
+            if bank_jobs.cancelled(job):
+                break
+            # RESOLVED path: a watermark-cleaned image must land cleaned, same
+            # rule as promoting to a dataset.
+            p = resolved_image_path(src, r)
+            try:
+                with open(p, 'rb'):       # prove the SOURCE is the readable one
+                    pass
+            except (OSError, TypeError):
+                # One unreadable/locked source costs one image, never the run.
+                unreadable += 1
+                bank_jobs.bump(job)
+                continue
+            target = os.path.join(dest.source_path, r.relpath)
+            try:
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                shutil.copy2(p, target)
+                size = os.path.getsize(target)
+            except OSError as e:
+                # The source opened, so this is the DESTINATION refusing: disk
+                # full, read-only, drive unplugged. Carrying on would leave a
+                # bank holding half the selection and presenting as finished —
+                # the one outcome worse than failing. Unmake it and say so.
+                logger.warning('bank promote: writing the copy failed',
+                               exc_info=True)
+                _discard_promoted_bank(user_id, dest_bank_id)
+                bank_jobs.fail(job, 'Could not write the copies — the new bank '
+                                    'was discarded and nothing was changed. '
+                                    'Check the free space on the drive holding '
+                                    "the app's data, then try again. "
+                                    f'({e.strerror or "write failed"})')
+                return
+            db.session.add(BankImage(bank_id=dest_bank_id, relpath=r.relpath,
+                                     file_size=size))
+            copied.append(r.id)
+            if len(copied) % 200 == 0:
+                db.session.commit()
+            bank_jobs.bump(job)
+        if not copied:
+            _discard_promoted_bank(user_id, dest_bank_id)
+            bank_jobs.fail(job, 'Nothing could be copied — the new bank was '
+                                'discarded. The selected files could not be read.')
+            return
+        db.session.commit()
+        # Marked LAST, and only for what really landed: the source keeps its rows
+        # (a promotion never removes anything from the bank it came from) and now
+        # says where they went, exactly like a promotion to a dataset.
+        for i0 in range(0, len(copied), _SQL_IN_CHUNK):
+            (BankImage.query
+             .filter(BankImage.bank_id == src_bank_id,
+                     BankImage.id.in_(copied[i0:i0 + _SQL_IN_CHUNK]))
+             .update({'promoted_bank_id': dest_bank_id},
+                     synchronize_session=False))
+        db.session.commit()
+        detail = f'{len(copied)} image(s) copied into "{dest.name}"'
+        if unreadable:
+            detail += f', {unreadable} unreadable'
         bank_jobs.progress(job, detail=detail)
     return run
 

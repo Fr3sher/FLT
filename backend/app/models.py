@@ -323,6 +323,13 @@ class BankImage(db.Model):
     # Set once the image has been promoted (copied) into a dataset — the funnel's
     # provenance, and the guard against promoting the same file twice by accident.
     promoted_dataset_id = db.Column(Integer, nullable=True)
+    # Set once the image has been promoted (copied) into another BANK — the
+    # second destination of ⬆ Promote, for isolating candidates out of a big
+    # dump without committing them to a training container yet. A SEPARATE
+    # column on purpose: promoted_dataset_id is stored in user databases and
+    # read as "a dataset id" everywhere, so it is never re-pointed at a bank.
+    # An image can have gone to both; the two answers stay independent.
+    promoted_bank_id = db.Column(Integer, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
