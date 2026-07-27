@@ -139,7 +139,7 @@ test('the sources read the defaults through the shared lookup', () => {
   }
 });
 
-// --- coverage: the fields Jeremy could not put back ------------------------
+// --- coverage: the fields that had no way back to their default ------------
 
 // section, config key, and the file that must offer its reset.
 const COVERED = [
