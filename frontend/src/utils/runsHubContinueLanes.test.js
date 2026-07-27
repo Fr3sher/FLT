@@ -77,7 +77,7 @@ test('no run open → no picker at all (the dialog stays single-lane)', () => {
 
 test('the Runs hub actually offers the picker and routes the local lane', () => {
   // The hub used to mount ContinueDialog WITHOUT `lanes` (cloud-only by design)
-  // — Jeremy opened Continue from the Runs page and had no local/pod choice.
+  // — Continue was opened from the Runs page and had no local/pod choice.
   assert.match(page, /lanes=\{continueLanes\}/);
   assert.match(page, /runsHubContinueLanes\(continueRunTarget/);
   // and the local lane must reach the LOCAL endpoint, not the cloud one

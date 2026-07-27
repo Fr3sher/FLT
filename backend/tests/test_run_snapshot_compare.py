@@ -288,7 +288,7 @@ def test_compare_unknown_run_is_an_error_not_a_crash(app):
 # --- the image archive --------------------------------------------------------
 
 def test_archive_keeps_a_deleted_image_visible(app):
-    """The change Jeremy names first — 'suppression ou ajout d'image' — is the one
+    """The change named first — 'suppression ou ajout d'image' — is the one
     that used to be unanswerable: once deleted there was nothing left to look at."""
     with app.app_context():
         ds = _dataset()

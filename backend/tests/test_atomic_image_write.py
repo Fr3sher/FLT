@@ -1,6 +1,6 @@
 """A generated image must never be readable half-written.
 
-Reported by Jeremy on 2026-07-26 after an OpenRouter generation: the tile was
+Reported on 2026-07-26 after an OpenRouter generation: the tile was
 black. The file on disk was a perfectly good 1024x1024 WEBP — caught mid-flight
 it measured ZERO bytes, and the server answered it with HTTP 200.
 

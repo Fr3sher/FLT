@@ -1368,7 +1368,7 @@ def _effective_resolution(ds) -> list:
 
     Slider mode defaults to 768 only: the concept_slider loss runs several
     prediction passes per step, so its VRAM peak sits far above a normal run —
-    multi-scale 768+1024 really OOMs on 24 GB (Jeremy's first slider run died
+    multi-scale 768+1024 really OOMs on 24 GB (the first reported slider run died
     with 'bad allocation' at step 21 when Discord grabbed some VRAM). This is a
     DEFAULT, not a clamp: an explicit user resolution is always obeyed."""
     if slider_mode_enabled(ds) and not _resolution_is_explicit(ds):

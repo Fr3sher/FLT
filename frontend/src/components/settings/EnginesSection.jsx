@@ -491,7 +491,7 @@ function IdentityPromptsCard({ config, setField, promptDefaults, promptDefaultsB
   )
 }
 
-/* One model field per API engine (feature request by Jeremy — the OpenRouter
+/* One model field per API engine (feature request — the OpenRouter
    engine shipped with a free-text model while Nano Banana and ChatGPT were
    frozen to whatever the release hardcoded, overridable only by an environment
    variable nobody could see from the app).

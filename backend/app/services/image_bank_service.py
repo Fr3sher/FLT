@@ -1475,7 +1475,7 @@ def semantic_dup_groups_payload(user_id, bank_id, offset=0, limit=50) -> dict | 
 
 def _best_of(rows):
     """'Keep best' heuristic for a duplicate group. When the aesthetic pass has
-    run it leads (Jeremy's ask: keep the NICE copy, not merely the biggest); a
+    run it leads (the ask: keep the NICE copy, not merely the biggest); a
     scored image always outranks an unscored one (sentinel -1 < the ~1..10 range).
     Then most pixels, sharpest, heaviest file — a Telegram dump's duplicates are
     mostly re-compressed or downscaled copies, so surface area is the honest
@@ -3089,7 +3089,7 @@ def _caption_job(bank_id, ids, force, vocabulary=None):
 # --- "Launch all" pipeline --------------------------------------------------
 # The overnight funnel: the user configures it once, hits Launch all, and comes
 # back to a triaged, optionally pre-captioned bank. It chains the EXISTING passes
-# in the order Jeremy validated. Each pass already filters status != 'reject', so
+# in the validated order. Each pass already filters status != 'reject', so
 # running auto-reject BEFORE the heavy passes means score/watermark/person only
 # ever touch the SURVIVORS — the costly work never pays for images we just
 # dropped (the deliberate cost/quality trade-off: duplicate "keep best" therefore

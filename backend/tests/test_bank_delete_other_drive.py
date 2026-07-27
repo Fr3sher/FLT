@@ -1,6 +1,6 @@
 """Deleting a bank whose folder lives on ANOTHER DRIVE must work.
 
-Reported by Jeremy on 2026-07-26: removing a bank pointing at `A:\\...` while the
+Reported on 2026-07-26: removing a bank pointing at `A:\\...` while the
 app runs from `C:\\` answered HTTP 500. The cause was `_is_imported_source`, whose
 `os.path.commonpath([root, p])` call sat OUTSIDE its try/except — and on Windows
 that call RAISES `ValueError: Paths don't have the same drive` rather than

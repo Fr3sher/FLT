@@ -631,7 +631,7 @@ def test_a_krea_row_is_badged_krea_and_a_legacy_klein_row_still_reads_klein():
 
 
 # --- The markings hold order must not SUMMON what it protects -----------------
-# Reported by Jeremy within hours of shipping: "why do my Krea 2 generations
+# Reported within hours of shipping: "why do my Krea 2 generations
 # always add tattoos?". The first version of KREA_MARKINGS_LOCK enumerated the
 # features to preserve ("tattoos with the same design..., scars, moles and
 # piercings") and was assumed to "cost nothing when the subject has no
