@@ -446,6 +446,69 @@ def test_images_sort_by_resolution(client, tmp_path, app):
     assert names('bogus') == ['a', 'b', 'c', 'd', 'e']
 
 
+def test_images_sort_by_score_and_sharpness(client, tmp_path, app):
+    """Requested by nofaceman (Discord): the bank already MEASURES aesthetics and
+    sharpness — the grid must be able to ORDER on them, not only filter. Same
+    contract as the resolution sort: unscored rows sink to the END in BOTH
+    directions (a NULL-first order would bury the very images the sort is for),
+    the sort composes with every filter, it survives pagination, and the ids
+    endpoint "Select all in filter" walks (same URL, bigger pages) sees the same
+    order — so ▶ Review opens on what the user is looking at."""
+    files = {f'{n}.jpg': checkerboard(size=64) for n in ('a', 'b', 'c', 'd', 'e')}
+    bank_id, _src = _mkbank(client, tmp_path, files)
+    # Hand-set the raw scores (bypass the passes, which need the ML extras).
+    # 'e' is the never-analysed row: NULL everywhere.
+    scores = {'a': (6.5, 120.0), 'b': (8.2, 40.0), 'c': (3.1, 900.0),
+              'd': (7.0, 300.0), 'e': (None, None)}
+    with app.app_context():
+        from app.extensions import db
+        from app.models import BankImage
+        for row in BankImage.query.filter_by(bank_id=bank_id).all():
+            aes, blur = scores[row.relpath.split('.')[0]]
+            row.aesthetic_score, row.blur_score = aes, blur
+        db.session.commit()
+
+    def names(sort, **qs):
+        params = '&'.join(f'{k}={v}' for k, v in {'sort': sort, **qs}.items())
+        got = client.get(f'/api/bank/{bank_id}/images?{params}').get_json()
+        return [i['name'].split('.')[0] for i in got['images']]
+
+    # Best first, then the unscored 'e' — never at the top.
+    assert names('aesthetic_desc') == ['b', 'd', 'a', 'c', 'e']
+    # Worst first (find the rejects) — 'e' STILL last, not first.
+    assert names('aesthetic_asc') == ['c', 'a', 'd', 'b', 'e']
+    # Sharpness = Laplacian variance: sharpest first / blurriest first.
+    assert names('sharp_desc') == ['c', 'd', 'a', 'b', 'e']
+    assert names('sharp_asc') == ['b', 'a', 'd', 'c', 'e']
+
+    # Composes with pagination — the page boundary does not reshuffle the order,
+    # and the whole set is still there once the pages are concatenated.
+    first = client.get(f'/api/bank/{bank_id}/images?sort=aesthetic_desc&limit=2').get_json()
+    second = client.get(f'/api/bank/{bank_id}/images'
+                        '?sort=aesthetic_desc&limit=2&offset=2').get_json()
+    assert [i['name'].split('.')[0] for i in first['images']] == ['b', 'd']
+    assert [i['name'].split('.')[0] for i in second['images']] == ['a', 'c']
+    assert first['total'] == second['total'] == 5
+
+    # Composes with a filter: nothing lost, nothing invented. Reject 'c' and the
+    # remaining set is exactly the other four, in the sorted order.
+    cid = next(i['id'] for i in
+               client.get(f'/api/bank/{bank_id}/images').get_json()['images']
+               if i['name'] == 'c.jpg')
+    client.post(f'/api/bank/{bank_id}/images/status',
+                json={'ids': [cid], 'status': 'reject'})
+    assert names('aesthetic_desc', status='pending') == ['b', 'd', 'a', 'e']
+    assert names('sharp_asc', status='pending') == ['b', 'a', 'd', 'e']
+
+    # "Select all in filter" / ▶ Review walk the SAME endpoint with limit=500 —
+    # the ids come back in the active sort AND under the active filter, so the
+    # selection is exactly what the user is looking at, in that order.
+    walked = client.get(f'/api/bank/{bank_id}/images'
+                        '?sort=aesthetic_desc&status=pending&limit=500').get_json()
+    assert [i['name'].split('.')[0] for i in walked['images']] == ['b', 'd', 'a', 'e']
+    assert walked['total'] == 4
+
+
 def test_resolution_buckets_counts_and_filter(client, tmp_path, app):
     """Resolution tiers bucket on MEGAPIXELS with HALF-OPEN [lo, hi) bounds. The
     exact boundaries matter: 1000×1000 (1.00 MP) and 1024×1024 (1.05 MP) both land
