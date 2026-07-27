@@ -3,6 +3,9 @@ import { resumeCaption } from '../../utils/lineageTree';
 import { famLabel, StatusDot, SavesChip } from './lineageChrome';
 import { trainingRunVariantLabel } from '../../utils/trainingRuns';
 import { runNumber, cloudNumber, runIdentityLabel } from '../../utils/runIdentity';
+import {
+  DEPLOY_BAR_CLASS, deployState, deployTitleSuffix,
+} from '../../utils/checkpointDeployState';
 
 /* ◉ The two things a lineage is DRAWN with: a run card and a checkpoint pill.
 
@@ -126,6 +129,15 @@ export function GraphCard({ node, lit, annotated, compareRole, onSelect }) {
  *  <svg> ignores the second argument. */
 export function CheckpointPill({ pill, offX, offY, active, selected, preview, big, onOpen, onToggleSelect, onZoomPreview, onOpenGallery, selectable = null }) {
   const gone = pill.present === false;
+  /* Can I generate from this checkpoint RIGHT NOW? The pill has always known
+     (`testable`) and never said so: the answer only surfaced as the words
+     "to deploy" inside the generation panel, i.e. AFTER the checkpoints were
+     already picked. It is drawn as a bar down the pill's left edge -- solid
+     sky = deployed, dashed slate = on disk only -- a channel none of the
+     pill's other meanings use (emerald = final save, indigo ring/box =
+     picked or resumed-from, dashed shell = the file is gone). See
+     utils/checkpointDeployState for why the shape doubles the colour. */
+  const deployCls = `${DEPLOY_BAR_CLASS[deployState(pill)] || ''} `;
   const st = preview?.status || null;
   const label = pill.step >= 1000 && pill.step % 1000 === 0 ? `${pill.step / 1000}k` : pill.step;
   // How many images this checkpoint has produced, from ANY surface (inline
@@ -152,7 +164,7 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
         : 'border-border bg-app/70 text-content-muted hover:border-indigo-400/50 hover:text-content ')
     + (pill.isResumeSource ? 'ring-1 ring-indigo-400/60 border-indigo-400/60 ' : '')
     + (selected ? 'ring-2 ring-indigo-400/80 border-indigo-400/70 ' : active ? 'ring-2 ring-indigo-400/80 ' : '');
-  const openTitle = `Checkpoint at step ${pill.step}${pill.final ? ' — final' : ''}${pill.isResumeSource ? ' — a run continued from here' : ''}${count ? ` — ${count} image${count > 1 ? 's' : ''}` : ''}${st === 'pending' ? ' — an image is rendering' : ''}`;
+  const openTitle = `Checkpoint at step ${pill.step}${pill.final ? ' — final' : ''}${pill.isResumeSource ? ' — a run continued from here' : ''}${count ? ` — ${count} image${count > 1 ? 's' : ''}` : ''}${st === 'pending' ? ' — an image is rendering' : ''}${deployTitleSuffix(pill)}`;
   const resultsKey = (e) => {
     if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openResults(e); }
   };
@@ -193,7 +205,7 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
           onClick={(e) => { e.stopPropagation(); onOpen(pill, e); }}
           title={openTitle}
           style={{ width: pill.w, height: pill.h }}
-          className={shellCls + ' flex w-full flex-col overflow-hidden text-[0.625rem] font-medium tabular-nums'}>
+          className={shellCls + deployCls + ' flex w-full flex-col overflow-hidden text-[0.625rem] font-medium tabular-nums'}>
           <div className="relative min-h-0 flex-1 w-full">
             {preview?.url ? (
               <img src={preview.url} alt={`Preview at step ${pill.step}`}
@@ -223,7 +235,7 @@ export function CheckpointPill({ pill, offX, offY, active, selected, preview, bi
           onClick={(e) => { e.stopPropagation(); onOpen(pill, e); }}
           title={openTitle}
           style={{ width: pill.w, height: pill.h }}
-          className={shellCls + ' flex w-full items-center justify-center gap-0.5 overflow-hidden px-0.5 text-[0.5625rem] font-medium tabular-nums'}>
+          className={shellCls + deployCls + ' flex w-full items-center justify-center gap-0.5 overflow-hidden px-0.5 text-[0.5625rem] font-medium tabular-nums'}>
           {pill.final && <span aria-hidden className="shrink-0 text-emerald-300">✓</span>}
           <span className="min-w-0 truncate">{label}</span>
           {count > 0 ? resultsChip(true)

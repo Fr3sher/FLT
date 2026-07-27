@@ -6,6 +6,7 @@ import {
   canvasFamily, canvasSelectionSummary, describeCanvasLaunch,
 } from '../../utils/canvasGeneration';
 import { famLabel } from '../../utils/familyLabels';
+import { DEPLOY_BAR_CLASS } from '../../utils/checkpointDeployState';
 import { runNumber } from '../../utils/runIdentity';
 import { HelpBadge } from '../../help/HelpMode';
 
@@ -65,17 +66,25 @@ function CanvasCheckpointRecap({ selection, onToggle, onClear }) {
                 {lane.name || `Dataset ${datasetId}`}
               </div>
               <div className="mt-0.5 flex flex-wrap gap-1">
+                {/* Same code as the board's pills: a solid sky edge means
+                    deployed, a dashed slate one means on disk only. The chip
+                    used to say "· to deploy" in a register of its own, which
+                    made the panel and the board two vocabularies for one fact.
+                    The words stay too — the bar is never the only signal. */}
                 {lane.picks.map((e) => (
                   <button key={`${e.recordId}:${e.step}`} type="button"
                     onClick={() => onToggle(e)}
-                    title={`Remove step ${e.step} of run ${runNumber({ record_id: e.recordId })} from this run`}
+                    title={`Remove step ${e.step} of run ${runNumber({ record_id: e.recordId })} from this run`
+                      + (e.deployed ? ' — deployed to ComfyUI'
+                        : ' — on disk but not deployed yet; the launch deploys it first')}
                     className={'flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.625rem] tabular-nums '
                       + (e.deployed
                         ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
-                        : 'border-amber-400/50 bg-amber-500/10 text-amber-100 ')}>
+                        : 'border-amber-400/50 bg-amber-500/10 text-amber-100 ')
+                      + DEPLOY_BAR_CLASS[e.deployed ? 'deployed' : 'on-disk'] + ' '}>
                     <span className="truncate">
                       #{e.recordId} · {e.step}
-                      {!e.deployed && <span className="opacity-80"> · to deploy</span>}
+                      {!e.deployed && <span className="opacity-80"> · not deployed yet</span>}
                     </span>
                     <span aria-hidden className="opacity-70">✕</span>
                   </button>
