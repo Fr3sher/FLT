@@ -155,7 +155,7 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
 }
 
 export default function DatasetGrid({ images, datasetId, onStatus, onCaption, onCrop, onDelete,
-                                      onMirror, onRegenerate, onView, onBatch, busy, nonces,
+                                      onMirror, onRegenerate, onReimprove, onView, onBatch, busy, nonces,
                                       mirroringIds, faceThresholds, datasetKind = 'character',
                                       onImproveBatch, kleinAvailable = false,
                                       eligibilityImages, dualCaptions = false,
@@ -329,7 +329,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
           <DatasetGridItem key={img.id} img={img} datasetId={datasetId} onStatus={onStatus} onCaption={onCaption}
             onCrop={onCrop} onDelete={onDelete} onMirror={onMirror}
             mirrorBusy={Boolean(mirroringIds?.has(img.id))} busy={bulkBusy}
-            onRegenerate={onRegenerate} onView={onView}
+            onRegenerate={onRegenerate} onReimprove={onReimprove} onView={onView}
             selected={selected.has(img.id)}
             onToggleSelect={onBatch && !isSmallImageRescueRow(img) ? toggle : undefined}
             nonce={(nonces && nonces[img.id]) || 0} faceThresholds={faceThresholds}

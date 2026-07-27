@@ -1161,6 +1161,27 @@ def dataset_image_improve(image_id):
     return jsonify({'ok': True, **result})
 
 
+@bp.post('/dataset/image/<int:image_id>/reimprove')
+def dataset_image_reimprove(image_id):
+    """Re-run the ✨ Upscale & improve pass on an improved tile, from its PARENT
+    and with today's settings — replacing the result in place.
+
+    The generic /regenerate route stays closed to these rows on purpose (it would
+    restart from the dataset reference and make an unrelated variation)."""
+    try:
+        result = svc.reimprove_image(LOCAL_USER, image_id)
+    except Exception as e:
+        from ..services.klein_edit_helper import KleinModelsMissing
+        if isinstance(e, svc.KleinNodesMissing):
+            return _klein_missing_response(e.missing, e.missing_nodes)
+        if isinstance(e, KleinModelsMissing):
+            return _klein_missing_response(e.missing)
+        return _map_error(e)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
+
+
 @bp.post('/dataset/<int:dataset_id>/improve/batch')
 def dataset_improve_batch(dataset_id):
     """Start the SERVER-side ✨ Klein upscale & improve batch over a selection.

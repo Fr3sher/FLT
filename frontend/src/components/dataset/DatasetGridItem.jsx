@@ -6,6 +6,7 @@ import CaptionEditorDialog from './CaptionEditorDialog';
 import PromptEditPopover from './PromptEditPopover';
 import PexelsAttribution from './PexelsAttribution';
 import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
+import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
 import { FACE_BADGE_CLASS, PROVENANCE_BADGE_CLASS, TILE_BADGE_STACK_CLASS,
   WATERMARK_BADGE_CLASS } from './tileBadgeLayout.js';
 
@@ -69,7 +70,7 @@ const WATERMARK_BADGE = {
 
 export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, onCrop, onDelete,
                                           onMirror, mirrorBusy = false, busy = false,
-                                          onRegenerate, onView, nonce = 0, faceThresholds,
+                                          onRegenerate, onReimprove, onView, nonce = 0, faceThresholds,
                                           selected = false, onToggleSelect, tileSize = 'M',
                                           datasetKind = 'character', dualCaptions = false }) {
   const [cap, setCap] = useState(img.caption || '');
@@ -91,10 +92,11 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
   const isRescueDerived = isSmallImageRescueRow(img);
   // A manual Klein improvement is derived from THIS image, not the dataset's
   // main reference. Sending it through the generic regenerate route would lose
-  // that source and silently make an unrelated variation instead.
-  const isImageImproveCandidate = img.derivation_kind === 'klein_image_improve';
-  const canRegenerate = !isRescueDerived && !isImageImproveCandidate && img.source === 'generated'
-    && !(img.status === 'pending' && !img.filename);
+  // that source and silently make an unrelated variation instead — so it gets
+  // its OWN re-run below (same parent, current improve settings) instead.
+  const isImageImproveCandidate = isImageImproveRow(img);
+  const canRegenerate = canRegenerateGeneric(img, { isRescueDerived });
+  const rerunImprove = onReimprove ? improveRerunAffordance(img) : null;
 
   const fb = faceBadge(img, faceThresholds);
   const wb = WATERMARK_BADGE[img.watermark_state];
@@ -202,6 +204,15 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
               title="Edit the prompt, then regenerate this variation"
               aria-label="Edit the prompt, then regenerate this variation"
               className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">✏️</button>
+          )}
+          {rerunImprove && (
+            <button type="button"
+              onClick={(e) => { e.stopPropagation(); onReimprove?.(img.id); }}
+              disabled={busy || !rerunImprove.enabled}
+              title={rerunImprove.title} aria-label={rerunImprove.title}
+              className="grid min-h-7 min-w-7 place-items-center rounded bg-black/60 text-[10px] text-white disabled:cursor-not-allowed disabled:opacity-45">
+              <span aria-hidden="true">🔄✨</span>
+            </button>
           )}
           {url && onMirror && (
             <button type="button"

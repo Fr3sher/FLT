@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-rerun-upscale-and-improve',
+    date: '2026-07-27',
+    title: 'Tuned the Upscale & improve settings? Re-run the pass on a tile in one click',
+    blurb:
+      'An image made by ✨ Upscale & improve had no regenerate button, and that was on purpose: the normal 🔄 restarts from your dataset\'s reference photo, so on an improved image it would have quietly produced something unrelated instead of a better version of that shot. But the improve settings became editable (steps, megapixels, base and consistency strength, and the instruction itself), and until now the only way to see a new value take effect was to delete the result and click ✨ again on the original. Those tiles now carry their own 🔄✨ button: it re-runs the improve pass on the SAME source image, with your settings as they are right now, and replaces the result in place — old file to the Trash, your typed caption kept. Images you improved with earlier versions get it too. If the source image was deleted since, the button says so instead of improving the wrong thing.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-27-klein-workflow-runs-on-a-stock-comfyui',
     date: '2026-07-27',
     title: 'Klein generation now works on a normal ComfyUI — and its images will look slightly different',

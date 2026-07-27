@@ -1079,7 +1079,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 <DatasetGrid images={gridImages} datasetId={d.id} onStatus={ds.setStatus} onCaption={ds.setCaption}
                   onCrop={setCropImg} onDelete={ds.deleteImage}
                   onMirror={ds.mirrorImage} mirroringIds={ds.mirroringIds}
-                  onRegenerate={(id, loraStrength, prompt) => ds.regenerate(id, loraStrength, prompt)} onView={setViewImg}
+                  onRegenerate={(id, loraStrength, prompt) => ds.regenerate(id, loraStrength, prompt)}
+                  onReimprove={ds.reimproveImage} onView={setViewImg}
                   onBatch={ds.batchImages} busy={ds.busy}
                   onImproveBatch={ds.improveBatch} activity={act}
                   kleinAvailable={Boolean(caps.engines?.klein)}

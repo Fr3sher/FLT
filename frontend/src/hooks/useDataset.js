@@ -481,6 +481,22 @@ export function useDataset() {
     return d;
   }, [refresh, toast]);
 
+  // Re-run the ✨ Upscale & improve pass on a tile that IS an improvement. The
+  // generic regenerate is closed to those rows (it would restart from the dataset
+  // reference and make an unrelated variation); this replaces the result in place,
+  // from the same parent image, with the improve settings as they are NOW — which
+  // is the point: those knobs are editable in Settings.
+  const reimproveImage = useCallback(async (imageId) => {
+    const d = await postJson(`/api/dataset/image/${imageId}/reimprove`, {});
+    if (!d.ok) {
+      toast.error(d.error || 'Could not re-run the improvement');
+      return d;
+    }
+    toast.success('Re-improving from the source image with your current improve settings');
+    await refresh();
+    return d;
+  }, [refresh, toast]);
+
   // Bulk ✨ Klein upscale & improve: ONE call that starts a SERVER job. The batch
   // used to be a browser loop, so a selection bigger than the backend's fan-out cap
   // was mostly refused, ⏹ Stop could not reach it, and closing the tab killed it.
@@ -1238,7 +1254,7 @@ export function useDataset() {
            analyzing: analyzingLive, watermarking: watermarkingLive, activity,
            nonces, mirroringIds, refNonce, recaptioningIds, create, open,
            deleteDataset, updateSettings, setCurrentId, setRef, addExtraRef, removeExtraRef,
-           generate, importFiles, scrapeImport, resolveSmallImageRescue, improveImage, improveBatch, classify, caption, recaption, recaptionImages,
+           generate, importFiles, scrapeImport, resolveSmallImageRescue, improveImage, reimproveImage, improveBatch, classify, caption, recaption, recaptionImages,
            setStatus, setCaption, mirrorImage, crop, cropRef, cropExtraRef, recropRefAuto, editReference, keepEditedReference, discardEditedReference, setDatasetTrainType, setDatasetFidelity, deleteImage, batchImages, replaceCaptions, writeCaptionFiles, openDatasetFolder, cancelPending, cancelCaption, regenerate, analyzeFaces,
            findWatermarks, cleanWatermarks, cleanWatermarkImages, restoreWatermarkImage, dismissWatermarks, saveWatermarkRegions,
            purgeUnused, exportZip, exportBackup, exportZipFor, exportBackupFor, importBackup, importDatasetZip, importDatasetFolder,

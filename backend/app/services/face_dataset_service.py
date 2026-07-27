@@ -5334,6 +5334,59 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier):
     return ids
 
 
+# --- The ✨ Upscale & improve profile, read ONCE per pass ----------------------
+# Every knob below lives in config and is user-editable, so it must be read at
+# ENQUEUE time, never frozen into the candidate row: re-running the pass (🔄 on
+# an improved tile) has to pick up whatever the user has since changed. These
+# four helpers are the single source of truth shared by the first pass
+# (improve_existing_image) and the re-run (reimprove_image) — two copies would
+# drift, and a re-run that used yesterday's settings is exactly the bug.
+def _improve_prompt() -> str:
+    """The improvement instruction, editable in Settings ▸ identity_prompts.
+    klein_improve, and switchable OFF entirely — disabled applies NO prompt
+    (pure upscale)."""
+    if cfg.get('identity_prompts.klein_improve_enabled', True):
+        return get_identity_prompt('klein_improve')
+    return ''
+
+
+def _improve_candidate_label(source) -> str:
+    """Label of the candidate produced from ``source`` (its parent image)."""
+    base_label = 'Klein upscale & improve'
+    source_label = (source.variation_label or '').strip()
+    return (f'{base_label} · {source_label}' if source_label else base_label)[:120]
+
+
+def _improve_enqueue_profile() -> dict:
+    """Profile reproduced from the user-provided ComfyUI PNG metadata: keep the
+    selected/default Klein model, override only sampling/LoRA/resolution.
+
+    The defaults (1.0 / 4 / 0.0 / 2.0) are the values that were once hardcoded,
+    so an untouched install behaves exactly as before. Clamped, because a bad
+    config value must degrade the pass, never crash the enqueue. Each fallback
+    MUST equal the shipped config default: _improve_float treats "still at its
+    default" as "the user has not set this", which is what lets a value saved
+    under the old key name speak for it."""
+    return {
+        'lora_strength': _improve_float('improve_consistency_strength', 1.0, 1.5),
+        'sampler_steps': _improve_int('improve_steps', 4),
+        'base_lora_strength': _improve_float('improve_base_lora_strength', 0.0),
+        'output_megapixels': _improve_float('improve_megapixels', 2.0, 8.0),
+    }
+
+
+def _improve_extra_metadata(source, label) -> dict:
+    return {
+        'is_dataset': True,
+        'dataset_id': source.dataset_id,
+        'variation_label': label,
+        'derivation_kind': KLEIN_IMAGE_IMPROVE,
+        'parent_image_id': source.id,
+        'source_image_id': source.id,
+        'action': 'upscale_improve',
+    }
+
+
 def improve_existing_image(user_id, image_id):
     """Serialize one source's improve request, including the queue hand-off."""
     lock = _IMAGE_IMPROVE_LOCKS[hash((str(user_id), image_id))
@@ -5398,18 +5451,9 @@ def _improve_existing_image_locked(user_id, image_id):
         raise ValueError(
             f'too many generations in flight ({in_flight}), wait or cancel')
 
-    # Profile reproduced from the user-provided ComfyUI PNG metadata.
-    # Keep the selected/default Klein model; override only prompt/sampling/LoRA.
-    # The improvement instruction is editable (Settings ▸ identity_prompts.klein_improve)
-    # and can be turned OFF entirely — disabled applies NO prompt (pure upscale).
-    if cfg.get('identity_prompts.klein_improve_enabled', True):
-        prompt = get_identity_prompt('klein_improve')
-    else:
-        prompt = ''
+    prompt = _improve_prompt()
     stored_prompt = prompt[:500]
-    base_label = 'Klein upscale & improve'
-    source_label = (img.variation_label or '').strip()
-    label = (f'{base_label} · {source_label}' if source_label else base_label)[:120]
+    label = _improve_candidate_label(img)
     candidate = FaceDatasetImage(
         dataset_id=img.dataset_id, source='generated', status='pending',
         parent_image_id=img.id, derivation_kind=KLEIN_IMAGE_IMPROVE,
@@ -5426,26 +5470,8 @@ def _improve_existing_image_locked(user_id, image_id):
         job_id = keh.enqueue_klein_edit(
             user_id=str(user_id), source_filename=img.filename,
             source_path=source_path, edit_prompt=prompt,
-            # The "Upscale & improve" quality profile, now user-tunable. Defaults
-            # (0 / 4 / 0) are the values that were hardcoded here, so an untouched
-            # install behaves exactly as before. Clamped, because a bad config
-            # value must degrade the pass, never crash the enqueue.
-            # The fallback MUST equal the shipped config default: _improve_float treats
-            # "still at its default" as "the user has not set this", which is what lets
-            # a value saved under the old key name speak for it.
-            lora_strength=_improve_float('improve_consistency_strength', 1.0, 1.5),
-            sampler_steps=_improve_int('improve_steps', 4),
-            base_lora_strength=_improve_float('improve_base_lora_strength', 0.0),
-            output_megapixels=_improve_float('improve_megapixels', 2.0, 8.0),
-            extra_metadata={
-                'is_dataset': True,
-                'dataset_id': img.dataset_id,
-                'variation_label': label,
-                'derivation_kind': KLEIN_IMAGE_IMPROVE,
-                'parent_image_id': img.id,
-                'source_image_id': img.id,
-                'action': 'upscale_improve',
-            },
+            **_improve_enqueue_profile(),
+            extra_metadata=_improve_extra_metadata(img, label),
         )
     except Exception:
         # No broken tile: the original is still untouched and the user can retry
@@ -5458,6 +5484,147 @@ def _improve_existing_image_locked(user_id, image_id):
     db.session.commit()
     _sync_generate_activity(img.dataset_id)
     return {'candidate_id': candidate.id, 'job_id': job_id}
+
+
+# The three ways a re-run can be impossible, worded as the user reads them. The
+# tile mirrors them (frontend/src/components/dataset/improveRerun.js) so the
+# button explains itself BEFORE the click rather than through a 400 after it.
+REIMPROVE_PARENT_GONE = ('the source image this improvement came from was deleted '
+                         '— nothing left to re-improve from')
+REIMPROVE_SOURCE_FILE_GONE = ('the source image file is missing on disk '
+                              '— nothing left to re-improve from')
+REIMPROVE_IN_FLIGHT = 'this improvement is still generating'
+
+
+def reimprove_image(user_id, image_id):
+    """Re-run the ✨ Upscale & improve pass that produced ``image_id``.
+
+    The generic regenerate route is deliberately CLOSED to these rows: it starts
+    from the dataset's reference photo and the catalog prompt, so on an improved
+    tile it would quietly produce an unrelated variation. The right gesture is
+    this one — run the improve pass again, from the SAME parent image, with the
+    settings as they are TODAY (klein.improve_* + the klein_improve instruction
+    are user-editable, and tuning them is the whole reason to re-run).
+
+    Replaces IN PLACE, exactly like regenerate_image: same row id, same
+    parent/derivation links, the previous result goes to the Trash once the new
+    job is safely queued. A second candidate next to the first would break the
+    one-live-improvement-per-source invariant that improve_existing_image and
+    bulk_improve_eligible_ids already enforce.
+
+    Returns ``{'candidate_id', 'job_id'}``, or None when the image is not owned
+    by ``user_id``. Raises ValueError (-> 400) when the row is not an improvement
+    or its parent is gone, RuntimeError (-> 409) while the pass is still running.
+    """
+    img = _owned_image(user_id, image_id)
+    if not img:
+        return None
+    if img.derivation_kind != KLEIN_IMAGE_IMPROVE:
+        raise ValueError('only an upscale & improve result can be re-improved')
+    # Take the same stripe as a first-pass improve OF THE PARENT: the two paths
+    # compete for the same "one live candidate per source" slot.
+    lock = _IMAGE_IMPROVE_LOCKS[hash((str(user_id), img.parent_image_id))
+                                % len(_IMAGE_IMPROVE_LOCKS)]
+    with lock:
+        return _reimprove_image_locked(user_id, image_id)
+
+
+def _reimprove_image_locked(user_id, image_id):
+    img = _owned_image(user_id, image_id)
+    if not img:
+        return None
+    if img.derivation_kind != KLEIN_IMAGE_IMPROVE:
+        raise ValueError('only an upscale & improve result can be re-improved')
+    if img.status == 'pending' and not img.filename:
+        raise RuntimeError(REIMPROVE_IN_FLIGHT)
+
+    # The parent is what this pass runs on. It carries no ForeignKey (legacy
+    # databases), so a deleted source leaves a dangling id — check the row, not
+    # just the column.
+    parent = (FaceDatasetImage.query
+              .filter_by(id=img.parent_image_id, dataset_id=img.dataset_id).first()
+              if img.parent_image_id else None)
+    if not parent or not parent.filename:
+        raise ValueError(REIMPROVE_PARENT_GONE)
+    source_path = _img_path(parent)
+    if not os.path.isfile(source_path):
+        raise ValueError(REIMPROVE_SOURCE_FILE_GONE)
+
+    from . import klein_edit_helper as keh
+    missing = keh.klein_missing_assets()
+    missing_nodes = keh.klein_missing_nodes()
+    if missing_nodes:
+        raise KleinNodesMissing(missing, missing_nodes)
+    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
+        raise keh.KleinModelsMissing(missing)
+
+    in_flight = (FaceDatasetImage.query
+                 .filter_by(dataset_id=img.dataset_id, status='pending')
+                 .filter(FaceDatasetImage.filename.is_(None)).count())
+    if in_flight + 1 > MAX_FANOUT:
+        raise ValueError(
+            f'too many generations in flight ({in_flight}), wait or cancel')
+
+    prompt = _improve_prompt()
+    label = _improve_candidate_label(parent)
+
+    # Enqueue BEFORE touching the row (regenerate_image's ordering): a ComfyUI
+    # refusal must leave the current result on screen, not a broken tile.
+    from ..job_queue import queue_manager
+    old_state = {field: getattr(img, field) for field in (
+        'filename', 'caption', 'status', 'fail_reason', 'job_id',
+        'variation_label', 'variation_prompt', 'framing',
+        'watermark_state', 'watermark_bbox', 'watermark_regions')}
+    old_path = _img_path(img) if img.filename else None
+    job_id = keh.enqueue_klein_edit(
+        user_id=str(user_id), source_filename=parent.filename,
+        source_path=source_path, edit_prompt=prompt,
+        **_improve_enqueue_profile(),
+        extra_metadata=_improve_extra_metadata(parent, label),
+    )
+
+    try:
+        _clear_watermark_metadata(img)
+        img.variation_label = label
+        img.variation_prompt = prompt[:500]
+        img.framing = parent.framing
+        # A caption typed on this tile is the user's work — keep it. Only an
+        # empty one is refilled from the parent, which is what a first pass does.
+        if not img.caption:
+            img.caption = parent.caption
+        img.filename = None
+        img.status = 'pending'
+        img.job_id = job_id
+        img.fail_reason = None
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        try:
+            queue_manager.cancel_job(job_id, str(user_id), 'image')
+        except Exception:
+            logger.exception('reimprove: failed to cancel unlinked job %s', job_id)
+        raise
+
+    # The DB no longer references the old file. If Trash itself fails, restore
+    # the exact previous row state and cancel the job we just queued.
+    try:
+        if old_path and os.path.exists(old_path):
+            trash.send_to_trash(
+                old_path, context=f'dataset-{img.dataset_id}-reimprove-{img.id}')
+    except Exception:
+        try:
+            for field, value in old_state.items():
+                setattr(img, field, value)
+            queue_manager.cancel_job(job_id, str(user_id), 'image', commit=False)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception('reimprove: failed to restore row %s after Trash error',
+                             image_id)
+        raise
+
+    _sync_generate_activity(img.dataset_id)
+    return {'candidate_id': img.id, 'job_id': job_id}
 
 
 # --- Bulk Klein upscale & improve: a SERVER job --------------------------------
