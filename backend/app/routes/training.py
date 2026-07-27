@@ -1507,13 +1507,30 @@ def dataset_run_archive_blob(sig):
     return send_file(path, max_age=31536000)
 
 
+@bp.get('/dataset/train/runs/<int:record_id>/deletion-impact')
+def dataset_train_run_deletion_impact(record_id):
+    """What deleting this run would take with it, counted — read by the
+    confirmation dialog so a destructive action is announced BEFORE it happens.
+
+    Returns checkpoint notes, preview links, generated images that would lose
+    their provenance (they are unlinked, never deleted), canvas positions,
+    children that would be detached, and archived source images this run is the
+    last referrer of. Unknown id → 404."""
+    impact = ct.run_deletion_impact(record_id)
+    if impact is None:
+        return jsonify({'error': 'unknown run'}), 404
+    return jsonify(impact)
+
+
 @bp.delete('/dataset/train/runs/<int:record_id>')
 def dataset_train_run_delete(record_id):
-    """Remove a GONE run (no checkpoints on disk) from the lineage graph — metadata
-    only: the record, its checkpoint notes, and its lineage edge (disk untouched;
-    the checkpoints are already gone). A run whose checkpoints are still on disk is
-    refused with 409 (delete those first) — never a silent erase. Children that
-    resumed from it are detached, not deleted. Unknown id → 404."""
+    """Remove a GONE run (no checkpoints on disk) from the lineage graph with
+    everything that only existed for it: the record, its checkpoint notes, its
+    preview links and its canvas position. Generated images are UNLINKED, not
+    deleted; archived source blobs are freed only when no other run references
+    them. A run whose checkpoints are still on disk is refused with 409 (delete
+    those first) — never a silent erase. Children that resumed from it are
+    detached, not deleted. Unknown id → 404."""
     status = ct.delete_run_record(record_id)
     if status == 'not_found':
         return jsonify({'error': 'unknown run'}), 404

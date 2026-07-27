@@ -3414,46 +3414,160 @@ def _record_checkpoints_on_disk(rec) -> int:
         return 0
 
 
-def delete_run_record(record_id) -> str:
-    """Remove a GONE run (no checkpoints on disk) from the lineage graph — its
-    TrainingRunRecord, its checkpoint notes, and (by detaching) its lineage edge.
-    METADATA ONLY: the checkpoints are already gone, so nothing on disk is touched.
+def _releasable_blob_sigs(rec) -> set:
+    """Content hashes archived for `rec` that NO OTHER run references.
 
-    Guards instead of deleting silently:
-      • a run whose checkpoints are still on disk is REFUSED ('has_saves') so a
-        recoverable run is never discarded from under the user;
-      • children that resumed FROM this run are DETACHED (parent_record_id → NULL),
-        keeping them in the graph as honest "origin unknown" roots rather than
-        breaking the tree on a dangling edge.
+    `run_archive` is content-addressed and therefore shared on purpose: an
+    unchanged dataset trained ten times stores its images ONCE, which is why a
+    whole training history stays small. So "free this run's archived images"
+    can only mean the blobs whose last referrer is this run — anything else
+    would blank the image comparison of a run nobody asked to touch.
+
+    The reference is the run snapshot (`run_snapshot.signatures`). Every path
+    that cannot be accounted for cleanly returns an EMPTY set — nothing is
+    deleted — rather than guessing:
+      • this run has no snapshot (legacy run): its blobs are unattributable;
+      • the `snapshot` column doesn't exist yet (a database whose boot migration
+        hasn't run): the sweep would raise, so it is caught and yields nothing.
+    Extra archived bytes are cheap; a hole in the archive is not."""
+    from ..models import TrainingRunRecord
+    from . import run_snapshot
+    try:
+        mine = run_snapshot.signatures(run_snapshot.loads(rec))
+        if not mine:
+            return set()
+        rows = db.session.query(TrainingRunRecord.snapshot).filter(
+            TrainingRunRecord.id != rec.id).all()
+        for (raw,) in rows:
+            mine -= run_snapshot.signatures_of_raw(raw)
+            if not mine:
+                break
+        return mine
+    except Exception:
+        logger.debug('archive reference accounting failed — releasing nothing',
+                     exc_info=True)
+        return set()
+
+
+def run_deletion_impact(record_id) -> dict | None:
+    """What removing this run would actually take with it, COUNTED — the payload
+    the confirmation dialog reads so a destructive action is announced before it
+    happens, not discovered after.
+
+    Every count degrades to 0 on its own rather than failing the preview: a
+    fresh install with empty tables, a run that was never previewed or tested,
+    an archive that doesn't exist. `None` when the run is unknown."""
+    from ..models import (TrainingRunRecord, CheckpointNote, CheckpointPreview,
+                          LoraTestImage, CanvasNodePosition)
+    from . import run_archive
+    rec = db.session.get(TrainingRunRecord, int(record_id))
+    if rec is None:
+        return None
+
+    def _count(model):
+        try:
+            return int(model.query.filter_by(record_id=rec.id).count())
+        except Exception:
+            logger.debug('deletion impact count failed for %s', model, exc_info=True)
+            return 0
+
+    try:
+        released = run_archive.stored_count(_releasable_blob_sigs(rec))
+    except Exception:
+        released = 0
+    return {
+        'record_id': rec.id,
+        'has_saves': _record_checkpoints_on_disk(rec) > 0,
+        'notes': _count(CheckpointNote),
+        'previews': _count(CheckpointPreview),
+        'images_unlinked': _count(LoraTestImage),
+        'canvas_positions': _count(CanvasNodePosition),
+        'children_detached': _count_children(rec),
+        'archived_images_released': released,
+    }
+
+
+def _count_children(rec) -> int:
+    from ..models import TrainingRunRecord
+    try:
+        return int(TrainingRunRecord.query
+                   .filter_by(parent_record_id=rec.id).count())
+    except Exception:
+        return 0
+
+
+def delete_run_record(record_id) -> str:
+    """Remove a GONE run from the lineage graph, with EVERYTHING that only
+    existed because of it. Five tables carry a `record_id`; leaving three of
+    them behind is how a "deleted" run keeps haunting the canvas and the
+    checkpoint gallery.
+
+    What goes, and why it goes that way:
+      • `TrainingRunRecord` + its `CheckpointNote`s + its `CheckpointPreview`
+        links (a checkpoint may hold several previews since the uniqueness
+        constraint was lifted) + its `CanvasNodePosition` (a board coordinate
+        for a card that no longer exists);
+      • children that resumed FROM this run are DETACHED (parent_record_id →
+        NULL), staying in the graph as honest "origin unknown" roots;
+      • `LoraTestImage` rows are UNLINKED (`record_id`/`step` → NULL), never
+        deleted. Those are real generated pictures that also live in the Test
+        Studio and the canvas gallery; removing a run is a tidying of lineage,
+        not an order to destroy images the user never said to destroy. They lose
+        their provenance, and the confirmation dialog says so up front;
+      • archived source blobs are released ONLY when this run was their last
+        referrer (`_releasable_blob_sigs`) — the store is shared between runs and
+        a naive delete would blank another run's comparison.
+
+    Guards kept: a run whose checkpoints are still on disk is REFUSED
+    ('has_saves') so a recoverable run is never discarded from under the user.
 
     Returns 'not_found' | 'has_saves' | 'deleted' | 'conflict'. The FK children
-    (CheckpointNote — no relationship cascade in this schema) are deleted and
-    FLUSHED before the parent row so SQLite never raises the repo's "delete 500"
-    IntegrityError; a stray one is caught and reported as 'conflict', never a 500."""
-    from ..models import TrainingRunRecord, CheckpointNote
+    (no relationship cascade in this schema) are deleted and FLUSHED before the
+    parent row so SQLite never raises the repo's "delete 500" IntegrityError; a
+    stray one is caught and reported as 'conflict', never a 500. Blobs are
+    touched only AFTER the commit succeeds — a filesystem hiccup must never roll
+    back a database deletion, and vice versa."""
+    from ..models import (TrainingRunRecord, CheckpointNote, CheckpointPreview,
+                          LoraTestImage, CanvasNodePosition)
+    from . import run_archive
     from sqlalchemy.exc import IntegrityError
     rec = db.session.get(TrainingRunRecord, int(record_id))
     if rec is None:
         return 'not_found'
     if _record_checkpoints_on_disk(rec) > 0:
         return 'has_saves'
+    # Computed BEFORE the row is gone — the snapshot that names the blobs lives
+    # on the record itself.
+    releasable = _releasable_blob_sigs(rec)
     try:
         # Detach any run that resumed from this one BEFORE deleting it: the child
         # stays displayed (as a root), the parent edge just disappears.
         (TrainingRunRecord.query
          .filter_by(parent_record_id=rec.id)
          .update({'parent_record_id': None}, synchronize_session=False))
+        # Generated images survive their run: only the provenance link is cut.
+        (LoraTestImage.query
+         .filter_by(record_id=rec.id)
+         .update({'record_id': None, 'step': None}, synchronize_session=False))
         # Delete FK children first and flush, so deleting the parent row can't hit
         # an IntegrityError (the "delete 500" trap — no cascade on these tables).
         CheckpointNote.query.filter_by(record_id=rec.id).delete(
             synchronize_session=False)
+        CheckpointPreview.query.filter_by(record_id=rec.id).delete(
+            synchronize_session=False)
+        CanvasNodePosition.query.filter_by(record_id=rec.id).delete(
+            synchronize_session=False)
         db.session.flush()
         db.session.delete(rec)
         db.session.commit()
-        return 'deleted'
     except IntegrityError:
         db.session.rollback()
         return 'conflict'
+    try:
+        run_archive.release(releasable)
+    except Exception:
+        logger.debug('archived blobs could not be released', exc_info=True)
+    return 'deleted'
 
 
 def _lineage_node(rec, crun, requested_id, failed_local_id):

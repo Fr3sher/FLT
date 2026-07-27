@@ -230,6 +230,40 @@ def portable(raw):
                        **kept}, separators=(',', ':'))
 
 
+def signatures(snap) -> set:
+    """Every archived content hash this snapshot points at — one per training
+    image plus the dataset's reference photo.
+
+    This is the ONLY durable link between a run and the blobs `run_archive` kept
+    for it, so it is also what "which archived images does this run own?" is
+    answered with when a run is deleted. A run with no snapshot (legacy) yields
+    an empty set: its blobs are unattributable and must therefore be left alone,
+    never guessed at."""
+    out = set()
+    if not isinstance(snap, dict):
+        return out
+    for entry in (snap.get('images') or {}).values():
+        if isinstance(entry, dict) and entry.get('c'):
+            out.add(str(entry['c']))
+    ref = (snap.get('dataset') or {}).get('reference')
+    if isinstance(ref, dict) and ref.get('c'):
+        out.add(str(ref['c']))
+    return out
+
+
+def signatures_of_raw(raw) -> set:
+    """`signatures()` straight from the stored JSON text — lets a caller sweep
+    every OTHER run's snapshot column without materialising ORM objects. An
+    unreadable blob yields an empty set (never raises)."""
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return set()
+    return signatures(data if isinstance(data, dict) else None)
+
+
 def caption_of(snap, image_id):
     """`(long, short)` for one image id in a snapshot, `(None, None)` when the
     snapshot didn't record it (image had no caption, or run predates snapshots)."""

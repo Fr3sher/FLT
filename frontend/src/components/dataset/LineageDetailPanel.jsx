@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { configRows } from './lineageDetail.js';
 import { isRunDeletable } from '../../utils/runDeletable.js';
+import { runDeletionKeeps, runDeletionLosses, runDeletionMessage } from '../../utils/runDeletionSummary.js';
 import { runIdentityLabel } from '../../utils/runIdentity';
-import { putJson, del } from '../../api/fetchClient';
+import { apiFetch, putJson, del } from '../../api/fetchClient';
 import { useToast } from '../common/Toast';
 
 /* The Lab detail panel — opens on a node click in the ◉ Graph. It turns the
@@ -21,6 +22,11 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
   const [runNote, setRunNote] = useState('');
   const [ckNotes, setCkNotes] = useState({});   // step -> text
   const [deleting, setDeleting] = useState(false);
+  // What a deletion would take with it, counted by the backend. Loaded when a
+  // removable run opens so the confirmation can be specific ("8 preview links")
+  // instead of vague; null when the probe failed — the dialog then falls back to
+  // honest generic wording rather than inventing numbers.
+  const [impact, setImpact] = useState(null);
 
   // Reseed local editors whenever a DIFFERENT run opens. Keyed on record_id so a
   // same-node re-render (e.g. the parent echoing our own onNodeChanged) doesn't
@@ -32,6 +38,20 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
     setCkNotes(seed);
   }, [node?.record_id]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Probe what a removal would clear, for the run currently open. Only for a
+  // run the graph already shows as gone — a live run is never deletable, so the
+  // extra request would be pure noise.
+  useEffect(() => {
+    const id = node?.record_id;
+    setImpact(null);
+    if (!id || !isRunDeletable(node)) return undefined;
+    let alive = true;
+    apiFetch(`/api/dataset/train/runs/${id}/deletion-impact`)
+      .then((data) => { if (alive) setImpact(data); })
+      .catch(() => { if (alive) setImpact(null); });
+    return () => { alive = false; };
+  }, [node?.record_id, node?.checkpoint_ready]);   // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!node) return null;
   const rows = configRows(node.config);
   const checkpoints = node.checkpoints || [];
@@ -42,10 +62,7 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
 
   const deleteRun = async () => {
     if (!deletable || deleting) return;
-    if (!window.confirm(
-      `Remove run #${node.record_id} from the graph?\n\n`
-      + 'Its checkpoints are already gone from disk. This clears the leftover '
-      + 'run entry and its notes — it does not delete any files.')) return;
+    if (!window.confirm(runDeletionMessage(node.record_id, impact))) return;
     setDeleting(true);
     try {
       await del(`/api/dataset/train/runs/${node.record_id}`);
@@ -157,8 +174,23 @@ export default function LineageDetailPanel({ node, onClose, onNodeChanged, onNod
             {deleting ? 'Removing…' : 'Remove this run'}
           </button>
           <p className="mt-1 text-[0.625rem] leading-snug text-content-subtle">
-            No checkpoints left on disk. Removes the leftover run entry and its notes — no files are deleted.
+            No checkpoints left on disk. No LoRA file is deleted.
           </p>
+          {/* The same truth as the confirmation, visible before clicking. Wraps
+              instead of scrolling sideways so it stays readable in the narrow
+              drawer of a phone. */}
+          {runDeletionLosses(impact).length > 0 && (
+            <ul className="mt-1 space-y-0.5 break-words text-[0.625rem] leading-snug text-content-subtle">
+              {runDeletionLosses(impact).map((line) => (
+                <li key={line}>• {line}</li>
+              ))}
+            </ul>
+          )}
+          {runDeletionKeeps(impact).map((line) => (
+            <p key={line} className="mt-1 break-words text-[0.625rem] leading-snug text-content-subtle">
+              {line}
+            </p>
+          ))}
         </section>
       )}
     </div>
