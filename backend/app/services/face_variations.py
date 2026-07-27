@@ -477,7 +477,8 @@ _KLEIN_FRAMING_DETAIL_BY_SUBJECT = {
 
 
 def wrap_variation_klein(prompt: str, nsfw: bool = False, framing: str | None = None,
-                         suffix: str = '', subject_type: str = 'human') -> str:
+                         suffix: str = '', subject_type: str = 'human',
+                         label: str = '') -> str:
     """Klein (FLUX.2, Kontext-lineage) is an INSTRUCTION-edit model: it follows
     imperative edit commands (the consistency LoRA's own usage example is "Turn
     this cat into a dog"). The API-engine wrapper above — preservation order
@@ -498,16 +499,21 @@ def wrap_variation_klein(prompt: str, nsfw: bool = False, framing: str | None = 
     to the creative prompt, before the framing detail): instruction-first means
     the description IS the command, so the suffix steers the intended result and
     never touches the restage/identity constraints that follow. Empty suffix ->
-    byte-identical output."""
+    byte-identical output.
+    `label` (the variation label) picks this shot's concrete garment — see the
+    two Krea-born fixes below, both MEASURED on Klein before being applied here.
+    """
     st = normalize_subject_type(subject_type)
     noun = _KLEIN_SUBJECT_NOUN.get(st, 'subject')
     detail = _KLEIN_FRAMING_DETAIL_BY_SUBJECT.get(st, _KLEIN_FRAMING_DETAIL).get(framing or '', '')
     medium = _KLEIN_MEDIUM.get(st, _KLEIN_MEDIUM_DEFAULT)
     nsfw_tail, sfw_tail = _KLEIN_RENDER_TAIL.get(st, _KLEIN_RENDER_TAIL_DEFAULT)
     ending = nsfw_tail if nsfw else sfw_tail
+    body = krea_outfit_directive(_append_suffix(prompt, suffix), label)
     return (
-        f"Create a new {medium} of the same {noun} as the reference image: {_append_suffix(prompt, suffix)}. "
+        f"Create a new {medium} of the same {noun} as the reference image: {body}. "
         + (f"{detail} " if detail else "")
+        + KREA_MARKINGS_LOCK
         + f"{get_identity_prompt('klein_identity', st)} {ending}")
 
 
@@ -575,6 +581,23 @@ _HAS_EXPRESSION = re.compile(
 # regenerate of one shot reproduces its own). Applied at WRAP time only — the
 # stored `variation_prompt` keeps the raw catalog text, so the other engines are
 # untouched and a regenerate re-applies the current rules exactly once.
+#
+# ALSO APPLIED TO KLEIN since 2026-07-27, on measurement, and to the two LOCAL
+# edit engines ONLY. What Klein actually does with the negation (5 pairs, same
+# seed, one factor changed):
+#   • it is NOT copying the reference garment — the negation IS followed, and the
+#     "colour leaks in tight shots" reading did NOT reproduce: the two fresh bust
+#     shots came back beige and grey-green knits, muted neutrals, not the
+#     reference's olive. That symptom is written off.
+#   • what DOES collapse is the lower half: all three wide shots answered the
+#     negation with blue jeans and pale sneakers, whatever the top. A dataset of
+#     that teaches the LoRA "this person wears blue jeans".
+#   • the concrete garment was obeyed exactly in 5/5 and broke the collapse in
+#     3/3 (grey denim / black trousers / black trousers) with three visibly
+#     different tops. That is the reason it ships here — not the colour claim.
+# The API engines (Nano Banana, ChatGPT, OpenRouter) are deliberately NOT
+# included: nothing has been measured on them, and a Klein result is not
+# evidence about a different model family.
 _KREA_OUTFIT_GENERIC = (
     re.compile(r'\bcasual clothes different from the reference outfit\b', re.I),
     re.compile(r'\bdifferent outfit\b', re.I),
@@ -603,6 +626,15 @@ _KREA_EXPRESSION_NEGATION = re.compile(
 # So the order now holds the SKIN, without naming a single feature. What is on
 # the reference is carried by the reference conditioning, not by this sentence —
 # whose only job is to forbid invention and redrawing.
+#
+# The re-worded order had only ever been checked in TEXT (the word was gone from
+# the prompt). It was verified IN IMAGE on 2026-07-27, on Klein, before being
+# extended to it — three shots on a subject with no markings at all, with and
+# without the sentence, same seed: nothing invented in 3/3, the pairs are
+# near-identical. And on the tattooed subject it earns its place: on the outdoor
+# bust the forehead piece VANISHED without it and is fully there with it, same
+# seed; the jaw work is preserved on both sides on the close-up; the wide shot is
+# a draw. Hence: applied to Klein too, and to the local edit engines only.
 KREA_MARKINGS_LOCK = (
     "Keep the skin exactly as it is in the reference image: do not add anything "
     "to it, and do not redraw, restyle, move or remove what is already there. ")
@@ -613,6 +645,19 @@ KREA_MARKINGS_LOCK = (
 # the same shot a different outfit on every app restart. Three properties at once:
 # outfits genuinely differ across the dataset, one shot regenerates identically,
 # and no randomness ever leaks into a stored prompt.
+#
+# SIZE IS MEASURED, not decorative. With crc32 modulo N, the load histogram over
+# the shipped catalog depends only on N, so the count was chosen by measuring it:
+# at 12 garments, 41 eligible shots collapsed onto 11 distinct ones with the
+# worst garment carrying 6 (a dataset that trades one uniform for another); at 25
+# they spread over 23 distinct ones with the worst carrying 4. Neighbouring sizes
+# are NOT monotonically better (24 peaks at 5, 22 at 6) — hence the pinned
+# distribution test, which fails if a catalog change re-concentrates the picks.
+# Every entry differs from the others on at least two of colour / cut / sleeve
+# length / material, so two shots that DO share a garment still look apart, and
+# all of them are neutral, everyday and plausible from a face crop to a full
+# body. Nothing here may name a summonable skin feature (see _SUMMONABLE in the
+# tests): 'scarf' contains 'scar'.
 KREA_OUTFIT_PALETTE = (
     'a plain white cotton t-shirt',
     'a red knit sweater',
@@ -626,6 +671,19 @@ KREA_OUTFIT_PALETTE = (
     'a mustard yellow cardigan',
     'a dark green flannel shirt',
     'a cream ribbed knit top',
+    'a charcoal wool blazer',
+    'a rust orange corduroy shirt',
+    'a teal cotton polo shirt',
+    'a soft pink oversized sweatshirt',
+    'a striped navy and white long-sleeve top',
+    'a camel wool coat',
+    'a black leather biker jacket',
+    'a lilac short-sleeve blouse',
+    'a chocolate brown suede jacket',
+    'a sky blue gingham shirt',
+    'a plum velvet top',
+    'a silver grey satin blouse',
+    'a coral sleeveless linen top',
 )
 
 
@@ -659,19 +717,14 @@ def wrap_variation_krea(prompt: str, nsfw: bool = False, framing: str | None = N
     result → identity lock → rendering tail), plus the two Krea-specific fixes:
     the outfit negation becomes a concrete garment, and permanent markings get an
     explicit hold order. `label` selects that garment deterministically — pass
-    the variation label so the same shot always renders the same outfit."""
-    st = normalize_subject_type(subject_type)
-    noun = _KLEIN_SUBJECT_NOUN.get(st, 'subject')
-    detail = _KLEIN_FRAMING_DETAIL_BY_SUBJECT.get(st, _KLEIN_FRAMING_DETAIL).get(framing or '', '')
-    medium = _KLEIN_MEDIUM.get(st, _KLEIN_MEDIUM_DEFAULT)
-    nsfw_tail, sfw_tail = _KLEIN_RENDER_TAIL.get(st, _KLEIN_RENDER_TAIL_DEFAULT)
-    ending = nsfw_tail if nsfw else sfw_tail
-    body = krea_outfit_directive(_append_suffix(prompt, suffix), label)
-    return (
-        f"Create a new {medium} of the same {noun} as the reference image: {body}. "
-        + (f"{detail} " if detail else "")
-        + KREA_MARKINGS_LOCK
-        + f"{get_identity_prompt('klein_identity', st)} {ending}")
+    the variation label so the same shot always renders the same outfit.
+
+    Both fixes were re-measured on Klein (2026-07-27) and held there too, so the
+    Klein wrapper now composes exactly the same prompt and this function is a
+    thin alias. Kept as a named entry point because the two engines are separate
+    product surfaces and only one of them may need to move next."""
+    return wrap_variation_klein(prompt, nsfw=nsfw, framing=framing, suffix=suffix,
+                                subject_type=subject_type, label=label)
 
 
 def _e(i, axis, framing, label, prompt, co=False, cb=False, aspect=None):

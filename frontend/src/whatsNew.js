@@ -48,6 +48,14 @@ import { SETUP_STEP_IDS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-klein-outfits-and-skin-hold',
+    date: '2026-07-27',
+    title: 'Klein datasets stop landing in the same jeans — and stop redrawing your tattoos',
+    blurb:
+      'Two fixes that Krea 2 Edit already had are now measured on Klein and shipped there too. Every shot gets a named garment instead of "a different outfit": asked that way, Klein answered three wide shots with three different tops but the same blue jeans and pale sneakers every time — a LoRA trained on that learns the jeans. And the shot keeps its skin: on the outdoor bust, a forehead tattoo simply vanished without the hold order and is fully there with it, same seed. Checked in both directions — on a subject with no markings at all, the hold order invents none. The wardrobe grew from 12 garments to 25, so a 40-shot dataset now spreads over 23 of them instead of repeating one six times. Nothing changes on Nano Banana, ChatGPT or OpenRouter: nothing was measured there.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-27-krea-reference-shape-notice',
     date: '2026-07-27',
     title: 'Krea told you why your full-body shots came back as busts — before you generate them',

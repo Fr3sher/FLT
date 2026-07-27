@@ -615,3 +615,66 @@ def test_no_krea_prompt_names_a_summonable_feature():
                                      label=entry.get('label', '')).lower()
         named = [w for w in _SUMMONABLE if w in prompt]
         assert not named, f"shot {entry['id']} names {named} in its Krea prompt"
+
+
+def test_no_klein_prompt_names_a_summonable_feature():
+    """Klein carries the same hold order since 2026-07-27, so it inherits the
+    same trap: whatever a garment or a shot is renamed to, no composed Klein
+    prompt may name a feature the encoder would paint on a subject who has none.
+    ('scarf' contains 'scar' — that is the kind of addition this catches.)"""
+    from app.services.face_variations import VARIATION_CATALOG, wrap_variation_klein
+    for entry in VARIATION_CATALOG:
+        prompt = wrap_variation_klein(entry['prompt'], nsfw=False,
+                                      framing=entry.get('framing'),
+                                      label=entry.get('label', '')).lower()
+        named = [w for w in _SUMMONABLE if w in prompt]
+        assert not named, f"shot {entry['id']} names {named} in its Klein prompt"
+
+
+# --- Klein inherits the two local-edit fixes (measured 2026-07-27) ------------
+
+def test_klein_holds_the_skin_and_gets_a_concrete_garment():
+    """MEASURED, same seed, one factor at a time. The hold order: on a subject
+    with NO markings it invented none (3/3), and on the tattooed one it kept a
+    forehead piece that vanished without it. The concrete garment: obeyed 5/5,
+    and it broke the "every wide shot ends in blue jeans" collapse the bare
+    negation produced in 3/3."""
+    from app.services import face_variations as fv
+    out = fv.wrap_variation_klein('upper body portrait, ' + fv.OUTFIT_VARY,
+                                  framing='bust', label='Bust, studio')
+    assert fv.KREA_MARKINGS_LOCK.strip() in out
+    assert fv.OUTFIT_VARY not in out and 'not the outfit' not in out
+    assert any(g in out for g in fv.KREA_OUTFIT_PALETTE)
+    # Same shot, same garment, run after run and process after process.
+    assert out == fv.wrap_variation_klein('upper body portrait, ' + fv.OUTFIT_VARY,
+                                          framing='bust', label='Bust, studio')
+
+
+def test_the_api_engines_are_left_alone():
+    """Nothing was measured on Nano Banana / ChatGPT / OpenRouter, so the two
+    local-edit fixes must not reach the shared API wrapper. Extending a Klein
+    result to another model family is the mistake this pins shut."""
+    from app.services import face_variations as fv
+    out = fv.wrap_variation('upper body portrait, ' + fv.OUTFIT_VARY)
+    assert fv.OUTFIT_VARY in out, 'the API wrapper must keep the raw catalog text'
+    assert fv.KREA_MARKINGS_LOCK.strip() not in out
+
+
+def test_the_outfit_palette_spreads_over_the_catalog():
+    """A palette too short trades a uniform for a quasi-uniform: at 12 garments
+    the worst one carried 6 of the 41 eligible shots and only 11 were ever used.
+    crc32-modulo means the load histogram depends on the palette SIZE, so this
+    pins the OUTCOME — a catalog or palette edit that re-concentrates the picks
+    fails here instead of silently shipping."""
+    import collections
+    from app.services import face_variations as fv
+    # Only the shots that actually RECEIVE a garment: krea_outfit_directive also
+    # strips the dead expression negation, which is not an outfit decision.
+    eligible = [e for e in fv.VARIATION_CATALOG
+                if any(g in fv.krea_outfit_directive(e['prompt'], e['label'])
+                       for g in fv.KREA_OUTFIT_PALETTE)]
+    assert len(eligible) > 30, 'catalog shrank — re-measure before relaxing this'
+    counts = collections.Counter(fv.krea_outfit_for(e['label']) for e in eligible)
+    assert max(counts.values()) <= 4, (
+        f'garment overload: {counts.most_common(3)} over {len(eligible)} shots')
+    assert len(counts) >= 20, f'only {len(counts)} distinct garments used'
