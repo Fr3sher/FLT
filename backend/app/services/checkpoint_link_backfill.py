@@ -19,9 +19,16 @@ Two sources of evidence, in that order — and NOTHING else:
    (``cloud_training._step_of_testable``). A row whose ``checkpoint`` carries
    both is attributable exactly.
 
+3. **The run tag ALONE, when the step is not in the name.** A step-less final
+   save (``…_rl42.safetensors``) attributes itself to a run beyond doubt and to
+   no step at all. Pass 2 threw that away with the step, so those images counted
+   as "could not be traced back to a checkpoint" — true, and useless: the run WAS
+   knowable. They now get ``record_id`` with ``step`` left NULL, which is exactly
+   what is known. The run gallery shows them in a "step unknown" group; no
+   checkpoint gallery can ever pick them up, because those filter on a step.
+
 Everything else is LEFT UNLINKED. A name with no run tag (imported before
-tagging existed), a step-less final save (its step is only knowable by scanning
-the run folder), a tag pointing at a run that no longer exists, a cloud tag
+tagging existed), a tag pointing at a run that no longer exists, a cloud tag
 matching two records — all skipped. Those images stay invisible under the nodes
 and the UI says how many there are (``unlinked_count``). Guessing would put a
 stranger's image under someone's checkpoint, which is worse than an honest gap.
@@ -45,7 +52,7 @@ logger = logging.getLogger(__name__)
 
 # Bump when the RESOLUTION RULE improves, so a smarter pass re-runs once on a
 # database it already visited (it still only fills links that are still NULL).
-BACKFILL_VERSION = 1
+BACKFILL_VERSION = 2
 _STATE_KEY = 'checkpoint_link_backfill'
 
 # Pass 1 — the pointer written at generation time. Correlated subqueries rather
@@ -89,6 +96,17 @@ _LINK_BY_NAME_SQL = text(
     """
     UPDATE lora_test_image
        SET record_id = :rid, step = :step
+     WHERE record_id IS NULL AND checkpoint = :ck AND dataset_id = :ds
+    """
+)
+
+# Pass 3 — the run is known, the step is not. `step` is deliberately left NULL
+# rather than defaulted to anything: a 0 or a guessed final step would put the
+# image under a checkpoint pill that did not make it.
+_LINK_RUN_ONLY_SQL = text(
+    """
+    UPDATE lora_test_image
+       SET record_id = :rid
      WHERE record_id IS NULL AND checkpoint = :ck AND dataset_id = :ds
     """
 )
@@ -158,10 +176,35 @@ def resolve_checkpoint_name(filename: str) -> tuple[int, int, int] | None:
     return rec.id, step, rec.dataset_id
 
 
+def resolve_run_name(filename: str) -> tuple[int, int] | None:
+    """(record_id, dataset_id) for a deployed LoRA filename whose RUN is knowable,
+    whatever the step — or None.
+
+    Deliberately weaker than ``resolve_checkpoint_name``: it answers the question
+    "which run made this?" and stops there. A step-less final save answers it
+    exactly; only the step is unknown, and an unknown step stays unknown."""
+    from ..models import TrainingRunRecord
+    from .lora_training import parse_deployed_run
+
+    source, run_id = parse_deployed_run(filename)
+    if not source or run_id is None:
+        return None
+    if source == 'cloud':
+        recs = TrainingRunRecord.query.filter_by(cloud_run_id=run_id).all()
+        if len(recs) != 1:
+            return None
+        rec = recs[0]
+    else:
+        rec = db.session.get(TrainingRunRecord, run_id)
+        if rec is None or rec.source == 'cloud':
+            return None
+    return rec.id, rec.dataset_id
+
+
 def backfill_checkpoint_links() -> dict:
     """Fill in every link the evidence supports. Returns
-    {'by_pointer': n, 'by_name': n, 'unlinked': n}. Never raises."""
-    out = {'by_pointer': 0, 'by_name': 0, 'unlinked': 0}
+    {'by_pointer': n, 'by_name': n, 'by_run': n, 'unlinked': n}. Never raises."""
+    out = {'by_pointer': 0, 'by_name': 0, 'by_run': 0, 'unlinked': 0}
     try:
         if not _schema_supports_backfill():
             logger.info('checkpoint link backfill: schema not ready (skipped)')
@@ -179,13 +222,25 @@ def backfill_checkpoint_links() -> dict:
                 hit = resolve_checkpoint_name(name)
             except Exception:
                 hit = None                      # one unreadable name skips itself
-            if not hit:
+            if hit:
+                rid, step, ds_id = hit
+                out['by_name'] += db.session.execute(
+                    _LINK_BY_NAME_SQL,
+                    {'rid': rid, 'step': step, 'ck': name, 'ds': ds_id}).rowcount or 0
                 continue
-            rid, step, ds_id = hit
-            out['by_name'] += db.session.execute(
-                _LINK_BY_NAME_SQL,
-                {'rid': rid, 'step': step, 'ck': name, 'ds': ds_id}).rowcount or 0
-        if out['by_name']:
+            # The step is not in the name — but the run may still be. Record what
+            # IS known instead of discarding the whole attribution.
+            try:
+                run_hit = resolve_run_name(name)
+            except Exception:
+                run_hit = None
+            if not run_hit:
+                continue
+            rid, ds_id = run_hit
+            out['by_run'] += db.session.execute(
+                _LINK_RUN_ONLY_SQL,
+                {'rid': rid, 'ck': name, 'ds': ds_id}).rowcount or 0
+        if out['by_name'] or out['by_run']:
             db.session.commit()
 
         out['unlinked'] = db.session.execute(_UNLINKED_COUNT_SQL).scalar() or 0
@@ -220,10 +275,12 @@ def run_if_needed() -> dict:
                     'ran_at': utc_stamp(),
                     **res}
         _save_state(summary_)
-        if res['by_pointer'] or res['by_name']:
+        if res['by_pointer'] or res['by_name'] or res['by_run']:
             logger.info('checkpoint link backfill: %d image(s) linked by pointer, '
-                        '%d by run tag, %d left unlinked',
-                        res['by_pointer'], res['by_name'], res['unlinked'])
+                        '%d by run tag, %d to a run without a step, '
+                        '%d left unlinked',
+                        res['by_pointer'], res['by_name'], res['by_run'],
+                        res['unlinked'])
         return summary_
     except Exception:
         logger.exception('checkpoint link backfill failed (non-fatal, boot continues)')

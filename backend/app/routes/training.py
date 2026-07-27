@@ -1807,6 +1807,42 @@ def train_checkpoint_images_delete(record_id, step):
     return jsonify({'ok': True, **out})
 
 
+@bp.get('/train/run/<int:record_id>/images')
+def train_run_images(record_id):
+    """🖼 Everything ONE RUN ever generated, grouped by checkpoint — the gallery
+    the ◉ Canvas opens on a run CARD. Shaped like the checkpoint one (same rows,
+    same `unlinked` footnote, same announced `delete_mode`), with `groups`
+    instead of a flat list: steps descending, the step-less group last.
+
+    Capped, and it says so: `per_step` images per checkpoint, `limit` overall,
+    with `truncated` per group and for the whole answer. A run with fourteen
+    checkpoints must not answer with a payload nobody can scroll."""
+    return jsonify(ct.run_gallery(
+        record_id,
+        limit=request.args.get('limit', default=None, type=int),
+        per_step=request.args.get('per_step', default=None, type=int)))
+
+
+@bp.post('/train/run/<int:record_id>/images/delete')
+def train_run_images_delete(record_id):
+    """🗑 Delete generated images from a RUN's gallery. Body: {image_ids: [id, …]}.
+
+    THE checkpoint delete with its scope widened (``step=None``) — same recycle
+    bin, same refusal of ids that belong elsewhere, same per-image `skipped`
+    report. Ids outside this run are refused, so widening the scope to a run
+    never widens it to the library."""
+    ids = (request.get_json(silent=True) or {}).get('image_ids') or []
+    if not isinstance(ids, list):
+        return jsonify({'error': 'image_ids must be a list'}), 400
+    try:
+        out = ct.delete_checkpoint_images(record_id, None, ids)
+    except OSError as e:
+        current_app.logger.warning('run gallery delete failed: %s', e)
+        return jsonify({'error': 'Could not delete these images — a file is '
+                                 'locked or unreachable. Try again.'}), 500
+    return jsonify({'ok': True, **out})
+
+
 @bp.get('/train/canvas/positions')
 def train_canvas_positions():
     """◉ LoRA Canvas: every remembered card position, grouped by dataset id.
