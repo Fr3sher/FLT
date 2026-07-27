@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { apiFetch, postJson } from '../../api/fetchClient';
 import {
-  allGalleryImageIds, galleryDeleteConfirmation, galleryDeleteSummary,
+  allGalleryImageIds, galleryActionBar, galleryDeleteConfirmation, galleryDeleteSummary,
   pruneGallerySelection, toggleGalleryImage,
 } from '../../utils/gallerySelection';
 import {
@@ -50,7 +50,11 @@ import { configRows } from '../dataset/lineageDetail.js';
 
    Deletion is deliberately UNREACHABLE by accident: it needs Select mode, then a
    pick, then a confirmation. Tapping a tile while scrolling a phone grid can
-   never delete anything — outside Select mode a tap only zooms. */
+   never delete anything — outside Select mode a tap only zooms. Select now opens
+   that mode from the same pinned bar the rest of it lives in (it used to sit in
+   the header, a reach away from everything it leads to) — from the OPPOSITE end
+   of that bar, and Delete stays disabled until a tile is picked, so sharing a
+   row with the destructive button costs the guard nothing. */
 export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onDetails }) {
   const [state, setState] = useState({ status: 'loading', data: null, error: null });
   const [zoom, setZoom] = useState(null);
@@ -151,6 +155,11 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
   }, []);
 
   if (!target) return null;
+  // Everything the pinned bottom bar shows — including whether it exists at all.
+  const bar = galleryActionBar({
+    status: state.status, picking, imageCount: images.length,
+    selectedCount: selected.size, busy,
+  });
   const confirmation = galleryDeleteConfirmation(selected.size, d?.delete_mode);
   const node = target.node || null;
   const paramRows = isRun ? configRows(node?.config) : [];
@@ -207,19 +216,6 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
             <span aria-hidden>🖼</span> {heading.title}
             <span className="font-normal text-content-muted"> · {heading.subtitle}</span>
           </h3>
-          {/* The gate into deletion. Absent while there is nothing to delete, so
-              an empty gallery carries no destructive control at all. */}
-          {state.status === 'ready' && images.length > 0 && (
-            <button type="button" data-testid="gallery-select-toggle"
-              onClick={() => { setPicking((v) => !v); setSelected(new Set()); setNotice(null); }}
-              aria-pressed={picking}
-              title={picking ? 'Leave selection mode' : 'Select images to delete'}
-              className={`shrink-0 rounded-md border px-2 py-1.5 text-[0.6875rem] ${picking
-                ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100'
-                : 'border-border text-content-muted hover:text-content'}`}>
-              {picking ? 'Done' : 'Select'}
-            </button>
-          )}
           <button type="button" onClick={onClose} aria-label="Close"
             className="shrink-0 px-1 py-1 text-content-subtle hover:text-content">✕</button>
         </header>
@@ -378,24 +374,55 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
           )}
         </div>
 
-        {/* The action bar only exists in Select mode, pinned so it stays reachable
-            with a thumb however far the grid has been scrolled. */}
-        {picking && state.status === 'ready' && (
+        {/* 📌 The action bar, pinned so it stays reachable with a thumb however far
+            the grid has been scrolled — and PERMANENT: `Select` used to sit up in
+            the header, so entering the mode meant reaching the top of a panel
+            whose every other control was already down here. It also means the
+            gate does not move when the mode turns on; it just gets company.
+
+            Everything destructive still hangs off `picking`, and the bar as a
+            whole off having images — an empty gallery carries no bar at all.
+            Both decisions are taken in galleryActionBar (unit-tested), not in an
+            inline `&&` that a rewrite could quietly loosen. */}
+        {bar.shown && (
           <div data-testid="gallery-action-bar"
             className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-surface-overlay px-3 py-2">
-            <span className="text-content-muted text-[0.6875rem]">{selected.size} selected</span>
-            <button type="button"
-              onClick={() => setSelected(selected.size === images.length
-                ? new Set() : allGalleryImageIds(images))}
-              className="rounded-md border border-border px-2 py-1.5 text-content-muted text-[0.6875rem] hover:text-content">
-              {selected.size === images.length ? 'Clear' : 'Select all'}
+            {/* Indigo — the app's accent, and already what this button turned when
+                it was on. The state is NOT the colour though: the label flips
+                Select/Done, the glyph with it, and aria-pressed says it out loud. */}
+            <button type="button" data-testid="gallery-select-toggle"
+              onClick={() => { setPicking((v) => !v); setSelected(new Set()); setNotice(null); }}
+              aria-pressed={bar.togglePressed}
+              aria-label={picking ? 'Leave selection mode' : 'Select images to delete'}
+              title={picking ? 'Leave selection mode' : 'Select images to delete'}
+              className={`shrink-0 rounded-md border px-3 py-1.5 text-[0.75rem] font-semibold ${picking
+                ? 'border-indigo-300 bg-indigo-500/40 text-white'
+                : 'border-indigo-400/70 bg-indigo-500/15 text-indigo-200 hover:bg-indigo-500/25'}`}>
+              <span aria-hidden>{picking ? '✓' : '☑'}</span> {bar.toggleLabel}
             </button>
-            <button type="button" data-testid="gallery-delete"
-              disabled={selected.size === 0 || busy}
-              onClick={() => setConfirming(true)}
-              className="ml-auto rounded-md border border-rose-500/50 px-3 py-1.5 text-[0.75rem] text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
-              🗑 Delete{selected.size ? ` (${selected.size})` : ''}
-            </button>
+            {bar.showsDelete && (
+              <>
+                <span className="text-content-muted text-[0.6875rem] tabular-nums">
+                  {selected.size} selected
+                </span>
+                <button type="button"
+                  onClick={() => setSelected(selected.size === images.length
+                    ? new Set() : allGalleryImageIds(images))}
+                  className="rounded-md border border-border px-2 py-1.5 text-content-muted text-[0.6875rem] hover:text-content">
+                  {bar.selectAllLabel}
+                </button>
+                {/* Last, and pushed to the far edge: the gate that opens this mode
+                    sits at the opposite end of the row, and this stays disabled
+                    until a tile has been picked — so the two taps that arm a
+                    delete can never be one thumb slide apart. */}
+                <button type="button" data-testid="gallery-delete"
+                  disabled={bar.deleteDisabled}
+                  onClick={() => setConfirming(true)}
+                  className="ml-auto rounded-md border border-rose-500/50 px-3 py-1.5 text-[0.75rem] text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
+                  🗑 Delete{selected.size ? ` (${selected.size})` : ''}
+                </button>
+              </>
+            )}
           </div>
         )}
       </aside>

@@ -38,15 +38,48 @@ for (const [name, src] of [['LineageDetailPanel', detail],
 test('the checkpoint gallery cannot delete on an accidental tap', () => {
   // A tile only deletes/selects inside `picking`; outside it, a tap zooms.
   assert.match(gallery, /picking\s*\n?\s*\?\s*setSelected\(\(cur\) => toggleGalleryImage/);
-  // The 🗑 button lives in the Select-mode action bar and needs a selection…
-  assert.match(gallery, /\{picking && state\.status === 'ready' && \(/);
-  assert.match(gallery, /disabled=\{selected\.size === 0 \|\| busy\}/);
+  // The 🗑 button lives in the Select-mode half of the action bar — the bar
+  // itself is permanent, its destructive half is not…
+  assert.match(gallery, /\{bar\.showsDelete && \(/);
+  assert.match(gallery, /disabled=\{bar\.deleteDisabled\}/);
   // …and it opens a confirmation rather than firing the request.
   assert.match(gallery, /onClick=\{\(\) => setConfirming\(true\)\}/);
   // Cancel is the focused default in that confirmation.
   assert.match(gallery, /autoFocus onClick=\{\(\) => setConfirming\(false\)\}/);
   // The delete request itself never leaves the confirmation.
   assert.match(gallery, /data-testid="gallery-confirm-delete"[\s\S]{0,120}onClick=\{runDelete\}/);
+});
+
+/* 👍 One reachable place for the whole gesture. Select used to sit in the header,
+   two thumb-lengths from the Select all / Delete it leads to; on a phone that is
+   the most expensive reach in the panel. It now opens the SAME pinned bar, which
+   is why the reach-distance argument below is inverted: what must stay far apart
+   is no longer Select and the grid, but Select and Delete. */
+test('Select rides the pinned bottom bar, kept apart from Delete', () => {
+  // Not in the header any more — the header keeps the title and the ✕ only.
+  const header = gallery.slice(gallery.indexOf('<header'), gallery.indexOf('</header>'));
+  assert.doesNotMatch(header, /gallery-select-toggle/);
+  // It is inside the pinned bar, which is itself gated on having images: an
+  // empty gallery carries no bar, so no destructive control and no dead gate.
+  const bar = gallery.slice(gallery.indexOf('data-testid="gallery-action-bar"'),
+    gallery.indexOf('</aside>'));
+  assert.match(bar, /gallery-select-toggle/);
+  assert.match(bar, /gallery-delete/);
+  assert.match(gallery, /\{bar\.shown && \(/);
+  assert.match(gallery, /galleryActionBar\(\{/);
+  // Select first, Delete last and pushed to the far edge: a thumb cannot slide
+  // from the gate straight onto the destructive button.
+  assert.ok(bar.indexOf('gallery-select-toggle') < bar.indexOf('gallery-delete'));
+  assert.match(bar, /data-testid="gallery-delete"[\s\S]{0,600}ml-auto/);
+  // The label carries the state, not just the colour — plus aria-pressed.
+  assert.match(bar, /\{bar\.toggleLabel\}/);
+  assert.match(bar, /aria-pressed=\{bar\.togglePressed\}/);
+  assert.match(bar, /aria-label=\{picking/);
+  // "A bit more visible": the resting gate is indigo, the app's accent, not the
+  // muted hairline it used to be.
+  assert.match(bar, /gallery-select-toggle[\s\S]{0,600}indigo/);
+  // It stays a real button, and the bar still wraps rather than scrolling at 400 px.
+  assert.match(bar, /flex-wrap/);
 });
 
 test('the checkpoint gallery lives in shared/, where both surfaces import it from', () => {

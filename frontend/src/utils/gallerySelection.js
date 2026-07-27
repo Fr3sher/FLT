@@ -38,6 +38,42 @@ export function allGalleryImageIds(images) {
   return new Set((images || []).map((i) => i?.id).filter((id) => id != null));
 }
 
+/** 📌 What the pinned bottom bar carries, for a given panel state.
+ *
+ *  `Select` used to live in the header while `Select all` and `Delete` lived in
+ *  a footer bar that only existed once the mode was ON. Entering the mode was
+ *  therefore a reach to the far corner of a panel whose every other control was
+ *  under the thumb — on a phone, the most expensive gesture here. So the bar is
+ *  PERMANENT (from the moment there is something to act on) and simply fills up
+ *  when the mode turns on. Permanent also means it does not appear under the
+ *  finger when the mode starts: the gate stays exactly where it was tapped.
+ *
+ *  Two guarantees that a `{picking && …}` used to carry for free now have to be
+ *  decided here, which is why this is a function and not an inline ternary:
+ *   • an EMPTY gallery shows no bar at all — no destructive control, and no
+ *     dead `Select` offering to pick from nothing;
+ *   • the destructive half exists only inside the mode AND stays inert until
+ *     something is picked, so the gate and the delete can never chain into one
+ *     accidental double-tap despite now sitting on the same row.
+ *
+ *  Returns {shown, toggleLabel, togglePressed, showsDelete, deleteDisabled,
+ *  selectAllLabel}. */
+export function galleryActionBar({
+  status, picking, imageCount, selectedCount, busy,
+} = {}) {
+  const listed = Math.max(0, Number(imageCount) || 0);
+  const picked = Math.max(0, Number(selectedCount) || 0);
+  const shown = status === 'ready' && listed > 0;
+  return {
+    shown,
+    toggleLabel: picking ? 'Done' : 'Select',
+    togglePressed: !!picking,
+    showsDelete: shown && !!picking,
+    deleteDisabled: picked === 0 || !!busy,
+    selectAllLabel: listed > 0 && picked === listed ? 'Clear' : 'Select all',
+  };
+}
+
 /** The confirmation text for a batch — everything the click will do, in order of
  *  surprise. `mode` is the backend's announced destination ('trash' |
  *  'app_trash' | anything else), read from the gallery payload BEFORE the click.
