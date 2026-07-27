@@ -99,6 +99,11 @@ _SETTING_ROWS = [
     ('ema', 'EMA decay', str),
     ('batch_size', 'Batch size', str),
     ('dual_captions', 'Dual captions', lambda v: 'yes' if v else 'no'),
+    # Memory strategy: a quantised run and a full-precision one are different
+    # experiments, so a shared config that omitted them could not be reproduced.
+    ('quantize', 'Quantise base model', lambda v: 'yes' if v else 'no'),
+    ('quantize_te', 'Quantise text encoder', lambda v: 'yes' if v else 'no'),
+    ('low_vram', 'Low-VRAM streaming', lambda v: 'yes' if v else 'no'),
     ('sample_every', 'Sample every', _fmt_steps),
 ]
 _KNOWN_SETTING_KEYS = {k for k, _, _ in _SETTING_ROWS} | {'style_mode'}

@@ -522,6 +522,17 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
       text: 'New: train each image on a long AND a short caption (Advanced options → Dual captions) so the LoRA leans less on any single wording.' } },
+  // Memory saving (quantisation + low-VRAM streaming) is a per-run Advanced
+  // training option like Dual captions, so it points at the settings-reference
+  // section that documents the Advanced panel rather than a global Settings card.
+  { id: 'training.memory_saving', kind: 'setting', title: 'Memory saving (quantisation, low VRAM)',
+    keywords: ['quantise', 'quantize', 'quantisation', 'qfloat8', 'fp8', 'low vram', 'lowvram',
+      'vram', 'memory', 'oom', 'out of memory', '5090', '4090', '24 gb', '32 gb', 'slow',
+      'speed', 'precision', 'text encoder', 'advanced', 'training'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'memory-saving-advanced',
+      text: 'New: if your card is bigger than 24 GB you can switch quantisation and low-VRAM streaming off (Advanced options → Memory saving) for a faster, more precise run.' } },
   // server
   setting('server.port', 'server', 'server-port', 'Server port',
     ['server', 'port', 'bind', 'network', '5050']),
