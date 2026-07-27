@@ -768,6 +768,49 @@ traced are **counted and left out** rather than shown under a checkpoint they
 might not belong to. The gallery says how many those are — they are still in the
 Test Studio, they simply have no node to sit under.
 
+**What a generated image was made with.** Open any image from a gallery and the
+full-screen view lays its record out beside it: the three facts you look for
+first (**step**, **seed**, **LoRA strength**) as chips, then the settings that
+actually decided the picture — sampler, scheduler, CFG, sampling steps, the base
+model, the LoRA file, any always-on LoRAs, the format, the face-similarity score
+— and the prompt last. The prompt folds when it is long instead of pushing
+everything else off the screen, and both the **seed** and the **prompt** copy in
+one click. A run that predates a given setting simply shows no row for it: an
+absent line is honest, a dash is not.
+
+**📌 Pinning an image onto the board.** Comparing two checkpoints means looking
+at their pictures *at the same time*, which a full-screen viewer cannot do. From
+that viewer, **📌 Pin to canvas** drops the image onto the board as a node of its
+own, joined to the checkpoint that produced it by the same connector the board
+uses for "this run continued from that checkpoint".
+
+- **Move it** by dragging (on a phone: a long press picks it up, exactly like a
+  run card). **Resize it** from the corner handle. **Close it** with **✕**.
+- Closing forgets nothing. Pin the same image again and it comes back **exactly
+  where you left it, at exactly the size you left it** — that is the point of the
+  feature, not a side effect. The geometry lives with your card positions, on
+  your machine's LoRA Dataset Studio rather than in one browser, so it follows
+  the dataset.
+- **Keyboard:** focus a pinned image (Tab), then the arrow keys move it,
+  Shift+arrows move it faster, **+** / **−** resize it and **Esc** closes it.
+- If the image is later **deleted**, its node quietly leaves the board — a node
+  showing a picture that no longer exists would be worse than no node. If the
+  *checkpoint* is gone but the image is not, the picture stays and simply loses
+  its connecting line.
+- Unticking a dataset takes its lane off the board, pinned images included; they
+  come back with the lane, untouched.
+- **✦ Tidy up** does not throw pinned images away — it re-flows them beside their
+  cards, since the cards are what they were positioned against.
+
+**Which checkpoints you can generate from, at a glance.** Every checkpoint pill
+carries its deployment state on its **left edge**: a **solid sky bar** means the
+checkpoint is deployed to ComfyUI and can be generated from right now; a **dashed
+grey bar** means the file is on your disk but not deployed yet. Not deployed does
+*not* mean missing — the save is there, it simply has no copy in ComfyUI, and
+ticking it before **🎨 Generate** makes the launch deploy it for you. The shape
+(solid versus dashed) carries as much of the message as the colour does, a legend
+sits above the board, and hovering a pill spells it out in words.
+
 The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.
