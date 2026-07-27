@@ -32,7 +32,25 @@ def _stderr_tail(proc) -> str:
                  if ln.strip()), '')
 
 
-def score_dataset_faces(ref_path, image_paths, timeout: int = 900):
+# Budget temps par image, en secondes. antelopev2 sur CPU tourne autour de
+# 0.3-1 s/image selon la taille ; 3 s laisse de la marge sur une machine lente
+# sans jamais bloquer une session entiere. Le forfait couvre le chargement du
+# modele (le plus gros cout fixe du subprocess).
+_TIMEOUT_PER_IMAGE_S = 3
+_TIMEOUT_FLOOR_S = 900
+
+
+def default_timeout(n_images: int) -> int:
+    """Budget d'un run de scoring, en secondes. Le timeout etait un forfait de
+    900 s dimensionne pour le seul set GARDE ; depuis que la passe couvre aussi
+    la pile de triage (les variations generees non encore ✓/✕), un gros dataset
+    peut depasser ce forfait — et un timeout ne rend AUCUN resultat partiel, donc
+    la passe entiere serait perdue. Le budget suit donc le nombre d'images."""
+    return max(_TIMEOUT_FLOOR_S,
+               120 + _TIMEOUT_PER_IMAGE_S * max(0, int(n_images or 0)))
+
+
+def score_dataset_faces(ref_path, image_paths, timeout: int | None = None):
     """Retourne ({path: {state, sim?, det, bbox_frac, yaw}}, error|None).
 
     `error` est None quand le scorer a tourne, sinon {'kind', 'detail'} :
@@ -47,6 +65,8 @@ def score_dataset_faces(ref_path, image_paths, timeout: int = 900):
     if not is_available():
         return {}, {'kind': 'unavailable',
                     'detail': 'face scoring is not installed (Quality tools step in Setup)'}
+    if timeout is None:
+        timeout = default_timeout(len(image_paths))
     payload = json.dumps({"ref": ref_path, "images": image_paths,
                           "models_root": cfg.get('face_scoring.models_root') or None})
     try:

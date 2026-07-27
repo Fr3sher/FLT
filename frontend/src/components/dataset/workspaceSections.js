@@ -31,7 +31,9 @@ export const WORKSPACE_SECTIONS = [
         focusSelector: 'input[type="url"]' },
     ] },
   { id: 'curation', title: 'Curation', icon: '🧹', eyebrow: 'quality',
-    description: 'Quality passes over the kept images — face resemblance, watermark find & clean, cleanup.',
+    // "kept images" was true of every pass here until face resemblance started
+    // scoring the undecided pile too — which is the whole point of scoring it.
+    description: 'Quality passes — face resemblance (kept + still undecided), watermark find & clean, cleanup.',
     panels: [
       { id: 'small-image-rescue', title: 'Klein rescue review', targetId: 'ds-curation-small-image-rescue', when: 'smallImageRescue' },
       { id: 'face-analysis', title: 'Face analysis', targetId: 'ds-curation-face-analysis', when: 'character' },
