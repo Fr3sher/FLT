@@ -56,6 +56,39 @@ test('a present-but-INVALID required asset keeps the step from going green', () 
   assert.equal(step.kleinInvalid.length, 1);
 });
 
+test('a widget value this ComfyUI does not offer keeps the step from going green', () => {
+  // Reported by IndependentProcess0 (Reddit). Every weight is on disk and every
+  // node class exists, so both existing checks pass — and the first generation
+  // still dies, because the graph pins a scheduler this ComfyUI never had. Since
+  // nothing is substituted (a scheduler changes the render), Setup is where the
+  // user has to find out, not the ComfyUI console after a failed batch.
+  const step = comfyStep({
+    reachable: true,
+    klein_missing: [],
+    klein_unsupported_enums: [{
+      node_id: '77', class_type: 'KSampler', input: 'scheduler', value: 'beta57',
+      pack: 'RES4LYF', url: 'https://github.com/ClownsharkBatwing/RES4LYF',
+    }],
+  });
+  assert.equal(step.hasKlein, false);
+  assert.equal(step.status, 'partial');
+  assert.equal(step.unsupportedEnums.length, 1);
+});
+
+test('an install that offers every pinned value is unaffected', () => {
+  // No regression for people whose ComfyUI already has the value: same render,
+  // same green step. The server sends an empty list both when it verified and
+  // found nothing AND when it could not verify at all (fail-open).
+  const ready = comfyStep({ reachable: true, klein_missing: [], klein_unsupported_enums: [] });
+  assert.equal(ready.hasKlein, true);
+  assert.equal(ready.status, 'ready');
+  assert.deepEqual(ready.unsupportedEnums, []);
+  // An older backend that doesn't publish the field at all must not gate either.
+  const legacy = comfyStep({ reachable: true, klein_missing: [] });
+  assert.equal(legacy.hasKlein, true);
+  assert.deepEqual(legacy.unsupportedEnums, []);
+});
+
 test('an advisory too_small invalid does NOT gate readiness', () => {
   const step = comfyStep({
     reachable: true,

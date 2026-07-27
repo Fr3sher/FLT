@@ -74,6 +74,13 @@ from ..utils.comfyui import load_workflow_local, fetch_output_image_bytes
 logger = logging.getLogger(__name__)
 
 KLEIN_INPAINT_WORKFLOW_PATH = cfg.BACKEND_DIR / 'workflows' / 'klein_inpaint.json'
+# 2026-07-27: node 77 of that file sampled with `scheduler: "beta57"`, a value the
+# third-party RES4LYF pack injects into ComfyUI's CORE scheduler list at import —
+# so it worked on the machine the graph was captured on and refused to run
+# ("Value not in list: scheduler") on every install without that pack, watermark
+# cleaning included. Now `simple`, which exists everywhere. See
+# backend/tests/test_workflow_portability.py, which fails offline if a value from
+# somebody's custom nodes is ever pinned in a shipped graph again.
 
 # The prefill already removed the watermark, so the refine prompt is about RECONSTRUCTION,
 # not removal: push Klein to regenerate real texture over the soft prefill and keep the
