@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  allGalleryImageIds, galleryDeleteConfirmation, galleryDeleteSummary,
+  allGalleryImageIds, galleryActionBar, galleryDeleteConfirmation, galleryDeleteSummary,
   pruneGallerySelection, toggleGalleryImage,
 } from './gallerySelection.js';
 
@@ -81,4 +81,56 @@ test('the summary reports what the backend did, not what was asked', () => {
   assert.match(galleryDeleteSummary({ rows_removed: 0, skipped: [{ id: 9 }] }),
     /^Nothing was deleted · 1 skipped$/);
   assert.match(galleryDeleteSummary(null), /Nothing was deleted/);
+});
+
+/* 📌 The pinned action bar. `Select` used to sit in the HEADER while everything
+ * it leads to sat in a footer bar that only existed once the mode was on — so
+ * entering the mode was a reach to the top of a panel whose every other control
+ * was under the thumb. The bar is now PERMANENT (as soon as there is something
+ * to act on) and simply fills up. Which means two promises now live here rather
+ * than in a `{picking && …}` that used to carry them for free:
+ *   • an EMPTY gallery still shows no bar at all — no destructive control, and
+ *     no dead `Select` on a panel with nothing to select;
+ *   • the destructive half only exists inside the mode, and stays inert until
+ *     something is picked, so `Select` then `Delete` cannot chain into a delete.
+ */
+test('the action bar appears only once there is something to act on', () => {
+  // Empty, still loading, or failed: no bar, hence no destructive control.
+  assert.equal(galleryActionBar({ status: 'ready', imageCount: 0 }).shown, false);
+  assert.equal(galleryActionBar({ status: 'loading', imageCount: 12 }).shown, false);
+  assert.equal(galleryActionBar({ status: 'error', imageCount: 12 }).shown, false);
+  assert.equal(galleryActionBar({ status: 'ready', imageCount: 1 }).shown, true);
+  // An empty gallery cannot even offer the gate into deletion.
+  assert.equal(galleryActionBar({ status: 'ready', imageCount: 0, picking: true }).showsDelete,
+    false);
+});
+
+test('the delete half only exists in Select mode, and is inert until a pick', () => {
+  const rest = galleryActionBar({ status: 'ready', imageCount: 4, selectedCount: 0 });
+  assert.equal(rest.showsDelete, false);           // at rest the bar carries Select alone
+  assert.equal(rest.togglePressed, false);
+  assert.equal(rest.toggleLabel, 'Select');
+
+  // Entering the mode selects nothing, so the very next tap cannot delete.
+  const armed = galleryActionBar({ status: 'ready', imageCount: 4, picking: true, selectedCount: 0 });
+  assert.equal(armed.showsDelete, true);
+  assert.equal(armed.deleteDisabled, true);
+  assert.equal(armed.toggleLabel, 'Done');
+  assert.equal(armed.togglePressed, true);
+
+  const picked = galleryActionBar({ status: 'ready', imageCount: 4, picking: true, selectedCount: 1 });
+  assert.equal(picked.deleteDisabled, false);
+  // A delete already in flight re-disables it — no double submit.
+  assert.equal(galleryActionBar({
+    status: 'ready', imageCount: 4, picking: true, selectedCount: 1, busy: true,
+  }).deleteDisabled, true);
+});
+
+test('select-all flips to Clear exactly when everything listed is picked', () => {
+  const at = (selectedCount) => galleryActionBar({
+    status: 'ready', imageCount: 3, picking: true, selectedCount,
+  }).selectAllLabel;
+  assert.equal(at(0), 'Select all');
+  assert.equal(at(2), 'Select all');
+  assert.equal(at(3), 'Clear');
 });

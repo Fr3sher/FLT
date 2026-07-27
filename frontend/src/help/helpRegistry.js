@@ -317,6 +317,7 @@ const TOPICS = [
     ['delete an image', 'delete images', 'remove a photo', 'remove images',
      'delete test images', 'clean up a checkpoint', 'too many images',
      'bad renders', 'failed test images', 'select images', 'select mode',
+     'where is the select button', 'select button moved', 'no delete button',
      'delete several images', 'where do deleted images go', 'undo a delete',
      'restore a deleted image', 'does it delete from the test studio'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),

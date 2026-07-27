@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-27-gallery-select-moved-to-the-bottom-bar',
+    date: '2026-07-27',
+    title: 'Cleaning up a run\'s images no longer means reaching for the top of the panel',
+    blurb:
+      'In a checkpoint or run gallery, Select opened the picking mode from the panel header, while everything it leads to — Select all, 🗑 Delete, the count — sat in a bar at the bottom. On a phone that was the most expensive reach in the panel. Select now lives in that same bottom bar, in indigo rather than grey so it is actually findable, and the bar is there from the moment the gallery has images. Deleting is no harder to reach by accident than before: Select sits at one end of the bar and Delete at the other, Delete stays greyed out until you have tapped at least one image, and the confirmation still spells out what leaves and where it goes. An empty gallery shows no bar at all.',
+  },
+  {
     id: '2026-07-27-rerun-upscale-and-improve',
     date: '2026-07-27',
     title: 'Tuned the Upscale & improve settings? Re-run the pass on a tile in one click',
