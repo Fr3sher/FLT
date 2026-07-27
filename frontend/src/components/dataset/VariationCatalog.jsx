@@ -568,6 +568,7 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
     comfyuiReachable: !!caps.comfyui?.reachable,
     missingAssets: caps.comfyui?.krea_missing,
     missingNodes: caps.comfyui?.krea_nodes_missing,
+    invalidAssets: caps.comfyui?.krea_invalid,
   });
 
   useEffect(() => {
