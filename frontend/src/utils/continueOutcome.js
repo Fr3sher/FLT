@@ -24,7 +24,12 @@
  * draws above everything and whose add-a-flag-once rule stops a server that
  * ignores the flag from looping. Only what comes out of those helpers reaches
  * this function. */
+/* The generic half of this rule now lives in submitOutcome.js — four more
+   dialogs had the same close-before-posting bug, and a second notion of "what
+   is a refusal" is how they would drift apart again. What stays HERE is the
+   training-specific part: stripping the wire markers. */
 // Explicit .js: this module is imported by `node --test` (no bundler resolution).
+import { submitAttemptOutcome } from './submitOutcome.js';
 import { CONFIRMABLE_REFUSALS, READINESS_REFUSAL } from './trainingRefusals.js';
 
 const MARKERS = [...CONFIRMABLE_REFUSALS, READINESS_REFUSAL].map(([marker]) => marker);
@@ -52,18 +57,9 @@ export function continueRefusalMessage(raw, fallback = 'Continue failed') {
  * `close` is true for success ONLY. A caller that ignores it and closes anyway
  * is back to the bug this exists to remove. */
 export function continueAttemptOutcome({ response, thrown, declined } = {}) {
-  if (declined) return { close: false, error: null };
-  if (thrown) {
-    return { close: false, error: continueRefusalMessage(thrown?.message ?? thrown) };
-  }
-  if (!response) {
-    return { close: false, error: 'Continue failed — no answer from the server.' };
-  }
-  if (response.ok === false) {
-    const msg = continueRefusalMessage(response.error);
-    return { close: false, error: response.hint ? `${msg} — ${response.hint}` : msg };
-  }
-  return { close: true, error: null };
+  return submitAttemptOutcome({
+    response, thrown, declined, fallback: 'Continue failed', clean: continueRefusalMessage,
+  });
 }
 
 export default continueAttemptOutcome;

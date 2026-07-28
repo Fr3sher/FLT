@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-refused-save-keeps-what-you-typed',
+    date: '2026-07-28',
+    title: 'A refused save no longer throws away what you just typed',
+    blurb:
+      'Four dialogs closed themselves before the server had answered, so a refusal deleted your work: the expanded caption editor lost the long AND short caption you had just written, the ✏️ edit-prompt bubble lost a rewritten prompt, 🚀 Launch all reset its seven pass checkboxes, and the folder browser dropped you back to the drive list. They now stay open, keep every field exactly as you left it, and show the reason next to the input that caused it. Escape and clicking outside still close them — only the server keeps them open.',
+  },
+  {
     id: '2026-07-28-bank-watermark-mask-editing',
     date: '2026-07-28',
     title: 'Fix a wrong watermark box without leaving the bank',

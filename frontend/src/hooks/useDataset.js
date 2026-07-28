@@ -760,15 +760,25 @@ export function useDataset() {
     await refresh();
   }, [refresh, toast]);
 
-  const setCaption = useCallback(async (imageId, captionText, shortText) => {
+  /* Returns {ok, error} — the expanded caption editor keeps the text the user
+     just typed only if it can tell a refusal from a success. `silent` is for
+     that caller and that caller only: it renders the refusal next to the
+     textarea, so a toast would say the same thing twice. The inline grid edit
+     and 🗑 Caption own no surface of their own and keep the toast. */
+  const setCaption = useCallback(async (imageId, captionText, shortText, { silent = false } = {}) => {
     // shortText undefined → only the long caption is sent (inline grid edit); the expanded
     // editor passes a string (possibly '') to also set the short variant.
     const body = shortText === undefined
       ? { caption: captionText }
       : { caption: captionText, caption_short: shortText };
     const d = await postJson(`/api/dataset/image/${imageId}/caption`, body);
-    if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
+    if (!d.ok) {
+      const error = d.error || 'Unexpected error';
+      if (!silent) toast.error(error);
+      return { ok: false, error };
+    }
     await refresh();
+    return { ok: true };
   }, [refresh, toast]);
 
   const mirrorImage = useCallback(async (imageId) => {
@@ -956,7 +966,10 @@ export function useDataset() {
   // selection instead of being pinned to the engine that made the tile;
   // the Klein model pick rides too for an API→Klein switch. Missing keys =
   // server keeps the legacy reuse-the-row's-engine behaviour.
-  const regenerate = useCallback(async (imageId, loraStrength, prompt) => {
+  /* {ok, error}, and `silent` for the ✏️ edit-prompt bubble: it shows the
+     refusal itself, right under the prompt it was about, instead of losing the
+     rewrite to a toast. */
+  const regenerate = useCallback(async (imageId, loraStrength, prompt, { silent = false } = {}) => {
     let engine = null; let kleinModel = null;
     try {
       engine = localStorage.getItem('datasetGenerator') || null;
@@ -965,8 +978,10 @@ export function useDataset() {
     const d = await postJson(`/api/dataset/image/${imageId}/regenerate`,
       { lora_strength: loraStrength, ...(prompt ? { prompt } : {}),
         ...(engine ? { engine } : {}), ...(kleinModel ? { klein_model: kleinModel } : {}) });
-    if (d.ok) { toast.success('Regeneration started'); await refresh(); }
-    else toast.error(d.error || 'Unexpected error');
+    if (d.ok) { toast.success('Regeneration started'); await refresh(); return { ok: true }; }
+    const error = d.error || 'Unexpected error';
+    if (!silent) toast.error(error);
+    return { ok: false, error };
   }, [refresh, toast]);
 
   const purgeUnused = useCallback(async () => {
@@ -1268,22 +1283,36 @@ export function useDataset() {
   // Same merge from a FOLDER on this machine's disk (kohya images + same-stem
   // .txt captions) — the path is a server-side path pasted as text, not a
   // browser file pick (a browser can't hand the server a folder path).
-  const importDatasetFolder = useCallback((path) => wrap(async () => {
-    const d = await postJson(`/api/dataset/${currentId}/import-folder`, { path });
-    if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
-    const parts = [`${d.imported} imported`];
-    if (d.captions) parts.push(`${d.captions} caption(s) attached`);
-    // The caption-elsewhere round trip: images already here are duplicates by
-    // design, so "N duplicates skipped" alone read as a failure. Say what the
-    // trip actually brought back.
-    if (d.captions_applied) parts.push(`${d.captions_applied} caption(s) applied to images already here`);
-    if (d.duplicates) parts.push(`${d.duplicates} duplicate(s) skipped`);
-    if (d.captions_kept) parts.push(`${d.captions_kept} kept the caption written here`);
-    if (d.failed) parts.push(`${d.failed} unreadable`);
-    toast.success(parts.join(' · '));
-    if (d.small) toast.warning(`${d.small} image(s) under 768 px — they will stay soft in training.`);
-    await refresh();
-  }), [wrap, currentId, refresh, toast]);
+  /* {ok, error}, so the in-app folder browser can keep the tree where the user
+     left it when the path is refused. `silent` for that browser only — it draws
+     the refusal above its own "Use this folder" button.
+     wrap() DROPS the call when another dataset job holds the busy flag and
+     returns undefined for it; that is a refusal too, and it says so rather than
+     reaching the browser as a mute "no answer from the server". */
+  const importDatasetFolder = useCallback(async (path, { silent = false } = {}) => {
+    const out = await wrap(async () => {
+      const d = await postJson(`/api/dataset/${currentId}/import-folder`, { path });
+      if (!d.ok) {
+        const error = d.error || 'Unexpected error';
+        if (!silent) toast.error(error);
+        return { ok: false, error };
+      }
+      const parts = [`${d.imported} imported`];
+      if (d.captions) parts.push(`${d.captions} caption(s) attached`);
+      // The caption-elsewhere round trip: images already here are duplicates by
+      // design, so "N duplicates skipped" alone read as a failure. Say what the
+      // trip actually brought back.
+      if (d.captions_applied) parts.push(`${d.captions_applied} caption(s) applied to images already here`);
+      if (d.duplicates) parts.push(`${d.duplicates} duplicate(s) skipped`);
+      if (d.captions_kept) parts.push(`${d.captions_kept} kept the caption written here`);
+      if (d.failed) parts.push(`${d.failed} unreadable`);
+      toast.success(parts.join(' · '));
+      if (d.small) toast.warning(`${d.small} image(s) under 768 px — they will stay soft in training.`);
+      await refresh();
+      return { ok: true };
+    });
+    return out ?? { ok: false, error: 'Another dataset job is running — wait for it to finish, then try again.' };
+  }, [wrap, currentId, refresh, toast]);
 
   // Restoration layer: fold the server-side `activity` into the visual flags so a
   // reloaded page (which lost the local captioning/analyzing/watermarking state)
