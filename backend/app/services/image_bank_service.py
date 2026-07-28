@@ -30,6 +30,8 @@ holding an HTTP request open or freezing the UI.
 """
 from __future__ import annotations
 
+import hashlib
+import io
 import logging
 import os
 import re
@@ -48,7 +50,8 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
 from . import bank_jobs, bank_undo, trash
-from .face_dataset_service import _dhash, _hamming, import_images
+from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
+                                   _hamming, _SCRAPE_DL_WORKERS, import_images)
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
 
@@ -4338,6 +4341,123 @@ def _import_folder_for(name: str) -> str:
         candidate = root / f'{stem}-{i}'
         i += 1
     return str(candidate)
+
+
+_SCRAPE_EXT = {'JPEG': '.jpg', 'PNG': '.png', 'WEBP': '.webp', 'BMP': '.bmp'}
+
+
+def _scrape_blob_name(raw: bytes) -> str | None:
+    """The filename a downloaded blob gets in a bank folder: its own content
+    hash. Two consequences, both wanted:
+
+    * a resume that re-downloads the SAME bytes writes the same name, so it
+      overwrites itself instead of piling up `photo (2).jpg` — idempotent without
+      anyone having to decide what a duplicate is;
+    * that is file IDENTITY, not curation. Near-duplicates (a re-encode, a crop,
+      the same shot at another size) keep separate names and reach the bank, where
+      the duplicate-group pass and the semantic pass are the ONE place that rules
+      on them. The dataset outlet's dHash gate deliberately does not run here —
+      two different definitions of "duplicate" over one pile is the failure mode
+      this whole path exists to avoid.
+
+    None when the bytes are not a raster image we store."""
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            ext = _SCRAPE_EXT.get(im.format)
+    except (OSError, ValueError):
+        return None
+    if not ext:
+        return None
+    return f'{hashlib.sha256(raw).hexdigest()[:24]}{ext}'
+
+
+def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
+    """🕸 Scrape → BANK: the scraper's second destination.
+
+    Downloads the SELECTED scanned images ({'url','title'}) into a bank's source
+    FOLDER, then lets the ordinary folder walk inventory them. Two modes:
+    ``bank_id`` appends to an existing bank (resume — a bank points at a live
+    folder, so a second scrape simply adds to the pile it already holds), while
+    ``name`` creates a new bank under ``bank_sources_root()`` exactly like
+    "Import to bank" does.
+
+    Deliberately does NOT reuse `scrape_import_urls`: that path is a DATASET
+    intake and rightly refuses what cannot be trained on (side < 768 px, ratio
+    > 3:1) and what it judges a perceptual duplicate. A bank is the step BEFORE
+    that judgement — "too small" and "near-duplicate" are verdicts its own passes
+    produce, with thresholds the user moves. Filtering at download time would
+    delete the evidence before the triage tool ever sees it. What IS kept from
+    that path is the download itself (`_download_scrape_item`: SSRF guard,
+    content-type allow-list, image-magic check, size cap) and the per-request cap.
+
+    Returns {'bank_id', 'name', 'created', 'saved', 'already_there', 'added',
+    'skipped': {...}}. ``added`` is what the folder walk actually inventoried.
+    Raises ValueError (bad input) or BankJobBusy (a pass owns the bank)."""
+    items = [it for it in (items or []) if isinstance(it, dict) and it.get('url')]
+    if not items:
+        raise ValueError('no items')
+    if len(items) > SCRAPE_IMPORT_MAX:
+        raise ValueError(f'max {SCRAPE_IMPORT_MAX} images per import')
+
+    created = False
+    if bank_id is not None:
+        bank = get_bank(user_id, bank_id)
+        if bank is None:
+            raise ValueError('bank not found')
+        # A live pass works off a snapshot of this bank's rows and reports against
+        # a fixed total; refresh_bank also declines to walk underneath it. Adding
+        # files now would land outside both — refuse in the shape the UI knows.
+        if bank_jobs.running(bank.id):
+            # The snapshot can vanish between the two reads (a job that finishes
+            # right here); the refusal must still name something.
+            snap = bank_jobs.get(bank.id) or {}
+            raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
+        folder = bank.source_path
+        if not folder or not os.path.isdir(folder):
+            raise ValueError('this bank\'s folder is unavailable — relocate it first')
+    else:
+        name = (name or '').strip()
+        if not name:
+            raise ValueError('name is required')
+        folder = _import_folder_for(name)
+        os.makedirs(folder, exist_ok=True)
+        bank = ImageBank(user_id=user_id, name=name, source_path=folder)
+        db.session.add(bank)
+        db.session.commit()
+        created = True
+
+    with ThreadPoolExecutor(max_workers=_SCRAPE_DL_WORKERS) as pool:
+        downloaded = list(pool.map(_download_scrape_item, items))
+
+    skipped: dict[str, int] = {}
+    saved = already_there = 0
+    for reason, raw in downloaded:
+        if reason != 'ok' or not raw:
+            skipped[reason] = skipped.get(reason, 0) + 1
+            continue
+        blob_name = _scrape_blob_name(raw)
+        if blob_name is None:
+            skipped['not_image'] = skipped.get('not_image', 0) + 1
+            continue
+        dest = os.path.join(folder, blob_name)
+        if os.path.exists(dest):
+            already_there += 1
+            continue
+        try:
+            with open(dest, 'wb') as fh:
+                fh.write(raw)
+        except OSError:
+            logger.warning('bank scrape: could not write %s', blob_name, exc_info=True)
+            skipped['errors'] = skipped.get('errors', 0) + 1
+            continue
+        saved += 1
+
+    # ONE inventory path for every bank: the same walk that picks up files the
+    # user drops in the folder by hand picks these up too. No third insert path.
+    sync = refresh_bank(user_id, bank.id, force=True) or {}
+    return {'bank_id': bank.id, 'name': bank.name, 'created': created,
+            'saved': saved, 'already_there': already_there,
+            'added': sync.get('added', 0), 'skipped': skipped}
 
 
 def start_dataset_import(app, user_id, dataset_id, name):

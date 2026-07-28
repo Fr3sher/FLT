@@ -271,6 +271,28 @@ touching the folder itself:
    are never touched. Files you removed from the folder are reported at the top
    of the bank, never deleted from it, so an unplugged drive can't wipe your
    triage.
+1bis. **🕸 Scrape the web into a bank** — you don't need a folder you prepared
+   by hand. Unfold **🕸 Scrape the web into a bank** on the bank list, choose a
+   destination (a **new bank**, or **add to an existing one**), then scan a
+   gallery URL and pick images exactly as you would for a dataset. They are
+   downloaded into that bank's own folder and inventoried on the spot.
+
+   Two things are worth knowing, because they are the whole point:
+
+   - **Nothing is filtered on the way in.** Scraping straight into a *dataset*
+     applies training-grade gates (short side ≥ 768 px, ratio ≤ 3:1, perceptual
+     de-duplication) *before* anything is stored. A bank is the step **before**
+     that judgement: "too small", "near-duplicate" and "wrong framing" are
+     verdicts its own passes produce, with thresholds you move. So the bank
+     stores what it downloaded and lets you decide. If you already know what you
+     are collecting, scraping straight into a dataset is still the shorter road.
+   - **A second scrape resumes the same bank.** Pick *Add to an existing bank*
+     and the new images join the pile — nothing is replaced, and no triage
+     decision you already made is reset. Re-downloading the exact same file
+     lands on the same name instead of piling up copies; that is file identity,
+     not a duplicate verdict (the bank's own passes own that word).
+
+   The rest of the funnel is unchanged: scan, cull, promote into a dataset.
 2. **🔎 Scan quality** — a background pass (CPU only, a few minutes even on
    thousands of images) scores every file: sharpness, noise, flat/empty
    frames, resolution — and groups **near-duplicates**. The flags follow the
