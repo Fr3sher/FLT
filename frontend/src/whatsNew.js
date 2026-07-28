@@ -64,6 +64,13 @@ export const WHATS_NEW = [
     to: '/cloud',
   },
   {
+    id: '2026-07-28-generation-works-on-linux-and-across-wsl',
+    date: '2026-07-28',
+    title: 'Generation works on Linux — and when ComfyUI runs in WSL or a container',
+    blurb:
+      'On Linux, nothing generated at all: every model kept in a subfolder (Krea, Klein, Z-Image, your trained LoRAs — which is all of them) was handed to ComfyUI with Windows-style backslashes, and ComfyUI rejected the whole workflow before the first step. Model names are now spelled the way the ComfyUI you are actually talking to spells them, read from that install itself — so it also works the other way round, when the app runs on Windows and ComfyUI lives in WSL, Docker or on another machine. Found and diagnosed by 1Tomber (GitHub #21).',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',

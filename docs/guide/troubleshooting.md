@@ -177,6 +177,32 @@ Hugging Face publishing. Only the ComfyUI-local engines need the filesystem.
 
 *(Reported by nofaceman on Discord.)*
 
+## "Value not in list" on every model, on Linux (fixed)
+
+**Symptom:** on a Linux install, nothing generated at all. ComfyUI's console showed,
+for every workflow:
+
+```
+Failed to validate prompt for output 28:
+* UNETLoader 20:
+  - Value not in list: unet_name: 'Krea\krea2_turbo_fp8.safetensors'
+    not in ['Krea/krea2_turbo_fp8.safetensors']
+```
+
+**Why:** ComfyUI builds its model lists with the separator of **its own** host —
+backslash on Windows, forward slash on Linux — and validates a model widget by
+exact string match. The app spelled those names with a Windows backslash whatever
+the platform, and it keeps every model in a subfolder (`Krea`, `klein`,
+`z image`, and every LoRA you train), so on Linux the answer was "nothing works"
+rather than "one model is missing".
+
+**Fixed:** the app now reads the spelling from the ComfyUI it is actually talking
+to and matches it. This also covers the reverse case — the app on Windows driving
+a ComfyUI in WSL, Docker or on another machine, which needs forward slashes — so
+there is nothing to configure either way.
+
+*(Found and diagnosed by 1Tomber, [GitHub #21](https://github.com/perfectgf/lora-dataset-studio/issues/21).)*
+
 ## Klein engine stays greyed out
 
 Klein needs a reachable ComfyUI **and** the Klein model files (~16 GB VRAM
