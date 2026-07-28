@@ -160,6 +160,8 @@ const COVERED = [
   ['EnginesSection.jsx', 'krea', 'base_model'],
   ['EnginesSection.jsx', 'krea', 'identity_lora'],
   // the same gap in the other sections
+  ['CaptioningSection.jsx', 'dataset_import', 'max_side'],
+  ['CaptioningSection.jsx', 'dataset_import', 'encoding'],
   ['CaptioningSection.jsx', 'captioning', 'backend'],
   ['CaptioningSection.jsx', 'watermark', 'device'],
   ['CaptioningSection.jsx', 'face_scoring', 'green'],

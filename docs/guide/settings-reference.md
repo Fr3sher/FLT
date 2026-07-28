@@ -306,6 +306,47 @@ Under **Advanced: ai-toolkit overrides**, three optional path overrides (all def
 
 Settings for how captions are produced and how the quality tools behave.
 
+### Dataset import
+
+What happens to a photo the **moment it enters a dataset**. Until this pair
+existed, both numbers were hardcoded and nothing on screen said so — reported by
+**Qeeyana (Reddit)**: *"Images added to 'dataset' are automatically normalized to
+1024. Why? Let me choose not to."*
+
+- **Stored resolution** → `dataset_import.max_side`. Longest side kept, in px.
+  Default **`1024`**. Options: `1024`, `1536`, `2048`, `4096`, or `0` = **keep
+  the original size**. The aspect ratio is always preserved (no square padding)
+  and an image is **never enlarged** — this only ever shrinks.
+  *Why 1024 by default:* every mainstream trainer buckets and downscales on its
+  own, so pixels above what you train at cost disk and nothing else. Raise it if
+  you train at a higher resolution, or if the dataset folder is also your
+  archive.
+- **Stored encoding** → `dataset_import.encoding`. Default **`standard`**.
+  | Value | What is written |
+  |---|---|
+  | `standard` *(default)* | WebP quality 92 — the shipped behaviour. |
+  | `high` | WebP quality 100. Still lossy, visually indistinguishable. |
+  | `lossless` | WebP lossless: pixel-identical to what you handed in. |
+  This is the **other half** of the loss: raising the resolution while leaving
+  quality 92 in place still re-encodes every import. Measured on a noisy 800×600
+  frame: q92 **158 KB**, q100 **243 KB**, lossless **797 KB** — roughly **5×**
+  the disk for lossless.
+
+**The hard ceiling is 8192 px, and it is not a preference.** Pillow's WebP
+encoder refuses any side past **16383 px** ("Image size exceeds WebP limit"), so
+an uncapped *original size* would turn a large panorama into a failed import
+rather than a big one. Anything above 8192 px is downscaled to it, and a
+configured value above the ceiling is clamped rather than silently ignored.
+
+**Changing this is not retroactive.** It applies to images imported *from now
+on*, so a dataset imported at 1024 and topped up at 2048 holds both — harmless
+for training (trainers bucket per image) but the folder is no longer uniform.
+Re-importing the originals is the only way to change what is already stored.
+
+**What it does NOT touch**: generated images, the ≤2048 px copies handed to an
+image API, and any image you have already curated (crop, rotate, watermark
+clean) — those lanes keep their own fixed sizes on purpose.
+
 ### Captioning
 
 - **Captioning backend** → `captioning.backend`. Which captioner writes your captions. Default **`auto`**.
@@ -603,6 +644,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `server.port` | Port the server listens on (default `5050`). |
 | `server.require_token` | On a non-loopback bind, require remote clients to present an access token (default `false` — a trusted LAN needs none). Toggle and token also live in Settings → Server & access. |
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
+| `dataset_import.max_side` | Longest side kept for an image imported into a dataset, in px (default `1024`; `0` = original size). Ratio always preserved, never enlarged, hard ceiling 8192 px (WebP's own limit is 16383). Not retroactive. Editable in Settings → Captioning & quality. |
+| `dataset_import.encoding` | How an imported image is written: `standard` (WebP q92, default), `high` (WebP q100), `lossless` (pixel-identical, ~5x the disk). Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
 | `comfyui.base_dir` | ComfyUI install directory, used to derive `output`/`input`/`models`/`loras` dirs if those aren't set explicitly. |
 | `comfyui.output_dir` | Explicit override for ComfyUI's output folder. Set it when ComfyUI runs with `--output-directory`. Editable in Settings → Local tools. |

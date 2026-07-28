@@ -686,13 +686,27 @@ export default function DatasetWorkspace({ ds, onBack }) {
   };
 
   // Export ZIP — shared by the header CTA and the Import & export row.
-  // Guard-rails: untriaged images are silently EXCLUDED from the zip. Style
-  // captions are mandatory and have no trigger-only fallback.
+  // Guard-rails: untriaged images are silently EXCLUDED from the zip. Missing
+  // captions are a REFUSAL YOU CAN OVERRIDE, never a wall: a Style set with no
+  // captions used to be a hard toast.error with no way past it, which blocked a
+  // legitimate need — getting the bare images out to caption them in another
+  // tool (reported by Qeeyana on Reddit). The reason for the guard-rail is now
+  // said out loud, cancelling still walks you to the captions, and the way back
+  // in is named so the trip has an end.
   const exportZipGuarded = () => {
     if (triage && !window.confirm(`${triage} image(s) still await triage (✓/✕) and will NOT be in the ZIP. Export anyway?`)) return;
     if (isStyle && keptUncaptioned) {
-      toast.error(`Style training needs a content-only caption for every kept image — ${keptUncaptioned} still missing.`);
-      jumpTo({ targetId: 'gf-captions' });
+      const ok = window.confirm(
+        `${keptUncaptioned} kept image(s) have no caption.\n\n`
+        + 'A Style LoRA learns "everything the captions do NOT name", so an empty '
+        + '.txt teaches it nothing — that is why this is normally blocked, and the '
+        + 'ZIP will contain those empty files.\n\n'
+        + 'OK to export anyway — e.g. to caption the images in another tool and '
+        + 'bring the .txt files back with 📦 Import dataset, which drops them onto '
+        + 'these same images.\n'
+        + 'Cancel to caption them here instead.');
+      if (!ok) { jumpTo({ targetId: 'gf-captions' }); return; }
+      ds.exportZip();
       return;
     }
     if (keptUncaptioned && !window.confirm(`${keptUncaptioned} kept image(s) without a caption (trigger only). Export anyway?`)) return;
@@ -1655,6 +1669,19 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   merges images + same-name .txt captions in — duplicates are skipped
                 </span>
               </div>
+              {/* The round trip existed and nothing said so: export → caption in
+                  another tool → import back. It only became a real trip once a
+                  re-imported .txt landed on the image ALREADY here instead of
+                  being dropped with its duplicate (see _merge_training_images).
+                  Reported by Qeeyana (Reddit). */}
+              <p id="ds-caption-elsewhere" tabIndex={-1}
+                className="scroll-mt-20 rounded-lg border border-border bg-surface px-3 py-2 text-[0.6875rem] text-content-muted">
+                <span className="font-medium text-content">Want to caption in another tool?</span>{' '}
+                Export the ZIP below, caption it wherever you like, then bring the same
+                folder back through 📦 Import dataset: images already here are not
+                duplicated, and their new <code>.txt</code> captions land on them.
+                A caption you already wrote here is never overwritten.
+              </p>
               <input ref={zipInput} type="file" accept=".zip,application/zip" className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0];
