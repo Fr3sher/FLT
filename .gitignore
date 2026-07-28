@@ -16,6 +16,7 @@ data/
 run/
 basedir/
 data-docker/
+data-docker-gpu/
 
 *.db
 *.db-shm

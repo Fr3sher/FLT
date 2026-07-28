@@ -43,8 +43,10 @@ COPY backend/requirements-ml.txt backend/requirements-ml.txt
 # matches the default base tag, but what actually gates it is the DRIVER (r525+),
 # not the CUDA version in the base image. Two other values, as --build-arg:
 #   https://download.pytorch.org/whl/cpu    ~7 GB smaller. The GPU stays fully
-#                                           available to ComfyUI; only ✨ Score and
-#                                           LaMa inpainting fall back to CPU.
+#                                           available to ComfyUI; only ✨ Score
+#                                           falls back to CPU. (LaMa inpainting
+#                                           is broken in this container either
+#                                           way, regardless of the torch index.)
 #   https://download.pytorch.org/whl/cu130  CUDA 13 wheels, needs an r580+ driver —
 #                                           pair it with a cuda13 BASE_IMAGE tag.
 # (there is no .../whl/gpu index — an unknown path here fails the build.) torchvision

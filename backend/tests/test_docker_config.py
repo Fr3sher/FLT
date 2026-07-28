@@ -91,14 +91,17 @@ def test_docker_context_excludes_generated_artifacts():
         if line.strip() and not line.lstrip().startswith('#')
     }
 
-    assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist', 'run', 'basedir'} <= ignored
+    assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist', 'run', 'basedir',
+            'data-docker-gpu'} <= ignored
 
 
 def test_git_ignores_the_docker_host_folders():
     """`docker compose -f docker-compose.gpu.yml up` creates ./run, ./basedir and
-    ./data-docker in the repo root, and after one boot they hold ComfyUI's venv and
-    model tree. Untracked, that is tens of GB one `git add -A` away from the repo."""
-    for folder in ('run', 'basedir', 'data-docker'):
+    ./data-docker-gpu in the repo root, and after one boot they hold ComfyUI's venv
+    and model tree. Untracked, that is tens of GB one `git add -A` away from the
+    repo. ./data-docker is the API-only stack's own separate folder, checked here
+    too since both stacks live in the same repo root."""
+    for folder in ('run', 'basedir', 'data-docker', 'data-docker-gpu'):
         result = subprocess.run(
             ['git', 'check-ignore', '-q', f'{folder}/'],
             cwd=REPO_ROOT, capture_output=True)
@@ -178,8 +181,9 @@ def test_gpu_image_layers_on_the_comfyui_base_without_hijacking_it():
     assert '/app/.venv' in dockerfile
 
     # A build-time `chown -R /app` rewrites every file's metadata and so copies the
-    # whole tree — torch included — into a second layer: 8.66 GB of the 15.9 GB
-    # image, for an ownership the runtime almost never wants. Measured, not guessed.
+    # whole tree — torch included — into a second layer: 8.66 GB and 407 s, for an
+    # ownership the runtime almost never wants. Measured, not guessed (the image's
+    # total size moves as layers change, so it is not cited here).
     assert not re.search(r'chown\s+-R\s+\S+\s+/app\b', dockerfile)
 
 

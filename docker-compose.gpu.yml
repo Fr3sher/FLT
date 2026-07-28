@@ -38,8 +38,12 @@ services:
       # models, input, output, custom_nodes. Point this at a models tree you already
       # have and you do not download it twice:  LDS_COMFY_BASEDIR=/srv/comfyui
       - ${LDS_COMFY_BASEDIR:-./basedir}:/basedir
-      # The studio's data and its config.json.
-      - ${LDS_DATA:-./data-docker}:/data
+      # The studio's data and its config.json. Defaults to a folder of its own,
+      # NOT the API-only stack's ./data-docker: sharing it would put two Flask
+      # processes on one SQLite database and one config.json, and would leave
+      # this container's seeder-written comfyui.base_dir=/basedir in a config
+      # the API-only container reads too, where that path does not exist.
+      - ${LDS_DATA:-./data-docker-gpu}:/data
       # API keys. `cp .env.example .env` FIRST: Docker creates a directory here
       # otherwise, and the app then cannot read a single key.
       - ./.env:/app/.env
@@ -70,6 +74,9 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=all
       # Extra ComfyUI flags, e.g. to leave VRAM headroom for the scoring pass:
       #- COMFY_CMDLINE_EXTRA=--reserve-vram 1
+      # NOT the place to change ComfyUI's port: the studio's healthcheck and its
+      # seeded api_url both assume 8188, so a --port flag here would silently
+      # break both.
     #extra_hosts:
     #  - "ollama.internal:host-gateway"
     deploy:

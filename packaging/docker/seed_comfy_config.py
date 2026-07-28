@@ -90,8 +90,17 @@ def main() -> int:
     if not isinstance(current, dict):
         current = {}
 
+    root = comfy_root()
+    if any(Path(candidate, 'models').is_dir() for candidate in COMFY_ROOT_CANDIDATES):
+        print(f'[studio] ComfyUI root: {root}', flush=True)
+    else:
+        print(f'[studio] ComfyUI root: {root} — none of {COMFY_ROOT_CANDIDATES} has a '
+              f'models/ directory yet, so this is the fallback guess, not a probed '
+              f'result. It may need correcting in Settings > Local tools once '
+              f'ComfyUI has actually created its models folder.', flush=True)
+
     merged, filled = fill_empty(current, wanted(
-        comfy_root(),
+        root,
         (os.environ.get('LDS_OLLAMA_URL') or '').strip()))
 
     if not filled:

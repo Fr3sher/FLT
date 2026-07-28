@@ -89,6 +89,38 @@ def test_main_honours_the_probed_root(seeder, tmp_path, monkeypatch):
     assert written['comfyui']['base_dir'] == str(basedir)
 
 
+def test_main_warns_when_the_chosen_root_is_the_fallback_guess(seeder, tmp_path, monkeypatch, capsys):
+    """Under BASE_DIRECTORY=/basedir the checkout never gets a models/ directory, so
+    a first boot that races ComfyUI's own setup bakes in FALLBACK_COMFY_ROOT — and
+    because the seeder never overwrites a non-empty base_dir, nothing repairs it on
+    restart. `docker logs` has to say so, naming the path, or it goes unnoticed."""
+    config = tmp_path / 'config.json'
+    monkeypatch.setenv('LDS_CONFIG', str(config))
+    monkeypatch.setattr(seeder, 'COMFY_ROOT_CANDIDATES',
+                        (str(tmp_path / 'nope'), str(tmp_path / 'also-nope')))
+
+    assert seeder.main() == 0
+
+    out = capsys.readouterr().out
+    assert seeder.FALLBACK_COMFY_ROOT in out
+    assert 'fallback' in out
+    assert 'Settings' in out
+
+
+def test_main_does_not_warn_when_a_real_models_folder_was_found(seeder, tmp_path, monkeypatch, capsys):
+    config = tmp_path / 'config.json'
+    monkeypatch.setenv('LDS_CONFIG', str(config))
+    basedir = tmp_path / 'basedir'
+    (basedir / 'models').mkdir(parents=True)
+    monkeypatch.setattr(seeder, 'COMFY_ROOT_CANDIDATES', (str(basedir),))
+
+    assert seeder.main() == 0
+
+    out = capsys.readouterr().out
+    assert str(basedir) in out
+    assert 'fallback' not in out
+
+
 def test_seeds_ollama_only_when_a_url_is_supplied(seeder, tmp_path, monkeypatch):
     config = tmp_path / 'config.json'
     monkeypatch.setenv('LDS_CONFIG', str(config))

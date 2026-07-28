@@ -706,7 +706,7 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 
 ## Run it your way
 
-**API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
+**API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the API-only Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
 
 There are two Docker images. The **API-only** one (`Dockerfile` / `docker-compose.yml`) installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What it cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA.
 
@@ -815,7 +815,7 @@ Then build and run:
 docker compose up --build
 ```
 
-This builds and runs the API-only mode (see `Dockerfile` / `docker-compose.yml`) — ComfyUI and ai-toolkit are host-native tools and out of scope for the container. Data persists to `./data-docker` on the host, and your API keys are mounted in from `.env`.
+This builds and runs the API-only mode (see `Dockerfile` / `docker-compose.yml`) — ComfyUI and ai-toolkit are host-native tools and out of scope for this container. See [Option 4](#option-4--docker-gpu--comfyui) for the image that runs ComfyUI too. Data persists to `./data-docker` on the host, and your API keys are mounted in from `.env`.
 
 ### Option 4 — Docker (GPU + ComfyUI)
 
@@ -830,7 +830,7 @@ docker compose -f docker-compose.gpu.yml up --build
 
 The app is then on `http://127.0.0.1:5050/` and ComfyUI's own web UI on `http://127.0.0.1:8188/`, the container reports `healthy`, and Settings ▸ Local tools shows ComfyUI as reachable with a valid install folder — verified end to end on an NVIDIA RTX 3500 Ada with driver 580. The ComfyUI folder settings are filled in for you on first boot, and anything you change in Settings afterwards survives a restart.
 
-It is built on [ComfyUI-Nvidia-Docker](https://github.com/mmartial/ComfyUI-Nvidia-Docker), which installs and updates ComfyUI itself — the first boot is slow because it creates ComfyUI's environment and downloads torch. `docker-compose.gpu.yml` runs under its own Compose project name, so it and the API-only stack can run at the same time — starting one does not stop the other.
+It is built on [ComfyUI-Nvidia-Docker](https://github.com/mmartial/ComfyUI-Nvidia-Docker), which installs and updates ComfyUI itself — the first boot is slow because it creates ComfyUI's environment and downloads torch. `docker-compose.gpu.yml` runs under its own Compose project name, so it and the API-only stack can run at the same time — starting one does not stop the other. The two stacks also default to **separate** data directories (`./data-docker-gpu` here vs. `./data-docker` for Option 3), and that separation matters: pointing both at the same `LDS_DATA` puts two Flask processes on one SQLite database and one `config.json`, and must not be done.
 
 Three host folders, all relocatable from `.env` (see the Docker block in `.env.example`):
 
@@ -838,13 +838,13 @@ Three host folders, all relocatable from `.env` (see the Docker block in `.env.e
 |---|---|---|
 | `./run` | ComfyUI's own environment, checkout and HF cache | `LDS_COMFY_RUN` |
 | `./basedir` | ComfyUI models, input, output, custom nodes | `LDS_COMFY_BASEDIR` |
-| `./data-docker` | the app's datasets, database and `config.json` | `LDS_DATA` |
+| `./data-docker-gpu` | the app's datasets, database and `config.json` | `LDS_DATA` |
 
 Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
 
 **Limits worth knowing before you build:**
 
-- **About 20 GB of disk before you download a single model**: the image itself is 11.3 GB and ComfyUI's own environment in `./run` is a further 8.4 GB. `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu` saves roughly 7 GB and leaves the GPU entirely to ComfyUI — only ✨ Score and watermark inpainting fall back to the CPU.
+- **About 20 GB of disk before you download a single model**: the image itself is 11.3 GB and ComfyUI's own environment in `./run` is a further 8.4 GB. `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu` saves roughly 7 GB and leaves the GPU entirely to ComfyUI — only ✨ Score falls back to the CPU.
 - **Ollama is not included**, so auto-captioning, framing auto-classify, head-crop and watermark detection need an Ollama elsewhere: uncomment the `extra_hosts` and `LDS_OLLAMA_URL` lines in the compose file to reach one running on the host.
 - **Local training is not included** — that is ai-toolkit on the host, or [cloud training](#no-gpu-train-in-the-cloud).
 - **Watermark inpainting does not currently work in Docker.**
