@@ -655,6 +655,45 @@ missing control can't be mistaken for a bug. Everything else in the lightbox —
 ✂ Crop, ⇄ Mirror, ✨ Upscale & improve — is unchanged and still acts on the
 image you opened.
 
+## Rotate a sideways image
+
+Scraped folders and phone exports are full of shots lying on their side. Both
+places you meet an image can turn it a quarter turn, and neither charges you for
+it. (Asked for by 1Tomber, GitHub issue #17.)
+
+**In a dataset**, open the image (click its tile) and use **↺ Rotate left** /
+**↻ Rotate right** in the bar under the picture, next to ⇄ Mirror. The file
+keeps its name, its caption, its status and its format — a PNG stays a PNG, a
+WEBP stays a WEBP. Four turns bring you back to exactly where you started:
+measured on the shipped encoder, a PNG and a WEBP come back **byte-identical**
+after going all the way round, so a mis-click costs nothing. The one exception
+is a JPEG, which the format itself forces to be re-encoded on every save: at the
+quality LDS writes (95, no chroma subsampling) that is around 46 dB PSNR — far
+below anything visible, and it barely grows with more turns — but it is not
+free, so it is worth knowing. Datasets normally hold WEBP, so this mostly
+concerns files restored from an old backup.
+
+Rotation is deliberately **not** part of ✂ Crop, even though that is where you
+might look for it first. Cropping **resamples** the image — it rescales the box
+you drew to a 1024 px long side — and resampling costs detail no matter how
+carefully the result is then saved. A quarter turn resamples nothing at all: it
+just moves existing pixels to new coordinates. Sending it through the crop lane
+would make it pay a price it does not owe.
+
+**In a bank**, your own folder is never written to — so a bank rotation does not
+touch your files at all. The turn is remembered against the image and applied to
+what the app shows you and to what it copies when you **⬆ Promote**; your
+original keeps its exact bytes, whatever you do. Select the images and use
+**↺ Rotate left** / **↻ Rotate right** in the selection bar to fix a whole
+sideways batch at once, or turn one image without leaving **▶ Review** with the
+↺ / ↻ buttons (keyboard: `[` and `]`). Rotating in Review never decides
+anything — the image stays under your cursor so you can judge it once it is the
+right way up.
+
+One caveat worth stating: the analysis passes (👤 Subject, ✨ Score, 📐 Framing)
+still read the original file, so turning an image does **not** re-run them. Turn
+first, then run the passes if you want them to see it upright.
+
 ## Clean the watermarks a bank found
 
 **🚩 Find watermarks** flags the images carrying an overlaid logo, URL or

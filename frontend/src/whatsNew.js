@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-rotate-images-in-the-dataset-and-the-bank',
+    date: '2026-07-28',
+    title: 'Straighten a sideways photo — rotate 90° in the dataset and in the bank',
+    blurb:
+      'Idea by 1Tomber (GitHub #17). ↺ / ↻ turn an image a quarter turn: in the dataset from the image inspector, next to Mirror, and in the bank from the selection bar or straight inside ▶ Review ([ and ]). It costs the image nothing it does not have to: a dataset PNG or WEBP comes back pixel-for-pixel identical after four turns, and in the bank your own files are never rewritten at all — the turn is remembered and applied to what you see and to what gets promoted.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-preflight-before-cloud-and-continue',
     date: '2026-07-28',
     title: 'The pre-training check now runs before a cloud run and before ▶ Continue',
