@@ -336,6 +336,7 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
   - [Run it your way](#run-it-your-way) — full local, API-only, **Docker**
   - [Setup & install](#setup--install)
     - [Docker (API-only, no GPU)](#option-3--docker-api-only)
+    - [Docker (GPU + ComfyUI)](#option-4--docker-gpu--comfyui)
   - [Minimum requirements](#minimum-requirements)
   - [Configuration & settings reference](#configuration--settings-reference)
   - [Exposing the app beyond localhost](#exposing-the-app-beyond-localhost)
@@ -707,7 +708,9 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 
 **API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
 
-The Docker image installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What the container cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA. Local training needs ai-toolkit on the host.
+There are two Docker images. The **API-only** one (`Dockerfile` / `docker-compose.yml`) installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What it cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA.
+
+The **GPU** one (`Dockerfile.gpu` / `docker-compose.gpu.yml`) runs ComfyUI inside the same container on an NVIDIA GPU, so that ComfyUI half works — see [Option 4](#option-4--docker-gpu--comfyui). It ships the ML extras too. Local training still needs ai-toolkit on the host in both cases.
 
 **Full local** — everything above plus Klein/Z-Image generation, captioning via JoyCaption, face scoring, masks, the Image bank scoring pass, training, and Test Studio. Requires ComfyUI and/or ai-toolkit running on the same host (or reachable over the network) and an NVIDIA GPU with 12 GB+ VRAM for Klein/Z-Image inference. Training VRAM depends on the model family — check the family's ai-toolkit preset before queuing a run. The face-scoring and masking helpers (`requirements-ml.txt`) run fine on CPU; they don't need the GPU.
 
@@ -814,6 +817,41 @@ docker compose up --build
 
 This builds and runs the API-only mode (see `Dockerfile` / `docker-compose.yml`) — ComfyUI and ai-toolkit are host-native tools and out of scope for the container. Data persists to `./data-docker` on the host, and your API keys are mounted in from `.env`.
 
+### Option 4 — Docker (GPU + ComfyUI)
+
+One container running **both** the app and ComfyUI on your NVIDIA GPU. This is the image to use if you want Klein/Z-Image generation, the Test Studio or LoRA deployment without installing ComfyUI yourself.
+
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host and a driver of **r525 or newer**.
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.gpu.yml up --build
+```
+
+The app is then on `http://127.0.0.1:5050/` and ComfyUI's own web UI on `http://127.0.0.1:8188/`, the container reports `healthy`, and Settings ▸ Local tools shows ComfyUI as reachable with a valid install folder — verified end to end on an NVIDIA RTX 3500 Ada with driver 580. The ComfyUI folder settings are filled in for you on first boot, and anything you change in Settings afterwards survives a restart.
+
+It is built on [ComfyUI-Nvidia-Docker](https://github.com/mmartial/ComfyUI-Nvidia-Docker), which installs and updates ComfyUI itself — the first boot is slow because it creates ComfyUI's environment and downloads torch. `docker-compose.gpu.yml` runs under its own Compose project name, so it and the API-only stack can run at the same time — starting one does not stop the other.
+
+Three host folders, all relocatable from `.env` (see the Docker block in `.env.example`):
+
+| Folder | Holds | Variable |
+|---|---|---|
+| `./run` | ComfyUI's own environment, checkout and HF cache | `LDS_COMFY_RUN` |
+| `./basedir` | ComfyUI models, input, output, custom nodes | `LDS_COMFY_BASEDIR` |
+| `./data-docker` | the app's datasets, database and `config.json` | `LDS_DATA` |
+
+Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
+
+**Limits worth knowing before you build:**
+
+- **About 20 GB of disk before you download a single model**: the image itself is 11.3 GB and ComfyUI's own environment in `./run` is a further 8.4 GB. `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu` saves roughly 7 GB and leaves the GPU entirely to ComfyUI — only ✨ Score and watermark inpainting fall back to the CPU.
+- **Ollama is not included**, so auto-captioning, framing auto-classify, head-crop and watermark detection need an Ollama elsewhere: uncomment the `extra_hosts` and `LDS_OLLAMA_URL` lines in the compose file to reach one running on the host.
+- **Local training is not included** — that is ai-toolkit on the host, or [cloud training](#no-gpu-train-in-the-cloud).
+- **Watermark inpainting does not currently work in Docker.**
+- **Neither port is authenticated**, exactly like Option 3. See [Exposing the app beyond localhost](#exposing-the-app-beyond-localhost) before putting them on a LAN.
+- **Extra installs may briefly fail right after a container recreate**: the launcher adopts `/app/.venv` in the background first (it walks ~7 GB), and installing extra dependencies from inside the app won't work until that finishes — the container logs say so. The image already ships the ML extras, so this rarely matters.
+- If you mount your own `/userscripts_dir` into the container you will shadow the app's launcher and only ComfyUI will start.
+
 ### External tools (install once, connect in Settings)
 
 None of these are bundled — each one is optional, installed separately, and then simply pointed to from the app's Settings page. Features light up automatically once their tool is detected (the "Test" button next to each field tells you immediately whether the app can see it).
@@ -864,7 +902,7 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 |---|---|---|---|
 | **API-only** (generate via Gemini/ChatGPT, import/scrape, curate, caption manually, export/backup) | none | ~2 GB | Any machine with Python 3.10–3.12; Docker image available |
 | **Auto-captioning & framing** (Ollama vision, 8B model) | ~8 GB VRAM | ~7 GB | Runs alongside generation, not concurrently |
-| **Local generation** (Klein 9B **KV** fp8 via ComfyUI) | ~16 GB VRAM | ~30 GB (model + text encoder + VAE) | Free, NSFW-capable; Setup downloads the models. The KV build is up to **2.5× faster on multi-reference edits** at the same quality, and downloads publicly (no HF token) |
+| **Local generation** (Klein 9B **KV** fp8 via ComfyUI) | ~16 GB VRAM | ~30 GB (model + text encoder + VAE) | Free, NSFW-capable; Setup downloads the models. The KV build is up to **2.5× faster on multi-reference edits** at the same quality, and downloads publicly (no HF token). Available in Docker via `docker-compose.gpu.yml` |
 | **LoRA training — Z-Image / SDXL** (ai-toolkit) | 16 GB+ recommended | 10 GB+ free enforced per run | Quantized (qfloat8) + low-VRAM mode |
 | **LoRA training — Krea 2** (ai-toolkit) | **24 GB VRAM** at 1024px (enforced warning) | ~24 GB base download (Raw) + 10 GB+ free | 12B model. Under 24 GB, set **Resolution → 768 only** in ⚙️ Advanced options — the main VRAM lever |
 | **LoRA training — FLUX.2 Klein** (ai-toolkit) | 4B: **16–24 GB VRAM** · 9B: **32–48 GB** (cloud lane) | base download + 10 GB+ free | Both bases gated on Hugging Face (HF token required). Train the 9B via ☁️ cloud |

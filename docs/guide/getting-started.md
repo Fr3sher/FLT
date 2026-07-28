@@ -43,6 +43,11 @@ python backend/run.py
 
 **Docker (API-only):** `cp .env.example .env`, then `docker compose up --build`.
 
+**Docker (GPU, with ComfyUI inside):** `cp .env.example .env`, then
+`docker compose -f docker-compose.gpu.yml up --build`. Needs an NVIDIA GPU and the
+NVIDIA Container Toolkit; this is the only Docker option that can do Klein/Z-Image
+generation and the Test Studio.
+
 The full install matrix (Windows release ZIP, GPU requirements, external tools)
 lives in the README on GitHub.
 
