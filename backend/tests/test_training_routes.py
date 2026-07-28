@@ -229,7 +229,10 @@ def test_enqueue_forwards_kwargs(client, monkeypatch):
     assert resp.status_code == 200
     assert captured == {
         'extra_steps': 500,
-        'masked': True,
+        # Absent from the request = the SERVICE reads the dataset's stored
+        # `masked` setting (it used to be a browser-only value the route
+        # substituted True for, which made the stored value unreachable).
+        'masked': None,
         'steps': 3000,
         'allow_caption_mismatch': True,
         'allow_caption_quality': True,
@@ -270,7 +273,10 @@ def test_schedule_future_enqueues_with_not_before(client, monkeypatch):
     assert captured == {
         'extra_steps': None,
         'not_before': '2999-01-01T00:00',
-        'masked': True,
+        # Absent from the request = the SERVICE reads the dataset's stored
+        # `masked` setting (it used to be a browser-only value the route
+        # substituted True for, which made the stored value unreachable).
+        'masked': None,
         'allow_caption_quality': True,
     }
 

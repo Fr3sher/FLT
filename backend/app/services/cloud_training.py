@@ -597,7 +597,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
 def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
                                 from_step=None, overrides=None,
                                 base_model=_UNSET, variant=None, train_type=None,
-                                masked=True, allow_caption_mismatch=False,
+                                masked=None, allow_caption_mismatch=False,
                                 allow_uncaptioned=False, allow_caption_quality=False,
                                 allow_unverified_weights=False, allow_not_ready=False,
                                 gpu_name=None) -> dict:
@@ -724,7 +724,7 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
 
 
 def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
-                          variant=None, train_type=None, masked=True,
+                          variant=None, train_type=None, masked=None,
                           allow_caption_mismatch=False, allow_uncaptioned=False,
                           allow_caption_quality=False,
                           allow_unverified_weights=False, allow_not_ready=False,
@@ -917,6 +917,13 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         # a lock: _provision re-searches live offers and rents the cheapest one
         # of this class, falling back to the cheapest overall if the class has
         # since sold out (vast offers are ephemeral).
+        # `masked` resolved ONCE, here, then stamped into the run params. That
+        # stamp is what _prepare_staging reads to decide whether rembg generates
+        # the person masks that get UPLOADED with the dataset — the cloud lane's
+        # only source of truth for masking. `None` (a fresh launch) = the
+        # dataset's stored setting; an explicit bool = a retry/continue replaying
+        # the source run's own frozen flag.
+        masked = lt.resolve_masked(ds, masked)
         params = {'steps': n_steps, 'variant': variant, 'base_model': base_model,
                   'train_type': fam, 'masked': bool(masked), **confirmations}
         if base_repo:
@@ -966,7 +973,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
             variant=variant, masked=bool(masked), steps=n_steps,
             cloud_run_id=run.id,
             settings=lt.launch_settings_snapshot(
-                _run_config_dataset(ds, params), fam),
+                _run_config_dataset(ds, params), fam, masked=masked),
             prepared=_prepared,
             parent_record_id=parent_record_id, resumed_from=resumed_from)
         if rec is not None:

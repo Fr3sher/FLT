@@ -616,6 +616,59 @@ def face_masking_enabled(ds) -> bool:
         return False
 
 
+# Person masking (background down-weighted to 10 %) has always defaulted to ON.
+# Keep the constant next to the reader: the default is what makes the migration
+# to a stored setting a no-op for every dataset that never touched it.
+PERSON_MASK_DEFAULT = True
+
+
+def person_masking_enabled(ds) -> bool:
+    """Whether this dataset trains with PERSON masks (subject isolated, background
+    at 10 % loss weight). Default ON.
+
+    Used to be a `masked` query parameter carried by the browser's localStorage,
+    which the server only ever saw at launch. Three consequences, all real: the
+    readiness badge could not warn that a dataset set to masked would train
+    unmasked for want of rembg; opening the app from a phone silently reverted to
+    the default; and no run snapshot recorded it, so two runs differing only by
+    masking looked identical. Stored in the train_settings JSON blob now, exactly
+    like `mask_faces` — one read, at export time, so the local queue, the
+    scheduler, a cloud run and a re-run of an OLD dataset all inherit it.
+
+    ABSENT key = the historical default (True): no existing dataset changes
+    behaviour by upgrading. An explicit False is a VALUE, not a falsy no-op —
+    the opposite of `mask_faces`, whose default is OFF.
+
+    Concept/Style are forced OFF here, mirroring the export guard: a person mask
+    erases a concept, and an always-on style must learn the whole frame."""
+    if not ds:
+        return PERSON_MASK_DEFAULT
+    if is_conceptual(ds):
+        return False
+    raw = getattr(ds, 'train_settings', None)
+    if not raw:
+        return PERSON_MASK_DEFAULT
+    try:
+        stored = json.loads(raw).get('masked')
+    except (ValueError, TypeError):
+        return PERSON_MASK_DEFAULT
+    return PERSON_MASK_DEFAULT if stored is None else bool(stored)
+
+
+def person_masking_stored(ds):
+    """The RAW stored opt-in — True / False / None when the dataset never answered.
+    The panel needs the tri-state (not the resolved boolean) to know whether the
+    one-time localStorage carry-over notice still has anything to disclose."""
+    raw = getattr(ds, 'train_settings', None) if ds else None
+    if not raw:
+        return None
+    try:
+        stored = json.loads(raw).get('masked')
+    except (ValueError, TypeError):
+        return None
+    return None if stored is None else bool(stored)
+
+
 # Concept descriptions whose ACT lives on the face. Masking the head then erases
 # the very thing being taught -- the community workflow this feature follows hit
 # exactly this and had to subtract the mouth back out of its face masks. We WARN
