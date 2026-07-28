@@ -156,7 +156,14 @@ DEFAULTS = {
         'ready_timeout_minutes': 25,   # boot budget: image pull + services up
         'max_runtime_minutes': 480,    # safety net (stall watchdog is the first line): hard stop past this
         'stall_timeout_minutes': 30,   # no step progress past this -> rescue + kill
-        'first_step_timeout_minutes': 45,  # no step 1 reached past this -> kill (base download wedged)
+        # Before step 1 the pod is fetching the base model. Two clocks guard it:
+        # first_step_timeout is IDLE time — rearmed every time the pod's log
+        # reports more downloaded bytes, so an honestly slow download is never
+        # cut; download_budget is the ABSOLUTE ceiling on that phase, so a host
+        # too slow to ever finish still dies well before the runtime cap
+        # (0 = no ceiling, runtime cap is then the only backstop).
+        'first_step_timeout_minutes': 45,  # no step 1 AND no new bytes past this -> kill
+        'first_step_download_budget_minutes': 180,  # hard ceiling on the pre-step-1 phase
         # Out-of-monitor freeze watchdog: a training run whose own monitor stopped
         # reporting for this long is terminated by the supervisor (0 = only warn
         # in the UI, never cut). Slow-by-design phases (boot/upload/download) are

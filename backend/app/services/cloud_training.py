@@ -2273,12 +2273,39 @@ def _monitor(app, run_id):
             #    — 2026-07-19). A healthy Krea-2-Raw run reaches step 1 in a few
             #    minutes (its full 2000-step run was ~84 min), so the default is
             #    generous enough to survive an honestly slow download.
+            #    The step counter is NOT the only progress signal in that phase:
+            #    the pod's log carries the base-model download's byte counter,
+            #    and a pod whose bytes advance is a pod that progresses. Judging
+            #    the phase on steps alone killed a paid run whose download was
+            #    perfectly healthy (reported by j_o_e_l. on Discord 2026-07-27:
+            #    KREA-2 RAW on a 5090, FAILED at 59 min, never past step 0 —
+            #    26.3 GB at the 2.58 MB/s measured on another pod is ~2 h 50, so
+            #    the 45-min budget GUARANTEED the failure). Advancing bytes now
+            #    rearm this clock, exactly as a step rearms the stall clock.
+            #    Raising the timeout instead would have been a cover-up: a
+            #    genuinely wedged pod must still die fast, because it is money
+            #    burning. Hence the second, ABSOLUTE ceiling below.
+            #  * download budget — the ceiling that keeps the rearm honest. A
+            #    host at 200 kB/s advances its bytes at every poll for 36 h;
+            #    rearming alone would let it ride the whole runtime cap for zero
+            #    steps, which IS the run-#75 failure the first-step watchdog was
+            #    built to stop. The default (180 min) clears the measured 2 h 50
+            #    worst case and stays far under the 480-min runtime cap; 0 turns
+            #    the ceiling off and leaves the runtime cap as sole backstop.
             stall_seconds = int(c.get('stall_timeout_minutes') or 30) * 60
             first_step_seconds = int(c.get('first_step_timeout_minutes') or 45) * 60
+            raw_budget = c.get('first_step_download_budget_minutes')
+            dl_budget_seconds = int(180 if raw_budget is None else (raw_budget or 0)) * 60
             grace_seconds = (int(c.get('unreachable_grace_minutes') or 0) * 60
                              or UNREACHABLE_GRACE_SECONDS)
             last_step = -1
             last_progress_ts = _now()
+            # Peak bytes the pod has reported downloading, and the anchor of the
+            # absolute pre-step-1 ceiling. `downloaded_bytes` only ever grows:
+            # a bar that restarts lower is treated as no progress, which is the
+            # conservative side of the choice.
+            downloaded_bytes = 0.0
+            first_step_anchor = last_progress_ts
             # Time of the FIRST failure of the current unreachable streak (None
             # while the pod answers). The grace must measure CONSECUTIVE get_job
             # failure time, not time-since-last-success: the per-poll log/sample
@@ -2322,7 +2349,7 @@ def _monitor(app, run_id):
                     _sleep(POLL_SECONDS)
                     continue
 
-                _pull_log_and_samples(run, remote, job_id)
+                log_text = _pull_log_and_samples(run, remote, job_id)
                 # Mid-run checkpoint mirror, throttled (~2 min at 10 s polls):
                 # list_files is cheap, but no need to hammer it every poll —
                 # the pod only writes a new save every save_every steps.
@@ -2379,20 +2406,60 @@ def _monitor(app, run_id):
                                            f'{stall_seconds // 60} min; pod terminated',
                                     error='stall watchdog')
                     return
-                elif last_step <= 0 and (_now() - last_progress_ts) > first_step_seconds:
-                    # No training step in first_step_timeout_minutes — the pod is
-                    # wedged before step 1 (typically the base-model download
-                    # crawling; nothing to rescue since no checkpoint exists).
-                    try:
-                        remote.stop_job(job_id)
-                    except Exception:
-                        pass
-                    _finish_if_open(run, 'error',
-                                    detail='No training step reached in '
-                                           f'{first_step_seconds // 60} min — pod likely '
-                                           'stuck downloading the base model; terminated',
-                                    error='first-step watchdog')
-                    return
+                elif last_step <= 0:
+                    # -- before step 1: the same guiding rule, applied to the
+                    # signal this phase actually has. Nothing to rescue here
+                    # either way — no checkpoint exists yet.
+                    if dl_budget_seconds and \
+                            (_now() - first_step_anchor) > dl_budget_seconds:
+                        # Checked BEFORE the rearm on purpose: a pod that
+                        # advances a handful of bytes every poll would otherwise
+                        # rearm its way past every ceiling.
+                        try:
+                            remote.stop_job(job_id)
+                        except Exception:
+                            pass
+                        _finish_if_open(
+                            run, 'error',
+                            detail='Still not training after '
+                                   f'{dl_budget_seconds // 60} min '
+                                   f'(base model fetched: {_fetched_label(downloaded_bytes)}) '
+                                   '— pod terminated before it could burn the '
+                                   'whole runtime cap',
+                            error='first-step download budget')
+                        return
+                    # download_bytes_seen, not parse_download_progress: the
+                    # card's parser reports the LAST bar, and with several
+                    # files in flight consecutive tails end on different bars,
+                    # so its `done` alternates between two frozen files and
+                    # would read as endless movement. A kill decision needs the
+                    # total, which only a file that really advanced can raise.
+                    seen = lt.download_bytes_seen(log_text)
+                    if seen is not None and seen > downloaded_bytes:
+                        downloaded_bytes = seen
+                        last_progress_ts = _now()
+                    elif (_now() - last_progress_ts) > first_step_seconds:
+                        # Say what was MEASURED. The old wording ("pod likely
+                        # stuck downloading the base model") is exactly what
+                        # j_o_e_l. read while his pod downloaded normally, and it
+                        # sent him hunting a vast.ai fault that did not exist.
+                        if downloaded_bytes > 0:
+                            what = ('its base-model download stopped at '
+                                    f'{_fetched_label(downloaded_bytes)}')
+                        else:
+                            what = ('the pod never reported a single downloaded '
+                                    'byte')
+                        try:
+                            remote.stop_job(job_id)
+                        except Exception:
+                            pass
+                        _finish_if_open(
+                            run, 'error',
+                            detail='No training step reached in '
+                                   f'{first_step_seconds // 60} min and '
+                                   f'{what}; pod terminated',
+                            error='first-step watchdog')
+                        return
                 _sleep(POLL_SECONDS)
         except _RunClosedExternally as closed:
             # Someone with more authority than this thread (a forced stop, the
@@ -2536,9 +2603,26 @@ def _seed_resume_checkpoint(run, remote, pod_settings):
                 run.id, os.path.basename(src), dest_dir)
 
 
+def _fetched_label(num_bytes) -> str:
+    """Downloaded volume as a user-facing string. Watchdog messages quote what
+    was measured, so the unit has to survive both '0 bytes' and '26.3 GB'."""
+    n = float(num_bytes or 0)
+    if n <= 0:
+        return 'nothing'
+    if n < 1e9:
+        return f'{n / 1e6:.0f} MB'
+    return f'{n / 1e9:.1f} GB'
+
+
 def _pull_log_and_samples(run, remote, job_id):
     """Mirror remote log + new samples into staging so cloud_progress reuses
-    the exact local parsing/serving machinery. Never raises."""
+    the exact local parsing/serving machinery. Never raises.
+
+    Returns the log text (''
+    when it could not be fetched) — the first-step watchdog reads the
+    base-model download's byte counter out of it, and re-reading the file we
+    just wrote would only add a way for the two to disagree."""
+    text = ''
     try:
         text = remote.get_log(job_id)
         with open(os.path.join(run.staging_dir, 'training.log'), 'w',
@@ -2556,6 +2640,7 @@ def _pull_log_and_samples(run, remote, job_id):
                                        os.path.join(samples_dir, name))
     except Exception as e:
         logger.debug('sample mirror failed: %s', e)
+    return text
 
 
 def _newest_remote_checkpoint(remote, job_id):
