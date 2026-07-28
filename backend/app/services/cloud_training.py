@@ -1189,20 +1189,31 @@ def _run_host_ip(run):
 
 
 def _load_bad_hosts() -> dict:
-    """{machine_id(str): {'ts': epoch, 'reason': str, 'ip': str|None}} —
-    expired entries are dropped on read (TTL cloud.host_blacklist_days).
-    Corrupt file -> empty. Legacy files (entries without 'ip') load unchanged;
-    they simply ban one machine_id, as they always did."""
+    """{machine_id(str): {'ts': epoch, 'reason': str, 'ip': str|None,
+    'ttl': seconds|None}} — expired entries are dropped on read. The default TTL
+    is cloud.host_blacklist_days; an entry may carry its OWN shorter 'ttl' when
+    the failure said "slow", not "broken" (see _blacklist_host).
+    Corrupt file -> empty. Legacy files (entries without 'ip'/'ttl') load
+    unchanged; they simply ban one machine_id on the default TTL, as always."""
     try:
         raw = json.loads(_bad_hosts_path().read_text(encoding='utf-8'))
     except (OSError, ValueError):
         return {}
     if not isinstance(raw, dict):
         return {}
-    ttl = float(cfg.get('cloud.host_blacklist_days') or 3) * 86400
+    default_ttl = float(cfg.get('cloud.host_blacklist_days') or 3) * 86400
     now = _now()
-    live = {k: v for k, v in raw.items()
-            if isinstance(v, dict) and now - float(v.get('ts') or 0) <= ttl}
+
+    def _alive(v):
+        if not isinstance(v, dict):
+            return False
+        try:
+            ttl = float(v.get('ttl')) if v.get('ttl') is not None else default_ttl
+        except (TypeError, ValueError):
+            ttl = default_ttl
+        return now - float(v.get('ts') or 0) <= ttl
+
+    live = {k: v for k, v in raw.items() if _alive(v)}
     if len(live) != len(raw):
         try:
             _bad_hosts_path().write_text(json.dumps(live), encoding='utf-8')
@@ -1211,7 +1222,7 @@ def _load_bad_hosts() -> dict:
     return live
 
 
-def _blacklist_host(machine_id, reason, ip=None):
+def _blacklist_host(machine_id, reason, ip=None, ttl_seconds=None):
     """Remember a host whose pod never became ready so the next launch (and the
     tier list) skips it for a few days. Best-effort: never raises.
 
@@ -1225,17 +1236,29 @@ def _blacklist_host(machine_id, reason, ip=None):
     The address is a WEAKER identity than the machine id — several machines can
     sit behind one NAT — so it only ever widens a ban that a real failure
     already justified, it expires on the same TTL, and _filter_offers refuses
-    to let it starve a launch."""
+    to let it starve a launch.
+
+    ttl_seconds overrides the default TTL for THIS entry — a host killed while
+    it was still visibly booting is slow, not broken, and a three-day exile is
+    the wrong price for that. A later, generic ban on the same host (the
+    retry path re-bans every failure it classifies as transient) INHERITS the
+    explicit ttl instead of silently upgrading it back to the default: the
+    specific classification of a failure outranks the generic one."""
     if not machine_id and not ip:
         return
     try:
         hosts = _load_bad_hosts()
         key = str(machine_id) if machine_id else f'ip:{ip}'
-        hosts[key] = {'ts': _now(), 'reason': str(reason)[:200], 'ip': ip or None}
+        prev = hosts.get(key) if isinstance(hosts.get(key), dict) else {}
+        ttl = ttl_seconds if ttl_seconds is not None else prev.get('ttl')
+        hosts[key] = {'ts': _now(), 'reason': str(reason)[:200], 'ip': ip or None,
+                      'ttl': float(ttl) if ttl is not None else None}
         _bad_hosts_path().write_text(json.dumps(hosts), encoding='utf-8')
-        logger.warning('blacklisted vast host machine_id=%s ip=%s for %s day(s): %s',
+        logger.warning('blacklisted vast host machine_id=%s ip=%s for %s: %s',
                        machine_id, ip or '?',
-                       cfg.get('cloud.host_blacklist_days') or 3, reason)
+                       f'{float(ttl) / 3600:.0f} h' if ttl is not None
+                       else f"{cfg.get('cloud.host_blacklist_days') or 3} day(s)",
+                       reason)
     except Exception:
         logger.exception('could not blacklist host %s', machine_id)
 
@@ -1254,9 +1277,10 @@ def _stamp_host_ip(run, ip):
         logger.debug('could not stamp the host address of run %s', run.id)
 
 
-def _blacklist_run_host(run, reason):
+def _blacklist_run_host(run, reason, ttl_seconds=None):
     """Blacklist the host a RUN was on, with every identity it left behind."""
-    _blacklist_host(_run_machine_id(run), reason, ip=_run_host_ip(run))
+    _blacklist_host(_run_machine_id(run), reason, ip=_run_host_ip(run),
+                    ttl_seconds=ttl_seconds)
 
 
 def _banned_ips(bad) -> set:
@@ -1985,6 +2009,69 @@ def _make_remote(run) -> RemoteAiToolkit:
     return RemoteAiToolkit(run.base_url, run.auth_token)
 
 
+# --- Boot evidence (2026-07-28) ------------------------------------------------
+# The boot wait used to read the pod's remote state and spend it on the phase
+# line only, then decide on elapsed time alone: a host honestly pulling a 26 GB
+# image died at 25 min and was exiled from the marketplace for three days. Same
+# guiding rule as the first-step watchdog: a pod whose remote evidence advances
+# is a pod that progresses.
+#
+# "Advances" is the whole difficulty. A boot fact that keeps being TRUE is not
+# progress (a pod frozen in 'loading' reports 'loading' forever), and a line
+# whose only moving part is its clock is not progress either. So evidence is
+# modelled as a growing SET of facts: only a fact never observed before rearms
+# the clock, which makes a frozen pod rearm exactly zero times.
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[A-Za-z]')
+# Clock-ish runs (12:34, 1:02:03, 2026-07-28T10:11) are stripped before a host
+# progress line is compared: an advancing elapsed time is the exact false
+# evidence that nearly got shipped into the first-step watchdog.
+_CLOCKISH_RE = re.compile(r'\d{1,2}:\d{2}(?::\d{2})?'
+                          r'|\d{4}-\d{2}-\d{2}[t ]?[\d:.]*', re.I)
+
+
+def _boot_status_message(inst) -> str:
+    """The host's free-text boot progress line, stripped of colour codes and of
+    anything that only measures time. Empty when vast publishes nothing — the
+    field is optional, so this is a bonus signal, never a requirement."""
+    raw = (inst or {}).get('status_msg')
+    if not isinstance(raw, str) or not raw.strip():
+        return ''
+    text = _CLOCKISH_RE.sub('', _ANSI_RE.sub('', raw))
+    return ' '.join(text.split())[:200]
+
+
+def _boot_facts(inst, port, base) -> set:
+    """Everything the pod is provably showing RIGHT NOW, as comparable facts."""
+    inst = inst or {}
+    facts = {'status:' + str(inst.get('actual_status') or 'unlisted')}
+    if ((inst.get('ports') or {}).get(f'{port}/tcp')):
+        facts.add('port-published')
+    if base:
+        facts.add('base-url')
+    if inst.get('jupyter_token'):
+        facts.add('auth-token')
+    msg = _boot_status_message(inst)
+    if msg:
+        facts.add('msg:' + msg)
+    return facts
+
+
+def _boot_stage_label(inst, port, base) -> str:
+    """What was MEASURED about this boot, for the failure message. 'Pod never
+    became ready in 25 min' is a guess; where it actually got to is not."""
+    inst = inst or {}
+    bits = ['vast status "%s"' % (inst.get('actual_status') or 'not listed yet')]
+    bits.append(f'port {port} '
+                + ('published' if ((inst.get('ports') or {}).get(f'{port}/tcp'))
+                   else 'not published yet'))
+    if base:
+        bits.append('UI not answering')
+    msg = _boot_status_message(inst)
+    if msg:
+        bits.append(f'host reported "{msg[:120]}"')
+    return ', '.join(bits)
+
+
 def _cloudify_job_config(job_config: dict, job_name: str,
                          staging_dataset: str, pod_settings: dict,
                          run_params: dict | None = None) -> dict:
@@ -2143,8 +2230,31 @@ def _monitor(app, run_id):
             # strides per call must not misfire this boot-timeout on a pod
             # that was, in fact, instantly ready.
             template_mode = bool((c.get('template_hash') or '').strip())
+            # Two clocks, exactly like the pre-step-1 phase further down:
+            #  * ready_timeout is IDLE time, rearmed by any boot fact the pod
+            #    had never shown before. Judging on elapsed time alone killed
+            #    honest 26 GB image pulls at 25 min — while the evidence that
+            #    they were progressing was already read, one line above, and
+            #    shown to the user in the phase line.
+            #  * boot_budget is the ABSOLUTE ceiling, evaluated BEFORE the
+            #    rearm so a host that dribbles one new fact per poll cannot
+            #    rearm its way past it. Raising ready_timeout instead would
+            #    have been a cover-up: a pod that shows nothing is money
+            #    burning and must still die in 25 minutes.
             ready_timeout = (int(c.get('ready_timeout_minutes') or 0) * 60
                              or READY_TIMEOUT_SECONDS)
+            raw_boot_budget = c.get('boot_budget_minutes')
+            boot_budget = int(90 if raw_boot_budget is None
+                              else (raw_boot_budget or 0)) * 60
+            slow_ban_seconds = float(
+                cfg.get('cloud.slow_boot_blacklist_hours') or 6) * 3600
+            # None until the first observation: the state a monitor INHERITS
+            # (every fact a resumed pod already shows) is a baseline, not
+            # progress — otherwise every app restart would hand a dead pod a
+            # brand-new window, the 2026-07-14 regression all over again.
+            boot_facts = None
+            boot_progress_ts = boot_started
+            boot_rearms = 0
             _set(run, phase_detail='Waiting for the pod to boot')
             port = int(c.get('ui_port') or 18675)
             if template_mode and port == 8675:
@@ -2209,11 +2319,36 @@ def _monitor(app, run_id):
                                 'base=%s ready=%s', run.id, st, port, has_ports,
                                 base or '-', ready)
                     _set(run, phase_detail=detail)
-                if _now() - boot_started > ready_timeout:
-                    # This host burned the whole boot budget — skip it for the
-                    # next few days so a relaunch can't land on it again.
-                    _blacklist_run_host(run, 'pod did not become ready in time')
-                    raise RuntimeError('pod did not become ready in time')
+                facts = _boot_facts(inst, port, base)
+                if boot_facts is None:
+                    boot_facts = set(facts)      # baseline, not progress
+                elif boot_budget and _now() - boot_started > boot_budget:
+                    # Ceiling first, so advancing evidence can never buy an
+                    # unbounded boot. This host was still visibly working —
+                    # slow, not broken — so it is skipped for HOURS, not days:
+                    # a saturated uplink is a condition of the night, and a
+                    # three-day exile the user never sees is the wrong price
+                    # for it. (A host that shows nothing takes the full ban
+                    # below — that mechanism has already saved real money.)
+                    _blacklist_run_host(
+                        run, 'pod was still booting past the boot budget',
+                        ttl_seconds=slow_ban_seconds if boot_rearms else None)
+                    raise RuntimeError(
+                        'pod did not become ready in time — still booting after '
+                        f'{boot_budget // 60} min: '
+                        f'{_boot_stage_label(inst, port, base)}')
+                elif facts - boot_facts:
+                    boot_facts |= facts
+                    boot_progress_ts = _now()
+                    boot_rearms += 1
+                elif _now() - boot_progress_ts > ready_timeout:
+                    # Nothing about this pod changed for the whole idle budget:
+                    # a dead or frozen host. Full ban, as before.
+                    _blacklist_run_host(run, 'pod stopped making boot progress')
+                    raise RuntimeError(
+                        'pod did not become ready in time — no boot progress '
+                        f'for {ready_timeout // 60} min: '
+                        f'{_boot_stage_label(inst, port, base)}')
                 _sleep(POLL_SECONDS)
 
             remote = _make_remote(run)
