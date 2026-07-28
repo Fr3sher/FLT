@@ -703,7 +703,7 @@ const TOPICS = [
   // surfaces it when the Advanced options are first opened.
   { id: 'training.dual_captions', kind: 'setting', title: 'Dual captions (long + short)',
     keywords: ['dual captions', 'long', 'short', 'short caption', 'caption', 'augmentation',
-      'short_and_long', 'advanced', 'training'],
+      'short_and_long', 'advanced', 'training', 'krea', 'anima', 'cache_text_embeddings'],
     guide: { chapter: 'dataset-guide', anchor: '7-dual-captions-long-short' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
