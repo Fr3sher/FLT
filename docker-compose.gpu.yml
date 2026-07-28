@@ -7,6 +7,12 @@
 # Dockerfile + docker-compose.yml and is unaffected by this file.
 #
 # Every ${...} below can be set in the same ./.env this mounts for API keys.
+
+# Its own compose project. Without this, `up` here would recreate the container
+# belonging to docker-compose.yml: both files call the service `studio`, and both
+# would otherwise inherit the same default project name from the directory.
+name: lora-dataset-studio-gpu
+
 services:
   studio:
     build:

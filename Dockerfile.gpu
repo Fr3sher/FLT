@@ -80,9 +80,12 @@ COPY packaging/docker packaging/docker
 RUN install -D -m 755 packaging/docker/studio_launch.sh \
         /userscripts_dir/50-lora-dataset-studio.sh
 
-# comfy's build-time uid:gid. When WANTED_UID differs the launcher adopts the tree,
-# which is what keeps the in-app dependency installer able to write into .venv.
-RUN chown -R 1024:1024 /app
+# Deliberately NO build-time `chown -R /app`: rewriting every file's metadata
+# makes BuildKit copy the whole tree — torch included — into a second layer.
+# Measured on this image: 8.66 GB and 407 s for a chown to 1024:1024, a uid that
+# WANTED_UID (default 1000, 99 on Unraid) almost never matches anyway. The
+# launcher (studio_launch.sh) adopts /app/.venv at runtime instead, in the
+# background, for whatever uid actually shows up.
 
 ENV LDS_DATA_DIR=/data \
     LDS_CONFIG=/data/config.json \

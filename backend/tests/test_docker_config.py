@@ -123,6 +123,11 @@ def test_launcher_can_never_abort_the_upstream_boot():
     # The studio is a background job beside ComfyUI's foreground process, so the
     # launcher has to be its own supervisor.
     assert [line for line in statements if line.startswith('while true')]
+    # ./.env is bind-mounted at /app/.env, so a chown -R of /app walks into the
+    # mount and re-owns the user's real API-key file on the host.
+    assert not [line for line in statements
+                if re.search(r'chown\s+-R\s+\S+\s+"?\$\{?STUDIO_DIR\}?"?\s*$', line)]
+    assert '/app/.venv' in script or '${STUDIO_DIR}/.venv' in script
 
 
 def test_healthcheck_covers_both_halves_of_the_gpu_image(monkeypatch):
@@ -172,6 +177,11 @@ def test_gpu_image_layers_on_the_comfyui_base_without_hijacking_it():
     # The studio's venv must never be ComfyUI's.
     assert '/app/.venv' in dockerfile
 
+    # A build-time `chown -R /app` rewrites every file's metadata and so copies the
+    # whole tree — torch included — into a second layer: 8.66 GB of the 15.9 GB
+    # image, for an ownership the runtime almost never wants. Measured, not guessed.
+    assert not re.search(r'chown\s+-R\s+\S+\s+/app\b', dockerfile)
+
 
 def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     compose = _read('docker-compose.gpu.yml')
@@ -188,6 +198,10 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     assert f'LDS_PORT={port}' in compose
     assert 'LDS_HOST=0.0.0.0' in compose
     assert 'LDS_CONFIG=/data/config.json' in compose
+
+    # Its own compose project, or `up` here recreates docker-compose.yml's container:
+    # both files call the service `studio`.
+    assert re.search(r'^name:\s*lora-dataset-studio-gpu\s*$', compose, re.M)
 
     # LDS_PORT is the port the app BINDS INSIDE the container. Interpolating it on
     # the host side of a mapping would publish a port nothing serves.

@@ -19,13 +19,20 @@ DATA_DIR="${LDS_DATA_DIR:-/data}"
 
 log() { echo "[studio] $*"; }
 
-# /app is chowned to comfy's BUILD-time uid (1024). When WANTED_UID differs, take
-# the tree over so the in-app dependency installer can still pip into .venv. /app
-# lives in the image and not on a mount, so this cannot touch host files.
+# Only /app/.venv, and never /app itself: the compose file bind-mounts ./.env at
+# /app/.env, so a chown -R of /app would walk into that mount and re-own the
+# user's real API-key file on the host.
+#
+# Backgrounded on purpose. This walks ~7 GB of torch, and upstream runs this hook
+# BEFORE it launches ComfyUI — so doing it inline would hold up both services for
+# minutes on every container recreate. The studio only needs to READ the venv to
+# run; ownership matters solely so the in-app dependency installer can pip into it.
 if [ ! -w "${STUDIO_DIR}/.venv" ]; then
-  log "adopting ${STUDIO_DIR} for uid $(id -u):$(id -g)"
-  sudo chown -R "$(id -u):$(id -g)" "${STUDIO_DIR}" \
-    || log "chown failed — installing dependencies from inside the app will not work"
+  log "adopting ${STUDIO_DIR}/.venv for uid $(id -u):$(id -g) in the background"
+  log "(installing dependencies from inside the app will not work until it finishes)"
+  ( sudo chown -R "$(id -u):$(id -g)" "${STUDIO_DIR}/.venv" \
+      && log "${STUDIO_DIR}/.venv adopted" \
+      || log "chown of ${STUDIO_DIR}/.venv failed — the in-app installer will not work" ) &
 fi
 
 # /data is the user's bind mount: the host owns it, so its ownership is not rewritten
