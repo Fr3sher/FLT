@@ -34,6 +34,18 @@ class FaceDataset(db.Model):
     # honore top-level que pour SDXL) : chemin VAE et chemin/te repo-id du TE.
     train_vae_path = db.Column(Text, nullable=True)
     train_te_path = db.Column(Text, nullable=True)
+    # Per-FAMILY memory of (base, variant). `train_base_model`/`train_variant`
+    # above stay the ACTIVE selection — every reader keeps reading them — and
+    # this JSON only remembers what each family was last set to:
+    #   {"zimage": {"base": "z image\\merge.safetensors", "variant": "turbo"},
+    #    "krea":   {"base": "", "variant": "base"}}
+    # Switching train_type stashes the outgoing family's pair here and restores
+    # the incoming one (cf. face_dataset_service.set_train_type). Without it a
+    # base chosen for Z-Image stayed attached to a Krea run: the selector read
+    # the family, the summary read the column, and both told the truth about
+    # different things. Additive + nullable migration in create_app; NULL simply
+    # means "nothing remembered yet", which is what every existing dataset is.
+    train_family_bases = db.Column(Text, nullable=True)
     # Réglages ai-toolkit avancés éditables par dataset (JSON) : rank, resolution,
     # save_every. NULL = défauts family-aware. Cf. lora_training._train_settings.
     train_settings = db.Column(Text, nullable=True)

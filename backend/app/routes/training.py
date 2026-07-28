@@ -629,7 +629,18 @@ def dataset_train_base_info(dataset_id):
     except Exception:
         models_dir = None
     comfyui_configured = bool(models_dir) and os.path.isdir(str(models_dir))
-    return jsonify({'bases': bases, 'base': ds.train_base_model or '',
+    # `base` must be what this run will ACTUALLY train on. train_base_model is a
+    # single column shared by every family, so a dataset switched from Z-Image to
+    # Krea 2 still carries the Z-Image merge — the builders already ignore it
+    # (they gate on an ABSOLUTE path), so reporting it made the panel's summary
+    # line, and the cloud dialog's "push this base", describe a run that was never
+    # going to happen. Report the effective base ('') and say why, once, instead.
+    _stored_base = ds.train_base_model or ''
+    _base_mismatch = lt.foreign_base_message(ds.train_type or 'zimage', _stored_base)
+    return jsonify({'bases': bases, 'base': '' if _base_mismatch else _stored_base,
+                    # Present ONLY when the persisted base belongs to another
+                    # family: the note the panel shows so the change isn't silent.
+                    'base_family_mismatch': _base_mismatch,
                     # « Custom weights… » (local-only) : chemin custom persisté +
                     # overrides SDXL (VAE/TE). Le sélecteur les ressème ; la
                     # whitelist par famille est ré-appliquée au lancement (400).

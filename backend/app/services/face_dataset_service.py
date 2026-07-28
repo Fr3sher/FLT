@@ -1019,13 +1019,73 @@ def create_dataset(user_id, name, trigger_word, kind=None, concept_desc=None, tr
     return ds
 
 
+def family_base_memory(ds) -> dict:
+    """Parsed `train_family_bases` — {family: {'base': str, 'variant': str|None}}.
+
+    Anything unparsable/foreign reads as {} (same discipline as _train_settings):
+    a corrupted blob must degrade to "nothing remembered", never to a crash."""
+    raw = getattr(ds, 'train_family_bases', None)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for fam, entry in data.items():
+        if fam in TRAIN_TYPES and isinstance(entry, dict):
+            out[fam] = {'base': entry.get('base') or '',
+                        'variant': entry.get('variant') or None}
+    return out
+
+
+def remembered_family_base(ds, family):
+    """(base, variant) this dataset last used on `family`, or (None, None) when
+    that family has never been configured here. `None` is deliberately distinct
+    from `''` (= "officially chose the official base")."""
+    entry = family_base_memory(ds).get(normalize_train_type(family))
+    if entry is None:
+        return None, None
+    return entry['base'], entry['variant']
+
+
 def set_train_type(user_id, dataset_id, train_type) -> bool:
     """Change the target model family later (kept in sync with the TrainingPanel
-    selector so the menu re-groups). Normalizes; unknown -> zimage. False if absent."""
+    selector so the menu re-groups). Normalizes; unknown -> zimage. False if absent.
+
+    The base and the variant are FAMILY-SCOPED even though `train_base_model` /
+    `train_variant` are single columns: a Z-Image merge is not a thing a Krea run
+    can load, and 'turbo' means a different checkpoint on each family. So the
+    outgoing family's pair is stashed in `train_family_bases` and the incoming
+    family's remembered pair takes its place — a family never yet configured
+    starts from the official base, and coming back to Z-Image finds the merge
+    exactly where it was left. Nothing is destroyed and nothing is asked."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return False
-    ds.train_type = normalize_train_type(train_type)
+    new_fam = normalize_train_type(train_type)
+    old_fam = normalize_train_type(getattr(ds, 'train_type', None))
+    if new_fam == old_fam:
+        db.session.commit()
+        return True
+    memory = family_base_memory(ds)
+    # Never remember a base the OUTGOING family provably cannot load. Datasets
+    # created before this column exist in exactly that state (a Z-Image merge
+    # left attached to a Krea 2 dataset); stashing it under 'krea' would freeze
+    # the bug into the memory and hand it back on the way home.
+    from . import lora_training as _lt
+    outgoing = ds.train_base_model or ''
+    if _lt.foreign_base_reason(old_fam, outgoing):
+        outgoing = ''
+    memory[old_fam] = {'base': outgoing,
+                       'variant': ds.train_variant or None}
+    remembered = memory.get(new_fam)
+    ds.train_base_model = (remembered or {}).get('base') or None
+    ds.train_variant = (remembered or {}).get('variant') or None
+    ds.train_family_bases = json.dumps(memory)
+    ds.train_type = new_fam
     db.session.commit()
     return True
 
