@@ -76,6 +76,31 @@ For the frontend, a successful `npm run build` is the check.
 - **No secrets or local paths.** Don't commit API keys, tokens, `config.json`, `.env`, or absolute paths from your machine — and scrub them from screenshots, logs and PR descriptions too. `.gitignore` already covers the usual suspects; the diagnostic report is built to be paste-safe for the same reason.
 - Be kind. See the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Already running your own fork?
+
+Several people run a modified copy, and that is exactly what the MIT licence is
+for — take it wherever you need it, no permission required, no obligation to
+send anything back.
+
+But if you have fixed something along the way that would help everyone, we would
+genuinely like it. A fork usually carries two very different kinds of change:
+
+- **Your product decisions** — engines you removed, defaults you disagree with,
+  behaviour you shaped around your own workflow. Keep them. They are why you
+  forked, and upstreaming them would only make your next merge harder.
+- **The fixes underneath them** — a path that only resolved on your machine, a
+  message that named the wrong cause, a crash on a layout we never tested. Those
+  are ours too, and they are usually a small diff sitting inside a much larger
+  branch.
+
+You do not have to disentangle them yourself. **Open an issue describing what you
+fixed and point at the commit in your fork** — that is enough. If it is a
+one-file change you would rather just send, open the PR straight from your fork
+(GitHub keeps the base repo correct by default).
+
+Worth knowing: fixes reported this way get credited to you by name in the commit
+and in the release notes, same as anyone else.
+
 ## Getting oriented
 
 The product docs double as a map of what the app does and why:
