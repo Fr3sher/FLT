@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-bank-watermark-mask-editing',
+    date: '2026-07-28',
+    title: 'Fix a wrong watermark box without leaving the bank',
+    blurb:
+      'The watermark detector draws one box, and it guesses: it misses a second logo, or lands beside the mark. Correcting it was only possible inside a dataset, so in a bank a bad box meant rejecting the image. Open ▶ Review on a flagged image and press 🚩 Edit mask: draw the zones yourself, and 🧽 Inpaint repaints exactly those — including a mark on the subject. Auto-crop deliberately skips a hand-masked image, and an emptied mask cleans nothing, on purpose. Thanks to Qeeyana (Reddit) for reporting it.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',

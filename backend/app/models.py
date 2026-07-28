@@ -275,6 +275,13 @@ class BankImage(db.Model):
     # or to repaint. NULL on a row scanned by a build that only kept the boolean —
     # such rows are re-picked by the next scan (see start_watermark).
     watermark_bbox = db.Column(Text, nullable=True)
+    # Hand-drawn correction: JSON list of normalized bboxes, the SAME shape and the
+    # same meaning as FaceDatasetImage.watermark_regions (one validator, one editor).
+    # NULL keeps the detector's bbox as the effective mask; [] is an EXPLICIT empty
+    # override ("there is nothing to repaint here") and never falls back to the box.
+    # Both cleaning levels read this first — an edit the cleaner ignores would be
+    # worse than no editor at all. Additive column (migration in create_app).
+    watermark_regions = db.Column(Text, nullable=True)
     # How the cleaned blob was produced: NULL = none (no cleaned version on disk) |
     # 'crop' (level 1, PIL, invents no pixel) | 'lama' | 'klein' (level 2, inpaint).
     # Non-NULL is what makes the readers (promote, thumbnails, the file route)

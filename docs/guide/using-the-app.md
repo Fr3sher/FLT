@@ -935,6 +935,38 @@ mark position; the panel says so and one more **🚩 Find watermarks** run makes
 them cleanable.
 
 
+## Fix a watermark mask in a bank
+
+The detector draws **one** box, and it is a guess: it can miss a second logo,
+swallow half the face, or land beside the mark. Open **▶ Review**, walk to a
+flagged image and press **🚩 Edit mask** (shortcut `M`) — the same zone editor
+the datasets use, on the bank image, right there.
+
+- **+ Add zone**, then drag on the photo to draw a rectangle over the mark. Up
+  to 32 zones; drag a zone to move it, its corners to resize.
+- **Delete zone** removes the selected one, **Reset to detected** throws your
+  zones away and puts the detector's box back.
+- Every edit saves as you draw. If a save fails it says so and offers a retry —
+  the zones on screen are never silently unsaved.
+
+What the two cleaning steps then do with your mask:
+
+- **🧽 Inpaint repaints exactly the zones you drew** — all of them, including a
+  zone sitting on the subject, which is precisely what a hand mask is for.
+- **✂ Auto-crop skips a hand-masked image.** A crop can only cut one border
+  band; it cannot express several zones or a mark on the subject, so cropping
+  the old box would remove pixels you did not point at.
+- **An empty mask cleans nothing.** Delete every zone and you have said "there
+  is nothing to repaint here": neither step touches that image, and the panel
+  says how many are in that state instead of leaving them looking unhandled.
+
+A flagged image an older scan left *without* a box becomes cleanable as soon as
+you draw the zones yourself — that drawing is the missing information. And as
+everywhere else in a bank, **your own file is never modified**: cleaning writes
+a separate copy. A rotated image is shown unrotated here, because the whole
+watermark lane works on your original file, which the ↻ turn never changed.
+
+
 ## Move a bank folder to another disk
 
 A bank points at a folder *in place*, but nothing it computes lives in that

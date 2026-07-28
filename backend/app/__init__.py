@@ -185,6 +185,10 @@ _SCHEMA_ADDITIONS = (
     # is recorded. Additive: existing banks keep their rows, they just carry NULLs.
     ('bank_image', 'watermark_bbox', 'TEXT'),
     ('bank_image', 'watermark_clean_method', 'VARCHAR(16)'),
+    # Hand-edited watermark mask (JSON list of normalized boxes), the bank's half
+    # of the dataset's watermark_regions. Additive: a database that never gains it
+    # simply has no hand-edited mask and both levels keep routing on the bbox.
+    ('bank_image', 'watermark_regions', 'TEXT'),
     # Bank provenance pass — effective resolution, letterbox, JPEG quality and the
     # ai/camera/unknown origin. Same additive path: existing banks keep every row
     # and simply carry NULLs until the next quality scan fills them in.

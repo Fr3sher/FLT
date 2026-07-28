@@ -334,6 +334,32 @@ def bank_watermark_undo(bank_id):
     return jsonify({'ok': True, 'restored': n})
 
 
+@bp.put('/bank/<int:bank_id>/image/<int:image_id>/watermark-regions')
+def bank_image_watermark_regions(bank_id, image_id):
+    """Replace one flagged image's hand-drawn watermark mask — the Bank's half of
+    the dataset route of the same name (same payload, same validator, same
+    meaning). {regions: null} drops the override and goes back to the detected
+    box; {regions: []} is an explicit empty mask (nothing gets repainted).
+    400 = illegal mask · 404 = unknown bank/image · 409 = no longer flagged."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or 'regions' not in data:
+        return jsonify({'error': 'regions is required'}), 400
+    try:
+        result = banks.set_watermark_regions(LOCAL_USER, bank_id, image_id,
+                                             data['regions'])
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        # A 409 that is NOT the "bank is occupied" refusal — it is a state
+        # conflict on one row (already cleaned/dismissed elsewhere, or by another
+        # tab). Labelled like the busy one so a caller can tell them apart
+        # instead of matching on our sentence.
+        return jsonify({'error': str(e), 'conflict': 'not_flagged'}), 409
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
+
+
 @bp.post('/bank/<int:bank_id>/watermark/dismiss')
 def bank_watermark_dismiss(bank_id):
     """Rule {image_ids} NOT watermarked — they leave both cleaning levels and are
