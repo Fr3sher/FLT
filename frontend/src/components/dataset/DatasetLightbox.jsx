@@ -244,7 +244,8 @@ export default function DatasetLightbox({
             Qeeyana on Reddit) is caused by the INSTRUCTION. The note quotes that
             instruction live and links to both. */}
         {onImprove && !improvementActive && (
-          <KleinImproveNote subjectType={subjectType} className="w-full sm:w-auto sm:max-w-md" />
+          <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
+            className="w-full sm:w-auto sm:max-w-md" />
         )}
       </div>
     </div>

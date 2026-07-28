@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-choose-the-klein-model-improve-runs-on',
+    date: '2026-07-28',
+    title: 'Choose which Klein model ✨ Upscale & improve runs on',
+    blurb:
+      'Improve never asked which model to use: it picked one for you, silently, and nothing on the screen said which. It now names the model it will run — even when there is only one — and lets you choose it when your ComfyUI has several. The choice is saved on the dataset (not in one browser), it is the same model Klein generation uses, and it applies to the single pass, the 🔄 re-run and the whole batch alike. Models are detected automatically wherever ComfyUI can load them, and if the one you chose is later moved away the run says so by name instead of quietly swapping in another.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-bank-watermark-mask-editing',
     date: '2026-07-28',
     title: 'Fix a wrong watermark box without leaving the bank',

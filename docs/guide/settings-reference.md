@@ -181,6 +181,22 @@ It is a **rendering** knob, not an anatomy fix: extra limbs, tails or wrong body
 
 Separate from **Upscale & improve ▸ Steps** (`klein.improve_steps`), which drives the manual improve pass only.
 
+### Klein model (per dataset)
+
+Not in Settings — it lives on the **dataset**, in the 🖥️ *Klein tuning* block of the generation panel and next to the ✨ **Upscale & improve** action itself. One setting, deliberately: generation and improve drive the same loader in the same workflow, so two near-identical model dropdowns would only be a lasting source of confusion. If you ever need to improve with a heavier model than the one you generate with, say so — splitting one stored value into two is additive; merging two back into one would have to throw one of your answers away.
+
+**Default is Auto**, and Auto is exactly what every dataset did before this setting existed: Studio resolves the model itself (the canonical download first, then the first loadable Klein file it finds). Choosing nothing changes nothing.
+
+**The list is detected, never typed.** It comes from the same scan ComfyUI itself would do — `models/unet`, `models/diffusion_models`, every root declared in `extra_model_paths.yaml`, and a relocated models folder (`comfyui.models_dir`) — in a `klein`-named subfolder **or** loose at the root. The one real constraint is that the model must be *nameable* as Klein: either the file name or its folder name has to contain `klein`. See *Where the Klein model can live* in the README.
+
+**What it applies to:** the single ✨ improve, the 🔄✨ re-run, the whole improve batch, and Klein generation (variations and regenerations) for that dataset.
+
+**When there is only one model**, the picker does not appear — there is no choice to make — but the line naming the model still does. Not knowing which model produced an image was the actual complaint; a dropdown with one option was never the answer.
+
+**If the model you chose is later moved or deleted**, the run **refuses by name** and tells you which file is gone. It does not quietly fall back to another model: that swap produces a result that looks perfectly fine and is not the one you asked for.
+
+**Coming from an older version:** the generation picker used to save to your **browser** (`editPage_flux2KleinModel_v1`), which improve never read — that is why improve had no model option anywhere. That browser value is still honoured for generation and is now offered, once, to be saved onto the dataset. Nothing is adopted behind your back: until you accept, improve keeps resolving Auto exactly as before.
+
 ### Identity & Klein prompts (advanced)
 
 *Feature request by @bbsorry (雨田壹).* Every generated variation is prefixed by a hidden **identity lock** — a block of text that tells the engine to keep the subject's exact identity and take the pose and setting from the description, not the reference photo. These used to be baked in and invisible; now you can read and edit them. They are stored under `identity_prompts.*`.

@@ -326,7 +326,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                   selection. w-full = its own line under the buttons, at every
                   width (Qeeyana, Reddit). */}
               {onImproveBatch && kleinAvailable && improveSelection.eligible.length > 0 && (
-                <KleinImproveNote subjectType={subjectType}
+                <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
                   className="w-full border-t border-indigo-400/20 pt-1.5" />
               )}
             </div>

@@ -17,6 +17,7 @@
 import { useEffect, useState } from 'react';
 import { apiFetch } from '../../api/fetchClient';
 import SettingsLink from '../common/SettingsLink';
+import KleinModelSetting from '../shared/KleinModelSetting';
 import { improveInstructionLine, improveAnimeCaution, readImproveInstruction } from './kleinImproveHint';
 
 const TTL_MS = 15000;
@@ -40,7 +41,7 @@ export function _resetKleinImproveNoteCache() {
   cache = { at: 0, promise: null };
 }
 
-export default function KleinImproveNote({ subjectType = '', className = '' }) {
+export default function KleinImproveNote({ subjectType = '', className = '', datasetId = null }) {
   const [payload, setPayload] = useState(null);
 
   useEffect(() => {
@@ -70,6 +71,11 @@ export default function KleinImproveNote({ subjectType = '', className = '' }) {
       {caution && (
         <p className="text-amber-300 break-words">{caution}</p>
       )}
+      {/* WHICH model executes the instruction — the other half of the same
+          question, and the half nothing on this screen ever answered. Named
+          even on a one-model install; the picker itself only appears when
+          there is more than one thing to pick. */}
+      <KleinModelSetting datasetId={datasetId} />
       {/* Two targets because they are two different problems: the WORDS
           (why it turned realistic) and the AMOUNT (how far it moved).
           flex-wrap so they stack rather than overflow on a phone. */}

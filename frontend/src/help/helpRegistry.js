@@ -816,6 +816,18 @@ const TOPICS = [
     // the panel already shows a targeted notice to the only browsers it affects
     // (the ones that had turned masking off). A third surface would be nagging.
     app: { route: '/datasets?section=training' } },
+  // WHICH Klein model runs — a per-DATASET setting since 28/07. Improve took no
+  // model at all (the server resolved one silently) and generation's picker was a
+  // per-BROWSER localStorage value that improve never read, so "which model made
+  // this?" had no answer on any screen. One setting now serves both.
+  { id: 'dataset.klein_model', kind: 'setting', title: 'Klein model for this dataset',
+    keywords: ['klein', 'model', 'base model', 'unet', 'diffusion model', 'which model',
+      'choose model', 'pick model', 'improve', 'upscale', 'upscale & improve',
+      'generation', 'flux2', 'flux 2', 'kv', '9b', '4b', 'safetensors', 'auto',
+      'auto-detected', 'detected', 'comfyui models', 'model missing', 'moved',
+      'not on disk', 'per browser', 'localstorage'],
+    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets' } },
   // Concept face masking (issue #15) is a per-DATASET Advanced training option,
   // so like Dual captions it points at the dataset guide rather than
   // settings-reference. Its two tuning knobs live in Settings > Training and are
