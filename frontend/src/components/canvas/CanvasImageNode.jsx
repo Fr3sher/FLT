@@ -38,17 +38,41 @@ import { imageFactsLine } from '../../utils/generatedImageFacts';
    arithmetic is nudgeImageNode(), unit-tested; this file only routes keys. */
 
 export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
-  onClose, onOpen, boardScale = 1 }) {
+  onClose, onOpen, boardScale = 1, variant = 'node', box = null }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
   const facts = imageFactsLine(img);
+  /* 🖼🖼 A MEMBER of a group draws the same picture with the same actions, in a
+     box the strip decides (utils/canvasImageGroups.layoutImageNodes) instead of
+     its own. Three things go away and nothing is added:
+
+       • the frame and the rounding — that IS the request ("side by side with no
+         border"), and a strip of framed tiles is a contact sheet, not one node;
+       • the resize corner — a member has no size of its own to drag; the strip
+         is resized as a whole, from its own corner;
+       • the permanent header and control cluster — at rest the strip is just
+         pictures. They come back on hover/focus of THIS picture and only this
+         one, which is also how you can tell which ✕ you are about to press.
+
+     Deliberately the SAME component and the same control cluster rather than a
+     second set of buttons drawn by the group: anything the chrome gains next
+     lands in a group for free. */
+  const member = variant === 'member';
+  const geom = box || node;
   // The controls are drawn in SCREEN space: counter-scaled by the board zoom so
   // a finger finds them at 24 % exactly as it does at 100 %.
-  const k = chromeScale(boardScale, node.w);
+  const k = chromeScale(boardScale, geom.w);
   const chrome = { transform: `scale(${k})`, transformOrigin: 'top right' };
+  // Revealed on hover/focus for a member, always on for a node of its own.
+  const reveal = member
+    ? ' opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100'
+    : '';
 
   const onKeyDown = (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); onClose?.(node); return; }
+    // A member has no geometry of its own to nudge — the strip decides its box.
+    // Swallowing the arrows anyway would silently break scrolling the page.
+    if (member) return;
     const next = nudgeImageNode(node, e.key, e.shiftKey);
     if (!next) return;                    // never swallow a key we do not handle
     e.preventDefault();
@@ -67,14 +91,31 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
       role="group"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      aria-label={`Pinned image from ${laneName || 'this dataset'}, ${stepLabel}. `
-        + 'Arrow keys move it, plus and minus resize it, Escape closes it.'}
+      aria-label={member
+        ? `Pinned image from ${laneName || 'this dataset'}, ${stepLabel}, inside a group. `
+          + 'Drag it off the group to take it out. Escape closes it.'
+        : `Pinned image from ${laneName || 'this dataset'}, ${stepLabel}. `
+          + 'Arrow keys move it, plus and minus resize it, Escape closes it.'}
       title={`${stepLabel} · ${facts}`}
-      style={{ position: 'absolute', left: node.x, top: node.y,
-        width: node.w, height: node.h }}
-      className="lds-canvas-image group flex flex-col overflow-hidden rounded-lg border border-indigo-400/40 bg-surface-overlay shadow-lg
-                 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300">
-      <header className="flex shrink-0 items-center gap-1 border-b border-border bg-app/70 px-1.5 py-0.5">
+      style={{ position: 'absolute', left: geom.x, top: geom.y,
+        width: geom.w, height: geom.h }}
+      className={'lds-canvas-image group flex flex-col overflow-hidden bg-surface-overlay '
+        + (member
+          // No frame and no rounding BETWEEN pictures — that is the request. The
+          // inset ring on hover is what replaces it: it lights the picture you
+          // are pointing at without ever drawing a rule between two of them.
+          ? 'hover:ring-2 hover:ring-inset hover:ring-indigo-300/70 '
+          : 'rounded-lg border border-indigo-400/40 shadow-lg ')
+        + 'focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-300'}>
+      {/* ⚠️ A member's label is an OVERLAY, not a row. Left in the flex flow it
+          still reserved its height while invisible, the picture below it was
+          then shorter than its tile, and `object-contain` answered with a dark
+          band down each side — which is a border between two images, drawn by
+          the very code that exists to remove it. */}
+      <header className={(member
+        ? 'absolute inset-x-0 top-0 z-10 flex items-center gap-1 bg-app/80 px-1.5 py-0.5 backdrop-blur-sm'
+        : 'flex shrink-0 items-center gap-1 border-b border-border bg-app/70 px-1.5 py-0.5')
+        + reveal}>
         <span className="min-w-0 flex-1 truncate text-content-muted text-[0.5625rem] font-semibold tabular-nums">
           {stepLabel}
         </span>
@@ -86,7 +127,8 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           glyphs a pixel apart is how a miss on ✕ opened 🔍 instead. */}
       <div style={chrome}
         data-testid="canvas-image-controls"
-        className="absolute right-0 top-0 z-10 flex items-start gap-1 rounded-bl-lg bg-app/85 p-0.5 backdrop-blur-sm">
+        className={'absolute right-0 top-0 z-10 flex items-start gap-1 rounded-bl-lg bg-app/85 p-0.5 backdrop-blur-sm'
+          + reveal}>
         {/* Opens the full record — every setting, the prompt, the copy buttons.
             The node is the picture; the facts stay one click away rather than
             being crammed onto a thumbnail. */}
@@ -108,12 +150,16 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
       </div>
       {/* The resize corner. 28 px on purpose — a hairline handle is a desktop-only
           affordance, and this board is used on a phone. Hit-tested BEFORE the
-          drag/pan decision, so a finger landing here always resizes. */}
+          drag/pan decision, so a finger landing here always resizes.
+          A group MEMBER has none: its width is its aspect ratio at the strip's
+          height, so there is nothing about it to drag. The strip has one. */}
+      {!member && (
       <span data-canvas-image-resize="" aria-hidden
         title="Drag to resize"
         style={{ position: 'absolute', right: 0, bottom: 0, width: 28, height: 28,
           transform: `scale(${k})`, transformOrigin: 'bottom right' }}
         className="cursor-nwse-resize touch-none rounded-tl-md border-l border-t border-indigo-400/40 bg-app/80 text-content-subtle after:absolute after:bottom-1 after:right-1 after:text-[0.625rem] after:content-['◢']" />
+      )}
     </div>
   );
 }

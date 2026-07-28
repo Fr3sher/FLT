@@ -4477,6 +4477,25 @@ def _clamp_image_box(x, y, w, h):
             min(CANVAS_IMAGE_MAX, max(CANVAS_IMAGE_MIN, h)))
 
 
+def _clean_group(node) -> tuple:
+    """🖼🖼 One row's group membership, sanitised: (group_id, group_pos).
+
+    The id is an opaque client key (``g<image id>``, with a suffix when that one
+    is taken); it is length-capped and stripped, never parsed. An empty or
+    unusable id means "in no group", and then the position is meaningless and
+    goes with it — a row carrying a position and no group would be a state the
+    board cannot draw."""
+    gid = node.get('group_id')
+    gid = str(gid).strip()[:40] if gid not in (None, '') else None
+    if not gid:
+        return (None, None)
+    try:
+        pos = int(node.get('group_pos') or 0)
+    except (TypeError, ValueError):
+        pos = 0
+    return (gid, max(0, min(10_000, pos)))
+
+
 def canvas_image_nodes(user_id, dataset_ids=None) -> dict:
     """🖼 Every image pinned on the board, grouped by dataset id — geometry AND
     the image row itself, so a lane can draw its pinned pictures without a
@@ -4517,6 +4536,11 @@ def canvas_image_nodes(user_id, dataset_ids=None) -> dict:
             'x': float(r.x), 'y': float(r.y),
             'w': float(r.w), 'h': float(r.h),
             'visible': bool(r.visible),
+            # 🖼🖼 The side-by-side strip this picture belongs to, if any. Null
+            # on every row of a board that has never grouped anything — and on
+            # every row of a database that predates the columns.
+            'group_id': r.group_id or None,
+            'group_pos': None if r.group_pos is None else int(r.group_pos),
             'image': _gallery_image(img),
         })
     if pruned:
@@ -4548,7 +4572,12 @@ def save_canvas_image_nodes(user_id, dataset_id, nodes) -> dict:
         box = _clamp_image_box(n.get('x'), n.get('y'), n.get('w'), n.get('h'))
         if box is None:
             continue
-        wanted[iid] = (box, bool(n.get('visible', True)))
+        # 🖼🖼 Group membership travels with the row. A row that does not MENTION
+        # the fields keeps whatever it had — a plain drag or resize sent by an
+        # older client (or by any code path that only knows about geometry) must
+        # never quietly dissolve a group.
+        group = _clean_group(n) if ('group_id' in n or 'group_pos' in n) else None
+        wanted[iid] = (box, bool(n.get('visible', True)), group)
     if not wanted:
         return {'saved': 0,
                 'total': CanvasImageNode.query.filter_by(dataset_id=dataset_id).count()}
@@ -4559,16 +4588,19 @@ def save_canvas_image_nodes(user_id, dataset_id, nodes) -> dict:
         CanvasImageNode.dataset_id == dataset_id,
         CanvasImageNode.image_id.in_(list(wanted))).all()}
     saved = 0
-    for iid, ((x, y, w, h), visible) in wanted.items():
+    for iid, ((x, y, w, h), visible, group) in wanted.items():
         if iid not in legit:
             continue
+        gid, gpos = group if group is not None else (None, None)
         row = existing.get(iid)
         if row is None:
             db.session.add(CanvasImageNode(
                 dataset_id=dataset_id, image_id=iid, x=x, y=y, w=w, h=h,
-                visible=visible))
+                visible=visible, group_id=gid, group_pos=gpos))
         else:
             row.x, row.y, row.w, row.h, row.visible = x, y, w, h, visible
+            if group is not None:
+                row.group_id, row.group_pos = gid, gpos
         saved += 1
     db.session.commit()
     return {'saved': saved,

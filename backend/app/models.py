@@ -801,6 +801,24 @@ class CanvasImageNode(db.Model):
     w = db.Column(Float, nullable=False, default=260.0)
     h = db.Column(Float, nullable=False, default=260.0)
     visible = db.Column(db.Boolean, nullable=False, default=True)
+    # 🖼🖼 Which side-by-side GROUP this picture is fused into, and where in it.
+    # Dropping one pinned image onto another turns them into one node whose
+    # pictures sit edge to edge; there is no limit on how many join, and
+    # dragging one off the strip makes it a node of its own again.
+    #
+    # A group is deliberately NOT a row of its own. It is a membership carried
+    # by pictures that stay ordinary nodes, because the geometry above is a
+    # per-image promise ("close it, re-open it from its gallery, it comes back
+    # where and how big you left it") and a container node would have to keep a
+    # second copy of every member's box, free to disagree with this one. Joining
+    # a group therefore never touches x/y/w/h — the strip is computed from them
+    # at draw time (frontend utils/canvasImageGroups), and leaving one hands
+    # them straight back.
+    #
+    # Both are NULLABLE and ADDITIVE (see _SCHEMA_ADDITIONS): a database that
+    # predates them reads NULL everywhere and draws the board it always drew.
+    group_id = db.Column(db.String(40), nullable=True)
+    group_pos = db.Column(db.Integer, nullable=True)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow,
                            onupdate=datetime.utcnow)
     dataset = db.relationship('FaceDataset')

@@ -394,6 +394,21 @@ const TOPICS = [
      'cross does not close', 'cannot close a pinned image', 'close button too small',
      'x does nothing', 'buttons too small on the canvas', 'canvas on a phone'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
+  // 🖼🖼 A gesture nobody can guess: it earns a topic of its own, not a clause
+  // buried in the one above. Half these keywords are how someone who has
+  // ALREADY done it by accident would describe what happened.
+  action('canvas-image-groups', '🖼🖼 Fuse pinned images side by side',
+    ['group images', 'merge images', 'fuse images', 'combine pinned images',
+     'side by side', 'contact sheet on the canvas', 'compare images edge to edge',
+     'no border between images', 'strip of images', 'image group',
+     'drop one image on another', 'stack images', 'join two pinned images',
+     'add a third image to the group', 'how many images can i group',
+     // …and how it reads when it was NOT meant.
+     'my images merged', 'two images became one', 'images stuck together',
+     'ungroup', 'split a group', 'take an image out of the group',
+     'undo a group', 'move a group of images', 'resize a group',
+     'close a whole group', 'which x closes which image'],
+    '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-deploy-state', 'Which checkpoints are deployed (the edge colour)',
     ['deployed', 'not deployed', 'blue bar', 'dashed bar', 'edge colour', 'legend',
      'which checkpoint can i use', 'testable', 'in comfyui', 'on disk only',

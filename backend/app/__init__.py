@@ -205,6 +205,11 @@ _SCHEMA_ADDITIONS = (
     # the database so the supervisor can terminate a pod whose monitor thread
     # never honoured it. Additive — existing runs simply carry NULL.
     ('cloud_training_run', 'stop_requested_at', 'DATETIME'),
+    # 🖼🖼 Canvas: which side-by-side group a pinned image is fused into, and
+    # where in it. Additive and nullable — a board that predates them simply has
+    # no groups on it, and every pinned picture keeps the geometry it had.
+    ('canvas_image_node', 'group_id', 'VARCHAR(40)'),
+    ('canvas_image_node', 'group_pos', 'INTEGER'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

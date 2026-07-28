@@ -10,6 +10,10 @@ import {
   clampImageBox, defaultImageSpot, imageNodeEdges, imageNodeExtent,
   openGeometry, visibleImageNodes,
 } from '../../utils/canvasImageNodes';
+import {
+  drawnNodes, extractFromGroup, groupBoxOf, layoutBoxes, layoutImageNodes,
+  mergeIntoGroup, mergeTargetAt, shouldExtract,
+} from '../../utils/canvasImageGroups';
 import { DEPLOY_BAR_CLASS, DEPLOY_LEGEND } from '../../utils/checkpointDeployState';
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
 import { LineageEdgeDefs, LineageEdges } from '../dataset/lineageEdges';
@@ -40,6 +44,7 @@ import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
+import CanvasImageGroup from './CanvasImageGroup';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
 import { HelpBadge } from '../../help/HelpMode';
@@ -184,19 +189,47 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
  *
  *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
-function LaneImages({ lane, nodes, onGeometry, onClose, onOpen, boardScale }) {
-  if (!nodes.length) return null;
-  const edges = imageNodeEdges(nodes, lane.graph);
+function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup,
+  boardScale, hint }) {
+  if (!layout.length) return null;
+  // Edges are drawn from where each picture actually IS — a member's slot in
+  // its strip, not the box it remembers while it waits to leave one.
+  const edges = imageNodeEdges(drawnNodes(layout), lane.graph);
   return (
     <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
       <svg width="1" height="1" className="block overflow-visible" aria-hidden>
         <LineageEdges edges={edges} isLit={() => false} />
       </svg>
-      {nodes.map((n) => (
-        <CanvasImageNode key={n.imageId} node={n} datasetId={lane.datasetId}
+      {layout.map((r) => (r.kind === 'group' ? (
+        <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
+          laneName={lane.name} onClose={onClose} onOpen={onOpen}
+          onCloseGroup={onCloseGroup} boardScale={boardScale}
+          dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
+      ) : (
+        <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
           laneName={lane.name} onGeometry={onGeometry} onClose={onClose}
           onOpen={onOpen} boardScale={boardScale} />
-      ))}
+      )))}
+      {/* ⊕ "Let go here and these become one node." Without it the very first
+          merge can only be discovered by accident, which is worse than not
+          having the feature: two pictures would fuse and the board would look
+          broken. Sober on purpose — the board's own indigo, an outline and a
+          caret at the exact slot the picture would take, no animation. */}
+      {hint?.merge && (
+        <div style={{ position: 'absolute', left: hint.box.x, top: hint.box.y,
+          width: hint.box.w, height: hint.box.h }}
+          data-testid="canvas-merge-hint"
+          className="pointer-events-none z-20 rounded-md border-2 border-dashed border-indigo-300 bg-indigo-500/15">
+          <span style={{ position: 'absolute', left: hint.caret - hint.box.x - 2, top: 0,
+            width: 4, height: hint.box.h }}
+            className="bg-indigo-300" aria-hidden />
+          <span style={{ position: 'absolute', left: 0, top: -22 / Math.max(boardScale, 0.05),
+            fontSize: Math.max(9, 11 / Math.max(boardScale, 0.05)) }}
+            className="whitespace-nowrap rounded bg-indigo-500 px-1.5 py-0.5 font-semibold text-white">
+            Join — {hint.count} images side by side
+          </span>
+        </div>
+      )}
     </div>
   );
 }
@@ -279,16 +312,46 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
   const imagesRef = useRef(imagesByLane);
   useEffect(() => { imagesRef.current = imagesByLane; }, [imagesByLane]);
 
+  /* 🖼🖼 What each lane actually DRAWS: lone pictures, and groups of pictures
+     fused into one side-by-side strip (utils/canvasImageGroups). Derived, never
+     stored — the rows keep one geometry per picture, exactly as before, plus
+     two nullable group fields.
+
+     A member being dragged is pulled OUT of its strip here, for the duration of
+     the gesture only. That is the affordance as much as the mechanism: the
+     picture lifts off the band the moment the drag starts, so "I can take this
+     one out" is visible before anything has been committed. */
+  const layoutByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) {
+      const list = imagesByLane[e.datasetId] || [];
+      const nodes = imgDrag?.detach && imgDrag.datasetId === e.datasetId
+        ? list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, groupId: null, groupPos: null } : n))
+        : list;
+      out[e.datasetId] = layoutImageNodes(nodes);
+    }
+    return out;
+  }, [placed, imagesByLane, imgDrag]);
+  const layoutRef = useRef(layoutByLane);
+  useEffect(() => { layoutRef.current = layoutByLane; }, [layoutByLane]);
+  // ⊕ / ⤢ What the gesture in flight would DO on release: a merge target, or
+  // "this one is on its way out of its group". Feedback only — the decision is
+  // taken again from the same functions at pointerup.
+  const [dropHint, setDropHint] = useState(null);
+
   // A lane has to be big enough to hold its pinned pictures too, or Fit would
-  // crop one off the board with no way back to it.
+  // crop one off the board with no way back to it. Measured on the STRIPS: a
+  // group is wider than any of its members and cropping it would put a picture
+  // out of reach with no way back.
   const world = useMemo(() => stackLanes(placed.map((e) => {
-    const ext = imageNodeExtent(imagesByLane[e.datasetId] || []);
+    const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
     return {
       ...e,
       width: Math.max(e.graph?.width || 0, ext.width),
       height: Math.max(e.graph?.height || 0, ext.height),
     };
-  })), [placed, imagesByLane]);
+  })), [placed, layoutByLane]);
 
   // The latest placement, for the pointer handlers (which must not re-bind on
   // every board change just to read a card's current position).
@@ -438,15 +501,46 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     }]);
   }, [onSaveImageNodes]);
 
-  const beginImage = useCallback((datasetId, imageId, mode, origin) => {
+  /* Write a whole set of rows a group gesture produced (a merge, an extraction,
+     a group close). Same optimistic rule as saveImage: on screen first, sent
+     after. `image` is looked up from the live lane because the pure functions
+     only deal in geometry and membership — they never carry the payload. */
+  const saveRows = useCallback((datasetId, rows, visible = true) => {
+    if (!rows?.length) return;
+    const byId = new Map((imagesRef.current[datasetId] || []).map((n) => [n.imageId, n]));
+    onSaveImageNodes?.(datasetId, rows.map((r) => ({
+      image_id: r.imageId, ...clampImageBox(r),
+      visible: r.visible ?? visible,
+      group_id: r.groupId ?? null,
+      group_pos: r.groupPos ?? null,
+      image: byId.get(r.imageId)?.image,
+    })));
+  }, [onSaveImageNodes]);
+
+  /* Pick a pinned picture — or a whole strip — up.
+     `asGroup` is what tells the two apart: a group is moved and resized through
+     its ANCHOR (the strip sits at the anchor's box), so the very same gesture
+     machinery serves both and there is no second one to keep in step. Without
+     the flag the anchor would be read as "a member being dragged out of its own
+     group", which is the one thing its title bar must never do. */
+  const beginImage = useCallback((datasetId, imageId, mode, origin, opts = {}) => {
     const node = (imagesRef.current[datasetId] || []).find((n) => n.imageId === imageId);
     if (!node) return false;
     const box = { x: node.x, y: node.y, w: node.w, h: node.h };
+    const groupBox = opts.asGroup
+      ? null : groupBoxOf(layoutRef.current[datasetId] || [], imageId);
+    // A member is dragged from the box it is DRAWN in, not the one it
+    // remembers — otherwise it would jump the instant it is picked up.
+    const tile = groupBox
+      ? drawnNodes(layoutRef.current[datasetId] || []).find((n) => n.imageId === imageId)
+      : null;
+    const from = tile ? { x: tile.x, y: tile.y, w: tile.w, h: tile.h } : box;
     // `cur` is the live box, kept on the gesture itself: reading it back off the
     // rendered lane at pointerup would race the last frame of the drag.
     imgRef.current = { datasetId, imageId, mode, sx: origin.x, sy: origin.y,
-      box, cur: box, moved: false, node };
-    setImgDrag({ datasetId, imageId, ...box });
+      box: from, own: box, cur: from, moved: false, node,
+      keepAspect: !!opts.keepAspect, groupBox, hint: null, leaving: false };
+    setImgDrag({ datasetId, imageId, ...from, detach: !!groupBox && mode === 'move' });
     pan.current = null;
     return true;
   }, []);
@@ -463,6 +557,21 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
        in utils/canvasNodeChrome so it is testable and cannot be lost in a
        rewrite of this handler. */
     if (isNodeControlTarget(e.target)) return;
+    /* 🖼🖼 A GROUP's own grips, hit-tested before its pictures: the title bar
+       moves the whole strip, the corner resizes it. Both act on the ANCHOR,
+       whose box IS the strip's — see beginImage(asGroup). On every pointer
+       type, no long press: the bar is the only grip a group has, and a finger
+       that deliberately grabbed a bar has already said what it means. */
+    const groupEl = e.target.closest?.('[data-canvas-group]');
+    if (groupEl) {
+      const resizing = !!e.target.closest?.('[data-canvas-group-resize]');
+      if (resizing || nodePointerIntent(e.target, e.pointerType) === 'group-move') {
+        frameRef.current?.setPointerCapture?.(e.pointerId);
+        if (beginImage(Number(groupEl.dataset.datasetId),
+          Number(groupEl.dataset.anchorId), resizing ? 'resize' : 'move',
+          localPoint(e), { asGroup: true, keepAspect: resizing })) return;
+      }
+    }
     const imgEl = e.target.closest?.('[data-canvas-image]');
     if (imgEl) {
       const dsId = Number(imgEl.dataset.datasetId);
@@ -545,11 +654,46 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
       const dy = (p.y - gi.sy) / s;
       if (!gi.moved && Math.hypot(p.x - gi.sx, p.y - gi.sy) < DRAG_SLOP) return;
       gi.moved = true;
-      const box = gi.mode === 'resize'
-        ? clampImageBox({ ...gi.box, w: gi.box.w + dx, h: gi.box.h + dy })
-        : clampImageBox({ ...gi.box, x: gi.box.x + dx, y: gi.box.y + dy });
+      let box;
+      if (gi.mode === 'resize') {
+        // A strip is resized as a WHOLE and keeps its shape: its height drives
+        // it (every member is scaled to that height), so letting width and
+        // height drift apart would only distort the anchor.
+        box = gi.keepAspect
+          ? clampImageBox({ ...gi.box, h: gi.box.h + dy,
+            w: gi.box.w * Math.max(0.05, (gi.box.h + dy) / Math.max(1, gi.box.h)) })
+          : clampImageBox({ ...gi.box, w: gi.box.w + dx, h: gi.box.h + dy });
+      } else {
+        box = clampImageBox({ ...gi.box, x: gi.box.x + dx, y: gi.box.y + dy });
+      }
+      /* What this drop WOULD do, recomputed on every frame from the very
+         functions that will decide it again on release — so the highlight can
+         never promise something the drop then refuses.
+         The probe is the dragged picture's CENTRE: "superposer" is about the
+         picture, not about where the finger happens to be inside it. */
+      if (gi.mode === 'move') {
+        const centre = { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+        const hit = mergeTargetAt(layoutRef.current[gi.datasetId] || [], gi.imageId, centre);
+        const leaving = !hit && shouldExtract(gi.groupBox, centre);
+        gi.hint = hit;
+        gi.leaving = leaving;
+        // Once it is on its way out, it is drawn at the size it will REALLY
+        // get back, so the change of size happens in the open during the
+        // gesture rather than as a surprise on release.
+        if (leaving && gi.own) {
+          box = clampImageBox({ x: centre.x - gi.own.w / 2, y: centre.y - gi.own.h / 2,
+            w: gi.own.w, h: gi.own.h });
+        }
+        setDropHint(hit
+          ? { datasetId: gi.datasetId, merge: true, box: hit.box, count: hit.count,
+            caret: hit.caret }
+          : (gi.groupBox && !leaving
+            ? { datasetId: gi.datasetId, leaving: true, groupId: gi.groupBox.groupId }
+            : null));
+      }
       gi.cur = box;
-      setImgDrag({ datasetId: gi.datasetId, imageId: gi.imageId, ...box });
+      setImgDrag({ datasetId: gi.datasetId, imageId: gi.imageId, ...box,
+        detach: !!gi.groupBox && gi.mode === 'move' });
       return;
     }
     const d = dragRef.current;
@@ -593,9 +737,31 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     const gi = imgRef.current;
     if (gi) {
       imgRef.current = null;
-      // Only a gesture that actually MOVED writes: a tap on a pinned picture
-      // must not quietly re-save the same coordinates.
-      if (gi.moved) saveImage(gi.datasetId, gi.node, gi.cur);
+      setDropHint(null);
+      /* Only a gesture that actually MOVED writes: a tap on a pinned picture
+         must not quietly re-save the same coordinates.
+
+         Three outcomes, in this order — the same order the highlight announced
+         them in, recomputed from the same functions so the two can never
+         disagree:
+           ⊕ dropped on another picture (or on a strip) → they FUSE, and the
+             dragged one keeps its own remembered geometry for the day it
+             leaves again;
+           ⤢ dropped clear of the strip it was in → it comes back out, at its
+             own size, where it was let go;
+           · anything else → the ordinary move/resize.
+         A member let go while still over its own strip falls through all three
+         and writes NOTHING: the gesture was started and abandoned, and the
+         board goes back exactly as it was. */
+      const nodes = imagesRef.current[gi.datasetId] || [];
+      if (gi.moved && gi.hint) {
+        saveRows(gi.datasetId,
+          mergeIntoGroup(nodes, gi.imageId, gi.hint.targetImageId, gi.hint.side));
+      } else if (gi.moved && gi.leaving) {
+        saveRows(gi.datasetId, extractFromGroup(nodes, gi.imageId, gi.cur));
+      } else if (gi.moved && !gi.groupBox) {
+        saveImage(gi.datasetId, gi.node, gi.cur);
+      }
       setImgDrag(null);
       pointers.current.delete(e.pointerId);
       frameRef.current?.releasePointerCapture?.(e.pointerId);
@@ -635,7 +801,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, [onPinLane, runCardGesture, saveImage]);
+  }, [onPinLane, runCardGesture, saveImage, saveRows]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -915,7 +1081,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
       const laneMap = imageNodes?.[dsId] || {};
       const res = placeImageBatch({
         graph: lane?.graph,
-        existing: imagesRef.current[dsId] || [],
+        // The boxes actually OCCUPIED: a strip, not the members' remembered
+        // spots — a fresh pin landing squarely on a group would be exactly the
+        // "nothing lands on top of anything" promise broken.
+        existing: layoutBoxes(layoutRef.current[dsId] || []),
         images,
         remembered: laneMap,
       });
@@ -957,14 +1126,52 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     setPinAllState(null);
   }, [pinAllState, onSaveImageNodes]);
 
-  // Closing KEEPS the geometry -- that is the whole promise. Only `visible` flips.
+  /* Closing KEEPS the geometry -- that is the whole promise. Only `visible`
+     flips.
+
+     🖼🖼 Closing a picture that is inside a GROUP also takes it out of it: a
+     closed picture is not in the strip, and leaving its membership behind would
+     make the strip re-form around a picture nobody can see. It leaves through
+     exactly the same function a drag-out uses, so the ones staying behind close
+     the gap the same way and a group left with one member dissolves the same
+     way — closing the second-to-last picture of a strip cannot leave a "group"
+     of one. The closed picture keeps its OWN remembered box, which is what
+     re-opening it from its gallery reads. */
   const handleCloseImage = useCallback((node) => {
     const dsId = node?.image?.dataset_id;
     if (dsId == null) return;
+    if (node.groupId) {
+      const nodes = imagesRef.current[dsId] || [];
+      const rows = extractFromGroup(nodes, node.imageId, { x: node.x, y: node.y });
+      if (rows.length) {
+        saveRows(dsId, rows.map((r) => (r.imageId === node.imageId
+          ? { ...r, visible: false } : { ...r, visible: true })));
+        return;
+      }
+    }
     onSaveImageNodes?.(dsId, [{
       image_id: node.imageId, x: node.x, y: node.y, w: node.w, h: node.h,
-      visible: false, image: node.image,
+      visible: false, group_id: null, group_pos: null, image: node.image,
     }]);
+  }, [onSaveImageNodes, saveRows]);
+
+  /* ✕ on the GROUP's bar: close all N at once.
+     Each picture keeps its OWN remembered geometry — the box it had before it
+     ever joined, never the slot it happened to occupy in the strip — and the
+     group is undone. So re-opening one from its gallery brings back exactly
+     that one, at its own size, which is the promise every other pinned picture
+     already makes; resurrecting a whole strip from a single gallery pin would
+     be the board doing something nobody asked for. The button says all of this
+     before it is pressed, and carries the count on the glyph so it can never be
+     mistaken for a member's ✕. */
+  const handleCloseGroup = useCallback((group) => {
+    const dsId = group?.members?.[0]?.node?.image?.dataset_id;
+    if (dsId == null) return;
+    onSaveImageNodes?.(dsId, group.members.map((m) => ({
+      image_id: m.node.imageId,
+      x: m.node.x, y: m.node.y, w: m.node.w, h: m.node.h,
+      visible: false, group_id: null, group_pos: null, image: m.node.image,
+    })));
   }, [onSaveImageNodes]);
 
   // The keyboard path into the same write (arrows / +- on a focused node), so
@@ -1053,8 +1260,12 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
             </span>
           ))}
         </span>
+        {/* The ONLY place the board's gestures are discoverable. A gesture that
+            is not listed here does not exist as far as anyone is concerned, so
+            every new one earns its clause — including 🖼🖼 drop-to-fuse, which
+            nobody would ever guess. */}
         <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
-          Drag a run to move it · drag the background to pan · wheel to zoom · click a run for all its images, notes and settings · click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare - pin an image from its gallery to put it ON the board
+          Drag a run to move it · drag the background to pan · wheel to zoom · click a run for all its images, notes and settings · click a checkpoint for its actions · tick a checkpoint’s <span aria-hidden>✓</span> to generate from it · <span className="font-semibold">⇧ Shift-click</span> two runs to compare - pin an image from its gallery to put it ON the board · <span className="font-semibold">drop one pinned image onto another</span> to fuse them side by side, drag one off the group to take it back out
         </span>
         {selectedForDiff.length > 0 && (
           <button type="button" onClick={() => setSelectedForDiff([])}
@@ -1103,9 +1314,11 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
             {world.lanes.map((lane) => (
               <div key={lane.datasetId}>
                 <LaneHeader lane={lane} />
-                <LaneImages lane={lane} nodes={imagesByLane[lane.datasetId] || []}
+                <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || []}
                   onGeometry={handleImageGeometry} onClose={handleCloseImage}
+                  onCloseGroup={handleCloseGroup}
                   onOpen={(n) => setPinnedZoom(n.image)}
+                  hint={dropHint?.datasetId === lane.datasetId ? dropHint : null}
                   boardScale={clampScale(view.scale)} />
                 <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
                   onNodeClick={onNodeClick} diffRole={diffRole} noteOf={noteOf}

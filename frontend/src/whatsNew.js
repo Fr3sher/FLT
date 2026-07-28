@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-canvas-fuse-pinned-images',
+    date: '2026-07-28',
+    title: 'Drop one pinned image onto another and compare them edge to edge',
+    blurb:
+      'Comparing two checkpoints on the canvas meant lining two pinned pictures up by hand and squinting at the gap between their frames. Now dropping one onto another fuses them into a single node: the pictures sit side by side with nothing drawn between them, and there is no limit — add a third, a tenth. Drag the title bar to move the whole strip, hover a picture for its own 🔍 and ✕, and drag one off the group to take it back out at the size it had before.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-28-scrape-straight-into-a-bank',
     date: '2026-07-28',
     title: 'Scrape the web straight into a bank — no throwaway dataset first',
