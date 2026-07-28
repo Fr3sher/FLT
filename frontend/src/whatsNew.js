@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-continue-training-from-the-canvas',
+    date: '2026-07-28',
+    title: 'Continue training straight from a checkpoint on the Canvas',
+    blurb:
+      'Click any checkpoint on the LoRA Canvas and ▶ Continue from here now opens the real launch dialog on that exact save — where to run it (local or cloud), how many extra steps, cadence, preview prompts, timestep weighting and learning rate. It used to be a greyed line telling you to go find the run on another page, and which page depended on whether it had trained locally or in the cloud. The board is also the first place that offers BOTH lanes for BOTH kinds of run: a local checkpoint can be finished on a rented GPU, and a cloud epoch can be finished on your machine. A lane that cannot be used says why instead of disappearing.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',
