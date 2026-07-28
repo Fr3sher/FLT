@@ -293,3 +293,41 @@ def test_monitor_responsiveness_still_reads_updated_at(ct, app, tmp_path):
             assert ct._monitor_is_responsive(run) is False
         finally:
             ct._monitor_threads.pop(int(run.id), None)
+
+
+def test_two_frozen_files_are_not_mistaken_for_progress(ct, app, tmp_path):
+    """The freeze clock read the LAST bar of the log. huggingface_hub fetches
+    several files at once, so consecutive tails end on DIFFERENT bars — and a
+    fingerprint built on the last one alone flips A → B → A forever while both
+    files sit frozen. A dead pod would have reported movement every poll, and
+    the freeze watchdog would never have fired on the one case it exists for.
+
+    Nothing here advances: both files hold their byte count and only the
+    elapsed column moves, exactly as tqdm re-prints it."""
+    with app.app_context():
+        two_files = (
+            'text_enc.safetensors:  50%|x| 1.00G/2.00G [10:00<10:00, 1.70MB/s]\n'
+            'vae.safetensors:      20%|x| 100M/500M [10:00<40:00, 170kB/s]\n'
+        )
+        run = _mkrun(ct, tmp_path, log=two_files,
+                     updated_at=datetime.utcnow() - timedelta(minutes=50))
+        ct.note_progress(run, datetime.utcnow() - timedelta(minutes=50))
+
+        # Same two frozen files, the tail now ending on the OTHER bar and with
+        # a bumped elapsed — the shape that used to read as progress.
+        swapped = (
+            'vae.safetensors:      20%|x| 100M/500M [10:20<40:00, 170kB/s]\n'
+            'text_enc.safetensors:  50%|x| 1.00G/2.00G [10:20<10:00, 1.70MB/s]\n'
+        )
+        (tmp_path / 'run_j1' / 'training.log').write_text(swapped, encoding='utf-8')
+        ct.note_progress(run)
+        assert ct._silent_seconds(run) > 45 * 60
+
+        # And the mirror image: one of the two genuinely advances -> alive.
+        moved = (
+            'text_enc.safetensors:  50%|x| 1.00G/2.00G [10:40<10:00, 1.70MB/s]\n'
+            'vae.safetensors:      60%|x| 300M/500M [10:40<02:00, 1.70MB/s]\n'
+        )
+        (tmp_path / 'run_j1' / 'training.log').write_text(moved, encoding='utf-8')
+        ct.note_progress(run)
+        assert ct._silent_seconds(run) < 60

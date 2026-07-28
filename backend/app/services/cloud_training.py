@@ -1535,16 +1535,33 @@ def _download_progress(run):
 
 
 def _progress_fingerprint(run) -> str:
-    """What "something actually happened on the pod" means, as a short string."""
+    """What "something actually happened on the pod" means, as a short string.
+
+    The download part is the SUM of every bar's bytes, not the last bar. Those
+    are not the same reading: huggingface_hub fetches several files at once, so
+    two consecutive tails end on different bars, and a fingerprint built from
+    the last one alone flips A(1.0G) → B(2.0G) → A(1.0G) forever while BOTH
+    files sit frozen. It would report movement on a dead pod — the freeze
+    watchdog would then never fire on the one case it exists for. Summing per
+    label means only a file that genuinely advanced can move the total.
+
+    Changing this string re-anchors the clock once per open run on upgrade (an
+    unseen fingerprint reads as progress). That costs one watchdog period on
+    runs alive at that moment, and it errs toward NOT killing — the right side
+    to be wrong on."""
+    tail = _log_tail(run)
     parsed = {}
     try:
-        parsed = lt._parse_training_log(_log_tail(run)) or {}
+        parsed = lt._parse_training_log(tail) or {}
     except Exception:
         parsed = {}
-    dl = _download_progress(run) or {}
+    try:
+        downloaded = lt.download_bytes_seen(tail)
+    except Exception:
+        downloaded = None
     return '|'.join(str(x) for x in (
         run.status or '', _staging_save_count(run), parsed.get('step'),
-        dl.get('label') or '', dl.get('done') or ''))
+        '' if downloaded is None else downloaded))
 
 
 def _read_progress_watch(run):
