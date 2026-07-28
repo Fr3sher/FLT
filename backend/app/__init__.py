@@ -136,6 +136,10 @@ _SCHEMA_ADDITIONS = (
     # nullable: a dataset that predates it simply has nothing remembered yet, and
     # keeps the base/variant it already had on the family it already had.
     ('face_dataset', 'train_family_bases', 'TEXT'),
+    # Per-family memory of the family-SCOPED train_settings keys (timestep_type).
+    # Additive and nullable, same contract: a dataset that predates it has
+    # nothing remembered and keeps exactly the settings it already had.
+    ('face_dataset', 'train_family_settings', 'TEXT'),
     ('face_dataset', 'prompt_suffix', 'TEXT'),
     ('face_dataset', 'prompt_suffixes', 'TEXT'),
     ('face_dataset', 'caption_options', 'TEXT'),

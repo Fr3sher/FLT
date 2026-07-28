@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-memory-savers-and-timestep-per-family',
+    date: '2026-07-28',
+    title: 'Switching model family no longer changes your run behind your back',
+    blurb:
+      'Turning quantisation or low-VRAM streaming off on a small family (Anima, SDXL — where off is the normal setting) and then switching to Krea 2, FLUX or Z-Image quietly built an unquantised 12B run: no warning, and hours of GPU — or rented cloud time — before anything went wrong. Advanced options and the pre-launch check now both say which saver is off, what that family actually needs, and what your card has. Timestep weighting is remembered per family instead, so a value picked for Z-Image stops overwriting the recipe of FLUX.2 Klein or Anima. Nothing changes for a dataset that stays on one family.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-07-28-mask-faces-says-why-it-is-off',
+    date: '2026-07-28',
+    title: '"Mask faces" tells you why it does not apply instead of vanishing',
+    blurb:
+      'On a character or style dataset the option disappeared entirely, so it read as a missing feature rather than one that does not apply — people went looking for it. It is now shown, greyed out, with the reason: a character LoRA has to learn the face, so weighing faces down would erase what you are training.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-training-base-is-per-family',
     date: '2026-07-28',
     title: 'Your training base now belongs to its model family',

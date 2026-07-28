@@ -54,7 +54,7 @@ import { laneOfPayload, preflightUrl } from './preflightLane.js';
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
-  memoryStateLabel,
+  memoryRiskLine, memoryStateLabel,
 } from './memorySavingAdvice';
 import { stopOutcomeMessage } from '../../utils/runSilence';
 import SettingsLink from '../common/SettingsLink';
@@ -469,6 +469,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const advMemTouched = memoryIsOverridden(adv?.memory_saving);
   const advMemStateLabel = memoryStateLabel(advMemEff);
   const advMemAdviceText = memoryAdviceText(adv?.memory_advice);
+  // Non-null only when a saver THIS family's recipe relies on is switched off.
+  // The server decides (one rule, shared with the preflight); the panel renders.
+  const advMemRiskLine = memoryRiskLine(adv?.memory_risk, adv?.family_label);
   const LR_SCHED_LABELS = { constant: 'Constant (default)', constant_with_warmup: 'Warmup → constant', linear: 'Linear decay', cosine: 'Cosine decay', cosine_with_restarts: 'Cosine + restarts' };
   // The resolution the next run will actually train at. Slider mode defaults to
   // 768 only (the slider loss makes several prediction passes per step — much
@@ -2330,6 +2333,16 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                     </label>
                   ))}
                 </div>
+                {/* A saver this family's recipe relies on is off — most often
+                    because it was switched off on a 2B family (Anima/SDXL, where
+                    off IS the default) and the family then changed. Wraps at
+                    400 px: no fixed width, no truncation. */}
+                {advMemRiskLine && (
+                  <span className={`text-[0.6875rem] leading-relaxed ${
+                    adv?.memory_risk?.verdict === 'can_disable' ? 'text-content-muted' : 'text-amber-300'}`}>
+                    {adv?.memory_risk?.verdict === 'can_disable' ? '' : '⚠️ '}{advMemRiskLine}
+                  </span>
+                )}
                 <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
                   <b className="text-content-muted font-medium">Why:</b> the recipes are tuned so a 12B model fits in
                   24 GB — quantisation costs precision and low-VRAM streaming costs a lot of speed. If your card is
