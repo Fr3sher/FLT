@@ -23,6 +23,20 @@ def _app():
     return current_app._get_current_object()
 
 
+def _busy(e):
+    """The ONE shape of a "this bank is occupied" refusal.
+
+    `error` stays what it always was (an English sentence, for anything that
+    only knows how to print a message), but `busy_kind` is the machine-readable
+    half the UI actually needs: it names the pass that holds the bank, so the
+    click can be refused in the user's vocabulary — "✨ Score pass is running —
+    137/412, press Stop above" — instead of echoing our sentence back at them.
+    It matters that this rides on the 409 itself: the refusal often arrives
+    BEFORE the first 2 s progress poll, so at that instant the response body is
+    the only thing that knows which pass is in the way."""
+    return jsonify({'error': str(e), 'busy_kind': e.kind}), 409
+
+
 @bp.get('/banks')
 def banks_list():
     """Every bank + its card previews. ?dataset_id=<id> additionally embeds each
@@ -68,7 +82,7 @@ def bank_from_dataset():
         bank_id = banks.start_dataset_import(_app(), LOCAL_USER,
                                              data.get('dataset_id'), data.get('name'))
     except bank_jobs.BankJobBusy as e:
-        return jsonify({'error': str(e)}), 409
+        return _busy(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except RuntimeError as e:
@@ -135,7 +149,7 @@ def bank_relocate(bank_id):
         out = banks.relocate_bank(LOCAL_USER, bank_id, data.get('folder'),
                                   confirm=bool(data.get('confirm')))
     except bank_jobs.BankJobBusy as e:
-        return jsonify({'error': str(e)}), 409
+        return _busy(e)
     except banks.BankRelocateMismatch as e:
         return jsonify({'error': str(e), **e.preview}), 400
     except ValueError as e:
@@ -203,7 +217,7 @@ def _start(fn, *args, **kwargs):
     try:
         fn(*args, **kwargs)
     except bank_jobs.BankJobBusy as e:
-        return jsonify({'error': str(e)}), 409
+        return _busy(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except RuntimeError as e:
@@ -379,7 +393,7 @@ def bank_promote_to_bank(bank_id):
                                           data.get('image_ids') or [],
                                           data.get('name'))
     except bank_jobs.BankJobBusy as e:
-        return jsonify({'error': str(e)}), 409
+        return _busy(e)
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, 'id': new_id}), 202
@@ -509,7 +523,13 @@ def bank_undo_last(bank_id):
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        # Same occupied-bank refusal as everywhere else, so the UI rephrases it
+        # through the same path instead of echoing our sentence. Raised as a
+        # RuntimeError rather than BankJobBusy, so the kind comes from the
+        # registry — same shape as delete-rejected below.
+        snap = bank_jobs.get(bank_id)
+        return jsonify({'error': str(e),
+                        'busy_kind': (snap or {}).get('kind')}), 409
     return jsonify({'ok': True, **out})
 
 
@@ -716,7 +736,12 @@ def bank_delete_rejected(bank_id):
     except ValueError:
         return jsonify({'error': 'not found'}), 404
     except RuntimeError as e:
-        return jsonify({'error': str(e)}), 409
+        # Same refusal as every other occupied-bank 409, so the UI rephrases it
+        # through the same path. This one is raised as a RuntimeError rather than
+        # BankJobBusy, so the kind is read back from the registry here.
+        snap = bank_jobs.get(bank_id)
+        return jsonify({'error': str(e),
+                        'busy_kind': (snap or {}).get('kind')}), 409
     return jsonify({'ok': True, **out})
 
 
