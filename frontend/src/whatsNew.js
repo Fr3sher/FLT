@@ -72,6 +72,13 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-28-lightbox-actions-use-the-side-space',
+    date: '2026-07-28',
+    title: 'A portrait photo now fills the screen, with the actions beside it',
+    blurb:
+      'Opening a portrait image full-screen on a wide monitor left two thirds of the width black while Crop, Mirror, Rotate and Upscale & improve queued on one line underneath — on the one axis the photo was short of. Those actions now move into a labelled rail in that empty space, and the photo gets the height back. Landscape images keep the bar at the bottom, where there is no side space to take, and phones are unchanged. The rail keeps full wording, not mute icons.',
+  },
+  {
     id: '2026-07-28-bank-watermark-mask-editing',
     date: '2026-07-28',
     title: 'Fix a wrong watermark box without leaving the bank',
