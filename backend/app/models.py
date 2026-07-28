@@ -146,6 +146,17 @@ class FaceDatasetImage(db.Model):
     # affiché sur la tuile — sinon l'échec est muet et l'utilisateur relance à
     # l'aveugle. Nettoyé au regenerate. Colonne additive (migration create_app).
     fail_reason = db.Column(Text, nullable=True)
+    # Ce que fail_reason raconte, en UN mot machine — pour COMPTER les échecs par
+    # nature sans relire la phrase (une phrase se réécrit, une clé non) :
+    #   'refused' = le fournisseur a répondu normalement et a refusé l'image
+    #               (filtre de sortie) — ce n'est pas une panne ;
+    #   'empty'   = 200 sans image, sans raison exploitable (moteurs qui ne
+    #               savent pas distinguer refus et hoquet) ;
+    #   'error'   = vraie panne (réseau, clé, quota, 5xx, sauvegarde, queue).
+    # NULL = ligne d'avant la colonne, ou échec non classé : l'UI ne compte alors
+    # que ce qu'elle sait, elle ne devine pas. Colonne additive (migration
+    # create_app). Valeurs = clés stockées en base : ne jamais les renommer.
+    fail_kind = db.Column(String(16), nullable=True)
     # De combien la box recadrée (head-crop auto à l'import OU recadrage manuel) est
     # en-dessous de la résolution d'entraînement : size / côté_de_la_box. NULL =
     # jamais croppé (import plein cadre) ou pas encore recalculé (anciennes lignes).

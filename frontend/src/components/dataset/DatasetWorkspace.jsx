@@ -35,6 +35,7 @@ import NextStepCard from './NextStepCard';
 import TrainingReadiness from './TrainingReadiness';
 import useGuidedFlow from '../../hooks/useGuidedFlow';
 import { filterImages, normalizeTag } from '../../utils/tagFilter';
+import { summarizeGeneration, refusalHeadline, failureHeadline } from './generationOutcome.js';
 import {
   GRID_STATUS_FILTERS, DEFAULT_GRID_STATUS_FILTER,
   filterImagesByStatus, gridStatusFilterCounts, normalizeGridStatusFilter,
@@ -596,6 +597,16 @@ export default function DatasetWorkspace({ ds, onBack }) {
     filterImagesByStatus(rescueGridImages, statusFilter, statusFilterOpts),
     { excludes: excludeTags, includes: includeTags, mode: effCaptionMode },
   ), gridSort);
+  // Outcome tally for the refusal notice below the progress banner. Counted from
+  // the rows already polled — no extra request, and it survives a page reload
+  // because it reads the stored fail_kind rather than a one-shot end-of-batch
+  // event nobody would be watching when the batch actually ends.
+  // Deliberately NOT memoised: this line sits after an early return, and a hook
+  // here throws "Rendered more hooks than during the previous render" the moment
+  // a dataset is opened. It is one O(n) pass over a list this component already
+  // walks a dozen times unmemoised.
+  const outcome = summarizeGeneration(images);
+  const refusalNote = refusalHeadline(outcome);
   const pending = images.filter((i) => i.status === 'pending' && !i.filename
     && !unresolvedRescueIds.has(i.id)).length;
   const triage = images.filter((i) => i.status === 'pending' && i.filename
@@ -1062,6 +1073,60 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 {stoppingGeneration || (act?.cancelling && act?.kind === 'improve')
                   ? 'Stopping…' : '⏹ Stop generation'}
               </button>
+            </div>
+          )}
+
+          {/* Provider refusals, counted and named ONCE — because the alternative
+              is what shipped before: N missing images, each explained only by a
+              9px clamped line inside its own failed tile, which reads as "the app
+              generated fewer images than I asked for". Shown whenever refused rows
+              exist (not just right after a batch): it is derived from stored rows,
+              so it survives a reload and clears when they are purged or retried.
+              Collapsed by default — the count is the headline, the policy detail
+              is one tap away and does not eat a 400 px screen. */}
+          {refusalNote && (
+            <div className="rounded-lg border-2 border-amber-400/60 bg-amber-500/10 px-3 py-2.5">
+              <div className="flex items-start gap-2">
+                <span className="text-base leading-none pt-0.5" aria-hidden>🚫</span>
+                <div className="min-w-0 flex flex-col gap-1">
+                  <span className="text-content text-sm font-semibold break-words">
+                    {refusalNote}
+                  </span>
+                  {failureHeadline(outcome) && (
+                    <span className="text-content-subtle text-[0.6875rem] break-words">
+                      {failureHeadline(outcome)}
+                    </span>
+                  )}
+                  <details className="text-content-subtle text-[0.6875rem]">
+                    <summary className="cursor-pointer text-amber-300">
+                      Why, and what this does and does not mean
+                    </summary>
+                    <div className="mt-1 flex flex-col gap-1 break-words">
+                      <p className="m-0">
+                        {outcome.refusedEngines.includes('nanobanana')
+                          ? 'Gemini (Nano Banana) screens the image it just produced'
+                          : 'The provider screens the image it just produced'}
+                        {' '}and answers with no image when that screen trips.
+                        The screen is <strong>not configurable</strong>: the safety
+                        settings the API exposes act on the prompt, not on the
+                        returned image, so LDS has no switch to turn it off.
+                      </p>
+                      <p className="m-0">
+                        It refuses ordinary requests too, and it is not consistent —
+                        the same prompt can pass on one attempt and be refused on the
+                        next. That is why nothing here tells you to reword or retry:
+                        neither is a fix, and we will not pretend otherwise.
+                      </p>
+                      <p className="m-0">
+                        Google&apos;s usage policy does not allow adult content on
+                        this engine, and repeated attempts can lead to restrictions
+                        on your Google account. LDS never sends NSFW variations to an
+                        API engine — those run only on the local Klein engine.
+                      </p>
+                    </div>
+                  </details>
+                </div>
+              </div>
             </div>
           )}
 

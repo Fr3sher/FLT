@@ -878,6 +878,18 @@ export default function VariationCatalog({ onGenerate, busy, generating = null, 
         Not the look you wanted (a stylized reference coming out realistic)? Edit the generation prompt in{' '}
         <a href="#/settings/engines" className="text-amber-300 underline decoration-amber-300/50">Settings › Image engines →</a>
       </p>
+      {/* Two facts about the Gemini engine that belong next to the choice, not in
+          a support thread after the fact. Both are stated flat, with no verdict
+          attached: the filter has no setting to offer, and nobody — in either
+          direction — has measured what SynthID does to trained weights, so this
+          says it is present and stops there. Plain <p>: wraps freely at 400 px. */}
+      <p className="text-content-subtle text-[0.625rem] -mt-1">
+        Building with <span className="text-content-muted">Nano Banana</span>? Google
+        screens every image it returns and refuses some of them — LDS names each
+        refusal on the tile; the filter itself is not configurable. Its outputs also
+        carry SynthID, Google&apos;s invisible provenance watermark.{' '}
+        <HelpBadge topic="nanobanana-filter-and-synthid" />
+      </p>
       {/* Five cards now, and the column stops at THREE. Tailwind breakpoints read
           the VIEWPORT, but these cards live in the workspace column next to the
           sidebar — a `2xl:grid-cols-5` measured on a 1600 px window put five cards
