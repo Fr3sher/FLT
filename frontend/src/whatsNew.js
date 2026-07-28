@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-preflight-before-cloud-and-continue',
+    date: '2026-07-28',
+    title: 'The pre-training check now runs before a cloud run and before ▶ Continue',
+    blurb:
+      'Launching in the cloud went straight to a paid GPU without ever showing the pre-training review — so leaking captions, near-duplicate images and pictures still waiting on a ✓/✕ shipped to the pod unnoticed. ▶ Continue skipped it too, on both lanes. Both now open the same review, with its editable caption list and its reject-one-of-each pairs. Checks about your own GPU (memory, PyTorch build) are left out of a cloud launch: that card is not the one running the job.',
+  },
+  {
     id: '2026-07-28-pin-to-canvas-from-the-thumbnail',
     date: '2026-07-28',
     title: 'Put a generated image on the board without opening it first',

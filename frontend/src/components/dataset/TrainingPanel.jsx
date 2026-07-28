@@ -46,6 +46,7 @@ import { graphContinueRefusal } from './lineageContinue.js';
 import RunLineageGraph from './RunLineageGraph';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
+import { laneOfPayload, preflightUrl } from './preflightLane.js';
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
@@ -685,10 +686,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     preflightResolver.current?.(ok);
     preflightResolver.current = null;
   };
-  const preflightOk = async () => {
+  // `lane` ('local' | 'cloud') decides which rows are relevant: a cloud run is
+  // not going to care about this box's VRAM or torch build. trainType/variant
+  // default to the panel's selection, but ▶ Continue overrides them with the
+  // checkpoint's own family so the image floor is checked against the right one.
+  const preflightOk = async ({ lane, trainType: tt, variant: va } = {}) => {
     try {
       const r = await fetch(
-        `/api/dataset/${ds.currentId}/train/preflight?train_type=${encodeURIComponent(trainType)}&variant=${encodeURIComponent(variant)}`,
+        preflightUrl(ds.currentId, { trainType: tt ?? trainType, variant: va ?? variant, lane }),
         { credentials: 'include' });
       if (!r.ok) return true;
       const d = await r.json();
@@ -734,7 +739,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     // ONE dialog, two lanes: the chosen checkpoint either resumes on this machine
     // or is seeded onto a fresh cloud pod. Same payload, same guarded+confirmable
     // request helper — only the hook call differs.
-    const inCloud = payload.lane === 'cloud';
+    const lane = laneOfPayload(payload);
+    const inCloud = lane === 'cloud';
+    // Continuing trains on the LIVE dataset, which can have drifted since the run
+    // started (images added, captions edited, triage left half-done) — so it gets
+    // the same sanity gate as a fresh launch, on whichever lane it resumes. The
+    // checkpoint's own family/variant, not the panel's current selection.
+    if (!(await preflightOk({ lane, trainType: checkpointTrainType,
+                              variant: checkpointVariant }))) return;
     await runConfirmableTrainingRequest(
       (continueOpts) => (inCloud ? ds.continueTrainingInCloud : ds.continueTraining)(
         payload.extraSteps, checkpointBase, checkpointVariant, checkpointTrainType,
@@ -1233,6 +1245,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // retry that used to live inline in the button handler.
   const [cloudDialog, setCloudDialog] = useState(false);
   const launchCloud = async (gpuName) => {
+    // A cloud launch spends real money, so it gets the SAME sanity gate as a local
+    // one — minus the rows about this machine's GPU, which no rented pod will use.
+    if (!(await preflightOk({ lane: 'cloud' }))) return;
     let body = {
       ...cloudTrainingLaunchPayload({
         baseModel: base, variant, trainType, masked, steps: stepsN, gpuName,

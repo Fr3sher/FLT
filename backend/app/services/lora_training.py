@@ -4465,7 +4465,8 @@ _KREA_MIN_VRAM_GB = 24
 _VRAM24_FAMILIES = ('krea', 'flux')   # familles 12B qui recommandent ~24 GB à 1024
 
 
-def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> dict:
+def training_preflight(user_id, dataset_id, train_type=None, variant=None,
+                       lane=None) -> dict:
     """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
     stop the launch (too few images for the family); warnings ask for one explicit
     confirm in the UI. Pure reads — never mutates, never raises on probe failures
@@ -4478,7 +4479,16 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
     workspace (gf-generate/gf-images) où corriger — None quand rien à cibler.
     NB : le check 'captioned' (images gardées sans caption) est un fail dans
     `checks` (assert_trainable refusera le launch) mais volontairement PAS un
-    blocker ici — le flux modal existant (launch → erreur explicite) est conservé."""
+    blocker ici — le flux modal existant (launch → erreur explicite) est conservé.
+
+    ``lane`` ('local' default, or 'cloud') says WHERE the run will execute. Every
+    row carries a ``scope``: 'dataset' (a property of the images/captions, true
+    wherever the job runs) or 'machine' (a read of THIS box — its GPU, its
+    ai-toolkit venv). A cloud lane drops the 'machine' rows and their warning
+    lines: that hardware will not run the job, and on a machine with no local
+    training environment at all they would fire on every single cloud launch —
+    which is exactly how users learn to click through warnings without reading
+    them. Default 'local' keeps the historical payload byte-for-byte."""
     from .face_variations import caption_has_identity_leak
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
@@ -4487,13 +4497,24 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
     label = _FAMILY_LABEL.get(ttype, ttype)
     blockers, warnings = [], []
     checks = []
+    # `warnings` is a flat list of strings (the modal renders it verbatim), so the
+    # lane filter cannot recognise a machine-scope line by reading it. Record the
+    # indices as they are appended instead — the only reliable pairing.
+    machine_warning_ix = set()
 
-    def _check(cid, clabel, status, detail, target=None, bypassable=None, hint=None):
+    def _machine_warn(msg):
+        machine_warning_ix.add(len(warnings))
+        warnings.append(msg)
+
+    def _check(cid, clabel, status, detail, target=None, bypassable=None, hint=None,
+               scope='dataset'):
         # `bypassable` (fail rows only): True = a QUALITY guard-rail the explicit
         # "Continue anyway" ack can waive; False = a physical impossibility the ack
         # never covers. `hint` = the honest one-line risk shown next to the ack.
+        # `scope`: 'dataset' = a property of the images/captions (true on any lane);
+        # 'machine' = a read of THIS box, meaningless when the job runs elsewhere.
         entry = {'id': cid, 'label': clabel, 'status': status,
-                 'detail': detail, 'target': target}
+                 'detail': detail, 'target': target, 'scope': scope}
         if bypassable is not None:
             entry['bypassable'] = bool(bypassable)
         if hint:
@@ -4711,11 +4732,12 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
         from .. import capabilities
         vram = capabilities.gpu_vram_gb()
         if vram is not None and ttype in _VRAM24_FAMILIES and vram < _KREA_MIN_VRAM_GB:
-            warnings.append(f'{label} training needs ~{_KREA_MIN_VRAM_GB} GB of VRAM at 1024 '
-                            f'— this GPU reports {vram} GB; expect OOM or extreme slowness. '
-                            'Drop the resolution to 768 in Advanced options to fit.')
+            _machine_warn(f'{label} training needs ~{_KREA_MIN_VRAM_GB} GB of VRAM at 1024 '
+                          f'— this GPU reports {vram} GB; expect OOM or extreme slowness. '
+                          'Drop the resolution to 768 in Advanced options to fit.')
             _check('vram', 'GPU memory', 'warn',
-                   f'{label} needs ~{_KREA_MIN_VRAM_GB} GB VRAM — this GPU reports {vram} GB')
+                   f'{label} needs ~{_KREA_MIN_VRAM_GB} GB VRAM — this GPU reports {vram} GB',
+                   scope='machine')
     except Exception:
         pass
 
@@ -4731,13 +4753,13 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
         arch = torch_arch_verdict(capabilities.aitoolkit_torch_info(),
                                   venv_python=cfg.aitoolkit_path('venv_python'))
         if arch and not arch['supported']:
-            warnings.append(arch['message']
-                            + (f' Fix: {arch["command"]}' if arch['command'] else ''))
+            _machine_warn(arch['message']
+                          + (f' Fix: {arch["command"]}' if arch['command'] else ''))
             # Keep the row SHORT — it sits in a one-line list next to ten other
             # checks, on a phone too. The full explanation + fix is the warning.
             _check('torch_arch', 'PyTorch supports this GPU', 'warn',
                    f'torch {arch["torch"]} has no {arch["sm"]} kernels — the run '
-                   'dies at the first GPU computation')
+                   'dies at the first GPU computation', scope='machine')
     except Exception:
         pass   # a probe failure must never block or fake a diagnosis
 
@@ -4775,6 +4797,16 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
             _check('face_mask', 'Face masking ready', 'ok',
                    'InsightFace found — the faces will be weighted down')
 
+    # Lane filter — BEFORE the verdict, so a cloud launch whose only complaint was
+    # this machine's GPU comes back a clean 🟢 instead of a warning nobody can act
+    # on. Note what stays: face_mask is machine-INSTALLED but dataset-SCOPED, since
+    # the masks are generated locally at export and uploaded with the images
+    # (cloud_training uploads `<staging>_masks`) — InsightFace missing here means
+    # the PAID run trains unmasked. Local origin, cloud consequence: it must show.
+    if (lane or 'local') == 'cloud':
+        checks = [c for c in checks if c.get('scope') != 'machine']
+        warnings = [w for i, w in enumerate(warnings) if i not in machine_warning_ix]
+
     # Verdict agrégé pour la pastille : un fail = 🔴, sinon un warn = 🟡, sinon 🟢.
     statuses = {c['status'] for c in checks}
     verdict = ('blocked' if 'fail' in statuses
@@ -4797,6 +4829,9 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None) -> di
             # can_override : la case « Continue anyway » n'est offerte que quand c'est True
             # (miroir exact du garde serveur assert_trainable/allow_not_ready).
             'can_override': can_override, 'override_hint': override_hint,
+            # Echoed so the modal can say WHERE this run is headed (and, implicitly,
+            # why no GPU-memory row is listed) without re-deriving it client-side.
+            'lane': ('cloud' if (lane or 'local') == 'cloud' else 'local'),
             'kept': n, 'floor': floor, 'recommended': reco}
 
 
