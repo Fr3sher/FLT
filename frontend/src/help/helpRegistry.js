@@ -298,7 +298,13 @@ const TOPICS = [
     ['ai-toolkit', 'aitoolkit', 'training', 'lora training', 'run.py', 'python',
      'interpreter', 'install training', 'train']),
   { id: 'page-studio', kind: 'page', title: 'Test Studio',
-    keywords: ['studio', 'test', 'lora', 'checkpoint', 'generate', 'compare'],
+    keywords: ['studio', 'test', 'lora', 'checkpoint', 'generate', 'compare',
+      // The words someone types when the Z-Image pipeline won't start or renders
+      // mush (bobba84, GitHub #18): a text encoder / VAE the app "can't find"
+      // because it is spelled differently, and Base opening on Turbo's sampler.
+      'z ae', 'z_ae', 'zimage vae', 'z-image vae', 'qwen_3_4b', 'text encoder not found',
+      'vae not found', 'rename the file', 'case sensitive folder',
+      'z-image base', 'base vs turbo', 'cfg 1', '8 steps', 'blurry base model'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
     app: { route: '/studio' } },
   { id: 'page-canvas', kind: 'page', title: 'LoRA Canvas',

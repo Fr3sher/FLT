@@ -53,6 +53,21 @@ export const WHATS_NEW = [
     title: 'The pre-training check now runs before a cloud run and before ▶ Continue',
     blurb:
       'Launching in the cloud went straight to a paid GPU without ever showing the pre-training review — so leaking captions, near-duplicate images and pictures still waiting on a ✓/✕ shipped to the pod unnoticed. ▶ Continue skipped it too, on both lanes. Both now open the same review, with its editable caption list and its reject-one-of-each pairs. Checks about your own GPU (memory, PyTorch build) are left out of a cloud launch: that card is not the one running the job.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-07-28-zimage-finds-its-own-encoder-and-vae',
+    date: '2026-07-28',
+    title: 'Z-Image no longer asks you to rename your files',
+    blurb:
+      'The Test Studio demanded one exact spelling for the Z-Image text encoder and VAE — “z ae.safetensors” with a space, inside a folder capitalised “Z image”. Anything else, including ComfyUI’s own documented names, read as missing. The app now finds them itself: any capitalisation, any separator (z_ae, z ae, z-ae), any sub-folder, across every extra_model_paths root. If nothing is there it still tells you exactly what to place and where. Thanks to bobba84 (GitHub #18).',
+  },
+  {
+    id: '2026-07-28-zimage-base-keeps-its-own-settings',
+    date: '2026-07-28',
+    title: 'Z-Image Base starts on Base settings, not Turbo’s',
+    blurb:
+      'Selecting a non-distilled Z-Image Base in the Test Studio opened on CFG 1 and 8 steps — correct for the distilled Turbo build and ruinous for Base, which needs real guidance and far more steps. Each base model now proposes its own starting CFG and step count, and the pickers reach the values Base needs. Anything you had already chosen yourself is left exactly as it was. Thanks to bobba84 (GitHub #18).',
   },
   {
     id: '2026-07-28-pin-to-canvas-from-the-thumbnail',
