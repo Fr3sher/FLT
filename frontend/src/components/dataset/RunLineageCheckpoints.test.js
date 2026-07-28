@@ -199,10 +199,11 @@ test('the dataset panel offers the SAME pill gesture through its local flow', ()
   assert.match(panel, /continueSource="any"/);
   assert.match(panel, /onContinueCheckpoint=\{checkpointMatchesTraining/);
   assert.match(panel, /const continueFromGraphCheckpoint = \(node, pill\) =>/);
-  assert.match(panel, /setContinueInitialStep\(step\);\s*setContinueOpen\(true\);/);
+  // (a fresh open also clears the last refusal — the dialog now keeps it)
+  assert.match(panel, /setContinueInitialStep\(step\);\s*setContinueError\(null\);\s*setContinueOpen\(true\);/);
   assert.match(panel, /initialFromStep=\{continueInitialStep\}/);
   // the plain Continue button clears the pill pick, so it still opens on latest
-  assert.match(panel, /setContinueInitialStep\(null\); setContinueOpen\(true\)/);
+  assert.match(panel, /setContinueInitialStep\(null\); setContinueError\(null\); setContinueOpen\(true\)/);
   // ONE continue call site (the guarded helper picks the lane's hook inside it),
   // never a second continue request assembled somewhere else in the panel
   assert.equal((panel.match(/payload\.extraSteps/g) || []).length, 1);

@@ -215,14 +215,19 @@ test('the board surfaces the backend’s refusal instead of swallowing it', () =
   // postJson THROWS on a 400/409 — the very refusal a vanished checkpoint
   // produces ("no local checkpoint at step N"). Without the catch the click
   // looks dead, which is the bug the Runs hub already paid for once.
-  assert.match(canvas, /const d = await postJson\(req\.url, req\.body\)/);
-  assert.match(canvas, /catch \(e\) \{[\s\S]*?toast\.error\(e\?\.message \|\| 'Continue failed'\)/);
-  // and an explicit {ok:false} body is a refusal too, not a success toast
-  assert.match(canvas, /d\?\.ok === false\) \{ toast\.error\(d\.error \|\| 'Continue failed'\)/);
-  // …and the dialog is dismissed BEFORE the request: the toast container is
-  // z-[100] and the dialog z-[9990], so a refusal raised over an open dialog
-  // renders behind it. Both other hosts close first for the same reason.
-  assert.match(canvas, /setContinueTarget\(null\);\s*\n\s*if \(!payload\) return;/);
+  assert.match(canvas, /await postWithConfirmations\(\(b\) => postJson\(req\.url, b\)/);
+  assert.match(canvas, /catch \(e\) \{[\s\S]*?continueAttemptOutcome\(\{ thrown: e \}\)/);
+  // an explicit {ok:false} body is a refusal too, not a success toast — both
+  // shapes go through the one classifier (utils/continueOutcome.js).
+  assert.match(canvas, /continueAttemptOutcome\(d === null \? \{ declined: true \} : \{ response: d \}\)/);
+  // …and the dialog is NO LONGER dismissed before the request. It used to be, to
+  // work around a toast container that rendered under every modal (fixed:
+  // Toast.jsx is z-[10000]) — at the price of discarding the lane, the resume
+  // checkpoint, the extra steps and the five folded settings on every refusal.
+  // The ordering contract for all three hosts lives in
+  // components/dataset/ContinueDialogRefusal.contract.test.js.
+  assert.doesNotMatch(canvas, /setContinueTarget\(null\);\s*\n\s*if \(!payload\) return;/);
+  assert.match(canvas, /if \(!outcome\.close\) \{ setContinueError\(outcome\.error\); return; \}/);
 });
 
 test('the dialog waits for the lane inputs before it seeds itself', () => {

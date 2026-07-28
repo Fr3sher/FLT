@@ -93,7 +93,9 @@ test('the cloud launch runs the preflight before spending money', () => {
 test('▶ Continue runs it too, on whichever lane it resumes', () => {
   // The gap nobody had reported: runContinue skipped the preflight on BOTH lanes.
   assert.match(panel, /const lane = laneOfPayload\(payload\);/);
-  assert.match(panel, /await preflightOk\(\{ lane, trainType: checkpointTrainType,\s*variant: checkpointVariant \}\)/);
+  // (…and its blockers are routed INTO the still-open dialog via onRefused,
+  // instead of a toast over a form that had already been thrown away.)
+  assert.match(panel, /await preflightOk\(\{ lane, trainType: checkpointTrainType,\s*variant: checkpointVariant, onRefused: setContinueError \}\)/);
 });
 
 test('the modal names the cloud lane and keeps its fix-in-place lists', () => {

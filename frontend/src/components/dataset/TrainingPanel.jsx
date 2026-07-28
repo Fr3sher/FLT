@@ -39,6 +39,7 @@ import {
   trainingPresetSnapshotScope,
 } from '../../utils/trainingPresets';
 import { runConfirmableTrainingRequest } from '../../utils/trainingConfirmations';
+import { continueAttemptOutcome } from '../../utils/continueOutcome';
 import { HelpBadge } from '../../help/HelpMode';
 import { requestHelpTip } from '../../help/helpTips';
 import { useToast } from '../common/Toast';
@@ -691,7 +692,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // not going to care about this box's VRAM or torch build. trainType/variant
   // default to the panel's selection, but ▶ Continue overrides them with the
   // checkpoint's own family so the image floor is checked against the right one.
-  const preflightOk = async ({ lane, trainType: tt, variant: va } = {}) => {
+  // `onRefused(message)` — WHERE the blockers are said. Default: a toast, which
+  // is right for the launch buttons (nothing is open to say it in). ▶ Continue
+  // passes its own so the reason lands inside the still-open dialog, next to the
+  // choices the user would otherwise have had to retype.
+  const preflightOk = async ({ lane, trainType: tt, variant: va, onRefused } = {}) => {
     try {
       const r = await fetch(
         // `masked` rides along so the modal can say "rembg is missing — this run
@@ -708,7 +713,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         // (d.can_override) may proceed when the user ticked « Continue anyway »;
         // the launch carries allow_not_ready and the server re-checks. A physical
         // impossibility (can_override false) always stops here.
-        if (!(d.can_override && allowNotReady)) { toast.error(d.blockers.join('\n')); return false; }
+        if (!(d.can_override && allowNotReady)) {
+          const msg = d.blockers.join('\n');
+          if (onRefused) onRefused(msg); else toast.error(msg);
+          return false;
+        }
       }
       if (d.warnings?.length) {
         return await new Promise((resolve) => {
@@ -738,28 +747,56 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // The checkpoint the dialog opens ON, when it was opened from a ◉ Graph pill
   // (null = the plain Continue button → the dialog's historical "latest" default).
   const [continueInitialStep, setContinueInitialStep] = useState(null);
+  // The LAST refusal, rendered INSIDE the dialog (utils/continueOutcome.js), and
+  // the in-flight flag that keeps it from being dismissed mid-request.
+  const [continueError, setContinueError] = useState(null);
+  const [continueSubmitting, setContinueSubmitting] = useState(false);
   const runContinue = async (payload) => {
-    setContinueOpen(false);
-    setContinueInitialStep(null);
-    if (!payload) return;
+    // POST WITH THE DIALOG STILL OPEN. Closing first was a workaround for a toast
+    // container that sat UNDER every modal (fixed: Toast.jsx is z-[10000]), and
+    // it cost the user the whole form on every refusal — including the preflight
+    // one, which is precisely the case where the answer is "fix this, then retry
+    // with the same choices".
+    if (!payload) { setContinueOpen(false); setContinueInitialStep(null); setContinueError(null); return; }
     // ONE dialog, two lanes: the chosen checkpoint either resumes on this machine
     // or is seeded onto a fresh cloud pod. Same payload, same guarded+confirmable
     // request helper — only the hook call differs.
     const lane = laneOfPayload(payload);
     const inCloud = lane === 'cloud';
-    // Continuing trains on the LIVE dataset, which can have drifted since the run
-    // started (images added, captions edited, triage left half-done) — so it gets
-    // the same sanity gate as a fresh launch, on whichever lane it resumes. The
-    // checkpoint's own family/variant, not the panel's current selection.
-    if (!(await preflightOk({ lane, trainType: checkpointTrainType,
-                              variant: checkpointVariant }))) return;
-    await runConfirmableTrainingRequest(
-      (continueOpts) => (inCloud ? ds.continueTrainingInCloud : ds.continueTraining)(
-        payload.extraSteps, checkpointBase, checkpointVariant, checkpointTrainType,
-        { ...continueOpts, fromStep: payload.fromStep, overrides: payload.overrides }),
-      { masked },
-      (error) => confirmableRetryFlag(error, 'Continue anyway (force)'),
-    );
+    setContinueSubmitting(true);
+    setContinueError(null);
+    try {
+      // Continuing trains on the LIVE dataset, which can have drifted since the run
+      // started (images added, captions edited, triage left half-done) — so it gets
+      // the same sanity gate as a fresh launch, on whichever lane it resumes. The
+      // checkpoint's own family/variant, not the panel's current selection.
+      // Its blockers are a REFUSAL about the dataset: they belong in the dialog,
+      // not only in a toast that outlives the choices it was about.
+      // Cancelling the warning report says nothing further (it IS the answer);
+      // a hard blocker is a message the dialog shows.
+      if (!(await preflightOk({ lane, trainType: checkpointTrainType,
+        variant: checkpointVariant, onRefused: setContinueError }))) return;
+      const { response, declined } = await runConfirmableTrainingRequest(
+        (continueOpts) => (inCloud ? ds.continueTrainingInCloud : ds.continueTraining)(
+          payload.extraSteps, checkpointBase, checkpointVariant, checkpointTrainType,
+          { ...continueOpts, fromStep: payload.fromStep, overrides: payload.overrides,
+            // The hook toasts refusals for its other callers; here the dialog
+            // shows them, and two copies of one sentence a centimetre apart read
+            // as a bug. Its SUCCESS toast is kept — the dialog is gone by then.
+            quiet: true }),
+        { masked },
+        (error) => confirmableRetryFlag(error, 'Continue anyway (force)'),
+      );
+      // The hooks never throw (they return {ok:false,error}); a decline is the
+      // user's own answer and says nothing further.
+      const outcome = continueAttemptOutcome({ response, declined });
+      if (!outcome.close) { setContinueError(outcome.error); return; }
+      setContinueOpen(false);
+      setContinueInitialStep(null);
+      setContinueError(null);
+    } finally {
+      setContinueSubmitting(false);
+    }
     refreshStatus();
     loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant);
   };
@@ -1102,6 +1139,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     });
     if (refusal) { toast.warning(refusal); return; }
     setContinueInitialStep(step);
+    setContinueError(null);
     setContinueOpen(true);
   };
   const onCheckpointTypeChange = (nextType) => {
@@ -2739,7 +2777,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 <button type="button"
                   disabled={!checkpointMatchesTraining
                     || (status.in_progress && !continueLanes.cloud.available)}
-                  onClick={() => { setContinueInitialStep(null); setContinueOpen(true); }}
+                  onClick={() => { setContinueInitialStep(null); setContinueError(null); setContinueOpen(true); }}
                   title={!checkpointMatchesTraining
                     ? 'To continue this run, select the same LoRA family, base and variant in Training first'
                     : status.in_progress
@@ -2990,10 +3028,16 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       </details>
       </CheckpointPortal>
 
-      {preflightReport && (
+      {/* Portalled, like the ▶ Continue dialog above and for the same reason:
+          this panel lives in a section the workspace hides with display:none,
+          and the ▶ Continue buttons are clickable from ANOTHER section. Rendered
+          in place, the report would open invisible and the launch would wait
+          forever on an answer nobody could give. It is also z-[9992] — ABOVE the
+          continue dialog that raises it, which now stays open behind it. */}
+      {preflightReport && createPortal((
         <PreflightModal report={preflightReport} datasetId={ds.currentId} ds={ds}
           onResolve={resolvePreflight} />
-      )}
+      ), document.body)}
 
       {cloudDialog && (
         <CloudLaunchDialog
@@ -3061,7 +3105,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             optimizer: adv?.optimizer, learning_rate: adv?.learning_rate }}
           // A local training in flight no longer freezes the whole dialog: the
           // Local lane is disabled with its reason, the Cloud lane stays usable.
-          busy={status.in_progress && !continueLanes.cloud.available}
+          busy={continueSubmitting || (status.in_progress && !continueLanes.cloud.available)}
+          error={continueError}
           onResolve={runContinue} />
       ), document.body)}
 

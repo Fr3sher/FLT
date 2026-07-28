@@ -97,8 +97,11 @@ test('a local continuation loops on the confirmable refusals like the panel does
   // place where "never ask twice for the same flag" is enforced) — the contract
   // is that this lane goes through it, with its own label.
   assert.match(page, /postWithConfirmations\(\s*\n?\s*\(b\) => postJson\(`\/api\/dataset\/\$\{run\.dataset_id\}\/train\/continue`, b\),\s*\n?\s*body, 'Continue anyway \(force\)'\)/);
-  // and a refusal must surface: postJson THROWS on 400/409
-  assert.match(page, /toast\.error\(e\?\.message \|\| 'Continue failed'\)/);
+  // and a refusal must surface: postJson THROWS on 400/409. It is now shown
+  // INSIDE the still-open dialog (the choices that caused it are still filled
+  // in) instead of as a toast over a dialog that had already been destroyed.
+  assert.match(page, /continueAttemptOutcome\(\{ thrown: e \}\)/);
+  assert.match(page, /if \(!outcome\.close\) \{ setContinueError\(outcome\.error\); return; \}/);
 });
 
 test('the confirmable refusal markers have ONE definition, shared by both mounts', () => {
