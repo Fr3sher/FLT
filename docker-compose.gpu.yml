@@ -1,0 +1,75 @@
+# GPU mode: the studio AND ComfyUI in one container (see Dockerfile.gpu).
+#
+#   cp .env.example .env                                  # do this FIRST
+#   docker compose -f docker-compose.gpu.yml up --build
+#
+# Needs the NVIDIA Container Toolkit on the host. The API-only, no-GPU pair is
+# Dockerfile + docker-compose.yml and is unaffected by this file.
+#
+# Every ${...} below can be set in the same ./.env this mounts for API keys.
+services:
+  studio:
+    build:
+      context: .
+      dockerfile: Dockerfile.gpu
+      # For an RTX 50xx / newer driver, move both of these together:
+      # args:
+      #   BASE_IMAGE: mmartial/comfyui-nvidia-docker:ubuntu24_cuda13.0-latest
+      #   TORCH_INDEX: https://download.pytorch.org/whl/cu130
+      # Or drop ~7 GB by scoring on the CPU (ComfyUI still gets the whole GPU):
+      #   TORCH_INDEX: https://download.pytorch.org/whl/cpu
+    image: lora-dataset-studio-gpu
+    container_name: lora-dataset-studio-gpu
+    restart: unless-stopped
+    ports:
+      # Host side only. LDS_PORT further down is the port the app BINDS INSIDE the
+      # container — do not reuse that name here, or you publish a port nothing serves.
+      - "${LDS_HOST_PORT:-5050}:5050"
+      - "${LDS_COMFY_HOST_PORT:-8188}:8188"
+    volumes:
+      # ComfyUI's own venv, source checkout and Hugging Face cache.
+      - ${LDS_COMFY_RUN:-./run}:/comfy/mnt
+      # models, input, output, custom_nodes. Point this at a models tree you already
+      # have and you do not download it twice:  LDS_COMFY_BASEDIR=/srv/comfyui
+      - ${LDS_COMFY_BASEDIR:-./basedir}:/basedir
+      # The studio's data and its config.json.
+      - ${LDS_DATA:-./data-docker}:/data
+      # API keys. `cp .env.example .env` FIRST: Docker creates a directory here
+      # otherwise, and the app then cannot read a single key.
+      - ./.env:/app/.env
+      # Do NOT mount anything at /userscripts_dir. It would shadow
+      # 50-lora-dataset-studio.sh and the studio would silently never start.
+    environment:
+      # --- the studio ---
+      - LDS_DATA_DIR=/data
+      - LDS_CONFIG=/data/config.json
+      - LDS_HOST=0.0.0.0
+      - LDS_PORT=5050
+      # Ollama is NOT in this image (auto-captioning, framing, watermark detection).
+      # Run it on the host, then uncomment this AND the extra_hosts block below.
+      #- LDS_OLLAMA_URL=http://ollama.internal:11434
+      # Last resort if /data cannot be made writable from the host: lets the
+      # container take ownership of your bind mount.
+      #- LDS_FORCE_CHOWN=true
+      # --- upstream's ComfyUI image ---
+      # Must match the owner of the folders mounted above (`id -u` / `id -g`).
+      # On Unraid that is usually 99 / 100.
+      - WANTED_UID=${LDS_UID:-1000}
+      - WANTED_GID=${LDS_GID:-1000}
+      - BASE_DIRECTORY=/basedir
+      - SECURITY_LEVEL=normal
+      - USE_UV=true
+      - USE_NEW_MANAGER=true
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # Extra ComfyUI flags, e.g. to leave VRAM headroom for the scoring pass:
+      #- COMFY_CMDLINE_EXTRA=--reserve-vram 1
+    #extra_hosts:
+    #  - "ollama.internal:host-gateway"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, compute, utility]

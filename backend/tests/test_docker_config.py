@@ -159,3 +159,24 @@ def test_gpu_image_layers_on_the_comfyui_base_without_hijacking_it():
     assert '/userscripts_dir/50-lora-dataset-studio.sh' in dockerfile
     # The studio's venv must never be ComfyUI's.
     assert '/app/.venv' in dockerfile
+
+
+def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
+    compose = _read('docker-compose.gpu.yml')
+    port = DEFAULTS['server']['port']
+
+    assert 'dockerfile: Dockerfile.gpu' in compose
+    assert f'"${{LDS_HOST_PORT:-{port}}}:{port}"' in compose
+    assert '"${LDS_COMFY_HOST_PORT:-8188}:8188"' in compose
+    for mount in (':/comfy/mnt', ':/basedir', ':/data', './.env:/app/.env'):
+        assert mount in compose, mount
+    assert 'driver: nvidia' in compose
+    assert re.search(r'capabilities:\s*\[\s*gpu', compose)
+    assert 'WANTED_UID=' in compose and 'WANTED_GID=' in compose
+    assert f'LDS_PORT={port}' in compose
+    assert 'LDS_HOST=0.0.0.0' in compose
+    assert 'LDS_CONFIG=/data/config.json' in compose
+
+    # LDS_PORT is the port the app BINDS INSIDE the container. Interpolating it on
+    # the host side of a mapping would publish a port nothing serves.
+    assert '${LDS_PORT' not in compose
