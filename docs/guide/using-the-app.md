@@ -534,43 +534,6 @@ is free even after a restart.
 On a memory-tight machine you can set `bank_scoring.text_search_idle_minutes` to
 `0`: nothing is ever kept warm, and each new phrase pays the ten seconds instead.
 
-## Tune the Bank filter thresholds
-
-The filter chips (🌫 Blurry, 📐 Small, ≈ Duplicates…) are verdicts, and every
-verdict comes from a number. Those numbers used to live only in
-*Settings ▸ Captioning & quality*, three screens away from the bank you were
-triaging. They are now also under the chips themselves: open **🎚 Filter
-thresholds** above the grid.
-
-It is the **same setting in both places** — one value, seen twice — so anything
-you change here applies to **every bank**, and the panel says so at the top.
-
-The twelve knobs are grouped by the question they answer: **Image quality**,
-**Duplicates**, **Size & framing**, **Content**, **Style**. The first two are
-open by default; the rest fold away, and a folded group tells you how many of
-its values you have moved off the default.
-
-Three things each control tells you that a bare number cannot:
-
-- **Which way catches more.** "Stricter" is not a direction. *Duplicate
-  distance* is a distance in hash bits — **raise** it to catch more
-  near-duplicates. *Semantic duplicate similarity* is a similarity — **lower**
-  it to catch more. They sit side by side and they move opposite ways, so each
-  field spells its own direction out in a sentence next to the input.
-- **When it takes effect.** Eight of them re-sort the bank the moment you save,
-  because the scan stores raw measurements and the verdicts are recomputed on
-  every read — no rescan, ever. The other four are baked into stored groups by a
-  pass, so they carry a button that re-runs that pass on the spot. Re-grouping
-  duplicates is cheap: it walks the stored hashes and decodes nothing.
-- **How many images it would touch.** As you change a read-time value, the panel
-  asks the server how many images that number *would* flag and shows
-  `1 240 → 3 019 images flagged` before you save anything. Nothing is written
-  until you press **Save**.
-
-Every field has **↺ Reset to default** (it only appears when the value is not
-the default), and the header carries **↺ Reset all to defaults**. The defaults
-come from the server, so they are always the real shipped values.
-
 ## Review a bank one image at a time
 
 Filter chips and bulk actions clear the obvious trash, but the last call —
@@ -710,9 +673,12 @@ below anything visible, and it barely grows with more turns — but it is not
 free, so it is worth knowing. Datasets normally hold WEBP, so this mostly
 concerns files restored from an old backup.
 
-Rotation is deliberately **not** part of ✂ Crop: the crop tool resizes, so it
-re-encodes to WEBP at quality 92 by design, and a quarter turn has no reason to
-pay for that.
+Rotation is deliberately **not** part of ✂ Crop, even though that is where you
+might look for it first. Cropping **resamples** the image — it rescales the box
+you drew to a 1024 px long side — and resampling costs detail no matter how
+carefully the result is then saved. A quarter turn resamples nothing at all: it
+just moves existing pixels to new coordinates. Sending it through the crop lane
+would make it pay a price it does not owe.
 
 **In a bank**, your own folder is never written to — so a bank rotation does not
 touch your files at all. The turn is remembered against the image and applied to

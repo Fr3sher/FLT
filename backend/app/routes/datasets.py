@@ -1413,9 +1413,10 @@ def dataset_image_rotate(image_id):
     """Permanently turn one owned dataset image by {degrees} CLOCKWISE (90/180/270).
 
     Idea by 1Tomber (GitHub #17). Deliberately its own route rather than an
-    option of /crop: the crop lane re-encodes to WEBP at quality 92 by design
-    (it resizes), while a quarter turn must not cost anything a turn does not
-    require — this one keeps the file's real format and its pixels."""
+    option of /crop: the crop lane RESAMPLES (it rescales the box to a fixed
+    long side), which costs detail however the result is then encoded, while a
+    quarter turn resamples nothing — it permutes existing pixels. This route
+    keeps the file's real format and its exact pixels."""
     data = request.get_json(silent=True) or {}
     try:
         result = svc.rotate_image(LOCAL_USER, image_id, data.get('degrees'))
