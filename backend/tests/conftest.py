@@ -58,6 +58,7 @@ def _reset_inmemory_registries():
     bank_jobs.reset()
     bank_undo.reset()
     image_bank_service.reset_folder_sync()
+    image_bank_service.reset_score_memo()
     vision_keepalive.forget_lease()
     clip_text_encoder.forget_memory_cache()
     yield
@@ -65,6 +66,7 @@ def _reset_inmemory_registries():
     bank_jobs.reset()
     bank_undo.reset()
     image_bank_service.reset_folder_sync()
+    image_bank_service.reset_score_memo()
     vision_keepalive.forget_lease()
     clip_text_encoder.forget_memory_cache()
     clip_text_encoder.release()

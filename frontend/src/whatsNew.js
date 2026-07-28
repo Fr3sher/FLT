@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-pick-diverse-and-balanced-are-fast-again',
+    date: '2026-07-28',
+    title: '🎨 Pick diverse and ⚖️ Balanced pick answer in about a second',
+    blurb:
+      'On a large bank these two buttons took over half a minute, almost all of it spent computing the same thing over and over: how crowded each image\'s neighbourhood is, plus one filesystem lookup per image that had already been done. The maths now runs on an optimised BLAS, the bank folder is resolved once instead of once per image, and a second click on an unchanged bank reuses the scores it just read. Measured on a real 9 500-image pool: 32 seconds down to roughly two. The images picked are exactly the same ones — this is speed, not a different selection.',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',

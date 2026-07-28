@@ -106,6 +106,19 @@ def _score_cache_path(bank_id) -> Path:
     return _bank_dir(bank_id) / 'score_cache.npz'
 
 
+def _abs_under(base: str, relpath: str) -> str | None:
+    """The containment-checked realpath of ``relpath`` under an ALREADY resolved
+    ``base``. Split out of ``abs_image_path`` so a loop over thousands of rows can
+    resolve the bank folder ONCE instead of per row: ``os.path.realpath`` is a
+    filesystem call, and re-resolving the same unchanging bank folder for every
+    image cost 424 ms of the 6 353-row curation pool alone (measured). Same
+    strings out, one syscall in."""
+    full = os.path.realpath(os.path.join(base, relpath))
+    if os.path.normcase(full).startswith(os.path.normcase(base + os.sep)):
+        return full
+    return None
+
+
 def abs_image_path(bank: ImageBank, row: BankImage) -> str | None:
     """Absolute SOURCE path of a bank image, or None when it escapes the
     bank's folder (belt & braces — relpaths only ever come from our own walk).
@@ -113,11 +126,7 @@ def abs_image_path(bank: ImageBank, row: BankImage) -> str | None:
     ⚠️ This is the user's own file. It is READ-ONLY for us, and it is NOT what
     the app should display or copy once a watermark has been cleaned — every
     reader must go through resolved_image_path() instead (see its docstring)."""
-    base = os.path.realpath(bank.source_path)
-    full = os.path.realpath(os.path.join(base, row.relpath))
-    if os.path.normcase(full).startswith(os.path.normcase(base + os.sep)):
-        return full
-    return None
+    return _abs_under(os.path.realpath(bank.source_path), row.relpath)
 
 
 def _clean_dir(bank_id) -> Path:
@@ -509,6 +518,7 @@ def delete_bank(user_id, bank_id) -> bool:
     db.session.delete(bank)
     db.session.commit()
     bank_undo.clear(bank_id)     # its rows are gone; a stale offer would outlive them
+    reset_score_memo()           # ~45 MB of embeddings for a bank that no longer is
     shutil.rmtree(_bank_dir(bank_id), ignore_errors=True)
     if imported_source and os.path.isdir(imported_source):
         try:
@@ -1465,6 +1475,27 @@ def rebuild_dup_groups(bank_id, max_distance=None) -> int:
 
 
 # --- semantic near-duplicate groups (stage 2 — crops / re-compressed variants) --
+# One-entry memo for the parsed score cache. Reading it is 350 ms on a 14 700-row
+# bank (40 MB .npz + a stat per row), and a user tuning a curation slider clicks
+# three or four times on the SAME unchanged cache — that was 350 ms paid over and
+# over for a file nobody touched. Bounded on purpose:
+#   • ONE bank at a time (~45 MB of float32 at 14 700 × 768 — switching banks frees
+#     the previous one rather than accumulating);
+#   • keyed on the .npz's own (size, mtime_ns), so a finished ✨ Score pass — which
+#     rewrites the file — invalidates it without anyone having to remember to;
+#   • and it expires anyway after _SCORE_MEMO_TTL, because the per-row staleness
+#     stats it skips are how a since-edited IMAGE gets dropped. A short window
+#     covers the double-click; a session-long one would hide a real edit.
+_SCORE_MEMO_TTL = 60.0
+_score_memo = None            # (key, at, {path: emb}) — see reset_score_memo()
+
+
+def reset_score_memo() -> None:
+    """Drop the parsed-score-cache memo (tests; bank deletion)."""
+    global _score_memo
+    _score_memo = None
+
+
 def _load_score_embeddings(bank: ImageBank) -> dict:
     """{abs_path: emb (np.float32, L2-normed)} from the ✨ Score pass cache, for the
     scored 'ok' images whose file still matches what was scored. Empty when the pass
@@ -1473,10 +1504,20 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
     signature) is dropped, so a semantic group is never built on an outdated
     embedding. Reads the .npz directly (numpy is in the Flask venv); torch/open_clip
     are NOT needed here — stage 2 costs no new GPU work, it reuses Score's output."""
+    global _score_memo
     import numpy as np
     path = _score_cache_path(bank.id)
     if not path.is_file():
         return {}
+    try:
+        st = path.stat()
+        key = (bank.id, str(path), st.st_size, st.st_mtime_ns)
+    except OSError:
+        key = None
+    if key is not None and _score_memo is not None:
+        mkey, at, cached = _score_memo
+        if mkey == key and (time.time() - at) < _SCORE_MEMO_TTL:
+            return cached
     try:
         with np.load(str(path), allow_pickle=False) as z:
             paths = [str(p) for p in z['paths']]
@@ -1503,6 +1544,8 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
             except OSError:
                 continue
         out[p] = np.asarray(emb, dtype='float32')
+    if key is not None:
+        _score_memo = (key, time.time(), out)
     return out
 
 
@@ -1988,10 +2031,23 @@ def _pool_embeddings(bank, emb_by_path, filters):
     import numpy as np
     rows = (_pool_query(bank.id, thresholds(), **filters)
             .order_by(BankImage.id.asc()).all())
+    base = os.path.realpath(bank.source_path)   # once, not once per row
+    prefix = os.path.normcase(base + os.sep)
     ids, vecs = [], []
     for r in rows:
-        p = abs_image_path(bank, r)
-        emb = emb_by_path.get(p) if p else None
+        # Fast path: the keys of emb_by_path were THEMSELVES produced by
+        # _abs_under (the ✨ Score pass walks the same rows), so a lexical
+        # normpath that HITS the dict is provably the very string realpath would
+        # have returned — no filesystem call needed to know that. A miss is the
+        # only case that can be a symlink/junction, and it falls through to the
+        # real resolution, so the result set is identical either way. That matters
+        # because realpath is a syscall and this loop runs once per pool image:
+        # 756 ms of a 6 353-row pool, against 6 ms for the lexical form.
+        p = os.path.normpath(os.path.join(base, r.relpath))
+        emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
+        if emb is None:
+            p = _abs_under(base, r.relpath)
+            emb = emb_by_path.get(p) if p else None
         if emb is not None:
             ids.append(r.id)
             vecs.append(emb)
@@ -2008,6 +2064,63 @@ _TYPICALITY_BLOCK = 512      # rows per similarity block — NEVER a full (m×m)
 _TYPICALITY_Z = 3.0          # robust deviations below the median density = full penalty
 _TYPICALITY_DECADES = 3.0    # novelty discount at full guard + full penalty: 10⁻³
 _TYPICALITY_MIN_POOL = 32    # under this a median/MAD "tail" is noise — guard off
+
+_BLAS_GEMM = ...             # unprobed sentinel; None once probed and unavailable
+
+
+def _fast_gemm_nt():
+    """scipy's single-precision GEMM (``A @ B.T``), or None when unreachable.
+
+    WHY this exists, measured rather than assumed: the numpy wheels this app runs
+    on ship WITHOUT an optimised BLAS (``threadpoolctl.threadpool_info()`` returns
+    an empty list), so ``E @ E.T`` runs single-threaded at ~5 GFLOP/s. On a real
+    6 353-image pool that is 12.6 s for ONE similarity pass — 89 % of a curation
+    click. scipy's wheels bundle OpenBLAS (24 threads here): the identical product
+    takes 0.14 s, ~90× less, for the same 62 GFLOP.
+
+    scipy is not in ``requirements.txt``, and it does not need to be: this lane
+    only runs when numpy is present, numpy only arrives with
+    ``requirements-ml.txt``, and insightface (the first line of that file) depends
+    on scipy. So every install that CAN reach this code has the fast path, and the
+    numpy fallback below is the belt-and-braces branch, not the normal one.
+
+    Probed once per process and remembered — importing scipy.linalg is ~200 ms."""
+    global _BLAS_GEMM
+    if _BLAS_GEMM is ...:
+        try:
+            from scipy.linalg.blas import sgemm
+            _BLAS_GEMM = sgemm
+        except Exception as e:  # noqa: BLE001 — no scipy / broken wheel = slow path
+            logger.info('no scipy BLAS for curation sampling (%s); '
+                        'falling back to numpy matmul', e)
+            _BLAS_GEMM = None
+    return _BLAS_GEMM
+
+
+def _sim_block(A, E):
+    """``A @ E.T`` for L2-normed float32 rows — the similarity block of the
+    typicality pass, routed through an optimised BLAS when one is reachable.
+
+    Returns a C-contiguous (len(A) × len(E)) float32 array: scipy hands back a
+    Fortran-ordered result, and the ``np.partition(..., axis=1)`` that follows
+    walks rows, so the copy pays for itself several times over.
+
+    Float caveat, stated because it is the one thing this change can affect: a
+    different BLAS sums the same products in a different order, so a similarity
+    can differ from numpy's by ~1e-6 (measured max absolute deviation over the
+    real bank). That is far below any threshold this module compares against, and
+    the selections were verified id-for-id identical on the production bank across
+    n ∈ {20, 60, 200} and typicality ∈ {0.25, 0.5, 1.0} — but it is an equality
+    of results, not of bits. ``typicality=0`` never reaches here at all, so the
+    golden "historical behaviour" path is untouched by construction."""
+    import numpy as np
+    gemm = _fast_gemm_nt()
+    if gemm is not None and A.dtype == np.float32 and E.dtype == np.float32:
+        try:
+            return np.ascontiguousarray(gemm(1.0, A, E, trans_b=True))
+        except Exception as e:  # noqa: BLE001 — never fail a click over an optimisation
+            logger.warning('scipy BLAS gemm refused the pool (%s); using numpy', e)
+    return A @ E.T
 
 
 def _isolation_penalty(E, *, k=_TYPICALITY_K, block=_TYPICALITY_BLOCK):
@@ -2038,12 +2151,15 @@ def _isolation_penalty(E, *, k=_TYPICALITY_K, block=_TYPICALITY_BLOCK):
 
     Time: this is an exact all-pairs pass, Θ(m²·d) — the same shape of work the
     semantic-dedup stage already does, and the reason the guard is computed ONLY
-    when it is on. Seconds on a big bank with a normal (BLAS-backed) numpy; a
-    numpy built without an optimised BLAS is ~50× slower and will make the click
-    wait, which is why the button reports that it is working. An approximation
-    (subsampling the reference set) was rejected on purpose: it would make a small
-    but legitimate group — eight shots of one rare outfit — look isolated and get
-    penalised, which is exactly the variety this selector exists to preserve."""
+    when it is on. It is also, by a wide margin, the most expensive thing a
+    curation click does; ``_sim_block`` explains why the product goes through
+    scipy's BLAS rather than numpy's (12.6 s → 0.14 s on a 6 353-image pool,
+    measured — the numpy this app ships on has no optimised BLAS, so the "~50×
+    slower" case that paragraph used to describe as a hazard WAS the normal one).
+    An approximation (subsampling the reference set) was rejected on purpose: it
+    would make a small but legitimate group — eight shots of one rare outfit —
+    look isolated and get penalised, which is exactly the variety this selector
+    exists to preserve."""
     import numpy as np
     m = int(E.shape[0])
     k = min(int(k), m - 1)
@@ -2054,7 +2170,7 @@ def _isolation_penalty(E, *, k=_TYPICALITY_K, block=_TYPICALITY_BLOCK):
         return np.zeros(m, dtype='float32')
     dens = np.empty(m, dtype='float32')
     for a in range(0, m, block):
-        S = E[a:a + block] @ E.T             # (b, m) block — never (m, m)
+        S = _sim_block(E[a:a + block], E)    # (b, m) block — never (m, m)
         rows = np.arange(S.shape[0])
         S[rows, rows + a] = -np.inf          # a row is not its own neighbour
         top = np.partition(S, m - k, axis=1)[:, m - k:]
@@ -2108,8 +2224,15 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     visual space — the antidote to a dump of 4 000 near-identical shots. Greedy
     FPS: seed with the lowest-id row (deterministic), then repeatedly add the
     point whose nearest already-chosen neighbour is FARTHEST (max-min cosine
-    distance). O(n·m·d) — one (m×d)·(d,) product per pick, ~sub-second even at
-    m=24 000 / n=2 000.
+    distance). The SAMPLING itself is O(n·m·d) — one (m×d)·(d,) product per pick,
+    110 ms at m=6 353 / n=60 (measured).
+
+    That figure used to be quoted as the cost of the WHOLE call ("~sub-second
+    even at m=24 000"), and on real data it was wrong by a factor of thirty: the
+    click took 32 s, of which the loop below was 0.1 s. The rest was the guard's
+    all-pairs pass (see ``_isolation_penalty`` / ``_sim_block``). Whatever else
+    changes here, keep this docstring measured — a comment promising a second
+    where the user waits half a minute is a debt, not documentation.
 
     ``typicality`` (0–1) exists because pure max-min distance is, mathematically,
     the criterion that prefers ISOLATED points: on a collected bank the first
