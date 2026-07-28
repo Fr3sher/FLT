@@ -1,4 +1,5 @@
 """Static contracts shared by the app and its development entrypoints."""
+import importlib.util
 import json
 import re
 from pathlib import Path
@@ -23,6 +24,23 @@ def _docker_env(dockerfile):
         for key, value in re.findall(r'([A-Z][A-Z0-9_]*)=([^\s]+)', line[4:]):
             assignments[key] = value
     return assignments
+
+
+def _shell_statements(script):
+    """A shell script's executable lines: comments and blanks dropped."""
+    return [line.strip() for line in script.splitlines()
+            if line.strip() and not line.strip().startswith('#')]
+
+
+def _load_script_module(name):
+    """Import one of packaging/docker's standalone boot scripts by path. They sit
+    outside the `app` package on purpose — they run under the container's system
+    python, before any venv is active — so there is no import path to them."""
+    path = REPO_ROOT / 'packaging' / 'docker' / f'{name}.py'
+    spec = importlib.util.spec_from_file_location(f'lds_docker_{name}', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def test_container_runtime_tracks_server_defaults():
@@ -73,3 +91,35 @@ def test_docker_context_excludes_generated_artifacts():
     }
 
     assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist'} <= ignored
+
+
+def test_launcher_can_never_abort_the_upstream_boot():
+    """Upstream's run_userscript does `$script || error_exit`, so a non-zero exit
+    from the launcher kills the container's ComfyUI too. A studio problem must
+    cost the studio only."""
+    script = _read('packaging/docker/studio_launch.sh')
+    statements = _shell_statements(script)
+
+    assert script.startswith('#!/bin/bash')
+    # The last thing the script DOES, not the last bytes of the file: a trailing
+    # comment reading "exit 0" would satisfy endswith() and prove nothing.
+    assert statements[-1] == 'exit 0'
+    # Prose is free to name `set -e`; only a statement that enables it is the defect.
+    assert not [line for line in statements if line.startswith('set -e')]
+    assert '/app/.venv/bin/python' in script
+    assert 'seed_comfy_config.py' in script
+    # The studio is a background job beside ComfyUI's foreground process, so the
+    # launcher has to be its own supervisor.
+    assert [line for line in statements if line.startswith('while true')]
+
+
+def test_healthcheck_covers_both_halves_of_the_gpu_image(monkeypatch):
+    """One container, two services: a live ComfyUI with a dead studio is a broken
+    stack, and Docker only gets one exit code to say so in. Imported rather than
+    grepped, so an endpoint only counts if it is actually wired into TARGETS."""
+    monkeypatch.delenv('LDS_PORT', raising=False)
+    healthcheck = _load_script_module('healthcheck')
+    targets = dict(healthcheck.TARGETS)
+
+    assert f":{DEFAULTS['server']['port']}/api/health" in targets['studio']
+    assert ':8188/system_stats' in targets['comfyui']
