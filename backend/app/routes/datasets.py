@@ -1162,6 +1162,52 @@ def dataset_image_delete(image_id):
     return (jsonify({'ok': True}), 200) if ok else (jsonify({'error': 'not found'}), 404)
 
 
+def _klein_model_state(ds):
+    """What the ✨ improve / Klein generation surfaces need to both CHOOSE a model
+    and NAME the one that will run.
+
+    `effective` is the bare file name the job will really load — including when
+    nothing was chosen, which is the case the UI could never talk about before:
+    hiding the picker under two models is defensible (there is no choice to make),
+    staying silent about WHICH model runs is not. `missing` is set when the stored
+    pick has left the disk: the run refuses by name (KleinModelGone) rather than
+    swapping in a neighbour, so the screen has to say so before the click."""
+    from .. import capabilities
+    from ..services import klein_edit_helper as keh
+    stored = svc.dataset_klein_model(ds)
+    choices = list((capabilities.probe()['comfyui'].get('models') or {}).get('klein') or [])
+    resolved = keh.klein_model_on_disk(stored) if stored else keh.resolve_klein_unet()
+    return {'stored': stored,
+            'effective': os.path.basename(resolved) if resolved else None,
+            'missing': stored if (stored and not resolved) else None,
+            'choices': choices}
+
+
+@bp.get('/dataset/<int:dataset_id>/klein-model')
+def dataset_klein_model_get(dataset_id):
+    """The dataset's Klein model pick, the model that will actually run, and the
+    models detected in ComfyUI (the SAME scan the generation picker uses — there
+    is deliberately no second scanner)."""
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **_klein_model_state(ds)})
+
+
+@bp.post('/dataset/<int:dataset_id>/klein-model')
+def dataset_klein_model_set(dataset_id):
+    """Choose the Klein model for this dataset — used by ✨ Upscale & improve (all
+    three lanes) and as the default of Klein generation. '' clears it back to auto."""
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    try:
+        svc.set_dataset_klein_model(LOCAL_USER, dataset_id, data.get('klein_model'))
+    except ValueError as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **_klein_model_state(svc.get_dataset(LOCAL_USER, dataset_id))})
+
+
 @bp.post('/dataset/image/<int:image_id>/improve')
 def dataset_image_improve(image_id):
     """Create a regular Klein-upscaled candidate without touching the source."""

@@ -107,6 +107,15 @@ class FaceDataset(db.Model):
     # so captioning never has to depend on the ai-toolkit gate. Read via
     # face_dataset_service.caption_options; additive migration in create_app.
     caption_options = db.Column(Text, nullable=True)
+    # Which Klein UNET this dataset's Klein work runs on — the BARE file name as the
+    # picker lists it (the subfolder prefix is the resolver's job). NULL = auto: let
+    # klein_edit_helper.resolve_klein_unet choose, which is byte-for-byte what every
+    # dataset did before this column existed. Read by ✨ Upscale & improve (all three
+    # lanes) and used as the default of the generation picker. A dedicated column
+    # (NOT train_settings) so applying a training preset — which REPLACES that blob —
+    # cannot wipe it, and because it is not a training setting at all. Additive
+    # migration in create_app.
+    klein_model = db.Column(String(255), nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(DateTime, default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
 

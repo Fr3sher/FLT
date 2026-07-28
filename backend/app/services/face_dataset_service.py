@@ -796,6 +796,40 @@ def set_caption_options(user_id, dataset_id, patch) -> dict:
     return cur
 
 
+# --- Which Klein model this dataset runs on ----------------------------------
+# Stored on the DATASET, not in localStorage: it describes what the dataset is
+# made of, so it must survive a browser change and be the same from a phone. The
+# generation picker had a per-browser value (editPage_flux2KleinModel_v1) that
+# improve never even read — hence "no option anywhere to choose the model used
+# for improve". NULL = auto (resolve_klein_unet decides), which is exactly what
+# every improve did before this setting existed.
+def dataset_klein_model(ds):
+    """The bare Klein model file name this dataset chose, or None for auto."""
+    name = (getattr(ds, 'klein_model', None) or '').strip() if ds else ''
+    return name or None
+
+
+def set_dataset_klein_model(user_id, dataset_id, name):
+    """Persist the dataset's Klein model pick. '' / None clears it back to auto —
+    un-choosing has to be a real gesture, not a value you can never take back.
+
+    Only a BARE file name is accepted: the picker lists bare names (the loader
+    prefix is resolve_klein_unet's job), so a value carrying a path separator is
+    never something the UI produced. Existence is deliberately NOT checked here —
+    a model can be moved away long after it was chosen, and the honest place to
+    say so is the run (KleinModelGone names the file), not a settings write that
+    would silently drop the user's answer."""
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    value = (name or '').strip()
+    if value and (os.path.basename(value) != value or value in ('.', '..')):
+        raise ValueError('a Klein model is named by its file name, without a folder')
+    ds.klein_model = value or None
+    db.session.commit()
+    return dataset_klein_model(ds)
+
+
 def _resolve_caption_backend(ds) -> str:
     """The engine a caption run uses: the dataset override when set, else the global
     captioning.backend (default 'auto')."""
@@ -5853,7 +5887,7 @@ def _sync_generate_activity(dataset_id):
     dataset_activity.sync_pending(dataset_id, 'generate', pending, engine=engine)
 
 
-def generate_variations(user_id, dataset_id, variations, multiplier, klein_model,
+def generate_variations(user_id, dataset_id, variations, multiplier, klein_model=None,
                         lora_strength=None, generation_lora_preset=None):
     """For each (variation x multiplier), enqueue a Klein edit of the reference
     and create a pending FaceDatasetImage. Returns the created image ids.
@@ -5877,6 +5911,12 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
         raise ValueError('dataset not found')
     if not ds.ref_filename:
         raise ValueError('reference image required')
+    # No model named by the caller → the DATASET's pick (None = auto, i.e. exactly
+    # what generation resolved before the setting existed). An explicit request
+    # value still wins: it is what the workspace picker sends, and a legacy browser
+    # that still holds editPage_flux2KleinModel_v1 must keep generating with it.
+    if not klein_model:
+        klein_model = dataset_klein_model(ds)
     # Preflight the Klein model files BEFORE creating any rows: a missing model
     # then surfaces as one actionable "downloading, retry" 409 (route handler) —
     # not a dataset full of failed tiles, each doomed by a ComfyUI validation
@@ -6046,9 +6086,15 @@ def _improve_candidate_label(source) -> str:
     return (f'{base_label} · {source_label}' if source_label else base_label)[:120]
 
 
-def _improve_enqueue_profile() -> dict:
-    """Profile reproduced from the user-provided ComfyUI PNG metadata: keep the
-    selected/default Klein model, override only sampling/LoRA/resolution.
+def _improve_enqueue_profile(ds=None) -> dict:
+    """Profile reproduced from the user-provided ComfyUI PNG metadata: the
+    dataset's Klein model plus the sampling/LoRA/resolution overrides.
+
+    `ds` is the dataset the improved image belongs to. Reading its model HERE is
+    what makes the choice reach all three improve lanes at once: the single pass,
+    the 🔄 re-run, and the batch (which drains through improve_existing_image).
+    None / a dataset that never chose yields klein_model=None — the exact value
+    every improve sent before this setting existed.
 
     The defaults (1.0 / 4 / 0.0 / 2.0) are the values that were once hardcoded,
     so an untouched install behaves exactly as before. Clamped, because a bad
@@ -6057,6 +6103,7 @@ def _improve_enqueue_profile() -> dict:
     default" as "the user has not set this", which is what lets a value saved
     under the old key name speak for it."""
     return {
+        'klein_model': dataset_klein_model(ds),
         'lora_strength': _improve_float('improve_consistency_strength', 1.0, 1.5),
         'sampler_steps': _improve_int('improve_steps', 4),
         'base_lora_strength': _improve_float('improve_base_lora_strength', 0.0),
@@ -6159,7 +6206,7 @@ def _improve_existing_image_locked(user_id, image_id):
         job_id = keh.enqueue_klein_edit(
             user_id=str(user_id), source_filename=img.filename,
             source_path=source_path, edit_prompt=prompt,
-            **_improve_enqueue_profile(),
+            **_improve_enqueue_profile(get_dataset(user_id, img.dataset_id)),
             extra_metadata=_improve_extra_metadata(img, label),
         )
     except Exception:
@@ -6268,7 +6315,7 @@ def _reimprove_image_locked(user_id, image_id):
     job_id = keh.enqueue_klein_edit(
         user_id=str(user_id), source_filename=parent.filename,
         source_path=source_path, edit_prompt=prompt,
-        **_improve_enqueue_profile(),
+        **_improve_enqueue_profile(get_dataset(user_id, img.dataset_id)),
         extra_metadata=_improve_extra_metadata(parent, label),
     )
 
@@ -6615,8 +6662,9 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
         # Klein target: keep the row's real model file when it has one; a row born
         # on an API engine holds an engine TAG here, not a model — use the
         # workspace's Klein pick instead (None = enqueue's default model).
+        # …and when the workspace sent none either, the DATASET's pick (None = auto).
         model = (img.klein_model if img.klein_model not in API_ENGINES
-                 else ((klein_model or '').strip() or None))
+                 else ((klein_model or '').strip() or dataset_klein_model(ds)))
         ref_path = os.path.join(_dataset_path(ds.id), ds.ref_filename)
         extra_paths = [os.path.join(_dataset_path(ds.id), fn)
                        for fn in extra_ref_filenames(ds)]

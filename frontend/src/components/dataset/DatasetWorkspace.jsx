@@ -1162,7 +1162,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   <ClassifyFramingButton images={images} ollama={caps.ollama} capsLoading={capsLoading}
                     busy={ds.busy} activity={act} onClassify={(n) => ds.classify(n)} />
                   <div id="ds-add-generate" tabIndex={-1} className="scroll-mt-20">
-                    <VariationCatalog key={`vc-${d.id}-${bodyFid}`} busy={ds.busy}
+                    <VariationCatalog key={`vc-${d.id}-${bodyFid}`} datasetId={d.id} busy={ds.busy}
                       generating={act && act.kind === 'generate' ? act : null}
                       onGenerate={(...args) => {
                         // Guard-rail: a batch is already in flight — launching another one

@@ -337,7 +337,7 @@ export default function DatasetLightbox({
             column is a better shape for prose than a strip squeezed to the
             right of six buttons. A rule above it ties it to the ✨ it explains. */}
         {onImprove && !improvementActive && (
-          <KleinImproveNote subjectType={subjectType}
+          <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
             className={rail
               ? 'w-full border-t border-white/10 pt-2'
               : 'w-full sm:w-auto sm:max-w-md'} />
