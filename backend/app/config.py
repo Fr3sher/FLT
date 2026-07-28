@@ -295,6 +295,15 @@ DEFAULTS = {
         # How hard the source latent is pushed back into the model each step.
         'ref_boost': 4.0,
     },
+    # Z-Image pipeline — the two loader refs the shipped Test Studio workflow used
+    # to hardcode from the developer's own ComfyUI (reported by bobba84, GitHub #18).
+    # BLANK = "find it yourself": services/zimage_model_resolver scans every
+    # registered vae / text_encoders root, sub-folders included, case- and
+    # separator-insensitively (z_ae, z ae, z-ae, ae.safetensors; qwen_3_4b in any
+    # sub-folder). Set either to a filename to PIN it — a pinned value is used as-is
+    # and is never second-guessed, which is also the escape hatch when a shared
+    # ComfyUI carries several plausible files (a FLUX.1 `ae.safetensors`, say).
+    'zimage': {'vae': '', 'text_encoder': ''},
     # Editable identity / quality prompts (feature request by @bbsorry / 雨田壹).
     # The identity "locks" that ride ahead of every generated variation used to be
     # hardcoded and invisible; these overrides expose them without touching the

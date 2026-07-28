@@ -48,6 +48,20 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-zimage-finds-its-own-encoder-and-vae',
+    date: '2026-07-28',
+    title: 'Z-Image no longer asks you to rename your files',
+    blurb:
+      'The Test Studio demanded one exact spelling for the Z-Image text encoder and VAE — “z ae.safetensors” with a space, inside a folder capitalised “Z image”. Anything else, including ComfyUI’s own documented names, read as missing. The app now finds them itself: any capitalisation, any separator (z_ae, z ae, z-ae), any sub-folder, across every extra_model_paths root. If nothing is there it still tells you exactly what to place and where. Thanks to bobba84 (GitHub #18).',
+  },
+  {
+    id: '2026-07-28-zimage-base-keeps-its-own-settings',
+    date: '2026-07-28',
+    title: 'Z-Image Base starts on Base settings, not Turbo’s',
+    blurb:
+      'Selecting a non-distilled Z-Image Base in the Test Studio opened on CFG 1 and 8 steps — correct for the distilled Turbo build and ruinous for Base, which needs real guidance and far more steps. Each base model now proposes its own starting CFG and step count, and the pickers reach the values Base needs. Anything you had already chosen yourself is left exactly as it was. Thanks to bobba84 (GitHub #18).',
+  },
+  {
     id: '2026-07-28-pin-to-canvas-from-the-thumbnail',
     date: '2026-07-28',
     title: 'Put a generated image on the board without opening it first',
