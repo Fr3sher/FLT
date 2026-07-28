@@ -135,8 +135,15 @@ export async function apiFetch(url, options = {}) {
   return res.json();
 }
 
-export function postJson(url, body) {
+/* `opts` reaches apiFetch untouched — notably `{ background: true }`, which keeps
+   an automatic POST from announcing a failure the user did not ask for. A POST is
+   not always a user action: the threshold panel previews counts while a number is
+   being typed, and without this a server that blinked would speak once per keystroke.
+   It was silently dropped before (the signature took two arguments), so callers
+   passing it were passing nothing. */
+export function postJson(url, body, opts = {}) {
   return apiFetch(url, {
+    ...opts,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
