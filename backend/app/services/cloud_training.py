@@ -24,7 +24,7 @@ from sqlalchemy import func
 
 from .. import config as cfg
 from ..extensions import db
-from ..models import CloudTrainingRun
+from ..models import CloudTrainingRun, SystemState
 from . import face_dataset_service as fds
 from . import gpu_speed
 from . import lora_training as lt
@@ -1171,9 +1171,28 @@ def _run_machine_id(run):
         return None
 
 
+def _run_host_ip(run):
+    """Public address of the host this run rented, or None.
+
+    Two sources, in order of trust: the address stamped from the RENTED
+    instance (measured — it is the same field the pod's base_url is built
+    from), then the one the offer advertised. A bad host that re-registers
+    under a new machine_id keeps its address, which is the only reason this
+    exists (2026-07-28)."""
+    try:
+        parsed = json.loads(run.train_params or '{}')
+        if not isinstance(parsed, dict):
+            return None
+        return parsed.get('host_ip') or parsed.get('offer_ip') or None
+    except (ValueError, TypeError):
+        return None
+
+
 def _load_bad_hosts() -> dict:
-    """{machine_id(str): {'ts': epoch, 'reason': str}} — expired entries are
-    dropped on read (TTL cloud.host_blacklist_days). Corrupt file -> empty."""
+    """{machine_id(str): {'ts': epoch, 'reason': str, 'ip': str|None}} —
+    expired entries are dropped on read (TTL cloud.host_blacklist_days).
+    Corrupt file -> empty. Legacy files (entries without 'ip') load unchanged;
+    they simply ban one machine_id, as they always did."""
     try:
         raw = json.loads(_bad_hosts_path().read_text(encoding='utf-8'))
     except (OSError, ValueError):
@@ -1192,19 +1211,65 @@ def _load_bad_hosts() -> dict:
     return live
 
 
-def _blacklist_host(machine_id, reason):
+def _blacklist_host(machine_id, reason, ip=None):
     """Remember a host whose pod never became ready so the next launch (and the
-    tier list) skips it for a few days. Best-effort: never raises."""
-    if not machine_id:
+    tier list) skips it for a few days. Best-effort: never raises.
+
+    The entry is still KEYED by machine_id (legacy files keep working), but it
+    also records the host's public address when one is known, because
+    machine_id alone is defeatable: run #120 failed on a machine, that machine
+    was blacklisted, and run #121 was rented three minutes later on a DIFFERENT
+    machine_id at the same address — the same box, re-registered (a vast
+    machine_id is a file on the host; reinstalling the daemon mints a new one).
+
+    The address is a WEAKER identity than the machine id — several machines can
+    sit behind one NAT — so it only ever widens a ban that a real failure
+    already justified, it expires on the same TTL, and _filter_offers refuses
+    to let it starve a launch."""
+    if not machine_id and not ip:
         return
     try:
         hosts = _load_bad_hosts()
-        hosts[str(machine_id)] = {'ts': _now(), 'reason': str(reason)[:200]}
+        key = str(machine_id) if machine_id else f'ip:{ip}'
+        hosts[key] = {'ts': _now(), 'reason': str(reason)[:200], 'ip': ip or None}
         _bad_hosts_path().write_text(json.dumps(hosts), encoding='utf-8')
-        logger.warning('blacklisted vast host machine_id=%s for %s day(s): %s',
-                       machine_id, cfg.get('cloud.host_blacklist_days') or 3, reason)
+        logger.warning('blacklisted vast host machine_id=%s ip=%s for %s day(s): %s',
+                       machine_id, ip or '?',
+                       cfg.get('cloud.host_blacklist_days') or 3, reason)
     except Exception:
         logger.exception('could not blacklist host %s', machine_id)
+
+
+def _stamp_host_ip(run, ip):
+    """Record the rented pod's public address in train_params (once). Silent on
+    any failure: this is bookkeeping for a future ban, never a reason to fail
+    a boot that is otherwise going fine."""
+    try:
+        parsed = json.loads(run.train_params or '{}')
+        if not isinstance(parsed, dict) or parsed.get('host_ip') == str(ip):
+            return
+        parsed['host_ip'] = str(ip)
+        _set(run, train_params=json.dumps(parsed))
+    except Exception:
+        logger.debug('could not stamp the host address of run %s', run.id)
+
+
+def _blacklist_run_host(run, reason):
+    """Blacklist the host a RUN was on, with every identity it left behind."""
+    _blacklist_host(_run_machine_id(run), reason, ip=_run_host_ip(run))
+
+
+def _banned_ips(bad) -> set:
+    return {str(v.get('ip')) for v in bad.values()
+            if isinstance(v, dict) and v.get('ip')}
+
+
+def _offer_ip(offer) -> str:
+    """Public address advertised by an OFFER. Documented on the vast offer
+    object; treated as optional because nothing guarantees it is populated for
+    every offer — when it is absent the address ban simply does not apply to
+    that offer, and the machine_id ban still does."""
+    return str(offer.get('public_ipaddr') or '')
 
 
 def _filter_offers(offers) -> list:
@@ -1214,8 +1279,17 @@ def _filter_offers(offers) -> list:
     offer got filtered, fall back to the input minus blacklisted hosts only
     (renting a suspect host beats failing the run outright)."""
     bad = _load_bad_hosts()
-    not_blacklisted = [o for o in offers
-                       if str(o.get('machine_id') or '') not in bad]
+    banned_ips = _banned_ips(bad)
+    by_machine = [o for o in offers
+                  if str(o.get('machine_id') or '') not in bad]
+    not_blacklisted = [o for o in by_machine
+                       if not (_offer_ip(o) and _offer_ip(o) in banned_ips)]
+    if not not_blacklisted and by_machine:
+        # The address ban is the wide one; it must never be the reason a launch
+        # finds nothing. Fall back to the narrow machine_id ban and say so.
+        logger.warning('every remaining offer sits on a blacklisted address — '
+                       'falling back to the machine-id blacklist only')
+        not_blacklisted = by_machine
     by_class = {}
     for o in not_blacklisted:
         by_class.setdefault(o.get('gpu_name') or '', []).append(o)
@@ -1337,9 +1411,18 @@ def _provision(run):
         offer = _pick_offer(_filter_offers(pool), params.get('requested_gpu'),
                             strict=bool(params.get('strict_gpu')))
         tried_offers.add(offer['offer_id'])
-        # Stamp the host identity so a boot failure can blacklist THIS machine.
-        if offer.get('machine_id') is not None:
-            params['machine_id'] = offer['machine_id']
+        # Stamp the host identity so a boot failure can blacklist THIS machine —
+        # by its id AND by the address it answers on, since the id alone was
+        # re-minted around a ban (see _blacklist_host). offer_ip is whatever the
+        # offer advertised; host_ip (stamped during boot-wait, below) is the
+        # address of the pod actually rented and is the one to trust.
+        if offer.get('machine_id') is not None or _offer_ip(offer):
+            if offer.get('machine_id') is not None:
+                params['machine_id'] = offer['machine_id']
+            if offer.get('host_id') is not None:
+                params['host_id'] = offer['host_id']
+            if _offer_ip(offer):
+                params['offer_ip'] = _offer_ip(offer)
             _set(run, train_params=json.dumps(params))
         try:
             if template_hash:
@@ -1388,15 +1471,143 @@ def _provision(run):
 
 
 def _idle_seconds(run, now=None) -> float:
-    """How long this run has been silent in the DATABASE — the only progress
-    signal that survives a restart and does not depend on the monitor thread
-    being healthy. Every monitor poll writes phase_detail through _set(), which
-    bumps updated_at, so a frozen updated_at means the monitor stopped
-    completing iterations (whatever the reason: dead, wedged in a socket read,
-    or gone with a restart)."""
+    """How long this run has been silent in the DATABASE — the MONITOR's
+    heartbeat, and nothing more.
+
+    Every monitor poll writes phase_detail through _set(), which bumps
+    updated_at, so a frozen updated_at means the monitor stopped completing
+    iterations (dead, wedged in a socket read, or gone with a restart). That
+    makes this the right question for "can this thread still be trusted with a
+    stop?" — and the WRONG one for "is the run getting anywhere?", which is
+    what _silent_seconds answers: a monitor happily re-writing the same
+    sentence every 10 s keeps this at zero forever. Do not merge the two."""
     now = now or datetime.utcnow()
     ref = run.updated_at or run.created_at or now
     return max(0.0, (now - ref).total_seconds())
+
+
+# -- durable progress clock ---------------------------------------------------
+# updated_at cannot answer "is this run getting anywhere?" for two independent
+# reasons, both measured:
+#  * it is re-stamped when the app RE-ADOPTS a run after a restart, so the
+#    silence counter restarts with the process. Three restarts in one hour kept
+#    a dead pod under the 45 min threshold for good (2026-07-28) — on the
+#    machine of someone who tinkers, the watchdog is off by construction;
+#  * it is bumped by the monitor's own writes, so a pod frozen at
+#    'running: - fetching transformer weights' looks perfectly alive.
+# The fix is to timestamp REMOTE evidence instead, and to keep that timestamp
+# in the database (SystemState) so it outlives the process. The fingerprint is
+# deliberately narrow: the run's phase, how many checkpoints landed, and the
+# byte/step counters the pod printed. Not the raw log — tqdm re-prints the same
+# bar with a bumped elapsed while the byte counter is frozen (measured: 1.95G
+# at 15:11 and again at 15:30), so hashing the text would call a stuck download
+# "progress". Not phase_detail either — re-adoption rewrites it, which is the
+# very reset being fixed.
+_PROGRESS_STATE_PREFIX = 'cloud_progress_watch:'
+
+
+def _progress_state_key(run_id) -> str:
+    return f'{_PROGRESS_STATE_PREFIX}{int(run_id)}'
+
+
+def _log_tail(run, max_bytes=64 * 1024) -> str:
+    """Tail of the run's mirrored pod log ('' when there is none). Bounded:
+    this is read on every card render and every supervisor tick."""
+    path = os.path.join(run.staging_dir or '', 'training.log')
+    try:
+        with open(path, 'rb') as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - max_bytes))
+            return fh.read().decode('utf-8', errors='replace')
+    except OSError:
+        return ''
+
+
+def _download_progress(run):
+    """Byte-counter progress of whatever the pod is currently downloading, or
+    None. Never raises: a card must never fail because a third-party bar
+    changed shape."""
+    try:
+        return lt.parse_download_progress(_log_tail(run))
+    except Exception:
+        logger.debug('download progress parse failed for run %s', run.id)
+        return None
+
+
+def _progress_fingerprint(run) -> str:
+    """What "something actually happened on the pod" means, as a short string."""
+    parsed = {}
+    try:
+        parsed = lt._parse_training_log(_log_tail(run)) or {}
+    except Exception:
+        parsed = {}
+    dl = _download_progress(run) or {}
+    return '|'.join(str(x) for x in (
+        run.status or '', _staging_save_count(run), parsed.get('step'),
+        dl.get('label') or '', dl.get('done') or ''))
+
+
+def _read_progress_watch(run):
+    row = db.session.get(SystemState, _progress_state_key(run.id))
+    if row is None or not row.value:
+        return None
+    try:
+        data = json.loads(row.value)
+        return (data['fp'], datetime.fromisoformat(data['ts']))
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def note_progress(run, now=None) -> datetime:
+    """Observe the run and return WHEN it last actually moved.
+
+    Writes only when the fingerprint changed, so a frozen run does not touch
+    the database at all (and a stuck run's own clock cannot be reset by the
+    act of watching it). The first observation of a run seeds the timestamp
+    with updated_at rather than `now`: at the first tick after a restart, the
+    last thing the previous process wrote is a much better estimate of "last
+    seen alive" than the instant the new process happened to start — seeding
+    with `now` would re-create the very reset this exists to remove."""
+    now = now or datetime.utcnow()
+    fp = _progress_fingerprint(run)
+    prev = _read_progress_watch(run)
+    if prev and prev[0] == fp:
+        return prev[1]
+    ts = now if prev else min(run.updated_at or now, now)
+    key = _progress_state_key(run.id)
+    try:
+        row = db.session.get(SystemState, key)
+        if row is None:
+            row = SystemState(key=key)
+            db.session.add(row)
+        row.value = json.dumps({'fp': fp, 'ts': ts.isoformat()})
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        logger.debug('could not record the progress clock of run %s', run.id)
+    return ts
+
+
+def _clear_progress_watch(run_id):
+    """Drop a finished run's progress clock — history rows never consult it."""
+    try:
+        row = db.session.get(SystemState, _progress_state_key(run_id))
+        if row is not None:
+            db.session.delete(row)
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _silent_seconds(run, now=None) -> float:
+    """How long the run has made no OBSERVABLE progress. Read-only: falls back
+    to _idle_seconds when nothing has been recorded yet (a run younger than the
+    first supervisor tick), so this is never worse than what it replaces."""
+    now = now or datetime.utcnow()
+    prev = _read_progress_watch(run)
+    if not prev:
+        return _idle_seconds(run, now)
+    return max(0.0, (now - prev[1]).total_seconds())
 
 
 def _monitor_is_responsive(run) -> bool:
@@ -1424,6 +1635,7 @@ def _force_stop(run, detail, error=None) -> dict:
     destroy by hand in the meantime."""
     iid = run.vast_instance_id
     _stop_event_for(run.id).set()   # a still-living monitor stands down too
+    _clear_progress_watch(run.id)   # every path below closes the run
     if not iid:
         _set(run, status='stopped', phase_detail=detail,
              error=error, finished_at=datetime.utcnow())
@@ -1547,8 +1759,13 @@ def supervise_active_runs() -> list:
                     acted.append({'run_id': run.id, 'reason': 'stop_deadline',
                                   'ok': res['ok']})
                     continue
+                # The progress clock is advanced HERE, from outside every
+                # monitor: the tick that judges the run is also the one that
+                # observes it, so the watchdog cannot be starved by a monitor
+                # that stopped looking.
+                note_progress(run, now)
                 limit = _freeze_limit_seconds(run, c)
-                if limit and _idle_seconds(run, now) > limit:
+                if limit and _silent_seconds(run, now) > limit:
                     res = _force_stop(
                         run, detail=f'Frozen — no progress for {limit // 60} min; '
                                     'pod terminated by the supervisor',
@@ -1828,6 +2045,7 @@ def _finish(run, status, detail='', error=None, destroy=True):
             logger.warning('terminate %s failed: %s', run.vast_instance_id, e)
     _set(run, status=status, phase_detail=detail, error=error,
          finished_at=datetime.utcnow())
+    _clear_progress_watch(run.id)
     return pod_gone
 
 
@@ -1934,6 +2152,10 @@ def _monitor(app, run_id):
                 # Bearer header) — pick it up as soon as the record shows it.
                 if inst and not run.auth_token and inst.get('jupyter_token'):
                     _set(run, auth_token=inst['jupyter_token'])
+                # The address of the pod we are actually paying for — the only
+                # host identity that a machine_id re-registration cannot shed.
+                if inst and inst.get('public_ipaddr'):
+                    _stamp_host_ip(run, inst['public_ipaddr'])
                 base = vast_client.derive_base_url(inst, port) if inst else None
                 ready = False
                 if base:
@@ -1954,8 +2176,7 @@ def _monitor(app, run_id):
                     # host — blacklist it like a timeout would. An early stop
                     # (changed their mind) says nothing about the host.
                     if _now() - boot_started > 8 * 60:
-                        _blacklist_host(_run_machine_id(run),
-                                        'user stopped a boot stuck past 8 min')
+                        _blacklist_run_host(run, 'user stopped a boot stuck past 8 min')
                     _finish(run, 'stopped', detail='Stopped by user during boot')
                     return
                 # Live telemetry: surface WHERE the boot is stuck (image pull,
@@ -1974,8 +2195,7 @@ def _monitor(app, run_id):
                 if _now() - boot_started > ready_timeout:
                     # This host burned the whole boot budget — skip it for the
                     # next few days so a relaunch can't land on it again.
-                    _blacklist_host(_run_machine_id(run),
-                                    'pod did not become ready in time')
+                    _blacklist_run_host(run, 'pod did not become ready in time')
                     raise RuntimeError('pod did not become ready in time')
                 _sleep(POLL_SECONDS)
 
@@ -2118,8 +2338,7 @@ def _monitor(app, run_id):
                     if not ok:
                         # A host that cannot DELIVER its result (even through
                         # the resume loop) is a bad host — skip it next time.
-                        _blacklist_host(_run_machine_id(run),
-                                        'could not serve the final checkpoint')
+                        _blacklist_run_host(run, 'could not serve the final checkpoint')
                         # LoRA > a few minutes of pod time: keep the pod for
                         # manual recovery; max-runtime/reconcile will reap it.
                         # Same guard as _finish_if_open: announcing a kept pod
@@ -2194,8 +2413,8 @@ def _monitor(app, run_id):
             retryable = _is_retryable_pod_failure(error_text)
             # Exclude the failed host before selecting the fresh pod.
             if retryable:
-                _blacklist_host(_run_machine_id(run),
-                                f'transient pod failure: {error_text[:160]}')
+                _blacklist_run_host(
+                    run, f'transient pod failure: {error_text[:160]}')
             pod_gone = _finish(run, 'error', detail='Run failed',
                                error=error_text)
             if retryable and pod_gone:
@@ -2765,13 +2984,21 @@ def _run_payload(run) -> dict:
             'auto_retry_of': _run_param(run, 'auto_retry_of'),
             'auto_retry_run_id': _run_param(run, 'auto_retry_run_id'),
             'created_at': run.created_at.isoformat() if run.created_at else None,
-            # How long the run has reported nothing, and how long it is allowed
-            # to (0 = the freeze watchdog is off). The card warns on its own
-            # from these two, so a silent run is visible even when the watchdog
-            # is configured never to cut.
-            'idle_seconds': int(_idle_seconds(run)),
+            # How long the run has reported nothing OBSERVABLE (not just how
+            # long the monitor has been quiet — see _silent_seconds), and how
+            # long it is allowed to (0 = the freeze watchdog is off). The card
+            # warns on its own from these two, so a silent run is visible even
+            # when the watchdog is configured never to cut.
+            'idle_seconds': int(_silent_seconds(run) if run.status in ACTIVE_STATES
+                                else _idle_seconds(run)),
             'idle_limit_seconds': (_freeze_limit_seconds(run)
                                    if run.status in ACTIVE_STATES else 0),
+            # Byte counter of whatever the pod is fetching right now (base
+            # weights are 26 GB — the phase users could not tell from a hang).
+            # None whenever nothing parsable is in the log: the card then keeps
+            # showing phase_detail, exactly as before.
+            'download': (_download_progress(run)
+                         if run.status in ACTIVE_STATES else None),
             'stop_requested': bool(run.stop_requested_at),
             'finished_at': run.finished_at.isoformat() if run.finished_at else None}
     if base_model is not None:
@@ -4687,6 +4914,9 @@ def cloud_progress(user_id, dataset_id, train_type=None) -> dict:
                 samples.append({'filename': f, 'step': int(m.group(1)),
                                 'prompt_idx': int(m.group(2))})
         samples.sort(key=lambda s: s['step'], reverse=True)
+    # `download` arrives through _run_payload (active runs only) — the same
+    # field name the local training_progress payload uses, so the component
+    # that renders it does not care which lane it is looking at.
     return {'active': run.status in ACTIVE_STATES, 'log_exists': log_exists,
             **parsed, 'samples': samples, **_run_payload(run),
             'phase': run.status}

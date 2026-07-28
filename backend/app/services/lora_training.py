@@ -5848,6 +5848,23 @@ _PROG_LOG_MAX_BYTES = 4 * 1024 * 1024   # tail cap: 3000 tqdm updates ≈ 0.5 MB
 _PROG_CURVE_MAX_POINTS = 200
 _PROG_SAMPLES_MAX = 24
 
+# The SAME log also carries huggingface_hub's byte-counter bars while the pod
+# pulls the base weights — the phase that costs the most and reported the least:
+#   raw.safetensors:   7%|▋| 1.95G/26.3G [15:30<2:37:06, 2.58MB/s]
+# Two independent reasons to recognise them.
+#  * They are not steps. '0.00/26.3G' matched _PROG_STEP_RE as "0/26", so a run
+#    downloading its base model showed 'step 0 / 26' — a plausible-looking
+#    number that was pure noise (verified on the run-121 log, 2026-07-28).
+#  * They ARE the answer to "is it downloading or is it frozen?", which nothing
+#    surfaced: two users waited hours in front of a fixed sentence.
+# The discriminator is the rate unit: tqdm prints B/s only for byte bars
+# (it/s or s/it for step bars). '?B/s' (no estimate yet) counts too.
+_DOWNLOAD_PROG_RE = re.compile(
+    r'(?P<label>[^\r\n|]{1,80}?):\s*(?P<percent>\d{1,3})%\|[^|]*\|\s*'
+    r'(?P<done>[\d.]+\s*[kKMGTP]?)/(?P<total>[\d.]+\s*[kKMGTP]?)\s*'
+    r'\[(?P<elapsed>[\d:]+)<(?P<eta>[\d:?]+),\s*(?P<speed>[\d.?]+\s*[kKMGTP]?B/s)\s*\]')
+_DOWNLOAD_RATE_RE = re.compile(r'[\d.?]\s*[kKMGTP]?B/s')
+
 
 def _parse_training_log(text: str) -> dict:
     """Extract (step, total, loss, speed, eta, loss_curve) from raw log text.
@@ -5861,6 +5878,10 @@ def _parse_training_log(text: str) -> dict:
         # contains incidental 'X/Y' text (dataset counts, resolutions) that must not
         # be read as progress.
         if '%|' not in seg and not lm:
+            continue
+        # A byte bar is a download, not a training step: '0.00/26.3G' read as
+        # step 0 of 26 is worse than no number at all.
+        if _DOWNLOAD_RATE_RE.search(seg):
             continue
         sm = None
         for sm in _PROG_STEP_RE.finditer(seg):
@@ -5891,6 +5912,40 @@ def _parse_training_log(text: str) -> dict:
         curve = [curve[int(i * stride)] for i in range(_PROG_CURVE_MAX_POINTS - 1)] + [curve[-1]]
     out['loss_curve'] = curve
     return out
+
+
+def parse_download_progress(text: str) -> dict | None:
+    """The LAST byte-counter bar in the log, or None when there is none.
+
+    Pure function. Returns the figures exactly as tqdm printed them — strings,
+    not converted numbers: '1.95G' is what the log says, and inventing
+    1.95 × 1024³ bytes from it would be a number the log never contained (the
+    unit divisor is the producer's choice, not ours). The caller displays them
+    and compares `done` for movement; neither needs a conversion.
+
+    Degrades on purpose: this format belongs to huggingface_hub/tqdm and can
+    change or be absent (some phases print no bar at all). Anything that does
+    not match EVERY field is not guessed at — it yields None, and the caller
+    keeps whatever it was already showing."""
+    last = None
+    for seg in re.split(r'[\r\n]+', text or ''):
+        m = _DOWNLOAD_PROG_RE.search(seg)
+        if m:
+            last = m
+    if last is None:
+        return None
+    label = last.group('label').strip()
+    # tqdm re-prints the bar with a bumped elapsed even while the byte counter
+    # is frozen (measured on the run-121 log: 1.95G at 15:11, then at 15:30).
+    # 'done' is therefore the only field that means "it moved".
+    return {'label': label[-60:] or 'download',
+            'percent': min(100, int(last.group('percent'))),
+            'done': last.group('done').strip(),
+            'total': last.group('total').strip(),
+            'elapsed': last.group('elapsed'),
+            'eta': None if '?' in last.group('eta') else last.group('eta'),
+            'speed': (None if '?' in last.group('speed')
+                      else last.group('speed').strip())}
 
 
 def _samples_dir(user_id, dataset_id, base_model=_PERSISTED, family=None,
@@ -5988,6 +6043,10 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
     log_path = _run_log_path(ds, base_model, family, variant)
     parsed = {'step': None, 'total': None, 'loss': None, 'speed': None, 'eta': None,
               'loss_curve': []}
+    # A local run downloads its base weights too (the first run of a family
+    # pulls tens of GB from Hugging Face), and showed the same motionless
+    # 'Starting up...' the cloud card showed. Same parser, same degradation.
+    download = None
     log_exists = os.path.isfile(log_path)
     if log_exists:
         try:
@@ -5995,10 +6054,13 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
             with open(log_path, encoding='utf-8', errors='replace') as fh:
                 if size > _PROG_LOG_MAX_BYTES:
                     fh.seek(size - _PROG_LOG_MAX_BYTES)
-                parsed = _parse_training_log(fh.read())
+                text = fh.read()
+            parsed = _parse_training_log(text)
+            download = parse_download_progress(text)
         except OSError:
             log_exists = False
     return {'active': active, 'log_exists': log_exists, **parsed,
+            'download': download,
             'masks_skipped': bool(active and queue_manager._get_system_state('training_masks_skipped', False)),
             'samples': list_training_samples(
                 user_id, dataset_id, base_model, family, variant=variant)}

@@ -241,3 +241,17 @@ Open the **Cloud** tab: every run shows its live phase, and the stall watchdog
 (Settings → Training → stall timeout) rescues logs and kills the pod if no step
 progress happens for too long. Orphaned pods are also destroyed automatically
 at every app start — you never pay for a forgotten GPU.
+
+**Decide without opening the vast.ai console.** The longest phase of a fresh
+run is the pod pulling its base weights — 26 GB for Krea 2, half an hour on a
+healthy host. The card shows that download as it happens: how much has landed,
+of how much, at what speed and its ETA. Two readings tell you everything:
+
+- the figures move → it is working, however slow it looks. A crawling download
+  is still a download; the *no training step in 45 min* watchdog will end it if
+  it never gets there;
+- the figures do not move, and the card says **Silent run — no progress
+  reported for N min** → the pod is frozen, not slow. Stop it, or let the
+  freeze watchdog terminate it at the configured limit. That counter is
+  measured on the pod and survives restarting the app, so leaving and coming
+  back does not reset the evidence.
