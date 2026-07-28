@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-scrape-straight-into-a-bank',
+    date: '2026-07-28',
+    title: 'Scrape the web straight into a bank — no throwaway dataset first',
+    blurb:
+      'The scraper had one outlet: straight into a dataset, through filters made for training — anything under 768 px, anything wider than 3:1 and anything it judged a near-duplicate was dropped before you ever saw it. Getting a scrape into the Image bank meant building a dataset you did not want, then importing it back, having already lost the images the triage passes exist to judge. The Image bank page now has its own scrape section: same scan, same picking, you just choose which bank receives them — a new one, or more into a bank you are already triaging. Nothing is filtered on the way in; the quality, duplicate and framing passes rule on the pile, and you promote the keepers into a dataset as usual.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',
