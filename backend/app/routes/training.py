@@ -1459,13 +1459,23 @@ def dataset_train_retry():
     """↻ Retry a FAILED LOCAL run (Runs page): relaunch training with the exact
     identity params stamped for that launch. A real launch_training — normal
     preflight, GPU-collision refusal, no bypass — replaying the live dataset
-    (slider settings included), not a resurrection of the dead process."""
+    (slider settings included), not a resurrection of the dead process.
+
+    The confirmable refusals are answered HERE, in the payload, exactly like the
+    Start handlers above — not inherited from the failed launch. Retry re-exports
+    the LIVE dataset, so the guards run against today's images: a consent given
+    for "1 image has no caption" must not silently wave through the twelve that
+    lost their caption since. Same reason the flags default to False: a retry is
+    a launch, and a launch asks. Reported by 1Tomber (GitHub #23), whose retry
+    was refused with no way to confirm and no way to see why."""
     gate = _require_aitoolkit()
     if gate:
         return gate
     d = request.get_json(silent=True) or {}
     try:
-        res = lt.retry_local_run(LOCAL_USER, int(d.get('record_id') or 0))
+        res = lt.retry_local_run(
+            LOCAL_USER, int(d.get('record_id') or 0),
+            **{k: bool(d.get(k)) for k in lt.CONFIRMATION_FLAGS})
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **res})

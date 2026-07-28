@@ -5880,14 +5880,39 @@ def failed_local_run() -> tuple | None:
     return rec_id, local_error_message(last_local_error())
 
 
-def retry_local_run(user_id, record_id) -> dict:
+# The confirmable pre-flight refusals a launch can be waved through, and the ONE
+# list the local retry lane forwards. Every one of them is a refusal the Start
+# flow already lets the user answer; a retry that could not answer them was a
+# dead button (GitHub #23). Mirrors cloud_training._CONFIRMATION_FLAGS — the
+# cloud lane replays them from the run's stored pod params, the local lane asks
+# again (its record stores no consent, and the dataset it re-exports is live).
+CONFIRMATION_FLAGS = (
+    'allow_caption_mismatch',
+    'allow_uncaptioned',
+    'allow_caption_quality',
+    'allow_unverified_weights',
+    'allow_not_ready',
+)
+
+
+def retry_local_run(user_id, record_id, **confirmations) -> dict:
     """↻ Retry a FAILED local run: a REAL launch_training replaying the identity
     params stamped for that launch (family / variant / base / masked / steps) —
     same guardrails as any launch (GPU-collision refusal, normal preflight, no
     bypass), not a resurrection of a dead process. The live dataset (images,
     captions, advanced + slider settings) is the source of truth and is replayed
     as-is, so a slider run re-emits its slider recipe — now with the 768-only
-    default that keeps its VRAM peak under 24 GB."""
+    default that keeps its VRAM peak under 24 GB.
+
+    ``**confirmations`` = the CONFIRMATION_FLAGS the caller answered for THIS
+    retry (all False by default). They are not read back from the failed record:
+    the record stores no consent, and the dataset being re-exported is the live
+    one, so an answer given at the first launch describes a dataset that may no
+    longer exist. Unknown keys are refused rather than silently dropped — a
+    typo'd flag name must not read as "the user did not confirm"."""
+    unknown = set(confirmations) - set(CONFIRMATION_FLAGS)
+    if unknown:
+        raise ValueError(f'unknown confirmation flag(s): {", ".join(sorted(unknown))}')
     from ..models import TrainingRunRecord
     rec = fds.db.session.get(TrainingRunRecord, int(record_id))
     if rec is None:
@@ -5904,7 +5929,8 @@ def retry_local_run(user_id, record_id) -> dict:
     return launch_training(
         user_id, rec.dataset_id, steps=rec.steps,
         base_model=(rec.base_model or None), variant=rec.variant,
-        train_type=rec.family, masked=bool(rec.masked))
+        train_type=rec.family, masked=bool(rec.masked),
+        **{k: bool(confirmations.get(k)) for k in CONFIRMATION_FLAGS})
 
 
 # --- Suivi de progression (log tail + loss curve + samples) -------------------
