@@ -1108,7 +1108,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 <DatasetGrid images={gridImages} datasetId={d.id} onStatus={ds.setStatus} onCaption={ds.setCaption}
                   onCrop={setCropImg} onDelete={ds.deleteImage}
                   onMirror={ds.mirrorImage} mirroringIds={ds.mirroringIds}
-                  onRegenerate={(id, loraStrength, prompt) => ds.regenerate(id, loraStrength, prompt)}
+                  onRegenerate={(id, loraStrength, prompt, opts) => ds.regenerate(id, loraStrength, prompt, opts)}
                   onReimprove={ds.reimproveImage} onView={setViewImg}
                   onBatch={ds.batchImages} busy={ds.busy}
                   onImproveBatch={ds.improveBatch} activity={act}
@@ -1912,7 +1912,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
       )}
       {folderBrowseOpen && (
         <FolderBrowserModal
-          onPick={(p) => ds.importDatasetFolder(p)}
+          onPick={(p) => ds.importDatasetFolder(p, { silent: true })}
           onClose={() => setFolderBrowseOpen(false)} />
       )}
       {captionOptionsOpen && (

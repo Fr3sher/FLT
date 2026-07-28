@@ -673,7 +673,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   }, [searchText])
   const goto = (off) => { setOffset(off); refreshImages(filter, off) }
 
-  const act = async (fn, okMsg) => {
+  /* `onRefusal` is for a caller that OWNS a surface for the refusal — today the
+     🚀 Launch all dialog, which draws it next to the checkboxes it is about and
+     stays open so they survive. When it is given, the message goes THERE instead
+     of to a toast: two copies of the same sentence is not twice as clear. Every
+     other button keeps the toast, because it has nowhere else to put it. */
+  const act = async (fn, okMsg, { onRefusal } = {}) => {
     try {
       const d = await fn()
       if (okMsg) toast.success(okMsg)
@@ -689,9 +694,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       // panel, 🗑 Delete rejected, ⬆ Promote, 🚀 Launch all. Anything else keeps
       // its own message — only a refusal that identified itself is reworded.
       const kind = e?.body?.busy_kind
-      toast.error(e?.status === 409 && kind
+      const message = e?.status === 409 && kind
         ? busyRefusal({ kind, activity: payload?.activity })
-        : (e?.message || 'Action failed.'))
+        : (e?.message || 'Action failed.')
+      if (onRefusal) onRefusal(message)
+      else toast.error(message)
       return null
     }
   }
@@ -709,10 +716,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       ...(captionVocab ? { vocabulary: captionVocab } : {}),
     }), null)
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
+  /* Posts with the dialog still OPEN and answers {ok,error}: a refused launch —
+     "a scan job is already running on this bank" is the usual one — used to close
+     the dialog first and reset all seven pass checkboxes and the reject flags to
+     their defaults. The dialog decides what to do with the answer. */
   const startPipeline = async (config) => {
+    let error = null
+    const d = await act(() => postJson(`/api/bank/${bankId}/pipeline`, config),
+      '🚀 Launch all started — you can walk away; Stop any time.',
+      { onRefusal: (m) => { error = m } })
+    if (!d) return { ok: false, error }
     setLaunchOpen(false)
-    await act(() => postJson(`/api/bank/${bankId}/pipeline`, config),
-      '🚀 Launch all started — you can walk away; Stop any time.')
+    return { ok: true }
   }
 
   const batchStatus = async (ids, status) => {
