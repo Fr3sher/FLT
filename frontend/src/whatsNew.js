@@ -48,6 +48,28 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-pin-to-canvas-from-the-thumbnail',
+    date: '2026-07-28',
+    title: 'Put a generated image on the board without opening it first',
+    blurb:
+      'Pinning a render onto the lineage board was only offered once you had opened it full-screen, so most people never learned the board could hold images at all. Every thumbnail in a run or checkpoint gallery now carries a 📌 of its own — one tap and it lands on the board next to the checkpoint that made it. It stays out of the way while you are selecting images to delete, so nothing new can be tapped by mistake.',
+  },
+  {
+    id: '2026-07-28-klein-refusals-name-the-cause',
+    date: '2026-07-28',
+    title: 'When Klein is greyed out, the app now tells you which thing is wrong',
+    blurb:
+      'The watermark cleaner and the small-image rescue used to answer every Klein refusal the same way — "needs ComfyUI running and the Klein models" — even when ComfyUI was running and the models were right there. They now show the same precise sentence the generation page does: the exact file that is missing, the file that is present but corrupted, the widget value your ComfyUI does not offer, or the engine being switched off in Settings. The cleaner also stops treating a broken weight as usable and silently handing it to ComfyUI.',
+  },
+  {
+    id: '2026-07-28-setup-checks-every-file-it-skips',
+    date: '2026-07-28',
+    title: 'Setup checks every file it decides not to re-download',
+    blurb:
+      'A download can be skipped because some other file already covers it — an earlier build under its old name, a copy in a folder you added through extra_model_paths, or a model you placed by hand. None of those were being opened before being vouched for, so a corrupted one sent you back into the same dead end by a different door. Each of them is now validated, and a file that cannot be loaded no longer counts as installed.',
+    to: '/setup',
+  },
+  {
     id: '2026-07-28-setup-stops-certifying-broken-models',
     date: '2026-07-28',
     title: 'Setup no longer says a model is installed when it cannot be loaded',
