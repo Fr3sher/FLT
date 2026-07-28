@@ -6020,6 +6020,41 @@ def parse_download_progress(text: str) -> dict | None:
                       else last.group('speed').strip())}
 
 
+_DOWNLOAD_UNIT = {'': 1.0, 'k': 1e3, 'K': 1e3, 'M': 1e6,
+                  'G': 1e9, 'T': 1e12, 'P': 1e15}
+
+
+def download_bytes_seen(text: str) -> float | None:
+    """Total bytes downloaded across EVERY bar in the log, or None when the log
+    holds no download bar at all. Same regex, same log, different question from
+    parse_download_progress(): that one answers "what do I SHOW the user" and
+    therefore reports the last bar verbatim; this one answers "did the pod
+    MOVE", which no single bar can answer.
+
+    Why a sum and not the last bar: huggingface_hub fetches several files at
+    once, so consecutive tails end on DIFFERENT bars. A watchdog comparing the
+    last bar alone would read A(1.0G), B(2.0G), A(1.0G)… as endless movement
+    while both files sit frozen — the exact false progress a kill decision must
+    never be built on. Keyed by label, summed, so only a file that genuinely
+    advanced can raise the total.
+
+    The unit divisor is assumed decimal. That is a guess about a producer's
+    formatting choice (see parse_download_progress), so the result is used for
+    two things only — a `>` comparison against the previous poll, and a rounded
+    human label in a failure message — never as an exact byte count."""
+    per_label = {}
+    for seg in re.split(r'[\r\n]+', text or ''):
+        for m in _DOWNLOAD_PROG_RE.finditer(seg):
+            raw = m.group('done').strip()
+            unit = raw[-1] if raw and raw[-1] in _DOWNLOAD_UNIT else ''
+            try:
+                value = float(raw[:-1] if unit else raw) * _DOWNLOAD_UNIT[unit]
+            except ValueError:
+                continue                      # not a number we can compare
+            per_label[m.group('label').strip()] = value
+    return sum(per_label.values()) if per_label else None
+
+
 def _samples_dir(user_id, dataset_id, base_model=_PERSISTED, family=None,
                  variant=_PERSISTED) -> str:
     return os.path.join(
