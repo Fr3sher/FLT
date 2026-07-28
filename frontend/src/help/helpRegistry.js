@@ -798,6 +798,24 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
       text: 'New: train each image on a long AND a short caption (Advanced options → Dual captions) so the LoRA leans less on any single wording.' } },
+  // Person masking (`masked`, background at 10 %) became a per-DATASET setting on
+  // 28/07 — it used to be a per-BROWSER localStorage preference the server only saw
+  // at launch. Same shape as Dual captions / Memory saving: a per-dataset training
+  // option, so it points at the settings-reference Training section, and its route
+  // is the training workspace section where the toggle lives.
+  { id: 'training.masked', kind: 'setting', title: 'Masked training (background at 10%)',
+    keywords: ['masked', 'mask', 'person mask', 'masked training', 'background',
+      'bg 10%', 'rembg', 'subject', 'isolate', 'loss weight', 'identity', 'room',
+      'advanced', 'training', 'not installed', 'missing', 'ml extras',
+      // It moved: people searching for where their old browser toggle went must
+      // land here, and so must the readiness row that now names it.
+      'per browser', 'localstorage', 'preference', 'phone', 'other machine',
+      'trains unmasked', 'readiness', 'preparation'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    // Deliberately NO one-time tip: the What's-new entry announces the move, and
+    // the panel already shows a targeted notice to the only browsers it affects
+    // (the ones that had turned masking off). A third surface would be nagging.
+    app: { route: '/datasets?section=training' } },
   // Concept face masking (issue #15) is a per-DATASET Advanced training option,
   // so like Dual captions it points at the dataset guide rather than
   // settings-reference. Its two tuning knobs live in Settings > Training and are

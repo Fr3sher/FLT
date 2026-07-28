@@ -125,6 +125,14 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-28-masked-training-is-saved-on-the-dataset',
+    date: '2026-07-28',
+    title: 'Masked training is saved on the dataset, not in one browser',
+    blurb:
+      'The 🎭 Masked toggle used to live in the browser you set it in: open the app from your phone and it quietly reverted to the default, and no run recorded which way it was set. It is now a dataset setting — shared across your devices, stamped into every run so two runs that differ only by masking no longer look identical, and read by the readiness badge, which can finally warn you that a dataset set to masked will train unmasked because rembg is missing. Existing datasets keep today’s behaviour; a browser that had turned masking off is asked once what to do with it.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',

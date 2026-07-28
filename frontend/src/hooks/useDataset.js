@@ -996,8 +996,11 @@ export function useDataset() {
         // seulement pour SDXL pour ne pas déclencher ce refus sur les autres.
         ...(opts.trainType === 'sdxl'
           ? { vae_path: opts.vaePath || '', te_path: opts.tePath || '' } : {}),
-        // Masked training (fond à 10 %) — défaut ON, toggle dans TrainingPanel.
-        masked: opts.masked !== false,
+        // Masked training (background at 10 %) — a persisted DATASET setting now,
+        // so the key is only sent when the caller has an explicit value. Omitted =
+        // the server reads the dataset (a browser that never loaded the settings
+        // must not overwrite a stored OFF with an optimistic default).
+        ...(typeof opts.masked === 'boolean' ? { masked: opts.masked } : {}),
         // Cible de steps absolue (plafond choisi dans TrainingPanel) — omise si
         // vide → le backend calcule la valeur adaptative (recommended_steps).
         ...(opts.steps ? { steps: opts.steps } : {}),
@@ -1055,7 +1058,7 @@ export function useDataset() {
     const body = {
       extra_steps: extraSteps,
       ...trainingRunSelection(baseModel, trainType, variant),
-      masked: opts.masked !== false,
+      ...(typeof opts.masked === 'boolean' ? { masked: opts.masked } : {}),
       allow_caption_mismatch: !!opts.allowCaptionMismatch,
       allow_uncaptioned: !!opts.allowUncaptioned,
       allow_unverified_weights: !!opts.allowUnverifiedWeights,
@@ -1092,7 +1095,7 @@ export function useDataset() {
     const body = {
       extra_steps: extraSteps,
       ...trainingRunSelection(baseModel, trainType, variant),
-      masked: opts.masked !== false,
+      ...(typeof opts.masked === 'boolean' ? { masked: opts.masked } : {}),
       allow_caption_mismatch: !!opts.allowCaptionMismatch,
       allow_uncaptioned: !!opts.allowUncaptioned,
       allow_unverified_weights: !!opts.allowUnverifiedWeights,

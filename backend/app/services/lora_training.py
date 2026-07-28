@@ -1623,7 +1623,38 @@ def _sample_every(ds) -> int:
     return v if v in _SAMPLE_EVERY_CHOICES else 250
 
 
-def launch_settings_snapshot(ds, family=None) -> dict:
+def person_masking_enabled(ds) -> bool:
+    """Person masking resolved for a run: the dataset's stored opt-in (default ON),
+    minus the two server guards that already force it off at export time — a
+    concept/style set (a person mask erases what is being taught) and slider mode
+    (the guided slider loss never reads batch.mask_tensor)."""
+    return fds.person_masking_enabled(ds) and not slider_mode_enabled(ds)
+
+
+def resolve_masked(ds, requested=None) -> bool:
+    """THE resolution of `masked` for a launch — one implementation, every lane.
+
+    An EXPLICIT boolean on the request still wins, and that is deliberate: the
+    canvas ▶ Continue replays the SOURCE run's own frozen flag, and a cloud
+    retry/continue replays the stamped run params. Those are per-RUN facts and
+    must not be re-read from a dataset that has since been edited. Absent (None)
+    — every fresh launch from the panel, the queue and the scheduler — resolves
+    to the dataset's persisted setting instead of the old hardcoded True."""
+    if isinstance(requested, bool):
+        return requested
+    return person_masking_enabled(ds)
+
+
+def resolve_masked_for(user_id, dataset_id, requested=None) -> bool:
+    """`resolve_masked` for the routes, which hold ids rather than the ORM row.
+    An unknown dataset falls back to the historical default (the launch below
+    raises 'dataset not found' on its own — this must not raise first)."""
+    if isinstance(requested, bool):
+        return requested
+    return person_masking_enabled(fds.get_dataset(user_id, dataset_id))
+
+
+def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     """Les réglages EFFECTIFS envoyés à ai-toolkit pour CE lancement — défauts
     résolus, pas les choix stockés. Stampé dans le registre de provenance
     (TrainingRunRecord.settings) par chaque launch local et cloud ; la page
@@ -1725,6 +1756,14 @@ def launch_settings_snapshot(ds, family=None) -> dict:
     # differ only by it are not the same experiment, so it is stamped effective
     # (concept-only, hence the kind check) exactly like `ema` and the memory keys.
     snap['mask_faces'] = bool(s.get('mask_faces')) and fds.is_concept(ds)
+    # Person masking, same reasoning as `mask_faces` right above: two runs of the
+    # same dataset that differ only by it are NOT the same experiment, and until
+    # this line the value lived in a browser and appeared in no snapshot at all —
+    # so a run comparison could not tell them apart. Stamped EFFECTIVE (the export
+    # guards for concept/style and slider mode are already folded in), and the
+    # per-run override wins when a replay carries one.
+    snap['masked'] = (bool(masked) if isinstance(masked, bool)
+                      else person_masking_enabled(ds))
     # Memory strategy — stamped with its EFFECTIVE value for the same reason as
     # `ema` above: two runs of the same dataset can differ only by these, and a
     # quantised run and a full-precision one are NOT the same experiment. Absent
@@ -1791,6 +1830,15 @@ def effective_train_settings(ds, family=None) -> dict:
             'mask_faces': bool(s.get('mask_faces')) and fds.is_concept(ds),
             'mask_faces_supported': fds.is_concept(ds),
             'mask_faces_concept_conflict': fds.concept_face_conflict(ds),
+            # Person masking (background at 10 % loss weight). `masked` = the value
+            # this dataset will train with, resolved (default ON, forced OFF for
+            # concept/style and slider mode); `masked_supported` = whether the
+            # toggle can do anything at all here, so the panel states the reason
+            # instead of hiding the control; `masked_stored` = the RAW tri-state
+            # (None = never answered) the one-time localStorage carry-over reads.
+            'masked': person_masking_enabled(ds),
+            'masked_supported': not fds.is_conceptual(ds) and not slider_mode_enabled(ds),
+            'masked_stored': fds.person_masking_stored(ds),
             # --- Memory strategy (issue #14) -----------------------------------
             # `memory_saving` = le choix STOCKÉ par clé (None = « Auto », le panel
             # recoche le défaut de la famille) ; `memory_saving_default` = ce que
@@ -1968,6 +2016,18 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             cur['mask_faces'] = True
         else:
             cur.pop('mask_faces', None)
+    if 'masked' in patch:
+        # Person masking. TRI-STATE, like the memory keys and unlike dual_captions /
+        # mask_faces: this lever's default is ON, so an explicit False is a VALUE
+        # that must be stored — dropping it would silently re-enable masking. Only
+        # None/'auto'/'' clears the key back to the default.
+        v = patch['masked']
+        if isinstance(v, bool):
+            cur['masked'] = v
+        elif v in (None, 'auto', ''):
+            cur.pop('masked', None)
+        else:
+            raise ValueError('masked must be true, false or auto')
     for _mk in _MEMORY_SETTING_KEYS:
         if _mk not in patch:
             continue
@@ -2004,7 +2064,7 @@ TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'sample_every', 'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
                       'grad_accum', 'network_type', 'ema', 'dual_captions',
-                      'mask_faces', 'learning_rate', *_MEMORY_SETTING_KEYS)
+                      'mask_faces', 'masked', 'learning_rate', *_MEMORY_SETTING_KEYS)
 
 # The ONLY settings a resume/continue may change. ai-toolkit rebuilds the job
 # config from scratch on every launch, so a re-read setting is honored on resume —
@@ -4902,44 +4962,45 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             _check('face_mask', 'Face masking ready', 'ok',
                    'InsightFace found — the faces will be weighted down')
 
-    # 10) PERSON masking asked for, but rembg isn't installed.
+    # 9bis) Person masking set to ON, but rembg isn't installed.
+    # Retenu de la premiere ecriture de cette ligne (issue #24) : la sonde derriere
+    # rembg est un import en sous-processus dont le TIMEOUT s'effondre en False
+    # (capabilities._cached_import), et un `import rembg` a froid a ete MESURE a
+    # ~20 s. Un refus dur transformerait donc une machine lente en machine qui ne
+    # peut plus lancer du tout : c'est la seconde raison, independante, pour
+    # laquelle cette ligne avertit et ne bloque jamais.
     #
-    # The exact twin of the face-mask row above, and it was missing: the person
-    # masks are the DEFAULT for a character run, and their absence downgraded the
-    # run to unmasked with the only trace a flag on the live progress view — which
-    # is gone as soon as the run ends. Someone pays for a full run, local or on a
-    # rented pod, and learns their LoRA memorised the room only by testing the
-    # result (issue #24, 1Tomber).
+    # THE reason `masked` became a stored dataset setting. While it lived in the
+    # browser's localStorage the server only learned it at launch, so this badge
+    # could not say what it says now: that the dataset is set to train masked and
+    # will not, because the mask backend is missing. Users found out from a flag
+    # on the progress view, GPU-hours in.
     #
-    # WARNING, NOT A BLOCKER — deliberately, for two reasons. Training unmasked is
-    # a legitimate choice, not a broken state; and the probe behind `masks` is a
-    # subprocess import whose TIMEOUT collapses to False (capabilities._cached_import),
-    # a cold `import rembg` measured ~20 s — so a hard refusal would turn a slow
-    # machine into a machine that cannot launch at all. The gate that helps is one
-    # explicit, informed acknowledgement, which is what a preflight warning is.
-    #
-    # `masked` is the CLIENT's intent (a localStorage preference the server never
-    # sees), so it rides in as a parameter. None = the caller did not say → stay
-    # silent rather than guess, and the payload is byte-for-byte the historical one.
-    # Concept/style/slider force person masks OFF by design, so they never warn.
-    if masked and not slider and not concept and not style:
+    # Same shape as the face-mask row above and for the same reasons: rembg is an
+    # optional ML extra, so its absence is a NORMAL state — a warning, never a
+    # blocker (a run without masks is a valid run). person_masking_enabled()
+    # already returns False for concept/style and slider mode, where masks are
+    # refused BY DESIGN and installing rembg would change nothing, so those stay
+    # silent instead of emitting pure noise.
+    if person_masking_enabled(ds):
         try:
-            from .. import capabilities
-            masks_ok = capabilities.probe_masks().get('ok')
+            from . import person_mask
+            person_mask_ok = person_mask.is_available()
         except Exception:
-            masks_ok = None      # probe blew up -> say nothing, never block
-        if masks_ok is False:
+            person_mask_ok = None    # probe blew up -> say nothing, never block
+        if person_mask_ok is False:
             warnings.append(
-                'Masked training is ON, but the person-mask backend (rembg) is not '
-                'installed — this run would train UNMASKED, with the background at '
-                'full loss weight, so the LoRA also learns the rooms. Install '
-                '"Person masks" from the Setup tab, or untick 🎭 Masked in Advanced '
-                'training options to train unmasked on purpose.')
-            _check('person_mask', 'Person masking ready', 'warn',
-                   'rembg is not installed — this run trains unmasked')
-        elif masks_ok:
-            _check('person_mask', 'Person masking ready', 'ok',
-                   'rembg found — the background will be weighted down')
+                'Masked training is ON for this dataset, but the person-mask backend '
+                '(rembg) is not installed — this run would train UNMASKED, with the '
+                'background at full loss weight. Install the ML extras from the Setup '
+                'tab, or turn Masked off in the training panel to train unmasked on '
+                'purpose.')
+            _check('person_mask', 'Masked training ready', 'warn',
+                   'rembg is not installed — this dataset is set to masked but the run '
+                   'trains unmasked', 'gf-training')
+        elif person_mask_ok:
+            _check('person_mask', 'Masked training ready', 'ok',
+                   'rembg found — the background will be weighted down to 10%')
 
     # Lane filter — BEFORE the verdict, so a cloud launch whose only complaint was
     # this machine's GPU comes back a clean 🟢 instead of a warning nobody can act
@@ -5141,7 +5202,7 @@ def archive_previous_run(ds) -> str | None:
 
 def launch_training(user_id, dataset_id, steps: int | None = None, check_captions: bool = True,
                     base_model=None, variant: str | None = None, train_type: str | None = None,
-                    allow_caption_mismatch: bool = False, masked: bool = True,
+                    allow_caption_mismatch: bool = False, masked: bool | None = None,
                     fresh: bool = False, allow_uncaptioned: bool = False,
                     allow_caption_quality: bool = False,
                     vae_path=_PERSISTED, te_path=_PERSISTED,
@@ -5295,8 +5356,11 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # Steps adaptatifs si non imposés ; sinon override borné (jamais < 500).
     steps = (default_steps(ds, train_type=launch_fam, variant=variant)
              if steps is None else max(500, int(steps)))
-    # masked (défaut ON) : masques personne exportés à côté du dataset → la
-    # job-config passe en masked training (fond 10 %). OFF ou indispo = historique.
+    # masked : masques personne exportés à côté du dataset → la job-config passe
+    # en masked training (fond 10 %). OFF ou indispo = historique. `None` (the
+    # default, and what every fresh launch now sends) = read the dataset's stored
+    # setting; an explicit bool is a per-RUN override replayed by ▶ Continue.
+    masked = resolve_masked(ds, masked)
     dataset_folder = export_dataset_to_aitoolkit(user_id, dataset_id, masked=masked)
     config_path = write_job_config(ds, dataset_folder, steps=steps)
     # Environnement du sous-process d'entraînement (HF_HOME + auth Hugging Face,
@@ -5362,7 +5426,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         # Honest provenance: a launch waved through despite a readiness blocker
         # records « acknowledged_not_ready » in its settings snapshot (surfaced in
         # the Runs-hub Share config) — discreet, so a thin run is explainable later.
-        _launch_settings = launch_settings_snapshot(ds)
+        _launch_settings = launch_settings_snapshot(ds, masked=masked)
         if allow_not_ready and isinstance(_launch_settings, dict):
             _launch_settings = {**_launch_settings, 'acknowledged_not_ready': True}
         checkpoint_registry.register_launch(
@@ -5465,7 +5529,7 @@ def _seed_continuation_from(user_id, dataset_id, base, family, variant,
 
 def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       base_model=_PERSISTED, variant=None, train_type=None,
-                      masked=True, allow_unverified_weights=False,
+                      masked=None, allow_unverified_weights=False,
                       allow_caption_mismatch=False, allow_uncaptioned=False,
                       allow_caption_quality=False, from_step=None, overrides=None,
                       allow_not_ready=False, _allow_dead_predecessor=False) -> dict:
@@ -6288,7 +6352,7 @@ def _save_queue(q: list) -> None:
 
 def enqueue_training(user_id, dataset_id, extra_steps=None,
                      base_model=_PERSISTED, variant=None, train_type=None,
-                     allow_caption_mismatch=False, not_before=None, masked=True,
+                     allow_caption_mismatch=False, not_before=None, masked=None,
                      steps=None, allow_uncaptioned=False,
                      allow_caption_quality=False,
                      vae_path=_PERSISTED, te_path=_PERSISTED,
@@ -6399,7 +6463,11 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         steps_target = None
     item = {'dataset_id': int(dataset_id), 'user_id': str(user_id), 'extra_steps': extra_steps,
             'base_model': base, 'variant': var, 'train_type': ttype,
-            'not_before': not_before, 'masked': bool(masked), 'steps': steps_target,
+            # Resolved HERE, at enqueue: the queue item freezes what the user saw
+            # when they queued it (like base/variant/steps just above). `None` =
+            # no explicit request → the dataset's stored setting.
+            'not_before': not_before, 'masked': resolve_masked(ds, masked),
+            'steps': steps_target,
             # SDXL custom overrides ride along so the deferred launch reproduces
             # the exact triplet (they're also persisted on ds above).
             'vae_path': eff_vae, 'te_path': eff_te,

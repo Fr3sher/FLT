@@ -7,6 +7,7 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
+import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
 import {
   checkpointSelectionMatchesTraining,
@@ -784,7 +785,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             // shows them, and two copies of one sentence a centimetre apart read
             // as a bug. Its SUCCESS toast is kept — the dialog is gone by then.
             quiet: true }),
-        { masked },
+        // maskedOpt, pas masked : tant que les reglages du dataset ne sont pas
+        // charges, le panneau n'envoie RIEN et le serveur lit la valeur stockee.
+        // Envoyer un defaut ici ecraserait un masquage desactive, sur un run paye.
+        { masked: maskedOpt },
         (error) => confirmableRetryFlag(error, 'Continue anyway (force)'),
       );
       // The hooks never throw (they return {ok:false,error}); a decline is the
@@ -818,21 +822,31 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     });
   };
 
-  // Masked training (fond 10 %) — défaut ON, persisté (partagé lancement/file/programmation).
-  const [masked, setMaskedS] = useState(() => {
-    try { return localStorage.getItem('trainMasked_v1') !== '0'; } catch { return true; }
-  });
-  const setMasked = (v) => {
-    setMaskedS(v);
-    try { localStorage.setItem('trainMasked_v1', v ? '1' : '0'); } catch { /* ignore */ }
-  };
-  // Concept/style : masked OFF. A person mask erases a concept and prevents an
-  // always-on style from learning the full frame/background. Do not overwrite
-  // the user's character preference while applying that safety default.
+  // Masked training (background at 10 %) — a PERSISTED DATASET setting, resolved
+  // server-side (default ON; forced OFF for concept/style and slider mode, which
+  // is why no client-side reset effect is needed here any more). It used to be a
+  // per-browser localStorage preference the server only saw at launch: the
+  // readiness badge could not warn about it, a phone reverted to the default, and
+  // no run snapshot recorded it. `maskedMigration` handles the one-time carry-over
+  // of the legacy browser key.
+  const masked = adv?.masked !== false;
+  const setMasked = (v) => saveAdv({ masked: !!v });
+  // Sent on a launch only once the settings have LOADED: an unloaded panel must
+  // never overwrite the dataset's stored value with an optimistic default.
+  const maskedOpt = adv ? masked : undefined;
+  const [maskedCarryOver, setMaskedCarryOver] = useState(false);
   useEffect(() => {
-    if (isConceptual) setMaskedS(false);
-    else { try { setMaskedS(localStorage.getItem('trainMasked_v1') !== '0'); } catch { setMaskedS(true); } }
-  }, [ds.currentId, isConceptual]); // eslint-disable-line react-hooks/exhaustive-deps
+    const store = (() => { try { return globalThis.localStorage || null; } catch { return null; } })();
+    const action = maskedCarryOverAction(store, adv);
+    if (action === 'clear') clearLegacyMasked(store);
+    setMaskedCarryOver(action === 'prompt');
+  }, [adv]);
+  const answerMaskedCarryOver = async (keep) => {
+    const store = (() => { try { return globalThis.localStorage || null; } catch { return null; } })();
+    await saveAdv({ masked: keep });
+    clearLegacyMasked(store);
+    setMaskedCarryOver(false);
+  };
   // Masked ON but rembg (person-mask backend) unavailable → the export silently
   // drops the masks and trains UNMASKED. Surface that instead of lying about it.
   // `=== false` (not `!caps.masks`) so we don't warn before caps have loaded.
@@ -849,7 +863,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const enqueue = async () => {
     if (!(await preflightOk())) return;
     // Mise en file AVEC la base/variante choisie (sinon le job reprend la base persistée).
-    let body = { base_model: base, variant, train_type: trainType, masked, steps: stepsN,
+    let body = { base_model: base, variant, train_type: trainType, masked: maskedOpt,
+                 steps: stepsN,
                  ...(allowNotReady ? { allow_not_ready: true } : {}),
                  ...(trainType === 'sdxl' ? { vae_path: vaePath, te_path: tePath } : {}) };
     let d = await postTrain(`/api/dataset/${ds.currentId}/train/enqueue`, body);
@@ -887,7 +902,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const schedule = async () => {
     if (!schedAt) return;
     if (!(await preflightOk())) return;
-    let body = { at: schedAt, base_model: base, variant, train_type: trainType, masked, steps: stepsN,
+    let body = { at: schedAt, base_model: base, variant, train_type: trainType,
+                 masked: maskedOpt, steps: stepsN,
                  ...(allowNotReady ? { allow_not_ready: true } : {}),
                  ...(trainType === 'sdxl' ? { vae_path: vaePath, te_path: tePath } : {}) };
     let d = await postTrain(`/api/dataset/${ds.currentId}/train/schedule`, body);
@@ -1294,7 +1310,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     if (!(await preflightOk({ lane: 'cloud' }))) return;
     let body = {
       ...cloudTrainingLaunchPayload({
-        baseModel: base, variant, trainType, masked, steps: stepsN, gpuName,
+        baseModel: base, variant, trainType, masked: maskedOpt, steps: stepsN, gpuName,
       }),
       ...(allowNotReady ? { allow_not_ready: true } : {}),
     };
@@ -1565,7 +1581,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                                    allow_uncaptioned: 'allowUncaptioned',
                                    allow_caption_quality: 'allowCaptionQuality',
                                    allow_unverified_weights: 'allowUnverifiedWeights' };
-            let opts = { baseModel: base, variant, trainType, masked, steps: stepsN, fresh,
+            let opts = { baseModel: base, variant, trainType, masked: maskedOpt,
+                         steps: stepsN, fresh,
                          vaePath, tePath, allowNotReady };
             let d = await ds.train(opts);
             for (let flag; d && d.ok === false && (flag = confirmableRetryFlag(d.error, 'Train anyway (force)')); ) {
@@ -2449,6 +2466,31 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               </span>
             )}
           </label>
+
+          {/* One-time carry-over of the legacy per-browser preference. Shown ONLY
+              to the browsers that had explicitly turned masking off — adopting
+              that silently would spread one browser's choice over every dataset,
+              and dropping it silently would start paying for a mask pass nobody
+              asked for. Neither happens: the user answers, once. */}
+          {maskedCarryOver && (
+            <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 flex flex-col gap-2 text-[0.6875rem]">
+              <span className="text-content leading-relaxed">
+                🎭 <b>Masked training is now a dataset setting</b>, shared across your
+                browsers and devices instead of living in this one. This browser had it
+                turned <b>off</b>; datasets default to <b>on</b>. Which do you want here?
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={() => answerMaskedCarryOver(false)}
+                  className="px-2 py-1 rounded border border-border text-content-muted hover:text-content hover:bg-surface-raised">
+                  Turn it off for this dataset
+                </button>
+                <button type="button" onClick={() => answerMaskedCarryOver(true)}
+                  className="px-2 py-1 rounded border border-emerald-400/40 text-emerald-300 hover:bg-emerald-500/10">
+                  Keep masking on
+                </button>
+              </div>
+            </div>
+          )}
 
           {!status.in_progress && keptCount >= 10 && (
             <label className="flex items-center gap-1.5 text-content-subtle text-[0.6875rem]"
