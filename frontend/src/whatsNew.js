@@ -80,6 +80,22 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-07-28-canvas-pin-all-generated-images',
+    date: '2026-07-28',
+    title: 'One click puts every image a canvas run made onto the board',
+    blurb:
+      'A finished generation said “5 images ready” and left you to open each checkpoint’s gallery and pin the pictures one by one. The green bar now carries 📌 Pin all — the whole lot lands on the board in one go, each image in its own column under the checkpoint that made it, and nothing is ever placed on top of anything else. It says how many it put down, names anything it left out, and ↩ Undo takes them straight back off.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-07-28-canvas-node-buttons-reachable-on-a-phone',
+    date: '2026-07-28',
+    title: 'The ✕ on a pinned image can be tapped again',
+    blurb:
+      'Closing a picture pinned on the LoRA Canvas did not work on a phone. The buttons were drawn at the board’s zoom, so on a board read at 65 % the cross was about ten pixels wide with the 🔍 right beside it — a near miss opened the full-screen view instead of closing the node. The ✕, the 🔍 and the resize corner now keep a real finger-sized target at every zoom level.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-28-preflight-before-cloud-and-continue',
     date: '2026-07-28',
     title: 'The pre-training check now runs before a cloud run and before ▶ Continue',
