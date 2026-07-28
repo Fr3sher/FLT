@@ -2,6 +2,32 @@ import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import pytest
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import _basetemp_guard
+
+
+def pytest_configure(config):
+    """Refuse a --basetemp another live pytest run already owns.
+
+    pytest rm_rf's the basetemp it is given (see _basetemp_guard), so two runs
+    sharing one wipe each other's tmp_path trees mid-flight and fail on things
+    that have nothing to do with the code. Several agents running this suite in
+    parallel is now the norm, so the collision is refused here — with a message
+    naming the other run — instead of surfacing as a phantom failure plus a
+    handful of "ERROR at setup" half a suite later."""
+    basetemp = getattr(config.option, 'basetemp', None)
+    if not basetemp:
+        return                        # no --basetemp: pytest numbers per run, safe
+    conflict = _basetemp_guard.claim(basetemp)
+    if conflict:
+        pytest.exit(conflict, returncode=pytest.ExitCode.USAGE_ERROR)
+
+
+def pytest_unconfigure(config):
+    basetemp = getattr(config.option, 'basetemp', None)
+    if basetemp:
+        _basetemp_guard.release(basetemp)
+
 @pytest.fixture(autouse=True)
 def _restore_secret_env():
     """set_secrets() writes os.environ directly; snapshot & restore the secret keys.
@@ -23,6 +49,30 @@ def _restore_secret_env():
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+@pytest.fixture(autouse=True)
+def _no_live_comfyui_vram_release(monkeypatch):
+    """Every GPU-exclusive vision window POSTs /free to ComfyUI — for real.
+
+    `gpu_exclusive_vision_window` calls `free_comfyui_vram()`, which is a live
+    `requests.post('<comfyui>/free', {"unload_models": true, "free_memory": true})`
+    with a 10 s timeout. Nothing mocks it, so on a developer machine where
+    ComfyUI is running the unit suite REALLY unloads that ComfyUI's models —
+    measured 2026-07-28: eleven test files reach 127.0.0.1:8188, among them the
+    whole bank-vision-concurrency file.
+
+    Two costs, and the second is the one that gets misfiled. It has a side
+    effect on a program nobody asked it to touch; and its duration is whatever
+    that program happens to be doing — instant when ComfyUI is idle, seconds
+    when it is mid-generation, the full 10 s timeout when the port answers but
+    the server is wedged. A test asserting "Stop returns in under 5 s" then
+    passes or fails on the state of an unrelated process. That is not a flake,
+    it is an undeclared dependency.
+
+    Tests that are ABOUT this call (test_vision_features) monkeypatch it
+    themselves; a later setattr wins over this one, so they are unaffected."""
+    monkeypatch.setattr('app.utils.comfyui.free_comfyui_vram', lambda *a, **k: True)
+
 
 @pytest.fixture(autouse=True)
 def _reset_inmemory_registries():
