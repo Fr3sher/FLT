@@ -705,13 +705,36 @@ converted to something heavier to protect pixels that were already lossy.
 
 Two honest caveats:
 
-- **Cropping still resamples.** The crop is normalised to a 1024 px long side, and
-  a small box is enlarged to reach it (that is what the ⚠ upscale warning is
-  about). Only the *encoding* is lossless; the resize never can be. The watermark
-  **✂ auto-crop**, which only cuts and never resizes, is lossless end to end.
+- **A large crop still resamples.** A box longer than 1024 px is normalised *down*
+  to a 1024 px long side, and only the *encoding* is lossless — that downscale
+  never can be. A box at or under 1024 px is a pure cut, so it is lossless end to
+  end, as is the watermark **✂ auto-crop**, which only cuts and never resizes.
 - **Files get bigger.** A cropped photo that used to weigh ~200 KB now weighs
   ~950 KB. That is the price of not throwing pixels away. Thumbnails and the
   copies uploaded to a generation API are unaffected: they stay small on purpose.
+
+### A crop is never enlarged
+
+A crop used to be stretched *up* to a 1024 px long side as well: select 240×180
+and the file stored was 1024×768. That enlargement invented no detail — shrinking
+such a file back recovers the real crop almost exactly — and since the encoder
+went lossless it cost roughly **6× the bytes** for nothing. A crop now keeps its
+own size, and only comes *down* to 1024 px.
+
+Two consequences worth stating plainly:
+
+- **Your dataset can end up mixing image sizes.** That is fine — training buckets
+  images by size — but a tile cropped out of a small area really does carry less
+  detail than a native shot of the same framing, and it always did; it just used
+  to look like 1024 px.
+- **The composition meter says so.** The old ⚠ *Upscaled* line is now
+  ⚠ *Under training resolution*. It fires on the same measurement and means the
+  same thing it always meant: this framing bucket is filled by cropping far into
+  photos rather than by native shots — add native shots for it. (Images imported
+  with the automatic head-crop *are* still enlarged to 1024, so both shapes land
+  under the same warning.)
+
+Images cropped **before** this change keep the enlarged pixels they have.
 
 Images you cropped **before** this changed keep the pixels they have — nothing is
 re-processed retroactively, and re-cropping an already-degraded file cannot bring

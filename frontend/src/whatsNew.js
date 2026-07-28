@@ -48,11 +48,27 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-crops-keep-their-own-resolution',
+    date: '2026-07-28',
+    title: 'Cropping in no longer blows the crop up to 1024 px',
+    blurb:
+      'A crop used to be stretched to a 1024 px long side whatever its real size, so a 240×180 selection was stored as 1024×768. Those extra pixels carried nothing — shrinking such a file back recovers the real crop almost exactly — while costing about 6× the bytes now that crops are stored losslessly. A crop is now never enlarged beyond what you actually selected; anything LARGER than 1024 px is still normalised down to 1024, exactly as before. Two things to know: new crops are smaller images than old ones, so a dataset can end up mixing sizes — training handles that (it buckets by size), but the smallest tiles genuinely carry less detail. That is what the composition meter now says out loud: the old "⚠ Upscaled" line is now "⚠ Under training resolution", and it still flags a framing bucket you filled by cropping far into a photo instead of adding native shots. Images cropped BEFORE this keep the enlarged pixels they already have.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-07-28-broken-model-replaced-only-once-the-new-one-arrives',
+    date: '2026-07-28',
+    title: 'A corrupted model file is only deleted once its replacement has landed',
+    blurb:
+      'Setup can now spot a model file that cannot be loaded (a login page saved under the model name, a truncated download) and re-fetch it. It used to delete the broken file first and download after — so an expired token, a re-gated repo or a host that was simply down left you with nothing at all instead of something broken. Now the download is opened and checked first, and the old file is only removed once real weights are actually on disk. Nothing is ever thrown away for a download that did not happen.',
+    to: '/setup',
+  },
+  {
     id: '2026-07-28-cropping-no-longer-recompresses',
     date: '2026-07-28',
     title: 'Cropping no longer quietly re-compresses your image',
     blurb:
-      'Every crop was re-encoded to lossy WebP, so cropping a PNG degraded it — and left a .png file holding WebP bytes. Crop and the watermark cleaners now keep the file\'s own format and write it back without losing pixels, like ✂ Mirror and ↺ Rotate already did: crop the same shot ten times and the tenth is identical to the first. JPEG has no lossless mode, so it is re-saved at the highest practical quality instead of being converted to something heavier. Cropped files are noticeably bigger now — that is the price of keeping the pixels. Two honest limits: cropping still rescales the box to a 1024 px long side, and resampling can never be lossless (only the watermark ✂ auto-crop, which never resizes, is); and images you cropped BEFORE this keep the pixels they have — nothing is re-processed retroactively.',
+      'Every crop was re-encoded to lossy WebP, so cropping a PNG degraded it — and left a .png file holding WebP bytes. Crop and the watermark cleaners now keep the file\'s own format and write it back without losing pixels, like ✂ Mirror and ↺ Rotate already did: crop the same shot ten times and the tenth is identical to the first. JPEG has no lossless mode, so it is re-saved at the highest practical quality instead of being converted to something heavier. Cropped files are noticeably bigger now — that is the price of keeping the pixels. Two honest limits: a box longer than 1024 px is still rescaled down to it, and that resampling can never be lossless (only the watermark ✂ auto-crop, which never resizes, is); and images you cropped BEFORE this keep the pixels they have — nothing is re-processed retroactively.',
     to: '/datasets',
   },
   {
