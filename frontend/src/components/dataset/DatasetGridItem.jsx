@@ -7,6 +7,7 @@ import PromptEditPopover from './PromptEditPopover';
 import PexelsAttribution from './PexelsAttribution';
 import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
 import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
+import { rememberImageRatio } from './lightboxActionPlacement.js';
 import { FACE_BADGE_CLASS, PROVENANCE_BADGE_CLASS, TILE_BADGE_STACK_CLASS,
   WATERMARK_BADGE_CLASS } from './tileBadgeLayout.js';
 
@@ -138,7 +139,14 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
             title="Inspect (zoom)"
             aria-label={`Inspect ${displayLabel(img.variation_label) || 'the image'} full screen`}
             className="block w-full h-full cursor-zoom-in">
+            {/* The tile and the lightbox request the SAME url, so the tile is
+                where the intrinsic size is known FIRST. Recording it here is
+                what lets the lightbox open with its actions already in the
+                right place, instead of committing them once the image paints
+                — see lightboxActionPlacement.js. */}
             <img src={url} alt={displayLabel(img.variation_label)} loading="lazy"
+              onLoad={(e) => rememberImageRatio(
+                img.id, e.currentTarget.naturalWidth, e.currentTarget.naturalHeight)}
               className={`w-full h-full ${imgFitCls}`} />
           </button>
         ) : (
