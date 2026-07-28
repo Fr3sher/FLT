@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
+    date: '2026-07-28',
+    title: 'Notifications no longer disappear behind an open dialog',
+    blurb:
+      'Every message the app raises — a refusal, a confirmation, an error — was drawn underneath any open dialog or full-screen viewer, so it simply never reached you: the app answered, and the answer was covered up. Notifications now sit above everything, and a check makes sure no future panel can climb over them again.',
+  },
+  {
     id: '2026-07-28-scrape-straight-into-a-bank',
     date: '2026-07-28',
     title: 'Scrape the web straight into a bank — no throwaway dataset first',
