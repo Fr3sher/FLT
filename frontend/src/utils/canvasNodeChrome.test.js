@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  chromeScale, chromeScreenSize, isNodeControlTarget, nodePointerIntent,
+  CLUSTER_UNITS, chromeScale, chromeScreenSize, clusterBox, isNodeControlTarget,
+  nodePointerIntent,
 } from './canvasNodeChrome.js';
 
 /* The ✕ that "did not work" on a phone.
@@ -50,11 +51,29 @@ test('the control CLUSTER never eats the picture it decorates', () => {
   // being 45 px wide — there is no honest way around that, and it is stated
   // here rather than hidden. Zooming in is the answer, and it works.
   const tiny = chromeScale(0.28, 160);
-  assert.ok(tiny * 64 <= 160 * 0.7 + 1e-9,
-    'the 🔍+✕ cluster stays under 70 % of the tile');
+  assert.ok(tiny * CLUSTER_UNITS <= 160 * 0.7 + 1e-9,
+    'the 🔍+⬇+✕ cluster stays under 70 % of the tile');
   assert.ok(tiny < 1 / 0.28, 'the cap, not the ideal, is what applies');
   // A full-size pin at the same zoom has room for more, and gets it.
   assert.ok(chromeScreenSize(0.28, 320) > chromeScreenSize(0.28, 160));
+});
+
+test('⬇ Download joined the cluster WITHOUT shrinking ✕ and 🔍', () => {
+  // The regression this pins: the cap is spent on the cluster's WIDTH, so a row
+  // that grew from two buttons to three would have spent 50 % more of it and
+  // taken every target down with it — at 24 % zoom, from 20 px to 15.7 px,
+  // which is the old unhittable-✕ bug creeping back in. So the third control
+  // wraps onto a second line and the width budget is untouched.
+  assert.equal(CLUSTER_UNITS, 64, 'two columns wide, whatever is in it');
+  assert.equal(clusterBox(3).maxWidth, CLUSTER_UNITS);
+  assert.equal(clusterBox(3).rows, 2, 'the third control goes UNDER, not beside');
+  assert.equal(clusterBox(2).rows, 1);
+  // …so the guarantees at every zoom the board is read at are the ones the
+  // two-button cluster already made.
+  assert.ok(chromeScreenSize(0.45, 320) >= 24,
+    `got ${chromeScreenSize(0.45, 320)} px at 45 %`);
+  assert.ok(chromeScreenSize(0.24, 320) >= 20,
+    `got ${chromeScreenSize(0.24, 320)} px at 24 %`);
 });
 
 test('a nonsense zoom is not allowed to produce a nonsense control', () => {
