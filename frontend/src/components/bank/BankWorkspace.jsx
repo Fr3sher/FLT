@@ -311,7 +311,11 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
           + (img.semantic_dup_group ? ` · same shot #${img.semantic_dup_group}` : '')
           + (img.caption ? `\n${img.caption}` : '')}
         className="block w-full">
-        <img src={`/api/bank/${bankId}/thumb/${img.id}`} alt={img.name} loading="lazy"
+        {/* ?r= is a cache buster, not a parameter the server reads: the thumb
+            route answers with max-age=3600, so a turned image would keep showing
+            its old orientation for an hour and read as "the button did nothing". */}
+        <img src={`/api/bank/${bankId}/thumb/${img.id}${img.rotation ? `?r=${img.rotation}` : ''}`}
+          alt={img.rotation ? `${img.name} (rotated ${img.rotation}°)` : img.name} loading="lazy"
           className={`w-full object-cover ${size === 'S' ? 'h-24' : 'h-36'}`} />
       </button>
       {selected && (
@@ -601,6 +605,22 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     if (showSelected) { exitSelectionView(); setOffset(0); refreshImages(filter, 0, { on: false }) }
   }
 
+  // 🔄 Quarter turns on the selection (idea by 1Tomber, GitHub #17). A whole
+  // scraped folder can come out sideways, so this is a BULK action here rather
+  // than a per-tile button — the tile already carries the selection gesture, the
+  // status badges and two hit targets.
+  const rotateSelection = async (degrees) => {
+    const ids = [...selected]
+    if (!ids.length) return
+    const d = await act(() => postJson(`/api/bank/${bankId}/rotate`, { ids, degrees }),
+      null)
+    if (d?.rotated) {
+      toast.success(`${d.rotated} image(s) rotated 90° ${degrees === 90 ? 'right' : 'left'}`
+        + ' — your own files are untouched.')
+      await refreshImages()
+    }
+  }
+
   const applyAutoReject = async () => {
     setShowAutoReject(false)
     const flags = [...rejectFlags]
@@ -636,6 +656,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // kept/rejected/undecided track the run live. The grid is refreshed once, on
   // close, so its tiles don't shuffle around behind the lightbox.
   const onReviewDecided = () => { refreshPayload() }
+  // A turn made in ▶ Review must already be right on the tile behind it: the
+  // grid is only refetched on close, and a tile still lying sideways would read
+  // as "it didn't take".
+  const onReviewRotated = (imageId, rotation) => setPage((prev) => ({
+    ...prev,
+    images: prev.images.map((im) => (im.id === imageId
+      ? { ...im, rotation, width: im.height, height: im.width }
+      : im)),
+  }))
   const closeReview = () => { setReview(null); refreshPayload(); refreshImages() }
 
   const selectAllCurrent = async () => {
@@ -1300,6 +1329,21 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               className="rounded-md border border-rose-400/50 bg-rose-500/10 px-2 py-0.5 text-xs font-semibold text-rose-200 hover:bg-rose-500/20">✕ Reject</button>
             <button type="button" onClick={() => batchStatus([...selected], 'pending')}
               className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:text-content">↺ Undecided</button>
+            {/* 🔄 Rotate the selection. Your own files are never rewritten: the
+                angle is stored on the row and applied to what the app shows and
+                to what it promotes — so four turns cost the original nothing. */}
+            <button type="button" onClick={() => rotateSelection(-90)}
+              aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees left`}
+              title="Rotate 90° left (counter-clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
+              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+              <span aria-hidden="true">↺</span> Rotate left
+            </button>
+            <button type="button" onClick={() => rotateSelection(90)}
+              aria-label={`Rotate the ${selected.size} selected image(s) 90 degrees right`}
+              title="Rotate 90° right (clockwise). Your own files are never modified — the turn is stored and applied to what you see and to what gets promoted."
+              className="rounded-md border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content">
+              <span aria-hidden="true">↻</span> Rotate right
+            </button>
           </>
         )}
       </div>
@@ -1596,7 +1640,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
       {review && (
         <BankReviewLightbox bankId={bankId} ids={review.ids} startId={review.startId}
-          seedImages={page.images} onDecided={onReviewDecided} onClose={closeReview} />
+          seedImages={page.images} onDecided={onReviewDecided}
+          onRotated={onReviewRotated} onClose={closeReview} />
       )}
 
       {relocating && (

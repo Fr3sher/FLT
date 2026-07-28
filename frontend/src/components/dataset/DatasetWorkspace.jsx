@@ -1856,6 +1856,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             && ds.nonces[viewImgComparison.parent.id]) || 0}
           onClose={() => setViewImg(null)}
           onMirror={viewImgLive._rescueReviewPreview ? undefined : ds.mirrorImage}
+          onRotate={viewImgLive._rescueReviewPreview ? undefined : ds.rotateImage}
           mirrorBusy={Boolean(ds.mirroringIds?.has(viewImgLive.id))}
           onImprove={canImproveViewImg ? ds.improveImage : undefined}
           improvePending={viewImgImproving}
