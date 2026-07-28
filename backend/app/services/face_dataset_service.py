@@ -3085,6 +3085,13 @@ def dataset_payload(user_id, dataset_id):
         # prefill. Applied at wrap time; never part of the stored per-image prompt.
         'prompt_suffix': ds.prompt_suffix or '',
         'prompt_suffixes': prompt_suffixes_dict(ds),
+        # Where this dataset's images actually live. It was displayed NOWHERE,
+        # which is how people ended up hunting for it in the file manager and
+        # pasting it into "create a bank" — a bank over a dataset's live files,
+        # whose 🗑 Delete rejected then deleted images out of the dataset. Showing
+        # the path (with the sentence that it belongs to the dataset) removes the
+        # reason to go looking; `services.path_guard` refuses the paste anyway.
+        'storage_path': _dataset_path(ds.id),
         'ref_filename': ds.ref_filename,
         # Pixel size of the ACTIVE reference (the cropped one — that is the file
         # every engine is handed). Krea 2 Edit reproduces this shape, so the

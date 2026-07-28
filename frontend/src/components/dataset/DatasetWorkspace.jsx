@@ -9,6 +9,7 @@ import { fmt } from '../../utils/studioFormat';
 import ImportDropzone from './ImportDropzone';
 import ConceptSourcesPanel from './ConceptSourcesPanel';
 import BankImportPanel from './BankImportPanel';
+import DatasetFolderNote from './DatasetFolderNote';
 import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
 import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
@@ -940,6 +941,12 @@ export default function DatasetWorkspace({ ds, onBack }) {
           </details>
         </div>
       </div>
+
+      {/* Where the images actually are. Shown here, at the top, because the
+          question "where is this on disk?" is asked before anything else — and
+          because the answer used to be findable only by hand, which is how a
+          dataset folder ended up pasted into a bank. */}
+      <DatasetFolderNote path={d.storage_path} />
 
       {/* Two-column workspace: the persistent section sidebar on the left (with the
           guided Progress checklist below it for character datasets), the ACTIVE

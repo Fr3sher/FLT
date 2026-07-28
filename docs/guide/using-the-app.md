@@ -935,6 +935,41 @@ mark position; the panel says so and one more **🚩 Find watermarks** run makes
 them cleanable.
 
 
+## A bank and a dataset never share files
+
+A dataset and an image bank can hand images to each other in both directions,
+and both directions **copy**. That is not an implementation detail — it is the
+rule the whole flow rests on:
+
+- **Bank → dataset** (**⬆ Promote…**) writes new files into the dataset.
+- **Dataset → bank** (**🗃 Import to bank**, on the dataset) copies the dataset's
+  kept images into a folder of the bank's own.
+
+Neither ever *points* at the other's files. The reason is that the two containers
+have opposite contracts. A dataset **owns** its images; a bank merely **points**
+at a live folder it does not own — which is exactly why 🗑 **Delete rejected** is
+allowed to remove files from it. Put a bank on a dataset's folder and that button
+stops deleting your rejects and starts deleting the dataset's training images.
+
+So the app refuses it. If you paste a dataset's image folder into **➕ Create
+bank** — or into **📦 Move folder…** for an existing bank — you get a refusal
+that names the dataset and points you at **🗃 Import to bank** instead. The check
+looks through the disguises: a subfolder of the dataset, the folder *containing*
+all datasets, a different letter case, forward slashes instead of backslashes,
+and symlinks or Windows junctions that resolve to the same place.
+
+**If you already have such a bank** (it was possible before this check existed),
+nothing is repaired or deleted behind your back. Opening it shows a red banner
+naming the dataset, and 🗑 Delete rejected is refused on that bank — everything
+else keeps working, so you can finish triaging. When you are ready, either
+**📦 Move folder…** to point the bank at a folder of its own, or remove the bank
+(removing a bank never touches files).
+
+The dataset's own folder is shown at the top of the dataset, with a **⧉ Copy**
+button, so you never have to go hunting for it in a file manager — which is how
+this trap was found in the first place.
+
+
 ## Move a bank folder to another disk
 
 A bank points at a folder *in place*, but nothing it computes lives in that
