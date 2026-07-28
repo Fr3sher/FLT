@@ -655,6 +655,43 @@ missing control can't be mistaken for a bug. Everything else in the lightbox —
 ✂ Crop, ⇄ Mirror, ✨ Upscale & improve — is unchanged and still acts on the
 image you opened.
 
+## Tune the Bank filter thresholds
+
+The filter chips (🌫 Blurry, 📐 Small, ≈ Duplicates…) are verdicts, and every
+verdict comes from a number. Those numbers used to live only in
+*Settings ▸ Captioning & quality*, three screens away from the bank you were
+triaging. They are now also under the chips themselves: open **🎚 Filter
+thresholds** above the grid.
+
+It is the **same setting in both places** — one value, seen twice — so anything
+you change here applies to **every bank**, and the panel says so at the top.
+
+The twelve knobs are grouped by the question they answer: **Image quality**,
+**Duplicates**, **Size & framing**, **Content**, **Style**. The first two are
+open by default; the rest fold away, and a folded group tells you how many of
+its values you have moved off the default.
+
+Three things each control tells you that a bare number cannot:
+
+- **Which way catches more.** "Stricter" is not a direction. *Duplicate
+  distance* is a distance in hash bits — **raise** it to catch more
+  near-duplicates. *Semantic duplicate similarity* is a similarity — **lower**
+  it to catch more. They sit side by side and they move opposite ways, so each
+  field spells its own direction out in a sentence next to the input.
+- **When it takes effect.** Eight of them re-sort the bank the moment you save,
+  because the scan stores raw measurements and the verdicts are recomputed on
+  every read — no rescan, ever. The other four are baked into stored groups by a
+  pass, so they carry a button that re-runs that pass on the spot. Re-grouping
+  duplicates is cheap: it walks the stored hashes and decodes nothing.
+- **How many images it would touch.** As you change a read-time value, the panel
+  asks the server how many images that number *would* flag and shows
+  `1 240 → 3 019 images flagged` before you save anything. Nothing is written
+  until you press **Save**.
+
+Every field has **↺ Reset to default** (it only appears when the value is not
+the default), and the header carries **↺ Reset all to defaults**. The defaults
+come from the server, so they are always the real shipped values.
+
 ## Rotate a sideways image
 
 Scraped folders and phone exports are full of shots lying on their side. Both
