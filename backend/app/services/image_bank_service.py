@@ -3225,6 +3225,15 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    # Occupancy BEFORE the model probe, and the order is the whole point: a bank
+    # that is already busy is busy whether or not Ollama answers. Probing first
+    # made a busy bank report "the vision model is not available" whenever the
+    # model happened to be unreachable -- the wrong reason, sending the user to
+    # fix an unrelated thing while the real answer was "wait, a pass is running".
+    # It also made the refusal depend on an EXTERNAL SERVICE, which is why CI
+    # (no Ollama) failed a release on it while two agents read it as a flake.
+    if bank_jobs.running(bank_id):
+        raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
     if not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
                            '(Settings ▸ Captioning & quality)')
@@ -3727,6 +3736,15 @@ def start_framing(app, user_id, bank_id, rescan=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    # Occupancy BEFORE the model probe, and the order is the whole point: a bank
+    # that is already busy is busy whether or not Ollama answers. Probing first
+    # made a busy bank report "the vision model is not available" whenever the
+    # model happened to be unreachable -- the wrong reason, sending the user to
+    # fix an unrelated thing while the real answer was "wait, a pass is running".
+    # It also made the refusal depend on an EXTERNAL SERVICE, which is why CI
+    # (no Ollama) failed a release on it while two agents read it as a flake.
+    if bank_jobs.running(bank_id):
+        raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
     if not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
                            '(Settings ▸ Captioning & quality)')
