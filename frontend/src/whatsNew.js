@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-07-28-cloud-run-download-bytes-and-durable-freeze-clock',
+    date: '2026-07-28',
+    title: 'A downloading cloud run now shows the bytes, not a frozen sentence',
+    blurb:
+      'While a pod fetches its base weights — 26 GB for Krea — the run card used to show one motionless line, "fetching transformer weights", for as long as it took. Nothing told a healthy download from a dead pod short of opening the vast.ai console, and people waited hours to find out. The card now reads the pod\'s own counter: how much has landed, of how much, at what speed, with the ETA. And the "no progress" warning is finally reliable — it is measured on what the pod does, so restarting the app no longer resets it, and a monitor repeating the same sentence no longer hides a frozen run.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',
