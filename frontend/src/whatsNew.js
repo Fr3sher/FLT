@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-continue-training-keeps-your-choices-when-refused',
+    date: '2026-07-28',
+    title: 'A refused ▶ Continue training no longer wipes what you picked',
+    blurb:
+      'Continue training closed the moment you clicked it, so a refusal left you with an error and an empty form: the lane, the checkpoint to resume from, the extra steps and every adjusted setting had to be typed again, with no clue which of them was refused. The form now stays open, the reason appears inside it next to those choices, and only a launch that actually starts closes it.',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',

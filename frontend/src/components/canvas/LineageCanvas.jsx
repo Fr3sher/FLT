@@ -33,6 +33,8 @@ import {
   canvasContinueLanes, canvasContinueRefusal, canvasContinueRequest,
   canvasContinueRow, canvasContinueSettings, canvasContinueSteps,
 } from '../../utils/canvasContinue';
+import { continueAttemptOutcome } from '../../utils/continueOutcome';
+import { postWithConfirmations } from '../../utils/trainingRefusals';
 import PreviewLightbox from '../dataset/PreviewLightbox';
 import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
@@ -1018,12 +1020,16 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
   const [continueTarget, setContinueTarget] = useState(null);   // {node, pill, step}
   const [continueRuns, setContinueRuns] = useState(null);       // /cloud/runs payload
   const [continueBusy, setContinueBusy] = useState(false);
+  // The LAST refusal, shown inside the dialog. See utils/continueOutcome.js: a
+  // refusal keeps the form and its five folded settings, only a success closes it.
+  const [continueError, setContinueError] = useState(null);
 
   const handleContinueCheckpoint = useCallback((node, pill) => {
     const refusal = canvasContinueRefusal(node, pill);
     if (refusal) { toast.warning(refusal); return; }
     setContinueTarget({ node, pill: pill || null, step: pill?.step ?? null });
     setContinueRuns(null);
+    setContinueError(null);
     // The dialog SEEDS its lane and its checkpoint from props on mount and never
     // re-seeds, so it must not mount before this answer lands: opening a beat
     // early made a configured cloud lane look like "needs a vast.ai API key",
@@ -1055,32 +1061,44 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
 
   const submitContinue = useCallback(async (payload) => {
     const target = continueTarget;
-    // CLOSE FIRST, then post — the same order both other hosts use, and not a
-    // stylistic choice: the toast container is z-[100] and this modal is
-    // z-[9990], so a refusal raised while the dialog is still up would be
-    // rendered BEHIND it. Measured on a 400-px capture.
-    setContinueTarget(null);
-    if (!payload) return;
+    // POST WITH THE DIALOG STILL OPEN. It used to close first — a workaround for
+    // a toast container that lived UNDER every modal (fixed: Toast.jsx is
+    // z-[10000]) — and the price was the whole form: lane, resume checkpoint,
+    // extra steps and the five folded settings, gone before the refusal arrived,
+    // with no clue which of them was refused.
+    if (!payload) { setContinueTarget(null); setContinueError(null); return; }
     const req = canvasContinueRequest(target.node, payload,
       { steps: canvasContinueSteps(target.node), masked: continueRow?.masked ?? null });
-    if (!req) { toast.error('This run cannot be continued from the board.'); return; }
+    if (!req) { setContinueError('This run cannot be continued from the board.'); return; }
     setContinueBusy(true);
+    setContinueError(null);
+    let outcome;
+    let d = null;
     try {
-      const d = await postJson(req.url, req.body);
-      if (d?.ok === false) { toast.error(d.error || 'Continue failed'); return; }
-      setOpenCk(null);
-      toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} `
-        + (payload.lane === 'cloud' ? 'on a fresh pod…' : 'on this machine…'));
-      onRefetchDataset?.(target.node.dataset_id);
+      // The board's local lane re-exports the CURRENT dataset, so it meets the
+      // same caption/quality guards as the two other hosts — which is a QUESTION
+      // ("12 images have no caption — continue anyway?"), not a refusal. It used
+      // to arrive here as a dead-end error string with no way to answer it. The
+      // app's one confirm-and-retry loop answers it, and its add-the-flag-ONCE
+      // rule is what stops a server that ignores the flag from re-asking forever.
+      d = await postWithConfirmations((b) => postJson(req.url, b), req.body,
+        'Continue anyway (force)');
+      outcome = continueAttemptOutcome(d === null ? { declined: true } : { response: d });
     } catch (e) {
       // postJson THROWS on a 400/409. That is exactly how a checkpoint whose
       // file is gone comes back ("no local checkpoint at step N (available:
-      // …)"), and how a busy GPU or a caption guard does. Swallowing it would
-      // make the click look dead — the bug the Runs hub already paid for once.
-      toast.error(e?.message || 'Continue failed');
+      // …)"), and how a busy GPU does.
+      outcome = continueAttemptOutcome({ thrown: e });
     } finally {
       setContinueBusy(false);
     }
+    if (!outcome.close) { setContinueError(outcome.error); return; }
+    setContinueTarget(null);
+    setContinueError(null);
+    setOpenCk(null);
+    toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} `
+      + (payload.lane === 'cloud' ? 'on a fresh pod…' : 'on this machine…'));
+    onRefetchDataset?.(target.node.dataset_id);
   }, [continueTarget, continueRow, toast, onRefetchDataset]);
 
   /* --- the generation in flight, owned by the BOARD -------------------------
@@ -1491,6 +1509,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
           initialFromStep={continueTarget.step}
           settings={canvasContinueSettings(continueTarget.node, continueRow)}
           busy={continueBusy}
+          error={continueError}
           onResolve={submitContinue} />
       )}
 

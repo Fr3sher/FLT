@@ -25,6 +25,7 @@ import {
   postWithConfirmations,
   RETRY_CONFIRMABLE_REFUSALS,
 } from '../utils/trainingRefusals';
+import { continueAttemptOutcome } from '../utils/continueOutcome';
 import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
@@ -515,12 +516,17 @@ export default function CloudRunsPage() {
   // A specific checkpoint to open the Continue dialog on, when it was launched
   // from a ◉ Graph pill ("continue from here"); null = the dialog's own default.
   const [continueInitialStep, setContinueInitialStep] = useState(null);
+  // The LAST refusal, rendered INSIDE the dialog (utils/continueOutcome.js).
+  // Only a success closes it, so a refused attempt no longer costs the user the
+  // lane, the checkpoint, the step count and the five folded settings.
+  const [continueError, setContinueError] = useState(null);
   const continueRun = (run) => {
     if (isTrainingRecipeReplayBlocked(run)) {
       toast.error('This checkpoint uses an incompatible legacy Z-Image recipe and cannot be continued safely.');
       return;
     }
     setContinueInitialStep(null);
+    setContinueError(null);
     setContinueRunTarget(run);
   };
   // The LOCAL lane of the same gesture: the checkpoint the cloud run left behind
@@ -549,34 +555,44 @@ export default function CloudRunsPage() {
   };
   const submitContinue = async (payload) => {
     const run = continueRunTarget;
-    setContinueRunTarget(null);
-    setContinueInitialStep(null);
-    if (!run || !payload) return;
+    // POST WITH THE DIALOG STILL OPEN. Closing first was a workaround for a toast
+    // container that sat UNDER every modal (fixed: Toast.jsx is z-[10000]); its
+    // own cost was that a refusal discarded the whole form. Only a success closes
+    // it now — a refusal lands inside it, next to the inputs that caused it.
+    if (!run || !payload) { setContinueRunTarget(null); setContinueInitialStep(null); return; }
     const local = payload.lane === 'local';
     setContinuing((m) => ({ ...m, [run.run_id]: true }));
+    setContinueError(null);
+    let outcome;
+    let d = null;
     try {
-      const d = local
+      // The local lane keeps its confirm-and-retry loop: a caption/quality guard
+      // is a QUESTION the user can answer, not a refusal to render. Whatever
+      // comes OUT of it — a decline, a real refusal, a success — is classified
+      // once, the same way on all three hosts.
+      d = local
         ? await postLocalContinue(run, payload)
         : await postJson('/api/dataset/train/cloud/continue',
           { run_id: run.run_id, extra_steps: payload.extraSteps,
             from_step: payload.fromStep, overrides: payload.overrides });
-      if (!d) return;                              // declined at a confirm prompt
-      if (d.ok === false) toast.error(d.error || 'Continue failed');
-      else if (local) {
-        toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} `
-          + 'on this machine — ComfyUI paused.');
-      } else {
-        toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} on a fresh pod…`);
-      }
-      poll();
+      outcome = continueAttemptOutcome(
+        d === null && local ? { declined: true } : { response: d });
     } catch (e) {
       // postJson THROWS on a refusal (400/409). Without this the local lane's
       // real reason — "no checkpoint at step N", a busy GPU, a caption guard —
       // was an unhandled rejection and the click looked like it did nothing.
-      toast.error(e?.message || 'Continue failed');
+      outcome = continueAttemptOutcome({ thrown: e });
     } finally {
       setContinuing((m) => ({ ...m, [run.run_id]: false }));
     }
+    if (!outcome.close) { setContinueError(outcome.error); return; }
+    setContinueRunTarget(null);
+    setContinueInitialStep(null);
+    setContinueError(null);
+    toast.success(local
+      ? `Continuing from step ${d.resumed_from} → ${d.target_steps} on this machine — ComfyUI paused.`
+      : `Continuing from step ${d.resumed_from} → ${d.target_steps} on a fresh pod…`);
+    poll();
   };
 
   // ⎘ Share config: download a paste-safe .txt of every setting this launch
@@ -640,6 +656,7 @@ export default function CloudRunsPage() {
       return;
     }
     setContinueInitialStep(pill?.step ?? null);
+    setContinueError(null);
     setContinueRunTarget(target);
   };
 
@@ -1130,6 +1147,7 @@ export default function CloudRunsPage() {
           settings={{ optimizer: continueRunTarget.settings?.optimizer,
             learning_rate: continueRunTarget.settings?.lr }}
           busy={!!continuing[continueRunTarget.run_id]}
+          error={continueError}
           onResolve={submitContinue} />
       )}
     </section>

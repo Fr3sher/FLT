@@ -1070,7 +1070,11 @@ export function useDataset() {
     if (d.ok) toast.success(`Resumed from step ${d.resumed_from} → ${d.target_steps} — ComfyUI paused`);
     // CUSTOM_WEIGHTS_UNVERIFIED is an interactive refusal: TrainingPanel owns
     // the explicit confirm + retry, so do not emit a premature error toast.
-    else if (!String(d.error || '').includes('CUSTOM_WEIGHTS_UNVERIFIED: ')
+    // `opts.quiet` says the CALLER shows the refusal itself — the ▶ Continue
+    // dialog now stays open and renders it inside, and one sentence printed
+    // twice a centimetre apart reads as a bug.
+    else if (!opts.quiet
+             && !String(d.error || '').includes('CUSTOM_WEIGHTS_UNVERIFIED: ')
              && !String(d.error || '').includes('CAPTION_QUALITY: ')
              && !String(d.error || '').includes('MISMATCH_CAPTION: ')
              && !String(d.error || '').includes('UNCAPTIONED: ')) {
@@ -1100,7 +1104,10 @@ export function useDataset() {
     };
     const d = await postJson(`/api/dataset/${currentId}/train/cloud/continue-local`, body);
     if (d.ok) toast.success(`Cloud run started from step ${d.resumed_from} → ${d.target_steps}`);
-    else if (!String(d.error || '').includes('CUSTOM_WEIGHTS_UNVERIFIED: ')
+    // `opts.quiet`: same contract as continueTraining above — the caller owns
+    // the refusal message (the ▶ Continue dialog stays open and shows it).
+    else if (!opts.quiet
+             && !String(d.error || '').includes('CUSTOM_WEIGHTS_UNVERIFIED: ')
              && !String(d.error || '').includes('CAPTION_QUALITY: ')
              && !String(d.error || '').includes('MISMATCH_CAPTION: ')
              && !String(d.error || '').includes('UNCAPTIONED: ')) {
