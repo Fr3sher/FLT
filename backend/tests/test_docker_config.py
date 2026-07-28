@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import re
+import subprocess
 from pathlib import Path
 
 from app.config import DEFAULTS
@@ -90,7 +91,18 @@ def test_docker_context_excludes_generated_artifacts():
         if line.strip() and not line.lstrip().startswith('#')
     }
 
-    assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist'} <= ignored
+    assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist', 'run', 'basedir'} <= ignored
+
+
+def test_git_ignores_the_docker_host_folders():
+    """`docker compose -f docker-compose.gpu.yml up` creates ./run, ./basedir and
+    ./data-docker in the repo root, and after one boot they hold ComfyUI's venv and
+    model tree. Untracked, that is tens of GB one `git add -A` away from the repo."""
+    for folder in ('run', 'basedir', 'data-docker'):
+        result = subprocess.run(
+            ['git', 'check-ignore', '-q', f'{folder}/'],
+            cwd=REPO_ROOT, capture_output=True)
+        assert result.returncode == 0, f'{folder}/ is not gitignored'
 
 
 def test_launcher_can_never_abort_the_upstream_boot():

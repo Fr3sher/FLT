@@ -12,5 +12,7 @@ docs
 .pytest_cache/
 packaging/build/
 packaging/dist/
+run/
+basedir/
 *.pyc
 __pycache__
