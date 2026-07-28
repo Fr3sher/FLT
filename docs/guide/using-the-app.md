@@ -1113,6 +1113,39 @@ Two things it will tell you rather than fail at:
   not share a base model or a workflow, so there is no single run that can render
   both. Unpick one family and the button comes back.
 
+**▶ Continue training from a checkpoint.** Clicking a pill's body opens its
+actions — Download, Deploy, Details, Delete — and **▶ Continue from here**. It
+opens the *same* launch dialog the Checkpoints panel and the Runs page open, on
+*that exact save*: pick where it runs (**💻 Local** or **☁ Cloud**), how many
+extra steps, and — folded under *Adjust settings* — the checkpoint cadence, the
+preview prompts, the timestep weighting and the learning rate. Rank, base and
+optimizer are locked to the checkpoint being continued; they are not things a
+resume can change.
+
+Read the step field as **extra** steps, not a total: the line beside it spells
+out where you land ("→ target step 3500") and so does the button. Resuming step
+2500 of a run that ended at 3500 is the whole point of opening this from a pill
+— a later epoch can be over-cooked, and the earlier one is often the better
+LoRA.
+
+The board is the only screen that offers **both lanes for both kinds of run**: a
+checkpoint is just a file, so a run trained on your machine can be finished on a
+rented GPU, and a cloud run's epoch can be finished here. What is *not* always
+possible is stated rather than hidden — a lane you cannot use stays visible,
+greyed, with its reason:
+
+- *"Local training needs ai-toolkit"* / *"A training is already running on this
+  machine"* — local training is single-flight for the whole machine.
+- *"Cloud training needs a vast.ai API key"*, an active cloud run on the same
+  dataset, or the concurrency limit.
+- *"This save is no longer on this machine"* — the lanes that need the file are
+  closed. For a **cloud** run the cloud lane still works, because a fresh pod is
+  seeded from that run's own staging rather than from your disk. For a local run
+  there is no copy anywhere, and both lanes say so.
+
+If the save vanished between the board being drawn and the click, the launch is
+refused with the steps that *are* available, named — never a silent failure.
+
 **The gallery under a checkpoint.** Images pile up. A checkpoint that has
 produced more than one shows a small **× N** badge; clicking it opens everything
 that checkpoint ever made, newest first — from the board, from the Test Studio,

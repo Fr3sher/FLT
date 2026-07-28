@@ -24,6 +24,11 @@ import { apiFetch, postJson } from '../../api/fetchClient';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
 import CheckpointActionsPopover from '../dataset/CheckpointActionsPopover';
+import ContinueDialog from '../dataset/ContinueDialog';
+import {
+  canvasContinueLanes, canvasContinueRefusal, canvasContinueRequest,
+  canvasContinueRow, canvasContinueSettings, canvasContinueSteps,
+} from '../../utils/canvasContinue';
 import PreviewLightbox from '../dataset/PreviewLightbox';
 import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
@@ -42,6 +47,7 @@ import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
+import { useCapabilities } from '../../context/CapabilitiesContext';
 import { HelpBadge } from '../../help/HelpMode';
 
 /* ◉ The LoRA Canvas surface — every selected dataset's genealogy on ONE board,
@@ -204,6 +210,9 @@ function LaneImages({ lane, nodes, onGeometry, onClose, onOpen, boardScale }) {
 export default function LineageCanvas({ entries, positions, imageNodes, onPinLane,
   onSaveImageNodes, onTidyUp, onRefetchDataset }) {
   const toast = useToast();
+  // ▶ Continue's LOCAL lane guard (is ai-toolkit set up at all) — the app's own
+  // capability probe, already loaded app-wide: no second request for it.
+  const { caps } = useCapabilities();
   const frameRef = useRef(null);
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
   const [view, setView] = useState({ scale: 1, tx: 0, ty: 0 });
@@ -824,6 +833,90 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     if (await deleteCheckpoint(openCk?.lane?.datasetId ?? null, node, pill)) setOpenCk(null);
   }, [deleteCheckpoint, openCk]);
 
+  /* --- ▶ Continue training, FROM THE BOARD ---------------------------------
+     The popover used to render a greyed sentence here: "open this run from the
+     Runs page (cloud) or the dataset's Checkpoints panel (local)". The capacity
+     existed; only the way in was missing, and it was a different way per lane.
+     The board now opens the app's ONE continue form — components/dataset/
+     ContinueDialog, the very dialog both other hosts mount, with every option it
+     offers (lane, resume-from, extra steps, cadence, preview prompts, timestep,
+     LR factor). No third form: what the board owns is the ROUTING and the LANE
+     RULE, and those live JSX-free in utils/canvasContinue.js.
+
+     Two things are fetched only when the dialog opens, never polled: the Runs
+     hub payload. It answers the lane guards (ai-toolkit, machine-wide local
+     single-flight, this dataset's active cloud run, the concurrency limit) AND
+     supplies the two fields a lineage node does not carry — the run's own
+     `masked` flag and its frozen settings snapshot. A board that polled that on
+     idle would spend a phone's battery drawing a static graph. */
+  const [continueTarget, setContinueTarget] = useState(null);   // {node, pill, step}
+  const [continueRuns, setContinueRuns] = useState(null);       // /cloud/runs payload
+  const [continueBusy, setContinueBusy] = useState(false);
+
+  const handleContinueCheckpoint = useCallback((node, pill) => {
+    const refusal = canvasContinueRefusal(node, pill);
+    if (refusal) { toast.warning(refusal); return; }
+    setContinueTarget({ node, pill: pill || null, step: pill?.step ?? null });
+    setContinueRuns(null);
+    // The dialog SEEDS its lane and its checkpoint from props on mount and never
+    // re-seeds, so it must not mount before this answer lands: opening a beat
+    // early made a configured cloud lane look like "needs a vast.ai API key",
+    // pre-selected Local for a cloud run, and posted to the local endpoint. Hence
+    // the two-state resolution — `null` while in flight, an OBJECT once settled.
+    // A failed read settles to `{}`: the lanes then read as open and the BACKEND
+    // refuses with its own reason, which beats a dialog refusing on a request
+    // that never left.
+    apiFetch('/api/dataset/train/cloud/runs?limit=50')
+      .then((d) => setContinueRuns(d || {}))
+      .catch(() => setContinueRuns({}));
+  }, [toast]);
+
+  const continueSteps = useMemo(
+    () => canvasContinueSteps(continueTarget?.node), [continueTarget]);
+  const continueRow = useMemo(
+    () => canvasContinueRow(continueTarget?.node,
+      [...(continueRuns?.actives || []), ...(continueRuns?.recent || [])]),
+    [continueTarget, continueRuns]);
+  const continueLanes = useMemo(
+    () => (continueTarget ? canvasContinueLanes(continueTarget.node, continueTarget.pill, {
+      aitoolkitValid: caps?.aitoolkit?.valid,
+      localActive: continueRuns?.local_active,
+      actives: continueRuns?.actives || [],
+      configured: continueRuns?.configured,
+      limit: continueRuns?.limit || 1,
+    }) : null),
+    [continueTarget, caps, continueRuns]);
+
+  const submitContinue = useCallback(async (payload) => {
+    const target = continueTarget;
+    // CLOSE FIRST, then post — the same order both other hosts use, and not a
+    // stylistic choice: the toast container is z-[100] and this modal is
+    // z-[9990], so a refusal raised while the dialog is still up would be
+    // rendered BEHIND it. Measured on a 400-px capture.
+    setContinueTarget(null);
+    if (!payload) return;
+    const req = canvasContinueRequest(target.node, payload,
+      { steps: canvasContinueSteps(target.node), masked: continueRow?.masked ?? null });
+    if (!req) { toast.error('This run cannot be continued from the board.'); return; }
+    setContinueBusy(true);
+    try {
+      const d = await postJson(req.url, req.body);
+      if (d?.ok === false) { toast.error(d.error || 'Continue failed'); return; }
+      setOpenCk(null);
+      toast.success(`Continuing from step ${d.resumed_from} → ${d.target_steps} `
+        + (payload.lane === 'cloud' ? 'on a fresh pod…' : 'on this machine…'));
+      onRefetchDataset?.(target.node.dataset_id);
+    } catch (e) {
+      // postJson THROWS on a 400/409. That is exactly how a checkpoint whose
+      // file is gone comes back ("no local checkpoint at step N (available:
+      // …)"), and how a busy GPU or a caption guard does. Swallowing it would
+      // make the click look dead — the bug the Runs hub already paid for once.
+      toast.error(e?.message || 'Continue failed');
+    } finally {
+      setContinueBusy(false);
+    }
+  }, [continueTarget, continueRow, toast, onRefetchDataset]);
+
   /* --- the generation in flight, owned by the BOARD -------------------------
      Not by the settings panel: closing that panel used to destroy the run id, so
      a launch could only be watched at the moment it was fired. */
@@ -1138,11 +1231,14 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
               node={openCk.node} pill={openCk.pill}
               runLabel={runIdentityLabel(openCk.node)}
               folderLabel={loraFolderLabel(openCk.node.train_type)}
-              // The board has no resume flow of its own: continuing a run is the
-              // Runs hub's (cloud) or the dataset panel's (local) gesture, each
-              // with its own dialog. Rather than a button that would go nowhere,
-              // the row says where the gesture lives.
-              continueReason="Continue from here: open this run from the Runs page (cloud) or the dataset’s Checkpoints panel (local)"
+              // ▶ Continue from here is a REAL button on the board now. It used
+              // to be a greyed sentence pointing at two other pages — one per
+              // lane — which is the whole reason this exists: the capacity was
+              // there, only the way in was missing. 'any' because the board
+              // serves BOTH sources (a local run's save qualifies too); the
+              // per-lane truth is the dialog's own answer, stated per lane.
+              continueSource="any"
+              onContinue={handleContinueCheckpoint}
               importing={importing} deleting={deleting}
               onDeploy={handleDeployCheckpoint}
               onDelete={handleDeleteCheckpoint}
@@ -1151,6 +1247,39 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
           </div>
         );
       })()}
+
+      {/* ▶ Continue training — the app's ONE dialog, hosted by the board.
+
+          It is a full-screen modal, NOT more rows inside the popover, and that
+          is a deliberate call: the popover is a fixed 210×232 px card sized to
+          fit a 400-px phone, and the launch form has a lane picker, a
+          checkpoint select, a step field and five folded settings. Cramming it
+          in would have produced a third, smaller, diverging form — the exact
+          debt the shared popover was extracted to avoid. The popover stays what
+          it is good at: the launcher.
+
+          It is also drawn in SCREEN pixels (fixed inset-0), like the popover
+          above it — neither scales with the board. A control drawn in world
+          units becomes a ~6-px target at 45 % zoom, which is how the ✕ became
+          unclickable once already. */}
+      {continueTarget && continueRuns && (
+        <ContinueDialog
+          context={runIdentityLabel(continueTarget.node)}
+          // Opens on the lane the SOURCE run trained in; resolveInitialLane then
+          // moves off it if that lane is closed and the other one isn't.
+          where={continueTarget.node.source === 'cloud' ? 'cloud' : 'local'}
+          lanes={continueLanes}
+          // This run's OWN saves — not the dataset's current selection. On a
+          // board holding ten datasets that distinction is the feature.
+          checkpoints={continueSteps.map((step) => ({ step }))}
+          // THE point of opening from a pill: step 2500 of a 3500-step run, not
+          // "the latest". initialResumeStep honours it only when it is a real
+          // save of this run (unit-tested in lineageContinue.js).
+          initialFromStep={continueTarget.step}
+          settings={canvasContinueSettings(continueTarget.node, continueRow)}
+          busy={continueBusy}
+          onResolve={submitContinue} />
+      )}
 
       {/* One drawer at a time: two picked runs → the compare diff, otherwise the
           single-run inspector. Both are the EXISTING panels, hosted unchanged —
