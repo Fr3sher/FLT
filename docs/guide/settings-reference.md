@@ -348,6 +348,14 @@ Thresholds for the **🗃️ Bank** quality flags. Every scanned image stores it
 read — so changing a threshold re-sorts an already-scanned bank instantly,
 with **no rescan**. (The two exceptions are noted below.)
 
+> **The same twelve values are editable from the Bank itself** — open
+> **🎚 Filter thresholds** above the grid, under the filter chips they decide.
+> It is one setting seen in two places, not a copy: editing either one writes
+> `config.bank.<key>` and therefore applies to **every** bank. The Bank panel
+> additionally previews how many images a candidate value would flag before you
+> save, and groups the controls by intent. See
+> *Using the app → Tune the Bank filter thresholds*.
+
 - **Sharpness minimum** → `bank.sharpness_min`. Variance of the Laplacian (the classic focus measure) under this = flagged **🌫 blurry**. Default **`100`**. Raise it to be stricter about focus, lower it if artistic soft shots get flagged.
 - **Noise maximum** → `bank.noise_max`. High-frequency residual (RMS vs a Gaussian blur) over this = flagged **📺 noisy**. Default **`15`**. Heavily textured images (foliage, fabric) score high by nature — this is a flag to review, not a verdict.
 - **Uniformity minimum** → `bank.uniformity_min`. Grayscale spread under this = flagged **⬜ flat** (solid colors, black frames, empty screenshots). Default **`12`**.

@@ -12,6 +12,8 @@ import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
 import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
+// 🎚 The twelve triage thresholds, edited here instead of in Settings.
+import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 // Source-folder re-walk messages (pure/testable).
 import { folderSyncToast } from './bankSync.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
@@ -374,6 +376,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [relocating, setRelocating] = useState(false)
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
   const [showAutoReject, setShowAutoReject] = useState(false)
+  // 🎚 The threshold editor folds away: the chips are the daily gesture, the
+  // numbers behind them are the occasional one.
+  const [thresholdsOpen, setThresholdsOpen] = useState(false)
   // Curation popovers ('diverse' | 'similar' | null) and their target counts.
   const [curateOpen, setCurateOpen] = useState(null)
   const [diverseN, setDiverseN] = useState(60)
@@ -1173,6 +1178,33 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 </Chip>
               ))}
             </FilterGroup>
+          )}
+        </div>
+
+        {/* 🎚 The numbers BEHIND those chips. Folded by default — the chips are
+            the everyday gesture and the thresholds are the occasional one — but
+            present, because tuning them used to mean leaving the bank for
+            Settings and coming back blind. Same config keys, same save. */}
+        <div className="border-t border-border pt-2">
+          <button type="button" onClick={() => setThresholdsOpen((v) => !v)}
+            aria-expanded={thresholdsOpen} aria-controls="bank-thresholds-panel"
+            className="flex w-full items-center gap-1.5 text-left text-xs text-content-muted hover:text-content">
+            <span aria-hidden>🎚</span>
+            <span className="font-medium">Filter thresholds</span>
+            {/* The gloss is the first thing to go on a phone: the label already
+                says what it opens, and a wrapped subtitle costs two lines. */}
+            <span className="hidden text-content-subtle sm:inline">
+              — what the chips above count as blurry, small, duplicate…
+            </span>
+            <span aria-hidden className="ml-auto text-content-subtle">{thresholdsOpen ? '▲' : '▼'}</span>
+          </button>
+          {thresholdsOpen && (
+            <div id="bank-thresholds-panel" className="mt-2">
+              <BankThresholdsPanel bankId={bankId}
+                onSaved={() => { refreshPayload(); refreshImages() }}
+                onRunPass={(endpoint) => act(
+                  () => postJson(`/api/bank/${bankId}/${endpoint}`, {}), null)} />
+            </div>
           )}
         </div>
 
