@@ -123,3 +123,39 @@ def test_healthcheck_covers_both_halves_of_the_gpu_image(monkeypatch):
 
     assert f":{DEFAULTS['server']['port']}/api/health" in targets['studio']
     assert ':8188/system_stats' in targets['comfyui']
+
+
+def test_gpu_image_layers_on_the_comfyui_base_without_hijacking_it():
+    """Dockerfile.gpu is a layer on someone else's image. Three of its rules are
+    invisible in a diff and fatal at runtime, so they are asserted here."""
+    dockerfile = _read('Dockerfile.gpu')
+    image_env = _docker_env(dockerfile)
+    port = DEFAULTS['server']['port']
+
+    assert 'mmartial/comfyui-nvidia-docker' in dockerfile
+    assert image_env['LDS_DATA_DIR'] == '/data'
+    assert image_env['LDS_CONFIG'] == '/data/config.json'
+    assert image_env['LDS_HOST'] == '0.0.0.0'
+    assert image_env['LDS_PORT'] == str(port)
+    assert f'EXPOSE {port}' in dockerfile
+    assert 'EXPOSE 8188' in dockerfile
+
+    logical = [line.strip()
+               for line in dockerfile.replace('\\\n', ' ').splitlines()
+               if line.strip()]
+
+    # 1. Upstream's ENTRYPOINT (/comfyui-nvidia_init.bash) must stay in charge.
+    assert not [line for line in logical
+                if line.startswith('ENTRYPOINT') or line.startswith('CMD ')]
+    # 2. The container starts as comfytoo and upstream's init script remaps comfy
+    #    to WANTED_UID before switching to it.
+    assert logical[-1] == 'USER comfytoo'
+    # 3. ComfyUI's venv activation must keep winning; the studio is only ever
+    #    invoked through absolute paths.
+    assert not [line for line in logical if line.startswith('ENV PATH')]
+
+    # /userscripts_dir/*.sh run in "skip" mode: not executable means not run.
+    assert 'install -D -m 755 packaging/docker/studio_launch.sh' in dockerfile
+    assert '/userscripts_dir/50-lora-dataset-studio.sh' in dockerfile
+    # The studio's venv must never be ComfyUI's.
+    assert '/app/.venv' in dockerfile
