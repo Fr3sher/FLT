@@ -77,6 +77,30 @@ export function chromeScreenSize(boardScale, nodeW) {
   return CHROME_BASE * chromeScale(s, nodeW) * s;
 }
 
+// 🖼🖼 The GRIP of a group of pinned images: the title bar you drag to move the
+// whole strip. Same problem as the buttons above and the same answer, with one
+// difference — a bar spans the strip's whole width, so it cannot be `scale()`d
+// (that would stretch it sideways too). Only its HEIGHT is counter-scaled.
+const BAR_BASE = 26;           // its height on screen, in pixels
+const MAX_BAR_FRACTION = 0.35; // …and the share of the strip it may never exceed
+
+/**
+ * How tall a group's drag bar must be drawn, in BOARD units, so it stays a
+ * finger-sized grip whatever the zoom.
+ *
+ * This bar is the ONLY way to move a group — dragging a picture inside a group
+ * means "take this one out" — so a bar that shrinks to four pixels at 24 % does
+ * not make the gesture awkward, it makes the group immovable.
+ */
+export function groupBarHeight(boardScale, groupH) {
+  const s = Number(boardScale);
+  const h = Number(groupH);
+  if (!Number.isFinite(s) || s <= 0) return BAR_BASE;
+  const wanted = Math.max(BAR_BASE, BAR_BASE / s);
+  const cap = Number.isFinite(h) && h > 0 ? Math.max(BAR_BASE, h * MAX_BAR_FRACTION) : Infinity;
+  return Math.min(wanted, cap);
+}
+
 /**
  * Is this event target one of a pinned node's own BUTTONS (✕, 🔍)?
  *
@@ -94,22 +118,32 @@ export function chromeScreenSize(boardScale, nodeW) {
  */
 export function isNodeControlTarget(target) {
   if (!target || typeof target.closest !== 'function') return false;
-  return !!target.closest('[data-canvas-image] button');
+  // A group's own ✕ is on the strip, not inside any one picture, so it needs
+  // naming here too — otherwise the frame captures its pointer and the button
+  // never hears the click, which is exactly the bug this guard exists for.
+  return !!(target.closest('[data-canvas-image] button')
+    || target.closest('[data-canvas-group-bar] button'));
 }
 
 /**
  * What a pointerdown inside a pinned node means:
- *   'control' — a button: hands off entirely, no capture, no long press;
- *   'resize'  — the corner handle: resize immediately, on every pointer type;
- *   'move'    — mouse/pen on the picture: pick it up;
- *   'press'   — touch on the picture: pan for now, pick it up on a long press.
+ *   'control'    — a button: hands off entirely, no capture, no long press;
+ *   'group-move' — a group's title bar: move the WHOLE strip, on any pointer
+ *                  type. It is a bar you deliberately grabbed; making a finger
+ *                  wait out a long press on it would be gratuitous, and it is
+ *                  the only grip a group has;
+ *   'resize'     — the corner handle: resize immediately, on every pointer type;
+ *   'move'       — mouse/pen on the picture: pick it up;
+ *   'press'      — touch on the picture: pan for now, pick it up on a long press.
  *
  * One function instead of a chain of `if`s inside the handler, so the rule
  * "a control is never a gesture" is a thing a test can hold on to.
  */
 export function nodePointerIntent(target, pointerType) {
   if (!target || typeof target.closest !== 'function') return 'press';
-  if (target.closest('[data-canvas-image] button')) return 'control';
+  if (target.closest('[data-canvas-image] button')
+    || target.closest('[data-canvas-group-bar] button')) return 'control';
+  if (target.closest('[data-canvas-group-bar]')) return 'group-move';
   if (target.closest('[data-canvas-image-resize]')) return 'resize';
   return pointerType === 'touch' ? 'press' : 'move';
 }

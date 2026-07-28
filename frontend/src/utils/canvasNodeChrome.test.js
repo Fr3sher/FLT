@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CLUSTER_UNITS, chromeScale, chromeScreenSize, clusterBox, isNodeControlTarget,
-  nodePointerIntent,
+  CLUSTER_UNITS, chromeScale, chromeScreenSize, clusterBox, groupBarHeight,
+  isNodeControlTarget, nodePointerIntent,
 } from './canvasNodeChrome.js';
 
 /* The ✕ that "did not work" on a phone.
@@ -110,4 +110,42 @@ test('something with no closest() at all does not throw', () => {
   assert.equal(isNodeControlTarget(null), false);
   assert.equal(isNodeControlTarget({}), false);
   assert.equal(nodePointerIntent(null, 'touch'), 'press');
+});
+
+// ---- 🖼🖼 the grip of a GROUP of pinned images ----------------------------
+
+const GROUP_BAR = el('[data-canvas-group-bar]', '[data-canvas-group]');
+const GROUP_CLOSE = el('[data-canvas-group-bar] button', '[data-canvas-group-bar]',
+  '[data-canvas-group]');
+
+test('a group’s title bar moves the whole strip, on any pointer type', () => {
+  assert.equal(nodePointerIntent(GROUP_BAR, 'mouse'), 'group-move');
+  assert.equal(nodePointerIntent(GROUP_BAR, 'touch'), 'group-move',
+    'the bar is the only grip a group has — a finger must not have to wait');
+  assert.equal(isNodeControlTarget(GROUP_BAR), false, 'it is a gesture: it wants the capture');
+});
+
+test('a group’s own ✕ is a button, exactly like a picture’s', () => {
+  assert.equal(nodePointerIntent(GROUP_CLOSE, 'touch'), 'control');
+  assert.ok(isNodeControlTarget(GROUP_CLOSE),
+    'without this the frame captures the pointer and the ✕ never hears the click');
+});
+
+test('the group bar stays a finger-sized grip at the zoom the board is read at', () => {
+  // 400 board units tall, read at 24 % — the far end of "zoomed out".
+  const h = groupBarHeight(0.24, 400);
+  assert.ok(h * 0.24 >= 24, `the bar measured ${(h * 0.24).toFixed(1)} px on screen`);
+  // Zoomed IN it must not balloon: a constant screen size, never smaller.
+  assert.equal(groupBarHeight(2, 400), 26);
+});
+
+test('the group bar never eats the strip it labels', () => {
+  // A tiny strip at a tiny zoom: the counter-scale is capped by the strip.
+  assert.ok(groupBarHeight(0.05, 100) <= Math.max(26, 100 * 0.35) + 1e-9);
+});
+
+test('groupBarHeight survives nonsense', () => {
+  assert.equal(groupBarHeight(0, 400), 26);
+  assert.equal(groupBarHeight(NaN, 400), 26);
+  assert.ok(Number.isFinite(groupBarHeight(1, NaN)));
 });

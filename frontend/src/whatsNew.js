@@ -76,6 +76,13 @@ export const WHATS_NEW = [
     title: 'Download your generated images — one, or a whole run as a ZIP',
     blurb:
       'The board can now hand the pictures over: ⬇ on a pinned image and in the full-screen viewer saves that one, and ⬇ ZIP in a gallery saves the lot (turn on Select first to take only the ones you tick). Every file keeps its lineage in its NAME — dataset, run, step and seed — so a render is still identifiable a month later instead of becoming another out_00042_.png. Big galleries say up front how many the archive holds, and a file that has left the disk is named rather than quietly dropped.',
+  },
+  {
+    id: '2026-07-28-canvas-fuse-pinned-images',
+    date: '2026-07-28',
+    title: 'Drop one pinned image onto another and compare them edge to edge',
+    blurb:
+      'Comparing two checkpoints on the canvas meant lining two pinned pictures up by hand and squinting at the gap between their frames. Now dropping one onto another fuses them into a single node: the pictures sit side by side with nothing drawn between them, and there is no limit — add a third, a tenth. Drag the title bar to move the whole strip, hover a picture for its own 🔍 and ✕, and drag one off the group to take it back out at the size it had before.',
     to: '/canvas',
   },
   {
