@@ -67,6 +67,7 @@ import uuid
 from PIL import Image, ImageDraw, ImageFilter
 
 from .. import config as cfg
+from . import image_encoding
 from . import klein_edit_helper as keh
 from ..job_queue import queue_manager
 from ..utils import comfy_fs
@@ -558,7 +559,14 @@ def inpaint_watermark_klein(user_id, image_path, boxes, *, seed=None, device='cp
         zone_mask = zone_hard.filter(ImageFilter.GaussianBlur(KLEIN_COMPOSITE_FEATHER_PX))
         result = composite_inpaint(result, corrected, crop_box, zone_mask)
     try:
-        result.save(image_path, 'WEBP', quality=92)
+        # Preserve the file's format and encode without loss (`image_encoding`, the
+        # rule mirror, rotate and crop follow). A WEBP q92 re-save re-compressed the WHOLE image
+        # to repaint a few square centimetres — which silently contradicted the
+        # "every pixel outside the footprint keeps its ORIGINAL bytes" guarantee
+        # this method is built on.
+        image_encoding.save_edit(
+            result, image_path, image_encoding.format_for_path(image_path, original),
+            image_encoding.LOSSLESS)
     except (OSError, ValueError) as e:
         return False, {'kind': 'failed', 'detail': f'could not save cleaned image: {e}'}
     return True, None

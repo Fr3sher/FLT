@@ -70,6 +70,31 @@ captioning rules and a few guards change with the dataset kind.
 11. **Export** — at any point, **Export ZIP** gives you the curated, captioned
     set as a standard ai-toolkit dataset. Nothing is locked in.
 
+### What editing an image costs it
+
+Crop, ✂ Mirror, ↺ Rotate and the watermark cleaners **overwrite** the file the
+trainer will later copy verbatim, so whatever they discard is discarded for good.
+They all follow one rule: **keep the file's format and re-encode it without losing
+pixels.** A PNG stays a PNG, a WebP is rewritten losslessly (crop it ten times and the tenth
+is identical to the first), and the file keeps a name that matches what is inside
+it. JPEG is the exception nobody can fix — it has no lossless mode — so a JPEG is
+re-saved at the highest practical quality with no chroma subsampling rather than
+converted to something heavier to protect pixels that were already lossy.
+
+Two honest caveats:
+
+- **Cropping still resamples.** The crop is normalised to a 1024 px long side, and
+  a small box is enlarged to reach it (that is what the ⚠ upscale warning is
+  about). Only the *encoding* is lossless; the resize never can be. The watermark
+  **✂ auto-crop**, which only cuts and never resizes, is lossless end to end.
+- **Files get bigger.** A cropped photo that used to weigh ~200 KB now weighs
+  ~950 KB. That is the price of not throwing pixels away. Thumbnails and the
+  copies uploaded to a generation API are unaffected: they stay small on purpose.
+
+Images you cropped **before** this changed keep the pixels they have — nothing is
+re-processed retroactively, and re-cropping an already-degraded file cannot bring
+back what the old encoder removed.
+
 ## Concept datasets (an object or action, not a person)
 
 Pick **Concept** at creation and describe the concept in the required field —
@@ -673,9 +698,10 @@ below anything visible, and it barely grows with more turns — but it is not
 free, so it is worth knowing. Datasets normally hold WEBP, so this mostly
 concerns files restored from an old backup.
 
-Rotation is deliberately **not** part of ✂ Crop: the crop tool resizes, so it
-re-encodes to WEBP at quality 92 by design, and a quarter turn has no reason to
-pay for that.
+Rotation is deliberately **not** part of ✂ Crop: the crop tool **rescales** the
+box you drew to a 1024 px long side, and resampling costs detail however the
+result is then encoded. A quarter turn resamples nothing — it permutes pixels
+that already exist — so it has no reason to ride that lane.
 
 **In a bank**, your own folder is never written to — so a bank rotation does not
 touch your files at all. The turn is remembered against the image and applied to

@@ -30,7 +30,7 @@ from ..extensions import db
 from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
-from . import dataset_activity, reference_edit_jobs, trash
+from . import dataset_activity, image_encoding, reference_edit_jobs, trash
 from .dataset_storage import dataset_path, ensure_dataset_dir
 
 # Garde le modèle vision chaud entre les images d'un même batch caption/classify
@@ -1415,10 +1415,39 @@ def _crop_resize_file(path, x, y, w, h, size=1024, dst=None):
     re-crop can widen back out instead of only tightening the previous crop.
 
     Returns (ok, upscale_ratio) — ratio is size / long_side_of_box (>1 means the
-    box was smaller than `size` and got enlarged), or None on failure."""
+    box was smaller than `size` and got enlarged), or None on failure.
+
+    ENCODING: the source format is preserved and written under
+    `image_encoding.LOSSLESS`. This used to be an unconditional lossy WEBP q92, so
+    cropping a PNG degraded it AND left PNG-named files holding WEBP bytes.
+
+    Crop is the one operation for which lossless was a real trade rather than an
+    obvious win — it RESAMPLES, so it destroys information whatever the encoder does,
+    and lossless costs 4.59x the bytes. It was chosen on measurement, not principle:
+    lossy WEBP has an error floor (chroma subsampled to 4:2:0 at every quality, so
+    q100 still leaves max channel error 16 for 1.74x the size), and that error
+    COMPOUNDS — five successive crops land at PSNR 45 dB whether they are q92 or
+    q100, while lossless stays byte-identical to the first crop. See the measurement
+    table in `image_encoding`'s module docstring.
+
+    ⚠️ What this does NOT claim: only the ENCODING is lossless. The crop is
+    normalised to a `size` long side, so unless the box's long side is already
+    exactly that, it is resampled — and for a SMALLER box that means an upscale
+    which invents no detail (`upscale_ratio` records it, and the UI warns). The
+    watermark crop (`_apply_watermark_crop`), which never resizes, is the one place
+    where the whole operation is lossless."""
     if not os.path.exists(path):
         return False, None
-    src = Image.open(path).convert('RGB')
+    with Image.open(path) as opened:
+        # The DESTINATION name decides (it may differ from the source: the reference
+        # editor reads the kept full frame and writes the derived crop), so the file
+        # written always contains what its extension promises.
+        fmt = image_encoding.format_for_path(dst or path, opened)
+        opened.load()
+        icc = _valid_icc_profile(opened.info.get('icc_profile'))
+        # Narrow the mode BEFORE resampling: Pillow silently drops to nearest-neighbour
+        # on paletted images, which would undo the point of removing the lossy encoder.
+        src = opened.convert(image_encoding.resample_mode(opened))
     box = (max(0, int(x)), max(0, int(y)), min(src.width, int(x + w)), min(src.height, int(y + h)))
     if box[2] <= box[0] or box[3] <= box[1]:
         return False, None
@@ -1429,7 +1458,8 @@ def _crop_resize_file(path, x, y, w, h, size=1024, dst=None):
         out_w, out_h = max(1, round(size * bw / bh)), size
     scale = size / max(bw, bh)
     out = io.BytesIO()
-    src.crop(box).resize((out_w, out_h), Image.LANCZOS).save(out, 'WEBP', quality=92)
+    image_encoding.save_edit(src.crop(box).resize((out_w, out_h), Image.LANCZOS),
+                             out, fmt, image_encoding.LOSSLESS, icc_profile=icc)
     with open(dst or path, 'wb') as fh:
         fh.write(out.getvalue())
     return True, scale
@@ -1470,22 +1500,28 @@ def transformed_image_bytes(path, transform):
     """Apply ``transform`` (a PIL image -> PIL image callable) fully in memory,
     without touching ``path``, and return the re-encoded bytes.
 
-    THE shared encoder of every in-place pixel edit that must not change what the
-    file IS (mirror, rotation). Dataset rows normally point at WEBP files, but
-    restored/legacy datasets may contain PNG or JPEG bytes (even under a
-    misleading extension). Preserve the format Pillow actually detects: PNG stays
-    lossless, WEBP is rewritten lossless so repeated edits do not accumulate
-    damage, and JPEG uses high-quality 4:4:4.
+    THE shared encoder of every in-place pixel edit that REORDERS pixels without
+    rebuilding any (mirror, rotation). Dataset rows normally point at WEBP files,
+    but restored/legacy datasets may contain PNG or JPEG bytes (even under a
+    misleading extension). Preserve the format Pillow actually detects and encode
+    it under `image_encoding.LOSSLESS` — the policy this operation REQUIRES, passed
+    explicitly so that tuning another operation's encoder can never silently
+    degrade this one.
 
     ⚠️ Only JPEG loses anything here, and it loses it on EVERY edit — Pillow has
     no DCT-domain (jpegtran-style) path, so a 90° turn of a JPEG is a re-encode,
     not a lossless block transform. PNG and WEBP round-trip pixel-exact, which is
     what dataset files actually are in practice (imports normalise to WEBP).
+
+    The format is read from the CONTENT, not the file name: a mirror/rotation has
+    no business converting a legacy extension mismatch it did not create. Crop,
+    which rewrites the file wholesale and may write to a DIFFERENT destination,
+    uses `image_encoding.format_for_path` instead.
     """
     try:
         with Image.open(path) as src:
             fmt = (src.format or '').upper()
-            if fmt not in {'PNG', 'WEBP', 'JPEG'}:
+            if fmt not in image_encoding.EDITABLE_FORMATS:
                 raise ValueError(f'unsupported image format: {fmt or "unknown"}')
             if getattr(src, 'n_frames', 1) != 1:
                 raise ValueError('animated images are not supported')
@@ -1497,25 +1533,13 @@ def transformed_image_bytes(path, transform):
             oriented = ImageOps.exif_transpose(src)
             edited = transform(oriented)
 
-            save_kwargs = {}
-            if icc:
-                save_kwargs['icc_profile'] = icc
-            if fmt == 'PNG':
-                # Keep the native PNG mode/bit depth and use only lossless DEFLATE.
-                save_kwargs.update(compress_level=6)
-            elif fmt == 'WEBP':
-                # WEBP input can carry alpha; RGB(A) preserves it while avoiding
-                # encoder-dependent conversions for unusual legacy modes.
-                has_alpha = 'A' in edited.getbands()
-                edited = edited.convert('RGBA' if has_alpha else 'RGB')
-                save_kwargs.update(lossless=True, quality=100, method=6)
-            else:  # JPEG
-                edited = edited.convert('RGB')
-                save_kwargs.update(quality=95, subsampling=0, optimize=True)
-
             out = io.BytesIO()
+            edited, save_kwargs = image_encoding.save_params(
+                edited, fmt, image_encoding.LOSSLESS, icc_profile=icc)
             edited.save(out, fmt, **save_kwargs)
             payload = out.getvalue()
+            # Read AFTER save_params: it may have converted the mode, and the
+            # self-check below compares the decoded size against this.
             expected_size = edited.size
     except ValueError:
         raise
@@ -3157,7 +3181,13 @@ def write_image_atomic(path, data: bytes) -> None:
 def normalize_to_webp(image_bytes: bytes, size: int = 1024) -> bytes:
     """Resize so the longest side ≤ `size`, KEEP the aspect ratio (no square pad),
     return WEBP. Pour les variations Nano Banana : un plan corps reste en portrait
-    (pas de bandes noires que le LoRA apprendrait). ai-toolkit gère le bucketing."""
+    (pas de bandes noires que le LoRA apprendrait). ai-toolkit gère le bucketing.
+
+    DERIVATIVE ON PURPOSE — this is INGEST/TRANSPORT (the ≤2048 px copy handed to a
+    generation API, and the normalisation of freshly generated bytes), not an edit of
+    an image the user already curated. It must NOT be routed through `image_encoding`:
+    inflating an upload 4x to protect pixels the remote engine will re-encode anyway
+    buys nothing. See the module docstring of `image_encoding` for the split."""
     im = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     im.thumbnail((size, size), Image.LANCZOS)
     out = io.BytesIO()
@@ -3276,7 +3306,12 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
     `return_detected` so existing 2-tuple callers (the /ref route) are unaffected.
 
     `use_vision=False` -> skip the bbox detection entirely (fast pure-PIL centered
-    square, no GPU window needed) — the manual-first reference flow."""
+    square, no GPU window needed) — the manual-first reference flow.
+
+    INGEST, not an edit: this runs once on the bytes being IMPORTED, and its name is
+    part of its contract (callers write the result to a `.webp`). Re-cropping that
+    reference afterwards goes through `_crop_resize_file`, which does preserve the
+    format losslessly."""
     im = Image.open(io.BytesIO(image_bytes)).convert('RGB')
     W, H = im.size
     norm = detect_head_bbox(image_bytes) if use_vision else None
@@ -5146,11 +5181,21 @@ def _preserve_original(path) -> None:
 
 
 def _apply_watermark_crop(path, box) -> bool:
-    """Crop `path` to `box` (left,top,right,bottom px) and re-save WEBP q92 WITHOUT
-    resizing -- the whole point of the crop route is that it invents no pixel (the
-    aspect-ratio change is absorbed by ai-toolkit's bucketing). Returns bool."""
+    """Crop `path` to `box` (left,top,right,bottom px) WITHOUT resizing -- the whole
+    point of the crop route is that it invents no pixel (the aspect-ratio change is
+    absorbed by ai-toolkit's bucketing). Returns bool.
+
+    Because nothing is resampled here, and the source format is now preserved and
+    re-encoded without loss (`image_encoding`), this is the one edit that is exactly
+    lossless end to end: the surviving pixels come out byte-identical. It used to be
+    re-saved as WEBP q92, which quietly re-compressed the ENTIRE image to remove a
+    band at its edge."""
     try:
-        im = Image.open(path).convert('RGB')
+        with Image.open(path) as opened:
+            fmt = image_encoding.format_for_path(path, opened)
+            opened.load()
+            icc = _valid_icc_profile(opened.info.get('icc_profile'))
+            im = opened.copy()
     except (OSError, ValueError):
         return False
     box = (max(0, int(box[0])), max(0, int(box[1])),
@@ -5158,7 +5203,8 @@ def _apply_watermark_crop(path, box) -> bool:
     if box[2] - box[0] < 1 or box[3] - box[1] < 1:
         return False
     out = io.BytesIO()
-    im.crop(box).save(out, 'WEBP', quality=92)
+    image_encoding.save_edit(im.crop(box), out, fmt, image_encoding.LOSSLESS,
+                             icc_profile=icc)
     with open(path, 'wb') as fh:
         fh.write(out.getvalue())
     return True

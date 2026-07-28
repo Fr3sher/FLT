@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-cropping-no-longer-recompresses',
+    date: '2026-07-28',
+    title: 'Cropping no longer quietly re-compresses your image',
+    blurb:
+      'Every crop was re-encoded to lossy WebP, so cropping a PNG degraded it — and left a .png file holding WebP bytes. Crop and the watermark cleaners now keep the file\'s own format and write it back without losing pixels, like ✂ Mirror and ↺ Rotate already did: crop the same shot ten times and the tenth is identical to the first. JPEG has no lossless mode, so it is re-saved at the highest practical quality instead of being converted to something heavier. Cropped files are noticeably bigger now — that is the price of keeping the pixels. Two honest limits: cropping still rescales the box to a 1024 px long side, and resampling can never be lossless (only the watermark ✂ auto-crop, which never resizes, is); and images you cropped BEFORE this keep the pixels they have — nothing is re-processed retroactively.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-rotate-images-in-the-dataset-and-the-bank',
     date: '2026-07-28',
     title: 'Straighten a sideways photo — rotate 90° in the dataset and in the bank',
