@@ -159,3 +159,32 @@ def app(tmp_path, monkeypatch):
 @pytest.fixture()
 def client(app):
     return app.test_client()
+
+
+@pytest.fixture(autouse=True)
+def _no_hugging_face_gate_call(request, monkeypatch):
+    """Keep the unit suite off the public internet.
+
+    `cloud_training._assert_official_base_reachable` really opens
+    https://huggingface.co/api/models/<repo>/tree/main, with an 8 s timeout, and
+    **83 tests reached it** — measured, not estimated. Two costs, one of which
+    has not been paid yet:
+
+    * duration, and it is the answer to a mystery from 2026-07-28: two agents
+      saw the suite take 620 s instead of 505 s and read that as the CAUSE of
+      failing tests. It was this, a network dependency nobody declared;
+    * a release trap. The call fails OPEN on timeouts and outages, but it RAISES
+      on 401/403. The day HF gates a base, changes a quota, or a stale token is
+      present, ~83 cloud tests fail at once and it will look exactly like a
+      flake storm — the same shape as the ordering bug that failed a release
+      that morning.
+
+    A unit test must never depend on someone else's uptime. The tests that exist
+    to exercise this gate opt back in with @pytest.mark.hf_gate, and they stub
+    urlopen themselves, so the behaviour stays covered — only the traffic goes.
+    """
+    if request.node.get_closest_marker('hf_gate'):
+        return
+    from app.services import cloud_training as _ct
+    monkeypatch.setattr(_ct, '_assert_official_base_reachable',
+                        lambda *a, **k: None, raising=False)
