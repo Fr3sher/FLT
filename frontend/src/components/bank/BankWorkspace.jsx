@@ -19,6 +19,8 @@ import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 import { folderSyncToast } from './bankSync.js'
 // Four progress states, not two — including the honest "I don't know" (pure/testable).
 import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } from './progressPresence.js'
+// An occupied bank refuses in OUR words, never in the server's (pure/testable).
+import { busyRefusal } from './bankPassRun.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
 import { openerLabel } from './scoringPython.js'
@@ -608,7 +610,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       await refreshPayload(); await refreshImages()
       return d
     } catch (e) {
-      toast.error(e?.message || 'Action failed.')
+      // ONE bank, ONE background job: every action here can be refused because
+      // another pass owns the bank. That refusal used to reach the user as the
+      // server's own sentence — "a scan job is already running on this bank" —
+      // which names no progress and no way out. The route now labels the 409
+      // with `busy_kind`, so it is rewritten HERE, once, for every button that
+      // goes through act(): the ✨ Analyze, the ↻ re-runs in the threshold
+      // panel, 🗑 Delete rejected, ⬆ Promote, 🚀 Launch all. Anything else keeps
+      // its own message — only a refusal that identified itself is reworded.
+      const kind = e?.body?.busy_kind
+      toast.error(e?.status === 409 && kind
+        ? busyRefusal({ kind, activity: payload?.activity })
+        : (e?.message || 'Action failed.'))
       return null
     }
   }
@@ -1260,7 +1273,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </button>
           {thresholdsOpen && (
             <div id="bank-thresholds-panel" className="mt-2">
+              {/* The panel's ↻ re-run buttons start the SAME one-job-per-bank
+                  passes as the toolbar above, so they need the same two facts
+                  the progress bar reads: whether a job holds the bank (to refuse
+                  the click before it is made, saying which pass and where it is)
+                  and the duplicate counts (to report what the pass produced).
+                  Both are already in this payload — no extra poll, no second
+                  progress mechanism. */}
               <BankThresholdsPanel bankId={bankId}
+                activity={payload?.activity} offline={!connection.online}
+                dupSummary={payload?.dup} semanticDupSummary={payload?.semantic_dup}
                 onSaved={() => { refreshPayload(); refreshImages() }}
                 onRunPass={(endpoint) => act(
                   () => postJson(`/api/bank/${bankId}/${endpoint}`, {}), null)} />

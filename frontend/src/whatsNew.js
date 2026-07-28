@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-bank-rerun-buttons-say-what-is-happening',
+    date: '2026-07-28',
+    title: 'The bank\'s ↻ re-run buttons finally tell you what is going on',
+    blurb:
+      'A bank runs one pass at a time, so pressing ↻ Re-group duplicates while a ✨ Score was still walking the bank could only ever produce a red "a scan job is already running on this bank" — a sentence with no progress and no way out. Those buttons are now disabled while another pass owns the bank, and each says which one and how far it has got ("✨ Score pass is running — 137 / 412"), pointing at Stop. When a re-run does go through, it reports what it produced right where you pressed it — "Done — 12 duplicate groups · 34 images (was 9 · 26)" — and says "unchanged" when your new value groups exactly the same images, instead of leaving you unable to tell a no-op from a pass that never ran. Every other occupied-bank refusal in the bank (Promote, 🗑 Delete rejected, 🚀 Launch all, the watermark passes) is now worded the same way.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-cropping-no-longer-recompresses',
     date: '2026-07-28',
     title: 'Cropping no longer quietly re-compresses your image',

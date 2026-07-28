@@ -717,6 +717,20 @@ Images you cropped **before** this changed keep the pixels they have — nothing
 re-processed retroactively, and re-cropping an already-degraded file cannot bring
 back what the old encoder removed.
 
+## Why a ↻ re-run button is greyed out
+
+A bank runs **one pass at a time**. While a ✨ Score, a 🔎 Quality scan or a
+🚀 Launch all is walking it, the ↻ buttons in this panel are disabled — and each
+one says which pass is holding the bank and how far it has got, for example
+*✨ Score pass is running on this bank — 137 / 412*. Wait for it to land, or
+press **Stop** in the ⏳ progress bar at the top of the bank; the buttons come
+back by themselves the moment the bank is free.
+
+When a re-run does start, the button reports what the pass produced right where
+you pressed it: **`Done — 12 duplicate groups · 34 images (was 9 · 26)`**. If
+your new value groups exactly the same images it says so — *unchanged* — rather
+than leaving you unable to tell a no-op from a pass that never ran.
+
 ## Rotate a sideways image
 
 Scraped folders and phone exports are full of shots lying on their side. Both
