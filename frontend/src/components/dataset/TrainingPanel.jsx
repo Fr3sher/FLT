@@ -6,6 +6,7 @@ import { getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
+import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
@@ -391,11 +392,25 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       // Wait for both before re-enabling Apply so an old-family preset/settings
       // cannot race the new selection.
       const info = await ds.trainBaseInfo?.();
+      // Re-seed base/variant from the SERVER, which now remembers them per
+      // family. The optimistic reset above only cleared this browser's state:
+      // it looked fixed until the next reload re-read the shared column and
+      // handed the other family's base straight back — the "change it and come
+      // back" dance. The server is the truth; adopt what it says. `nextBase`
+      // stays the fallback so SDXL — the one family that REQUIRES a checkpoint
+      // — still lands on a usable one the first time it is picked.
+      let seededBase = nextBase;
+      let seededVariant = nextVariant;
       if (info) {
         setBaseInfo(info);
         setAdv(info.train_settings || null);
+        seededBase = info.base || nextBase;
+        seededVariant = normalizeCheckpointVariant(t, info.variant || nextVariant);
+        setBase(seededBase);
+        setCustomBase(looksAbsolute(seededBase));
+        setVariant(seededVariant);
       }
-      const checkpointData = await ds.listCheckpoints?.(nextBase, t, nextVariant);
+      const checkpointData = await ds.listCheckpoints?.(seededBase, t, seededVariant);
       setStepsInfo(checkpointData?.recommended_steps_info || null);
     } catch {
       // Persistence succeeded: keep the new family truthful and let the normal
@@ -1647,6 +1662,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           {sliderOn ? '🎚 slider (Beta) · ' : ''}base “{zimageRecipe?.baseLabel || baseLabel}”{zimageRecipe ? ` · ${zimageRecipe.adapterActive ? 'Turbo adapter v2 ON' : 'no training adapter'}` : ''} · {sliderOn ? 'unmasked (slider)' : maskedRembgMissing ? 'unmasked (rembg missing)' : masked ? 'masked' : 'unmasked'} · {advResLabel} · {stepsOverride.trim() ? `${stepsN} steps` : sliderOn ? `${stepsInfo?.steps ?? 1000} steps (slider policy)` : 'adaptive steps'}{advNetworkType === 'lokr' ? ' · LoKr' : ''}{advEma ? ` · EMA ${advEma}` : ''}
         </span>
       </div>
+
+      {/* A custom base picked on ANOTHER family was still attached to this
+          dataset (one shared column). The run ignores it — say so, once, rather
+          than let the summary above advertise weights nobody will load. */}
+      {baseInfo?.base_family_mismatch && (
+        <p className="m-0 mt-1 text-amber-300 text-[0.6875rem]">
+          ⚠ {baseInfo.base_family_mismatch}
+        </p>
+      )}
 
       {/* --- Slider LoRA (Beta) : entraîne un LoRA BIPOLAIRE (±strength) depuis une
            paire de prompts via le trainer `concept_slider` d'ai-toolkit. Les images
@@ -3238,8 +3262,13 @@ function CustomBasePushSection({ datasetId, trainType, variant, base, onReadyCha
   const job = state?.job || {};
   const pushing = pushBusy || job.state === 'running';
   const sizeLabel = state?.local_size_bytes != null ? ` (~${fmtBytes(state.local_size_bytes)})` : '';
+  const view = customBasePushView({ state, checkError, pushing });
   let body;
-  if (checkError) {
+  if (view.kind === 'foreign') {
+    // Another family's base: nothing to push, nothing to restore. Say what the
+    // run will do instead of offering an upload that could only fail.
+    body = <p className="m-0 text-amber-300 text-[0.75rem]">⚠ {view.message}</p>;
+  } else if (checkError) {
     body = <p className="m-0 text-red-300 text-[0.75rem]">⚠ {checkError}</p>;
   } else if (!state) {
     body = <p className="m-0 text-content-muted text-[0.75rem]">Checking your custom base on Hugging Face…</p>;
@@ -3272,27 +3301,20 @@ function CustomBasePushSection({ datasetId, trainType, variant, base, onReadyCha
       </p>
     );
   } else {
-    const why = state.reason === 'size_mismatch'
-      ? 'Your local custom base changed since it was pushed — push it again to update the private copy.'
-      : state.reason === 'file_missing'
-        ? 'The private repo exists but is missing the file this variant needs — push again to add it.'
-        : 'This run uses custom weights the pod cannot download yet.';
     body = (
       <div className="flex flex-col gap-1.5">
         <p className="m-0 text-content-muted text-[0.75rem]">
-          {why} Pushing uploads your custom base{sizeLabel} to a <b className="text-content">PRIVATE</b> repo
+          {view.message} Pushing uploads your custom base{sizeLabel} to a <b className="text-content">PRIVATE</b> repo
           on your Hugging Face account — one time; future cloud runs reuse it. It is never made public.
         </p>
-        {!state.local_available && (
-          <p className="m-0 text-amber-300 text-[0.75rem]">
-            ⚠ The local file is unavailable ({state.local_reason || 'missing'}) — restore it to push.
-          </p>
+        {view.warning && (
+          <p className="m-0 text-amber-300 text-[0.75rem]">⚠ {view.warning}</p>
         )}
         {(pushError || job.state === 'error') && (
           <p className="m-0 text-red-300 text-[0.75rem]">⚠ {pushError || job.error}</p>
         )}
         <button type="button" onClick={() => startPush(false)}
-          disabled={!state.local_available || pushBusy}
+          disabled={!view.canPush || pushBusy}
           className="w-fit px-3 py-1.5 rounded-lg border border-sky-500/50 bg-sky-500/10 text-sky-200 text-sm font-semibold disabled:opacity-40">
           ⬆ Push custom base to Hugging Face (one-time)
         </button>

@@ -132,6 +132,10 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset', 'train_slider', 'TEXT'),
     ('face_dataset', 'train_vae_path', 'TEXT'),
     ('face_dataset', 'train_te_path', 'TEXT'),
+    # Per-family memory of (base, variant) — see models.FaceDataset. Additive and
+    # nullable: a dataset that predates it simply has nothing remembered yet, and
+    # keeps the base/variant it already had on the family it already had.
+    ('face_dataset', 'train_family_bases', 'TEXT'),
     ('face_dataset', 'prompt_suffix', 'TEXT'),
     ('face_dataset', 'prompt_suffixes', 'TEXT'),
     ('face_dataset', 'caption_options', 'TEXT'),

@@ -437,6 +437,26 @@ Defaults for new runs, plus everything about the optional cloud training lane.
 
 - **Default training family** → `training.default_family`. The model family preselected when you start a new run. One of `zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, `anima`. Default **`zimage`**. Purely a starting point — you can switch family per run. `anima` trains the open [Anima](https://huggingface.co/circlestone-labs/Anima-Base-v1.0-Diffusers) anime model on its public base (no gated download); it is **local-only** for now (needs an up-to-date ai-toolkit + diffusers — cloud training arrives once the GPU pod image is verified).
 
+### Training base & variant are per FAMILY
+
+The **Base** and **variant** chosen in *Advanced training options* belong to the
+model family they were chosen under, not to the dataset as a whole. Switching
+**LoRA type** hands you that family's own base — the official one the first time
+you pick it — and switching back restores what you had. Nothing is discarded:
+each family's choice is remembered on the dataset.
+
+This matters because the choices are not interchangeable. A Z-Image base is a
+ComfyUI merge **name** that gets converted to the diffusers layout first; Krea 2,
+FLUX.1 and FLUX.2 Klein take an **absolute path** to a `.safetensors` of their own
+architecture. Before this, one dataset held one base for every family, so a base
+picked for Z-Image stayed attached to a Krea 2 run — where it was silently ignored
+in favour of the official base, while the panel's summary line and the cloud
+dialog both went on advertising it.
+
+A base that provably belongs to another family (found on datasets created before
+this change) is reported as such in the panel, is not used, and is not offered for
+upload to Hugging Face by the cloud dialog.
+
 ### Concept face masking
 
 Used **only** by Concept datasets that switched **Mask faces** on in *Advanced

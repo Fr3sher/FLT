@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-training-base-is-per-family',
+    date: '2026-07-28',
+    title: 'Your training base now belongs to its model family',
+    blurb:
+      'Picking a custom base for Z-Image and then switching the LoRA type to Krea 2 left that Z-Image file attached: the selector said Krea 2, the line below it said the Z-Image file, and the only cure was changing the family and coming back — which fixed the screen but nothing else, so it was back on the next reload. The base and the variant are now remembered per family: switching hands you that family\'s own base, coming back finds yours exactly where you left it, and nothing is thrown away. The cloud dialog stops offering to upload another family\'s weights to your Hugging Face account, and no longer calls a file "missing" when it is sitting safely on your disk.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-bank-watermark-mask-editing',
     date: '2026-07-28',
     title: 'Fix a wrong watermark box without leaving the bank',

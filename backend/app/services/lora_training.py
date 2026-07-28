@@ -877,6 +877,56 @@ def assert_zimage_custom_recipe_confirmed(family, base_model, variant,
             'or non-distilled. Confirm this recipe explicitly before export.')
 
 
+# Families whose custom base is a free ABSOLUTE local file: a RELATIVE name there
+# can only have been picked on another family (their builders gate on
+# `_is_custom_weights`, so they ignore it outright — see the `name_or_path` lines
+# in _build_job_config_krea/_flux/_flux2klein/_anima).
+_ABSOLUTE_BASE_FAMILIES = ('krea', 'flux', 'flux2klein', 'anima')
+
+
+def foreign_base_reason(family, base_model) -> str | None:
+    """Why `base_model` provably cannot belong to `family` — or None.
+
+    `train_base_model` is ONE column shared by every family, so a base picked for
+    Z-Image stays attached when the family becomes Krea 2. The two shapes below
+    are decidable without touching the disk or a ComfyUI config, which is what
+    makes them safe to act on:
+
+    * a RELATIVE name on a family whose custom lane is an absolute file path — it
+      can only be a Z-Image merge (or an SDXL checkpoint) name;
+    * an ABSOLUTE path on Z-Image, whose custom lane is a ComfyUI merge NAME that
+      gets converted to diffusers first.
+
+    SDXL is deliberately excluded: its bases are relative basenames too, and
+    telling them apart from a Z-Image merge needs a configured ComfyUI — on an
+    install that has none, every legitimate SDXL base would read as foreign.
+    Companion of `assert_zimage_custom_recipe_confirmed`: same "the recipe must be
+    coherent before anything is spawned or uploaded" job, one family-scope earlier.
+    """
+    base = str(base_model or '').strip()
+    if not base:
+        return None
+    fam = (family or '').lower()
+    if fam in _ABSOLUTE_BASE_FAMILIES and not _is_custom_weights(base):
+        return 'relative_base_on_absolute_family'
+    if fam == 'zimage' and _is_custom_weights(base):
+        return 'absolute_base_on_zimage'
+    return None
+
+
+def foreign_base_message(family, base_model) -> str | None:
+    """The human sentence for `foreign_base_reason`, or None when coherent.
+    Names the family it can't belong to AND what actually happens, because
+    "unavailable" was read as "my file is gone" when the file was fine."""
+    if not foreign_base_reason(family, base_model):
+        return None
+    label = _FAMILY_LABEL.get(family, family)
+    name = os.path.basename(str(base_model).replace('\\', '/'))
+    return (f'“{name}” was chosen for another model family, not {label} — a '
+            f'{label} run cannot load it, so this run uses the official '
+            f'{label} base. Pick a {label} base to change that.')
+
+
 def zimage_recipe_diagnostic(family, variant, effective_base=None,
                              training_adapter=None, recipe_version=None) -> dict | None:
     """Read-only safety annotation for Runs payloads, including legacy rows.
