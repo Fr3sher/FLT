@@ -101,6 +101,14 @@ export const WHATS_NEW = [
       'Four dialogs closed themselves before the server had answered, so a refusal deleted your work: the expanded caption editor lost the long AND short caption you had just written, the ✏️ edit-prompt bubble lost a rewritten prompt, 🚀 Launch all reset its seven pass checkboxes, and the folder browser dropped you back to the drive list. They now stay open, keep every field exactly as you left it, and show the reason next to the input that caused it. Escape and clicking outside still close them — only the server keeps them open.',
   },
   {
+    id: '2026-07-28-nano-banana-says-when-google-refused',
+    date: '2026-07-28',
+    title: 'Missing images from Nano Banana now say who refused them',
+    blurb:
+      'Google screens every image Gemini returns, and when it blocks one the API answers "success" with nothing in it. LDS used to call that an empty response and suggest retrying — so a refused request looked like a broken app. Each refused tile now names the cause and relays Google\'s own reason code, a run tells you how many were refused versus how many actually failed, and real problems (key, quota, connection) keep their own separate message. A batch never stops on a refusal. No promises attached: that filter is not configurable, it refuses ordinary requests, and the same prompt can pass one time and not the next.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-28-bank-watermark-mask-editing',
     date: '2026-07-28',
     title: 'Fix a wrong watermark box without leaving the bank',

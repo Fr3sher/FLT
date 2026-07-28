@@ -2189,7 +2189,7 @@ _BACKUP_IMG_FIELDS = ('filename', 'source', 'framing', 'variation_label', 'statu
                       'caption', 'caption_short', 'variation_prompt', 'face_score', 'face_state',
                       'upscale_ratio', 'watermark_state', 'watermark_bbox',
                       'watermark_regions', 'parent_image_id', 'derivation_kind',
-                      'fail_reason', 'source_metadata')
+                      'fail_reason', 'fail_kind', 'source_metadata')
 
 
 def _backup_basename(value):
@@ -3026,10 +3026,11 @@ def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs
                 reference_edit_jobs.set_failed(dataset_id, token, f'{engine}: {e}')
                 return
             if out is None:
-                reference_edit_jobs.set_failed(
-                    dataset_id, token,
-                    f'{engine}: empty response (often a content-policy refusal or a '
-                    'transient API error - retry usually works)')
+                # Un refus NOMMÉ est déjà parti par `except EngineError` au-dessus
+                # (EngineRefused en hérite) : ici il ne reste que le vide muet des
+                # moteurs qui ne savent pas distinguer refus et hoquet.
+                reference_edit_jobs.set_failed(dataset_id, token,
+                                               f'{engine}: {_EMPTY_MSG}')
                 return
             cand_fn = f'{user_id}{reference_edit_jobs.CANDIDATE_MARKER}{uuid.uuid4().hex[:8]}.webp'
             cand_path = os.path.join(_dataset_dir(dataset_id), cand_fn)
@@ -3330,6 +3331,10 @@ def dataset_payload(user_id, dataset_id):
                     'status': i.status, 'caption': i.caption,
                     'caption_short': i.caption_short,
                     'fail_reason': i.fail_reason,
+                    # 'refused' | 'empty' | 'error' | None — de quelle NATURE est
+                    # l'échec, pour que l'UI puisse compter les refus fournisseur
+                    # sans relire la phrase (cf. models.FaceDatasetImage).
+                    'fail_kind': i.fail_kind,
                     'parent_image_id': i.parent_image_id,
                     'derivation_kind': i.derivation_kind,
                     'source_metadata': normalize_source_metadata(i.source_metadata),
@@ -6308,7 +6313,7 @@ def _reimprove_image_locked(user_id, image_id):
     # refusal must leave the current result on screen, not a broken tile.
     from ..job_queue import queue_manager
     old_state = {field: getattr(img, field) for field in (
-        'filename', 'caption', 'status', 'fail_reason', 'job_id',
+        'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
         'variation_label', 'variation_prompt', 'framing',
         'watermark_state', 'watermark_bbox', 'watermark_regions')}
     old_path = _img_path(img) if img.filename else None
@@ -6332,6 +6337,7 @@ def _reimprove_image_locked(user_id, image_id):
         img.status = 'pending'
         img.job_id = job_id
         img.fail_reason = None
+        img.fail_kind = None
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -6617,7 +6623,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
     from ..job_queue import queue_manager
     old_state = {
         field: getattr(img, field) for field in (
-            'filename', 'caption', 'status', 'fail_reason', 'job_id',
+            'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
             'klein_model', 'variation_prompt', 'watermark_state',
             'watermark_bbox', 'watermark_regions')
     }
@@ -6705,6 +6711,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
         img.status = 'pending'
         img.job_id = new_job_id
         img.fail_reason = None
+        img.fail_kind = None
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -6777,16 +6784,27 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                                    suffix=dataset_prompt_suffix(ds, img.framing),
                                    subject_type=subject_type_of(ds)),
                     **gen_kwargs)
+            except EngineRefused as e:
+                # Même règle que dans le lot : un refus se nomme, il ne se
+                # déguise pas en panne (et il n'invente pas de contournement).
+                out = None
+                img.status = 'failed'
+                img.fail_reason = f'{engine}: {str(e)[:400]}'
+                img.fail_kind = 'refused'
+                db.session.commit()
+                return engine
             except SubscriptionQuotaExceeded:
                 out = None
                 img.status = 'failed'
                 img.fail_reason = _QUOTA_MSG
+                img.fail_kind = 'error'
                 db.session.commit()
                 return engine
             except SubscriptionUnavailable as e:
                 out = None
                 img.status = 'failed'
                 img.fail_reason = f'chatgpt: {e}'
+                img.fail_kind = 'error'
                 db.session.commit()
                 return engine
             if out:
@@ -6796,7 +6814,8 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 img.filename = fn
             else:
                 img.status = 'failed'
-                img.fail_reason = f'{engine}: empty response (often a content-policy refusal or a transient API error - retry usually works)'
+                img.fail_reason = f'{engine}: {_EMPTY_MSG}'
+                img.fail_kind = 'empty'
             db.session.commit()
             return engine
         except Exception as e:
@@ -6805,6 +6824,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
             if current and current.filename is None:
                 current.status = 'failed'
                 current.fail_reason = f'{engine}: {e}'[:500]
+                current.fail_kind = 'error'
                 db.session.commit()
             raise
         finally:
@@ -6879,7 +6899,16 @@ def edit_engine_choice_message():
     return 'pick ' + (f"{', '.join(head)} or {last}" if head else last)
 
 from .chatgpt_image import SubscriptionQuotaExceeded, SubscriptionUnavailable
-from .engine_errors import EngineError, EngineFatal
+from .engine_errors import EngineError, EngineFatal, EngineRefused
+
+# La phrase des moteurs qui ne SAVENT pas pourquoi ils rentrent bredouilles
+# (ChatGPT, OpenRouter : 200 sans image, aucune métadonnée de refus lisible).
+# Nano Banana ne passe plus par là — il lève NanoBananaRefused avec la vraie
+# cause. Ce qui reste ici doit donc dire l'ambiguïté au lieu de la trancher :
+# l'ancienne version promettait « retry usually works », ce qui était faux la
+# moitié du temps et envoyait réessayer un refus définitif. On nomme l'ignorance.
+_EMPTY_MSG = ('empty response — no image and no reason given (a content-policy '
+              'refusal and a transient API error look identical here)')
 
 _QUOTA_MSG = ('chatgpt: subscription image quota reached — remaining rows were '
               'stopped; rerun in API-key mode or wait for your plan quota to reset')
@@ -6929,6 +6958,10 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
     # the batch fails fast instead of burning one call each.
     quota_exhausted = threading.Event()
     stop_msg = {'text': _QUOTA_MSG}   # set to the actual stop reason when it fires
+    # Refus fournisseur du lot. Une liste (append est atomique sous le GIL) pour
+    # que le log de fin rende un DÉCOMPTE au lieu de laisser 12 trous sur 40 se
+    # découvrir tuile par tuile. L'UI, elle, recompte depuis fail_kind.
+    refused = []
     token = dataset_activity.begin(dataset_id, 'generate', total=len(items), engine=engine) \
         if dataset_id is not None else None
 
@@ -6960,10 +6993,12 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
                 if img is not None:
                     img.status = 'failed'
                     img.fail_reason = stop_msg['text']
+                    img.fail_kind = 'error'
                     db.session.commit()
             return
         out = None
         fail_reason = None
+        fail_kind = 'error'
         gen_kwargs = {'aspect_ratio': aspect}
         if engine == 'chatgpt':
             gen_kwargs['force_lane'] = force_lane
@@ -6975,7 +7010,17 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
             if not out:
                 # api_generate signale certains refus/vides par un retour falsy
                 # sans lever — sans raison, la tuile "failed" resterait muette.
-                fail_reason = f'{engine}: empty response (often a content-policy refusal or a transient API error - retry usually works)'
+                fail_reason = f'{engine}: {_EMPTY_MSG}'
+                fail_kind = 'empty'
+        except EngineRefused as e:
+            # Le fournisseur a répondu, et a refusé CETTE image. Ce n'est pas une
+            # panne : on ne coupe pas le lot (les lignes suivantes ont leurs
+            # chances — le filtre n'est pas déterministe), on nomme la cause et
+            # on la compte à part pour pouvoir en rendre un décompte honnête.
+            refused.append(image_id)
+            logger.info(f"{engine} batch: refused at row {image_id}: {e}")
+            fail_reason = f'{engine}: {str(e)[:400]}'
+            fail_kind = 'refused'
         except SubscriptionQuotaExceeded as e:
             quota_exhausted.set(); stop_msg['text'] = _QUOTA_MSG
             logger.warning(f"{engine} batch: quota exhausted at row {image_id}: {e}")
@@ -7015,9 +7060,11 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
                     logger.warning(f"{engine} batch: save failed for row {image_id}: {e}")
                     img.status = 'failed'
                     img.fail_reason = f'saving the image failed: {str(e)[:400]}'
+                    img.fail_kind = 'error'
             else:
                 img.status = 'failed'
                 img.fail_reason = fail_reason
+                img.fail_kind = fail_kind
             db.session.commit()
 
     def _one(item):
@@ -7035,7 +7082,8 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
             list(pool.map(_one, items))
     finally:
         dataset_activity.end(token)   # idempotent; end(None) is a no-op
-    logger.info(f"{engine} batch: done ({len(items)} variation(s))")
+    tally = f" — {len(refused)} refused by the provider" if refused else ''
+    logger.info(f"{engine} batch: done ({len(items)} variation(s)){tally}")
 
 
 def generate_variations_nanobanana(app, user_id, dataset_id, variations, multiplier,

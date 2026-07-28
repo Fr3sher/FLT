@@ -372,6 +372,22 @@ An empty dataset needs material. There are four ways in, and they mix freely ins
 **The four sources:**
 
 - **✨ Generate** — from one or more reference photos, through **Nano Banana Pro** (Gemini), **ChatGPT** (`gpt-image-2`), or a local **Klein/ComfyUI** model. Each request wraps the selected references in identity-preservation instructions so the face is preserved; generated results still need human review. (Character sets add up to 3 extra reference angles for multi-view consistency.)
+
+  **Two limits of the Gemini engine, stated up front.** Google screens every image
+  it returns; when that screen trips, the API answers *success* with no image in
+  it. LDS reports each of those as a refusal, relays Google's own reason code, and
+  counts them at the end of a run — but it cannot prevent them: **that filter is
+  not configurable.** The safety categories the API exposes act on the prompt, not
+  on the returned image, and no setting turns the image screen off. It also
+  refuses ordinary requests, and it is not consistent — the same prompt can pass
+  on one attempt and be refused on the next, so retrying is a coin toss rather
+  than a fix. Google's usage policy does not allow adult content here (up to
+  account restriction); LDS never sends NSFW variations to an API engine — those
+  run only on local Klein. Separately, **every Gemini output carries SynthID**,
+  Google's invisible provenance watermark. If you are building a training set,
+  that is a property of your data worth knowing about; what effect it has on
+  trained LoRA weights has not been measured, in either direction, by anyone.
+  Neither limit applies to the local engines.
 - **📥 Import** — drag in your own photos. Concept/Style keep the full frame; Character can optionally auto-crop around the head (or use a centered/manual crop when local vision is unavailable).
 - **🌐 Scrape** — collect real images from supported web sources (below).
 - **🗃️ Image bank** — when you're not starting from a handful of shots but from a **giant unsorted dump**, triage it first, then promote the keepers.

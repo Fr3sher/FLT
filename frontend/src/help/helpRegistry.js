@@ -123,6 +123,18 @@ const TOPICS = [
   // Multi-engine generation: the cards are checkboxes and, from two engines on,
   // a mode decides whether the shots are SHARED between them (varied dataset,
   // same cost) or sent to ALL of them (compare, then triage — multiplies cost).
+  // Two properties of the Gemini engine that change what you get, and that no
+  // amount of settings can change back. Kept as its own topic rather than folded
+  // into dataset-engine-mode: this one answers "why did I get fewer images than
+  // I asked for", which is a question people arrive at already frustrated.
+  { id: 'nanobanana-filter-and-synthid', kind: 'section',
+    title: 'Nano Banana: the output filter, and SynthID',
+    keywords: ['nano banana', 'nanobanana', 'gemini', 'google', 'refused', 'refusal',
+      'blocked', 'content filter', 'safety', 'imagesafety', 'empty response',
+      'missing images', 'fewer images', 'synthid', 'watermark', 'provenance',
+      'nsfw', 'policy', 'bikini', 'lingerie'],
+    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets?section=add' } },
   { id: 'dataset-engine-mode', kind: 'setting', title: 'Engines & how they share a batch',
     keywords: ['engine', 'engines', 'multiple engines', 'several engines', 'split',
       'all engines', 'compare engines', 'klein', 'krea', 'krea 2 edit', 'nano banana',
