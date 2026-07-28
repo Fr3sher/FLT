@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
+    date: '2026-07-28',
+    title: 'A busy database no longer strands a paid cloud run — for real this time',
+    blurb:
+      'Cloud runs are watched by a monitor that writes progress to the database every few seconds. When something else was writing heavily at that moment (a caption batch, a Bank import), that write could lose the lock — and the retry meant to absorb it crashed on its own error message instead, killing the monitor. The run then sat at "TRAINING" with no error, no progress and a rented GPU still billing, until the freeze watchdog or an app restart caught it up to 45 minutes later. The retry now works, and a run whose monitor does die is closed properly with its pod terminated instead of being left open.',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-28-comfyui-slow-is-not-comfyui-stopped',
     date: '2026-07-28',
     title: 'A busy ComfyUI is no longer reported as a stopped one',
