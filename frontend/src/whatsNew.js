@@ -48,6 +48,21 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-improve-says-what-it-is-about-to-ask-klein',
+    date: '2026-07-28',
+    title: 'Upscale & improve now shows the instruction it is about to send',
+    blurb:
+      'The improve pass sends Klein a fixed instruction — and the built-in one asks for photographic texture and sharp detail, which is why anime and illustrated datasets came back looking realistic. That instruction is now quoted right next to the ✨ button, with one click to rewrite it or turn it off entirely, and a drawn dataset gets an explicit warning. Thanks Qeeyana (Reddit).',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-07-28-klein-model-needs-no-symlink',
+    date: '2026-07-28',
+    title: 'Your Klein model can stay where it is — no copy, no symlink',
+    blurb:
+      'models/unet/klein/ is only where Setup downloads to; it was never required. Any klein-named sub-folder of models/unet or models/diffusion_models works, as does either folder\'s top level, plus every extra_model_paths.yaml root and a relocated models folder. The Setup screen, the README and the Guide now say so, and a test keeps that list honest. Thanks CyberTod (Reddit).',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',
