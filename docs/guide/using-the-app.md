@@ -886,10 +886,18 @@ one click. A run that predates a given setting simply shows no row for it: an
 absent line is honest, a dash is not.
 
 **📌 Pinning an image onto the board.** Comparing two checkpoints means looking
-at their pictures *at the same time*, which a full-screen viewer cannot do. From
-that viewer, **📌 Pin to canvas** drops the image onto the board as a node of its
-own, joined to the checkpoint that produced it by the same connector the board
-uses for "this run continued from that checkpoint".
+at their pictures *at the same time*, which a full-screen viewer cannot do. So
+**📌** drops an image onto the board as a node of its own, joined to the
+checkpoint that produced it by the same connector the board uses for "this run
+continued from that checkpoint".
+
+There are two ways in, and the first one is the one to remember: **every
+thumbnail in a run or checkpoint gallery carries a 📌 in its bottom-right
+corner** — one tap, no need to open the image at all. It is hidden while you are
+in **Select** mode (that mode is for arming a delete, and a second target there
+is a mis-tap waiting to happen). The same action is also in the full-screen
+viewer, spelled out as **📌 Pin to canvas**, for when you have already opened a
+picture and decide it belongs on the board.
 
 - **Move it** by dragging (on a phone: a long press picks it up, exactly like a
   run card). **Resize it** from the corner handle. **Close it** with **✕**.
