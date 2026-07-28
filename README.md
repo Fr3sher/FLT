@@ -825,8 +825,11 @@ Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud
 
 ```bash
 cp .env.example .env
+mkdir -p run basedir data-docker-gpu
 docker compose -f docker-compose.gpu.yml up --build
 ```
+
+Create those three folders **yourself, before the first start**. Docker creates a missing bind-mount source as `root`, and the container runs as your own user — so if you skip the `mkdir`, the app refuses to start and says so in the log (ComfyUI still comes up). The same applies to `docker-compose.yml`'s `./data-docker`.
 
 The app is then on `http://127.0.0.1:5050/` and ComfyUI's own web UI on `http://127.0.0.1:8188/`, the container reports `healthy`, and Settings ▸ Local tools shows ComfyUI as reachable with a valid install folder — verified end to end on an NVIDIA RTX 3500 Ada with driver 580. The ComfyUI folder settings are filled in for you on first boot, and anything you change in Settings afterwards survives a restart.
 
