@@ -27,8 +27,17 @@
    testing: the component only applies the number. */
 
 const CHROME_BASE = 28;        // one control's own size, in board units
-// The whole corner cluster (🔍 + ✕, their gap and their padding) at scale 1…
-const CLUSTER_UNITS = 64;
+// The cluster's WIDTH budget at scale 1 — two controls, their gap and their
+// padding. Exported because the component must lay itself out inside exactly
+// this number: the cap below is spent on it, so a row that grew to three
+// buttons would spend 50 % more and shrink every target by a third.
+export const CLUSTER_UNITS = 64;
+// …which is why a third control WRAPS instead of widening the row. ⬇ Download
+// joined 🔍 and ✕ and the honest choice was between a narrower button and a
+// second line; the second line costs nothing (the node has vertical room to
+// spare in its corner) and it keeps 🔍 and ✕ at the exact pixel they have
+// always been, which muscle memory has a right to.
+export const CLUSTER_COLUMNS = 2;
 // …and the share of the node it is never allowed to exceed. The cap is on the
 // CLUSTER, not on one button: capping each button separately let two of them
 // side by side cover almost the entire width of a small tile.
@@ -49,6 +58,15 @@ export function chromeScale(boardScale, nodeW) {
     ? Math.max(1, (w * MAX_CLUSTER_FRACTION) / CLUSTER_UNITS)
     : Infinity;
   return Math.min(Math.max(1, wanted), cap);
+}
+
+/** The cluster's own box, in the UNSCALED units the component lays out in.
+ *  A hard max-width is what actually makes the third control wrap: without it
+ *  flex would happily draw a 96-unit row inside a 64-unit budget and every
+ *  target would silently lose a third of its size at low zoom. */
+export function clusterBox(buttonCount = 3) {
+  const rows = Math.max(1, Math.ceil(buttonCount / CLUSTER_COLUMNS));
+  return { maxWidth: CLUSTER_UNITS, rows };
 }
 
 /** What that control measures on screen, once counter-scaled — the number the

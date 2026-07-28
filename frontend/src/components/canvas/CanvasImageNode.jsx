@@ -1,6 +1,7 @@
 import { nudgeImageNode } from '../../utils/canvasImageNodes';
-import { chromeScale } from '../../utils/canvasNodeChrome';
+import { CLUSTER_UNITS, chromeScale } from '../../utils/canvasNodeChrome';
 import { imageFactsLine } from '../../utils/generatedImageFacts';
+import { useImageDownload } from '../../hooks/useImageDownload';
 
 /* 🖼 One generated image, pinned ON the board.
 
@@ -32,6 +33,14 @@ import { imageFactsLine } from '../../utils/generatedImageFacts';
    keep a constant size on screen, and they are laid out as one cluster in the
    corner rather than two glyphs crammed into a 12-px header row.
 
+   ⬇ …and the cluster now has THREE controls, which is why it wraps. The cap
+   that keeps it off the picture is spent on the cluster's WIDTH, so a third
+   button drawn beside the others would have shrunk all of them by a third and
+   walked the same bug back in. It goes on a second line instead, last, so 🔍
+   and ✕ never move. What it downloads keeps its lineage in its NAME — dataset,
+   run, step, seed — because this board is the only place that knows all four
+   and a file called out_00042_.png in Downloads knows none of them.
+
    ⌨ Keyboard. The node itself is focusable: arrows move it, Shift+arrows move
    it faster, +/− resize it, Esc closes it. Moving and resizing by mouse alone
    would put the whole feature out of reach of anyone who does not use one. The
@@ -45,7 +54,14 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   // The controls are drawn in SCREEN space: counter-scaled by the board zoom so
   // a finger finds them at 24 % exactly as it does at 100 %.
   const k = chromeScale(boardScale, node.w);
-  const chrome = { transform: `scale(${k})`, transformOrigin: 'top right' };
+  // ⚠️ maxWidth, not a guess: the cap chromeScale applies is spent on the
+  // cluster's WIDTH, so a third control drawn BESIDE the other two would spend
+  // 50 % more of it and shrink every target by a third — 20 px down to 15.7 px
+  // at 24 % zoom, which is the unhittable-✕ bug walking back in. It wraps
+  // instead, and ⬇ is last so 🔍 and ✕ never move.
+  const chrome = { transform: `scale(${k})`, transformOrigin: 'top right',
+    maxWidth: CLUSTER_UNITS };
+  const dl = useImageDownload();
 
   const onKeyDown = (e) => {
     if (e.key === 'Escape') { e.stopPropagation(); onClose?.(node); return; }
@@ -86,7 +102,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           glyphs a pixel apart is how a miss on ✕ opened 🔍 instead. */}
       <div style={chrome}
         data-testid="canvas-image-controls"
-        className="absolute right-0 top-0 z-10 flex items-start gap-1 rounded-bl-lg bg-app/85 p-0.5 backdrop-blur-sm">
+        className="absolute right-0 top-0 z-10 flex flex-wrap items-start justify-end gap-1 rounded-bl-lg bg-app/85 p-0.5 backdrop-blur-sm">
         {/* Opens the full record — every setting, the prompt, the copy buttons.
             The node is the picture; the facts stay one click away rather than
             being crammed onto a thumbnail. */}
@@ -101,7 +117,34 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           title="Close this image — re-opening it from its gallery puts it back here, at this size"
           aria-label={`Close the pinned image at ${stepLabel}`}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle text-[0.875rem] leading-none hover:bg-red-500/25 hover:text-content">✕</button>
+        {/* ⬇ Keep this picture. LAST in the cluster, so it wraps onto its own
+            line and 🔍 and ✕ stay at the pixel a hand already knows.
+            The file lands under a name that still says where it came from —
+            dataset, run, step, seed (services/gallery_download.py). That name
+            is the ONLY carrier of the lineage: there is no sidecar, and a
+            board's whole value is lost the moment two checkpoints' renders
+            become two files called out_00042_.png. */}
+        <button type="button" disabled={dl.busy}
+          onClick={(e) => { e.stopPropagation(); dl.download(node.imageId); }}
+          data-testid="canvas-image-download"
+          title="Download this image — the file name keeps its dataset, run, step and seed"
+          aria-label={`Download the image at ${stepLabel}`}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle text-[0.75rem] leading-none hover:bg-app hover:text-content disabled:opacity-50">
+          {dl.busy ? '…' : '⬇'}
+        </button>
       </div>
+      {/* A refusal has to be READABLE, and the node is small — so it is a strip
+          across the bottom of the picture, counter-scaled like the buttons are,
+          rather than a tooltip nobody hovers on a phone. It happens: the board
+          lists rows whose file a resume or a trash sweep took off the disk. */}
+      {dl.error && (
+        <div role="alert" data-testid="canvas-image-download-error"
+          onClick={(e) => { e.stopPropagation(); dl.clearError(); }}
+          style={{ transform: `scale(${k})`, transformOrigin: 'bottom left' }}
+          className="absolute bottom-0 left-0 z-10 max-w-full cursor-pointer rounded-tr-md bg-red-900/90 px-1 py-0.5 text-[0.5rem] leading-tight text-red-50">
+          {dl.error}
+        </div>
+      )}
       <div className="relative min-h-0 flex-1 bg-black/30">
         <img src={img.url} alt={`Generated at ${stepLabel}`} draggable={false}
           className="h-full w-full select-none object-contain" />

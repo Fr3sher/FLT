@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-download-canvas-images-one-or-the-whole-gallery',
+    date: '2026-07-28',
+    title: 'Download your generated images — one, or a whole run as a ZIP',
+    blurb:
+      'The board can now hand the pictures over: ⬇ on a pinned image and in the full-screen viewer saves that one, and ⬇ ZIP in a gallery saves the lot (turn on Select first to take only the ones you tick). Every file keeps its lineage in its NAME — dataset, run, step and seed — so a render is still identifiable a month later instead of becoming another out_00042_.png. Big galleries say up front how many the archive holds, and a file that has left the disk is named rather than quietly dropped.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-28-scrape-straight-into-a-bank',
     date: '2026-07-28',
     title: 'Scrape the web straight into a bank — no throwaway dataset first',
