@@ -246,6 +246,33 @@ def is_installed() -> bool:
     return bool(p) and p.is_file()
 
 
+def assert_interpreter_ready() -> None:
+    """Refuse a launch whose interpreter provably cannot `import torch`, NAMING
+    the path — the only fact that makes the failure obvious in one second.
+
+    `is_installed()` above only asks whether a file is there. A path that exists,
+    runs, and carries none of ai-toolkit's dependencies passes it, the run starts,
+    and ai-toolkit dies on `ModuleNotFoundError: No module named 'torch'` while the
+    panel suggests a missing base model or a Hugging Face token (GitHub #19,
+    strouder — an `aitoolkit.python` pointing at the Windows Store python stub
+    while a working venv sat next to run.py).
+
+    Refuses ONLY on a proven False. An unknown probe (cold-import timeout) lets
+    the launch through: blocking a real training run on an answer we do not have
+    would be a worse bug than the one this fixes. RuntimeError -> 409 (a backend
+    availability problem, not a bad request)."""
+    from .. import capabilities
+    from .training_diagnostics import interpreter_verdict
+    try:
+        report = capabilities.aitoolkit_interpreter_report()
+    except Exception:
+        return                                   # a broken probe never blocks a run
+    verdict = interpreter_verdict(report['python'], report['torch'],
+                                  alternative=report['alternative'])
+    if verdict:
+        raise RuntimeError(verdict['message'])
+
+
 def _aitoolkit_supports_krea() -> bool:
     """L'ai-toolkit installé connaît-il l'arch Krea 2 ? C'est CRITIQUE : ai-toolkit
     fait `if ModelClass.arch == config.arch` puis, sans match, retombe
@@ -4857,7 +4884,8 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
     the watcher thread, and an unknown probe adds no key at all."""
     from ..utils.redact import redact_tokens, redact_user_paths
     from .training_diagnostics import (extract_error_excerpt, gated_repo_verdict,
-                                       torch_arch_verdict)
+                                       hf_transfer_verdict, interpreter_verdict,
+                                       missing_module_in_log, torch_arch_verdict)
     wide = _log_tail(log_path, _ERROR_SCAN_LINES)
     payload = {'dataset_id': dataset_id, 'rc': rc,
                'log_tail': redact_tokens(redact_user_paths(_log_tail(log_path)))[-1500:],
@@ -4869,6 +4897,34 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
         if gated:
             payload['hf_gated'] = {k: gated[k] for k in ('status', 'repo', 'url',
                                                          'title', 'message')}
+    except Exception:
+        pass
+    # A dead fast-download accelerator looks exactly like a network fault, and the
+    # app never sets that variable — so saying so is the whole remedy (GitHub #18,
+    # bobba84).
+    try:
+        transfer = hf_transfer_verdict(wide)
+        if transfer:
+            payload['hf_transfer'] = transfer
+    except Exception:
+        pass
+    # A `ModuleNotFoundError` in the log is a PROVEN interpreter problem, and the
+    # one fact the log itself never carries is WHICH Python produced it. The
+    # module is read off the log — no subprocess is spawned from the watcher
+    # thread — and the "which venv works instead" hint costs a probe only here,
+    # on a run that already failed (GitHub #19, strouder).
+    try:
+        module = missing_module_in_log(wide)
+        if module:
+            from .. import capabilities
+            report = capabilities.aitoolkit_interpreter_report()
+            verdict = interpreter_verdict(
+                report['python'] or cfg.aitoolkit_path('venv_python'),
+                False, alternative=report['alternative'], module=module)
+            if verdict:
+                payload['interpreter'] = {k: verdict[k] for k in (
+                    'python', 'module', 'windows_store', 'alternative',
+                    'title', 'message')}
     except Exception:
         pass
     try:
@@ -4954,6 +5010,10 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     availability problem, not a bad request)."""
     if not is_installed():
         raise RuntimeError('ai-toolkit is not configured')
+    # The interpreter EXISTS; can it actually run ai-toolkit? Asked here, before a
+    # whole dataset is exported, so a torch-less Python is named now instead of
+    # surfacing minutes later as an opaque crash (GitHub #19, strouder).
+    assert_interpreter_ready()
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -5280,6 +5340,9 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
             queue_manager._get_system_state('training_pid', None))
         if not (_allow_dead_predecessor and previous_is_dead):
             raise ValueError('a training is already in progress')
+    # Same interpreter gate as a fresh launch: a resume spawns the very same
+    # ai-toolkit command, so a torch-less Python must be named here too.
+    assert_interpreter_ready()
     # Validate the safe-subset overrides BEFORE any side effect: a forbidden key
     # (rank/alpha/optimizer/…) must fail loudly with nothing archived or persisted.
     override_patch = validate_resume_overrides(overrides)

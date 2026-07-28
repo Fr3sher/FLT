@@ -419,6 +419,85 @@ def probe_aitoolkit() -> dict:
             'has_run': False, 'python_candidates': []}
 
 
+def _torch_import_state(python: str):
+    """`import torch` on this interpreter: True / False / None (unknown).
+
+    Stricter than `_cached_import_state` about what counts as a FAILED IMPORT.
+    That helper's seam reports False for anything that goes wrong, including a
+    path that cannot be executed at all — and "this file is not a working Python"
+    is a different problem from "this Python has no torch", with a different
+    sentence and, above all, one we must not state as a fact when a training
+    launch hangs on it. So a failed import is confirmed by a second, trivial
+    `pass` probe: if the interpreter cannot even run that, the answer is UNKNOWN.
+    The extra subprocess only ever runs in the already-failing case, and both
+    answers go through the same cache."""
+    state = _cached_import_state('aitoolkit_torch', python, 'import torch')
+    if state is not False:
+        return state
+    if _cached_import_state('aitoolkit_alive', python, 'pass') is not True:
+        return None
+    return False
+
+
+def aitoolkit_interpreter_report() -> dict:
+    """Can the interpreter ai-toolkit is configured with actually `import torch`?
+
+    {'python': str, 'torch': True|False|None, 'alternative': str}.
+
+    `torch` is THREE-valued on purpose and reuses the same cached subprocess seam
+    every other ML capability goes through: True = proven importable, False =
+    proven not, None = we did not find out (no interpreter on disk, or a cold
+    import that timed out). None must never be treated as a refusal — a first
+    `import torch` on a cold venv behind an antivirus takes tens of seconds.
+
+    `alternative` is the venv the checkout carries (`venv/`, `.venv/`) when an
+    EXPLICIT `aitoolkit.python` is set, is broken, and that venv works — the
+    swap we can then offer instead of leaving the user to guess. Empty
+    otherwise; it costs a second probe only in the already-broken case.
+
+    Deliberately NOT part of probe(): probe() is polled and must stay cheap and
+    never spawn a torch import. This is called from a launch attempt, from the
+    Test button, and from a crash report — moments where the answer is worth
+    paying for."""
+    out = {'python': '', 'torch': None, 'alternative': ''}
+    python = cfg.aitoolkit_path('venv_python')
+    if not python or not Path(python).is_file():
+        return out
+    out['python'] = str(python)
+    out['torch'] = _torch_import_state(str(python))
+    if out['torch'] is not False:
+        return out
+    # Broken, and only because of an explicit override? Then the checkout's own
+    # venv is the obvious way out — but only claim it after PROVING it works.
+    if not (cfg.get('aitoolkit.python') or '').strip():
+        return out
+    derived = cfg.aitoolkit_path('venv_python_derived')
+    if derived and Path(derived).is_file() and os.path.normcase(str(derived)) \
+            != os.path.normcase(str(python)):
+        if _torch_import_state(str(derived)) is True:
+            out['alternative'] = str(derived)
+    return out
+
+
+def probe_aitoolkit_test() -> dict:
+    """The Settings ▸ Local tools "Test" button for ai-toolkit. Same folder checks
+    as probe_aitoolkit, plus the one the folder checks cannot see: does the chosen
+    interpreter have torch? A Test that goes green on a Python without torch is
+    the exact trap of GitHub #19 (strouder) — everything configured, every run
+    dead on `No module named 'torch'`. An UNKNOWN probe keeps the green: we refuse
+    to fail a test on an answer we do not have."""
+    result = probe_aitoolkit()
+    if not result.get('ok'):
+        return result
+    from .services.training_diagnostics import interpreter_verdict
+    report = aitoolkit_interpreter_report()
+    verdict = interpreter_verdict(report['python'], report['torch'],
+                                  alternative=report['alternative'])
+    if verdict:
+        return {**result, 'ok': False, 'detail': verdict['message']}
+    return result
+
+
 # JoyCaption's runtime deps that ai-toolkit does NOT ship: the training venv has
 # torch/torchvision, but joycaption_infer.py also needs transformers (AutoTokenizer
 # / LlavaForConditionalGeneration), bitsandbytes (the NF4 4-bit load) and accelerate

@@ -48,6 +48,28 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-training-names-the-python-it-uses',
+    date: '2026-07-28',
+    title: 'Training now tells you WHICH Python it is about to run',
+    blurb:
+      'A path that exists, runs, and has no torch used to pass every check — then every run died on "No module named \'torch\'" while the panel suggested a missing base model or a Hugging Face token, two dead ends. The app now tries `import torch` on the interpreter you configured before it launches anything, and if it fails it refuses with the path on screen, points out a Windows Store python.exe when that is what you picked, and offers the working venv sitting next to run.py. The Test button in Settings ▸ Local tools checks the same thing, and a torch failure never mentions Hugging Face again. Reported in detail by strouder (GitHub #19).',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-07-28-a-failed-download-is-not-always-your-network',
+    date: '2026-07-28',
+    title: 'A download that dies is no longer blamed on your connection',
+    blurb:
+      'The optional Hugging Face fast-download accelerator (HF_HUB_ENABLE_HF_TRANSFER) needs the hf_xet package, and without it transfers abort with something that reads exactly like a network fault — so people go and check their firewall. The training failure panel now recognises it and names both fixes: set the variable to 0, or install hf_xet. The app never sets that variable itself; it comes from your shell or another tool. Reported by bobba84 (GitHub #18).',
+  },
+  {
+    id: '2026-07-28-guide-explains-the-two-folders',
+    date: '2026-07-28',
+    title: 'The Guide finally explains which folder does what',
+    blurb:
+      'A full-local install is three programs, two folders, two ports and two Python environments — and nothing said so, which cost one user hours of patching ai-toolkit\'s own web UI (port 8675) while the real problem was one setting here. Getting started now has a short table: the Studio and its .venv drive training and read config.json, ai-toolkit\'s venv is the one that needs torch, and its Next.js UI is unrelated. It also documents the Python versions that actually work — 3.11 for ai-toolkit, and 3.11.9 on Windows because later 3.11 releases ship no installer. Reported by strouder (GitHub #19).',
+  },
+  {
     id: '2026-07-28-pin-to-canvas-from-the-thumbnail',
     date: '2026-07-28',
     title: 'Put a generated image on the board without opening it first',

@@ -1302,6 +1302,35 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         return (
         <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-red-200 text-[0.6875rem]">
           <div className="font-semibold">⚠ {view.title}</div>
+          {/* WHICH Python ai-toolkit was run with. A path that exists and runs but
+              has no torch passes every folder check, so the run dies on
+              "No module named 'torch'" with nothing pointing at the setting at
+              fault — hours lost, reported by strouder (GitHub #19). Named first,
+              above every other verdict: once the path is on screen the mistake is
+              obvious in one second. `break-all` because these paths are long and
+              the panel has to survive a 400 px phone. */}
+          {view.interpreter && (
+            <div className="mt-1.5 rounded border border-amber-400/40 bg-amber-500/10 p-2 text-amber-100">
+              <div className="font-semibold">{view.interpreter.title}</div>
+              <p className="m-0 mt-0.5 break-words text-amber-200/90">{view.interpreter.message}</p>
+              <div className="mt-1 break-all font-mono text-[0.625rem] text-amber-100">
+                {view.interpreter.python}
+              </div>
+              <a href="#/settings/local-tools?focus=aitoolkit-python"
+                className="mt-1 inline-block text-amber-300 underline decoration-amber-300/50">
+                Settings ▸ Local tools ▸ Python interpreter →
+              </a>
+            </div>
+          )}
+          {/* The optional Hugging Face fast-download accelerator, dead. It reads
+              like a network fault and is not one, and the app never sets that
+              variable — reported by bobba84 (GitHub #18). */}
+          {view.hfTransfer && (
+            <div className="mt-1.5 rounded border border-amber-400/40 bg-amber-500/10 p-2 text-amber-100">
+              <div className="font-semibold">{view.hfTransfer.title}</div>
+              <p className="m-0 mt-0.5 break-words text-amber-200/90">{view.hfTransfer.message}</p>
+            </div>
+          )}
           {/* The GPU-architecture verdict is a PROVEN cause read from the venv
               that trains — it goes first, above the log, with its remedy. */}
           {view.gpuArch && (
