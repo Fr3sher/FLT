@@ -46,6 +46,17 @@ class FaceDataset(db.Model):
     # different things. Additive + nullable migration in create_app; NULL simply
     # means "nothing remembered yet", which is what every existing dataset is.
     train_family_bases = db.Column(Text, nullable=True)
+    # Same idea, for the handful of `train_settings` keys whose MEANING is bound
+    # to the family (lora_training._FAMILY_SCOPED_SETTING_KEYS — today
+    # `timestep_type`). `train_settings` above stays the ACTIVE blob every reader
+    # reads; this JSON only remembers what each family was last set to:
+    #   {"zimage": {"timestep_type": "sigmoid"}, "flux2klein": {}}
+    # An empty dict for a family means "that family rides its own default", which
+    # is NOT the same as "never configured" (absent). Without it, a `sigmoid`
+    # picked under Z-Image overwrote the canonical `weighted` of FLUX.2 Klein and
+    # Anima on a family switch — silently, and it changes the LoRA that comes out.
+    # Additive + nullable migration in create_app; NULL = nothing remembered yet.
+    train_family_settings = db.Column(Text, nullable=True)
     # Réglages ai-toolkit avancés éditables par dataset (JSON) : rank, resolution,
     # save_every. NULL = défauts family-aware. Cf. lora_training._train_settings.
     train_settings = db.Column(Text, nullable=True)

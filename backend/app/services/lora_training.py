@@ -653,7 +653,17 @@ _FAMILY_EXPECTED_ARCH = {'sdxl': 'sdxl', 'krea': 'krea2',
                          'flux': 'flux', 'flux2klein': 'flux', 'anima': 'anima'}
 _ARCH_LABEL = {'sdxl': 'an SDXL', 'sd15': 'a Stable Diffusion 1.5',
                'flux': 'a FLUX', 'krea2': 'a Krea 2', 'anima': 'an Anima'}
-_FAMILY_LABEL = {'sdxl': 'SDXL', 'krea': 'Krea 2',
+# THE family display name — one map, used by preflight_custom_paths,
+# foreign_base_message, training_preflight and the run-summary lines.
+#
+# It was defined TWICE in this module (here, and again ~4000 lines below). Python
+# keeps the LAST binding, so at runtime the second one always won and this one was
+# dead code — nothing was ever mislabelled. What was lost was READABILITY: this
+# copy had no 'zimage' entry, so anyone reading the callers here concluded that
+# Z-Image falls through to its raw key, and a fix applied to this map would have
+# had no effect at all. The two are merged, with 'zimage' kept (the runtime
+# behaviour of the surviving definition), and the lower one deleted.
+_FAMILY_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2',
                  'flux': 'FLUX.1', 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima'}
 # Confirmable-refusal marker (mirrors UNCAPTIONED:/MISMATCH_CAPTION:): the UI
 # strips it, asks window.confirm, and retries with allow_unverified_weights.
@@ -1071,6 +1081,11 @@ _EMA_CHOICES = (0.99, 0.999)
 # échangent de la qualité contre de la place). Un knob qui ne peut que dégrader
 # n'est pas un choix, c'est un piège.
 _MEMORY_SETTING_KEYS = ('quantize', 'quantize_te', 'low_vram')
+# Human names, mirrored from the panel's MEMORY_LABELS (memorySavingAdvice.js) so
+# a preflight sentence names the checkbox the user has to go and tick back.
+_MEMORY_LABELS = {'quantize': 'Quantise base model',
+                  'quantize_te': 'Quantise text encoder',
+                  'low_vram': 'Low-VRAM streaming'}
 
 # Ce que chaque famille émet quand l'utilisateur ne choisit rien. NE PAS TOUCHER :
 # la majorité du parc est à 24 Go ou moins et c'est ce qui fait tenir l'entraînement.
@@ -1170,6 +1185,62 @@ def _memory_saving_advice(ds, family) -> dict:
         verdict = 'keep_on'
     return {'verdict': verdict, 'vram_gb': vram, 'gpu': gpu,
             'unquantised_vram_gb': need}
+
+
+def memory_saving_risk(ds, family) -> dict | None:
+    """Which of the family's CALIBRATED memory savers this run has switched off,
+    or None when the recipe is intact.
+
+    Why a warning and not a per-family memory (the `train_family_bases` treatment
+    given to the base and the variant):
+
+    * a base model is meaningless outside its family — a Z-Image merge is not a
+      thing a Krea run can even load — so remembering it per family is the only
+      way to state a truth. `quantize=False` is not like that: it is a statement
+      about the CARD ("mine is big enough"), and the card does not change when
+      the family does. What changes is whether it still suffices. Stashing the
+      flag per family would answer a question nobody asked and would silently
+      re-enable quantisation on the way back, which is the same silence in the
+      other direction;
+    * this is provenance-BLIND on purpose. Someone who unticks "Quantise base
+      model" directly on Krea 2 with a 24 GB card is in exactly the same danger
+      as someone who unticked it on Anima and switched family. A memory only ever
+      catches the second one. One check catches both.
+
+    Only the True→False direction is reported: switching a saver ON where the
+    family default is off (anima/sdxl) costs precision and speed, never a run.
+    """
+    d = _memory_saving_defaults(ds, family)
+    disabled = [k for k in _MEMORY_SETTING_KEYS
+                if d[k] and not _memory_flag_eff(ds, k, d[k])]
+    if not disabled:
+        return None
+    advice = _memory_saving_advice(ds, family)
+    return {'family': family, 'disabled': disabled,
+            'unquantised_vram_gb': advice['unquantised_vram_gb'],
+            'vram_gb': advice['vram_gb'], 'gpu': advice['gpu'],
+            'verdict': advice['verdict']}
+
+
+# Settings whose meaning is bound to the FAMILY, not to the machine or the
+# dataset — the ones that get the `train_family_bases` treatment (a per-family
+# memory in `train_family_settings`, see face_dataset_service.set_train_type).
+#
+# `timestep_type` qualifies and the memory levers deliberately do not:
+#   * 'weighted' is the canonical flowmatch schedule of FLUX.2 Klein and Anima,
+#     'sigmoid' of Z-Image and FLUX.1, 'linear' of Krea 2. Picking one is picking
+#     a family's recipe; carrying it over silently changes the LoRA that comes
+#     out, with no error, no slowdown and nothing to observe afterwards. There is
+#     no sentence a warning could add — "your LoRA is different" is not
+#     actionable — so the honest fix is to stop carrying it;
+#   * the memory levers are a statement about the card, and get a warning
+#     instead. See memory_saving_risk for the full argument;
+#   * `resolution` stays global too: 768 and 1024 mean the same thing on every
+#     family, the value is a deliberate quality/VRAM trade-off a user restates
+#     rarely, and the one dangerous combination (1024 on a 12B, small card) is
+#     already a preflight row. Adding it here would mean silently re-raising
+#     someone's 768 back to 768,1024 on a family switch — a NEW silent change.
+_FAMILY_SCOPED_SETTING_KEYS = ('timestep_type',)
 
 
 def _train_settings(ds) -> dict:
@@ -1902,6 +1973,15 @@ def effective_train_settings(ds, family=None) -> dict:
                 k: _memory_flag_eff(ds, k, _memory_saving_defaults(ds, fam)[k])
                 for k in _MEMORY_SETTING_KEYS},
             'memory_advice': _memory_saving_advice(ds, fam),
+            # None when the family's calibrated recipe is intact; otherwise names
+            # WHICH savers are off and what this family needs without them. The
+            # panel states it next to the checkboxes, the preflight repeats it
+            # before the GPU (or the rented pod) is paid for. Both read the same
+            # function — one rule, two surfaces.
+            'memory_risk': memory_saving_risk(ds, fam),
+            # Family label, so the panel can name the family in that sentence
+            # without shipping a second copy of the map.
+            'family_label': _FAMILY_LABEL.get(fam, fam),
             'resolution': res if res in _RES_CHOICES else '768,1024',
             # `resolution` above is the STORED choice (default label when unset);
             # these two report what the run will actually train at — slider mode
@@ -4640,8 +4720,8 @@ def style_caption_quality(dataset_id) -> dict:
 # surapprentissage.
 TRAIN_MIN_IMAGES = {'zimage': (12, 20), 'sdxl': (20, 30), 'krea': (15, 20), 'flux': (15, 20),
                     'flux2klein': (15, 20)}
-_FAMILY_LABEL = {'zimage': 'Z-Image', 'sdxl': 'SDXL', 'krea': 'Krea 2', 'flux': 'FLUX.1',
-                 'flux2klein': 'FLUX.2 Klein', 'anima': 'Anima'}
+# (_FAMILY_LABEL used to be re-declared here, shadowing the definition near the
+#  top of the module. Merged there — see the comment on it.)
 # VRAM mesurée : Krea 2 (12B) sature un 24 GB à 1024 (cf. KREA_TRAIN_RESOLUTION). Flux
 # est un DiT de même classe (12B) → même seuil recommandé.
 _KREA_MIN_VRAM_GB = 24
@@ -4942,16 +5022,67 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     elif rows:
         _check('triage', 'Everything triaged', 'ok', 'no image awaiting ✓/✕')
 
+    # 6bis) MEMORY SAVERS switched off under a family whose recipe needs them.
+    #
+    # This is the row that did not exist while quantize/quantize_te/low_vram were
+    # stored globally and applied to whatever family came next: a `False` set on
+    # Anima or SDXL (2B — where it IS the default) followed a family switch onto a
+    # 12B DiT and produced a Krea/FLUX config with `quantize: false`, no
+    # `low_vram` and no `qtype` — the calibrated recipe gone, and nothing said.
+    # Deliberately provenance-blind (see memory_saving_risk): setting it here
+    # directly is the same danger, so it earns the same sentence.
+    #
+    # scope='dataset': the flags travel WITH the job, so they matter on the cloud
+    # lane too — that is where the mistake costs rented GPU-hours in real money,
+    # which is the last place to drop the row.
+    _mem_risk = memory_saving_risk(ds, ttype)
+    if _mem_risk:
+        _off = ', '.join(_MEMORY_LABELS[k] for k in _mem_risk['disabled'])
+        _need = _mem_risk['unquantised_vram_gb']
+        # The local card's verdict only speaks for the LOCAL lane. On the cloud
+        # the job runs on a pod we have not rented yet, so a big local card
+        # proves nothing about it and the requirement is stated as a requirement.
+        if (lane or 'local') == 'cloud':
+            warnings.append(
+                f'{_off} switched off for a {label} run — {label} needs roughly {_need} GB '
+                f'of VRAM without them. Rent a pod with at least that, or turn them back '
+                'on in Advanced options ▸ Memory saving.')
+            _check('memory_saving', 'Memory saving', 'warn',
+                   f'{_off} off — the pod needs ~{_need} GB VRAM for {label}', 'gf-training')
+        elif _mem_risk['verdict'] == 'can_disable':
+            _check('memory_saving', 'Memory saving', 'ok',
+                   f'{_off} off — {_mem_risk["gpu"] or "this GPU"} has '
+                   f'{_mem_risk["vram_gb"]} GB, over the ~{_need} GB {label} needs without them')
+        else:
+            _seen = (f'this GPU reports {_mem_risk["vram_gb"]} GB'
+                     if _mem_risk['vram_gb'] else 'this machine reports no usable GPU')
+            warnings.append(
+                f'{_off} switched off for a {label} run — {label} needs roughly {_need} GB '
+                f'of VRAM without them and {_seen}. The run does not fail cleanly there: it '
+                'slows to a crawl for hours while the driver pages to system RAM. Turn them '
+                'back on in Advanced options ▸ Memory saving.')
+            _check('memory_saving', 'Memory saving', 'warn',
+                   f'{_off} off — {label} needs ~{_need} GB without them, {_seen}',
+                   'gf-training')
+
     # 7) VRAM (Krea 2 mesuré à 24 GB ; None = inconnu, jamais bloquant)
     try:
         from .. import capabilities
         vram = capabilities.gpu_vram_gb()
         if vram is not None and ttype in _VRAM24_FAMILIES and vram < _KREA_MIN_VRAM_GB:
+            # Only advise dropping to 768 when 768 is not ALREADY the choice —
+            # telling someone to make a change they made is how a preflight
+            # teaches people to click through it.
+            _at_1024 = max(_effective_resolution(ds)) > 768
+            _fix = ('Drop the resolution to 768 in Advanced options to fit.' if _at_1024
+                    else 'You are already at 768, the low-VRAM resolution for this family; '
+                         'keep the memory savers on too.')
             _machine_warn(f'{label} training needs ~{_KREA_MIN_VRAM_GB} GB of VRAM at 1024 '
                           f'— this GPU reports {vram} GB; expect OOM or extreme slowness. '
-                          'Drop the resolution to 768 in Advanced options to fit.')
+                          + _fix)
             _check('vram', 'GPU memory', 'warn',
-                   f'{label} needs ~{_KREA_MIN_VRAM_GB} GB VRAM — this GPU reports {vram} GB',
+                   f'{label} needs ~{_KREA_MIN_VRAM_GB} GB VRAM at 1024 — this GPU reports '
+                   f'{vram} GB' + ('' if _at_1024 else ' (already at 768)'),
                    scope='machine')
     except Exception:
         pass

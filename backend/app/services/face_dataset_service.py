@@ -1051,6 +1051,35 @@ def remembered_family_base(ds, family):
     return entry['base'], entry['variant']
 
 
+def family_settings_memory(ds) -> dict:
+    """Parsed `train_family_settings` — {family: {setting: value}}, restricted to
+    the family-scoped keys. Same degrade-to-{} discipline as family_base_memory:
+    a corrupted blob means "nothing remembered", never a crash."""
+    from . import lora_training as _lt
+    raw = getattr(ds, 'train_family_settings', None)
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for fam, entry in data.items():
+        if fam in TRAIN_TYPES and isinstance(entry, dict):
+            out[fam] = {k: v for k, v in entry.items()
+                        if k in _lt._FAMILY_SCOPED_SETTING_KEYS}
+    return out
+
+
+def remembered_family_settings(ds, family):
+    """The family-scoped settings this dataset last used on `family`, or None
+    when that family was never configured here. `{}` (configured, everything on
+    Auto) is deliberately distinct from None (never configured)."""
+    return family_settings_memory(ds).get(normalize_train_type(family))
+
+
 def set_train_type(user_id, dataset_id, train_type) -> bool:
     """Change the target model family later (kept in sync with the TrainingPanel
     selector so the menu re-groups). Normalizes; unknown -> zimage. False if absent.
@@ -1061,7 +1090,16 @@ def set_train_type(user_id, dataset_id, train_type) -> bool:
     outgoing family's pair is stashed in `train_family_bases` and the incoming
     family's remembered pair takes its place — a family never yet configured
     starts from the official base, and coming back to Z-Image finds the merge
-    exactly where it was left. Nothing is destroyed and nothing is asked."""
+    exactly where it was left. Nothing is destroyed and nothing is asked.
+
+    The SAME treatment is given to the handful of `train_settings` keys whose
+    meaning is bound to the family (lora_training._FAMILY_SCOPED_SETTING_KEYS —
+    `timestep_type`, whose canonical value differs per family): stashed in
+    `train_family_settings`, restored on the way back, and CLEARED (back to the
+    incoming family's own default) when that family has nothing remembered. The
+    other advanced settings stay global on purpose — see the comment on
+    _FAMILY_SCOPED_SETTING_KEYS for why quantisation and resolution are not
+    here."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return False
@@ -1085,6 +1123,25 @@ def set_train_type(user_id, dataset_id, train_type) -> bool:
     ds.train_base_model = (remembered or {}).get('base') or None
     ds.train_variant = (remembered or {}).get('variant') or None
     ds.train_family_bases = json.dumps(memory)
+
+    # --- family-scoped train_settings keys, same stash/restore contract --------
+    scoped = _lt._FAMILY_SCOPED_SETTING_KEYS
+    settings = _lt._train_settings(ds)
+    smemory = family_settings_memory(ds)
+    smemory[old_fam] = {k: settings[k] for k in scoped if k in settings}
+    incoming = smemory.get(new_fam)
+    for k in scoped:
+        if incoming is not None and k in incoming:
+            settings[k] = incoming[k]
+        else:
+            # Never configured on the incoming family (or explicitly left on
+            # Auto there) → drop the key so the family's own canonical default
+            # applies. Dropping is what makes it byte-identical to a dataset
+            # that never touched the setting, exactly like update_train_settings.
+            settings.pop(k, None)
+    ds.train_settings = json.dumps(settings) if settings else None
+    ds.train_family_settings = json.dumps(smemory)
+
     ds.train_type = new_fam
     db.session.commit()
     return True

@@ -846,7 +846,11 @@ const TOPICS = [
   { id: 'training.memory_saving', kind: 'setting', title: 'Memory saving (quantisation, low VRAM)',
     keywords: ['quantise', 'quantize', 'quantisation', 'qfloat8', 'fp8', 'low vram', 'lowvram',
       'vram', 'memory', 'oom', 'out of memory', '5090', '4090', '24 gb', '32 gb', 'slow',
-      'speed', 'precision', 'text encoder', 'advanced', 'training'],
+      'speed', 'precision', 'text encoder', 'advanced', 'training',
+      // The cross-family trap: these three flags are global while their
+      // calibrated default is per family, so people search for why a run that
+      // "worked on Anima" crawls or dies on Krea 2 / FLUX.
+      'model family', 'switched family', 'lora type', 'carried over', 'crawl'],
     guide: { chapter: 'settings-reference', anchor: 'training' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'memory-saving-advanced',
