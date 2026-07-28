@@ -174,7 +174,18 @@ DEFAULTS = {
         'verified_only': True,
         'secure_cloud_only': False,
         'host_blacklist_days': 3,      # skip hosts whose pod never became ready
-        'ready_timeout_minutes': 25,   # boot budget: image pull + services up
+        # A host killed while it was still VISIBLY booting (see boot_budget below)
+        # was slow, not broken: it is skipped for hours, not days, so a bad night
+        # on one uplink does not silently shrink the marketplace for three days.
+        'slow_boot_blacklist_hours': 6,
+        # Boot is guarded by the same two clocks as the pre-step-1 phase below.
+        # ready_timeout is IDLE time — rearmed every time the pod shows a boot
+        # fact it had never shown before (a new vast status, the UI port getting
+        # published, a moving host progress line), so a pod honestly pulling a
+        # 26 GB image is never cut; boot_budget is the ABSOLUTE ceiling on the
+        # phase, so a host too slow to ever finish still dies fast (0 = none).
+        'ready_timeout_minutes': 25,   # no boot progress at all past this -> kill
+        'boot_budget_minutes': 90,     # hard ceiling on the whole boot phase
         'max_runtime_minutes': 480,    # safety net (stall watchdog is the first line): hard stop past this
         'stall_timeout_minutes': 30,   # no step progress past this -> rescue + kill
         # Before step 1 the pod is fetching the base model. Two clocks guard it:

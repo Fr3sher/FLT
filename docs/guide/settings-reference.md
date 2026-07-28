@@ -587,8 +587,10 @@ These have no UI control — they're for advanced users editing `config.json` by
 | `cloud.pod_overhead_minutes` | `35` | Boot + model download + quantize time built into cost estimates. |
 | `cloud.min_inet_down_mbps` | `400` | Skip hosts too slow to pull the image. |
 | `cloud.min_disk_bw_mbps` | `500` | Skip hosts too slow to extract it. |
-| `cloud.host_blacklist_days` | `3` | How long to skip a host whose pod never became ready. |
-| `cloud.ready_timeout_minutes` | `25` | Boot budget: image pull + services up. |
+| `cloud.host_blacklist_days` | `3` | How long to skip a host whose pod showed no sign of booting. |
+| `cloud.slow_boot_blacklist_hours` | `6` | Shorter skip for a host that was still visibly booting when the boot ceiling cut it — slow, not broken. |
+| `cloud.ready_timeout_minutes` | `25` | **Idle** boot budget: the clock restarts every time the pod shows a boot fact it had never shown before (a new vast status, the UI port getting published, a moving host progress line), so an honest multi-gigabyte image pull is never cut. Only a pod that shows nothing new for this long is terminated. |
+| `cloud.boot_budget_minutes` | `90` | **Absolute** ceiling on the boot phase. Because progress restarts the timeout above, a host too slow to ever finish would keep your rental alive; past this it is terminated regardless (`0` = no ceiling). |
 | `cloud.disk_gb` | `60` | Instance disk (base model + dataset + checkpoints). |
 | `cloud.min_vram_gb` | `{zimage:24, sdxl:16, krea:24, flux2klein:32}` | Minimum VRAM **per family**. flux2klein uses 32 (the 9B is the cloud-first lane; a 32 GB pod also trains the 4B). |
 | `cloud.onstart` | `''` | Optional startup command for the raw-image fallback. |

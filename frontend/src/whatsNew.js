@@ -95,6 +95,13 @@ export const WHATS_NEW = [
     to: '/settings/local-tools',
   },
   {
+    id: '2026-07-28-cloud-boot-waits-for-a-pod-that-is-still-working',
+    date: '2026-07-28',
+    title: 'Cloud launches survive a slow host pulling its image',
+    blurb:
+      'A pod that took more than 25 minutes to boot was terminated even when it was honestly downloading its multi-gigabyte image — and its host was quietly skipped for the next three days. The boot wait now restarts its clock whenever the pod shows real progress, keeps an absolute ceiling so a dead pod still dies fast, tells you where the boot actually got to, and only exiles a slow host for a few hours.',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',
