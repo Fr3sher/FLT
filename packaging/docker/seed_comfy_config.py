@@ -2,10 +2,10 @@
 """Point the app at the ComfyUI that shares its container.
 
 Runs on every boot of the GPU image (Dockerfile.gpu), before ComfyUI itself starts.
-The four ComfyUI folder overrides and the API URL live in config.json only — there
-is no environment override for them (see backend/app/config.py) — so a container
-that ships its own ComfyUI has to write them down, or the user would have to type
-container-internal paths into Settings by hand.
+base_dir and the API URL live in config.json only — there is no environment
+override for them (see backend/app/config.py) — so a container that ships its own
+ComfyUI has to write them down, or the user would have to type container-internal
+paths into Settings by hand.
 
 Only keys that are EMPTY or MISSING are filled, so a path changed in Settings
 survives every restart: this seeds a default, it does not enforce one.
@@ -19,21 +19,35 @@ import os
 import sys
 from pathlib import Path
 
-COMFY_ROOT = '/comfy/mnt/ComfyUI'      # holds main.py + models/ -> a valid base_dir
+# Where ComfyUI's models actually live decides everything else. Two layouts exist:
+# with upstream's BASE_DIRECTORY set (our compose file does set it) models/, input/
+# and output/ move to /basedir and the checkout keeps only code; without it they stay
+# inside the checkout. Probing beats reading BASE_DIRECTORY from the environment,
+# because upstream re-execs its init script through `sudo su comfy` and the variable
+# does not survive — it is absent from the /tmp/comfy_env.txt it saves.
+COMFY_ROOT_CANDIDATES = ('/basedir', '/comfy/mnt/ComfyUI')
+FALLBACK_COMFY_ROOT = '/comfy/mnt/ComfyUI'
 API_URL = 'http://127.0.0.1:8188'      # same container, so loopback
 
 
-def wanted(base_directory: str, ollama_url: str) -> dict:
-    """The values this container knows to be true, as a nested config fragment."""
-    comfy = {'base_dir': COMFY_ROOT, 'api_url': API_URL}
-    if base_directory:
-        # Upstream's BASE_DIRECTORY layout moves models/input/output out of the
-        # ComfyUI checkout, so base_dir alone no longer derives them.
-        comfy['models_dir'] = f'{base_directory}/models'
-        comfy['loras_dir'] = f'{base_directory}/models/loras'
-        comfy['input_dir'] = f'{base_directory}/input'
-        comfy['output_dir'] = f'{base_directory}/output'
-    fragment = {'comfyui': comfy}
+def comfy_root(candidates=None):
+    """The folder the app should treat as the ComfyUI install: the first candidate
+    that actually holds a models/ directory. That is also exactly what
+    capabilities._is_comfyui_dir checks, so a root chosen here cannot be rejected
+    there."""
+    for candidate in (candidates or COMFY_ROOT_CANDIDATES):
+        if Path(candidate, 'models').is_dir():
+            return candidate
+    return FALLBACK_COMFY_ROOT
+
+
+def wanted(base_dir: str, ollama_url: str) -> dict:
+    """The values this container knows to be true, as a nested config fragment.
+
+    No models_dir/input_dir/output_dir/loras_dir: config.resolve_comfyui_dir derives
+    all four from base_dir, and writing them would only pin paths that are already
+    right — while going stale the moment the layout changes."""
+    fragment = {'comfyui': {'base_dir': base_dir, 'api_url': API_URL}}
     if ollama_url:
         fragment['ollama'] = {'url': ollama_url}
     return fragment
@@ -77,7 +91,7 @@ def main() -> int:
         current = {}
 
     merged, filled = fill_empty(current, wanted(
-        (os.environ.get('BASE_DIRECTORY') or '').strip().rstrip('/'),
+        comfy_root(),
         (os.environ.get('LDS_OLLAMA_URL') or '').strip()))
 
     if not filled:
