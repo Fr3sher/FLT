@@ -766,6 +766,15 @@ const TOPICS = [
      'body', 'back', 'full body', 'full length', 'framing', 'cropped', 'tight',
      'too close', 'zoomed in', 'bust instead of body', '3:4'],
     '/datasets?section=add', 'using-the-app', 'krea-and-the-shape-of-your-reference-photo'),
+  // Rotation exists in TWO places with two different promises (a dataset file is
+  // rewritten, a bank file never is), so it gets one topic that says both —
+  // otherwise "does this touch my folder?" has no address. Idea by 1Tomber (#17).
+  action('action-rotate-image', 'Rotate an image 90°',
+    ['rotate', 'rotation', 'turn', 'sideways', 'upright', 'orientation', 'portrait',
+     'landscape', 'straighten', 'quarter turn', '90', '180', '270', 'left', 'right',
+     'clockwise', 'counter-clockwise', 'exif', 'upside down', 'lossless', 'mirror',
+     'flip', 'bank', 'crop'],
+    '/datasets', 'using-the-app', 'rotate-a-sideways-image'),
   action('action-caption-generate', 'Generate captions',
     ['caption', 'generate', 'joycaption', 'ollama', 'text'],
     '/datasets?section=captions&panel=generate', 'dataset-guide', '3-captions-the-make-or-break-step'),

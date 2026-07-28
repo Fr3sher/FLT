@@ -468,6 +468,22 @@ def bank_images_status(bank_id):
     return jsonify({'ok': True, 'changed': n})
 
 
+@bp.post('/bank/<int:bank_id>/rotate')
+def bank_rotate(bank_id):
+    """Turn {ids} by {degrees} CLOCKWISE (90/180/270, negative = left).
+
+    Idea by 1Tomber (GitHub #17). Synchronous and cheap: it writes ONE integer
+    per row — the user's own files are never touched, the turned copy is built
+    lazily by the resolver on the next read."""
+    data = request.get_json(silent=True) or {}
+    try:
+        result = banks.rotate_images(LOCAL_USER, bank_id, data.get('ids'),
+                                     data.get('degrees'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **result})
+
+
 @bp.post('/bank/<int:bank_id>/apply-flags')
 def bank_apply_flags(bank_id):
     data = request.get_json(silent=True) or {}
