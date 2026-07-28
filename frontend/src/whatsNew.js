@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-retry-asks-instead-of-doing-nothing',
+    date: '2026-07-28',
+    title: 'Retry no longer looks dead when a run needs your confirmation',
+    blurb:
+      'On the Runs page, ↻ Retry could do nothing at all: no job, no error, no toast. It happened whenever the run needed a confirmation Start had already asked for — an image with no caption, a dataset under the image floor, captions in the wrong style — because Retry never carried your answer, and the refusal that came back was thrown away before it reached the screen. Retry now asks the same question Start asks, relaunches once you confirm, and says out loud why it stopped when it stops. Stop and 🧹 Clean finished runs on the same page were silent in the same way and now speak too. Reported by 1Tomber (GitHub #23).',
+    to: '/cloud',
+  },
+  {
     id: '2026-07-28-scrape-straight-into-a-bank',
     date: '2026-07-28',
     title: 'Scrape the web straight into a bank — no throwaway dataset first',

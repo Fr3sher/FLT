@@ -21,7 +21,10 @@ import {
   runRetryKey,
   trainingRunVariantLabel,
 } from '../utils/trainingRuns';
-import { confirmableRetryFlag } from '../utils/trainingRefusals';
+import {
+  postWithConfirmations,
+  RETRY_CONFIRMABLE_REFUSALS,
+} from '../utils/trainingRefusals';
 import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
@@ -416,6 +419,13 @@ export default function CloudRunsPage() {
       if (m.level === 'error') toast.error(m.text, 20000);
       else toast.info(m.text, m.level === 'warn' ? 12000 : undefined);
       poll();
+    } catch (e) {
+      // Same silent-button class as ↻ Retry (GitHub #23), and the expensive one:
+      // a Stop that was refused leaves a pod BILLING. Never let that be quiet.
+      toast.error(e?.message
+        ? `Could not stop this run: ${e.message} — check the pod in the vast.ai console.`
+        : 'Could not stop this run. Check the pod in the vast.ai console — it may still be billing.',
+      20000);
     } finally {
       setStopping((m) => ({ ...m, [run.run_id]: false }));
     }
@@ -460,6 +470,14 @@ export default function CloudRunsPage() {
   // (steps/variant/family/masked, + GPU class for cloud). Cloud runs replay
   // their pod params on a fresh pod; a LOCAL run replays its stamped provenance
   // record through launch_training (normal preflight, GPU-collision refusal).
+  //
+  // A retry is a LAUNCH, so it meets every pre-flight guard a launch meets — and
+  // the guards run on the LIVE dataset, not on the one that failed. Until GitHub
+  // #23 (1Tomber) this handler had no catch: postJson rejects on a 400 and shows
+  // nothing of its own for that status, so a run whose dataset still had an
+  // uncaptioned image produced an uncaught promise rejection and a button that
+  // visibly did nothing. Now the confirmable refusals get their confirm — the
+  // same one Start asks — and everything else gets said out loud.
   const [retrying, setRetrying] = useState({});      // runRetryKey -> bool
   const retry = async (run) => {
     if (isTrainingRecipeReplayBlocked(run)) {
@@ -472,12 +490,18 @@ export default function CloudRunsPage() {
     const key = runRetryKey(run);
     setRetrying((m) => ({ ...m, [key]: true }));
     try {
-      const d = await postJson(req.url, req.body);
-      if (d.ok === false) toast.error(d.error || 'Retry failed');
-      else toast.success(isLocal
+      const d = await postWithConfirmations(
+        (body) => postJson(req.url, body), req.body,
+        'Retry anyway (force)', RETRY_CONFIRMABLE_REFUSALS);
+      if (!d) return;                              // declined at a confirm prompt
+      toast.success(isLocal
         ? 'Run relaunched locally — watch it under In progress…'
         : 'Run relaunched — provisioning a fresh pod…');
       poll();
+    } catch (e) {
+      toast.error(e?.message
+        ? `Could not retry this run: ${e.message}`
+        : 'Could not retry this run. Please try again.');
     } finally {
       setRetrying((m) => ({ ...m, [key]: false }));
     }
@@ -507,7 +531,7 @@ export default function CloudRunsPage() {
   // so it hits the same caption/quality guards as a fresh launch: loop on the
   // confirmable refusals exactly like the panel does, accumulating the force flags.
   const postLocalContinue = async (run, payload) => {
-    let body = {
+    const body = {
       extra_steps: payload.extraSteps,
       ...(run.base_model != null ? { base_model: run.base_model } : {}),
       ...(run.train_type ? { train_type: run.train_type } : {}),
@@ -519,16 +543,9 @@ export default function CloudRunsPage() {
       // backend default (on), same as everywhere else.
       masked: run.masked !== false,
     };
-    for (;;) {
-      try {
-        return await postJson(`/api/dataset/${run.dataset_id}/train/continue`, body);
-      } catch (e) {
-        const flag = confirmableRetryFlag(e?.message, 'Continue anyway (force)');
-        if (flag === 'declined') return null;      // the confirm WAS the answer
-        if (!flag) throw e;
-        body = { ...body, [flag]: true };
-      }
-    }
+    return postWithConfirmations(
+      (b) => postJson(`/api/dataset/${run.dataset_id}/train/continue`, b),
+      body, 'Continue anyway (force)');
   };
   const submitContinue = async (payload) => {
     const run = continueRunTarget;
@@ -1026,13 +1043,19 @@ export default function CloudRunsPage() {
               <button type="button"
                 onClick={async () => {
                   if (!window.confirm(`Move the staging folders of all FINISHED runs to the trash?\n\nDataset copies, samples and checkpoint duplicates already imported. Active runs and pods kept for recovery are spared.\n${TRASH_REMINDER}`)) return;
-                  const d = await postJson('/api/dataset/train/cloud/purge', {});
-                  if (d.ok) {
-                    // "62.6 GB moved to the trash" on its own reads as "space
-                    // reclaimed" — it is not, the trash is on the same disk. And
-                    // "Cleaned 0 run(s)" said nothing about WHY. Both fixed here.
-                    const msg = purgeAllResultMessage(d);
-                    toast[msg.kind === 'error' ? 'error' : msg.kind === 'success' ? 'success' : 'info'](msg.text);
+                  // No catch here meant a refused purge threw past the refresh
+                  // below AND said nothing (GitHub #23's defect class again).
+                  try {
+                    const d = await postJson('/api/dataset/train/cloud/purge', {});
+                    if (d.ok) {
+                      // "62.6 GB moved to the trash" on its own reads as "space
+                      // reclaimed" — it is not, the trash is on the same disk. And
+                      // "Cleaned 0 run(s)" said nothing about WHY. Both fixed here.
+                      const msg = purgeAllResultMessage(d);
+                      toast[msg.kind === 'error' ? 'error' : msg.kind === 'success' ? 'success' : 'info'](msg.text);
+                    }
+                  } catch (e) {
+                    toast.error(e?.message || 'Could not clean the finished runs.');
                   }
                   await loadStagingSizes();
                   poll();
