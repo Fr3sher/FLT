@@ -899,6 +899,45 @@ def bank_payload(user_id, bank_id) -> dict | None:
     }
 
 
+def flag_preview(user_id, bank_id, overrides=None) -> dict | None:
+    """Per-flag image counts for a CANDIDATE threshold set — what the bank WOULD
+    look like at those numbers, without saving anything.
+
+    This is what turns tuning a threshold from a guess into a decision: the
+    quality scan persists RAW scores and every verdict is recomputed at read
+    time (see BankImage's docstring), so answering "how many images would a
+    sharpness floor of 140 flag?" is the same COUNT the payload already runs,
+    with a different dict. No decode, no pass, no write.
+
+    Only the read-time thresholds are meaningful here. The four grouping ones
+    (dup_distance, face/style/semantic similarity) are baked into stored group
+    ids by their pass, so a count against a candidate value would be a number
+    about the OLD grouping — the UI says "applies at the next pass" instead.
+
+    Unknown keys and junk values are ignored rather than 400: this is a live
+    preview firing on every keystroke, and a half-typed "0." must degrade to
+    "no change yet", never to an error toast."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    th = thresholds()
+    for key, val in (overrides or {}).items():
+        if key not in cfg.DEFAULTS['bank']:
+            continue
+        try:
+            th[key] = float(val)
+        except (TypeError, ValueError):
+            continue
+    th['dup_distance'] = int(th['dup_distance'])
+    th['min_side'] = int(th['min_side'])
+    base = BankImage.query.filter_by(bank_id=bank_id)
+    flags = {}
+    for flag in _QUALITY_FLAGS + _SCORE_FLAGS:
+        crit = _flag_filter(flag, th)
+        flags[flag] = base.filter(crit).count() if crit is not None else 0
+    return {'flags': flags, 'thresholds': th, 'total': base.count()}
+
+
 def _load_pipeline_report(bank: ImageBank):
     """The persisted 'Launch all' summary (parsed), or None. A corrupt blob is
     swallowed — a broken report must never 500 the whole bank payload."""

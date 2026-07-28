@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-07-28-bank-filter-thresholds-in-place',
+    date: '2026-07-28',
+    title: 'Tune every Bank filter without leaving the bank',
+    blurb:
+      'The twelve numbers behind the filter chips — blurry, small, duplicate, NSFW — were only editable in Settings, three screens from the bank you were triaging. They are now under the chips too, in 🎚 Filter thresholds: grouped by what they answer, each one saying which way catches MORE images (the duplicate distance and the semantic similarity move opposite ways), when it takes effect, and how many images the value you are typing would flag — before you save. Reset any one, or all of them, to the shipped defaults. Same setting as Settings, so it applies to every bank.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-preflight-before-cloud-and-continue',
     date: '2026-07-28',
     title: 'The pre-training check now runs before a cloud run and before ▶ Continue',
