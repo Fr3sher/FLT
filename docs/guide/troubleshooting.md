@@ -221,6 +221,35 @@ you to fix different things. The causes, and what each one means:
 | `Your ComfyUI doesn't have <value>` | the graph pins a widget value your ComfyUI doesn't offer | Install the named node pack, restart ComfyUI |
 | `disabled in Settings (engines)` | you turned the engine off | Re-enable it in Settings ▸ Engines |
 
+### Where the Klein model may live — you do **not** need `models/unet/klein/`
+
+`models/unet/klein/` is only where the Setup button *downloads* to. It has never
+been a requirement, and nothing needs to be copied, moved or symlinked to satisfy
+it. The app resolves the Klein UNET exactly where a running ComfyUI would, in
+this order:
+
+| Layout | Example |
+| --- | --- |
+| a `klein`-named sub-folder of `models/unet` | `models/unet/klein/flux-2-klein-9b-kv-fp8.safetensors` |
+| **any** sub-folder whose name contains `klein`, any capitalisation or spacing | `models/unet/Flux2 Klein/…safetensors` |
+| the **top level** of `models/unet` | `models/unet/flux-2-klein-9b-kv-fp8.safetensors` |
+| the same three, under `models/diffusion_models` | `models/diffusion_models/flux2-klein-9b/…safetensors` |
+| any root declared in your `extra_model_paths.yaml` | a Stability Matrix / portable / A1111-shared tree |
+| a relocated models folder | **Settings → Local tools → ComfyUI models folder** |
+
+**The one limit:** the model has to be *nameable* as Klein — either the **file
+name** or its **sub-folder name** must contain `klein`. A file called
+`model.safetensors` sitting loose in `diffusion_models/` is invisible; put it in
+a `klein/` folder (any file name then works) or rename the file. That rule is
+what stops another family's checkpoint being wired into the Klein graph.
+
+Every row of that table is covered by
+`backend/tests/test_klein_model_locations_documented.py`, so it cannot quietly
+stop being true.
+
+*(Reported by CyberTod on Reddit, who duplicated the weights and built a symlink
+to reclaim the disk space — neither was necessary.)*
+
 ### "On disk but cannot be loaded"
 
 A `.safetensors` file declares the length of its JSON header in its first eight
@@ -244,6 +273,37 @@ With ComfyUI stopped, the checks that need it cannot run, and the app reports no
 gap rather than inventing one. Your files being on disk is therefore **not** a
 clean bill of health, and Setup says so instead of showing a tick it did not
 earn. Start ComfyUI and re-check.
+
+## "Upscale & improve" makes my anime look realistic
+
+**Why:** the improve pass sends Klein a fixed instruction, and the shipped one is
+a *photographic* recipe — `add detailed texture, add sharp details, add candid
+shot, add soft focus effect`. It is applied to every dataset, drawn ones
+included, so on anime or illustration it does exactly what it says: it adds skin
+texture and photo micro-detail your line art never had.
+
+**Fix — two levers, both in Settings → Image engines → *Identity & Klein prompts
+(advanced)*:**
+
+1. **Rewrite the instruction.** The *Klein upscale & improve prompt* box holds
+   the text in use; edit it to something that suits drawn art (e.g. "keep the
+   drawn anime rendering, clean line art, flat cel shading, sharpen the lines").
+   Clearing the box restores the shipped default — nothing is frozen.
+2. **Or send no instruction at all.** The checkbox above the box — *Apply an
+   improvement prompt on "Klein upscale & improve"* — turns it off, and the pass
+   becomes a pure upscale.
+
+Separately, **Settings → Image engines → *Upscale & improve — strength*** decides
+how far the pass may move the image at all (output megapixels, sampler steps, the
+enhancement LoRA, the consistency LoRA). Lower the *Enhancement LoRA* and raise
+the *Consistency LoRA* if you want the pass to change less.
+
+Both are now quoted and linked **from the ✨ Upscale & improve button itself** —
+in the lightbox and in the grid's bulk toolbar — so the instruction currently in
+force is readable where the action happens, and anime datasets get an explicit
+warning there.
+
+*(Reported by Qeeyana on Reddit.)*
 
 ## Port 5000 conflict on macOS
 

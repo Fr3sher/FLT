@@ -4,7 +4,7 @@
  * backdrop close it; a click on the image toggles the zoom mode.
  */
 import { useEffect, useRef, useState } from 'react';
-import SettingsLink from '../common/SettingsLink';
+import KleinImproveNote from './KleinImproveNote';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { displayLabel } from '../../utils/labels';
 import PexelsAttribution from './PexelsAttribution';
@@ -57,6 +57,7 @@ export default function DatasetLightbox({
   improvePending = false,
   improveReady = false,
   kleinAvailable = false,
+  subjectType = '',
 }) {
   const [full, setFull] = useState(false); // false = fit screen, true = 100 %
   const [comparing, setComparing] = useState(false);
@@ -238,13 +239,12 @@ export default function DatasetLightbox({
         )}
         {/* Its strength, step count and instruction are all editable, and nothing
             here said so — the reported case for making settings discoverable from
-            where the action happens. `focus` lands on the strength block itself:
-            a label promising one setting must not leave the reader hunting for it
-            down a long section. */}
+            where the action happens. A link alone was not enough: it pointed at
+            the strength knobs while the complaint ("anime comes back realistic",
+            Qeeyana on Reddit) is caused by the INSTRUCTION. The note quotes that
+            instruction live and links to both. */}
         {onImprove && !improvementActive && (
-          <SettingsLink section="engines" focus="klein-improve-strength" className="self-center">
-            Adjust improve strength
-          </SettingsLink>
+          <KleinImproveNote subjectType={subjectType} className="w-full sm:w-auto sm:max-w-md" />
         )}
       </div>
     </div>

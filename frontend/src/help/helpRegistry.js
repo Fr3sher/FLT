@@ -330,7 +330,15 @@ const TOPICS = [
      // a file that is present but unreadable (a cut-short or corrupted download).
      'klein model missing', 'model missing', 'corrupted', 'corrupt', 'truncated',
      'unreadable', 'on disk but', 'cannot be loaded', 'greyed out', 'not ready',
-     'download again', 'redownload', 're-download', 'broken download']),
+     'download again', 'redownload', 're-download', 'broken download',
+     // WHERE the model may live. CyberTod (Reddit) read the download destination
+     // as a requirement, copied ~10 GB into unet/klein/ and made a symlink to get
+     // the disk space back — the resolver had been scanning diffusion_models/,
+     // both roots' top level and every extra_model_paths root all along.
+     'symlink', 'symbolic link', 'junction', 'hard link', 'disk space', 'space',
+     'move the model', 'another folder', 'different folder', 'shared models',
+     'diffusion_models', 'extra_model_paths', 'stability matrix', 'portable',
+     'models_dir', 'models folder', 'duplicate', 'copy the model']),
   setupStep('setup-krea-install', 'install', 'Install the Krea 2 Edit engine',
     ['krea', 'krea 2', 'krea 2 edit', 'install krea', 'node pack', 'comfyui-krea2edit',
      'custom nodes', 'custom_nodes', 'identity lora', 'krea2_identity_edit', 'civitai',
@@ -572,8 +580,16 @@ const TOPICS = [
      'subject type', 'animal', 'per subject', 'leak', 'tails', 'extra limbs']),
   setting('identity_prompts.klein_identity', 'engines', 'identity-prompts', 'Klein identity prompt',
     ['identity', 'klein', 'restage', 'face', 'prompt', 'preserve', 'pose']),
+  // The words Qeeyana (Reddit) actually used are in here verbatim: she had the
+  // symptom ("anime looks realistic after the quality inpaint") and no path to
+  // the cause, because the shipped instruction — "add detailed texture, add
+  // sharp details, add candid shot, add soft focus effect" — is a photographic
+  // recipe applied to every dataset. Searching her own sentence must land here.
   setting('identity_prompts.klein_improve', 'engines', 'identity-prompt-klein-improve', 'Klein improve prompt & toggle',
-    ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable']),
+    ['klein', 'improve', 'upscale', 'enhance', 'prompt', 'texture', 'detail', 'toggle', 'disable',
+     'anime', 'drawn', 'illustration', 'cartoon', 'too realistic', 'realistic', 'photoreal',
+     'textures', 'skin detail', 'skin', 'improve prompt', 'turn off improve', 'quality inpaint',
+     'inpaint', 'ruins my images', 'harms the image', 'style changed', 'no prompt']),
   // The four knobs behind the lightbox's "Adjust improve strength →". They were
   // exposed as settings but never registered, so Help search could not reach them
   // and the link had nothing to aim at.

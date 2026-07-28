@@ -1092,6 +1092,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   onBatch={ds.batchImages} busy={ds.busy}
                   onImproveBatch={ds.improveBatch} activity={act}
                   kleinAvailable={Boolean(caps.engines?.klein)}
+                  subjectType={d.subject_type || 'human'}
                   eligibilityImages={images}
                   nonces={ds.nonces} faceThresholds={d.face_thresholds} datasetKind={d.kind || 'character'}
                   faceScoringBlocked={d.face_scoring_blocked}
@@ -1863,6 +1864,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
           improveReady={viewImgImprovementReady}
           busy={ds.busy}
           kleinAvailable={Boolean(caps.engines?.klein)}
+          subjectType={d.subject_type || 'human'}
           onCrop={viewImgLive._rescueReviewPreview
             ? undefined
             : (img) => { setViewImg(null); setCropImg(img); }} />
