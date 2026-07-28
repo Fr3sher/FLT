@@ -491,6 +491,28 @@ def bank_images_status(bank_id):
     return jsonify({'ok': True, 'changed': n})
 
 
+@bp.post('/bank/<int:bank_id>/undo')
+def bank_undo_last(bank_id):
+    """↩ Put the last BULK decision back — the net under the bank's biggest
+    gesture. Synchronous: it rewrites two columns on ids we already hold.
+
+    The reply is deliberately an honest ledger, not an "ok": {restored, missing,
+    conflicts, conflict_names} so a partial restore can SAY it restored 340 of
+    400 and name what it left alone. 400 = there is nothing to undo (no offer,
+    or it expired); 409 = a pass is running on this bank.
+
+    Only the status-flipping bulk actions are ever offered here. 🗑 Delete
+    rejected and ⬆ Promote are not undoable cleanly, so they publish no offer —
+    see ``services.bank_undo``."""
+    try:
+        out = banks.undo_last(LOCAL_USER, bank_id)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 409
+    return jsonify({'ok': True, **out})
+
+
 @bp.post('/bank/<int:bank_id>/rotate')
 def bank_rotate(bank_id):
     """Turn {ids} by {degrees} CLOCKWISE (90/180/270, negative = left).

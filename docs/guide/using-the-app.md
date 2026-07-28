@@ -594,6 +594,53 @@ app's own data folder, and deleting the new bank takes them with it.
 If the copy cannot be written — a full disk, a drive pulled out — the new bank is
 **discarded** rather than left holding half the shortlist and looking finished.
 You are told what happened and nothing has changed.
+## Undo the last bulk decision
+
+A bank lets you mark hundreds of images with one click: select the whole filter
+and press ✕, apply an auto-reject at a threshold, collapse every duplicate group,
+or run 🚀 Launch all. That is the point of a bank — and it is also the click you
+most want back when the threshold was wrong or the filter was not the one you
+thought.
+
+After any of those, an **↩ Undo** bar appears above the grid saying what
+happened and how many images it moved. Press it and every one of those images
+goes back to exactly what it was: its previous ✓/✕/undecided state *and* the
+reason it carried. Images the action never touched are not touched here either —
+if you had already kept a photo by hand and the bulk reject flipped it, undo puts
+it back to **kept**, not to undecided.
+
+The bar does not disappear on a timer, and it survives a page reload: the
+decision it takes back lives in the app's database, not in your browser tab. It
+stays until you use it, dismiss it, or run another bulk action.
+
+**Its limits, stated plainly.**
+
+- **One step.** Only the most recent bulk action is remembered. Run a second one
+  and it replaces the first — this is a net under the click you just made, not a
+  history of your session.
+- **Until the app restarts.** The memory is in the running app. Restart it and
+  the offer is gone; the decisions themselves are safely saved, as always.
+- **It never over-claims.** If some of the images have left the bank since (a
+  re-scan noticed the files were gone), or if you changed some of them yourself
+  in the meantime — in ▶ Review, or in another tab — those are *not* overwritten.
+  The result tells you exactly how many it restored out of how many, how many
+  are gone, and names the ones a newer decision now owns.
+
+**What is deliberately NOT offered.** Two bank actions have no undo, because a
+half-working one would be worse than none:
+
+- **🗑 Delete rejected** sends your source files to the recycle bin and drops
+  their rows with everything the passes had computed about them. Files in the
+  recycle bin are yours to restore, from your file manager — the app cannot do
+  it for you, and it will not pretend otherwise. This action also withdraws any
+  pending ↩ offer, since the images it pointed at are the ones just removed.
+- **⬆ Promote** copies images into a dataset (or a new bank) through the normal
+  import path. Un-promoting would mean deleting images in a dataset you may have
+  already captioned, cropped or trained on. Delete them there if you want them
+  gone.
+
+The 🔄 rotate button needs no undo entry: turn the other way and the image is
+byte-for-byte the original again.
 ## Sort a grid to review faster
 
 Filters answer *which images*; sorting answers *which one first*. Both grids
