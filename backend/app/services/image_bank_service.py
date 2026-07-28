@@ -2069,6 +2069,38 @@ def _isolation_penalty(E, *, k=_TYPICALITY_K, block=_TYPICALITY_BLOCK):
     return (ramp * ramp).astype('float32')
 
 
+def _farthest_point(E, factor, n):
+    """Greedy farthest-point sampling over the L2-normed rows of ``E`` (m×d),
+    returning ``n`` ROW POSITIONS in pick order. Seeded on position 0 — callers
+    pass rows in ascending id order, so the seed and every tie-break resolve to
+    the lowest id and the result is deterministic.
+
+    ``factor`` is the per-row novelty multiplier in (0, 1] (the typicality guard,
+    see ``_isolation_penalty``) or None to sample on pure max-min distance. Shared
+    by ``select_diverse`` (whole pool) and ``select_balanced`` (one call per
+    bucket, on a slice of the same E and the same pool-wide factor) so the guard
+    behaves identically in both — there is exactly one copy of this loop."""
+    import numpy as np
+    m = int(E.shape[0])
+    if n <= 0 or m == 0:
+        return []
+    if n >= m:
+        return list(range(m))
+    # min_dist[i] = cosine distance from row i to the NEAREST chosen row so far.
+    chosen = [0]                                 # seed = lowest id (E[0])
+    min_dist = 1.0 - E @ E[0]
+    min_dist[0] = -np.inf                        # never re-pick a chosen row
+    for _ in range(n - 1):
+        score = min_dist if factor is None else min_dist * factor
+        nxt = int(np.argmax(score))              # ties → lowest index = lowest id
+        if not np.isfinite(score[nxt]):          # pool exhausted (all chosen)
+            break
+        chosen.append(nxt)
+        min_dist = np.minimum(min_dist, 1.0 - E @ E[nxt])
+        min_dist[nxt] = -np.inf
+    return chosen
+
+
 def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
                    filters=None):
     """Farthest-point sampling over the ✨ Score CLIP embeddings, tempered by a
@@ -2131,20 +2163,199 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     factor = None
     if w > 0.0:
         factor = 10.0 ** (-_TYPICALITY_DECADES * w * _isolation_penalty(E))
-    # min_dist[i] = cosine distance from row i to the NEAREST chosen row so far.
-    chosen = [0]                                 # seed = lowest id (E[0])
-    min_dist = 1.0 - E @ E[0]
-    min_dist[0] = -np.inf                        # never re-pick a chosen row
-    for _ in range(n - 1):
-        score = min_dist if factor is None else min_dist * factor
-        nxt = int(np.argmax(score))              # ties → lowest index = lowest id
-        if not np.isfinite(score[nxt]):          # pool exhausted (all chosen)
-            break
-        chosen.append(nxt)
-        min_dist = np.minimum(min_dist, 1.0 - E @ E[nxt])
-        min_dist[nxt] = -np.inf
+    chosen = _farthest_point(E, factor, n)
     return {'image_ids': sorted(ids[i] for i in chosen),
             'pool': m, 'requested': n, 'typicality': w}
+
+
+# --- balanced selection (coverage of the LABELS, not of the embedding space) --
+# `select_diverse` answers "is my set VARIED?"; this one answers a different
+# question no per-image score can ask: "does my set COVER what I want to be able
+# to generate?". Asking for the 60 best/most varied of a bank that is 49% full
+# body and 3.6% face shots returns those proportions — the LoRA then renders one
+# framing well and the rest badly, with nothing having said so.
+#
+# WHICH AXIS. Measured on a real 43 000-image bank rather than assumed: `framing`
+# had 13 000 rows classified across all four buckets (body 49%, bust 37%, back
+# 11%, face 3.6%) — a discrete label with a real, actionable imbalance. Over the
+# same bank `face_cluster` covered 4.7% of the rows and shattered them into 561
+# clusters whose biggest held 34% — on a mono-subject bank a semantic/identity
+# split is sparse and arbitrary, so balancing on it would spread a selection over
+# noise. Hence: framing is the DEFAULT axis, and person is an explicit opt-in for
+# the genuinely multi-subject dump.
+_BALANCE_AXES = ('framing', 'framing+person')
+_BALANCE_DEFAULT_AXIS = 'framing'   # stored in localStorage — never rename
+
+
+def _balanced_quotas(sizes: dict, n: int) -> dict:
+    """Split ``n`` picks as evenly as possible over the buckets, capped by what
+    each one actually HAS (largest-remainder water-filling).
+
+    A bucket that cannot serve its equal share is filled to the brim and its
+    unused share is redistributed over the buckets that still have room — the
+    ARBITRATION being: asking for 60 when a perfect split only yields 42 returns
+    60, not 42, because throwing 18 usable images away buys a purity nobody asked
+    for. What is forbidden is doing it SILENTLY: every caller gets ``fair_share``
+    next to ``selected`` per bucket, so the top-up is visible as the deficit it
+    is. Deterministic: buckets are walked in sorted key order, and a leftover
+    single pick goes to the bucket with the most room left (key ascending on a
+    tie)."""
+    keys = sorted(sizes)
+    quota = {k: 0 for k in keys}
+    open_keys = [k for k in keys if sizes[k] > 0]
+    remaining = min(int(n), sum(sizes.values()))
+    while open_keys and remaining > 0:
+        base = remaining // len(open_keys)
+        if base == 0:                       # fewer picks left than buckets
+            order = sorted(open_keys, key=lambda k: (-(sizes[k] - quota[k]), k))
+            for k in order[:remaining]:
+                quota[k] += 1
+            break
+        capped = [k for k in open_keys if sizes[k] - quota[k] <= base]
+        if capped:
+            for k in capped:
+                take = sizes[k] - quota[k]
+                quota[k] += take
+                remaining -= take
+            capped_set = set(capped)
+            open_keys = [k for k in open_keys if k not in capped_set]
+        else:
+            for k in open_keys:
+                quota[k] += base
+            remaining -= base * len(open_keys)
+    return quota
+
+
+def _pool_labels(bank, filters) -> dict:
+    """{image_id: (framing, face_cluster)} for the same pool ``_pool_embeddings``
+    walks — one extra column read, no GPU."""
+    rows = _pool_query(bank.id, thresholds(), **(filters or {})).all()
+    return {r.id: (r.framing, r.face_cluster) for r in rows}
+
+
+def _balance_axis_hint(axis, m, unlabelled, unknown) -> str:
+    """The honest message for a bank that simply has not been labelled yet — the
+    DEFAULT state of a fresh bank, not an error. Names the pass that is missing
+    and the numbers, instead of returning an empty or misleading selection."""
+    what = ('the shot type of each image' if axis == 'framing'
+            else 'the shot type AND the person of each image')
+    passes = ('run the 📐 Framing pass first' if axis == 'framing'
+              else 'run the 📐 Framing and 👥 Group by person passes first')
+    tail = ''
+    if unknown and not unlabelled:
+        tail = (f' — {unknown} of {m} came back as "unknown" framing, which is a '
+                f'classification the balance cannot use')
+    else:
+        tail = f' — {unlabelled} of {m} images here have no label yet'
+    return (f'{passes}: balanced selection needs {what}{tail}. '
+            f'🎨 Pick diverse works without it.')
+
+
+def select_balanced(user_id, bank_id, n=60, *, axis=_BALANCE_DEFAULT_AXIS,
+                    typicality=_TYPICALITY_DEFAULT, filters=None):
+    """Select ``n`` images SPREAD OVER the labels of ``axis`` instead of taking
+    the top of one ranking: an even split across framings (and optionally across
+    people), each bucket filled with the same farthest-point + typicality
+    sampling ``select_diverse`` uses. So it is "the most varied 15 face shots,
+    the most varied 15 busts, …" rather than "the most varied 60", which on a
+    lopsided bank is 30 bodies and 2 faces.
+
+    It ACCOMPANIES ``select_diverse``, it does not replace it: variety inside a
+    space and coverage of a label are different questions, and the diverse
+    selector still works on a bank with no labels at all (which is most banks
+    until the 📐 Framing pass has run).
+
+    Composition with the typicality guard: the isolation penalty is computed ONCE
+    over the WHOLE filtered pool and then sliced per bucket — deliberately, since
+    "alone in the bank" is a property of the bank. Computing it per bucket would
+    make every member of a small bucket look isolated and penalise exactly the
+    images the balance exists to bring in.
+
+    Returns {'image_ids', 'pool', 'requested', 'selected', 'typicality', 'axis',
+    'buckets': [{key, framing, cluster, available, fair_share, selected, short}],
+    'unlabelled', 'unknown', 'shortfall'}. Raises ValueError (→400) when Score
+    has not run, or when nothing in the filter carries the axis label."""
+    import numpy as np
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    if axis not in _BALANCE_AXES:
+        axis = _BALANCE_DEFAULT_AXIS
+    emb_by_path = _load_score_embeddings(bank)
+    if not emb_by_path:
+        raise ValueError('run ✨ Score first — balanced selection reuses its '
+                         'embeddings')
+    n = max(1, min(int(n), _CURATION_MAX_N))
+    try:
+        w = 0.0 if typicality is None else float(typicality)
+    except (TypeError, ValueError):
+        w = _TYPICALITY_DEFAULT
+    w = max(0.0, min(1.0, w))
+    ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
+    m = len(ids)
+    if not m:
+        raise ValueError('nothing to select from in the current filter')
+
+    labels = _pool_labels(bank, filters or {})
+    buckets, meta = {}, {}
+    unlabelled = unknown = 0
+    for pos, iid in enumerate(ids):
+        fr, cl = labels.get(iid, (None, None))
+        if fr is None:
+            unlabelled += 1
+            continue
+        if fr not in _FRAMINGS:              # 'unknown' — a real classification,
+            unknown += 1                     # but not one you can balance on
+            continue
+        if axis == 'framing+person':
+            if cl is None:
+                unlabelled += 1
+                continue
+            key = f'{fr}#{int(cl)}'
+            meta[key] = (fr, int(cl))
+        else:
+            key = fr
+            meta[key] = (fr, None)
+        buckets.setdefault(key, []).append(pos)
+    if not buckets:
+        raise ValueError(_balance_axis_hint(axis, m, unlabelled, unknown))
+
+    sizes = {k: len(v) for k, v in buckets.items()}
+    quota = _balanced_quotas(sizes, n)
+    # What a split with no ceiling WOULD have given each bucket — the yardstick
+    # a shortfall is reported against ("back: 3 of an even 15").
+    fair = _balanced_quotas({k: n for k in sizes}, n)
+
+    factor = None
+    if w > 0.0:
+        factor = 10.0 ** (-_TYPICALITY_DECADES * w * _isolation_penalty(E))
+    chosen, report = [], []
+    for key in sorted(sizes):
+        pos = buckets[key]                   # ascending id order (pool order)
+        take = quota[key]
+        if take >= len(pos):
+            picked = list(pos)
+        elif take <= 0:
+            picked = []
+        else:
+            idx = np.asarray(pos)
+            sub = np.ascontiguousarray(E[idx])
+            subf = None if factor is None else np.ascontiguousarray(factor[idx])
+            picked = [pos[i] for i in _farthest_point(sub, subf, take)]
+        chosen.extend(picked)
+        fr, cl = meta[key]
+        report.append({'key': key, 'framing': fr, 'cluster': cl,
+                       'available': len(pos), 'fair_share': fair[key],
+                       'selected': len(picked),
+                       'short': len(pos) < fair[key]})
+    order = {k: i for i, k in enumerate(_FRAMINGS)}
+    report.sort(key=lambda b: (order.get(b['framing'], 99),
+                               b['cluster'] if b['cluster'] is not None else -1))
+    return {'image_ids': sorted(ids[i] for i in chosen),
+            'pool': m, 'requested': n, 'selected': len(chosen),
+            'typicality': w, 'axis': axis, 'buckets': report,
+            'unlabelled': unlabelled, 'unknown': unknown,
+            'shortfall': max(0, n - len(chosen))}
 
 
 def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=None):

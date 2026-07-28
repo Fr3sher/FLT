@@ -589,6 +589,35 @@ def bank_select_diverse(bank_id):
     return jsonify({'ok': True, **out})
 
 
+@bp.post('/bank/<int:bank_id>/select-balanced')
+def bank_select_balanced(bank_id):
+    """Select N images SPREAD OVER the framing labels (optionally × person)
+    instead of the top of one ranking — the answer to "does my set cover what I
+    want to generate?". Same embeddings and same typicality guard as
+    select-diverse, applied inside each bucket. Never mutates.
+
+    {axis} 'framing' (default) | 'framing+person'. 400 with the exact missing
+    pass when Score hasn't run or nothing in the filter carries the label."""
+    data = request.get_json(silent=True) or {}
+    try:
+        n = int(data.get('n') or 60)
+    except (TypeError, ValueError):
+        n = 60
+    typ = data.get('typicality')
+    try:
+        typ = banks._TYPICALITY_DEFAULT if typ in (None, '') else float(typ)
+    except (TypeError, ValueError):
+        typ = banks._TYPICALITY_DEFAULT
+    try:
+        out = banks.select_balanced(LOCAL_USER, bank_id, n=n,
+                                    axis=data.get('axis') or 'framing',
+                                    typicality=typ,
+                                    filters=_curation_filters(data))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **out})
+
+
 @bp.post('/bank/<int:bank_id>/select-similar')
 def bank_select_similar(bank_id):
     """Rank the current filter by CLIP similarity to a reference bank image
