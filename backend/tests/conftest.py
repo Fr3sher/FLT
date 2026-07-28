@@ -136,6 +136,21 @@ def app(tmp_path, monkeypatch):
     # a test asserting "ComfyUI unconfigured -> RuntimeError" silently inherited a
     # previous test's real base_dir and passed for the wrong reason.
     monkeypatch.setattr(_cfg, '_cache', None)
+    # capabilities.py caches its WHOLE probe for 30 s in a module global, and that
+    # clock does not know tests exist: a file that ran seconds earlier -- with its
+    # own tmp config, so legitimately seeing no ai-toolkit -- leaves 'aitoolkit
+    # invalid' in the cache, and the next test's `client.get(.../preflight)` gets
+    # 409 instead of 200 no matter what config IT wrote. Reproduced 2/2 by running
+    # test_masked_dataset_setting.py before test_training_preflight.py.
+    #
+    # Same class as the two bank tests that failed a release this morning: a test
+    # whose answer depends on a shared clock fails INTERMITTENTLY, and intermittent
+    # reads as random. Clearing both caches per test makes the suite say what the
+    # test set up, and nothing else.
+    import app.capabilities as _caps
+    monkeypatch.setattr(_caps, '_cache', None)
+    monkeypatch.setattr(_caps, '_cache_ts', 0.0)
+    _caps._import_cache.clear()
     from app import create_app
     application = create_app({'TESTING': True, 'WTF_CSRF_ENABLED': False,
                               'SQLALCHEMY_DATABASE_URI': 'sqlite:///:memory:'})

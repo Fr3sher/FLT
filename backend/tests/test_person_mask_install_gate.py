@@ -109,17 +109,27 @@ def test_unmasked_launch_says_nothing(app, tmp_path, monkeypatch):
     assert not _row(r)
 
 
-def test_a_caller_that_states_no_intent_gets_the_historical_payload(app, tmp_path,
-                                                                   monkeypatch):
-    """The workspace readiness badge calls the same route with no `masked`. It
-    must keep getting exactly what it got before."""
+def test_a_caller_that_states_no_intent_reads_the_dataset(app, tmp_path,
+                                                         monkeypatch):
+    """REWRITTEN, and the rewrite IS the feature.
+
+    This test used to assert that a caller stating no intent got the historical
+    silent payload — correct while `masked` lived in the browser's localStorage,
+    because the server genuinely could not know. Now the setting is stored on the
+    dataset, so the workspace readiness badge — which states no intent, by
+    design — is exactly the caller that must be told: this dataset is set to
+    train masked and rembg is missing, so the run would train unmasked. Staying
+    silent here is the defect the stored setting was introduced to remove.
+
+    An explicit `masked=False` is still honoured and still silent; see
+    test_unmasked_launch_says_nothing."""
     from app.services import lora_training as lt
     _no_rembg(monkeypatch)
     with app.app_context():
         ds = _dataset(tmp_path, trigger='pmi_none')
         r = lt.training_preflight(LOCAL_USER, ds.id)
-    assert not _warn(r)
-    assert not _row(r)
+    assert _warn(r), 'the badge must say the dataset is set to masked'
+    assert _row(r)
 
 
 def test_concept_datasets_stay_silent(app, tmp_path, monkeypatch):

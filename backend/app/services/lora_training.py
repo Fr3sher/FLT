@@ -4982,7 +4982,19 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     # already returns False for concept/style and slider mode, where masks are
     # refused BY DESIGN and installing rembg would change nothing, so those stay
     # silent instead of emitting pure noise.
-    if person_masking_enabled(ds):
+    # resolve_masked, pas person_masking_enabled : un appelant qui EXPRIME une
+    # intention explicite (le panneau qui rejoue le drapeau gele d'un run, une
+    # relance cloud) doit etre cru — avertir « le dataset est en masque » a qui
+    # vient de dire « lance sans masque » serait un contresens. Sans intention
+    # (le badge de preparation, qui n'en a pas), on lit le reglage du dataset :
+    # c'est exactement ce que ce chantier rend possible.
+    # …ET les gardes de CONCEPTION, toujours. Une intention explicite decide de
+    # l'OPT-IN de l'utilisateur, jamais des cas ou le masque est refuse par
+    # construction : sur un concept/style le masque effacerait ce qu'on enseigne,
+    # et en mode slider la perte guidee ne lit jamais le masque. Sans cette
+    # seconde moitie, un `masked=True` explicite sur un concept enverrait
+    # installer rembg pour un run qui ne s'en servira jamais.
+    if resolve_masked(ds, masked) and not slider and not concept and not style:
         try:
             from . import person_mask
             person_mask_ok = person_mask.is_available()
