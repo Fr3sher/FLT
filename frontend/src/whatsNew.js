@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-comfyui-slow-is-not-comfyui-stopped',
+    date: '2026-07-28',
+    title: 'A busy ComfyUI is no longer reported as a stopped one',
+    blurb:
+      'The app gave ComfyUI 8 seconds to list its nodes and model files — and that list grows with every custom-node pack and every weight you install, so the richer your ComfyUI, the more likely it ran out of time. Krea 2 generations then refused with "ComfyUI isn\'t running" at a ComfyUI that was running perfectly. The budget is now 45 seconds and adjustable (Settings ▸ Local tools ▸ ComfyUI ▸ "ComfyUI response timeout"), and a slow ComfyUI and a stopped one no longer share one message: one tells you to raise the timeout, the other to start ComfyUI. A ComfyUI that is genuinely off is still detected in seconds, so nothing waits 45 seconds for nothing. Found, measured (~15 s on his install) and fixed by j_o_e_l. (Discord).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-28-cropping-no-longer-recompresses',
     date: '2026-07-28',
     title: 'Cropping no longer quietly re-compresses your image',
