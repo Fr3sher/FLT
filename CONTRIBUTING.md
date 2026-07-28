@@ -44,9 +44,11 @@ The repo **ships the frontend prebuilt** in `frontend/dist/` (that folder is com
 ```bash
 cd frontend
 npm install
-npm run dev      # live-reload dev server; proxies /api to the running backend (see frontend/README.md)
+npm run dev      # live-reload dev server; proxies /api to the backend on :5050
 npm run build    # writes frontend/dist/
 ```
+
+⚠ **`npm run dev` drives a real backend.** `/api` is proxied to `http://127.0.0.1:5050` — your actual install — and write requests go through. Set `LDS_DEV_API_TARGET` (shell, or `frontend/.env.local`) to point it at a throwaway instance instead; see [frontend/README.md](frontend/README.md).
 
 **If you change anything under `frontend/src`, run `npm run build` and commit the regenerated `frontend/dist/` in the same PR** — otherwise people running from source won't see your change. There's no TypeScript/ESLint step; a clean `npm run build` is the bar.
 
@@ -55,8 +57,11 @@ npm run build    # writes frontend/dist/
 The backend has a large test suite (950+ tests) and it must stay green:
 
 ```bash
+pip install -r backend/requirements-dev.txt   # pytest + the two test-only ML extras
 python -m pytest backend/tests -q
 ```
+
+`requirements-dev.txt` is **exactly** what CI and the release job install — that is the point of it. A suite green against a different set of packages is not evidence about CI: a stray `pytest-flask` on one dev machine once made nine tests pass locally and fail on the release tag. (The suite runs with `-p no:flask` for that reason; you do not need to uninstall anything.)
 
 This is exactly what CI runs on a release tag, so run it locally before you open a PR. If you add or change behavior, add or update a test for it. The suite mocks external tools (ComfyUI, ai-toolkit, Ollama), so it runs without a GPU or any of those installed.
 
