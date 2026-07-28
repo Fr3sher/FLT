@@ -327,6 +327,14 @@ const TOPICS = [
      'where did my image go', 'generation in progress', 'lost my run',
      'stop a canvas run', 'resume a canvas run', 'how many images'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
+  action('canvas-pin-all', '📌 Pin all of a run’s images at once',
+    ['pin all', 'pin all images', 'pin everything', 'pin the whole run',
+     'put all the images on the board', 'deploy all images to the canvas',
+     'one click pin', 'bulk pin', 'pin all 5', 'images ready button',
+     'undo pin all', 'too many images pinned', 'left out', 'contact sheet',
+     'why are my images under the tree', 'where did the pinned images go',
+     'pin all button missing', 'pin all does nothing', 'already pinned'],
+    '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-pinned-images', '📌 Pin an image onto the board',
     ['pin an image', 'pin to canvas', 'image on the canvas', 'put an image on the board',
      'compare two images side by side', 'move an image', 'resize an image',
@@ -336,7 +344,11 @@ const TOPICS = [
      // The feature existed for a while with no way to FIND it (viewer-only), so
      // "where is it" is a real search, not a hypothetical one.
      'where is pin to canvas', 'cannot find pin', 'pin from the thumbnail',
-     'pin button missing', 'pin without opening the image'],
+     'pin button missing', 'pin without opening the image',
+     // Reported from a phone: the ✕ "did not work". It was reachable-sized only
+     // at 100 % zoom, so this is a real search term, not a hypothetical one.
+     'cross does not close', 'cannot close a pinned image', 'close button too small',
+     'x does nothing', 'buttons too small on the canvas', 'canvas on a phone'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-deploy-state', 'Which checkpoints are deployed (the edge colour)',
     ['deployed', 'not deployed', 'blue bar', 'dashed bar', 'edge colour', 'legend',

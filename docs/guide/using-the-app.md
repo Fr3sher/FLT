@@ -914,8 +914,38 @@ picture and decide it belongs on the board.
   its connecting line.
 - Unticking a dataset takes its lane off the board, pinned images included; they
   come back with the lane, untouched.
-- **✦ Tidy up** does not throw pinned images away — it re-flows them beside their
-  cards, since the cards are what they were positioned against.
+- **✦ Tidy up** does not throw pinned images away — it re-flows them into the
+  same tidy band **📌 Pin all** uses, so a rebuild of the automatic tree can no
+  longer park a picture on top of a run card.
+- The **✕**, the **🔍** and the resize corner keep a finger-sized target **at
+  every zoom level**: they are drawn at a constant size on screen rather than at
+  the board's, so a board fitted to twenty runs is still one you can tap.
+
+**📌 Pin all — the whole lot in one gesture.** When a generation launched from
+the board finishes, the green bar says how many images are ready and names the
+checkpoints they joined. **📌 Pin all N to the board** puts every one of them on
+the board without opening a single gallery.
+
+- **Where they land.** In a band under the lane, **one column per checkpoint**,
+  each column under the checkpoint that produced it — so a lot spanning four runs
+  reads as four groups, and each picture still draws its own line back to its
+  pill. The band starts below everything already on the lane, which is what makes
+  the guarantee a real one: **nothing is ever placed on top of a run card, a
+  checkpoint pill or a picture you positioned yourself.**
+- **Big lots become a contact sheet.** A pair of renders lands full size; twenty
+  or thirty land as thumbnails, which is the size you actually compare that many
+  pictures at. Each one is still resizable afterwards like any other node.
+- **What is already on the board is left alone.** An image you have already
+  pinned is neither moved nor duplicated, and the button counts only what is
+  left — once everything is up, the button is simply not there any more. An
+  image you *closed* is offered again, and comes back where you closed it when
+  that spot is free.
+- **Nothing is stacked in silence.** One click places at most 40 pictures; if the
+  run made more, the bar says how many were left out and where to get them
+  (their checkpoint gallery). The count of what was actually pinned is announced
+  for screen readers too.
+- **↩ Undo** takes exactly the images that click added straight back off the
+  board, and nothing else.
 
 **Which checkpoints you can generate from, at a glance.** Every checkpoint pill
 carries its deployment state on its **left edge**: a **solid sky bar** means the
