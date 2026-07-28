@@ -17,6 +17,7 @@ import BankWatermarkPanel from './BankWatermarkPanel'
 import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 // Source-folder re-walk messages (pure/testable).
 import { folderSyncToast } from './bankSync.js'
+import { UNDO_HINT, undoBannerText, undoOffer, undoResultMessage } from './bankUndo.js'
 // Four progress states, not two — including the honest "I don't know" (pure/testable).
 import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } from './progressPresence.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
@@ -123,6 +124,44 @@ function ProgressUnknown({ stale }) {
         ? 'Lost contact — the progress above is the last thing we heard. The pass keeps running on the server.'
         : 'Lost contact — can’t read job progress right now. Anything you started keeps running on the server; this comes back when the connection does.'}
     </p>
+  )
+}
+
+/** ↩ The net under the bank's biggest gesture.
+ *
+ * Deliberately NOT a toast: a bar that vanishes after four seconds is unusable
+ * for anyone who reads slowly, and this is the one control you reach for after
+ * realising you just marked 400 images wrong. It stays until it is used,
+ * dismissed, or replaced by a newer action — and it is fed by the bank payload,
+ * so it is still there after a reload, unlike an undo that only ever lived in
+ * this tab.
+ *
+ * `role="status"` + `aria-live="polite"` so a screen reader is told the net
+ * exists at the moment the bulk action lands, without stealing focus from the
+ * grid. Both controls are real buttons, in tab order.
+ */
+function UndoBar({ offer, busy, onUndo, onDismiss }) {
+  if (!offer) return null
+  return (
+    <div role="status" aria-live="polite"
+      className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-sky-400/40 bg-sky-500/10 px-3 py-2 text-sm text-content">
+      <p className="m-0 min-w-0 grow basis-full sm:basis-auto">
+        <span aria-hidden>↩</span>{' '}
+        <span className="font-semibold">{undoBannerText(offer)}</span>
+        <span className="block text-xs text-content-muted sm:inline sm:before:content-['_—_']">
+          {UNDO_HINT}
+        </span>
+      </p>
+      <button type="button" onClick={onUndo} disabled={busy}
+        className="rounded border border-sky-400/60 px-2 py-1 text-xs font-semibold hover:bg-white/10 disabled:opacity-50">
+        {busy ? 'Undoing…' : '↩ Undo'}
+      </button>
+      <button type="button" onClick={onDismiss} disabled={busy}
+        title="Keep the change and hide this"
+        className="rounded border border-border px-2 py-1 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50">
+        Dismiss
+      </button>
+    </div>
   )
 }
 
@@ -397,6 +436,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [selected, setSelected] = useState(() => new Set())
   const [promoteOpen, setPromoteOpen] = useState(false)
   const [deleteRejectedOpen, setDeleteRejectedOpen] = useState(false)
+  // ↩ one step back over the last bulk decision. `undoDismissedAt` remembers the
+  // offer the user waved away by its timestamp, so the NEXT bulk action shows a
+  // bar again instead of inheriting the dismissal.
+  const [undoBusy, setUndoBusy] = useState(false)
+  const [undoDismissedAt, setUndoDismissedAt] = useState(0)
   const [launchOpen, setLaunchOpen] = useState(false)
   // ✨ Score's interpreter picker — reuse a CUDA Python this machine already has
   // instead of downloading another torch. Opened from the CPU warning.
@@ -641,6 +685,26 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     if (showSelected) { exitSelectionView(); setOffset(0); refreshImages(filter, 0, { on: false }) }
   }
 
+  // ↩ Put the last bulk decision back. The reply is a ledger, not an "ok": it
+  // is reported verbatim, so a restore that only got 340 of 400 rows back says
+  // which ones it could not take and why.
+  const undoLast = async () => {
+    setUndoBusy(true)
+    try {
+      const d = await postJson(`/api/bank/${bankId}/undo`, {})
+      const msg = undoResultMessage(d)
+      toast[msg.type === 'error' ? 'error' : msg.type](msg.text)
+      setSelected(new Set())
+      if (showSelected) exitSelectionView()
+      await refreshPayload(); await refreshImages()
+    } catch (e) {
+      toast.error(e?.message || 'Undo failed — nothing was changed.')
+      await refreshPayload()
+    } finally {
+      setUndoBusy(false)
+    }
+  }
+
   // 🔄 Quarter turns on the selection (idea by 1Tomber, GitHub #17). A whole
   // scraped folder can come out sideways, so this is a BULK action here rather
   // than a per-tile button — the tile already carries the selection gesture, the
@@ -821,6 +885,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   }
 
   const counts = payload?.counts
+  // ↩ the live offer, minus the one the user already waved away.
+  const offer = undoOffer(payload)
+  const undoBar = offer && offer.at !== undoDismissedAt ? offer : null
   const flags = payload?.flags || {}
   const resBuckets = payload?.res_buckets || {}
   // Only surface tiers that actually hold scanned images (plus the active one,
@@ -925,6 +992,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       </header>
 
       <ProgressBar activity={payload?.activity} onCancel={cancelJob} offline={!connection.online} />
+
+      <UndoBar offer={undoBar} busy={undoBusy} onUndo={undoLast}
+        onDismiss={() => setUndoDismissedAt(undoBar?.at || 0)} />
 
       {!live && payload?.pipeline_report
         && payload.pipeline_report.finished_at !== dismissedReportAt && (

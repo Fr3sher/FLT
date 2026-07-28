@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-bank-undo-last-bulk-decision',
+    date: '2026-07-28',
+    title: 'Marked 400 bank images by mistake? Take it back.',
+    blurb:
+      'A bank\'s bulk actions — ✓/✕ over a whole filter, auto-reject at a threshold, collapsing duplicate groups, 🚀 Launch all — now leave an ↩ Undo bar above the grid. One press puts every image back exactly as it was, its state and its reason, without touching the images the action never moved. The bar waits for you instead of vanishing on a timer, and it survives a page reload. Limits stated on the bar itself: one step back, and only until the app restarts. 🗑 Delete rejected and ⬆ Promote deliberately offer nothing, because neither can be undone honestly — and if an undo cannot restore everything, it says how many it restored and names what it left alone.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-cropping-no-longer-recompresses',
     date: '2026-07-28',
     title: 'Cropping no longer quietly re-compresses your image',

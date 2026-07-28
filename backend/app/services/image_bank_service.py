@@ -47,7 +47,7 @@ from sqlalchemy import and_, case, func, or_
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import bank_jobs, trash
+from . import bank_jobs, bank_undo, trash
 from .face_dataset_service import _dhash, _hamming, import_images
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
@@ -508,6 +508,7 @@ def delete_bank(user_id, bank_id) -> bool:
     BankImage.query.filter_by(bank_id=bank_id).delete(synchronize_session=False)
     db.session.delete(bank)
     db.session.commit()
+    bank_undo.clear(bank_id)     # its rows are gone; a stale offer would outlive them
     shutil.rmtree(_bank_dir(bank_id), ignore_errors=True)
     if imported_source and os.path.isdir(imported_source):
         try:
@@ -893,6 +894,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'clusters': clusters, 'faces_scanned': faces_scanned,
         'style_clusters': style_clusters,
         'activity': bank_jobs.get(bank_id),
+        # ↩ the one-step-back offer, so the bar survives a reload (the decision
+        # it takes back is in the database, not in a tab).
+        'undo': bank_undo.peek(bank_id),
         'pipeline_report': _load_pipeline_report(bank),
         'score_device': score_device_info(bank_id),
         'thresholds': th,
@@ -1658,7 +1662,7 @@ def _best_of(rows):
 
 def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
                  col=BankImage.dup_group, attr='dup_group', reason='duplicate',
-                 respect_existing_keep=True):
+                 respect_existing_keep=True, snapshot=None):
     """Resolve duplicate groups: keep one member, REJECT the others (a status,
     never a file deletion, so it's reversible). strategy 'best'|'first' applies to
     one group or, when ``group`` is None, to every unresolved group at once;
@@ -1673,10 +1677,19 @@ def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
     group to ONE, and the members of a same-shot group are typically ALL 'keep',
     so respecting keep would reject nobody. The elected keeper is always safe
     (``r.id in keep``); with False every OTHER member falls to reject, keep
-    included. Returns {'resolved': groups, 'rejected': images}."""
+    included. Returns {'resolved': groups, 'rejected': images}.
+
+    ``snapshot``: pass a live :class:`bank_undo.Snapshot` to fold this resolve
+    into a WIDER undo step (the pipeline's auto-reject is a flag pass plus this
+    one); omit it and the call publishes its own one-step undo offer."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    own_snapshot = snapshot is None
+    if own_snapshot:
+        snapshot = bank_undo.Snapshot(
+            'Resolve same-shot groups' if reason == 'semantic_dup'
+            else 'Resolve duplicate groups')
     keep_by_group = {}
     if keep_ids:
         rows = BankImage.query.filter(BankImage.bank_id == bank_id,
@@ -1707,44 +1720,61 @@ def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
         for r in rows:
             if r.id in keep or (respect_existing_keep and r.status == 'keep'):
                 continue
+            snapshot.note(r, 'reject', reason)
             r.status, r.reject_reason = 'reject', reason
             rejected += 1
             changed = True
         if changed or len(rows) >= 2:
             resolved += 1
     db.session.commit()
+    if own_snapshot:
+        snapshot.commit(bank_id)
     return {'resolved': resolved, 'rejected': rejected}
 
 
 def resolve_semantic_dups(user_id, bank_id, strategy='best', group=None,
-                          keep_ids=None, respect_existing_keep=True):
+                          keep_ids=None, respect_existing_keep=True,
+                          snapshot=None):
     """resolve_dups for stage 2 (semantic_dup_group, reject reason
     'semantic_dup')."""
     return resolve_dups(user_id, bank_id, strategy=strategy, group=group,
                         keep_ids=keep_ids, col=BankImage.semantic_dup_group,
                         attr='semantic_dup_group', reason='semantic_dup',
-                        respect_existing_keep=respect_existing_keep)
+                        respect_existing_keep=respect_existing_keep,
+                        snapshot=snapshot)
 
 
 # --- statuses & flag application --------------------------------------------
+_STATUS_UNDO_LABEL = {'keep': 'Keep images', 'reject': 'Reject images',
+                      'pending': 'Set images back to undecided'}
+
+
 def set_status(user_id, bank_id, ids, status) -> int:
-    """Manual keep/reject/pending on a selection. Returns rows changed."""
+    """Manual keep/reject/pending on a selection. Returns rows changed.
+
+    Snapshots the prior (status, reason) of every row it actually flips, so the
+    workspace can offer ONE step back — this is the gesture that puts hundreds of
+    decisions in flight at once (select the whole filter, then ✕)."""
     if status not in ('pending', 'keep', 'reject'):
         raise ValueError('bad status')
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
     ids = [int(i) for i in (ids or [])]
+    reason = 'manual' if status == 'reject' else None
+    snapshot = bank_undo.Snapshot(_STATUS_UNDO_LABEL[status])
     n = 0
     for i0 in range(0, len(ids), _SQL_IN_CHUNK):
         rows = BankImage.query.filter(
             BankImage.bank_id == bank_id,
             BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
         for r in rows:
+            snapshot.note(r, status, reason)
             r.status = status
-            r.reject_reason = 'manual' if status == 'reject' else None
+            r.reject_reason = reason
             n += 1
     db.session.commit()
+    snapshot.commit(bank_id)
     return n
 
 
@@ -1783,13 +1813,21 @@ def rotate_images(user_id, bank_id, ids, delta) -> dict:
     return {'rotated': len(rotations), 'rotations': rotations}
 
 
-def apply_flags(user_id, bank_id, flags) -> dict:
+def apply_flags(user_id, bank_id, flags, snapshot=None) -> dict:
     """Bulk-reject the PENDING images carrying the given flags. Manual ✓/✕
     decisions are never flipped (only status='pending' is touched) — same
-    contract as the dataset auto-triage. Returns per-flag reject counts."""
+    contract as the dataset auto-triage. Returns per-flag reject counts.
+
+    This is the mis-set-threshold accident in one click, so it snapshots what it
+    flipped. ``snapshot``: pass a live :class:`bank_undo.Snapshot` to fold the
+    pass into a wider undo step (the pipeline does); omit it and the call
+    publishes its own offer."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    own_snapshot = snapshot is None
+    if own_snapshot:
+        snapshot = bank_undo.Snapshot('Auto-reject by flag')
     th = thresholds()
     out = {}
     for flag in flags or []:
@@ -1801,10 +1839,81 @@ def apply_flags(user_id, bank_id, flags) -> dict:
         rows = (BankImage.query.filter_by(bank_id=bank_id, status='pending')
                 .filter(crit).all())
         for r in rows:
+            snapshot.note(r, 'reject', flag)
             r.status, r.reject_reason = 'reject', flag
         out[flag] = len(rows)
     db.session.commit()
+    if own_snapshot:
+        snapshot.commit(bank_id)
     return out
+
+
+# --- ↩ undo the last bulk decision ------------------------------------------
+_UNDO_NAME_SAMPLE = 8        # conflicting files quoted back so the user can find them
+
+
+def undo_offer(user_id, bank_id) -> dict | None:
+    """{label, count, at} for the workspace's ↩ bar, or None. Rides in the bank
+    payload the workspace already polls, which is what makes the offer survive a
+    reload — the decision it takes back lives in the database, not in a tab."""
+    if not get_bank(user_id, bank_id):
+        return None
+    return bank_undo.peek(bank_id)
+
+
+def undo_last(user_id, bank_id) -> dict:
+    """Put every row the last bulk decision changed back to what it was.
+
+    Three outcomes per row, all counted, because a restore that quietly missed
+    half of its rows would be worse than no undo at all:
+
+    * **restored** — the row is still there and still carries what the action
+      set, so it goes back to its recorded prior value (status AND reason: the
+      flag counters read the reason column);
+    * **missing** — the row left the bank since (a re-scan dropped a file that
+      disappeared from the folder);
+    * **conflict** — someone changed it since (another tab, ▶ Review, a later
+      pass). It is LEFT ALONE and named: overwriting a newer decision with an
+      older one is not "undo", it is a second accident.
+
+    Rows the action never touched are untouched here by construction — only the
+    snapshot's ids are read. Synchronous even on a big lot: the work is one
+    indexed SELECT plus in-place writes over the ids we already know, so a
+    5 000-image restore lands in well under a second — a progress bar would take
+    longer to render than the job it reports on.
+    """
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    if bank_jobs.running(bank_id):
+        raise RuntimeError('a pass is running on this bank — stop it first')
+    snap = bank_undo.take(bank_id)
+    if not snap or not snap['rows']:
+        raise ValueError('nothing to undo')
+
+    entries = snap['rows']
+    ids = list(entries)
+    seen = set()
+    restored = conflicts = 0
+    conflict_names = []
+    for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+        rows = BankImage.query.filter(
+            BankImage.bank_id == bank_id,
+            BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
+        for r in rows:
+            seen.add(r.id)
+            entry = entries[r.id]
+            if (r.status, r.reject_reason) != tuple(entry['after']):
+                conflicts += 1
+                if len(conflict_names) < _UNDO_NAME_SAMPLE:
+                    conflict_names.append(os.path.basename(r.relpath))
+                continue
+            r.status, r.reject_reason = entry['before']
+            restored += 1
+    db.session.commit()
+    return {'label': snap['label'], 'total': len(ids), 'restored': restored,
+            'missing': len(ids) - len(seen), 'conflicts': conflicts,
+            'conflict_names': conflict_names}
 
 
 # --- curation selectors (diversity · reference similarity) ------------------
@@ -2321,6 +2430,10 @@ def delete_rejected(user_id, bank_id) -> dict:
         ).delete(synchronize_session=False)
     out['rows_removed'] = len(remove_ids)
     db.session.commit()
+    # The pending ↩ offer points at rows this run just dropped — restoring them
+    # would find nothing. Withdraw it rather than advertise a restore we cannot
+    # perform (the files themselves went to a trash only the user can reach).
+    bank_undo.clear(bank_id)
     # Report the WORST outcome that happened: one permanently removed file makes
     # the run 'delete', whatever the rest did. The UI wording follows this.
     for mode in ('delete', 'app_trash', 'trash'):
@@ -3684,10 +3797,17 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
                            or f"scanned {c['scanned']}, {c['dup_groups']} duplicate group(s)")
         return
     if step == 'auto_reject':
-        rejected = apply_flags(user_id, bank_id, reject_flags) if reject_flags else {}
+        # ONE undo offer for the whole step, not one per sub-pass: the user fired
+        # "Launch all", so the unit they would take back is the auto-reject, not
+        # its second half. The later steps only ADD analysis columns, so undoing
+        # this one leaves them consistent.
+        snap = bank_undo.Snapshot('Launch all — auto-reject')
+        rejected = (apply_flags(user_id, bank_id, reject_flags, snapshot=snap)
+                    if reject_flags else {})
         dup_rejected = 0
         if resolve_dups:
-            dup_rejected = resolve_dups_keep_best(user_id, bank_id)
+            dup_rejected = resolve_dups_keep_best(user_id, bank_id, snapshot=snap)
+        snap.commit(bank_id)
         n = sum(rejected.values()) + dup_rejected
         entry['counts'] = {'rejected': n, 'by_flag': rejected,
                            'duplicates': dup_rejected}
@@ -3765,10 +3885,10 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
     entry['status'], entry['reason'] = 'skipped', 'unknown step'
 
 
-def resolve_dups_keep_best(user_id, bank_id) -> int:
+def resolve_dups_keep_best(user_id, bank_id, snapshot=None) -> int:
     """Auto-resolve every unresolved duplicate group keeping the best member,
     for the pipeline's auto-reject step. Returns the number REJECTED."""
-    out = resolve_dups(user_id, bank_id, strategy='best')
+    out = resolve_dups(user_id, bank_id, strategy='best', snapshot=snapshot)
     return out.get('rejected', 0)
 
 
