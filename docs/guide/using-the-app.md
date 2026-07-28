@@ -692,6 +692,31 @@ Every field has **↺ Reset to default** (it only appears when the value is not
 the default), and the header carries **↺ Reset all to defaults**. The defaults
 come from the server, so they are always the real shipped values.
 
+### What editing an image costs it
+
+Crop, ✂ Mirror, ↺ Rotate and the watermark cleaners **overwrite** the file the
+trainer will later copy verbatim, so whatever they discard is discarded for good.
+They all follow one rule: **keep the file's format and re-encode it without losing
+pixels.** A PNG stays a PNG, a WebP is rewritten losslessly (crop it ten times and the tenth
+is identical to the first), and the file keeps a name that matches what is inside
+it. JPEG is the exception nobody can fix — it has no lossless mode — so a JPEG is
+re-saved at the highest practical quality with no chroma subsampling rather than
+converted to something heavier to protect pixels that were already lossy.
+
+Two honest caveats:
+
+- **Cropping still resamples.** The crop is normalised to a 1024 px long side, and
+  a small box is enlarged to reach it (that is what the ⚠ upscale warning is
+  about). Only the *encoding* is lossless; the resize never can be. The watermark
+  **✂ auto-crop**, which only cuts and never resizes, is lossless end to end.
+- **Files get bigger.** A cropped photo that used to weigh ~200 KB now weighs
+  ~950 KB. That is the price of not throwing pixels away. Thumbnails and the
+  copies uploaded to a generation API are unaffected: they stay small on purpose.
+
+Images you cropped **before** this changed keep the pixels they have — nothing is
+re-processed retroactively, and re-cropping an already-degraded file cannot bring
+back what the old encoder removed.
+
 ## Rotate a sideways image
 
 Scraped folders and phone exports are full of shots lying on their side. Both
