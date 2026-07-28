@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-28-offline-is-not-empty',
+    date: '2026-07-28',
+    title: 'Losing the connection no longer looks like your job stopped',
+    blurb:
+      'Leaving a running pass and coming back on a phone used to greet you with ten stacked "Connection lost" banners over the whole app — and no progress bar, because the poll behind it had failed. The banners are now one line that counts repeats, automatic polls fail silently, and a single "Offline — reconnecting…" strip takes over: your progress stays on screen, marked as the last thing we heard. Passes always kept running on the server; now the screen says so, and says it again when the connection is back.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-preflight-before-cloud-and-continue',
     date: '2026-07-28',
     title: 'The pre-training check now runs before a cloud run and before ▶ Continue',

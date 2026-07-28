@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { useCapabilities } from '../../context/CapabilitiesContext'
+import { useConnectionStatus } from '../../hooks/useConnectionStatus'
 import DupGroupsPanel from './DupGroupsPanel'
 import PromoteDialog from './PromoteDialog'
 import DeleteRejectedDialog from './DeleteRejectedDialog'
@@ -14,6 +15,8 @@ import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
 // Source-folder re-walk messages (pure/testable).
 import { folderSyncToast } from './bankSync.js'
+// Four progress states, not two — including the honest "I don't know" (pure/testable).
+import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } from './progressPresence.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
 import { openerLabel } from './scoringPython.js'
@@ -105,16 +108,37 @@ const STEP_SHORT = {
   framing: '📐 Framing', caption: '🏷️ Caption',
 }
 
-function ProgressBar({ activity, onCancel }) {
-  if (!activity || activity.finished) return null
+/* No contact with the server, so no fresh job snapshot. Saying NOTHING here is
+   the bug this replaces: a pass that is running perfectly well in the bank's
+   server-side thread looked exactly like a pass that had stopped. Plain text,
+   NOT a live region — the global ConnectionBanner already announces the outage
+   once, and a second live region would double every announcement. */
+function ProgressUnknown({ stale }) {
+  return (
+    <p className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm text-content-muted">
+      <span aria-hidden>📡</span>{' '}
+      {stale
+        ? 'Lost contact — the progress above is the last thing we heard. The pass keeps running on the server.'
+        : 'Lost contact — can’t read job progress right now. Anything you started keeps running on the server; this comes back when the connection does.'}
+    </p>
+  )
+}
+
+function ProgressBar({ activity, onCancel, offline = false }) {
+  const presence = progressPresence(activity, offline)
+  if (presence === PROGRESS_HIDDEN) return null
+  if (presence === PROGRESS_UNKNOWN) return <ProgressUnknown />
+  const stale = presence === PROGRESS_STALE
   const { kind, done, total, detail } = activity
   const pct = total > 0 ? Math.round((100 * done) / total) : null
   const pipe = kind === 'pipeline' ? activity.pipeline : null
   return (
     <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm">
-      <div className="flex items-center gap-3">
+      {/* flex-wrap: at 400 px the label, the bar and Stop cannot share one row —
+          they used to squash the label to a sliver. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         <span aria-hidden>⏳</span>
-        <span className="text-content">
+        <span className={`text-content ${stale ? 'opacity-60' : ''}`}>
           {pipe
             ? `🚀 Launch all — step ${(pipe.index ?? 0) + 1}/${pipe.total_steps} · ${STEP_SHORT[pipe.current] || pipe.current}`
             : ({ scan: 'Quality scan', faces: 'Face pass', score: 'Scoring pass',
@@ -134,6 +158,7 @@ function ProgressBar({ activity, onCancel }) {
           Stop
         </button>
       </div>
+      {stale && <ProgressUnknown stale />}
       {pipe && Array.isArray(pipe.results) && pipe.results.length > 0 && (
         <ul className="flex flex-wrap gap-1.5 pl-6 text-xs">
           {pipe.results.map((r, i) => (
@@ -420,6 +445,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [review, setReview] = useState(null)
   const [reviewLoading, setReviewLoading] = useState(false)
   const activityWasLive = useRef(false)
+  // 📡 Drives the "we lost contact" note in the progress zone: a failed poll
+  // must never render as "no job running".
+  const connection = useConnectionStatus()
 
   const loadCoverage = useCallback(async () => {
     try {
@@ -436,7 +464,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       // ?refresh=1 forces the source-folder re-walk (the bank was just opened);
       // a plain poll lets the server's cooldown decide, so the 2 s job poll
       // doesn't hammer the disk.
-      const d = await apiFetch(`/api/bank/${bankId}${opts.force ? '?refresh=1' : ''}`)
+      const d = await apiFetch(`/api/bank/${bankId}${opts.force ? '?refresh=1' : ''}`,
+        { background: !!opts.background })
       setPayload(d)
       // Images dropped in the folder show up on their own — say it, and pull
       // them into the grid, so the counters never move without a reason.
@@ -513,7 +542,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       return undefined
     }
     activityWasLive.current = true
-    const t = setInterval(refreshPayload, 2000)
+    // background: this 2 s tick is the one that stacked ten "Connection lost"
+    // banners over the whole app when the phone's connection dropped.
+    const t = setInterval(() => refreshPayload({ background: true }), 2000)
     return () => clearInterval(t)
   }, [live, refreshPayload, refreshImages, toast, payload?.activity?.error,
       payload?.activity?.cancelled, payload?.activity?.detail])
@@ -888,7 +919,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         )}
       </header>
 
-      <ProgressBar activity={payload?.activity} onCancel={cancelJob} />
+      <ProgressBar activity={payload?.activity} onCancel={cancelJob} offline={!connection.online} />
 
       {!live && payload?.pipeline_report
         && payload.pipeline_report.finished_at !== dismissedReportAt && (
