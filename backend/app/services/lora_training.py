@@ -4543,7 +4543,7 @@ _VRAM24_FAMILIES = ('krea', 'flux')   # familles 12B qui recommandent ~24 GB à 
 
 
 def training_preflight(user_id, dataset_id, train_type=None, variant=None,
-                       lane=None) -> dict:
+                       lane=None, masked=None) -> dict:
     """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
     stop the launch (too few images for the family); warnings ask for one explicit
     confirm in the UI. Pure reads — never mutates, never raises on probe failures
@@ -4565,7 +4565,13 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     lines: that hardware will not run the job, and on a machine with no local
     training environment at all they would fire on every single cloud launch —
     which is exactly how users learn to click through warnings without reading
-    them. Default 'local' keeps the historical payload byte-for-byte."""
+    them. Default 'local' keeps the historical payload byte-for-byte.
+
+    ``masked`` says whether the caller intends MASKED training (person masks). It
+    is a client-side preference the server cannot read, so it is passed in; None
+    (the default) means "not stated" and the person-mask row is omitted entirely —
+    warning about a mask nobody asked for is exactly the noise that teaches people
+    to click through preflights."""
     from .face_variations import caption_has_identity_leak
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
@@ -4895,6 +4901,45 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         elif face_mask_ok:
             _check('face_mask', 'Face masking ready', 'ok',
                    'InsightFace found — the faces will be weighted down')
+
+    # 10) PERSON masking asked for, but rembg isn't installed.
+    #
+    # The exact twin of the face-mask row above, and it was missing: the person
+    # masks are the DEFAULT for a character run, and their absence downgraded the
+    # run to unmasked with the only trace a flag on the live progress view — which
+    # is gone as soon as the run ends. Someone pays for a full run, local or on a
+    # rented pod, and learns their LoRA memorised the room only by testing the
+    # result (issue #24, 1Tomber).
+    #
+    # WARNING, NOT A BLOCKER — deliberately, for two reasons. Training unmasked is
+    # a legitimate choice, not a broken state; and the probe behind `masks` is a
+    # subprocess import whose TIMEOUT collapses to False (capabilities._cached_import),
+    # a cold `import rembg` measured ~20 s — so a hard refusal would turn a slow
+    # machine into a machine that cannot launch at all. The gate that helps is one
+    # explicit, informed acknowledgement, which is what a preflight warning is.
+    #
+    # `masked` is the CLIENT's intent (a localStorage preference the server never
+    # sees), so it rides in as a parameter. None = the caller did not say → stay
+    # silent rather than guess, and the payload is byte-for-byte the historical one.
+    # Concept/style/slider force person masks OFF by design, so they never warn.
+    if masked and not slider and not concept and not style:
+        try:
+            from .. import capabilities
+            masks_ok = capabilities.probe_masks().get('ok')
+        except Exception:
+            masks_ok = None      # probe blew up -> say nothing, never block
+        if masks_ok is False:
+            warnings.append(
+                'Masked training is ON, but the person-mask backend (rembg) is not '
+                'installed — this run would train UNMASKED, with the background at '
+                'full loss weight, so the LoRA also learns the rooms. Install '
+                '"Person masks" from the Setup tab, or untick 🎭 Masked in Advanced '
+                'training options to train unmasked on purpose.')
+            _check('person_mask', 'Person masking ready', 'warn',
+                   'rembg is not installed — this run trains unmasked')
+        elif masks_ok:
+            _check('person_mask', 'Person masking ready', 'ok',
+                   'rembg found — the background will be weighted down')
 
     # Lane filter — BEFORE the verdict, so a cloud launch whose only complaint was
     # this machine's GPU comes back a clean 🟢 instead of a warning nobody can act

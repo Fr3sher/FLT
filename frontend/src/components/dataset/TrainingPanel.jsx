@@ -694,7 +694,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const preflightOk = async ({ lane, trainType: tt, variant: va } = {}) => {
     try {
       const r = await fetch(
-        preflightUrl(ds.currentId, { trainType: tt ?? trainType, variant: va ?? variant, lane }),
+        // `masked` rides along so the modal can say "rembg is missing — this run
+        // trains unmasked" BEFORE the GPU (or the rented pod) is paid for, instead
+        // of the fallback showing up as a flag on a progress view that disappears
+        // when the run ends (issue #24, 1Tomber).
+        preflightUrl(ds.currentId, { trainType: tt ?? trainType, variant: va ?? variant,
+                                     lane, masked }),
         { credentials: 'include' });
       if (!r.ok) return true;
       const d = await r.json();
