@@ -225,6 +225,11 @@ def dataset_list():
         {'id': d.id, 'name': d.name, 'trigger_word': d.trigger_word, 'ref_filename': d.ref_filename,
          'kind': ((d.kind or '').lower() or 'character'),
          'train_type': (d.train_type or 'zimage'),
+         # Where the dataset's images live on disk. Displayed on the dataset (with
+         # a copy button), and read by the 🗃 bank creation form so it can say
+         # "that folder belongs to a dataset" WHILE the path is being typed —
+         # the server refuses it either way (services/path_guard.py).
+         'storage_path': dataset_path(d.id),
          **(stats.get(d.id) or empty)}
         for d in dss]})
 

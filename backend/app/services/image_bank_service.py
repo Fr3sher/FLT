@@ -49,7 +49,7 @@ from sqlalchemy import and_, case, func, or_
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import bank_jobs, bank_undo, trash
+from . import bank_jobs, bank_undo, path_guard, trash
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _hamming, _SCRAPE_DL_WORKERS, _watermark_regions_payload,
                                    import_images, normalize_watermark_regions)
@@ -242,6 +242,13 @@ def create_bank(user_id, name, folder):
         raise ValueError('name is required')
     if not folder or not os.path.isdir(folder):
         raise ValueError(f'folder not found or not readable: {folder or "(empty)"}')
+    # A bank and a dataset only ever TRANSIT images (by copy) — they never share
+    # them. This folder is the one place that door was open: a dataset's storage
+    # folder pasted here made a bank over the dataset's LIVE files, and this
+    # bank's 🗑 Delete rejected then deleted images out of the dataset.
+    conflict = path_guard.dataset_folder_conflict(folder)
+    if conflict:
+        raise ValueError(conflict['message'])
     folder = os.path.realpath(folder)
     rels = []
     for root, _dirs, files in os.walk(folder):
@@ -410,6 +417,12 @@ def _relocate_target(folder) -> str:
         raise ValueError('a folder is required')
     if not os.path.isdir(folder):
         raise ValueError(f'folder not found or not readable: {folder}')
+    # Relocation is the SAME door as creation, just later: repointing a bank at a
+    # dataset's storage folder shares the files exactly as creating it there
+    # would. Refused in the dry run too, so the dialog never offers the move.
+    conflict = path_guard.dataset_folder_conflict(folder)
+    if conflict:
+        raise ValueError(conflict['message'])
     return os.path.realpath(folder)
 
 
@@ -926,6 +939,10 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'undo': bank_undo.peek(bank_id),
         'pipeline_report': _load_pipeline_report(bank),
         'score_device': score_device_info(bank_id),
+        # Non-null only on a bank created before the create-time guard, whose
+        # folder IS a dataset's storage. The workspace turns it into a standing
+        # banner and disables 🗑 Delete rejected, which the server refuses anyway.
+        'dataset_conflict': bank_dataset_conflict(user_id, bank_id),
         'thresholds': th,
     }
 
@@ -2677,6 +2694,33 @@ def overlapping_banks(user_id, bank_id) -> list:
     return sorted(out, key=lambda o: o['id'])
 
 
+class BankSharesDataset(ValueError):
+    """A destructive action was asked of a bank whose folder IS a dataset's.
+
+    A subclass of ValueError so nothing that already catches ValueError starts
+    500-ing, but a distinct type so the one route that answers 404 to "bank not
+    found" can tell this apart and answer 400 with the explanation instead."""
+
+
+def bank_dataset_conflict(user_id, bank_id) -> dict | None:
+    """Does THIS bank already sit on a dataset's storage folder? None when it
+    does not — which is every bank the guard in create_bank/_relocate_target has
+    ever seen.
+
+    The guard alone protects nobody who already has such a bank: it was created
+    before the guard existed, it is in their database right now, and the click
+    that hurts is 🗑 Delete rejected. So the conflict is DETECTED at open time
+    (it rides in the workspace payload, which is also the 2 s poll — one
+    realpath, no walk) and the destructive action refuses. Deliberately nothing
+    else: the bank stays fully readable and fully triageable, and NOTHING is
+    ever removed on the app's own initiative. Only the user can decide whether
+    that bank should be relocated or dropped."""
+    bank = get_bank(user_id, bank_id)
+    if not bank or not bank.source_path:
+        return None
+    return path_guard.dataset_folder_conflict(bank.source_path)
+
+
 def rejected_delete_preview(user_id, bank_id) -> dict | None:
     """What a 🗑 Delete rejected would actually destroy — the honest warning the
     confirmation needs. Counts the rejected files of this bank that ANOTHER bank
@@ -2712,7 +2756,10 @@ def rejected_delete_preview(user_id, bank_id) -> dict | None:
         if n:
             shared.append({'id': other['id'], 'name': other['name'],
                            'relation': other['relation'], 'files': n})
-    return {'rejected': len(rows), 'mode': _delete_mode(), 'shared': shared}
+    return {'rejected': len(rows), 'mode': _delete_mode(), 'shared': shared,
+            # The hard stop, next to the soft warnings: another BANK losing files
+            # is a warning the user may accept, a DATASET losing them is not.
+            'dataset_conflict': bank_dataset_conflict(user_id, bank_id)}
 
 
 def _delete_mode() -> str:
@@ -2747,6 +2794,16 @@ def delete_rejected(user_id, bank_id) -> dict:
         raise ValueError('bank not found')
     if bank_jobs.running(bank_id):
         raise RuntimeError('a job is running on this bank — stop it first')
+    # An install that predates the create-time guard can still hold a bank whose
+    # folder IS a dataset's. Here, and only here, that stops being cosmetic: these
+    # "rejects" are the dataset's images. Refuse — never silently delete, never
+    # silently clean up on the user's behalf.
+    conflict = bank_dataset_conflict(user_id, bank_id)
+    if conflict:
+        raise BankSharesDataset(
+            'This bank points at a dataset\'s own image folder, so deleting its '
+            'rejected files would delete images out of the dataset. Nothing was '
+            f'deleted. {conflict["message"]}')
 
     rows = BankImage.query.filter_by(bank_id=bank_id, status='reject').all()
     out = {'mode': 'trash', 'deleted': 0, 'trashed': 0, 'already_absent': 0,
@@ -4699,6 +4756,15 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
         folder = bank.source_path
         if not folder or not os.path.isdir(folder):
             raise ValueError('this bank\'s folder is unavailable — relocate it first')
+        # Appending here WRITES into the bank's folder. On a legacy bank sitting
+        # on a dataset that means downloading scraped files straight into the
+        # dataset's training images — not destructive, but exactly the sharing
+        # this guard exists to end.
+        conflict = path_guard.dataset_folder_conflict(folder)
+        if conflict:
+            raise ValueError(
+                'This bank points at a dataset\'s own image folder, so scraping '
+                f'into it would drop files inside the dataset. {conflict["message"]}')
     else:
         name = (name or '').strip()
         if not name:

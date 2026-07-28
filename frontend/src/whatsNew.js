@@ -109,6 +109,22 @@ export const WHATS_NEW = [
       'Continue training closed the moment you clicked it, so a refusal left you with an error and an empty form: the lane, the checkpoint to resume from, the extra steps and every adjusted setting had to be typed again, with no clue which of them was refused. The form now stays open, the reason appears inside it next to those choices, and only a launch that actually starts closes it.',
   },
   {
+    id: '2026-07-28-a-bank-can-no-longer-be-created-on-a-dataset-folder',
+    date: '2026-07-28',
+    title: 'A bank can no longer be pointed at a dataset’s own image folder',
+    blurb:
+      'Nothing stopped you from pasting a dataset’s storage folder into “Create bank”. The bank then listed the dataset’s live files — and its 🗑 Delete rejected deleted images out of the dataset, with no warning at all. A bank and a dataset only ever pass images to each other by copy, so that folder is now refused at creation and when moving a bank, and the refusal names the dataset and sends you to 🗃 Import to bank instead (which copies). The check sees through subfolders, the folder holding all datasets, a different case, other separators, and symlinks or Windows junctions. If you already have such a bank, nothing is deleted or repaired behind your back: opening it says so, and only the destructive button is refused.',
+    to: '/bank',
+  },
+  {
+    id: '2026-07-28-a-dataset-now-shows-where-its-images-are-on-disk',
+    date: '2026-07-28',
+    title: 'A dataset now shows where its images are on disk',
+    blurb:
+      'The folder holding a dataset’s images was displayed nowhere, so finding it meant digging through the app’s data directory by hand. It is now at the top of the dataset with a copy button — next to the one line worth knowing: that folder belongs to the dataset, and it must not be used as an image bank’s source.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',

@@ -1045,6 +1045,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             </button>
           </div>
         )}
+        {/* A bank created before this was refused can still point at a dataset's
+            own image folder. Nothing is repaired behind the user's back — the
+            bank stays fully readable — but the fact is stated every time it is
+            opened, because the click that hurts (🗑 Delete rejected) is right
+            here on this page. */}
+        {payload?.dataset_conflict && (
+          <div role="alert"
+            className="rounded-md border border-rose-500/70 bg-rose-500/15 p-3 text-sm text-rose-100 space-y-1">
+            <p className="font-semibold">⛔ This bank sits on a dataset’s image folder</p>
+            <p className="text-rose-100/90">{payload.dataset_conflict.message}</p>
+            <p className="text-rose-100/90">
+              🗑 Delete rejected is disabled here. Use 📦 Move folder… to point this
+              bank at a folder of its own, or remove the bank — removing a bank never
+              touches files.
+            </p>
+          </div>
+        )}
         <FolderSyncNote sync={payload?.folder_sync}
           onRelocate={() => setRelocating(true)} />
         {counts && (
@@ -1857,11 +1874,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           className="rounded-md bg-gradient-primary px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50">
           ⬆ Promote…
         </button>
+        {/* Disabled outright when this bank's folder belongs to a dataset: the
+            banner above says it is, and a button that still opened a dialog only
+            to be refused there would make that sentence a lie. */}
         <button type="button" onClick={() => setDeleteRejectedOpen(true)}
-          disabled={live || !(counts?.reject > 0)}
-          title={(counts?.reject > 0)
-            ? 'Delete the rejected images from your disk (OS trash when available). Irreversible — asks you to type DELETE first. Kept images are untouched.'
-            : 'No rejected images to delete'}
+          disabled={live || !(counts?.reject > 0) || !!payload?.dataset_conflict}
+          title={payload?.dataset_conflict
+            ? 'This bank sits on a dataset’s image folder — deleting these files would delete the dataset’s images.'
+            : (counts?.reject > 0)
+              ? 'Delete the rejected images from your disk (OS trash when available). Irreversible — asks you to type DELETE first. Kept images are untouched.'
+              : 'No rejected images to delete'}
           className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm text-rose-300 disabled:opacity-40 hover:bg-rose-500/10">
           🗑 Delete rejected from disk{(counts?.reject > 0) ? ` (${counts.reject})` : ''}
         </button>

@@ -786,6 +786,10 @@ def bank_delete_rejected(bank_id):
     gates it behind a type-DELETE confirmation fed by the preview above."""
     try:
         out = banks.delete_rejected(LOCAL_USER, bank_id)
+    except banks.BankSharesDataset as e:
+        # Not "not found": the bank exists, and the refusal is the whole point —
+        # its folder is a dataset's, so this delete would amputate the dataset.
+        return jsonify({'error': str(e)}), 400
     except ValueError:
         return jsonify({'error': 'not found'}), 404
     except RuntimeError as e:
