@@ -327,8 +327,9 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
 - **Reference**
   - [Why this instead of ai-toolkit?](#why-this-instead-of-ai-toolkit)
   - [Feature matrix by backend](#feature-matrix-by-backend)
-  - [Run it your way](#run-it-your-way)
+  - [Run it your way](#run-it-your-way) — full local, API-only, **Docker**
   - [Setup & install](#setup--install)
+    - [Docker (API-only, no GPU)](#option-3--docker-api-only)
   - [Minimum requirements](#minimum-requirements)
   - [Configuration & settings reference](#configuration--settings-reference)
   - [Exposing the app beyond localhost](#exposing-the-app-beyond-localhost)
@@ -666,7 +667,9 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 
 ## Run it your way
 
-**API-only** — dataset creation, generation via Gemini/ChatGPT, import/scrape, manual curation/captions, backup and export. Runs on any machine with Python and no GPU; this is what the Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
+**API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
+
+The Docker image installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What the container cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA. Local training needs ai-toolkit on the host.
 
 **Full local** — everything above plus Klein/Z-Image generation, captioning via JoyCaption, face scoring, masks, the Image bank scoring pass, training, and Test Studio. Requires ComfyUI and/or ai-toolkit running on the same host (or reachable over the network) and an NVIDIA GPU with 12 GB+ VRAM for Klein/Z-Image inference. Training VRAM depends on the model family — check the family's ai-toolkit preset before queuing a run. The face-scoring and masking helpers (`requirements-ml.txt`) run fine on CPU; they don't need the GPU.
 
