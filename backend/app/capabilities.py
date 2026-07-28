@@ -147,6 +147,16 @@ def _object_info_timeout() -> int:
     return _cu.object_info_timeout()
 
 
+def _dataset_import_policy() -> dict:
+    """The effective import resolution/encoding, published for the UI. Lazy
+    import for the same reason as _object_info_timeout: the service imports
+    config, not capabilities."""
+    from .services import face_dataset_service as _fds
+    p = _fds.import_encode_policy()
+    return {'max_side': p['max_side'], 'encoding': p['encoding'],
+            'capped': p['capped'], 'ceiling': p['ceiling']}
+
+
 def comfyui_down_message(status, waited) -> str:
     """THE sentence for a ComfyUI that isn't answering. Two causes, two remedies —
     never one fits-all line.
@@ -1457,6 +1467,11 @@ def probe(force=False) -> dict:
         # review lightbox uses it as the per-image crop-vs-inpaint default; when False,
         # auto-routing repaints border marks instead of cropping them.
         'watermark_allow_crop': bool(cfg.get('watermark.allow_crop')),
+        # What an imported photo will actually be STORED as (Settings ▸ Captioning
+        # & quality ▸ Dataset import). Published so the import screens can quote
+        # the number instead of keeping their own copy of the default — the whole
+        # point of the setting is that the rule stops being invisible.
+        'dataset_import': _dataset_import_policy(),
         'python': python_ml_status(),
         'scrape_deps': probe_scrape_deps()['ok'],
         'training_visible': aitoolkit['ok'] or bool(cfg.secret('VAST_API_KEY')),

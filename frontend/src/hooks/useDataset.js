@@ -1243,7 +1243,12 @@ export function useDataset() {
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
     const parts = [`${d.imported} imported`];
     if (d.captions) parts.push(`${d.captions} caption(s) attached`);
+    // The caption-elsewhere round trip: images already here are duplicates by
+    // design, so "N duplicates skipped" alone read as a failure. Say what the
+    // trip actually brought back.
+    if (d.captions_applied) parts.push(`${d.captions_applied} caption(s) applied to images already here`);
     if (d.duplicates) parts.push(`${d.duplicates} duplicate(s) skipped`);
+    if (d.captions_kept) parts.push(`${d.captions_kept} kept the caption written here`);
     if (d.failed) parts.push(`${d.failed} unreadable`);
     toast.success(parts.join(' · '));
     if (d.small) toast.warning(`${d.small} image(s) under 768 px — they will stay soft in training.`);
@@ -1258,7 +1263,12 @@ export function useDataset() {
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
     const parts = [`${d.imported} imported`];
     if (d.captions) parts.push(`${d.captions} caption(s) attached`);
+    // The caption-elsewhere round trip: images already here are duplicates by
+    // design, so "N duplicates skipped" alone read as a failure. Say what the
+    // trip actually brought back.
+    if (d.captions_applied) parts.push(`${d.captions_applied} caption(s) applied to images already here`);
     if (d.duplicates) parts.push(`${d.duplicates} duplicate(s) skipped`);
+    if (d.captions_kept) parts.push(`${d.captions_kept} kept the caption written here`);
     if (d.failed) parts.push(`${d.failed} unreadable`);
     toast.success(parts.join(' · '));
     if (d.small) toast.warning(`${d.small} image(s) under 768 px — they will stay soft in training.`);

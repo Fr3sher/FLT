@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-import-resolution-is-yours-to-choose',
+    date: '2026-07-28',
+    title: 'You choose what resolution your imported photos are stored at',
+    blurb:
+      'Every image entering a dataset was resampled to 1024 px and re-encoded as WebP quality 92 — with no setting anywhere and nothing on screen saying why. Settings ▸ Captioning & quality ▸ Dataset import now lets you pick 1024 to 4096 px, or the original size, and the encoding alongside it (quality 92, quality 100, or fully lossless) — because the resolution was only half the loss. The default is unchanged at 1024/q92, so nothing already imported moves, and the import dropzone now states what it is about to store and why, with a link to change it. Original size still stops at 8192 px: WebP itself refuses past 16383. Thanks to Qeeyana (Reddit) for asking why the app was deciding this for you.',
+    to: '/settings/captioning',
+  },
+  {
+    id: '2026-07-28-caption-elsewhere-round-trip',
+    date: '2026-07-28',
+    title: 'Caption your images in another tool, and bring the captions back',
+    blurb:
+      'A Style dataset refused to export its ZIP until every kept image was captioned, with no way past it — which blocked something perfectly reasonable: getting the bare images out to caption them in your own tool. That refusal is now a confirmation that explains what an empty caption does to a Style LoRA, and cancelling still takes you to the captions. The return trip works too, and that was the real gap: re-importing those images with their new .txt files used to drop every one of them as a duplicate, captions included. Their captions now land on the images already in the dataset, a caption you wrote here is never overwritten, and the Import & export panel finally says the round trip exists. Thanks to Qeeyana (Reddit).',
+    to: '/datasets?section=export',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',
