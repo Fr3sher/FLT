@@ -64,6 +64,13 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-28-comfyui-input-copies-cleaned-up',
+    date: '2026-07-28',
+    title: 'Improve and Edit stop filling your ComfyUI input folder',
+    blurb:
+      'Every Klein or Krea job copies your source image into ComfyUI\'s input folder, and nothing ever deleted those copies: a three-month-old install had 3,896 of them sitting there, 0.67 GB. Each job now removes its own copies the moment it ends — finished, failed or stopped — and a sweep at startup clears what earlier versions left behind. Images you dropped in that folder yourself are never touched.',
+  },
+  {
     id: '2026-07-28-training-base-is-per-family',
     date: '2026-07-28',
     title: 'Your training base now belongs to its model family',

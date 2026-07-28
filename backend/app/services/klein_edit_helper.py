@@ -685,6 +685,10 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     uid = uuid.uuid4().hex[:8]
     comfy_input = f"edit_source_{uid}_{source_filename}"
     comfy_fs.stage_input_copy(source_path, comfy_input, comfy_input_dir)
+    # Every name staged for THIS job, so its completion can delete them again.
+    # Without this list each improved image left a full-resolution duplicate in
+    # ComfyUI's input folder forever (measured: 3 896 orphans on one install).
+    staged_inputs = [comfy_input]
 
     workflow["52"]["inputs"]["image"] = comfy_input
     # Prompt into the CLIPTextEncode widget directly (node 6). The old RES4LYF
@@ -725,6 +729,7 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
             continue
         ref_input = f"edit_ref{i}_{uid}_{os.path.basename(ref_path)}"
         comfy_fs.stage_input_copy(ref_path, ref_input, comfy_input_dir)
+        staged_inputs.append(ref_input)
         load_id, scale_id = f"ds_ref{i}_load", f"ds_ref{i}_scale"
         enc_id, lat_id = f"ds_ref{i}_encode", f"ds_ref{i}_latent"
         workflow[load_id] = {"class_type": "LoadImage", "inputs": {"image": ref_input},
@@ -848,6 +853,7 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     meta = {"model_name": "klein_edit_dataset"}
     if extra_metadata:
         meta.update(extra_metadata)
+    meta["staged_inputs"] = staged_inputs
     queue_manager.add_job(job_type="image", user_id=str(user_id), workflow_data=workflow,
                           prompt=edit_prompt, job_id=job_id, metadata=meta)
     return job_id
