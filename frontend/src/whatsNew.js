@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-dual-captions-no-longer-crash-krea-and-anima',
+    date: '2026-07-28',
+    title: 'Dual captions no longer crash a Krea 2 or Anima run',
+    blurb:
+      'Turning on dual captions before a Krea 2 or Anima run made training die at the first step with a NoneType error — after the weights download and the whole caching pass. Those two families pre-cache their text embeddings and unload the text encoder to fit in VRAM, so there is no encoder left to read a second caption. The app now says so on the toggle and in the pre-launch check, and trains on the long caption alone instead of building a config that cannot run. Reported by 1Tomber (GitHub #22).',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-07-28-busy-database-no-longer-strands-a-paid-cloud-run',
     date: '2026-07-28',
     title: 'A busy database no longer strands a paid cloud run — for real this time',

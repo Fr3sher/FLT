@@ -1715,7 +1715,12 @@ def launch_settings_snapshot(ds, family=None) -> dict:
     # Fixed at 1 by every family's recipe today. Recorded anyway: the day it stops
     # being 1, the runs on either side of the change have to be comparable.
     snap['batch_size'] = 1
-    snap['dual_captions'] = bool(s.get('dual_captions'))
+    # Stamped EFFECTIVE, like `ema` and the memory keys: krea/anima cannot train a second
+    # caption (they cache their text embeddings — see _dual_captions_unsupported_reason),
+    # so recording the preference there would make the run comparison claim two runs
+    # differ by dual captions when the trainer saw exactly the same captions.
+    snap['dual_captions'] = (bool(s.get('dual_captions'))
+                             and fam not in DUAL_CAPTION_UNSUPPORTED_FAMILIES)
     # Face masking is a per-run FACT, not a preference: two concept runs that
     # differ only by it are not the same experiment, so it is stamped effective
     # (concept-only, hence the kind check) exactly like `ema` and the memory keys.
@@ -2865,6 +2870,45 @@ def _apply_style_overrides(ds, process: dict, family: str | None = None) -> dict
     return process
 
 
+# Families whose recipe caches the text embeddings and unloads the text encoder to fit
+# their 12B/2B DiT — and which therefore CANNOT honour dual captions (see
+# _dual_captions_unsupported_reason). Kept as data so the preflight can warn before the
+# launch without building a job config; test_dual_captions asserts it stays in sync with
+# what the recipes actually emit, so a new caching family cannot slip in unnoticed.
+DUAL_CAPTION_UNSUPPORTED_FAMILIES = ('krea', 'anima')
+
+
+def _dual_captions_unsupported_reason(process: dict) -> str | None:
+    """Why this ai-toolkit process cannot train dual captions. None = it can.
+
+    ai-toolkit caches ONE embedding per image: TextEmbeddingCachingMixin.cache_text_embeddings
+    encodes `file_item.caption` (the LONG one) and nothing else, and once the encoder is
+    unloaded SDTrainer takes the `if unload_text_encoder or is_caching_text_embeddings`
+    branch, which feeds the model `batch.prompt_embeds` and never looks at the prompt
+    strings again. The short caption has, literally, nowhere to go.
+
+    It does not merely go unused — it crashes the run. The caching pass reaches
+    load_caption() through get_text_embedding_info_dict() WITHOUT the JSON caption dict,
+    so each item is filled from its .txt sidecar (long only) and `raw_caption_short` stays
+    None; load_caption() then short-circuits on the real per-batch call ("we already
+    loaded it"), `caption_short` is never computed, and the doubled prompt list handed to
+    inject_trigger_into_prompt contains None → AttributeError at the first step, after the
+    weights download and the whole caching pass. Reported on krea as GitHub issue #22 by
+    1Tomber; anima emits the identical pair.
+
+    So the combination is refused at config time rather than patched with a placeholder
+    short caption: a placeholder would buy a green run that trains exactly like a
+    long-caption run while claiming otherwise."""
+    train = process.get('train') or {}
+    if any(d.get('cache_text_embeddings') for d in process.get('datasets', ())):
+        return ('this family pre-caches its text embeddings (one embedding per image) '
+                'to free the VRAM its text encoder would hold')
+    if train.get('unload_text_encoder'):
+        return ('this family unloads its text encoder after caching, so no second '
+                'caption can be encoded')
+    return None
+
+
 def _apply_dual_captions(ds, process: dict, dataset_folder) -> dict:
     """Wire ai-toolkit dual long+short captioning onto one process. No-op unless the
     dataset opted in. When on, the FIRST dataset block points at the JSON caption file
@@ -2873,8 +2917,14 @@ def _apply_dual_captions(ds, process: dict, dataset_folder) -> dict:
     BOTH captions. caption_ext is left as-is; it is ignored once folder_path is a JSON file.
 
     Local-only for now: the cloud pod's dataset upload skips the JSON, so the cloud path
-    (_cloudify_job_config) reverts this back to the historical folder + .txt sidecars."""
+    (_cloudify_job_config) reverts this back to the historical folder + .txt sidecars.
+
+    No-op as well on a family that caches its text embeddings — emitting the pair is what
+    crashed issue #22. The run then trains on the long caption alone (the .txt sidecars,
+    trigger included), and the preflight says so before the launch."""
     if not fds.dual_captions_enabled(ds):
+        return process
+    if _dual_captions_unsupported_reason(process):
         return process
     datasets = process.get('datasets') or []
     if not datasets:
@@ -4663,6 +4713,28 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                    'launching asks to confirm', 'gf-images')
         else:
             _check('captioned', 'Every kept image captioned', 'ok', f'{n}/{n} captioned')
+
+    # 3ter) DUAL CAPTIONS vs famille. Krea/Anima pré-cachent les embeddings de texte et
+    # déchargent l'encodeur : la caption courte n'a aucun encodeur pour la lire, et l'émettre
+    # quand même faisait planter le run au 1er step (issue #22, 1Tomber). La combinaison est
+    # refusée à la construction de la config — on le DIT ici, avant le launch, plutôt que de
+    # laisser l'utilisateur croire qu'il entraîne sur deux libellés. scope='dataset' : c'est
+    # une propriété de la recette de famille, vraie sur n'importe quelle voie.
+    # Slider mode is excluded: its guided loss ignores captions entirely, and the
+    # 'captioned' row above already says so — a second row promising two wordings would
+    # contradict it.
+    if fds.dual_captions_enabled(ds) and not slider:
+        if ttype in DUAL_CAPTION_UNSUPPORTED_FAMILIES:
+            warnings.append(
+                f'Dual captions are ON but {label} cannot train them — it pre-caches its '
+                'text embeddings and unloads the text encoder, so only the long caption is '
+                'encoded. The run will train on the long caption alone.')
+            _check('dual_captions', 'Dual captions', 'warn',
+                   f'{label} caches its text embeddings — the short caption is ignored and '
+                   'the run trains on the long one alone', 'gf-training')
+        else:
+            _check('dual_captions', 'Dual captions', 'ok',
+                   f'{label} trains each image on both its long and its short caption')
 
     # 3) captions suspectes (trop courtes / dupliquées) — sans objet en slider mode
     caps = [(r.caption or '').strip() for r in kept if (r.caption or '').strip()]

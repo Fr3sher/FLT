@@ -6,6 +6,7 @@ import { getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
+import { dualCaptionsSupport } from './dualCaptions.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
 import {
   checkpointSelectionMatchesTraining,
@@ -2186,6 +2187,14 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                     className="h-4 w-4 rounded border-border bg-surface accent-indigo-500" />
                   <span className="text-content-muted text-[0.75rem]">long + short (local training only)</span>
                 </label>
+                {/* Issue #22 (1Tomber): Krea 2 / Anima cache their text embeddings, so the
+                    short caption can never be encoded. Say it here rather than let the user
+                    believe two wordings are training. Wraps at 400 px — no fixed width. */}
+                {advDualCaptions && !dualCaptionsSupport(trainType).supported && (
+                  <span className="text-amber-400 text-[0.6875rem] leading-relaxed">
+                    Ignored here: {dualCaptionsSupport(trainType).note}
+                  </span>
+                )}
                 <span className="text-content-subtle text-[0.6875rem] leading-relaxed">
                   <b className="text-content-muted font-medium">Why:</b> trains each image with both a full and a brief
                   caption (text-side augmentation) so the LoRA leans less on any single wording.
