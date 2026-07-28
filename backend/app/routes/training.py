@@ -415,12 +415,18 @@ def dataset_train_preflight(dataset_id):
 
     `?lane=cloud` drops the rows that read THIS machine (GPU memory, torch build)
     — they describe hardware that will not run a cloud job. Absent or `local`
-    returns the historical payload unchanged."""
+    returns the historical payload unchanged.
+
+    `?masked=1|0` states whether the launch intends masked (person-mask) training,
+    a client-side preference the server cannot read. Absent = not stated, and the
+    person-mask readiness row is omitted."""
     # The gate follows the lane. A cloud-only install has no ai-toolkit, so the
     # historical _require_aitoolkit() would 409 exactly where these warnings matter
     # most (money is about to be spent) — and the caller treats a non-200 as "no
     # objection", which would have made the whole cloud preflight a silent no-op.
     lane = request.args.get('lane') or None
+    raw_masked = request.args.get('masked')
+    masked = None if raw_masked is None else raw_masked not in ('0', 'false', '')
     gate = _require_cloud() if lane == 'cloud' else _require_aitoolkit()
     if gate:
         return gate
@@ -431,7 +437,7 @@ def dataset_train_preflight(dataset_id):
             LOCAL_USER, dataset_id,
             train_type=request.args.get('train_type') or None,
             variant=request.args.get('variant') or None,
-            lane=lane)})
+            lane=lane, masked=masked)})
     except Exception as e:
         return _map_error(e)
 

@@ -87,6 +87,14 @@ export const WHATS_NEW = [
     to: '/datasets?section=export',
   },
   {
+    id: '2026-07-28-installs-that-do-not-work-no-longer-report-success',
+    date: '2026-07-28',
+    title: 'An install that did not work no longer says it worked',
+    blurb:
+      'Installing Person masks could report success — every requirement "already satisfied" — while the capability stayed ✗ Not installed and masked training quietly fell back to unmasked, so a whole run learned the background you meant to exclude. The missing piece (onnxruntime, which rembg needs but no longer declares) is now installed, an existing GPU build is left alone, and every scoped install re-runs the capability check afterwards and names the missing module when it fails. Launching a masked run without it now asks you first, instead of finding out from the result. Thanks to 1Tomber (GitHub #24).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',
