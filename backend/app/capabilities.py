@@ -1133,8 +1133,6 @@ def probe(force=False) -> dict:
     # green (advisory too_small does not gate) — an honest badge points the user at
     # the broken file instead of letting a doomed generate crash ComfyUI.
     klein_invalid = _keh.klein_invalid_assets()
-    klein_blocking_invalid = any(
-        i['blocking'] and i['asset'] in _keh.KLEIN_REQUIRED for i in klein_invalid)
     # Capability gap on the graph's WIDGET VALUES, not its nodes. The shipped Klein
     # workflow used to pin `scheduler: "beta57"`, a value the third-party RES4LYF
     # pack injects into ComfyUI's CORE list — so a stock install passed every asset
@@ -1147,11 +1145,13 @@ def probe(force=False) -> dict:
     # this fails OPEN — an unreachable ComfyUI reports no gap, `reachable` already
     # says that.
     klein_unsupported_enums = _keh.klein_unsupported_enums() if comfy['ok'] else []
-    klein_ready = (comfy['ok'] and not klein_unsupported_enums
-                   and bool(_keh.resolve_klein_unet())
-                   and bool(_keh.resolve_klein_vae())
-                   and bool(_keh.resolve_klein_text_encoder())
-                   and not klein_blocking_invalid)
+    # The verdict itself lives in klein_edit_helper so the watermark cleaner reads
+    # the SAME four conditions instead of its own laxer copy; the ingredients are
+    # already computed here for the payload, so they are handed over rather than
+    # re-probed.
+    klein_ready = _keh.klein_engine_ready(
+        comfy['ok'], missing=klein_missing, invalid=klein_invalid,
+        unsupported_enums=klein_unsupported_enums)
     # Krea 2 Identity Edit — the second LOCAL engine. Readiness is honest and
     # four-part (base model + identity LoRA + text encoder + VAE) AND depends on
     # a custom-node pack, unlike Klein whose graph is core-nodes-only. Both gaps

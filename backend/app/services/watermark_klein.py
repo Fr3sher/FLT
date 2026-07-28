@@ -128,15 +128,21 @@ _POLL_INTERVAL = 1.0
 
 
 def is_available() -> bool:
-    """Klein inpaint is usable = ComfyUI reachable AND the required Klein assets are on
-    disk. The custom-node preflight (network) is deferred to clean-time (one actionable
-    409), same split as the Klein generate path."""
+    """Klein inpaint is usable — the SAME verdict `caps.watermark_klein` publishes,
+    read from the one place that computes it (klein_edit_helper.klein_engine_ready).
+
+    It used to be a laxer copy: ComfyUI reachable + the three required files on
+    disk, by name. That skipped the two gaps the engine badge already knew about —
+    a pinned widget VALUE this ComfyUI does not accept, and a file that is present
+    but is not loadable weights (the truncated 9.5 GB UNET / HTML licence page).
+    Being laxer than the badge is not harmless: `is_available()` is what makes the
+    cleaner fall back to LaMa, so it decided to hand ComfyUI a doomed job instead
+    of degrading cleanly, and it words the "why not" the bank cleaner shows.
+    The custom-node preflight (network) stays deferred to clean-time (one
+    actionable 409), same split as the Klein generate path."""
     try:
         from ..capabilities import probe_comfyui
-        if not probe_comfyui()['ok']:
-            return False
-        missing = keh.klein_missing_assets()
-        return not any(a in missing for a in keh.KLEIN_REQUIRED)
+        return keh.klein_engine_ready(probe_comfyui()['ok'])
     except Exception:
         return False
 
