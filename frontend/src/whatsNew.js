@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-28-balanced-pick',
+    date: '2026-07-28',
+    title: 'Pick a set that covers your framings, not just the top of a ranking',
+    blurb:
+      'Asking for "the 60 most varied" of a bank that is mostly full-body shots gives you mostly full-body shots — on a realistic test pool it returned 0 face shots and 0 back views out of 20, and nothing said so. ⚖️ Balanced pick spreads the same sampling evenly over face / bust / body / back (optionally per person), tells you exactly what you got — "5 face, 5 bust, 5 body, 5 back" — and names any framing it could not fill instead of quietly padding with something else. It sits in the Curate row and at the bottom of 📊 Coverage advice, where the advice finally becomes a gesture.',
+    to: '/bank',
+  },
+  {
     id: '2026-07-28-cropping-no-longer-recompresses',
     date: '2026-07-28',
     title: 'Cropping no longer quietly re-compresses your image',

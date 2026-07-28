@@ -332,6 +332,9 @@ the selection bar offers two selectors that cost no extra GPU time:
   behaviour the button had before this setting existed. On a very large bank the
   first click takes a few seconds (it reads every image's neighbourhood once);
   the button says *Sampling…* while it does.
+- **⚖️ Balanced pick** — see [Pick a balanced set](#pick-a-balanced-set) below: the
+  same sampling, but spread evenly over your **framings** instead of taken off
+  the top of one ranking.
 - **🎯 Similar to selected** — select **one** image as a reference, and it ranks
   everything by how much it looks like that image and selects the closest N — the
   fast way to pull one person or one look out of a mixed export.
@@ -357,6 +360,10 @@ families want 20+"*. It's **advice only** — nothing is kept or rejected — an
 pure maths on data the passes already computed, so it costs no GPU. The
 framing-balance line needs the 📐 Framing pass to have run; without it the panel
 still covers person mix, style spread and resolution and hints to run framing.
+
+The advice becomes a gesture with **⚖️ Pick a balanced set…** at the bottom of
+the panel — see [Pick a balanced set](#pick-a-balanced-set).
+
 **🗑 Delete rejected from disk** (next to Promote) is the one exception to the
 "your source folder is never modified" rule, and it's opt-in. Once you're happy
 with your triage, it removes every image you marked ✕ rejected from its source
@@ -387,6 +394,43 @@ pass left **off by default** (it's the slowest GPU pass and a clean-up run
 rarely needs a description on every shot). Stop it any time — and when you come
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
+
+## Pick a balanced set
+
+Advice is only half the gesture, so **📊 Coverage advice** ends with **⚖️ Pick a
+balanced set…** (the same button sits in the **Curate** row). It answers a
+question no per-image score can ask: *does my set cover what I want to be able to
+generate?*
+
+Ask **🎨 Pick diverse** for 20 images out of a bank that is 47% full body, 35%
+bust, 12% face and 6% back views, and you get roughly those proportions — on a
+synthetic reproduction of exactly that shape it returned **0 face shots and 0
+back views**. The LoRA then renders one shot type well and the rest badly, and
+nothing ever said so. **⚖️ Balanced pick** returns **5 face, 5 bust, 5 body, 5
+back** out of the same pool, each bucket filled with the *same* most-varied
+sampling — and the same **Skip the odd ones out** guard — that 🎨 Pick diverse
+uses.
+
+- **Balance on** — **Framing** by default. It is the axis that carries real
+  information: on a one-subject bank, person groups are sparse and split into
+  many small, arbitrary clusters, so balancing on them spreads a selection over
+  noise. **Framing × person** is there for a dump that genuinely holds several
+  subjects.
+- **When an axis can't be satisfied**, it says so instead of quietly filling the
+  gap: *"Only 3 back images exist in this filter — an even split wanted 15"*. The
+  freed picks go to the buckets that have room, so asking for 60 still gives you
+  60 — the deficit is reported as a number, never hidden. If even that isn't
+  enough, it says how many you actually got and why.
+- **The result is always stated** — *"Selected 60 of 60 requested, spread over
+  framing: 15 face, 15 bust, 15 body, 15 back"* — as text, per bucket, next to
+  what each bucket had available. There is no chart you have to read.
+- **An unlabelled bank is the normal state**, not an error. Nothing has a framing
+  until the 📐 Framing pass has run, so the button says which pass is missing and
+  how many images it would bring in, rather than returning an empty or misleading
+  selection. 🎨 Pick diverse keeps working without it.
+
+Like the other selectors it honours the current filter and search, and it only
+**selects** — nothing is kept, rejected or deleted.
 
 ## Is this image really what it says it is?
 
