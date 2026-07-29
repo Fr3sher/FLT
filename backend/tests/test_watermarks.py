@@ -1665,7 +1665,7 @@ def test_klein_clean_disk_equals_display_equals_export_and_keeps_dimensions(
     monkeypatch.setattr(wk, 'is_available', lambda: True)
     monkeypatch.setattr(wk, '_prefill_region', lambda scaled, boxes, device='cpu': (scaled, None))
 
-    def _fake_klein(user_id, crop_img, *, seed, timeout=None):
+    def _fake_klein(user_id, crop_img, *, seed, timeout=None, **_kw):
         arr = np.asarray(crop_img.convert('RGB')).astype('int16') + 60
         return Image.fromarray(np.clip(arr, 0, 255).astype('uint8'), 'RGB'), None
     monkeypatch.setattr(wk, '_run_klein_job', _fake_klein)
@@ -1914,7 +1914,7 @@ def test_inpaint_klein_harmonizes_the_drifted_patch_into_the_neighbourhood(monke
     # prefill: pass the crop through untouched; Klein: brighten the whole crop by +40 (drift)
     monkeypatch.setattr(wk, '_prefill_region', lambda scaled, boxes, device='cpu': (scaled, None))
 
-    def _fake_klein(user_id, crop_img, *, seed, timeout=None):
+    def _fake_klein(user_id, crop_img, *, seed, timeout=None, **_kw):
         arr = np.asarray(crop_img).astype('int16') + 40
         return Image.fromarray(np.clip(arr, 0, 255).astype('uint8'), 'RGB'), None
     monkeypatch.setattr(wk, '_run_klein_job', _fake_klein)

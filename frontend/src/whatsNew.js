@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-29-every-klein-screen-names-its-model',
+    date: '2026-07-29',
+    title: 'Every screen that runs Klein now says which model it runs',
+    blurb:
+      'Three more places started Klein work on a model nothing named: the reference edit, the rescue of scraped images under 768 px, and the 🧽 watermark clean. They follow your dataset\'s Klein model now, like improve and generation already did, and each screen states which model will run — including when there is only one and nothing to pick. A model you chose that has since been moved or deleted is refused by name instead of being swapped for a neighbour. A bank has no dataset to follow, so its Klein inpaint keeps resolving the model itself — and now tells you which. Datasets that never chose a model are untouched.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-memory-savers-and-timestep-per-family',
     date: '2026-07-28',
     title: 'Switching model family no longer changes your run behind your back',

@@ -1183,6 +1183,18 @@ def _klein_model_state(ds):
             'choices': choices}
 
 
+@bp.get('/klein-model')
+def klein_model_global():
+    """The Klein model a job with NO dataset behind it will run on — today only the
+    bank's watermark inpaint (a bank has no dataset to inherit a pick from).
+
+    READ-ONLY on purpose: there is exactly one place to CHOOSE a Klein model, and
+    it is the dataset. This endpoint exists so the bank can still say which model
+    is about to repaint its images — naming and choosing are two different
+    questions, and the naming half is the one that works everywhere."""
+    return jsonify({'ok': True, **_klein_model_state(None)})
+
+
 @bp.get('/dataset/<int:dataset_id>/klein-model')
 def dataset_klein_model_get(dataset_id):
     """The dataset's Klein model pick, the model that will actually run, and the
