@@ -3719,6 +3719,14 @@ def _watermark_inpaint_job(bank_id, method):
                         continue
                     dst = _stage_clean_copy(bank_id, row, src)
                     if engine == 'klein':
+                        # No klein_model on purpose. The Klein model choice lives on
+                        # the DATASET (it describes what a dataset is made of) and a
+                        # bank has none to inherit — so this pass keeps the auto
+                        # resolution it has always used. Deliberately NOT a global
+                        # setting and NOT a third picker on the bank: that would be a
+                        # second authority for the same UNETLoader. What the bank DOES
+                        # owe the user is the name of the model that will run, which
+                        # the panel now states (BankWatermarkPanel → /api/klein-model).
                         ok, err = watermark_klein.inpaint_watermark_klein(
                             bank.user_id, str(dst), [list(b) for b in boxes])
                         if ok:

@@ -207,7 +207,9 @@ Not in Settings — it lives on the **dataset**, in the 🖥️ *Klein tuning* b
 
 **The list is detected, never typed.** It comes from the same scan ComfyUI itself would do — `models/unet`, `models/diffusion_models`, every root declared in `extra_model_paths.yaml`, and a relocated models folder (`comfyui.models_dir`) — in a `klein`-named subfolder **or** loose at the root. The one real constraint is that the model must be *nameable* as Klein: either the file name or its folder name has to contain `klein`. See *Where the Klein model can live* in the README.
 
-**What it applies to:** the single ✨ improve, the 🔄✨ re-run, the whole improve batch, and Klein generation (variations and regenerations) for that dataset.
+**What it applies to:** every piece of Klein work that dataset starts — the single ✨ improve, the 🔄✨ re-run, the whole improve batch, Klein generation (variations and regenerations), the **reference edit** on the Klein engine, the **rescue of scraped images under 768 px**, and the **🧽 watermark clean** on the Klein engine (bulk and per-image).
+
+**The one exception is a bank**, which has no dataset and therefore nothing to inherit: its 🧽 Klein inpaint resolves the model automatically, and the panel says which one. Naming the model and choosing it are separate questions — a bank can be told, it just has nowhere to store an answer.
 
 **When there is only one model**, the picker does not appear — there is no choice to make — but the line naming the model still does. Not knowing which model produced an image was the actual complaint; a dropdown with one option was never the answer.
 

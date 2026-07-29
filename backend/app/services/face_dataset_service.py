@@ -2881,6 +2881,11 @@ def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
             job_id = enqueue_klein_edit(
                 user_id=str(user_id), source_filename=ds.ref_filename,
                 source_path=ref_path, edit_prompt=prompt, extra_ref_paths=extras,
+                # The dataset's model, like every other Klein lane: this edit
+                # produces the REFERENCE the whole dataset is built from, so it is
+                # the last place that should run on a different model than the
+                # images it anchors. None (never chose) = the historical auto pick.
+                klein_model=dataset_klein_model(ds),
                 sampler_steps=_generation_steps(), extra_metadata=meta)
     except Exception as exc:
         # Nothing queued: drop the entry rather than leave a spinner with no job.
@@ -4115,6 +4120,11 @@ def _save_small_scrape_pair(user_id, dataset_id, raw, prompt, source_metadata=No
     try:
         job_id = enqueue_klein_edit(
             user_id=str(user_id), source_filename=filename, source_path=source_path,
+            # Same model as everything else this dataset makes — a rescued 512 px
+            # scrape ends up in the SAME training set as the improved images, so
+            # running it on another model is exactly the drift the setting exists
+            # to stop. None (never chose) = the historical auto pick.
+            klein_model=dataset_klein_model(get_dataset(user_id, dataset_id)),
             edit_prompt=prompt, sampler_steps=_generation_steps(),
             extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                             'variation_label': label,
@@ -5676,6 +5686,18 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
     error = None
     lama_ok = watermark_lama.is_available()
     klein_ok = method == 'klein' and watermark_klein.is_available()
+    # The Klein model this DATASET runs on — the same pick ✨ improve and Klein
+    # generation use. A watermark clean overwrites the image in place, so running
+    # it on a model the dataset did not choose is the one lane where the swap
+    # cannot be spotted afterwards by comparing to a source.
+    klein_model = dataset_klein_model(ds)
+    if klein_ok and klein_model:
+        # Refuse the WHOLE pass by name, before a single file is touched: every
+        # image would fail identically, and a half-cleaned dataset is worse than
+        # an untouched one. None (never chose) skips this — nothing was promised.
+        from . import klein_edit_helper as keh
+        if not keh.klein_model_on_disk(klein_model):
+            raise keh.KleinModelGone(klein_model)
     lama_pending = []  # (img, path, bboxes, manual_regions)
 
     def _run_klein(img, path, boxes, manual):
@@ -5686,7 +5708,8 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
             out['skipped'] += 1               # leave 'detected' (Klein not ready)
             return
         _preserve_original(path)
-        ok, err = watermark_klein.inpaint_watermark_klein(user_id, path, boxes)
+        ok, err = watermark_klein.inpaint_watermark_klein(user_id, path, boxes,
+                                                          klein_model=klein_model)
         if ok:
             img.watermark_state = 'cleaned'
             if manual:

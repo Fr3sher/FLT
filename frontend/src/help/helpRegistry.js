@@ -837,7 +837,11 @@ const TOPICS = [
       'choose model', 'pick model', 'improve', 'upscale', 'upscale & improve',
       'generation', 'flux2', 'flux 2', 'kv', '9b', '4b', 'safetensors', 'auto',
       'auto-detected', 'detected', 'comfyui models', 'model missing', 'moved',
-      'not on disk', 'per browser', 'localstorage'],
+      'not on disk', 'per browser', 'localstorage',
+      // 29/07: the setting reaches every Klein lane the dataset owns, and each of
+      // those screens now NAMES the model — so each is a way people look for it.
+      'reference edit', 'edit reference', 'rescue', 'small images', 'under 768',
+      'watermark', 'watermark clean', 'inpaint', 'klein inpaint', 'bank'],
     guide: { chapter: 'settings-reference', anchor: 'image-engines' },
     app: { route: '/datasets' } },
   // Concept face masking (issue #15) is a per-DATASET Advanced training option,

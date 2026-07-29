@@ -13,6 +13,7 @@ import DatasetFolderNote from './DatasetFolderNote';
 import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
 import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
+import KleinModelSetting from '../shared/KleinModelSetting';
 import SmallImageRescueReview from './SmallImageRescueReview';
 import CaptionToolsBar from './CaptionToolsBar';
 import CaptionOptionsPopover from './CaptionOptionsPopover';
@@ -1350,6 +1351,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       Klein <span className="font-normal opacity-70">quality</span>
                     </button>
                   </div>
+                  {/* A clean OVERWRITES the image, so the model that repaints it is
+                      the one lane whose swap can never be spotted afterwards. It is
+                      the dataset's model, like improve and generation — named here,
+                      changeable here. basis-full: its own row rather than a squeezed
+                      column at 400 px. */}
+                  {watermarkMethod === 'klein' && (
+                    <KleinModelSetting datasetId={d.id} className="basis-full" />
+                  )}
                   {/* Allow auto-crop: the SAME persisted preference as Settings ▸ Watermark
                       inpainting (write-through). Off → a border mark is repainted (LaMa/
                       Klein) instead of cropped; the per-image review can still override it. */}
