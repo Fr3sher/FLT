@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-07-29-chatgpt-failures-name-their-cause',
+    date: '2026-07-29',
+    title: 'A failed ChatGPT generation now says what went wrong',
+    blurb:
+      'On a ChatGPT subscription, a dropped connection, a timeout, an OpenAI outage and a lane OpenAI had closed all came back as the same blank tile worded as if the provider had simply produced nothing. Each now names itself, and the two that stop a run say so: a refused connection asks you to reconnect, and an endpoint OpenAI no longer serves tells you to switch to API-key mode instead of leaving you searching your own settings. On the API key, a safety refusal is now told apart from a reference photo OpenAI could not read — opposite problems that used to share one sentence. OpenRouter does the same with the moderation reasons it returns inside a successful response. Where the cause genuinely cannot be read, the tile still says so rather than guessing.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-07-28-memory-savers-and-timestep-per-family',
     date: '2026-07-28',
     title: 'Switching model family no longer changes your run behind your back',
