@@ -845,9 +845,12 @@ Three host folders, all relocatable from `.env` (see the Docker block in `.env.e
 
 Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
 
+`LDS_DNS` sets the container's resolver, defaulting to `1.1.1.1` — point it at your own router or Pi-hole if you reach anything by internal hostname.
+
 **Limits worth knowing before you build:**
 
 - **About 20 GB of disk before you download a single model**: the image itself is 11.3 GB and ComfyUI's own environment in `./run` is a further 8.4 GB. `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu` saves roughly 7 GB and leaves the GPU entirely to ComfyUI — only ✨ Score falls back to the CPU.
+- **It needs working internet — and working DNS — on every start, not just the first one.** The upstream base image re-installs its installer (`uv`, from `astral.sh`) and updates ComfyUI before either service launches, and it exits if a hostname does not resolve. `curl: (6) Could not resolve host: astral.sh` followed by `!! ERROR: uv not found after installation` in the log is that: a name did not resolve inside the container — not the GPU, the driver or the app. First check whether the container is on a network at all: `docker inspect -f '{{json .NetworkSettings.Networks}}' lora-dataset-studio-gpu` answering `{}` means it is orphaned from a network that no longer exists, and `up` has been restarting it ever since — `down`, then `up --force-recreate`. On **Unraid** that is the usual cause, and the cure is **Settings → Docker → "Preserve user defined networks" = Yes**: on the default `No` it deletes Compose networks when the array stops. Otherwise it is a boot race (autostart before the host's network is up — `restart: unless-stopped` retries and the next attempt gets through) or a resolver the container cannot reach, for which there is a commented `dns:` block in `docker-compose.gpu.yml`. There is no offline mode for this image.
 - **Ollama is not included**, so auto-captioning, framing auto-classify, head-crop and watermark detection need an Ollama elsewhere: uncomment the `extra_hosts` and `LDS_OLLAMA_URL` lines in the compose file to reach one running on the host.
 - **Local training is not included** — that is ai-toolkit on the host, or [cloud training](#no-gpu-train-in-the-cloud).
 - **Watermark inpainting does not currently work in Docker.**

@@ -210,3 +210,23 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     # LDS_PORT is the port the app BINDS INSIDE the container. Interpolating it on
     # the host side of a mapping would publish a port nothing serves.
     assert '${LDS_PORT' not in compose
+
+    # An explicit resolver, because the one a Compose network inherits from the
+    # host is often unreachable from inside the container — and this image fetches
+    # from astral.sh on every start, so an unresolvable name is a restart loop.
+    # Overridable, since setting it REPLACES the inherited list.
+    assert 'dns: ${LDS_DNS:-' in compose
+
+
+def test_every_gpu_compose_variable_is_documented():
+    """.env.example is where these are discovered — the compose file is not read
+    by most people who deploy it. A variable that only exists in the YAML is a
+    knob nobody knows about."""
+    compose = _read('docker-compose.gpu.yml')
+    documented = _read('.env.example')
+    interpolated = set(re.findall(r'\$\{(LDS_[A-Z0-9_]+)', compose))
+
+    # LDS_PORT and friends are the container's own environment, set in the file
+    # itself rather than read from .env.
+    undocumented = sorted(name for name in interpolated if name not in documented)
+    assert not undocumented, f'not in .env.example: {undocumented}'
