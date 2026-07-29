@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/settings/local-tools',
   },
   {
+    id: '2026-07-29-training-bases-follow-extra-model-paths',
+    date: '2026-07-29',
+    title: 'Train on a base that lives outside ComfyUI\'s models folder',
+    blurb:
+      'If your ComfyUI keeps its weights elsewhere through extra_model_paths.yaml (portable builds, Stability Matrix, a shared A1111 tree), your SDXL checkpoints and Z-Image merges now show up in the training base picker, launch, and convert — the last two places that still only looked in models/. When the same file name exists in two roots, the app picks the one ComfyUI itself would load, so you train on the weights you generate with. And a base that really is missing is now named here, instead of failing later inside ai-toolkit with a path you never typed.',
+    to: '/datasets',
+  },
+  {
     id: '2026-07-28-memory-savers-and-timestep-per-family',
     date: '2026-07-28',
     title: 'Switching model family no longer changes your run behind your back',

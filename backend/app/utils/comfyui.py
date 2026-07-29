@@ -1601,6 +1601,18 @@ def get_checkpoint_models(include_hidden=False):
             subdir_path = os.path.join(checkpoints_dir, subdir)
             if os.path.exists(subdir_path):
                 search_dirs.append(subdir_path)
+        # Any checkpoints root declared in extra_model_paths.yaml. Portable /
+        # Stability-Matrix / A1111-shared installs keep every checkpoint OUTSIDE
+        # <base>/models, so this picker showed them an empty SDXL base list while
+        # ComfyUI loaded those very files. Additive: no yaml -> nothing appended and
+        # this list is byte-for-byte the historical one. (The scan below is
+        # recursive, so subfolders under an extra root are covered like Biglove/.)
+        try:
+            from ..services import comfy_model_paths
+            search_dirs += [d for d in comfy_model_paths.extra_roots("checkpoints")
+                            if os.path.exists(d)]
+        except Exception:
+            pass
 
         if not search_dirs:
             logger.warning(f"Checkpoint model directories not found: {biglove_dir} (and parent {checkpoints_dir})")
@@ -1681,8 +1693,18 @@ def get_zimage_models():
     if out_dir:
         try:
             models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
-            for base in ("unet", "diffusion_models"):
-                base_dir = os.path.join(models_root, base)
+            base_dirs = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
+            # Plus any diffusion_models root declared in extra_model_paths.yaml (the
+            # `unet` key folds into the same canonical type). Without this, a Z-Image
+            # merge kept outside <base>/models was absent from the training base
+            # picker — and therefore unconvertible, whatever zimage_convert resolves.
+            # Additive: no yaml -> nothing appended, list unchanged.
+            try:
+                from ..services import comfy_model_paths
+                base_dirs += comfy_model_paths.extra_roots("diffusion_models")
+            except Exception:
+                pass
+            for base_dir in base_dirs:
                 if not os.path.isdir(base_dir):
                     continue
                 for root, _dirs, files in os.walk(base_dir):
