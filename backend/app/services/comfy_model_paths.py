@@ -281,6 +281,48 @@ def search_roots(folder_type: str) -> list[str]:
     return roots
 
 
+# Folder types for which the app has a dedicated "put it exactly here" override.
+# Only `loras` today: it is the only type the app WRITES into (deployed LoRAs).
+_WRITE_OVERRIDE_KEYS = {'loras': 'comfyui.loras_dir'}
+
+
+def write_root(folder_type: str) -> str | None:
+    """The ONE root new files are WRITTEN to for a folder type. ``None`` when
+    ComfyUI is unconfigured.
+
+    Reading may span every root; writing has to pick one, and picking it silently
+    is what shipped GitHub #25 (Geekswordsman): deploys and the "open LoRA folder"
+    button used ``<base>/models/loras`` even when the yaml declared the real one.
+    Priority, highest first:
+
+      1. the explicit ``comfyui.loras_dir`` override — someone who filled that
+         field said exactly where their files go, and no yaml may take it back;
+      2. ``search_roots()[0]`` — the root ComfyUI ITSELF treats as primary, which
+         is a yaml root only when that profile carries ``is_default: true``
+         (that flag is precisely how ComfyUI is told "look here first");
+      3. nothing else — with no yaml this IS ``<base>/models/loras``, so installs
+         without an ``extra_model_paths.yaml`` are unchanged.
+
+    Consequence worth stating out loud: a yaml root declared WITHOUT
+    ``is_default`` is a secondary location for ComfyUI, so it stays secondary
+    here too and deploys keep landing in ``<base>/models/loras``. Making a plain
+    extra root capture the writes would hijack the very common "also read my
+    A1111 folder" setup. Users who want the yaml root to receive files have two
+    levers, both already theirs: ``is_default: true``, or the loras override.
+    """
+    canon = _canon(folder_type)
+    key = _WRITE_OVERRIDE_KEYS.get(canon)
+    if key:
+        try:
+            explicit = (cfg.get(key) or '').strip()
+        except Exception:
+            explicit = ''
+        if explicit:
+            return os.path.normpath(explicit)
+    roots = search_roots(canon)
+    return roots[0] if roots else None
+
+
 def _recursive_models(root: str):
     """Yield ``(rel_name, abs_path)`` for every model file under ``root`` (os.walk,
     followlinks), mirroring folder_paths.recursive_search: ``rel_name`` is the path

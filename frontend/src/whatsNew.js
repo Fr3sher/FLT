@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-29-deploy-follows-extra-model-paths',
+    date: '2026-07-29',
+    title: 'Deployed LoRAs land where your extra_model_paths.yaml says',
+    blurb:
+      'If your ComfyUI keeps its LoRAs outside the install folder, deploying one — and the "open LoRA folder" button — used the default folder anyway. Both now follow your extra_model_paths.yaml, the LoRA override still wins when you set one, and Settings shows the exact folder that will receive the file. LoRAs you deployed before stay listed and deletable where they are. Thanks to Geekswordsman (GitHub #25).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-07-28-memory-savers-and-timestep-per-family',
     date: '2026-07-28',
     title: 'Switching model family no longer changes your run behind your back',

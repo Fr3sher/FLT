@@ -191,46 +191,97 @@ def training_subprocess_env(hf_home=None) -> dict:
 # checkpoint pool). Distinct error message from the aitoolkit accessors above:
 # a dataset can be trainable (aitoolkit OK) while ComfyUI itself is unconfigured,
 # and the two are gated independently by the Settings/capabilities probe.
-def _lora_dest_dir_zimage():
-    d = cfg.comfyui_dir('loras')
+#
+# The loras root comes from `comfy_model_paths.write_root`, NOT from
+# `cfg.comfyui_dir('loras')`: the latter only knows the explicit override and
+# <base>/models/loras, so an `extra_model_paths.yaml` declaring the real loras
+# folder was honoured when READING and ignored when WRITING — deploys and the
+# "open LoRA folder" button both landed in the default folder (GitHub #25,
+# Geekswordsman). Everything a user can still find on disk keeps being read from
+# EVERY root (see `_lora_family_dirs`), so a LoRA deployed before this change is
+# still listed, resolvable and deletable.
+def _loras_root():
+    from . import comfy_model_paths
+    d = comfy_model_paths.write_root('loras')
     if not d:
         raise RuntimeError('ComfyUI is not configured')
-    return d / 'z image'
+    return d
+
+
+# Family -> its subfolder under a loras root. Single source for the deploy
+# accessors AND for the multi-root read helpers below.
+_FAMILY_SUBDIR = {'zimage': 'z image', 'sdxl': 'sdxl', 'krea': 'krea',
+                  'flux': 'flux', 'flux2klein': 'flux2klein', 'anima': 'anima'}
+
+
+def _lora_dest_dir_zimage():
+    return os.path.join(_loras_root(), 'z image')
 
 
 def _lora_dest_dir_sdxl():
-    d = cfg.comfyui_dir('loras')
-    if not d:
-        raise RuntimeError('ComfyUI is not configured')
-    return d / 'sdxl'
+    return os.path.join(_loras_root(), 'sdxl')
 
 
 def _lora_dest_dir_krea():
-    d = cfg.comfyui_dir('loras')
-    if not d:
-        raise RuntimeError('ComfyUI is not configured')
-    return d / 'krea'
+    return os.path.join(_loras_root(), 'krea')
 
 
 def _lora_dest_dir_flux():
-    d = cfg.comfyui_dir('loras')
-    if not d:
-        raise RuntimeError('ComfyUI is not configured')
-    return d / 'flux'
+    return os.path.join(_loras_root(), 'flux')
 
 
 def _lora_dest_dir_flux2klein():
-    d = cfg.comfyui_dir('loras')
-    if not d:
-        raise RuntimeError('ComfyUI is not configured')
-    return d / 'flux2klein'
+    return os.path.join(_loras_root(), 'flux2klein')
 
 
 def _lora_dest_dir_anima():
-    d = cfg.comfyui_dir('loras')
-    if not d:
-        raise RuntimeError('ComfyUI is not configured')
-    return d / 'anima'
+    return os.path.join(_loras_root(), 'anima')
+
+
+def _lora_family_dirs(fam: str) -> list[str]:
+    """Every folder where a LoRA of this family can be found, write folder FIRST
+    then the other roots ComfyUI searches, de-duplicated.
+
+    Writing needs one folder; reading must not lose sight of the others. Without
+    this, changing the deploy root would have orphaned every LoRA already deployed
+    under `<base>/models/loras` — still on disk, still loadable by ComfyUI, but
+    gone from the "IN COMFYUI" list and undeletable from the app."""
+    from . import comfy_model_paths
+    sub = _FAMILY_SUBDIR.get((fam or '').lower(), 'z image')
+    roots = []
+    try:
+        roots.append(_loras_root())
+    except RuntimeError:
+        pass
+    roots += comfy_model_paths.search_roots('loras')
+    out, seen = [], set()
+    for root in roots:
+        p = os.path.join(root, sub)
+        key = os.path.normcase(os.path.normpath(p))
+        if key not in seen:
+            seen.add(key)
+            out.append(p)
+    return out
+
+
+def _resolve_deployed_path(fam: str, filename: str) -> str | None:
+    """Absolute path of a deployed LoRA named in LoraLoader form
+    (`<family subfolder>\\name.safetensors`), searched across every loras root.
+    Fail-closed on path traversal: the resolved file must sit inside the family
+    folder of the root it was found in. None when it is nowhere."""
+    rel = str(filename or '').replace('\\', os.sep).replace('/', os.sep).strip(os.sep)
+    if not rel:
+        return None
+    for d in _lora_family_dirs(fam):
+        root = os.path.abspath(d)
+        cand = os.path.abspath(os.path.join(os.path.dirname(root), rel))
+        try:
+            inside = os.path.commonpath([cand, root]) == root
+        except ValueError:            # different drives
+            continue
+        if inside and os.path.isfile(cand):
+            return cand
+    return None
 
 
 def _sdxl_checkpoints_dir():
@@ -4101,11 +4152,12 @@ def list_imported_checkpoints(user_id, dataset_id, family=None) -> list[dict]:
         return []
     fam = _train_type(ds, family)
     prefix = f'lora_{_safe_trigger(ds)}'
-    try:
-        dest_dir = _lora_dest_dir(ds, family)
-    except RuntimeError:
-        return []
-    if not os.path.isdir(dest_dir):
+    # EVERY loras root, not just the deploy one: a LoRA deployed before the app
+    # learned to read extra_model_paths.yaml (GitHub #25) sits in the old default
+    # folder, and dropping it from this list would make an existing file
+    # undeletable from the app for no reason the user can see.
+    dirs = [d for d in _lora_family_dirs(fam) if os.path.isdir(d)]
+    if not dirs:
         return []
     from ..utils.comfyui import format_trained_lora_label
     # Cloud-trained checkpoints are auto-imported into the same folder but
@@ -4129,11 +4181,17 @@ def list_imported_checkpoints(user_id, dataset_id, family=None) -> list[dict]:
             cloud_prefixes.add(f'lds{r.id}_')
     except Exception:
         pass
-    subfolder = os.path.basename(os.path.normpath(dest_dir))
-    out = []
-    for fn in sorted(os.listdir(dest_dir)):
+    subfolder = _FAMILY_SUBDIR.get(fam, 'z image')
+    out, seen = [], set()
+    for dest_dir, fn in sorted(((d, fn) for d in dirs for fn in os.listdir(d)),
+                               key=lambda pair: pair[1]):
         if not fn.lower().endswith('.safetensors'):
             continue
+        # Same name in two roots = ComfyUI loads the higher-priority one; list it
+        # once, from that same root, so the app never shows a file ComfyUI shadows.
+        if fn in seen:
+            continue
+        seen.add(fn)
         # deployed cloud names may carry the _v<N> dataset-version suffix —
         # strip it before matching against the staging basenames
         stem = re.sub(r'_v\d+(?=\.safetensors$)', '', fn)
@@ -4178,18 +4236,17 @@ def lora_deploy_dir(user_id, dataset_id, family=None) -> str:
 
 def deployed_lora_paths(user_id, dataset_id, family=None) -> list[str]:
     """Absolute paths of THIS dataset's LoRA files already deployed in the
-    family's ComfyUI loras folder, for the "include trained LoRAs" backup toggle.
+    family's ComfyUI loras folders, for the "include trained LoRAs" backup toggle.
     [] when ComfyUI is unconfigured or nothing is deployed. Reuses
     list_imported_checkpoints so cloud-named epochs are captured too."""
-    try:
-        dest = lora_deploy_dir(user_id, dataset_id, family)
-    except (RuntimeError, ValueError):
+    ds = fds.get_dataset(user_id, dataset_id)
+    if not ds:
         return []
+    fam = _train_type(ds, family)
     out = []
     for c in list_imported_checkpoints(user_id, dataset_id, family=family):
-        name = os.path.basename(str(c.get('filename', '')).replace('\\', '/'))
-        p = os.path.join(dest, name)
-        if name and os.path.isfile(p):
+        p = _resolve_deployed_path(fam, c.get('filename', ''))
+        if p:
             out.append(p)
     return out
 
@@ -4206,11 +4263,10 @@ def delete_imported_checkpoint(user_id, dataset_id, filename, family=None) -> st
         raise ValueError('unknown checkpoint')
     # ds is guaranteed truthy here: an unowned/missing dataset makes
     # list_imported_checkpoints return [] above, which already raised.
-    root = os.path.abspath(_lora_dest_dir(ds, family))
-    loras_root = os.path.dirname(root)
-    rel = filename.replace('\\', os.sep).replace('/', os.sep)
-    dest = os.path.abspath(os.path.join(loras_root, rel))
-    if os.path.commonpath([dest, root]) != root or not os.path.isfile(dest):
+    # Searched across every loras root, so a LoRA deployed before the app read
+    # extra_model_paths.yaml (GitHub #25) is deletable where it actually is.
+    dest = _resolve_deployed_path(_train_type(ds, family), filename)
+    if not dest:
         raise ValueError('file not found')
     # trash, never destroy: a wrong click on a deployed LoRA is recoverable
     # until 'Empty trash' in Settings.
@@ -4305,12 +4361,11 @@ def dataset_disk_usage(user_id, dataset_id, base_model=_PERSISTED, family=None,
         pass
     try:
         ds = fds.get_dataset(user_id, dataset_id)
-        root = _lora_dest_dir(ds, family)
+        fam = _train_type(ds, family)
         for c in list_imported_checkpoints(user_id, dataset_id, family=family):
-            p = os.path.join(os.path.dirname(root),
-                             c['filename'].replace('\\', os.sep))
+            p = _resolve_deployed_path(fam, c['filename'])
             try:
-                out['deployed_bytes'] += os.path.getsize(p)
+                out['deployed_bytes'] += os.path.getsize(p) if p else 0
             except OSError:
                 pass
     except Exception:
@@ -4349,14 +4404,12 @@ def purge_training_artifacts(user_id, trigger_safe) -> list[str]:
     removed: list[str] = []
     run_prefix = f'u{user_id}_{trigger_safe}'    # ex. u1_Lola69382
     lora_prefix = f'lora_{trigger_safe}'         # ex. lora_Lola69382
-    # 1) LoRA déployés dans ComfyUI (z image + sdxl + krea + flux + flux2klein + anima séparés)
+    # 1) LoRA déployés dans ComfyUI (z image + sdxl + krea + flux + flux2klein + anima
+    # séparés), dans CHAQUE racine loras : un LoRA déployé avant le correctif #25
+    # vit dans l'ancien dossier par défaut et doit partir avec le dataset.
     lora_roots = []
-    for accessor in (_lora_dest_dir_zimage, _lora_dest_dir_sdxl, _lora_dest_dir_krea,
-                     _lora_dest_dir_flux, _lora_dest_dir_flux2klein, _lora_dest_dir_anima):
-        try:
-            lora_roots.append(str(accessor()))
-        except RuntimeError:
-            pass
+    for fam in _FAMILY_SUBDIR:
+        lora_roots += _lora_family_dirs(fam)
     for root in lora_roots:
         if not os.path.isdir(root):
             continue
@@ -4511,10 +4564,11 @@ def rename_training_artifacts(user_id, old_trigger_safe, new_trigger_safe) -> di
         return roots
 
     plan = []
-    # 1) deployed LoRAs in ComfyUI (zimage + sdxl + krea + flux + flux2klein + anima)
-    for root in _roots((_lora_dest_dir_zimage, _lora_dest_dir_sdxl, _lora_dest_dir_krea,
-                        _lora_dest_dir_flux, _lora_dest_dir_flux2klein, _lora_dest_dir_anima)):
-        plan += _rename_plan(root, old_lora, new_lora, suffix='.safetensors')
+    # 1) deployed LoRAs in ComfyUI (zimage + sdxl + krea + flux + flux2klein + anima),
+    # in every loras root — see purge_training_artifacts.
+    for fam in _FAMILY_SUBDIR:
+        for root in _lora_family_dirs(fam):
+            plan += _rename_plan(root, old_lora, new_lora, suffix='.safetensors')
     # 2) run output + 3) export datasets (whole folders)
     for root in _roots((_output_dir, _datasets_dir)):
         plan += _rename_plan(root, old_run, new_run, want_dir=True)
