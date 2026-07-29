@@ -1182,35 +1182,25 @@ def _resolve_lora_abs_path(checkpoint) -> str | None:
     relative to models/loras), resolved case-INSENSITIVELY (the workflow paths
     carry mixed casing — 'z image', 'Krea' — and a case-sensitive cloud FS must
     still find the file). None when ComfyUI's loras dir isn't configured or the
-    file can't be located."""
-    try:
-        loras = cfg.comfyui_dir('loras')
-    except Exception:
-        loras = None
-    if not loras:
-        return None
+    file can't be located.
+
+    Searched across EVERY loras root in ComfyUI's own priority order (the yaml's
+    included), like the loader node this path is handed to — a LoRA deployed into
+    an extra_model_paths root, or into the old default one before GitHub #25, must
+    resolve either way."""
     rel = str(checkpoint or '').replace('\\', os.sep).replace('/', os.sep).lstrip(os.sep)
     if not rel:
         return None
-    direct = os.path.join(str(loras), rel)
-    if os.path.isfile(direct):
-        return direct
-    cur = str(loras)
-    for part in rel.split(os.sep):
-        if not part or part == '.':
-            continue
-        nxt = os.path.join(cur, part)
-        if os.path.exists(nxt):
-            cur = nxt
-            continue
-        try:
-            match = next((e for e in os.listdir(cur) if e.lower() == part.lower()), None)
-        except OSError:
-            return None
-        if match is None:
-            return None
-        cur = os.path.join(cur, match)
-    return cur if os.path.isfile(cur) else None
+    from . import comfy_model_paths
+    try:
+        roots = comfy_model_paths.search_roots('loras')
+    except Exception:
+        roots = []
+    for loras in roots:
+        found = _ci_resolve(str(loras), rel)
+        if found and os.path.isfile(found):
+            return found
+    return None
 
 
 def _preflight_checkpoint_arch(run_family, checkpoints):
