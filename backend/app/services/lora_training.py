@@ -406,32 +406,52 @@ def _lora_dest_dir(ds, family=None) -> str:
 def _sdxl_base_choices() -> set:
     """Whitelist serveur des bases SDXL = basenames des checkpoints ComfyUI.
     include_hidden=True pour ne pas exclure un checkpoint masqué légitime, et
-    pour récupérer une forme stable quelle que soit la variante de retour."""
+    pour récupérer une forme stable quelle que soit la variante de retour.
+
+    Union with every checkpoint reachable through ``extra_model_paths.yaml``:
+    get_checkpoint_models only knows ``<base>/models/checkpoints``, so on a
+    portable / Stability-Matrix / A1111-shared install this whitelist rejected
+    ('unknown SDXL checkpoint') bases that ComfyUI itself loads. Strictly ADDITIVE
+    — with no yaml the extra set is empty and this is byte-for-byte the old one."""
     from ..utils.comfyui import get_checkpoint_models
     out = set()
     for c in (get_checkpoint_models(include_hidden=True) or []):
         out.add(c['name'] if isinstance(c, dict) else c)
+    try:
+        from . import comfy_model_paths
+        for rel, _ab in comfy_model_paths.list_models('checkpoints'):
+            out.add(os.path.basename(rel))
+    except Exception:
+        pass
     return out
 
 
 def _sdxl_base_path(base_model: str) -> str:
-    """Résout le .safetensors SDXL sous models/checkpoints. get_checkpoint_models
-    APLATIT en basename (l'info de sous-dossier - ex. Biglove/ - est perdue) → on
-    cherche récursivement le basename. Refuse chemin absolu / '..' (anti-traversal ;
-    la whitelist amont _sdxl_base_choices garantit déjà un basename connu)."""
+    """Résout le .safetensors SDXL parmi TOUTES les racines `checkpoints` que
+    ComfyUI utiliserait (``<base>/models/checkpoints`` + les racines déclarées dans
+    ``extra_model_paths.yaml``), dans l'ordre de priorité de ComfyUI. get_checkpoint_models
+    APLATIT en basename (l'info de sous-dossier - ex. Biglove/ - est perdue) → la
+    recherche par basename est conservée. Refuse chemin absolu / '..' (anti-traversal ;
+    la whitelist amont _sdxl_base_choices garantit déjà un basename connu).
+
+    Raises ValueError NAMING the file when nothing matches. The old code returned the
+    bare name here, which is what made this hole expensive rather than merely wrong:
+    ai-toolkit received `bigLove_photo5.safetensors`, resolved it against its OWN
+    working directory, and died with a message about a path the user never typed. A
+    model we cannot find has to be said here, by name, while we still know which name
+    was asked for."""
     name = str(base_model or '')
     parts = name.replace('\\', '/').split('/')
     if os.path.isabs(name) or '..' in parts:
         raise ValueError('invalid SDXL base path')
-    checkpoints_dir = str(_sdxl_checkpoints_dir())
-    cand = os.path.join(checkpoints_dir, name)
-    if os.path.exists(cand):
-        return cand
-    base = os.path.basename(name.replace('\\', '/'))
-    for root, _dirs, files in os.walk(checkpoints_dir):
-        if base in files:
-            return os.path.join(root, base)
-    return name  # fallback (ne devrait pas arriver : base whitelistée + existante)
+    _sdxl_checkpoints_dir()   # raises the explicit 'ComfyUI is not configured'
+    from . import comfy_model_paths
+    hit = comfy_model_paths.resolve_model_file('checkpoints', name)
+    if hit:
+        return hit
+    raise ValueError(
+        f'SDXL base checkpoint not found: {name} - looked in every ComfyUI '
+        'checkpoints folder, including the ones declared in extra_model_paths.yaml')
 
 
 # --- Custom weights (V1 « Custom weights… », local-only) ----------------------
