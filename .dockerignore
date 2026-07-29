@@ -15,5 +15,6 @@ packaging/build/
 packaging/dist/
 run/
 basedir/
+bank-images/
 *.pyc
 __pycache__

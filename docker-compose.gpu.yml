@@ -44,6 +44,13 @@ services:
       # this container's seeder-written comfyui.base_dir=/basedir in a config
       # the API-only container reads too, where that path does not exist.
       - ${LDS_DATA:-./data-docker-gpu}:/data
+      # Optional, for 🗃️ Image bank: a folder of unsorted images to triage IN
+      # PLACE. Point it at a tree you already have — LDS_BANK_SOURCES=/mnt/photos —
+      # and then type the CONTAINER path in "New bank": /images, or /images/dump.
+      # The host path means nothing inside here. A bank only ever reads these
+      # files; the single exception is 🗑 Delete rejected, so append `:ro` to this
+      # line if you would rather that action fail than have it touch originals.
+      - ${LDS_BANK_SOURCES:-./bank-images}:/images
       # API keys. `cp .env.example .env` FIRST: Docker creates a directory here
       # otherwise, and the app then cannot read a single key.
       - ./.env:/app/.env

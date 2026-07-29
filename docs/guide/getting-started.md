@@ -44,7 +44,7 @@ python backend/run.py
 **Docker (API-only):** `cp .env.example .env`, then `docker compose up --build`.
 
 **Docker (GPU, with ComfyUI inside):** `cp .env.example .env`, then
-`mkdir -p run basedir data-docker-gpu` — create those yourself, or Docker creates
+`mkdir -p run basedir data-docker-gpu bank-images` — create those yourself, or Docker creates
 them as `root` and the app cannot write to them — then
 `docker compose -f docker-compose.gpu.yml up --build`. Needs an NVIDIA GPU and the
 NVIDIA Container Toolkit; this is the only Docker option that can do Klein/Z-Image

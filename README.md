@@ -825,25 +825,26 @@ Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud
 
 ```bash
 cp .env.example .env
-mkdir -p run basedir data-docker-gpu
+mkdir -p run basedir data-docker-gpu bank-images
 docker compose -f docker-compose.gpu.yml up --build
 ```
 
-Create those three folders **yourself, before the first start**. Docker creates a missing bind-mount source as `root`, and the container runs as your own user — so if you skip the `mkdir`, the app refuses to start and says so in the log (ComfyUI still comes up). The same applies to `docker-compose.yml`'s `./data-docker`.
+Create those four folders **yourself, before the first start**. Docker creates a missing bind-mount source as `root`, and the container runs as your own user — so if you skip the `mkdir`, the app refuses to start and says so in the log (ComfyUI still comes up). The same applies to `docker-compose.yml`'s `./data-docker`.
 
 The app is then on `http://127.0.0.1:5050/` and ComfyUI's own web UI on `http://127.0.0.1:8188/`, the container reports `healthy`, and Settings ▸ Local tools shows ComfyUI as reachable with a valid install folder — verified end to end on an NVIDIA RTX 3500 Ada with driver 580. The ComfyUI folder settings are filled in for you on first boot, and anything you change in Settings afterwards survives a restart.
 
 It is built on [ComfyUI-Nvidia-Docker](https://github.com/mmartial/ComfyUI-Nvidia-Docker), which installs and updates ComfyUI itself — the first boot is slow because it creates ComfyUI's environment and downloads torch. `docker-compose.gpu.yml` runs under its own Compose project name, so it and the API-only stack can run at the same time — starting one does not stop the other. The two stacks also default to **separate** data directories (`./data-docker-gpu` here vs. `./data-docker` for Option 3), and that separation matters: pointing both at the same `LDS_DATA` puts two Flask processes on one SQLite database and one `config.json`, and must not be done.
 
-Three host folders, all relocatable from `.env` (see the Docker block in `.env.example`):
+Four host folders, all relocatable from `.env` (see the Docker block in `.env.example`):
 
 | Folder | Holds | Variable |
 |---|---|---|
 | `./run` | ComfyUI's own environment, checkout and HF cache | `LDS_COMFY_RUN` |
 | `./basedir` | ComfyUI models, input, output, custom nodes | `LDS_COMFY_BASEDIR` |
 | `./data-docker-gpu` | the app's datasets, database and `config.json` | `LDS_DATA` |
+| `./bank-images` | unsorted images for the 🗃️ Image bank to triage, mounted at `/images` | `LDS_BANK_SOURCES` |
 
-Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
+Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice, and `LDS_BANK_SOURCES` at a photo dump you want to triage — a bank reads those images **in place** and copies only what you promote into a dataset. In **New bank**, type the path *inside* the container (`/images`, or a sub-folder like `/images/telegram-export`); the host path does not exist in there. 🗑 **Delete rejected** is the one bank action that writes to that folder, so mount it `:ro` if you want the originals untouchable. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
 
 On a shared box you can also cap what it takes — `LDS_MEM_LIMIT`, `LDS_MEMSWAP_LIMIT` (memory **and** swap combined, so it has to be ≥ the memory cap) and `LDS_CPUS`, all unlimited unless you set them. Cap generously: the first boot installs torch and ComfyUI's whole dependency tree, and a tight limit shows up as a *killed* install rather than a slow one. `LDS_DNS` sets the container's resolver, defaulting to `1.1.1.1` — point it at your own router or Pi-hole if you reach anything by internal hostname.
 

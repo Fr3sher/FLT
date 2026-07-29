@@ -92,7 +92,7 @@ def test_docker_context_excludes_generated_artifacts():
     }
 
     assert {'.worktrees', '.pytest_cache', 'packaging/build', 'packaging/dist', 'run', 'basedir',
-            'data-docker-gpu'} <= ignored
+            'data-docker-gpu', 'bank-images'} <= ignored
 
 
 def test_git_ignores_the_docker_host_folders():
@@ -100,8 +100,10 @@ def test_git_ignores_the_docker_host_folders():
     ./data-docker-gpu in the repo root, and after one boot they hold ComfyUI's venv
     and model tree. Untracked, that is tens of GB one `git add -A` away from the
     repo. ./data-docker is the API-only stack's own separate folder, checked here
-    too since both stacks live in the same repo root."""
-    for folder in ('run', 'basedir', 'data-docker', 'data-docker-gpu'):
+    too since both stacks live in the same repo root. ./bank-images is the worst
+    of the set to get wrong: whatever a user drops in there to triage is by
+    definition personal photographs, and this repo is public."""
+    for folder in ('run', 'basedir', 'data-docker', 'data-docker-gpu', 'bank-images'):
         result = subprocess.run(
             ['git', 'check-ignore', '-q', f'{folder}/'],
             cwd=REPO_ROOT, capture_output=True)
@@ -194,7 +196,7 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     assert 'dockerfile: Dockerfile.gpu' in compose
     assert f'"${{LDS_HOST_PORT:-{port}}}:{port}"' in compose
     assert '"${LDS_COMFY_HOST_PORT:-8188}:8188"' in compose
-    for mount in (':/comfy/mnt', ':/basedir', ':/data', './.env:/app/.env'):
+    for mount in (':/comfy/mnt', ':/basedir', ':/data', ':/images', './.env:/app/.env'):
         assert mount in compose, mount
     assert 'driver: nvidia' in compose
     assert re.search(r'capabilities:\s*\[\s*gpu', compose)
