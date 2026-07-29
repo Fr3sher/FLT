@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-29-test-studio-random-dataset-captions',
+    date: '2026-07-29',
+    title: 'Give Test Studio a real dataset caption in one click',
+    blurb:
+      '🎲 Caption can now pull a random nonblank caption from a kept image in a dataset you choose, so a useful Studio test prompt is never far from the work you already curated. Pick the source once and it stays locked in this browser; use ▾ to change it. If you have typed a prompt, Studio asks before replacing it. Suggested by the owner.',
+    to: '/studio',
+  },
+  {
     id: '2026-07-29-deploy-follows-extra-model-paths',
     date: '2026-07-29',
     title: 'Deployed LoRAs land where your extra_model_paths.yaml says',

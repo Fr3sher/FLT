@@ -13,6 +13,7 @@ import math
 import ntpath
 import os
 import posixpath
+import random
 import re
 import shutil
 import tempfile
@@ -70,6 +71,17 @@ def _comfy_output_dir():
 # mord, _cap_caption coupe à une FIN DE PHRASE — jamais en plein mot. Historique : à 800
 # il tranchait les captions descriptives en pleine phrase (« …a pale, neutral tone, and a »).
 CAPTION_MAX_CHARS = 10000
+
+# Exact Unicode whitespace set that Python's ``str.strip()`` recognizes.  SQLite's
+# default ``trim`` only removes U+0020, so it would otherwise sample a caption made
+# solely of (for example) U+2003 and let the final Python cleanup turn it into an
+# apparent empty result.  Supplying this set to SQLite keeps the SQL eligibility
+# predicate and the API's ``.strip()`` contract aligned without loading all rows.
+_PYTHON_STRIP_CHARS = (
+    '\t\n\x0b\x0c\r\x1c\x1d\x1e\x1f \x85\xa0\u1680'
+    '\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a'
+    '\u2028\u2029\u202f\u205f\u3000'
+)
 
 
 def _cap_caption(text):
@@ -1419,6 +1431,39 @@ def _propagate_trigger_rename(ds, old_safe, new_safe) -> dict:
 def get_dataset(user_id, dataset_id):
     ds = db.session.get(FaceDataset, dataset_id)
     return ds if ds and str(ds.user_id) == str(user_id) else None
+
+
+def random_kept_caption(user_id, dataset_id) -> str | None:
+    """Return one cleaned caption from an owned dataset's kept images.
+
+    The candidate count and random offset stay in SQL so a large dataset never
+    has all of its captions materialized just to choose one.  ``None`` means
+    the dataset exists but has no non-blank kept caption; an inaccessible
+    dataset raises ``LookupError`` so the route can return a 404 without
+    leaking ownership details.
+    """
+    if not get_dataset(user_id, dataset_id):
+        raise LookupError('dataset not found')
+
+    from sqlalchemy import func
+
+    cleaned = func.trim(FaceDatasetImage.caption, _PYTHON_STRIP_CHARS)
+    eligible = (db.session.query(FaceDatasetImage.caption)
+                .join(FaceDataset, FaceDatasetImage.dataset_id == FaceDataset.id)
+                .filter(FaceDatasetImage.dataset_id == dataset_id,
+                        FaceDataset.user_id == str(user_id),
+                        FaceDatasetImage.status == 'keep',
+                        FaceDatasetImage.caption.isnot(None),
+                        cleaned != ''))
+    count = eligible.count()
+    if not count:
+        return None
+
+    caption = (eligible.order_by(FaceDatasetImage.id.asc())
+               .offset(random.randrange(count)).limit(1).scalar())
+    # Keep the API contract robust if an unusual Unicode whitespace-only value
+    # slipped through SQLite's trim character set.
+    return (caption or '').strip() or None
 
 
 def list_datasets(user_id):
