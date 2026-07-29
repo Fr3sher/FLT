@@ -57,6 +57,14 @@ services:
     # REPLACES the inherited list, so set LDS_DNS to your LAN's own resolver if
     # you depend on internal hostnames.
     dns: ${LDS_DNS:-1.1.1.1}
+    # Optional caps, unlimited unless you set them. The first boot alone unpacks
+    # torch and ComfyUI's whole dependency tree, so a tight cap shows up as a
+    # killed install rather than a slow one.
+    mem_limit: ${LDS_MEM_LIMIT:-0}
+    # Docker's rule, not ours: this is memory + swap COMBINED, it must be >=
+    # mem_limit, and 0 means "twice mem_limit". Equal to mem_limit = no swap.
+    memswap_limit: ${LDS_MEMSWAP_LIMIT:-0}
+    cpus: ${LDS_CPUS:-0}
     environment:
       # --- the studio ---
       - LDS_DATA_DIR=/data

@@ -218,6 +218,20 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     assert 'dns: ${LDS_DNS:-' in compose
 
 
+def test_gpu_compose_resource_caps_default_to_no_limit():
+    """The caps are for people who ask for them. Shipping a real number as the
+    default would throttle — or OOM-kill — every install that never did, and the
+    first boot (torch plus ComfyUI's dependency tree) is exactly where a tight cap
+    stops looking like slowness and starts looking like a broken image. 0 is
+    Docker's own "no limit" for memory and cpus, and for memswap_limit it means
+    twice mem_limit."""
+    compose = _read('docker-compose.gpu.yml')
+
+    assert 'mem_limit: ${LDS_MEM_LIMIT:-0}' in compose
+    assert 'memswap_limit: ${LDS_MEMSWAP_LIMIT:-0}' in compose
+    assert 'cpus: ${LDS_CPUS:-0}' in compose
+
+
 def test_every_gpu_compose_variable_is_documented():
     """.env.example is where these are discovered — the compose file is not read
     by most people who deploy it. A variable that only exists in the YAML is a

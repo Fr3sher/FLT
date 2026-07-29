@@ -845,7 +845,7 @@ Three host folders, all relocatable from `.env` (see the Docker block in `.env.e
 
 Point `LDS_COMFY_BASEDIR` at a ComfyUI models tree you already have and nothing is downloaded twice. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them.
 
-`LDS_DNS` sets the container's resolver, defaulting to `1.1.1.1` — point it at your own router or Pi-hole if you reach anything by internal hostname.
+On a shared box you can also cap what it takes — `LDS_MEM_LIMIT`, `LDS_MEMSWAP_LIMIT` (memory **and** swap combined, so it has to be ≥ the memory cap) and `LDS_CPUS`, all unlimited unless you set them. Cap generously: the first boot installs torch and ComfyUI's whole dependency tree, and a tight limit shows up as a *killed* install rather than a slow one. `LDS_DNS` sets the container's resolver, defaulting to `1.1.1.1` — point it at your own router or Pi-hole if you reach anything by internal hostname.
 
 **Limits worth knowing before you build:**
 
