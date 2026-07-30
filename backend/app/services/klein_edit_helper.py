@@ -703,8 +703,12 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     # the routes can only turn into a detail-free 500 (reported by nofaceman).
     comfy_input_dir = comfy_fs.ensure_input_usable(_comfy_input_dir())
     uid = uuid.uuid4().hex[:8]
-    comfy_input = f"edit_source_{uid}_{source_filename}"
-    comfy_fs.stage_input_copy(source_path, comfy_input, comfy_input_dir)
+    source_stem = os.path.splitext(os.path.basename(str(source_filename)))[0] or 'source'
+    # The input directory may belong to a remote/containerised ComfyUI. Stage a
+    # fresh upright PNG there rather than copying camera EXIF/XMP/GPS bytes.
+    staged_source = comfy_fs.stage_input_image(
+        source_path, f"edit_source_{uid}_{source_stem}.png", comfy_input_dir)
+    comfy_input = os.path.basename(staged_source)
     # Every name staged for THIS job, so its completion can delete them again.
     # Without this list each improved image left a full-resolution duplicate in
     # ComfyUI's input folder forever (measured: 3 896 orphans on one install).
@@ -747,8 +751,10 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
         if not ref_path or not os.path.exists(ref_path):
             logger.warning(f"klein multi-ref: extra ref missing on disk: {ref_path}")
             continue
-        ref_input = f"edit_ref{i}_{uid}_{os.path.basename(ref_path)}"
-        comfy_fs.stage_input_copy(ref_path, ref_input, comfy_input_dir)
+        ref_stem = os.path.splitext(os.path.basename(str(ref_path)))[0] or f'ref{i}'
+        staged_ref = comfy_fs.stage_input_image(
+            ref_path, f"edit_ref{i}_{uid}_{ref_stem}.png", comfy_input_dir)
+        ref_input = os.path.basename(staged_ref)
         staged_inputs.append(ref_input)
         load_id, scale_id = f"ds_ref{i}_load", f"ds_ref{i}_scale"
         enc_id, lat_id = f"ds_ref{i}_encode", f"ds_ref{i}_latent"

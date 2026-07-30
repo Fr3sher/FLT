@@ -154,7 +154,11 @@ def _dataset_import_policy() -> dict:
     from .services import face_dataset_service as _fds
     p = _fds.import_encode_policy()
     return {'max_side': p['max_side'], 'encoding': p['encoding'],
-            'capped': p['capped'], 'ceiling': p['ceiling']}
+            'capped': p['capped'], 'ceiling': p['ceiling'],
+            'input_max_side': p['input_max_side'],
+            'input_max_pixels': p['input_max_pixels'],
+            'preserve_max_side': p['preserve_max_side'],
+            'preserve_max_pixels': p['preserve_max_pixels']}
 
 
 def comfyui_down_message(status, waited) -> str:

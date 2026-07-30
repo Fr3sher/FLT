@@ -114,22 +114,20 @@ DEFAULTS = {
     # (reported by Qeeyana on Reddit: "images added to dataset are automatically
     # normalized to 1024. Why? Let me choose not to.").
     #
-    # max_side: longest side kept, in px. The default 1024 is NOT arbitrary — it
-    #   is the resolution the mainstream trainers bucket to, and every trainer
-    #   only ever DOWNSCALES, so storing more pixels than you will train on buys
-    #   nothing but disk. It stays 1024 so no existing dataset changes meaning.
-    #   0 = store the image at its original size. Whatever the value, the
-    #   ceiling below applies: it is a format limit, not a preference.
-    # encoding: 'standard' (WebP q92 — the shipped behaviour), 'high' (WebP
-    #   q100, still lossy but visually indistinguishable), 'lossless' (WebP
-    #   lossless, pixel-identical, typically 3-5x the file size). This is the
-    #   OTHER half of the loss: raising max_side while leaving q92 in place
-    #   keeps re-encoding every import.
+    # max_side: longest side kept, in px, when a WebP normalization mode is
+    #   explicitly selected. 0 = store at the original size. Whatever the value,
+    #   the ceiling below applies: it is a format limit, not a preference.
+    # encoding: 'preserve' (the shipped default) keeps supported static source
+    #   bytes exactly as supplied: JPEG, PNG, WebP or BMP. 'standard' (WebP q92),
+    #   'high' (WebP q100) and 'lossless' (lossless WebP) remain opt-in legacy
+    #   normalization modes. `max_side` deliberately does not affect `preserve`:
+    #   training creates its own disposable PNG staging copy at launch, so an
+    #   import must not throw away the user's master first.
     #
     # Applies to the dataset INGEST lanes only (photo import, kohya ZIP/folder
     # merge, scrape-to-dataset). It does not touch generated images, the ≤2048
     # copies handed to a generation API, or an image the user already curated.
-    'dataset_import': {'max_side': 1024, 'encoding': 'standard'},
+    'dataset_import': {'max_side': 1024, 'encoding': 'preserve'},
     'training': {'default_family': 'zimage'},
     # Concept face masking (opt-in per dataset, Advanced training options). Both
     # knobs are exposed because NOBODY has measured the right value: no public A/B

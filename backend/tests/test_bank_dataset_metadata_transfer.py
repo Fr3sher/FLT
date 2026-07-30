@@ -175,12 +175,16 @@ def _make_source_transform(bank, image, kind):
 
 
 @pytest.mark.parametrize(
-    ('transform', 'expected_size'),
-    (('direct', (160, 96)), ('rotation', (96, 160)), ('clean', (83, 57))),
+    ('transform', 'expected_size', 'expected_format', 'expected_suffix'),
+    (('direct', (160, 96), 'JPEG', '.jpg'),
+     ('rotation', (96, 160), 'JPEG', '.jpg'),
+     ('clean', (83, 57), 'WEBP', '.webp')),
 )
-def test_jpeg_bank_to_dataset_snapshot_is_v2_final_webp_deterministic_only(
-        app, tmp_path, transform, expected_size):
-    """Snapshots describe the final Dataset WebP, never the Bank's old row."""
+def test_bank_to_dataset_snapshot_describes_the_final_preserved_file(
+        app, tmp_path, transform, expected_size, expected_format, expected_suffix):
+    """Direct/rotated Bank masters retain JPEG; a cleaned Bank derivative remains
+    WebP. In every case the snapshot describes the final Dataset file, never the
+    old Bank row."""
     from app.models import FaceDatasetImage
     from app.services.dataset_storage import dataset_path
 
@@ -192,12 +196,16 @@ def test_jpeg_bank_to_dataset_snapshot_is_v2_final_webp_deterministic_only(
         final_path = Path(dataset_path(dataset.id)) / dataset_image.filename
 
         with Image.open(final_path) as stored:
-            assert stored.format == 'WEBP'
+            assert stored.format == expected_format
             assert stored.size == expected_size
+        assert dataset_image.filename.endswith(expected_suffix)
         snapshot = _assert_v2_snapshot_matches_final(
             dataset_image.bank_analysis_snapshot, final_path)
-        # A normalized WebP does not carry the input JPEG's quality estimate.
-        assert snapshot['analysis']['jpeg_quality'] is None
+        # A clean derivative is WebP and carries no JPEG estimate. The helper
+        # above already proves that a preserved JPEG's value is measured from its
+        # final bytes, not copied from Bank history.
+        if expected_format == 'WEBP':
+            assert snapshot['analysis']['jpeg_quality'] is None
         assert source_image.jpeg_quality == HISTORICAL_ANALYSIS['jpeg_quality']
 
 

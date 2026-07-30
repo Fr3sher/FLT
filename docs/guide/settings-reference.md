@@ -348,44 +348,47 @@ Settings for how captions are produced and how the quality tools behave.
 
 ### Dataset import
 
-What happens to a photo the **moment it enters a dataset**. Until this pair
-existed, both numbers were hardcoded and nothing on screen said so — reported by
-**Qeeyana (Reddit)**: *"Images added to 'dataset' are automatically normalized to
-1024. Why? Let me choose not to."*
+What happens to a photo the **moment it enters a dataset**. The default now
+keeps the source as the master file; a training launch creates its own disposable
+working copies. This follows **Qeeyana (Reddit)** asking: *"Images added to
+'dataset' are automatically normalized to 1024. Why? Let me choose not to."*
 
-- **Stored resolution** → `dataset_import.max_side`. Longest side kept, in px.
-  Default **`1024`**. Options: `1024`, `1536`, `2048`, `4096`, or `0` = **keep
-  the original size**. The aspect ratio is always preserved (no square padding)
-  and an image is **never enlarged** — this only ever shrinks.
-  *Why 1024 by default:* every mainstream trainer buckets and downscales on its
-  own, so pixels above what you train at cost disk and nothing else. Raise it if
-  you train at a higher resolution, or if the dataset folder is also your
-  archive.
-- **Stored encoding** → `dataset_import.encoding`. Default **`standard`**.
+- **Stored encoding** → `dataset_import.encoding`. Default **`preserve`**.
   | Value | What is written |
   |---|---|
-  | `standard` *(default)* | WebP quality 92 — the shipped behaviour. |
-  | `high` | WebP quality 100. Still lossy, visually indistinguishable. |
-  | `lossless` | WebP lossless: pixel-identical to what you handed in. |
-  This is the **other half** of the loss: raising the resolution while leaving
-  quality 92 in place still re-encodes every import. Measured on a noisy 800×600
-  frame: q92 **158 KB**, q100 **243 KB**, lossless **797 KB** — roughly **5×**
-  the disk for lossless.
+  | `preserve` *(default)* | An un-cropped JPG/JPEG, PNG, WebP or BMP is kept byte-for-byte with the matching extension. `max_side` is ignored. |
+  | `standard` | Opt-in normalization to WebP quality 92, with the selected maximum side. |
+  | `high` | Opt-in normalization to WebP quality 100, with the selected maximum side. Still lossy. |
+  | `lossless` | Opt-in normalization to lossless WebP, with the selected maximum side. |
+  `preserve` is for a dataset that is also your archive. It does not ask the
+  trainer to consume an arbitrary source file: at training start LDS writes
+  temporary PNG + caption pairs for ai-toolkit, then leaves the imported master
+  untouched.
 
-**The hard ceiling is 8192 px, and it is not a preference.** Pillow's WebP
-encoder refuses any side past **16383 px** ("Image size exceeds WebP limit"), so
-an uncapped *original size* would turn a large panorama into a failed import
-rather than a big one. Anything above 8192 px is downscaled to it, and a
-configured value above the ceiling is clamped rather than silently ignored.
+**Import safety limit — every mode:** Before preserve, WebP normalization, or
+auto head-crop can decode the source, it must be no larger than **16 Mi-pixels**
+and **8192 px per side**. A larger file is rejected; convert or resize it before
+importing. WebP normalization does not bypass this admission limit.
+- **Stored resolution** → `dataset_import.max_side`. Used only by the three WebP
+normalization modes. Choose `1024`, `1536`, `2048`, `4096`, or `0` = original
+size. The aspect ratio is always preserved (no square padding) and an image is
+never enlarged. This output setting takes effect only after the source passes
+the import safety limit above; normalized output also clamps the longest side to
+**8192 px**.
+
+**Auto head-crop is deliberately different.** It changes the picture into a
+square head shot, so it creates a derived WebP even when `preserve` is selected.
+The same is true of later edits such as crop, rotate and watermark clean: a
+transformed image is not the original master any more.
 
 **Changing this is not retroactive.** It applies to images imported *from now
-on*, so a dataset imported at 1024 and topped up at 2048 holds both — harmless
-for training (trainers bucket per image) but the folder is no longer uniform.
-Re-importing the originals is the only way to change what is already stored.
+on*, so a dataset can hold mixed formats and sizes. That is harmless for training
+(every trainer buckets and downscales on its own). Existing WebPs cannot be
+reconstructed into the source files that were discarded by older versions.
 
 **What it does NOT touch**: generated images, the ≤2048 px copies handed to an
-image API, and any image you have already curated (crop, rotate, watermark
-clean) — those lanes keep their own fixed sizes on purpose.
+image API, and any image you have already curated — those lanes keep their own
+fixed sizes on purpose.
 
 ### Captioning
 
@@ -742,8 +745,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `server.port` | Port the server listens on (default `5050`). |
 | `server.require_token` | On a non-loopback bind, require remote clients to present an access token (default `false` — a trusted LAN needs none). Toggle and token also live in Settings → Server & access. |
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
-| `dataset_import.max_side` | Longest side kept for an image imported into a dataset, in px (default `1024`; `0` = original size). Ratio always preserved, never enlarged, hard ceiling 8192 px (WebP's own limit is 16383). Not retroactive. Editable in Settings → Captioning & quality. |
-| `dataset_import.encoding` | How an imported image is written: `standard` (WebP q92, default), `high` (WebP q100), `lossless` (pixel-identical, ~5x the disk). Editable in Settings → Captioning & quality. |
+| `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still be at most 16 Mi-pixels and 8192 px per side; a larger one is rejected and must be converted or resized before import. Not retroactive. Editable in Settings → Captioning & quality. |
+| `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The 16 Mi-pixel / 8192 px-per-side input limit applies to every mode. Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
 | `comfyui.base_dir` | ComfyUI install directory, used to derive `output`/`input`/`models`/`loras` dirs if those aren't set explicitly. |
 | `comfyui.output_dir` | Explicit override for ComfyUI's output folder. Set it when ComfyUI runs with `--output-directory`. Editable in Settings → Local tools. |

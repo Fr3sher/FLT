@@ -389,7 +389,7 @@ An empty dataset needs material. There are four ways in, and they mix freely ins
   that is a property of your data worth knowing about; what effect it has on
   trained LoRA weights has not been measured, in either direction, by anyone.
   Neither limit applies to the local engines.
-- **📥 Import** — drag in your own photos. Concept/Style keep the full frame; Character can optionally auto-crop around the head (or use a centered/manual crop when local vision is unavailable).
+- **📥 Import** — drag in your own photos. Uncropped JPEG/JPG, PNG, WebP and BMP files stay byte-for-byte in their original format by default; training creates its disposable PNG working pairs only when a run starts. Every source, including WebP normalization and head-crop, must be at most **16 Mi-pixels** and **8192 px per side**; a larger file is rejected, so convert or resize it before importing. Concept/Style keep the full frame; Character can optionally auto-crop around the head (or use a centered/manual crop when local vision is unavailable), which deliberately creates a derived WebP.
 - **🌐 Scrape** — collect real images from supported web sources (below).
 - **🗃️ Image bank** — when you're not starting from a handful of shots but from a **giant unsorted dump**, triage it first, then promote the keepers.
 

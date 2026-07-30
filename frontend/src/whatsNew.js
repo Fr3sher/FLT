@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-30-preserve-imported-photo-files',
+    date: '2026-07-30',
+    title: 'Keep the photo you imported, not an automatic WebP copy',
+    blurb:
+      'New un-cropped JPG, PNG, WebP and BMP imports now stay byte-for-byte in their original format by default. Training still gets disposable PNG pairs only when it starts, so the dataset keeps its master files. WebP normalization remains available as an opt-in policy; Auto head-crop deliberately creates a derived WebP, and older WebPs cannot be reversed into originals.',
+    to: '/settings/captioning',
+  },
+  {
     id: '2026-07-30-krea-raw-lokr-likeness-starter',
     date: '2026-07-30',
     title: 'Start a Krea 2 Raw LoKr likeness run from a named recipe',

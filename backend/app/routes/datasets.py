@@ -412,8 +412,22 @@ def dataset_ref_edit(dataset_id):
     # anchors for THIS call only, never persisted as dataset extra refs. The local
     # engines refuse them rather than drop them silently (see
     # svc.LOCAL_EDIT_REF_SUPPORT); the modal hides the picker for those engines.
-    extra_bytes = [f.read() for f in request.files.getlist('ref') if f and f.filename]
     try:
+        extra_bytes = []
+        for index, upload in enumerate(request.files.getlist('ref'), 1):
+            if not upload or not upload.filename:
+                continue
+            # Bound the request-thread snapshot itself. The service repeats the
+            # cap + full image sanitation before any external API worker starts.
+            try:
+                raw = upload.read(svc.EXTERNAL_REFERENCE_MAX_BYTES + 1)
+            except (OSError, TypeError, MemoryError) as exc:
+                raise ValueError(f'extra edit reference {index} could not be read') from exc
+            if len(raw) > svc.EXTERNAL_REFERENCE_MAX_BYTES:
+                raise ValueError(
+                    f'extra edit reference {index} is too large '
+                    f'(max {svc.EXTERNAL_REFERENCE_MAX_BYTES // (1024 * 1024)} MiB)')
+            extra_bytes.append(raw)
         svc.start_reference_edit(current_app._get_current_object(), LOCAL_USER,
                                  dataset_id, engine, prompt, extra_edit_ref_bytes=extra_bytes)
     except Exception as e:

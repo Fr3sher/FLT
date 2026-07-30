@@ -30,7 +30,7 @@ import sys
 import threading
 from datetime import datetime
 
-from PIL import Image
+from PIL import Image, ImageOps
 
 from .. import config as cfg
 from ..models import FaceDataset, FaceDatasetImage
@@ -3215,7 +3215,11 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
             continue
         stem = f'{trigger}_{n:03d}'
         dst = os.path.join(out, f'{stem}.png')
-        Image.open(src).convert('RGB').save(dst, 'PNG')
+        # Dataset masters can retain their native JPEG/PNG/WebP/BMP bytes. The
+        # trainer receives this disposable PNG instead: bake EXIF orientation into
+        # pixels before dropping metadata so an upright JPEG never trains sideways.
+        with Image.open(src) as source:
+            ImageOps.exif_transpose(source).convert('RGB').save(dst, 'PNG')
         exported.append(dst)
         cap = fds.style_content_caption(ds, img.caption)
         body = cap if fds.is_style(ds) else (f'{trigger}, {cap}' if cap else trigger)

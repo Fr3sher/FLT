@@ -528,8 +528,9 @@ def fit_output_size(width, height, max_mp=MAX_OUTPUT_MP):
 def _source_size(path):
     try:
         from PIL import Image
+        from . import image_encoding
         with Image.open(path) as im:
-            return im.size
+            return image_encoding.visual_size_from_header(im)
     except Exception:
         # A source we cannot measure still deserves a job: 1 MP square is the
         # neutral fallback, not a crash.
@@ -676,10 +677,14 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     # being up says nothing about ComfyUI's input folder being reachable from here.
     comfy_input_dir = comfy_fs.ensure_input_usable(_comfy_input_dir())
     uid = uuid.uuid4().hex[:8]
-    comfy_input = f'krea_source_{uid}_{source_filename}'
-    comfy_fs.stage_input_copy(source_path, comfy_input, comfy_input_dir)
+    source_stem = os.path.splitext(os.path.basename(str(source_filename)))[0] or 'source'
+    staged_source = comfy_fs.stage_input_image(
+        source_path, f'krea_source_{uid}_{source_stem}.png', comfy_input_dir)
+    comfy_input = os.path.basename(staged_source)
 
-    width, height = fit_output_size(*_source_size(source_path))
+    # Measure the exact sanitized, EXIF-oriented PNG handed to the graph, never
+    # the raw camera raster whose aspect can be transposed by orientation 5–8.
+    width, height = fit_output_size(*_source_size(staged_source))
     workflow = build_workflow(
         comfy_input, edit_prompt, unet=unet, clip=clip, vae=vae,
         lora_name=lora_name, width=width, height=height,

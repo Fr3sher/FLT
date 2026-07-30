@@ -401,6 +401,7 @@ export function useDataset() {
     const dup = d.duplicates || 0;
     const small = d.small || 0;
     toast.success(`${d.imported} imported${dup ? ` · ${dup} duplicate(s) skipped` : ''}`);
+    if (d.failed) toast.warning(`${d.failed} image${d.failed === 1 ? '' : 's'} not imported — use JPEG, PNG, WebP or BMP, up to 16 Mi-pixels and 8192 px per side; convert or resize before importing.`);
     if (dup && !d.imported) toast.warning('All files were already in the dataset (perceptual duplicates).');
     if (small) toast.warning(`${small} image(s) are under 768 px — training only downscales, they will stay soft.`);
     await refresh();

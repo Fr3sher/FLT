@@ -39,6 +39,7 @@ _STATIC_MIME_TYPES = {
     '.svg': 'image/svg+xml',
     '.webp': 'image/webp',
     '.png': 'image/png',
+    '.bmp': 'image/bmp',
     '.jpg': 'image/jpeg',
     '.jpeg': 'image/jpeg',
     '.gif': 'image/gif',
