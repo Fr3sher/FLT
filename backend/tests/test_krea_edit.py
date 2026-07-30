@@ -566,7 +566,7 @@ def test_krea_pose_cards_override_conflicting_generic_framing_details(
     out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
                                  label=entry['label'])
     final_card = fv.krea_card_pose_priority(
-        fv.krea_outfit_directive(entry['prompt'], entry['label']))
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'))
 
     assert requested_card_text in out
     assert conflicting_detail not in out
@@ -623,6 +623,21 @@ def test_krea_card_priority_does_not_repeat_edited_or_custom_prompt_text():
     assert out.count(custom) == 1
     assert out.endswith(fv.krea_card_pose_priority())
     assert not out.endswith(fv.krea_card_pose_priority(custom))
+
+
+def test_krea_card_priority_tail_is_not_built_from_the_editable_palette(monkeypatch):
+    """A palette choice may shape the description, never the post-SFW tail."""
+    entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
+    palette_text = 'untrusted palette text that must remain before identity'
+    monkeypatch.setattr(fv, 'outfit_palette', lambda *_args: (palette_text,))
+
+    out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
+                                 label=entry['label'])
+    assert out.count(palette_text) == 1
+    assert out.rfind(palette_text) < out.rfind(
+        fv.get_identity_prompt('klein_identity', 'human'))
+    assert out.endswith(fv.krea_card_pose_priority(
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human')))
 
 
 def test_the_wrapper_respects_the_subject_type_and_the_nsfw_switch():

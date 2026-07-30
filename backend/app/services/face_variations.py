@@ -865,11 +865,11 @@ def wrap_variation_krea(prompt: str, nsfw: bool = False, framing: str | None = N
     explicit hold order. `label` selects that garment deterministically — pass
     the variation label so the same shot always renders the same outfit.
 
-    Both fixes were re-measured on Klein (2026-07-27) and held there too, so both
-    wrappers now pass the same two flags and compose an identical prompt. Kept as
-    a named entry point because the two engines are separate product surfaces and
-    only one of them may need to move next — the flags are where that split would
-    reappear, which is why they stay parameters even while both are True."""
+    The outfit and permanent-marking fixes are also used by Klein, but Krea has
+    one deliberately local addition: conflicting pose cards receive a final,
+    catalog-owned priority instruction.  The named entry point keeps that engine
+    boundary explicit rather than letting a Krea tuning silently affect Klein.
+    """
     return _compose_edit_prompt(prompt, nsfw=nsfw, framing=framing, suffix=suffix,
                                  subject_type=subject_type, label=label,
                                  concrete_outfit=True, markings_lock=True,
@@ -902,6 +902,12 @@ KREA_CARD_POSE_PRIORITY_GENERIC = (
     f'{KREA_CARD_POSE_PRIORITY_PREFIX} honor exactly the pose, camera angle and '
     f'framing already stated in the shot description. {KREA_CARD_POSE_PRIORITY_SUFFIX}')
 _KREA_TRUSTED_TAIL_MAX_CHARS = 600
+# The final priority instruction must stay server-owned.  These replace the
+# catalog's default variation clauses without consulting the editable outfit
+# palette (whose text is valid in the normal description, but must not appear
+# after identity/SFW locks).
+_KREA_CATALOG_OUTFIT = 'wearing a varied casual outfit'
+_KREA_CATALOG_EXPRESSION = 'a calm neutral facial expression'
 
 
 def krea_card_pose_priority(card_prompt: str = '') -> str:
@@ -947,11 +953,12 @@ def _krea_builtin_card_prompt(prompt: str, label: str, subject_type: str) -> str
         return ''
     if prompt.strip() != catalog_prompt.strip():
         return ''
-    # Keep the final catalog instruction positive (the normal Krea body does the
-    # same rewrite) without ever taking words from the client prompt.  A user can
-    # customize the palette in Settings, so fail closed to the generic tail if it
-    # would make this otherwise short, server-owned instruction unexpectedly big.
-    card = krea_outfit_directive(catalog_prompt, label)
+    # Keep the final catalog instruction positive without consulting an editable
+    # setting.  The normal description may still use the selected outfit palette,
+    # but this tail is deliberately static and safe to place after identity/SFW.
+    card = (catalog_prompt
+            .replace(OUTFIT_VARY, _KREA_CATALOG_OUTFIT)
+            .replace(EXPRESSION_NEUTRAL, _KREA_CATALOG_EXPRESSION))
     return card if len(card) <= _KREA_TRUSTED_TAIL_MAX_CHARS else ''
 
 
@@ -960,13 +967,9 @@ def _compose_edit_prompt(prompt: str, *, nsfw: bool, framing, suffix: str,
                           concrete_outfit: bool, markings_lock: bool,
                           card_pose_priority: bool = False) -> str:
     """The ONE assembly of a local-edit prompt, shared by Klein and Krea — the two
-    wrappers had drifted into two copies of the same six-part concatenation, and
-    every part of it is now user-editable, which is five more chances for the
-    copies to disagree. The two flags are where the engines COULD differ (name a
-    concrete garment / hold the skin); both are True today because the two fixes
-    were born on Krea and then measured to hold on Klein too. They stay
-    parameters rather than duplicated bodies precisely so one engine can move
-    without the other silently following.
+    wrappers had drifted into two copies of the same six-part concatenation.  The
+    engine-specific flags (name a concrete garment / hold the skin / prioritize a
+    catalog pose) keep one engine's correction from silently moving the other.
 
     Klein's order remains load-bearing and unchanged: command + description,
     framing detail, markings hold, identity lock, rendering tail.  On Krea only,
