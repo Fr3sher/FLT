@@ -546,6 +546,85 @@ def test_the_wrapper_is_instruction_first_and_locks_permanent_markings():
     assert fv.get_identity_prompt('klein_identity', 'human') in out
 
 
+@pytest.mark.parametrize(
+    ('entry_id', 'conflicting_detail', 'requested_card_text'),
+    [
+        ('face_profile_l', 'both eyes in crisp focus', 'left profile view'),
+        ('body_sit', 'natural standing distance', 'sitting on a chair'),
+    ],
+)
+def test_krea_pose_cards_override_conflicting_generic_framing_details(
+        entry_id, conflicting_detail, requested_card_text):
+    """The card, not a reusable front/standing hint, is Krea's final command.
+
+    These are the two field failures: the default face detail asks for both eyes
+    on a strict profile, while the body detail asks for a standing composition on
+    a seated card.  The generic detail must disappear and the exact card intent
+    must be the last imperative Krea reads.
+    """
+    entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == entry_id)
+    out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
+                                 label=entry['label'])
+    final_card = fv.krea_card_pose_priority(
+        fv.krea_outfit_directive(entry['prompt'], entry['label']))
+
+    assert requested_card_text in out
+    assert conflicting_detail not in out
+    assert out.endswith(final_card)
+    # The concrete words must be repeated after the identity lock and rendering
+    # tail, not merely referred to as an earlier instruction.
+    assert out.rfind(requested_card_text) > out.rfind(
+        fv.get_identity_prompt('render_tail_sfw', 'human'))
+
+
+def test_krea_card_priority_is_scoped_to_krea_not_klein_or_api_wrappers():
+    """Do not generalise a Krea-specific prompt correction to other engines."""
+    entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
+    krea = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
+                                  label=entry['label'])
+    klein = fv.wrap_variation_klein(entry['prompt'], framing=entry['framing'],
+                                    label=entry['label'])
+    api = fv.wrap_variation(entry['prompt'])
+
+    assert 'both eyes in crisp focus' not in krea
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX in krea
+    assert 'both eyes in crisp focus' in klein
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in klein
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in api
+
+
+def test_krea_card_priority_stays_human_and_uses_the_current_regenerate_prompt():
+    """A historical label must not overrule an edited prompt or non-human detail."""
+    front = fv.wrap_variation_krea('close-up portrait, front view', framing='face',
+                                   label='Profile left')
+    assert 'both eyes in crisp focus' in front
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in front
+
+    sitting = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'body_sit')
+    animal = fv.wrap_variation_krea(sitting['prompt'], framing='body',
+                                    subject_type='animal', label=sitting['label'])
+    animal_detail = fv.get_identity_prompt('framing_body', 'animal')
+    assert animal_detail in animal
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in animal
+
+
+def test_krea_card_priority_does_not_duplicate_a_dataset_suffix():
+    entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
+    suffix = 'shot on 35mm film'
+    out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
+                                 label=entry['label'], suffix=suffix)
+    assert out.count(suffix) == 1
+
+
+def test_krea_card_priority_does_not_repeat_edited_or_custom_prompt_text():
+    """Free-form prompt text stays before the identity/SFW locks exactly once."""
+    custom = 'left profile view, ' + ('deliberate detail ' * 800)
+    out = fv.wrap_variation_krea(custom, framing='face', label='Custom profile')
+    assert out.count(custom) == 1
+    assert out.endswith(fv.krea_card_pose_priority())
+    assert not out.endswith(fv.krea_card_pose_priority(custom))
+
+
 def test_the_wrapper_respects_the_subject_type_and_the_nsfw_switch():
     anime = fv.wrap_variation_krea('close-up', framing='face', subject_type='anime',
                                    label='Face front')
