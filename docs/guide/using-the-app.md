@@ -794,6 +794,13 @@ two images displayed at different scales cannot be compared honestly.
 that is not a comparison. Leave the comparison (⊟) and the usual click-for-100 %
 inspection is back, on whichever image you are looking at.
 
+When you **✓ Keep** a completed **✨ Upscale & improve** candidate, LDS keeps
+both files but returns its original to **Undecided** automatically — so the
+improved image is the one selected for training. This happens in the lightbox
+and with bulk **✓ Keep**, even if you selected both tiles. Nothing is deleted:
+you can still compare them, and can mark the original **Keep** again later if
+you deliberately want to train on both.
+
 If the original was deleted, rejected and purged, or simply never recorded (very
 old rows), there is no button — a short amber note says why instead, so a
 missing control can't be mistaken for a bug. Everything else in the lightbox —

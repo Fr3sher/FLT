@@ -1592,6 +1592,196 @@ def _clear_watermark_metadata(img):
     img.watermark_regions = None
 
 
+def _unkeep_parent_for_kept_improvement(img):
+    """Make a kept Klein improvement the dataset's active choice.
+
+    An improve result is a separate image row, so this deliberately changes only
+    the original row's review state: no files, captions or lineage are removed.
+    The parent lookup is scoped to the candidate's dataset because legacy
+    ``parent_image_id`` has no foreign key and may be stale or point elsewhere.
+    A queued result can be marked Keep before its bytes arrive; it cannot replace
+    the source until a regular file has actually landed in the dataset folder.
+    """
+    filename = img.filename
+    if (img.derivation_kind != KLEIN_IMAGE_IMPROVE
+            or not img.parent_image_id
+            or not isinstance(filename, str)
+            or not filename
+            or '/' in filename
+            or '\\' in filename
+            or os.path.basename(filename) != filename
+            or ntpath.basename(filename) != filename
+            or posixpath.basename(filename) != filename
+            or img.parent_image_id == img.id):
+        return False
+    try:
+        candidate_path = _img_path(img)
+    except (TypeError, ValueError):
+        return False
+    if not os.path.isfile(candidate_path):
+        return False
+    # Keep can race with an unkeep/reject click while completion is linking its
+    # file.  Flush our local completion/status work, then let one SQL statement
+    # consult the CURRENT candidate row and update only a still-kept parent.
+    # Reading ``img.status`` here would use a stale SQLAlchemy object and could
+    # evict the parent after the user already changed their mind.
+    from sqlalchemy import exists, update
+    from sqlalchemy.orm import aliased
+
+    db.session.flush()
+    candidate = aliased(FaceDatasetImage)
+    candidate_is_kept = exists().where(
+        candidate.id == img.id,
+        candidate.dataset_id == img.dataset_id,
+        candidate.parent_image_id == img.parent_image_id,
+        candidate.derivation_kind == KLEIN_IMAGE_IMPROVE,
+        candidate.status == 'keep',
+        candidate.filename == filename,
+    )
+    result = db.session.execute(
+        update(FaceDatasetImage)
+        .where(FaceDatasetImage.id == img.parent_image_id,
+               FaceDatasetImage.dataset_id == img.dataset_id,
+               FaceDatasetImage.status == 'keep',
+               candidate_is_kept)
+        .values(status='pending')
+        .execution_options(synchronize_session=False))
+    return bool(result.rowcount)
+
+
+def _rekeep_pending_parent_for_reimprove(img):
+    """CAS the source back to Keep while a currently kept result is re-run."""
+    if (img.derivation_kind != KLEIN_IMAGE_IMPROVE
+            or not img.parent_image_id
+            or img.parent_image_id == img.id):
+        return False
+    from sqlalchemy import exists, update
+    from sqlalchemy.orm import aliased
+
+    candidate = aliased(FaceDatasetImage)
+    candidate_is_kept = exists().where(
+        candidate.id == img.id,
+        candidate.dataset_id == img.dataset_id,
+        candidate.parent_image_id == img.parent_image_id,
+        candidate.derivation_kind == KLEIN_IMAGE_IMPROVE,
+        candidate.status == 'keep',
+    )
+    result = db.session.execute(
+        update(FaceDatasetImage)
+        .where(FaceDatasetImage.id == img.parent_image_id,
+               FaceDatasetImage.dataset_id == img.dataset_id,
+               FaceDatasetImage.status == 'pending',
+               candidate_is_kept)
+        .values(status='keep')
+        .execution_options(synchronize_session=False))
+    return bool(result.rowcount)
+
+
+def _nullable_equals(column, value):
+    return column.is_(None) if value is None else column == value
+
+
+def _matches_reimprove_state(row, img, state):
+    """SQL predicates for the snapshot that the re-run is allowed to replace."""
+    return (
+        row.id == img.id,
+        row.dataset_id == img.dataset_id,
+        row.parent_image_id == img.parent_image_id,
+        row.derivation_kind == KLEIN_IMAGE_IMPROVE,
+        row.status == state['status'],
+        _nullable_equals(row.filename, state['filename']),
+        _nullable_equals(row.job_id, state['job_id']),
+    )
+
+
+def _transition_reimprove_candidate(img, old_state, parent, label, prompt, job_id,
+                                    expected_transition_caption):
+    """CAS one improvement into its in-flight replacement state.
+
+    The job has already been queued, but a status click can land while enqueue is
+    in progress.  Do not overwrite that newer decision; the caller cancels the
+    unlinked job when this snapshot no longer matches.
+    """
+    from sqlalchemy import case, update
+
+    values = {
+        'filename': None,
+        'status': 'pending',
+        'job_id': job_id,
+        'variation_label': label,
+        'variation_prompt': prompt[:500],
+        'framing': parent.framing,
+        'fail_reason': None,
+        'fail_kind': None,
+        'watermark_state': None,
+        'watermark_bbox': None,
+        'watermark_regions': None,
+    }
+    if not old_state['caption']:
+        # A blank caption inherits the parent on a normal re-run, but an editor
+        # can save text while enqueue_klein_edit is waiting.  Fill only if it is
+        # STILL blank in the database; otherwise preserve that newer work.
+        still_blank = ((FaceDatasetImage.caption.is_(None))
+                       | (FaceDatasetImage.caption == ''))
+        values['caption'] = case(
+            (still_blank, expected_transition_caption), else_=FaceDatasetImage.caption)
+    result = db.session.execute(
+        update(FaceDatasetImage)
+        .where(*_matches_reimprove_state(FaceDatasetImage, img, old_state))
+        .values(**values)
+        .execution_options(synchronize_session=False))
+    if result.rowcount:
+        db.session.expire(img)
+    return bool(result.rowcount)
+
+
+def _restore_reimprove_candidate_after_trash_failure(
+        img, old_state, job_id, expected_transition_caption):
+    """Restore only the exact transient state written by this re-run."""
+    from sqlalchemy import case, update
+
+    transient = dict(old_state, status='pending', filename=None, job_id=job_id)
+    # Restore the exact old caption only while it is still what this transition
+    # would have written.  A caption changed during Trash I/O wins instead.
+    restore_values = {field: value for field, value in old_state.items()
+                      if field != 'caption'}
+    restore_values['caption'] = case(
+        (_nullable_equals(FaceDatasetImage.caption, expected_transition_caption),
+         old_state['caption']),
+        else_=FaceDatasetImage.caption)
+    result = db.session.execute(
+        update(FaceDatasetImage)
+        .where(*_matches_reimprove_state(FaceDatasetImage, img, transient))
+        .values(**restore_values)
+        .execution_options(synchronize_session=False))
+    if result.rowcount:
+        db.session.expire(img)
+    return bool(result.rowcount)
+
+
+def _undo_rekeep_parent_after_reimprove_trash_failure(img, old_state):
+    """Undo only a fallback whose candidate was successfully restored."""
+    if (img.derivation_kind != KLEIN_IMAGE_IMPROVE
+            or not img.parent_image_id
+            or img.parent_image_id == img.id):
+        return False
+    from sqlalchemy import exists, update
+    from sqlalchemy.orm import aliased
+
+    candidate = aliased(FaceDatasetImage)
+    candidate_is_restored = exists().where(
+        *_matches_reimprove_state(candidate, img, old_state))
+    result = db.session.execute(
+        update(FaceDatasetImage)
+        .where(FaceDatasetImage.id == img.parent_image_id,
+               FaceDatasetImage.dataset_id == img.dataset_id,
+               FaceDatasetImage.status == 'keep',
+               candidate_is_restored)
+        .values(status='pending')
+        .execution_options(synchronize_session=False))
+    return bool(result.rowcount)
+
+
 def set_image_status(user_id, image_id, status):
     if status not in _VALID_STATUS:
         raise ValueError('invalid status')
@@ -1606,6 +1796,8 @@ def set_image_status(user_id, image_id, status):
     if status == 'reject':
         _clear_watermark_metadata(img)
     img.status = status
+    if status == 'keep':
+        _unkeep_parent_for_kept_improvement(img)
     db.session.commit()
     return True
 
@@ -2914,6 +3106,13 @@ def batch_image_action(user_id, dataset_id, image_ids, action):
                 _clear_watermark_metadata(img)
             img.status = action
         n += 1
+    if action == 'keep':
+        # This is deliberately a second phase.  If both a source and its
+        # improvement are selected, every explicit choice is applied first,
+        # then the kept candidate wins regardless of database/query order.
+        for img in rows:
+            if img.status == 'keep':
+                _unkeep_parent_for_kept_improvement(img)
     db.session.commit()
     return n
 
@@ -7012,6 +7211,8 @@ REIMPROVE_PARENT_GONE = ('the source image this improvement came from was delete
 REIMPROVE_SOURCE_FILE_GONE = ('the source image file is missing on disk '
                               '— nothing left to re-improve from')
 REIMPROVE_IN_FLIGHT = 'this improvement is still generating'
+REIMPROVE_STATE_CHANGED = ('this improvement changed while it was being re-queued '
+                           '— review it and try again')
 
 
 def reimprove_image(user_id, image_id):
@@ -7093,6 +7294,8 @@ def _reimprove_image_locked(user_id, image_id):
         'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
         'variation_label', 'variation_prompt', 'framing',
         'watermark_state', 'watermark_bbox', 'watermark_regions')}
+    expected_transition_caption = (old_state['caption']
+                                   if old_state['caption'] else parent.caption)
     old_path = _img_path(img) if img.filename else None
     job_id = keh.enqueue_klein_edit(
         user_id=str(user_id), source_filename=parent.filename,
@@ -7102,19 +7305,17 @@ def _reimprove_image_locked(user_id, image_id):
     )
 
     try:
-        _clear_watermark_metadata(img)
-        img.variation_label = label
-        img.variation_prompt = prompt[:500]
-        img.framing = parent.framing
-        # A caption typed on this tile is the user's work — keep it. Only an
-        # empty one is refilled from the parent, which is what a first pass does.
-        if not img.caption:
-            img.caption = parent.caption
-        img.filename = None
-        img.status = 'pending'
-        img.job_id = job_id
-        img.fail_reason = None
-        img.fail_kind = None
+        # Do this while the candidate is still Keep.  The CAS observes both
+        # rows in the database, so an intervening parent reject/failed decision
+        # is never overwritten by this re-run's temporary fallback.
+        parent_rekept = _rekeep_pending_parent_for_reimprove(img)
+        if not _transition_reimprove_candidate(
+                img, old_state, parent, label, prompt, job_id,
+                expected_transition_caption):
+            # The status/file/job snapshot changed after enqueue. Rolling back
+            # also undoes a just-applied parent fallback; the except path below
+            # cancels this unlinked job and maps the race to a 409.
+            raise RuntimeError(REIMPROVE_STATE_CHANGED)
         db.session.commit()
     except Exception:
         db.session.rollback()
@@ -7132,8 +7333,13 @@ def _reimprove_image_locked(user_id, image_id):
                 old_path, context=f'dataset-{img.dataset_id}-reimprove-{img.id}')
     except Exception:
         try:
-            for field, value in old_state.items():
-                setattr(img, field, value)
+            restored_candidate = _restore_reimprove_candidate_after_trash_failure(
+                img, old_state, job_id, expected_transition_caption)
+            if parent_rekept and restored_candidate:
+                # Candidate first: if a user changed it during the Trash call,
+                # its CAS fails and the fallback parent remains Keep instead of
+                # overwriting that newer decision.
+                _undo_rekeep_parent_after_reimprove_trash_failure(img, old_state)
             queue_manager.cancel_job(job_id, str(user_id), 'image', commit=False)
             db.session.commit()
         except Exception:
@@ -7996,6 +8202,10 @@ def link_completed_dataset_image(job_id, filename, failed=False, reason=None):
                 img.fail_reason = ('The finished image could not be retrieved from ComfyUI '
                                    '(not on disk, and the /view API fetch failed).')
                 logger.warning(f"dataset link: file not on disk and /view API fetch failed (job {job_id})")
+        # A user may have marked this in-flight improvement Keep while waiting.
+        # Only the freshly linked, on-disk result may now replace its parent;
+        # the helper also preserves a later explicit return to Pending.
+        _unkeep_parent_for_kept_improvement(img)
     db.session.commit()
     # This job just left the in-flight set: reconcile the Klein 'generate'
     # indicator (clears it when this was the last job of the batch). Guarded — a
