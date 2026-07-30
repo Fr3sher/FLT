@@ -35,7 +35,7 @@ from . import (bank_transfer_metadata, dataset_activity, image_encoding,
                reference_edit_jobs, trash)
 from .dataset_storage import dataset_path, ensure_dataset_dir
 from .image_provenance import provenance_metrics
-from .image_quality import quality_metrics
+from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 
 # Garde le modèle vision chaud entre les images d'un même batch caption/classify
 # (sinon Ollama le recharge - cold start ~10s - à CHAQUE image). Déchargé en fin
@@ -4096,24 +4096,63 @@ def _dhash(im: Image.Image) -> int:
     return bits
 
 
+# Bank analysis needs to decode before its pure-Pillow metrics can downscale.
+# Keep the header guard local to this call rather than changing Pillow's process-
+# wide bomb policy: a 16 MP source is already a substantial RGB working set, and
+# the project itself caps stored Dataset sides at 8192 px.  A Bank may still copy
+# a larger file; it simply starts unanalysed and can be reviewed separately.
+BANK_ANALYSIS_MAX_SIDE = IMPORT_MAX_SIDE_CEILING
+BANK_ANALYSIS_MAX_PIXELS = 16 * 1024 * 1024
+
+
+def _bank_analysis_dimensions_allowed(im: Image.Image) -> bool:
+    """Reject headers whose full decode would exceed the local analysis budget."""
+    try:
+        width, height = im.size
+        return (isinstance(width, int) and isinstance(height, int)
+                and 0 < width <= BANK_ANALYSIS_MAX_SIDE
+                and 0 < height <= BANK_ANALYSIS_MAX_SIDE
+                and width * height <= BANK_ANALYSIS_MAX_PIXELS)
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        return False
+
+
+def _loaded_bank_deterministic_analysis(im: Image.Image) -> dict | None:
+    """Apply the header guard, then decode only an image safe for this analysis."""
+    if not _bank_analysis_dimensions_allowed(im):
+        logger.warning('bank analysis skipped image beyond %d px / %d px-side budget',
+                       BANK_ANALYSIS_MAX_PIXELS, BANK_ANALYSIS_MAX_SIDE)
+        return None
+    # Match the Bank scan's JPEG fast path. It bounds decode work before the
+    # quality metric performs its own <=1024px analysis copy; other formats
+    # keep their native decoder behavior after the local header guard.
+    im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
+    im.load()
+    return _bank_deterministic_values(im)
+
+
 def bank_deterministic_analysis(image_source) -> dict | None:
     """Measure the deterministic Bank fields from one final image.
 
-    Bank -> Dataset always invokes this on its emitted WebP, and a transformed
-    Bank -> Bank copy invokes it on the copied derived file.  Keeping it here
-    next to the Dataset dHash makes both transfer directions use exactly the
-    same pure-Pillow formulas as the Bank quality scan, without carrying source
-    ML outputs across a byte-changing conversion.
+    Bank -> Dataset always invokes this on its emitted WebP, and every Bank ->
+    Bank copy invokes it on the destination file.  Keeping it here next to the
+    Dataset dHash makes both transfer directions use exactly the same pure-Pillow
+    formulas as the Bank quality scan, without carrying stale source ML outputs.
     """
     try:
+        # Pillow may warn at open time, but the explicit header guard below runs
+        # before ``load()``. If an installation promotes that warning to an
+        # exception, the dedicated catch remains safe without changing global
+        # warning filters shared by concurrent Bank scans.
         if isinstance(image_source, (bytes, bytearray)):
             handle = io.BytesIO(image_source)
             with Image.open(handle) as im:
-                im.load()
-                return _bank_deterministic_values(im)
+                return _loaded_bank_deterministic_analysis(im)
         with Image.open(image_source) as im:
-            im.load()
-            return _bank_deterministic_values(im)
+            return _loaded_bank_deterministic_analysis(im)
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
+        logger.warning('bank analysis skipped Pillow decompression bomb')
+        return None
     except (OSError, TypeError, ValueError, SyntaxError, UnidentifiedImageError):
         return None
 

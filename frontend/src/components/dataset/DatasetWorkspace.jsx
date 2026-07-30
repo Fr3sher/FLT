@@ -684,9 +684,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
     && !isSmallImageRescueRow(viewImgLive)
     && viewImgLive.derivation_kind !== 'klein_image_improve';
 
-  // Import to bank — the reverse of promoting bank images into a dataset. The
-  // dialog makes the durable choice explicit: copy captions/valid analysis by
-  // default, or intentionally create an unanalysed bank to re-run every pass.
+  // Import to bank — the reverse of promoting bank images into a dataset. Both
+  // choices retain Dataset-owned metadata; the default restores compatible
+  // final-file technical analysis, while Start fresh skips only prior reuse.
   // Either way the images are COPIED into a bank-owned folder, never shared.
   const importToBank = async ({ name, preserveAnalysis }) => {
     const result = await postJson(datasetToBankUrl(),
@@ -1805,12 +1805,12 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       className="flex items-center gap-2 flex-wrap scroll-mt-20">
                       <button type="button" data-workspace-focus disabled={!kept}
                         onClick={() => setImportToBankOpen(true)}
-                        title="Turn this dataset back into a bank: its kept images are COPIED into a bank of their own. Keep captions and valid analysis, or start unanalysed and re-triage with the bank tools — this dataset is never touched."
+                        title="Turn this dataset back into a bank: its kept images are COPIED into a bank of their own. Both choices keep Dataset-owned captions, curation, framing, watermark and provenance. By default compatible final-file technical analysis is restored; Start fresh skips only reuse of prior analysis. This dataset is never touched."
                         className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm disabled:opacity-40">
                         ↑ Import to bank
                       </button>
                       <span className="text-content-subtle text-[0.6875rem]">
-                        copies kept images — keep captions &amp; valid analysis, or start unanalysed
+                        both choices keep Dataset metadata — restore compatible analysis, or start fresh analysis
                       </span>
                     </div>
                     <div id="ds-export-backup" tabIndex={-1}

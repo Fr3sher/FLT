@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,9 +19,9 @@ SOURCE_METADATA = {
 WATERMARK_BBOX = '[0.1,0.1,0.3,0.3]'
 WATERMARK_REGIONS = '[[0.1,0.1,0.3,0.3]]'
 
-# Deliberately implausible historical values.  A direct Bank -> Bank copy may
-# retain them; every route that materialises / normalizes pixels must calculate
-# deterministic values again from the result and never carry the ML values.
+# Deliberately implausible historical Bank values. Bank -> Dataset and Bank ->
+# Bank calculate deterministic values again from copied output and never carry
+# these ML values.
 HISTORICAL_ANALYSIS = {
     'quality_state': 'ok',
     'blur_score': 13.5,
@@ -94,6 +95,26 @@ def _assert_model_analysis_is_empty(row):
 
     assert _row_values(row, transfer.MODEL_ANALYSIS_FIELDS) == {
         name: None for name in transfer.MODEL_ANALYSIS_FIELDS
+    }
+
+
+def _valid_v2_snapshot_payload():
+    """One independently valid payload to mutate for rejection cases."""
+    return {
+        'v': 2,
+        'fingerprint': 'a' * 64,
+        'analysis': {
+            'quality_state': 'ok',
+            'blur_score': 13.5,
+            'noise_score': 2.25,
+            'uniformity_score': 41.0,
+            'dhash': '0123456789abcdef',
+            'detail_ratio': 0.88,
+            'bars_ratio': 0.01,
+            'jpeg_quality': 92.0,
+            'origin': 'camera',
+            'origin_evidence': 'exif-camera',
+        },
     }
 
 
@@ -333,6 +354,62 @@ def test_v1_snapshot_is_rejected_even_when_its_fingerprint_matches(app, tmp_path
         _assert_model_analysis_is_empty(returned)
 
 
+@pytest.mark.parametrize(
+    'overrides',
+    (
+        {'detail_ratio': -0.001},
+        {'detail_ratio': 1.001},
+        {'bars_ratio': -0.001},
+        {'bars_ratio': 1.001},
+        {'jpeg_quality': 0},
+        {'jpeg_quality': 101},
+        {'blur_score': -0.001},
+        # The Laplacian has range [-4*255, +4*255], so its variance cannot
+        # exceed (4*255)^2; see image_quality.quality_metrics.
+        {'blur_score': float((4 * 255) ** 2) + 0.001},
+        {'noise_score': -0.001},
+        # Noise is RMS over an 8-bit difference image, bounded by 255.
+        {'noise_score': 255.001},
+        {'uniformity_score': -0.001},
+        {'uniformity_score': 128.001},
+        {'quality_state': 'unreadable'},
+        {'origin': 'unknown', 'origin_evidence': 'claimed-source'},
+        {'origin': 'ai', 'origin_evidence': None},
+        {'origin': 'camera', 'origin_evidence': None},
+    ),
+    ids=(
+        'detail_ratio-below-zero',
+        'detail_ratio-above-one',
+        'bars_ratio-below-zero',
+        'bars_ratio-above-one',
+        'jpeg_quality-below-one',
+        'jpeg_quality-above-100',
+        'blur-negative',
+        'blur-above-physical-laplacian-bound',
+        'noise-negative',
+        'noise-above-physical-rms-bound',
+        'uniformity-negative',
+        'uniformity-above-128',
+        'quality-state-not-ok',
+        'unknown-origin-with-evidence',
+        'ai-origin-without-evidence',
+        'camera-origin-without-evidence',
+    ),
+)
+def test_strict_v2_snapshot_validation_rejects_invalid_analysis_in_parser_and_backup_path(
+        overrides):
+    """Both direct reads and backup canonicalization reject invalid v2 claims."""
+    from app.services import bank_transfer_metadata as transfer
+
+    payload = _valid_v2_snapshot_payload()
+    payload['analysis'].update(overrides)
+    serialized = json.dumps(payload)
+    assert transfer.parse_snapshot(serialized) is None
+    # Backup import passes persisted JSON through this canonicalizer, so it must
+    # have the same fail-closed policy as the public parser.
+    assert transfer.normalized_snapshot_storage(serialized) is None
+
+
 def test_snapshot_parser_rejects_deeply_nested_json_without_raising():
     from app.services import bank_transfer_metadata as transfer
 
@@ -343,8 +420,86 @@ def test_snapshot_parser_rejects_deeply_nested_json_without_raising():
     assert transfer.parse_snapshot(payload) is None
 
 
-def test_direct_bank_to_bank_copy_keeps_history_but_resets_container_state(app, tmp_path):
+def test_bank_deterministic_analysis_skips_oversized_header_before_load(monkeypatch):
+    """The local Bank-analysis guard must reject pixels before decoding them."""
+    from app.services import face_dataset_service as datasets
+
+    class OversizedImage:
+        size = (datasets.BANK_ANALYSIS_MAX_SIDE,
+                datasets.BANK_ANALYSIS_MAX_SIDE)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def draft(self, *_args):
+            raise AssertionError('oversized header reached draft before guard')
+
+        def load(self):
+            raise AssertionError('oversized header reached load before guard')
+
+    monkeypatch.setattr(datasets.Image, 'open', lambda *_args, **_kwargs: OversizedImage())
+    assert datasets.bank_deterministic_analysis('oversized-image') is None
+
+
+def test_bank_deterministic_analysis_skips_pillow_bombs_without_filter_mutation(
+        monkeypatch):
+    """Bomb errors/warnings degrade safely without changing global filters."""
+    from app.services import face_dataset_service as datasets
+
+    filters_before = list(warnings.filters)
+
+    def bomb_error(*_args, **_kwargs):
+        raise datasets.Image.DecompressionBombError('too many pixels')
+
+    monkeypatch.setattr(datasets.Image, 'open', bomb_error)
+    assert datasets.bank_deterministic_analysis('bomb-error') is None
+
+    def bomb_warning(*_args, **_kwargs):
+        raise datasets.Image.DecompressionBombWarning('too many pixels')
+
+    monkeypatch.setattr(datasets.Image, 'open', bomb_warning)
+    assert datasets.bank_deterministic_analysis('bomb-warning') is None
+    assert warnings.filters == filters_before
+
+
+def test_bank_to_bank_promotion_survives_pillow_bomb_in_both_destination_reads(
+        app, tmp_path, monkeypatch):
+    """A bomb must not kill the later dimensions read after analysis skips it."""
     from app.models import BankImage
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        filters_before = list(warnings.filters)
+
+        def bomb(*_args, **_kwargs):
+            raise banks.Image.DecompressionBombError('too many pixels')
+
+        # ``banks.Image`` and the Dataset analysis share Pillow's module, so
+        # this simulates both destination opens in the real B -> B job.
+        monkeypatch.setattr(banks.Image, 'open', bomb)
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source_image.id], 'Bomb-safe copy')
+        copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == {
+            name: None for name in transfer.DETERMINISTIC_ANALYSIS_FIELDS
+        }
+        _assert_model_analysis_is_empty(copied)
+        assert (copied.width, copied.height) == (None, None)
+        assert copied.caption == 'caption from the bank'
+        assert json.loads(copied.source_metadata) == SOURCE_METADATA
+        assert copied.status == 'pending'
+        assert warnings.filters == filters_before
+
+
+def test_direct_bank_to_bank_copy_recalculates_analysis_and_resets_container_state(
+        app, tmp_path):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
     from app.services import bank_transfer_metadata as transfer
     from app.services import image_bank_service as banks
 
@@ -353,14 +508,24 @@ def test_direct_bank_to_bank_copy_keeps_history_but_resets_container_state(app, 
         destination_id = banks.start_bank_promote(
             app, 'local', source_bank.id, [source_image.id], 'Bank copy')
         copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        destination = db.session.get(ImageBank, destination_id)
+        copied_file = Path(destination.source_path) / copied.relpath
         assert copied.caption == 'caption from the bank'
-        assert copied.framing == 'body'
-        assert copied.watermark_state == 'detected'
+        # Image-specific review state must be redone for every new Bank, even
+        # for a direct byte copy; only caption and provenance are safe to keep.
+        assert copied.framing is None
+        assert copied.watermark_state is None
+        assert copied.watermark_bbox is None
+        assert copied.watermark_regions is None
         assert json.loads(copied.source_metadata) == SOURCE_METADATA
-        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == _row_values(
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
+            _final_deterministic_analysis(copied_file))
+        # The historical source row is deliberately implausible: even the
+        # direct route must take its technical truth from the copied bytes.
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) != _row_values(
             source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS)
-        assert _row_values(copied, transfer.MODEL_ANALYSIS_FIELDS) == _row_values(
-            source_image, transfer.MODEL_ANALYSIS_FIELDS)
+        _assert_model_analysis_is_empty(copied)
+        assert (copied.width, copied.height) == _dimensions(copied_file)
         assert copied.status == 'pending'
         assert (copied.dup_group, copied.semantic_dup_group,
                 copied.face_cluster, copied.style_cluster) == (None, None, None, None)
@@ -391,6 +556,10 @@ def test_transformed_bank_to_bank_copy_recalculates_deterministic_analysis_only(
             _final_deterministic_analysis(copied_file))
         _assert_model_analysis_is_empty(copied)
         assert copied.status == 'pending'
+        assert copied.framing is None
+        assert copied.watermark_state is None
+        assert copied.watermark_bbox is None
+        assert copied.watermark_regions is None
         assert copied.watermark_clean_method is None
         assert copied.rotation is None
 

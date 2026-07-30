@@ -43,9 +43,9 @@ DETERMINISTIC_ANALYSIS_FIELDS = (
 )
 
 # These ML-derived values are meaningful only for the exact Bank file a model
-# saw.  They are never serialised in a Dataset snapshot.  A direct Bank -> Bank
-# copy may retain them because it copies unchanged source bytes; a resolved
-# clean/rotated copy must clear them and remeasure only the deterministic set.
+# saw.  They are never serialised in a Dataset snapshot or copied into another
+# Bank: every copied file starts without model verdicts until that Bank reruns
+# its own model passes.
 MODEL_ANALYSIS_FIELDS = (
     'face_state',
     'face_det',
@@ -53,14 +53,30 @@ MODEL_ANALYSIS_FIELDS = (
     'nsfw_score',
 )
 
-# Kept as the Bank-row convenience set.  Do not use it for snapshot payloads.
-PIXEL_ANALYSIS_FIELDS = DETERMINISTIC_ANALYSIS_FIELDS + MODEL_ANALYSIS_FIELDS
-
 _TEXT_LIMITS = {
     'quality_state': 12,
     'dhash': 16,
     'origin': 8,
     'origin_evidence': 24,
+}
+
+# A valid final WebP always has technical metrics and a dHash.  Some provenance
+# probes legitimately abstain (flat images have no effective-detail verdict and
+# WebP has no JPEG quantization table), hence only these three may be NULL.
+_OPTIONAL_NUMERIC_FIELDS = frozenset(
+    ('detail_ratio', 'bars_ratio', 'jpeg_quality'))
+_NUMERIC_LIMITS = {
+    # ``image_quality`` uses a 4-neighbour Laplacian with L in
+    # [-4*255, +4*255]. Popoviciu's bound gives Var(L) <= (4*255)^2.
+    'blur_score': (0.0, float((4 * 255) ** 2)),
+    # Noise is the RMS of an 8-bit difference image, hence never exceeds 255.
+    'noise_score': (0.0, 255.0),
+    # Grayscale population standard deviation is at most 127.5; 128 leaves a
+    # deliberate rounding margin while rejecting impossible backup payloads.
+    'uniformity_score': (0.0, 128.0),
+    'detail_ratio': (0.0, 1.0),
+    'bars_ratio': (0.0, 1.0),
+    'jpeg_quality': (1.0, 100.0),
 }
 
 
@@ -105,14 +121,16 @@ def _normalized_analysis(value) -> dict | None:
     for name in DETERMINISTIC_ANALYSIS_FIELDS:
         item = value.get(name)
         if item is None:
-            out[name] = None
-            continue
+            if name in _OPTIONAL_NUMERIC_FIELDS or name == 'origin_evidence':
+                out[name] = None
+                continue
+            return None
         if name in _TEXT_LIMITS:
             if not isinstance(item, str) or len(item) > _TEXT_LIMITS[name]:
                 return None
             if name == 'dhash' and not re.fullmatch(r'[0-9a-fA-F]{16}', item):
                 return None
-            if name == 'quality_state' and item not in ('ok', 'unreadable'):
+            if name == 'quality_state' and item != 'ok':
                 return None
             if name == 'origin' and item not in ('ai', 'camera', 'unknown'):
                 return None
@@ -125,7 +143,19 @@ def _normalized_analysis(value) -> dict | None:
                 return None
         except (TypeError, OverflowError):
             return None
-        out[name] = float(item)
+        number = float(item)
+        low, high = _NUMERIC_LIMITS[name]
+        if number < low or (high is not None and number > high):
+            return None
+        out[name] = number
+    origin, evidence = out['origin'], out['origin_evidence']
+    if origin == 'unknown':
+        if evidence is not None:
+            return None
+    elif not isinstance(evidence, str) or not evidence.strip():
+        # Known camera/AI attribution must say which short detector token
+        # earned it; a bare claim is not a valid final-WebP provenance value.
+        return None
     return out
 
 

@@ -52,7 +52,7 @@ export default function DatasetToBankDialog({ datasetName, keptCount, onClose, o
       onMouseDown={(event) => { if (event.target === event.currentTarget) dismiss(); }}>
       <form ref={dialogRef} role="dialog" aria-modal="true"
         aria-labelledby="dataset-to-bank-title" aria-describedby="dataset-to-bank-copy-note"
-        onSubmit={submit} onMouseDown={(event) => event.stopPropagation()}
+        onSubmit={submit}
         className="flex w-full max-w-md max-h-[90vh] flex-col gap-4 overflow-y-auto rounded-xl border border-border bg-surface-overlay p-4 shadow-2xl sm:p-5">
         <div className="flex items-start justify-between gap-3">
           <div>
@@ -77,7 +77,10 @@ export default function DatasetToBankDialog({ datasetName, keptCount, onClose, o
         </label>
 
         <fieldset className="flex flex-col gap-2">
-          <legend className="text-sm font-medium text-content">What comes with the copies?</legend>
+          <legend className="text-sm font-medium text-content">Analysis for the copied bank</legend>
+          <p className="m-0 text-[0.75rem] leading-relaxed text-content-muted">
+            Both choices keep Dataset-owned metadata: captions, curation, framing, watermark and provenance.
+          </p>
           <label className={`cursor-pointer rounded-lg border p-3 transition-colors ${preserveAnalysis
             ? 'border-indigo-400/70 bg-indigo-500/10'
             : 'border-border bg-surface-raised hover:bg-surface'}`}>
@@ -86,9 +89,9 @@ export default function DatasetToBankDialog({ datasetName, keptCount, onClose, o
                 disabled={busy} onChange={() => setPreserveAnalysis(true)}
                 className="mt-0.5 h-4 w-4 shrink-0 accent-indigo-500" />
               <span>
-                <span className="block text-sm font-semibold text-content">Keep captions &amp; valid analysis</span>
+                <span className="block text-sm font-semibold text-content">Reuse compatible final-file analysis</span>
                 <span className="mt-0.5 block text-[0.75rem] leading-relaxed text-content-muted">
-                  Bring across captions, keep/reject curation, framing, watermark and provenance. Technical measures are recalculated for the final file; Face and Score AI results are not reused after a transformed copy.
+                  Restore compatible final-file technical analysis. Face and Score AI results are not reused after a transformed copy.
                 </span>
               </span>
             </span>
@@ -101,9 +104,9 @@ export default function DatasetToBankDialog({ datasetName, keptCount, onClose, o
                 disabled={busy} onChange={() => setPreserveAnalysis(false)}
                 className="mt-0.5 h-4 w-4 shrink-0 accent-amber-500" />
               <span>
-                <span className="block text-sm font-semibold text-content">Start fresh</span>
+                <span className="block text-sm font-semibold text-content">Start fresh analysis</span>
                 <span className="mt-0.5 block text-[0.75rem] leading-relaxed text-content-muted">
-                  The new bank starts unanalysed. Run its bank passes yourself when you want a clean review.
+                  Keep the same Dataset metadata, but skip reuse of prior analysis. Run bank passes when you want fresh analysis.
                 </span>
               </span>
             </span>

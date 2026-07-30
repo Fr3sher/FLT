@@ -81,7 +81,7 @@ Point it at a messy dump of thousands of images and triage it in place. Nothing 
 | **▶ Review one by one** | Full-screen, one image at a time, **Keep / Reject / Skip** — for the pile that needs an eye, not a filter |
 | **📦 Move folder…** | Move a bank's images to another disk and keep every analysis: scores, duplicate groups, faces, decisions, captions |
 | **🚀 Launch all** | Runs the whole chain end to end overnight and leaves a morning report |
-| **④ Promote · ↑ Import to bank** | Pushes a bank's keepers into a target dataset, or copies a dataset's keepers into a new bank with captions, curation, framing, watermark and provenance. Technical measures are recalculated for the final file; Face/Score AI results are intentionally not reused after normalization. Choose **Start fresh** for a deliberately unanalysed bank. |
+| **④ Promote · ↑ Import to bank** | Pushes a bank's keepers into a target dataset, or copies a dataset's keepers into a new bank. Both choices retain Dataset-owned captions, curation, framing, watermark and provenance. By default compatible final-file technical analysis is restored; **Start fresh** skips only reuse of prior analysis. Face/Score AI results are intentionally not reused after normalization. |
 
 *Details: [The Image bank](#the-image-bank--triage-a-giant-folder-in-place)*
 

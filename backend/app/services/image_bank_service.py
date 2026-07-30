@@ -4827,11 +4827,15 @@ _BANK_TRANSFER_STATUSES = frozenset(('pending', 'keep', 'reject'))
 
 
 def _copied_image_dimensions(path) -> tuple[int | None, int | None]:
-    """Read dimensions from the destination file, never from stale row metadata."""
+    """Read destination dimensions without letting a Pillow bomb sink promotion."""
     try:
+        # A default Pillow warning still returns the header; an installation may
+        # promote it to an exception, which is caught below without mutating the
+        # warning policy shared by concurrent Bank workers.
         with Image.open(path) as im:
             return im.size
-    except (OSError, TypeError, ValueError):
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning,
+            OSError, TypeError, ValueError):
         return None, None
 
 
@@ -5063,7 +5067,11 @@ def start_bank_promote(app, user_id, bank_id, ids, name):
     # Checked BEFORE anything is created: bank_jobs.start would raise the same
     # 409 a moment later, having already left a folder and a row behind.
     if bank_jobs.running(bank_id):
-        raise bank_jobs.BankJobBusy(bank_jobs.get(bank_id)['kind'])
+        # ``running()`` gets a snapshot internally; a finished job can expire
+        # between that read and this one.  Preserve the established 409 instead
+        # of turning a harmless TTL race into a server error.
+        snap = bank_jobs.get(bank_id) or {}
+        raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
     folder = _import_folder_for(name)
     os.makedirs(folder, exist_ok=True)
     dest = ImageBank(user_id=user_id, name=name, source_path=folder)
@@ -5095,37 +5103,34 @@ def _discard_promoted_bank(user_id, dest_bank_id):
                        exc_info=True)
 
 
-def _bank_copy_values(row: BankImage, copied_path, *, copy_source_analysis: bool) -> dict:
+def _bank_copy_values(row: BankImage, copied_path) -> dict:
     """Metadata a Bank -> Bank copy can keep without inheriting false links.
 
     The copied image has its own physical size and no derived-clean/rotation
-    artifact yet.  A direct source-file copy can retain its historical analysis;
-    a clean/rotated resolved copy recomputes only deterministic values and clears
-    ML outputs.  Cluster and duplicate-group ids are container-local, so they
-    are intentionally left blank for the destination to rebuild.  Curation
-    deliberately does not: a copied Bank has always begun as a fresh triage
-    queue.
+    artifact yet.  Every copy is remeasured from its destination bytes: a source
+    path can be replaced after its original Bank scan, so even an unchanged
+    resolved path proves nothing about stale technical or ML results.  Caption
+    and source attribution are safe user metadata; framing and watermark review
+    describe pixels, so a new Bank must review them again.  Cluster and
+    duplicate-group ids are container-local, so they are intentionally left
+    blank for the destination to rebuild.  Curation deliberately does not: a
+    copied Bank has always begun as a fresh triage queue.
     """
-    values = {
-        name: getattr(row, name, None)
-        for name in bank_transfer_metadata.PIXEL_ANALYSIS_FIELDS
-    }
-    if not copy_source_analysis:
-        values.update({name: None
-                       for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS})
-        values.update(bank_deterministic_analysis(copied_path) or {})
-        values.update({name: None
-                       for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
+    values = {name: None
+              for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS}
+    values.update(bank_deterministic_analysis(copied_path) or {})
+    values.update({name: None
+                   for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
     values.update({
         'caption': row.caption,
         'source_metadata': _source_metadata_storage(row.source_metadata),
-        'framing': row.framing if row.framing in _BANK_TRANSFER_FRAMINGS else None,
-        'watermark_state': (row.watermark_state
-                            if row.watermark_state in _BANK_TRANSFER_WATERMARK_STATES
-                            else None),
-        'watermark_bbox': row.watermark_bbox if isinstance(row.watermark_bbox, str) else None,
-        'watermark_regions': (row.watermark_regions
-                              if isinstance(row.watermark_regions, str) else None),
+        # Both are image-specific review outputs.  The copied image may have
+        # been cleaned, rotated, or replaced after the source verdict, so no
+        # watermark/framing conclusion is portable to another Bank.
+        'framing': None,
+        'watermark_state': None,
+        'watermark_bbox': None,
+        'watermark_regions': None,
         # The target file IS already cleaned/rotated when the source was resolved.
         # Replaying either pointer would look for a non-existent derived blob or
         # rotate the image a second time.
@@ -5145,19 +5150,6 @@ def _bank_copy_values(row: BankImage, copied_path, *, copy_source_analysis: bool
     return values
 
 
-def _resolved_path_is_analysed_source(bank: ImageBank, row: BankImage,
-                                      resolved_path) -> bool:
-    """Whether promotion copied the exact file whose Bank analysis describes it."""
-    raw_path = abs_image_path(bank, row)
-    if not raw_path or not resolved_path:
-        return False
-    try:
-        return (os.path.normcase(os.path.realpath(resolved_path))
-                == os.path.normcase(os.path.realpath(raw_path)))
-    except (OSError, TypeError, ValueError):
-        return False
-
-
 def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
     def run(job):
         src = db.session.get(ImageBank, src_bank_id)
@@ -5173,7 +5165,6 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
             # RESOLVED path: a watermark-cleaned image must land cleaned, same
             # rule as promoting to a dataset.
             p = resolved_image_path(src, r)
-            copy_source_analysis = _resolved_path_is_analysed_source(src, r, p)
             try:
                 with open(p, 'rb'):       # prove the SOURCE is the readable one
                     pass
@@ -5203,8 +5194,7 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                 return
             db.session.add(BankImage(
                 bank_id=dest_bank_id, relpath=r.relpath, file_size=size,
-                **_bank_copy_values(r, target,
-                                    copy_source_analysis=copy_source_analysis)))
+                **_bank_copy_values(r, target)))
             copied.append(r.id)
             if len(copied) % 200 == 0:
                 db.session.commit()

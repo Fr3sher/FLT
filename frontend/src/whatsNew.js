@@ -52,7 +52,7 @@ export const WHATS_NEW = [
     date: '2026-07-30',
     title: '🗃️ Turn a dataset back into a bank without losing its useful context',
     blurb:
-      '↑ Import to bank now carries captions, keep/reject curation, framing, watermark and provenance into the copied bank, so it can carry on from work already done. Its technical measures are recalculated for the final file, while Face and Score AI results are deliberately not reused after normalization. Want a blank slate instead? Choose Start fresh and it begins unanalysed; either way the original dataset is untouched. Suggested by the owner.',
+      '↑ Import to bank now carries captions, keep/reject curation, framing, watermark and provenance into the copied bank, whichever analysis choice you make. The default restores compatible final-file technical analysis; Start fresh skips only reuse of prior analysis. Face and Score AI results are deliberately not reused after normalization, and the original dataset is untouched. Suggested by the owner.',
     to: '/datasets?section=export&panel=to-bank',
   },
   {
