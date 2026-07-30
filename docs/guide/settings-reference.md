@@ -563,6 +563,33 @@ Guard-rails on cost and host quality for rented pods. The card also shows a live
 
 These live under **⚙️ Advanced options** in a dataset's training panel — rank, resolution, save/sample cadence, optimizer, scheduler, EMA, LoKr and more. Each carries its own inline **Why/How** note, so they aren't repeated here. Two are worth calling out because of a caveat.
 
+#### Krea 2 Raw · LoKr likeness — a reported community starting point
+
+The built-in **Krea 2 Raw · LoKr likeness** preset is deliberately narrow: it is
+shown only for a **Character** dataset on a compatible Krea 2 Base/Raw variant.
+It turns a [reported Krea 2 Raw LoKr recipe from the Stable Diffusion
+community](https://www.reddit.com/r/StableDiffusion/comments/1v2vsqm/almost_perfect_likeness_in_750_steps_krea_2_lokr/)
+into a named, inspectable starting point — **not** into a promise that a different
+person, image set, captioning style or checkpoint will match at the same step.
+
+The post linked a full Pastebin configuration, but that Pastebin has since been
+deleted. LDS therefore records only the values the post actually reports:
+**LoKr factor 16**, **768 px**, **Automagic2** with initial learning rate
+**`1e-4`**, **Sigmoid** timestep weighting, **Balanced** content/style mode,
+**Differential Guidance** at scale **3**, and a checkpoint/preview cadence of
+**250** steps. The Krea-only Expert controls show those values plainly, and the
+run snapshot carries the factor, content/style mode and Differential Guidance so
+you can compare an experiment later instead of trusting a remembered recipe.
+
+The post does **not** publish the LoKr linear rank or alpha. LDS keeps its
+existing Krea Character **32/32** choice rather than inventing a rank/alpha pair
+and presenting it as sourced. Likewise, the reported **3000 total steps** are
+not forced by the preset: LDS keeps its adaptive step policy so a small dataset
+is not silently overcooked. To reproduce that target intentionally, type
+**3000** into the **Steps** box for that run; leave it empty to use the adaptive
+policy. Treat the intermediate saves — including the early ones — as candidates
+to compare in Test Studio, not as proof that a specific step will be best.
+
 **One rule applies to all of them: they are stored per DATASET, not per family.** Switching **LORA TYPE** keeps every advanced setting you had — which is what you want for rank, optimizer or resolution, and what you do **not** want for the two settings below, whose right value is different on every family. Those two are handled explicitly:
 
 - **Memory saving carries over, and is now said out loud.** `quantize` / `quantize_te` / `low_vram` are a statement about *your card*, and your card doesn't change when the family does — so the values follow you. What changes is whether the card still suffices: switching them off on Anima or SDXL (2B, where **off** is the calibrated default) and then moving to Krea 2, FLUX.1, FLUX.2 Klein or Z-Image used to build an unquantised 12B run in complete silence. Both the panel and the **pre-launch check** now name which saver is off, what that family needs without it (see the estimates below) and what your card reports. It stays a **warning, never a blocker** — a big card legitimately runs unquantised — and it is deliberately **not** dropped on the cloud lane, where the mistake bills rented GPU-hours. The warning is also *provenance-blind*: unticking a box directly on Krea 2 with a 24 GB card gets the same sentence as inheriting it from Anima, because it is the same danger.

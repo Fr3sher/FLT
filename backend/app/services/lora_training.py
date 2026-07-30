@@ -1116,7 +1116,7 @@ _DEFAULT_TIMESTEP = {'zimage': 'sigmoid', 'krea': 'linear', 'flux': 'sigmoid',
                      'flux2klein': 'weighted', 'anima': 'weighted'}   # ce que « Auto » résout (sdxl : aucun) ; flux subject → sigmoid (reco ai-toolkit) ; flux2klein → weighted (défaut canonique options.ts, PAS sigmoid) ; anima → weighted (défaut options.ts PR #860)
 # Batch 2 — optimiseur / planning du LR / batch effectif (valeurs VÉRIFIÉES dans
 # ai-toolkit : get_optimizer + toolkit/scheduler.py). CAME n'est PAS supporté.
-_OPTIMIZER_CHOICES = ('adamw8bit', 'adafactor', 'automagic', 'prodigy')
+_OPTIMIZER_CHOICES = ('adamw8bit', 'adafactor', 'automagic', 'automagic2', 'prodigy')
 _LR_SCHEDULER_CHOICES = ('constant', 'linear', 'cosine', 'cosine_with_restarts', 'constant_with_warmup')
 _WARMUP_CHOICES = (50, 100, 200, 500)          # num_warmup_steps ; UNIQUEMENT avec constant_with_warmup
 _GRAD_ACCUM_CHOICES = (1, 2, 4)
@@ -1124,15 +1124,19 @@ _GRAD_ACCUM_CHOICES = (1, 2, 4)
 #   - network.type='lokr' : LoRASpecialNetwork choisit LokrModule pour TOUTE arch
 #     (toolkit/lora_special.py L384 `elif self.network_type.lower() == "lokr"`) et
 #     'lokr' est dans le Literal NetworkType (toolkit/config_modules.py L165). Aucune
-#     famille exclue → PAS de whitelist. lokr_factor reste au défaut -1 (auto = plus
-#     grand facteur) donc non émis. NB : use_old_lokr_format diffère selon l'arch
+#     famille exclue → PAS de whitelist. NB : use_old_lokr_format diffère selon l'arch
 #     (nommage des poids seulement, pas le support) — krea2/flux2_klein = nouveau
 #     format, zimage/sdxl/flux = ancien ; les deux s'entraînent et se chargent.
 #   - train.ema_config={use_ema, ema_decay} : knob niveau TrainConfig, arch-agnostique
 #     (config_modules.py L525-533 + EMAConfig L794-797, défaut ema_decay=0.999).
-# Recette communautaire (Krea-2) : LoKr + rank bas + EMA 0.99 → ressemblance ~step 500.
 _NETWORK_TYPE_CHOICES = ('lora', 'lokr')
+_LOKR_FACTOR_CHOICES = (4, 8, 16, 32)
 _EMA_CHOICES = (0.99, 0.999)
+# Krea Raw community-recipe controls. They are real ai-toolkit TrainConfig
+# fields, but intentionally Krea-scoped in LDS: the report that motivated them
+# concerns Krea 2 and we do not turn one anecdotal recipe into a global default.
+_CONTENT_OR_STYLE_CHOICES = ('balanced', 'style', 'content')
+_DIFFERENTIAL_GUIDANCE_SCALE_RANGE = (0.1, 10.0)
 
 # --- Memory-saving levers (quantisation + low-VRAM streaming) --------------------
 # Community request (GitHub issue #14, bobba84): the recipes hard-coded quantize /
@@ -1363,12 +1367,23 @@ def _lora_alpha(rank, family, ds=None) -> int:
     return rank
 
 
+def _numeric_choice(value, choices):
+    """A persisted numeric choice, accepting only real integer values.
+
+    ``bool`` is an ``int`` subclass and legacy JSON can also contain floats that
+    compare equal to an integer choice (for example ``1.0 == 1``).  Neither is a
+    valid stored configuration value, so keep the effective readers aligned with
+    API ingress and only propagate exact integers.
+    """
+    return value if type(value) is int and value in choices else None
+
+
 def _lora_alpha_eff(ds, rank, family) -> int:
     """Alpha EFFECTIF : un `alpha` explicite dans train_settings prime sur le dérivé.
     Découpler alpha du rank = levier de LR « doux » (échelle effective = alpha/rank).
     En mode slider, l'utilisateur peut ainsi remettre alpha 8 (défaut 4) via ce knob."""
-    a = _train_settings(ds).get('alpha')
-    return a if a in _ALPHA_CHOICES else _lora_alpha(rank, family, ds)
+    a = _numeric_choice(_train_settings(ds).get('alpha'), _ALPHA_CHOICES)
+    return a if a is not None else _lora_alpha(rank, family, ds)
 
 
 def _network_type_eff(ds) -> str:
@@ -1379,13 +1394,43 @@ def _network_type_eff(ds) -> str:
     return t if t in _NETWORK_TYPE_CHOICES else 'lora'
 
 
+def _lokr_factor_eff(ds) -> int | None:
+    """Explicit LoKr decomposition factor, or None for ai-toolkit's auto choice.
+
+    `lokr_factor=-1` is ai-toolkit's auto mode. LDS keeps the user-facing setting
+    absent in that case so existing LoKr runs retain their prior behaviour; a
+    shipped recipe can opt into a known factor (notably Krea Raw's factor 16).
+    """
+    v = _train_settings(ds).get('lokr_factor')
+    return v if isinstance(v, int) and not isinstance(v, bool) and v in _LOKR_FACTOR_CHOICES else None
+
+
+def _lokr_full_rank_eff(ds) -> bool:
+    """The explicitly recorded LoKr full-rank mode, defaulting to the LDS-safe False.
+
+    This is deliberately not an editable advanced setting.  It only lets a cloud
+    continuation replay a provenance snapshot made by an older/other LDS run that
+    explicitly used full-rank LoKr; otherwise forcing False would silently change
+    the checkpoint topology while claiming to resume it.
+    """
+    return _train_settings(ds).get('lokr_full_rank') is True
+
+
 def _network_block(ds, rank, family) -> dict:
     """Bloc `network` LoRA/LoKr partagé par les 5 job-configs : type + rank + alpha
     (override-aware) + dropout optionnel (régularisateur anti-overfit, clé omise quand
-    off). LoKr = même bloc, seul `type` change ; lokr_factor reste au défaut ai-toolkit
-    (-1 = auto) donc non émis."""
-    net = {'type': _network_type_eff(ds), 'linear': rank,
+    off). A normal LDS LoKr run pins `lokr_full_rank=False` because ai-toolkit has
+    changed its implicit default; an explicit value from a frozen continuation
+    snapshot is replayed verbatim so the weights' topology is not changed.
+    `lokr_factor` remains auto unless explicitly chosen."""
+    network_type = _network_type_eff(ds)
+    net = {'type': network_type, 'linear': rank,
            'linear_alpha': _lora_alpha_eff(ds, rank, family)}
+    if network_type == 'lokr':
+        net['lokr_full_rank'] = _lokr_full_rank_eff(ds)
+        factor = _lokr_factor_eff(ds)
+        if factor is not None:
+            net['lokr_factor'] = factor
     if _klein_style(ds, family) and net['type'] == 'lora':
         # FLUX.2 Klein STYLE : ajoute un LoRA Conv2d aux moitiés du linear (conv_alpha
         # au quart) → dims 128/64/64/32 au rank par défaut. Combo dominant du sweep
@@ -1455,8 +1500,8 @@ def resolve_resume_lr(settings: dict, lr_factor) -> float | None:
 
 
 def _grad_accum(ds) -> int:
-    g = _train_settings(ds).get('grad_accum')
-    return g if g in _GRAD_ACCUM_CHOICES else 1
+    g = _numeric_choice(_train_settings(ds).get('grad_accum'), _GRAD_ACCUM_CHOICES)
+    return g if g is not None else 1
 
 
 def _lr_sched_fields(ds) -> dict:
@@ -1488,6 +1533,43 @@ def _ema_fields(ds) -> dict:
     if v is None:
         return {}
     return {'ema_config': {'use_ema': True, 'ema_decay': v}}
+
+
+def _content_or_style_eff(ds) -> str:
+    """Krea's ai-toolkit `train.content_or_style`, defaulting to balanced."""
+    v = _train_settings(ds).get('content_or_style')
+    return v if v in _CONTENT_OR_STYLE_CHOICES else 'balanced'
+
+
+def _differential_guidance_enabled(ds) -> bool:
+    return _train_settings(ds).get('do_differential_guidance') is True
+
+
+def _differential_guidance_scale_eff(ds) -> float:
+    """Validated Differential Guidance multiplier, defaulting to ai-toolkit's 3."""
+    v = _train_settings(ds).get('differential_guidance_scale')
+    lo, hi = _DIFFERENTIAL_GUIDANCE_SCALE_RANGE
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= float(v) <= hi:
+        return float(v)
+    return 3.0
+
+
+def _krea_recipe_fields(ds) -> dict:
+    """Optional Krea 2 community-recipe controls for ai-toolkit's TrainConfig.
+
+    LDS emits no extra keys for an untouched dataset, preserving the existing
+    ai-toolkit defaults. A preset that pins Balanced or Differential Guidance
+    emits exactly what it announced, so the run config and provenance stay
+    reproducible.
+    """
+    s = _train_settings(ds)
+    out = {}
+    if s.get('content_or_style') in _CONTENT_OR_STYLE_CHOICES:
+        out['content_or_style'] = _content_or_style_eff(ds)
+    if _differential_guidance_enabled(ds):
+        out['do_differential_guidance'] = True
+        out['differential_guidance_scale'] = _differential_guidance_scale_eff(ds)
+    return out
 
 
 # --- Slider LoRA mode (Beta) -----------------------------------------------------
@@ -1930,11 +2012,24 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     # experiment exists to answer. An explicit 'off' costs one line and cannot be
     # misread. The cloud run stamps this same snapshot.
     snap['network_type'] = _network_type_eff(ds)
+    if snap['network_type'] == 'lokr':
+        # ai-toolkit has changed the implicit `lokr_full_rank` default across
+        # releases. LDS pins False in the emitted job so rank/alpha stay real;
+        # stamp both facts to make a shared recipe reproducible.
+        snap['lokr_full_rank'] = _lokr_full_rank_eff(ds)
+        factor = _lokr_factor_eff(ds)
+        snap['lokr_factor'] = factor if factor is not None else 'auto'
     em = _ema_eff(ds)
     snap['ema'] = em if em is not None else 'off'
+    if fam == 'krea':
+        snap['content_or_style'] = _content_or_style_eff(ds)
+        dg_enabled = _differential_guidance_enabled(ds)
+        snap['do_differential_guidance'] = dg_enabled
+        snap['differential_guidance_scale'] = (
+            _differential_guidance_scale_eff(ds) if dg_enabled else 'off')
     snap['lr_scheduler'] = s.get('lr_scheduler') if s.get('lr_scheduler') in _LR_SCHEDULER_CHOICES else 'constant'
     snap['warmup'] = s.get('warmup') if s.get('warmup') in _WARMUP_CHOICES else 0
-    snap['grad_accum'] = s.get('grad_accum') if s.get('grad_accum') in _GRAD_ACCUM_CHOICES else 1
+    snap['grad_accum'] = _grad_accum(ds)
     # Fixed at 1 by every family's recipe today. Recorded anyway: the day it stops
     # being 1, the runs on either side of the change have to be comparable.
     snap['batch_size'] = 1
@@ -1983,7 +2078,7 @@ def effective_train_settings(ds, family=None) -> dict:
             'alpha': _lora_alpha_eff(ds, eff_rank, fam),   # alpha EFFECTIF (override-aware) — libellé
             'default_rank': _default_rank_for(ds, fam),
             # --- Expert levers (None/off = comportement actuel ; le select recoche « Auto ») ---
-            'alpha_setting': s.get('alpha') if s.get('alpha') in _ALPHA_CHOICES else None,
+            'alpha_setting': _numeric_choice(s.get('alpha'), _ALPHA_CHOICES),
             'default_alpha': _lora_alpha(eff_rank, fam, ds),
             'alpha_choices': list(_ALPHA_CHOICES),
             'dropout': s.get('dropout') if s.get('dropout') in _DROPOUT_CHOICES else None,
@@ -2002,7 +2097,7 @@ def effective_train_settings(ds, family=None) -> dict:
             'lr_scheduler_choices': list(_LR_SCHEDULER_CHOICES),
             'warmup': s.get('warmup') if s.get('warmup') in _WARMUP_CHOICES else None,
             'warmup_choices': list(_WARMUP_CHOICES),
-            'grad_accum': s.get('grad_accum') if s.get('grad_accum') in _GRAD_ACCUM_CHOICES else None,   # None → 1
+            'grad_accum': _numeric_choice(s.get('grad_accum'), _GRAD_ACCUM_CHOICES),   # None → 1
             'grad_accum_choices': list(_GRAD_ACCUM_CHOICES),
             'network_type': s.get('network_type') if s.get('network_type') in _NETWORK_TYPE_CHOICES else None,  # None → lora
             'network_type_choices': list(_NETWORK_TYPE_CHOICES),
@@ -2010,8 +2105,26 @@ def effective_train_settings(ds, family=None) -> dict:
             # mirrors timestep_type_supported so the UI can gate a future family with
             # one line; today it is always True (no family refuses lokr).
             'network_type_supported': True,
+            'lokr_factor': (_lokr_factor_eff(ds) if _network_type_eff(ds) == 'lokr'
+                            else None),
+            'lokr_factor_choices': list(_LOKR_FACTOR_CHOICES),
             'ema': s.get('ema') if s.get('ema') in _EMA_CHOICES else None,   # None → off
             'ema_choices': list(_EMA_CHOICES),
+            # The four fields below are deliberately Krea-only in LDS. ai-toolkit
+            # accepts them broadly, but they exist here to make the Krea Raw LoKr
+            # community preset transparent rather than silently storing invisible
+            # settings on unrelated families. Values survive a family switch and
+            # return when the user comes back to Krea, like other advanced knobs.
+            'krea_recipe_supported': fam == 'krea',
+            'content_or_style': (s.get('content_or_style')
+                                 if fam == 'krea' and s.get('content_or_style') in _CONTENT_OR_STYLE_CHOICES
+                                 else None),
+            'content_or_style_choices': list(_CONTENT_OR_STYLE_CHOICES),
+            'content_or_style_default': 'balanced',
+            'do_differential_guidance': (s.get('do_differential_guidance') is True
+                                         if fam == 'krea' else False),
+            'differential_guidance_scale': (_differential_guidance_scale_eff(ds)
+                                            if fam == 'krea' else None),
             # Dual long+short captioning (ai-toolkit short_and_long_captions). Boolean,
             # default OFF. Local training only for now (the cloud pod's dataset upload
             # skips the JSON caption file), so the recipe strips it on the cloud path.
@@ -2071,14 +2184,17 @@ def effective_train_settings(ds, family=None) -> dict:
             'max_sample_prompts': _MAX_SAMPLE_PROMPTS}
 
 
-def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
+def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -> dict:
     """Valide + fusionne un patch {rank?, resolution?, save_every?, sample_every?,
     sample_prompts?} dans train_settings. Une clé à None/'auto'/vide est RETIRÉE
     (retour au défaut). Retourne les réglages effectifs pour la famille courante."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
-    cur = _train_settings(ds)
+    # ``_settings`` is the preset path's private, unpersisted candidate.  Reusing
+    # this validator keeps every acceptance/rejection rule identical while a
+    # preset validates its complete replacement before making one DB write.
+    cur = _train_settings(ds) if _settings is None else _settings
     if 'rank' in patch:
         r = patch['rank']
         if r in (None, 'auto'):
@@ -2140,7 +2256,7 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
         v = patch['alpha']
         if v in (None, 'auto'):
             cur.pop('alpha', None)                         # auto → alpha dérivé du rank
-        elif v in _ALPHA_CHOICES:
+        elif type(v) is int and v in _ALPHA_CHOICES:
             cur['alpha'] = v
         else:
             raise ValueError(f'alpha must be one of {_ALPHA_CHOICES} (or auto)')
@@ -2178,9 +2294,9 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             raise ValueError(f'warmup must be one of {_WARMUP_CHOICES} (or off)')
     if 'grad_accum' in patch:
         v = patch['grad_accum']
-        if v in (None, 1, 'auto'):
+        if v in (None, 'auto') or (type(v) is int and v == 1):
             cur.pop('grad_accum', None)                    # 1 = défaut → clé retirée
-        elif v in _GRAD_ACCUM_CHOICES:
+        elif type(v) is int and v in _GRAD_ACCUM_CHOICES:
             cur['grad_accum'] = v
         else:
             raise ValueError(f'grad_accum must be one of {_GRAD_ACCUM_CHOICES} (or auto)')
@@ -2192,6 +2308,14 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             cur['network_type'] = v
         else:
             raise ValueError(f'network_type must be one of {_NETWORK_TYPE_CHOICES} (or auto)')
+    if 'lokr_factor' in patch:
+        v = patch['lokr_factor']
+        if v in (None, 'auto', '', -1):
+            cur.pop('lokr_factor', None)                   # -1 = ai-toolkit auto factor
+        elif isinstance(v, int) and not isinstance(v, bool) and v in _LOKR_FACTOR_CHOICES:
+            cur['lokr_factor'] = v
+        else:
+            raise ValueError(f'lokr_factor must be one of {_LOKR_FACTOR_CHOICES} (or auto)')
     if 'ema' in patch:
         v = patch['ema']
         if v in (None, 'off', '', 0, 0.0):
@@ -2200,6 +2324,36 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             cur['ema'] = v
         else:
             raise ValueError(f'ema must be one of {_EMA_CHOICES} (or off)')
+    if 'content_or_style' in patch:
+        v = patch['content_or_style']
+        if v in (None, 'auto', ''):
+            cur.pop('content_or_style', None)
+        elif v in _CONTENT_OR_STYLE_CHOICES:
+            # Keep an explicit 'balanced' setting when a preset provides it: the
+            # preset then remains self-describing even though it matches ai-toolkit's
+            # default today.
+            cur['content_or_style'] = v
+        else:
+            raise ValueError(f'content_or_style must be one of {_CONTENT_OR_STYLE_CHOICES} (or auto)')
+    if 'do_differential_guidance' in patch:
+        v = patch['do_differential_guidance']
+        if not isinstance(v, bool):
+            raise ValueError('do_differential_guidance must be true or false')
+        if v:
+            cur['do_differential_guidance'] = True
+        else:
+            cur.pop('do_differential_guidance', None)
+    if 'differential_guidance_scale' in patch:
+        v = patch['differential_guidance_scale']
+        lo, hi = _DIFFERENTIAL_GUIDANCE_SCALE_RANGE
+        if v in (None, 'auto', '', 'off'):
+            cur.pop('differential_guidance_scale', None)
+        elif (isinstance(v, (int, float)) and not isinstance(v, bool)
+              and lo <= float(v) <= hi):
+            cur['differential_guidance_scale'] = float(v)
+        else:
+            raise ValueError(
+                f'differential_guidance_scale must be between {lo:g} and {hi:g} (or auto)')
     if 'dual_captions' in patch:
         # Plain boolean lever: truthy stores True, anything falsy drops the key so OFF is
         # byte-identical to a dataset that never touched it.
@@ -2253,6 +2407,8 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
             cur['learning_rate'] = float(v)
         else:
             raise ValueError('learning_rate must be a positive number (or auto)')
+    if _settings is not None:
+        return cur
     ds.train_settings = json.dumps(cur) if cur else None
     fds.db.session.commit()
     return effective_train_settings(ds)
@@ -2264,7 +2420,9 @@ def update_train_settings(user_id, dataset_id, patch: dict) -> dict:
 TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'sample_every', 'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
-                      'grad_accum', 'network_type', 'ema', 'dual_captions',
+                      'grad_accum', 'network_type', 'lokr_factor', 'ema',
+                      'content_or_style', 'do_differential_guidance',
+                      'differential_guidance_scale', 'dual_captions',
                       'mask_faces', 'masked', 'learning_rate', *_MEMORY_SETTING_KEYS)
 
 # The ONLY settings a resume/continue may change. ai-toolkit rebuilds the job
@@ -2359,16 +2517,17 @@ def validate_resume_overrides(overrides) -> dict:
     return patch
 
 # Built-in quick presets: shipped with the app (every install sees them),
-# read-only, versioned with the code. One preset per (family × dataset kind):
-# Character locks an identity, Style absorbs a look (route-owned catalogue),
-# Concept generalizes an object/pose/composition. Every value is SOURCED —
+# read-only, versioned with the code. Every (family × dataset kind) has one
+# general-purpose quick preset; narrowly-scoped, source-labelled recipes may sit
+# alongside it. Character locks an identity, Style absorbs a look (route-owned
+# catalogue), Concept generalizes an object/pose/composition. Every value is SOURCED —
 # research vault first (Tech-IA notes), the installed ai-toolkit's own defaults
 # second (ui/src/app/jobs/new/options.ts + config/examples), 2026 community
 # consensus third — never intuition; per-preset comments carry the source.
-# Steps stay adaptive (recommended_steps owns them per kind) and the learning
-# rate is family-fixed (1e-4 / prodigy), so neither is a preset key. A test
-# asserts every builtin applies with zero ignored/rejected keys, so a drifting
-# choice-list can't silently break them.
+# Steps stay adaptive (recommended_steps owns them per kind). A source-labelled
+# recipe may pin the family-default learning rate explicitly when that is part of
+# its published configuration. A test asserts every builtin applies with zero
+# ignored/rejected keys, so a drifting choice-list can't silently break them.
 
 # Identity AND flexibility probes — overfit (waxy skin, frozen pose) shows here
 # first. One probe sheet per checkpoint: on character sets the quality comes
@@ -2462,6 +2621,36 @@ BUILTIN_TRAIN_PRESETS = [
                        '768/1024 with a probe sheet every 250 steps to catch '
                        'the identity sweet-spot early.',
         'settings': _character_preset_settings(32, 32),
+    },
+    # Community report, not a universal result:
+    # https://www.reddit.com/r/StableDiffusion/comments/1v2vsqm/
+    # almost_perfect_likeness_in_750_steps_krea_2_lokr/
+    # The linked Pastebin configuration was later deleted. The post specifies
+    # LoKr factor 16 but not linear rank/alpha, so LDS retains its verified Krea
+    # Character 32/32 baseline instead of inventing missing values. `base` is
+    # Krea-2-Raw in LDS; Turbo is deliberately excluded from this Raw recipe.
+    {
+        'id': 'builtin-krea-raw-lokr-likeness',
+        'name': 'Krea 2 Raw · LoKr likeness',
+        'train_type': 'krea',
+        'dataset_kind': 'character',
+        'variants': ['base', 'raw'],
+        'builtin': True,
+        'community': True,
+        'description': 'Community Krea-2 Raw starting recipe: LoKr factor 16, '
+                       '768 px, Automagic v2, sigmoid, Balanced and Differential '
+                       'Guidance ×3. Inspect the early checkpoints; it is not a '
+                       'guarantee for every dataset.',
+        'settings': {
+            **_character_preset_settings(32, 32, resolution='768', timestep_type='sigmoid'),
+            'network_type': 'lokr',
+            'lokr_factor': 16,
+            'optimizer': 'automagic2',
+            'learning_rate': 1e-4,
+            'content_or_style': 'balanced',
+            'do_differential_guidance': True,
+            'differential_guidance_scale': 3.0,
+        },
     },
     # 32/32 is the AI-Toolkit-community default and the "lower-regret choice
     # for hard faces" (vault 2026-07-10; options.ts + neurocanvas ship 32) —
@@ -2678,11 +2867,17 @@ BUILTIN_TRAIN_PRESETS = [
 
 def snapshot_train_settings(user_id, dataset_id) -> dict:
     """The dataset's RAW explicit settings (what a preset captures) — only the
-    keys the user actually changed, not the effective/derived view."""
+    keys the user actually changed, not the effective/derived view. Invalid
+    legacy non-integer values for numeric controls are omitted so a newly saved
+    preset cannot perpetuate bool/float numeric ambiguity."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
-    return _train_settings(ds)
+    settings = _train_settings(ds)
+    return {key: value for key, value in settings.items()
+            if (key == 'alpha' and _numeric_choice(value, _ALPHA_CHOICES) is not None)
+            or (key == 'grad_accum' and _numeric_choice(value, _GRAD_ACCUM_CHOICES) is not None)
+            or key not in ('alpha', 'grad_accum')}
 
 
 def apply_train_settings_dict(user_id, dataset_id, settings: dict):
@@ -2696,17 +2891,20 @@ def apply_train_settings_dict(user_id, dataset_id, settings: dict):
         raise ValueError('dataset not found')
     ignored = sorted(k for k in settings if k not in TRAIN_SETTING_KEYS)
     rejected = []
-    ds.train_settings = None          # a preset REPLACES, it doesn't overlay
-    fds.db.session.commit()
+    candidate = {}                    # a preset REPLACES, it doesn't overlay
     for k in TRAIN_SETTING_KEYS:
         if k not in settings:
             continue
         try:
-            update_train_settings(user_id, dataset_id, {k: settings[k]})
+            update_train_settings(user_id, dataset_id, {k: settings[k]},
+                                  _settings=candidate)
         except ValueError as e:
             rejected.append({'key': k, 'reason': str(e)})
-    return (effective_train_settings(fds.get_dataset(user_id, dataset_id)),
-            ignored, rejected)
+    # A concurrent Train observes either the old preset or this fully validated
+    # replacement — never the previous clear plus a prefix of its keys.
+    ds.train_settings = json.dumps(candidate) if candidate else None
+    fds.db.session.commit()
+    return effective_train_settings(ds), ignored, rejected
 
 
 def _dest_base_tag(ds, base_model=_PERSISTED, family=None,
@@ -3465,6 +3663,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'dtype': 'bf16',
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
+                    **_krea_recipe_fields(ds),
                 },
                 'model': model,
                 'sample': {
@@ -3966,26 +4165,83 @@ def resume_source_checkpoint(checkpoints, step):
     return min(matches, key=lambda c: bool(c.get('final')))
 
 
-def describe_geometry_conflict(parent_geometry, rank, alpha):
-    """Message for "you cannot continue THESE weights at THAT rank", or None when
-    the shapes agree (or the parent's geometry was never recorded).
+_LEGACY_LOKR_FULL_RANK_RESUME_ERROR = (
+    'cannot continue this legacy LoKr checkpoint because its `lokr_full_rank` '
+    'topology was never recorded. ai-toolkit defaults have changed, so forcing '
+    'a mode now could load the weights into a different network. Start a fresh '
+    'LoKr run, or continue from a checkpoint with recorded LoKr topology.')
 
-    A LoRA's rank and alpha size its matrices: rank-32 weights simply do not load
-    into a rank-64 network. So on a resume the geometry is a property of the
-    checkpoint, never a setting to re-pick — and when the two disagree the launch
-    must say so BEFORE renting anything, not train a fresh LoRA the user believes
-    is a continuation."""
+
+def legacy_lokr_resume_error(parent_geometry, fallback_settings=None):
+    """Return a hard-stop reason when a resume would guess LoKr full-rank mode.
+
+    A recorded LoKr parent is authoritative: it must carry a real boolean
+    ``lokr_full_rank`` value.  When a pre-registry parent has no adapter type,
+    inspect the frozen/live settings that the continuation would otherwise emit;
+    a legacy LoKr setting without that fact is equally unsafe.  A known LoRA
+    parent stays untouched here (the normal type-conflict check handles a
+    LoRA-to-LoKr switch separately).
+    """
+    geometry = parent_geometry if isinstance(parent_geometry, dict) else {}
+    parent_type = geometry.get('network_type')
+    candidate = (geometry if parent_type == 'lokr'
+                 else fallback_settings if parent_type not in _NETWORK_TYPE_CHOICES
+                 else None)
+    if isinstance(candidate, str):
+        try:
+            candidate = json.loads(candidate)
+        except (TypeError, ValueError):
+            candidate = None
+    if (isinstance(candidate, dict)
+            and candidate.get('network_type') == 'lokr'
+            and not isinstance(candidate.get('lokr_full_rank'), bool)):
+        return _LEGACY_LOKR_FULL_RANK_RESUME_ERROR
+    return None
+
+
+def describe_geometry_conflict(parent_geometry, rank, alpha, *, network_type=None,
+                               lokr_factor=None, lokr_full_rank=None):
+    """Explain a known checkpoint/topology mismatch, or return ``None``.
+
+    Adapter type, rank/alpha, and LoKr's decomposition parameters all determine
+    the tensors a checkpoint can load.  The parent geometry is intentionally
+    partial: missing provenance keys are legacy *unknowns*, not today's defaults,
+    so only facts explicitly recorded for the checkpoint are enforced.
+    """
     geo = parent_geometry or {}
+    parent_type = geo.get('network_type')
+    if (parent_type in _NETWORK_TYPE_CHOICES
+            and network_type in _NETWORK_TYPE_CHOICES
+            and parent_type != network_type):
+        return (f'this checkpoint was trained as {"LoKr" if parent_type == "lokr" else "LoRA"}, '
+                f'and this run would use {"LoKr" if network_type == "lokr" else "LoRA"}. '
+                'The adapter type is fixed by the checkpoint weights; restore the '
+                'original network type in Training settings, or start a fresh run.')
     want_r, want_a = geo.get('rank'), geo.get('alpha')
     bad = ((want_r is not None and rank is not None and int(want_r) != int(rank))
            or (want_a is not None and alpha is not None and int(want_a) != int(alpha)))
-    if not bad:
-        return None
-    return (f'this checkpoint was trained at rank {want_r} / alpha {want_a}, and '
-            f'this run would use rank {rank} / alpha {alpha}. A LoRA\'s rank is '
-            'fixed by its weights — continuing it at another rank cannot load '
-            'them. Set rank and alpha back in Training settings, or start a '
-            'fresh run instead of continuing.')
+    if bad:
+        return (f'this checkpoint was trained at rank {want_r} / alpha {want_a}, and '
+                f'this run would use rank {rank} / alpha {alpha}. A LoRA\'s rank is '
+                'fixed by its weights — continuing it at another rank cannot load '
+                'them. Set rank and alpha back in Training settings, or start a '
+                'fresh run instead of continuing.')
+    if parent_type == network_type == 'lokr':
+        parent_factor = geo.get('lokr_factor')
+        if (parent_factor is not None and lokr_factor is not None
+                and parent_factor != lokr_factor):
+            return (f'this LoKr checkpoint was trained with factor {parent_factor}, and '
+                    f'this run would use factor {lokr_factor}. LoKr factor changes the '
+                    'checkpoint tensor geometry; restore the original factor or start '
+                    'a fresh run.')
+        if ('lokr_full_rank' in geo and isinstance(lokr_full_rank, bool)
+                and geo['lokr_full_rank'] != lokr_full_rank):
+            return ('this LoKr checkpoint was trained with '
+                    f'lokr_full_rank={geo["lokr_full_rank"]}, and this run would use '
+                    f'lokr_full_rank={lokr_full_rank}. Full-rank mode changes the '
+                    'checkpoint tensor geometry; restore the original mode or start '
+                    'a fresh run.')
+    return None
 
 
 def checkpoint_file_path(user_id, dataset_id, filename, base_model=_PERSISTED,
@@ -5893,9 +6149,18 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # inherit the parent's rank without rewriting the user's own settings behind
     # their back (the cloud lane can — it carries a per-run snapshot). Refuse
     # loudly, here: nothing has been archived, persisted or launched yet.
+    _parent_geometry = checkpoint_registry.network_geometry(_parent)
+    _legacy_lokr_error = legacy_lokr_resume_error(
+        _parent_geometry, getattr(ds, 'train_settings', None))
+    if _legacy_lokr_error:
+        raise ValueError(_legacy_lokr_error)
+    _live_geometry = launch_settings_snapshot(ds, fam)
     _conflict = describe_geometry_conflict(
-        checkpoint_registry.network_geometry(_parent),
-        _lora_rank(ds, fam), _lora_alpha_eff(ds, _lora_rank(ds, fam), fam))
+        _parent_geometry,
+        _live_geometry['rank'], _live_geometry['alpha'],
+        network_type=_live_geometry.get('network_type'),
+        lokr_factor=_live_geometry.get('lokr_factor'),
+        lokr_full_rank=_live_geometry.get('lokr_full_rank'))
     if _conflict:
         raise ValueError(_conflict)
     try:

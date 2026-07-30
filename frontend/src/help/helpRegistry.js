@@ -824,6 +824,20 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
       text: 'New: train each image on a long AND a short caption (Advanced options → Dual captions) so the LoRA leans less on any single wording.' } },
+  // Expert controls, not global Settings: factor is meaningful only for a LoKr
+  // network, and the Krea fields intentionally surface one reported community
+  // starting point without claiming its result transfers to every dataset.
+  { id: 'training.lokr_factor', kind: 'setting', title: 'LoKr decomposition factor',
+    keywords: ['lokr', 'lo kr', 'factor', 'decomposition', 'network', 'adapter',
+      'rank', 'alpha', 'advanced', 'training', 'auto', 'krea'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    app: { route: '/datasets?section=training&panel=advanced' } },
+  { id: 'training.krea_community_recipe', kind: 'setting', title: 'Krea Raw LoKr community starting point',
+    keywords: ['krea', 'krea 2', 'krea raw', 'lokr', 'likeness', 'community recipe',
+      'balanced', 'content', 'style', 'differential guidance', 'guidance scale',
+      'automagic2', 'sigmoid', 'reddit', 'advanced', 'training', 'preset'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    app: { route: '/datasets?section=training&panel=advanced' } },
   // Person masking (`masked`, background at 10 %) became a per-DATASET setting on
   // 28/07 — it used to be a per-BROWSER localStorage preference the server only saw
   // at launch. Same shape as Dual captions / Memory saving: a per-dataset training

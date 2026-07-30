@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-30-krea-raw-lokr-likeness-starter',
+    date: '2026-07-30',
+    title: 'Start a Krea 2 Raw LoKr likeness run from a named recipe',
+    blurb:
+      'A new Character-only Krea 2 Raw · LoKr likeness preset puts the reported community starting point in one place: LoKr factor 16, 32/32, 768 px, Automagic2, Sigmoid, Balanced and differential guidance 3. Those Krea-only controls are now visible in Expert options and every run records them for comparison. It is a starting point, not a likeness promise: inspect your own checkpoints, and type 3000 in Steps only when you deliberately want that target instead of the adaptive policy.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
     id: '2026-07-30-dataset-to-bank-keeps-useful-context',
     date: '2026-07-30',
     title: '🗃️ Turn a dataset back into a bank without losing its useful context',
