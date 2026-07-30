@@ -58,3 +58,42 @@ def test_load_config_returns_defensive_copy(tmp_path, monkeypatch):
     cfg = config.load_config()
     cfg['server']['port'] = 9999          # caller mutation must not corrupt the cache
     assert config.get('server.port') == 5050
+
+
+def test_legacy_krea_default_pair_migrates_on_read_and_persists_on_next_save(tmp_path, monkeypatch):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'krea': {'grounding_px': 1024, 'ref_boost': 4.0}}),
+                    encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+
+    # Reads do not rewrite user configuration, but the corrected profile applies
+    # immediately to generation on an upgraded install.
+    assert config.get('krea.grounding_px') == 512
+    assert config.get('krea.ref_boost') == 1.0
+    untouched = json.loads(path.read_text(encoding='utf-8'))
+    assert untouched['krea'] == {'grounding_px': 1024, 'ref_boost': 4.0}
+
+    # Its next ordinary Settings save records the one-time migration too.
+    config.save_config({'server': {'port': 5051}})
+    saved = json.loads(path.read_text(encoding='utf-8'))['krea']
+    assert saved['grounding_px'] == 512
+    assert saved['ref_boost'] == 1.0
+    assert saved['calibration_version'] == config.KREA_CALIBRATION_VERSION
+
+
+def test_a_custom_legacy_krea_calibration_is_not_rewritten(tmp_path, monkeypatch):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'krea': {'grounding_px': 768, 'ref_boost': 4.0}}),
+                    encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 768
+    assert config.get('krea.ref_boost') == 4.0
+
+    # An explicit post-update choice, even the old 1024 value, receives a marker
+    # and is never mistaken for the historical untouched pair on a later reload.
+    config.save_config({'krea': {'grounding_px': 1024}})
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    saved = json.loads(path.read_text(encoding='utf-8'))['krea']
+    assert saved['calibration_version'] == config.KREA_CALIBRATION_VERSION

@@ -1240,11 +1240,6 @@ export default function DatasetWorkspace({ ds, onBack }) {
                         ds.generate(...args);
                       }}
                       hasRef={!!d.ref_filename} composition={d.composition} images={images}
-                      // Krea reproduces the reference's shape: the panel needs it to
-                      // warn about squeezed body/back shots BEFORE a batch, and a way
-                      // to offer the fix (the same ✂ editor, pre-set to a portrait).
-                      refWidth={d.ref_width} refHeight={d.ref_height}
-                      onCropRefTo={(aspect) => setRefCrop({ aspect })}
                       bodyFidelity={bodyFid}
                       promptSuffix={d.prompt_suffix || ''}
                       promptSuffixes={d.prompt_suffixes || null}
@@ -1921,11 +1916,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
         // back out — not just tighten the already-cropped square. Legacy datasets with
         // no stored original fall back to the cropped ref (can only tighten, as before).
         <CropModal imageUrl={`/api/dataset/${d.id}/img/${encodeURIComponent(d.ref_original_filename || d.ref_filename)}`}
-          // 1:1 stays the historical default. `setRefCrop({aspect})` opens the same
-          // editor pre-set to another ratio — how the Krea framing advisory offers
-          // "crop to 3:4" without a second modal. The row of ratio buttons is still
-          // there, so the preset is a starting point, never a lock.
-          defaultAspect={(refCrop && refCrop.aspect) || 1}
+          // 1:1 is the historical default; the editor itself still offers its ratio
+          // buttons when a different manual crop is wanted.
+          defaultAspect={1}
           onCancel={() => setRefCrop(false)}
           onConfirm={async (box) => { await ds.cropRef(box); setRefCrop(false); }}
           onReset={d.ref_original_filename

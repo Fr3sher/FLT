@@ -150,38 +150,20 @@ to the captions instead.
 
 ## Krea and the shape of your reference photo
 
-**Krea 2 Edit reproduces the shape of your reference photo** (capped at 2 MP).
-That is not a setting — the identity-edit LoRA was trained on same-size pairs,
-so an output whose aspect ratio differs from the source loses likeness. Krea
-therefore ignores each shot's own aspect hint. **Klein and the API engines do
-not work this way**: they follow the shot.
+**Krea 2 Edit now follows the framing of the selected shot card** during dataset
+generation. The reference photo still anchors identity, but Krea's v1.2 Fit path
+adapts it to the requested output: **1:1** for face cards and **3:4** for bust,
+body and back cards. A square reference therefore no longer forces a full-body or
+sitting card into a tight bust crop.
 
-What this means in practice, measured on the same shot with the same seed:
+This is deliberately limited to Krea dataset variations. The separate **Edit
+reference** action keeps the source layout for a free-form edit, while Klein and
+the API engines keep their existing, separate generation paths.
 
-| Reference | Result for `body_stand_front` |
-| --- | --- |
-| Square, 1024×1024 | Framed around the **bust** — the model moves in |
-| Portrait, 835×1024 | **Full figure**, down to the calves |
-
-Nothing is broken and no prompt fixes it: a standing figure does not fit in a
-square, so the model resolves the conflict by cropping tighter. Since the human
-catalog is mostly `body` shots, a square reference quietly squeezes almost
-everything a character dataset wants.
-
-**The fix is one crop.** When you tick Krea with a square or landscape reference
-and wide shots selected, the generation panel says how many shots are affected
-and offers **✂ Crop reference to 3:4** — the same crop editor as the ✂ button on
-the reference, opened on the full-frame original with the 3:4 ratio pre-set. You
-can still reshape the box, or pick 2:3 / 9:16 for even more room.
-
-Two things worth knowing:
-
-- **✂ Auto head-crop** (the checkbox next to the reference) and **↺ Reset to
-  auto** inside the crop editor both produce a **square**. They are built for
-  face likeness, not for full-body framing — do not use them to answer this
-  notice.
-- The notice only appears for Krea, only when the reference can be measured, and
-  only when body/back shots are actually selected. A face-only run never sees it.
+You can still crop a reference when you want a different identity anchor or
+composition, but you no longer need to crop it merely to give a selected body
+card enough vertical room. Reference quality still matters for likeness; the
+selected card now owns the output frame.
 
 ## Your own shot catalog (JSON import)
 

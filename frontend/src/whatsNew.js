@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-30-krea-shot-card-adherence',
+    date: '2026-07-30',
+    title: 'Krea 2 now follows the dataset shots you selected',
+    blurb:
+      'Krea 2 Edit used to let the reference photo dominate a dataset run, so distinct cards could repeat its pose. Its calibrated Krea-only profile now gives the selected card priority for angle, expression, pose and scene, while keeping identity from the reference. Face cards render 1:1 and bust/body/back cards 3:4 through Krea Fit v1.2, so a square reference no longer squeezes a full-body or sitting card into a bust crop. ChatGPT, Nano Banana, OpenRouter and Klein keep their own generation paths unchanged.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-30-keep-an-improvement-without-training-on-both',
     date: '2026-07-30',
     title: '✓ Keep an improved image without accidentally training on both',

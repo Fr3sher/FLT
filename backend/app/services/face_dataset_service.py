@@ -167,14 +167,12 @@ def image_pixel_size(path):
     """(w, h) of an image file, or None when it cannot be measured.
 
     PIL reads the header only — no decode — and the answer is cached per
-    (path, mtime, size). WHY the payload needs it at all: the Krea 2 Edit engine
-    reproduces the REFERENCE's aspect ratio (krea_edit_helper.fit_output_size —
-    the edit LoRA was trained on same-size pairs), so a square reference makes
-    every `body`/`back` shot come back cropped tighter than asked. The front end
-    can only warn about that if it knows the reference's shape, and it has never
-    been told. Degrades to None on ANY failure (missing file, exotic format,
-    Pillow absent): an unmeasurable reference must cost a warning, never a 500.
-    A file that cannot be stat'ed is measured without caching — never guessed."""
+    (path, mtime, size). The dataset payload exposes the reference dimensions
+    for clients that need to describe or crop the source; Krea dataset cards now
+    choose their own target aspect through the Fit v1.2 path. Degrades to None
+    on ANY failure (missing file, exotic format, Pillow absent): an unmeasurable
+    image must never turn a payload read into a 500. A file that cannot be
+    stat'ed is measured without caching — never guessed."""
     try:
         st = os.stat(path)
         key = (str(path), st.st_mtime_ns, st.st_size)
@@ -3728,9 +3726,8 @@ def dataset_payload(user_id, dataset_id):
         'storage_path': _dataset_path(ds.id),
         'ref_filename': ds.ref_filename,
         # Pixel size of the ACTIVE reference (the cropped one — that is the file
-        # every engine is handed). Krea 2 Edit reproduces this shape, so the
-        # generation panel uses it to warn, BEFORE a batch, that a square/landscape
-        # reference will squeeze the body & back shots. None when unmeasurable.
+        # every engine is handed). Kept for crop-aware clients; Krea dataset cards
+        # now use the selected card's target frame. None when unmeasurable.
         'ref_width': (ref_size or (None, None))[0],
         'ref_height': (ref_size or (None, None))[1],
         'ref_original_filename': ds.ref_original_filename or '',
@@ -7030,6 +7027,9 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier):
                             suffix=dataset_prompt_suffix(ds, v.get('framing')),
                             subject_type=subject_type_of(ds),
                             label=v.get('label') or ''),
+                        # Krea v1.2 fit geometry accepts the catalog canvas even
+                        # when it differs from the dataset reference.
+                        aspect_ratio=aspect_for_label(v.get('label'), v.get('framing')),
                         extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                                         'variation_label': v.get('label')})
                 except Exception:
@@ -7641,6 +7641,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 suffix=dataset_prompt_suffix(ds, img.framing),
                 subject_type=subject_type_of(ds),
                 label=img.variation_label or ''),
+            aspect_ratio=aspect_for_label(img.variation_label, img.framing),
             extra_metadata={'is_dataset': True, 'dataset_id': img.dataset_id,
                             'variation_label': img.variation_label})
     else:

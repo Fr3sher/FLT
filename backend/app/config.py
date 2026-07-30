@@ -31,6 +31,14 @@ load_dotenv(ENV_PATH)
 SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOKEN',
                'VAST_API_KEY', 'REDDIT_CLIENT_ID', 'CIVITAI_API_KEY', 'PEXELS_API_KEY')
 
+# A Krea install saved by the previous release can carry its old *defaults* in
+# config.json, so a changed DEFAULTS value alone would never reach it. This
+# marker lets us distinguish that one-time profile migration from settings the
+# user changes after the new profile is available.
+KREA_CALIBRATION_VERSION = 2
+_LEGACY_KREA_GROUNDING_PX = 1024.0
+_LEGACY_KREA_REF_BOOST = 4.0
+
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
     # (phone, tablet, another PC) — the Settings "Server" card's LAN toggle just
@@ -323,6 +331,9 @@ DEFAULTS = {
     # extra_model_paths root), which is what makes the engine work on installs
     # that look nothing like the developer's.
     'krea': {
+        # Internal marker for the calibrated dataset-restaging defaults below.
+        # It is intentionally not a user-facing setting.
+        'calibration_version': KREA_CALIBRATION_VERSION,
         # Blank = auto-resolve a Krea 2 base under any 'krea'-named model folder,
         # preferring a Turbo then a Raw build. Set it to a filename to pin one.
         'base_model': '',
@@ -334,15 +345,15 @@ DEFAULTS = {
         # reference is shown to the vision text-encoder at. LOW = follows the
         # PROMPT (more variety, weaker likeness); HIGH = RESEMBLES the reference
         # (stronger likeness, but it starts copying the pose and the outfit you
-        # asked it to change). The node's own default is 768; its author
-        # recommends 1024+ for people, and a character dataset is people.
-        'grounding_px': 1024,
+        # asked it to change). 512 is the measured default for dataset poses: it
+        # keeps identity while giving the prompt room to move the pose.
+        'grounding_px': 512,
         # Pack reference workflow values, measured working. cfg is pinned at 1.0
         # in code (guidance-distilled model) and is deliberately NOT a setting.
         'steps': 10,
         'identity_lora_strength': 1.0,
         # How hard the source latent is pushed back into the model each step.
-        'ref_boost': 4.0,
+        'ref_boost': 1.0,
     },
     # Z-Image pipeline — the two loader refs the shipped Test Studio workflow used
     # to hardcode from the developer's own ComfyUI (reported by bobba84, GitHub #18).
@@ -429,6 +440,49 @@ def _deep_merge(base, override):
         else:
             out[k] = copy.deepcopy(v)
     return out
+
+
+def _number_is(value, expected):
+    """Strict-enough numeric comparison for hand-editable JSON settings."""
+    try:
+        return float(value) == expected
+    except (TypeError, ValueError):
+        return False
+
+
+def _migrate_krea_pose_profile(conf: dict, stored: dict, incoming: dict | None = None) -> dict:
+    """Apply the calibrated Krea pose defaults to an untouched legacy profile.
+
+    ``config.json`` overrides ``DEFAULTS``. Before this calibration, Settings
+    saved 1024 / 4.0 as its Krea defaults, so existing users would otherwise
+    continue to get reference-dominated poses forever. Only the exact old pair,
+    without this version marker, is upgraded. Any other value is treated as an
+    intentional choice. When a save explicitly carries either calibration knob,
+    it is also intentional and receives the marker rather than being rewritten.
+    """
+    stored_krea = (stored or {}).get('krea')
+    krea = conf.get('krea')
+    if not isinstance(stored_krea, dict) or not isinstance(krea, dict):
+        return conf
+    try:
+        if int(stored_krea.get('calibration_version', 0)) >= KREA_CALIBRATION_VERSION:
+            return conf
+    except (TypeError, ValueError):
+        pass
+
+    incoming_krea = (incoming or {}).get('krea')
+    explicit_calibration = isinstance(incoming_krea, dict) and any(
+        key in incoming_krea for key in ('grounding_px', 'ref_boost'))
+    if explicit_calibration:
+        krea['calibration_version'] = KREA_CALIBRATION_VERSION
+        return conf
+
+    if (_number_is(stored_krea.get('grounding_px'), _LEGACY_KREA_GROUNDING_PX)
+            and _number_is(stored_krea.get('ref_boost'), _LEGACY_KREA_REF_BOOST)):
+        krea['grounding_px'] = DEFAULTS['krea']['grounding_px']
+        krea['ref_boost'] = DEFAULTS['krea']['ref_boost']
+        krea['calibration_version'] = KREA_CALIBRATION_VERSION
+    return conf
 
 # --- engines added by an update --------------------------------------------
 # _deep_merge REPLACES lists (it only recurses into dicts), which is right for
@@ -583,7 +637,9 @@ def load_config(force=False) -> dict:
         if not isinstance(user, dict):
             user = {}
         _cache = _merge_new_engines(
-            _migrate_klein_loras(_deep_merge(DEFAULTS, user)), user)
+            _migrate_klein_loras(
+                _migrate_krea_pose_profile(_deep_merge(DEFAULTS, user), user)),
+            user)
         return copy.deepcopy(_cache)
 
 def save_config(partial: dict) -> dict:
@@ -602,7 +658,8 @@ def save_config(partial: dict) -> dict:
         if not isinstance(current, dict):
             current = {}
         merged = _stamp_known_engines(_migrate_klein_loras(
-            _deep_merge(current, partial or {}),
+            _migrate_krea_pose_profile(_deep_merge(current, partial or {}), current,
+                                       partial or {}),
             convert='generation_lora_presets' not in ((partial or {}).get('klein') or {})),
             partial)
         tmp = p.with_suffix('.json.tmp')

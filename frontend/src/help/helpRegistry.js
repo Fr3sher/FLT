@@ -990,10 +990,9 @@ const TOPICS = [
      'face', 'bust', 'body', 'back', 'sort shots', 'imported', 'import', 'drag and drop',
      'no crop', 'head crop off', 'ollama', 'vision', 'qwen'],
     '/datasets?section=add', 'dataset-guide', '2-how-many-images-and-which-ones'),
-  // Krea's one structural quirk: it reproduces the REFERENCE's aspect ratio, so
-  // a square reference squeezes every body/back shot. Reached from the ⚠ notice
-  // in the generation panel — the only place the trade-off can be acted on.
-  action('krea-reference-shape', 'Krea and the shape of your reference photo',
+  // Krea's Fit path applies the selected card's frame to a reference that still
+  // anchors identity. Keep the stable id/anchor so old help links continue to land.
+  action('krea-reference-shape', 'Krea follows the selected shot framing',
     ['krea', 'krea 2', 'krea 2 edit', 'reference', 'reference photo', 'aspect',
      'aspect ratio', 'shape', 'square', 'portrait', 'landscape', 'crop', 'recrop',
      'body', 'back', 'full body', 'full length', 'framing', 'cropped', 'tight',
