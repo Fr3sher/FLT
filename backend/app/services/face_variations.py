@@ -891,6 +891,8 @@ _KREA_PROFILE_VIEW = re.compile(
     r'\b(?:left|right)\s+(?:profile|side)(?:\s+view)?\b|'
     r'\b(?:profile|side)(?:\s+view)?\s+(?:left|right)\b|'
     r'\b(?:strict\s+)?profile(?:\s+view)?\b|\bside[- ]view\b', re.I)
+_KREA_THREE_QUARTER_VIEW = re.compile(
+    r'\b(?:three[- ]quarter|3\s*(?:/|-)\s*4)\b', re.I)
 _KREA_NON_STANDING_BODY_POSE = re.compile(
     r'\b(?:sitting|seated|sit|lying|reclining|kneeling|crouching|squatting|'
     r'walking|running|jumping|dancing)\b', re.I)
@@ -898,6 +900,9 @@ KREA_CARD_POSE_PRIORITY_PREFIX = 'Mandatory shot requirement:'
 KREA_CARD_POSE_PRIORITY_SUFFIX = (
     'Render exactly this pose, camera angle and framing; do not substitute the '
     'reference pose or a different view.')
+KREA_TRUE_PROFILE_REQUIREMENT = (
+    'For a profile shot, rotate the face to a true 90-degree side view with only '
+    'the nearer eye visible.')
 KREA_CARD_POSE_PRIORITY_GENERIC = (
     f'{KREA_CARD_POSE_PRIORITY_PREFIX} honor exactly the pose, camera angle and '
     f'framing already stated in the shot description. {KREA_CARD_POSE_PRIORITY_SUFFIX}')
@@ -910,7 +915,7 @@ _KREA_CATALOG_OUTFIT = 'wearing a varied casual outfit'
 _KREA_CATALOG_EXPRESSION = 'a calm neutral facial expression'
 
 
-def krea_card_pose_priority(card_prompt: str = '') -> str:
+def krea_card_pose_priority(card_prompt: str = '', *, true_profile: bool = False) -> str:
     """Return Krea's final pose imperative without moving free-form text after SFW.
 
     A concrete prompt is only accepted here after `_krea_builtin_card_prompt`
@@ -920,8 +925,15 @@ def krea_card_pose_priority(card_prompt: str = '') -> str:
     """
     shot = (card_prompt or '').strip().rstrip('.')
     if not shot:
-        return KREA_CARD_POSE_PRIORITY_GENERIC
-    return f'{KREA_CARD_POSE_PRIORITY_PREFIX} {shot}. {KREA_CARD_POSE_PRIORITY_SUFFIX}'
+        priority = KREA_CARD_POSE_PRIORITY_GENERIC
+    else:
+        priority = (
+            f'{KREA_CARD_POSE_PRIORITY_PREFIX} {shot}. '
+            f'{KREA_CARD_POSE_PRIORITY_SUFFIX}')
+    # ``true_profile`` comes from a pose classifier before the locks, but only
+    # selects this static instruction; no free-form request text moves after SFW.
+    return (f'{priority} {KREA_TRUE_PROFILE_REQUIREMENT}'
+            if true_profile else priority)
 
 
 def _krea_card_pose_needs_priority(prompt: str, framing: str | None,
@@ -933,10 +945,16 @@ def _krea_card_pose_needs_priority(prompt: str, framing: str | None,
         return False
     text = prompt or ''
     return (
-        framing == 'face' and bool(_KREA_PROFILE_VIEW.search(text))
+        framing == 'face' and _krea_true_profile_view(text)
     ) or (
         framing == 'body' and bool(_KREA_NON_STANDING_BODY_POSE.search(text))
     )
+
+
+def _krea_true_profile_view(text: str) -> bool:
+    """A real side profile, never a three-quarter view with both eyes visible."""
+    return (bool(_KREA_PROFILE_VIEW.search(text or ''))
+            and not bool(_KREA_THREE_QUARTER_VIEW.search(text or '')))
 
 
 def _krea_builtin_card_prompt(prompt: str, label: str, subject_type: str) -> str:
@@ -1002,6 +1020,8 @@ def _compose_edit_prompt(prompt: str, *, nsfw: bool, framing, suffix: str,
     # cards get the bounded generic imperative instead.
     prioritize_card = card_pose_priority and _krea_card_pose_needs_priority(
         prompt, framing, st)
+    true_profile = (prioritize_card and framing == 'face'
+                    and _krea_true_profile_view(prompt))
     final_card = (_krea_builtin_card_prompt(prompt, label, st)
                   if prioritize_card else '')
     if prioritize_card:
@@ -1014,7 +1034,8 @@ def _compose_edit_prompt(prompt: str, *, nsfw: bool, framing, suffix: str,
         + (f"{detail} " if detail else "")
         + (f"{lock} " if lock else "")
         + f"{get_identity_prompt('klein_identity', st)} {ending}"
-        + (f" {krea_card_pose_priority(final_card)}" if prioritize_card else ""))
+        + (f" {krea_card_pose_priority(final_card, true_profile=true_profile)}"
+           if prioritize_card else ""))
 
 
 def _e(i, axis, framing, label, prompt, co=False, cb=False, aspect=None):

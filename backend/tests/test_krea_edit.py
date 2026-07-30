@@ -432,7 +432,7 @@ def test_the_sampler_settings_are_the_measured_ones():
     ks = next(n for n in g.values() if n['class_type'] == 'KSampler')['inputs']
     assert ks['cfg'] == 1.0, 'guidance-distilled: any other cfg is a mistake'
     assert (ks['sampler_name'], ks['scheduler']) == ('euler', 'simple')
-    assert ks['steps'] == 10
+    assert ks['steps'] == 8
 
 
 def test_the_krea_graph_defaults_favor_prompt_adherence_without_weakening_identity():
@@ -441,7 +441,7 @@ def test_the_krea_graph_defaults_favor_prompt_adherence_without_weakening_identi
     patch = next(n for n in g.values() if n['class_type'] == 'Krea2EditModelPatch')
     lora = next(n for n in g.values() if n['class_type'] == 'LoraLoaderModelOnly')
     assert {n['inputs']['grounding_px'] for n in encodes} == {512}
-    assert patch['inputs']['ref_boost'] == 1.0
+    assert patch['inputs']['ref_boost'] == 0.25
     assert lora['inputs']['strength_model'] == 1.0
 
 
@@ -468,9 +468,9 @@ def test_no_loader_value_is_ever_hardcoded_in_the_graph_builder():
 def test_grounding_is_clamped_and_snapped_and_junk_degrades_to_the_default(krea):
     keh, _base, config = krea
     assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 1.0
+    assert config.get('krea.ref_boost') == 0.25
     assert keh.grounding_px() == 512
-    assert keh._ref_boost() == 1.0
+    assert keh._ref_boost() == 0.25
     config.save_config({'krea': {'grounding_px': 700}})
     assert keh.grounding_px() == 704, 'snapped to the 64px patch grid'
     config.save_config({'krea': {'grounding_px': 99999}})
@@ -566,7 +566,8 @@ def test_krea_pose_cards_override_conflicting_generic_framing_details(
     out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
                                  label=entry['label'])
     final_card = fv.krea_card_pose_priority(
-        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'))
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'),
+        true_profile=entry_id == 'face_profile_l')
 
     assert requested_card_text in out
     assert conflicting_detail not in out
@@ -575,6 +576,7 @@ def test_krea_pose_cards_override_conflicting_generic_framing_details(
     # tail, not merely referred to as an earlier instruction.
     assert out.rfind(requested_card_text) > out.rfind(
         fv.get_identity_prompt('render_tail_sfw', 'human'))
+    assert (fv.KREA_TRUE_PROFILE_REQUIREMENT in out) == (entry_id == 'face_profile_l')
 
 
 def test_krea_card_priority_is_scoped_to_krea_not_klein_or_api_wrappers():
@@ -608,6 +610,21 @@ def test_krea_card_priority_stays_human_and_uses_the_current_regenerate_prompt()
     assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in animal
 
 
+def test_krea_three_quarter_profile_is_not_rewritten_as_a_true_side_profile():
+    out = fv.wrap_variation_krea('close-up portrait, three-quarter profile, smiling',
+                                 framing='face', label='Face 3/4')
+    assert 'both eyes in crisp focus' in out
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in out
+    assert fv.KREA_TRUE_PROFILE_REQUIREMENT not in out
+
+
+def test_krea_profile_priority_is_not_disabled_by_an_age():
+    out = fv.wrap_variation_krea('close-up portrait, left profile view, 34-year-old',
+                                 framing='face', label='Profile left')
+    assert 'both eyes in crisp focus' not in out
+    assert fv.KREA_TRUE_PROFILE_REQUIREMENT in out
+
+
 def test_krea_card_priority_does_not_duplicate_a_dataset_suffix():
     entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
     suffix = 'shot on 35mm film'
@@ -621,7 +638,7 @@ def test_krea_card_priority_does_not_repeat_edited_or_custom_prompt_text():
     custom = 'left profile view, ' + ('deliberate detail ' * 800)
     out = fv.wrap_variation_krea(custom, framing='face', label='Custom profile')
     assert out.count(custom) == 1
-    assert out.endswith(fv.krea_card_pose_priority())
+    assert out.endswith(fv.krea_card_pose_priority(true_profile=True))
     assert not out.endswith(fv.krea_card_pose_priority(custom))
 
 
@@ -637,7 +654,8 @@ def test_krea_card_priority_tail_is_not_built_from_the_editable_palette(monkeypa
     assert out.rfind(palette_text) < out.rfind(
         fv.get_identity_prompt('klein_identity', 'human'))
     assert out.endswith(fv.krea_card_pose_priority(
-        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human')))
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'),
+        true_profile=True))
 
 
 def test_the_wrapper_respects_the_subject_type_and_the_nsfw_switch():

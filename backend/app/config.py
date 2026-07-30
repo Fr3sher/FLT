@@ -31,13 +31,16 @@ load_dotenv(ENV_PATH)
 SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOKEN',
                'VAST_API_KEY', 'REDDIT_CLIENT_ID', 'CIVITAI_API_KEY', 'PEXELS_API_KEY')
 
-# A Krea install saved by the previous release can carry its old *defaults* in
+# A Krea install saved by a previous release can carry its old *defaults* in
 # config.json, so a changed DEFAULTS value alone would never reach it. This
 # marker lets us distinguish that one-time profile migration from settings the
 # user changes after the new profile is available.
-KREA_CALIBRATION_VERSION = 2
+KREA_CALIBRATION_VERSION = 3
 _LEGACY_KREA_GROUNDING_PX = 1024.0
 _LEGACY_KREA_REF_BOOST = 4.0
+_PREVIOUS_KREA_GROUNDING_PX = 512.0
+_PREVIOUS_KREA_REF_BOOST = 1.0
+_PREVIOUS_KREA_STEPS = 10
 
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
@@ -350,10 +353,10 @@ DEFAULTS = {
         'grounding_px': 512,
         # Pack reference workflow values, measured working. cfg is pinned at 1.0
         # in code (guidance-distilled model) and is deliberately NOT a setting.
-        'steps': 10,
+        'steps': 8,
         'identity_lora_strength': 1.0,
         # How hard the source latent is pushed back into the model each step.
-        'ref_boost': 1.0,
+        'ref_boost': 0.25,
     },
     # Z-Image pipeline — the two loader refs the shipped Test Studio workflow used
     # to hardcode from the developer's own ComfyUI (reported by bobba84, GitHub #18).
@@ -451,36 +454,51 @@ def _number_is(value, expected):
 
 
 def _migrate_krea_pose_profile(conf: dict, stored: dict, incoming: dict | None = None) -> dict:
-    """Apply the calibrated Krea pose defaults to an untouched legacy profile.
+    """Apply calibrated Krea pose defaults only to untouched old profiles.
 
-    ``config.json`` overrides ``DEFAULTS``. Before this calibration, Settings
-    saved 1024 / 4.0 as its Krea defaults, so existing users would otherwise
-    continue to get reference-dominated poses forever. Only the exact old pair,
-    without this version marker, is upgraded. Any other value is treated as an
-    intentional choice. When a save explicitly carries either calibration knob,
-    it is also intentional and receives the marker rather than being rewritten.
+    ``config.json`` overrides ``DEFAULTS``. The first Krea profile saved
+    1024 / 4.0; calibration v2 then saved
+    512 / 1.0 / 10.  Both are reference-dominated for diverse dataset poses. Only
+    those exact shipped profiles are upgraded. Any other value is an intentional
+    choice. An explicit save of a calibration knob is also intentional and gets
+    the marker rather than being rewritten.
     """
     stored_krea = (stored or {}).get('krea')
     krea = conf.get('krea')
     if not isinstance(stored_krea, dict) or not isinstance(krea, dict):
         return conf
     try:
-        if int(stored_krea.get('calibration_version', 0)) >= KREA_CALIBRATION_VERSION:
-            return conf
+        stored_version = int(stored_krea.get('calibration_version', 0) or 0)
     except (TypeError, ValueError):
-        pass
+        stored_version = 0
+    if stored_version >= KREA_CALIBRATION_VERSION:
+        return conf
 
     incoming_krea = (incoming or {}).get('krea')
     explicit_calibration = isinstance(incoming_krea, dict) and any(
-        key in incoming_krea for key in ('grounding_px', 'ref_boost'))
+        key in incoming_krea for key in ('grounding_px', 'ref_boost', 'steps'))
     if explicit_calibration:
         krea['calibration_version'] = KREA_CALIBRATION_VERSION
         return conf
 
-    if (_number_is(stored_krea.get('grounding_px'), _LEGACY_KREA_GROUNDING_PX)
-            and _number_is(stored_krea.get('ref_boost'), _LEGACY_KREA_REF_BOOST)):
+    is_v1_default = (
+        stored_version < 2
+        and _number_is(stored_krea.get('grounding_px'), _LEGACY_KREA_GROUNDING_PX)
+        and _number_is(stored_krea.get('ref_boost'), _LEGACY_KREA_REF_BOOST)
+        # Older config files did not record steps, so absence means their
+        # shipped 10-step profile; a present non-10 value is a user choice.
+        and _number_is(stored_krea.get('steps', _PREVIOUS_KREA_STEPS),
+                       _PREVIOUS_KREA_STEPS))
+    is_v2_default = (
+        stored_version == 2
+        and _number_is(stored_krea.get('grounding_px'), _PREVIOUS_KREA_GROUNDING_PX)
+        and _number_is(stored_krea.get('ref_boost'), _PREVIOUS_KREA_REF_BOOST)
+        and _number_is(stored_krea.get('steps', _PREVIOUS_KREA_STEPS),
+                       _PREVIOUS_KREA_STEPS))
+    if is_v1_default or is_v2_default:
         krea['grounding_px'] = DEFAULTS['krea']['grounding_px']
         krea['ref_boost'] = DEFAULTS['krea']['ref_boost']
+        krea['steps'] = DEFAULTS['krea']['steps']
         krea['calibration_version'] = KREA_CALIBRATION_VERSION
     return conf
 
