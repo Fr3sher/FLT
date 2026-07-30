@@ -49,10 +49,12 @@ from sqlalchemy import and_, case, func, or_
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import bank_jobs, bank_undo, path_guard, trash
+from . import bank_jobs, bank_transfer_metadata, bank_undo, path_guard, trash
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _hamming, _SCRAPE_DL_WORKERS, _watermark_regions_payload,
-                                   import_images, normalize_watermark_regions)
+                                   _source_metadata_storage, bank_deterministic_analysis,
+                                   import_images,
+                                   normalize_watermark_regions)
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
 
@@ -4818,11 +4820,72 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
             'added': sync.get('added', 0), 'skipped': skipped}
 
 
-def start_dataset_import(app, user_id, dataset_id, name):
+_BANK_TRANSFER_WATERMARK_STATES = frozenset(
+    ('none', 'detected', 'dismissed', 'cleaned', 'failed', 'error'))
+_BANK_TRANSFER_FRAMINGS = frozenset(('face', 'bust', 'body', 'back', 'unknown'))
+_BANK_TRANSFER_STATUSES = frozenset(('pending', 'keep', 'reject'))
+
+
+def _copied_image_dimensions(path) -> tuple[int | None, int | None]:
+    """Read dimensions from the destination file, never from stale row metadata."""
+    try:
+        with Image.open(path) as im:
+            return im.size
+    except (OSError, TypeError, ValueError):
+        return None, None
+
+
+def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analysis: bool) -> dict:
+    """The current user-facing Dataset data, plus a compatible old Bank analysis.
+
+    The snapshot never gets to overwrite caption/framing/watermark/provenance or
+    curation: those fields are the user's present Dataset choices.  It only adds
+    final-WebP measurements when the just-copied bytes still equal the promotion
+    fingerprint.  This is deliberately checked against ``copied_path`` after the
+    copy, closing the tiny edit-during-copy race as well.
+    """
+    values = {
+        'caption': row.caption,
+        'framing': row.framing if row.framing in _BANK_TRANSFER_FRAMINGS else None,
+        'watermark_state': (row.watermark_state
+                            if row.watermark_state in _BANK_TRANSFER_WATERMARK_STATES
+                            else None),
+        'watermark_bbox': row.watermark_bbox if isinstance(row.watermark_bbox, str) else None,
+        'watermark_regions': (row.watermark_regions
+                              if isinstance(row.watermark_regions, str) else None),
+        'source_metadata': _source_metadata_storage(row.source_metadata),
+        # Dataset-to-Bank only starts from kept rows.  Keep the current explicit
+        # decision should it change while the background copy is waiting, but do
+        # not invent a Bank-only 'failed' status for a Dataset failure row.
+        'status': (row.status if row.status in _BANK_TRANSFER_STATUSES else 'keep'),
+        'watermark_clean_method': None,
+        # A Bank rotation has already been materialised into the Dataset pixels
+        # during promotion.  Restoring it here would turn the copied file twice.
+        'rotation': None,
+    }
+    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    if preserve_analysis:
+        analysis = bank_transfer_metadata.compatible_analysis(
+            row.bank_analysis_snapshot, copied_path)
+        if analysis:
+            values.update(analysis)
+        elif row.bank_analysis_snapshot is not None:
+            # A Dataset byte edit (or a rejected legacy payload) must not keep
+            # looking transferable forever.  The compatibility check above is
+            # against the just-copied bytes, so clearing here is race-safe.
+            row.bank_analysis_snapshot = None
+    return values
+
+
+def start_dataset_import(app, user_id, dataset_id, name, preserve_analysis=True):
     """The REVERSE of promote: turn a dataset back into a bank. Copies the
     dataset's KEPT images into a folder of their own and registers it as a bank
     under `name`, so the dataset's material can be re-triaged with the bank tools
-    (perceptual + semantic dedup, framing, scores) without disturbing it.
+    (perceptual + semantic dedup, framing, scores) without disturbing it.  By
+    default the compatible Bank analysis saved on each Dataset image is restored;
+    ``preserve_analysis=False`` instead starts a fresh unanalysed Bank while
+    still carrying the Dataset's current captions, framing, watermark metadata,
+    source attribution and curation decision.
 
     COPIES rather than pointing the bank at the dataset's live folder: the two
     would otherwise share files, and curating one would mutate the other. That
@@ -4834,9 +4897,11 @@ def start_dataset_import(app, user_id, dataset_id, name):
     renders bank_jobs progress. The bank row is created FIRST (empty) so the job
     has a bank_id to report against; a job that dies part-way leaves a bank
     holding exactly the images it managed to copy, never a phantom row.
-    Raises ValueError (-> 400) on a missing dataset, a blank name, or nothing kept."""
-    from ..models import FaceDatasetImage
+    Raises ValueError (-> 400) on a missing dataset, a blank name, invalid
+    preservation mode, or nothing kept."""
     from .dataset_storage import dataset_path
+    if not isinstance(preserve_analysis, bool):
+        raise ValueError('preserve_analysis must be a boolean')
     name = (name or '').strip()
     if not name:
         raise ValueError('name is required')
@@ -4859,20 +4924,26 @@ def start_dataset_import(app, user_id, dataset_id, name):
     src_dir = str(dataset_path(dataset_id))
     bank_jobs.start(
         app, bank.id, 'dataset_import',
-        _dataset_import_job(bank.id, src_dir, [r.filename for r in rows]),
+        _dataset_import_job(bank.id, src_dir,
+                            [(r.id, r.filename) for r in rows], preserve_analysis),
         total=len(rows))
     return bank.id
 
 
-def _dataset_import_job(bank_id, src_dir, filenames):
+def _dataset_import_job(bank_id, src_dir, image_rows, preserve_analysis=True):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
         copied = missing = failed = 0
-        for i, fn in enumerate(filenames, 1):
+        for i, (image_id, fallback_fn) in enumerate(image_rows, 1):
             if bank_jobs.cancelled(job):
                 break
+            # Re-read the row for its latest user-authored choices.  The list of
+            # ids still fixes the *selection* at click time, matching the old
+            # filename-only job; a deleted legacy row degrades to a plain copy.
+            row = db.session.get(FaceDatasetImage, image_id)
+            fn = row.filename if row and row.filename else fallback_fn
             src = os.path.join(src_dir, fn)
             if not os.path.isfile(src):
                 missing += 1
@@ -4880,6 +4951,7 @@ def _dataset_import_job(bank_id, src_dir, filenames):
                 continue
             dest = os.path.join(bank.source_path, fn)
             try:
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
                 shutil.copy2(src, dest)
                 size = os.path.getsize(dest)
             except OSError:
@@ -4889,7 +4961,10 @@ def _dataset_import_job(bank_id, src_dir, filenames):
                 failed += 1
                 bank_jobs.bump(job)
                 continue
-            db.session.add(BankImage(bank_id=bank_id, relpath=fn, file_size=size))
+            values = (_dataset_row_bank_values(row, dest, preserve_analysis)
+                      if row is not None else {'status': 'keep'})
+            db.session.add(BankImage(bank_id=bank_id, relpath=fn, file_size=size,
+                                     **values))
             copied += 1
             if i % 200 == 0:
                 db.session.commit()
@@ -5020,6 +5095,69 @@ def _discard_promoted_bank(user_id, dest_bank_id):
                        exc_info=True)
 
 
+def _bank_copy_values(row: BankImage, copied_path, *, copy_source_analysis: bool) -> dict:
+    """Metadata a Bank -> Bank copy can keep without inheriting false links.
+
+    The copied image has its own physical size and no derived-clean/rotation
+    artifact yet.  A direct source-file copy can retain its historical analysis;
+    a clean/rotated resolved copy recomputes only deterministic values and clears
+    ML outputs.  Cluster and duplicate-group ids are container-local, so they
+    are intentionally left blank for the destination to rebuild.  Curation
+    deliberately does not: a copied Bank has always begun as a fresh triage
+    queue.
+    """
+    values = {
+        name: getattr(row, name, None)
+        for name in bank_transfer_metadata.PIXEL_ANALYSIS_FIELDS
+    }
+    if not copy_source_analysis:
+        values.update({name: None
+                       for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS})
+        values.update(bank_deterministic_analysis(copied_path) or {})
+        values.update({name: None
+                       for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
+    values.update({
+        'caption': row.caption,
+        'source_metadata': _source_metadata_storage(row.source_metadata),
+        'framing': row.framing if row.framing in _BANK_TRANSFER_FRAMINGS else None,
+        'watermark_state': (row.watermark_state
+                            if row.watermark_state in _BANK_TRANSFER_WATERMARK_STATES
+                            else None),
+        'watermark_bbox': row.watermark_bbox if isinstance(row.watermark_bbox, str) else None,
+        'watermark_regions': (row.watermark_regions
+                              if isinstance(row.watermark_regions, str) else None),
+        # The target file IS already cleaned/rotated when the source was resolved.
+        # Replaying either pointer would look for a non-existent derived blob or
+        # rotate the image a second time.
+        'watermark_clean_method': None,
+        'rotation': None,
+        # Preserve the historical Bank -> Bank contract: a copy is a fresh
+        # candidate set, never an inherited keep/reject decision.
+        'status': 'pending',
+        'reject_reason': None,
+        # New Bank-local relationships are rebuilt by the normal passes.
+        'dup_group': None,
+        'semantic_dup_group': None,
+        'face_cluster': None,
+        'style_cluster': None,
+    })
+    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    return values
+
+
+def _resolved_path_is_analysed_source(bank: ImageBank, row: BankImage,
+                                      resolved_path) -> bool:
+    """Whether promotion copied the exact file whose Bank analysis describes it."""
+    raw_path = abs_image_path(bank, row)
+    if not raw_path or not resolved_path:
+        return False
+    try:
+        return (os.path.normcase(os.path.realpath(resolved_path))
+                == os.path.normcase(os.path.realpath(raw_path)))
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
     def run(job):
         src = db.session.get(ImageBank, src_bank_id)
@@ -5035,6 +5173,7 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
             # RESOLVED path: a watermark-cleaned image must land cleaned, same
             # rule as promoting to a dataset.
             p = resolved_image_path(src, r)
+            copy_source_analysis = _resolved_path_is_analysed_source(src, r, p)
             try:
                 with open(p, 'rb'):       # prove the SOURCE is the readable one
                     pass
@@ -5062,8 +5201,10 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                                     "the app's data, then try again. "
                                     f'({e.strerror or "write failed"})')
                 return
-            db.session.add(BankImage(bank_id=dest_bank_id, relpath=r.relpath,
-                                     file_size=size))
+            db.session.add(BankImage(
+                bank_id=dest_bank_id, relpath=r.relpath, file_size=size,
+                **_bank_copy_values(r, target,
+                                    copy_source_analysis=copy_source_analysis)))
             copied.append(r.id)
             if len(copied) % 200 == 0:
                 db.session.commit()
@@ -5133,7 +5274,9 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
             if bank_jobs.cancelled(job):
                 break
             chunk = rows[c0:c0 + _PROMOTE_CHUNK]
-            blobs, chunk_rows, caps, frms = [], [], [], []
+            blobs, chunk_rows = [], []
+            caps, frms, source_meta, snapshots = [], [], [], []
+            watermark_states, watermark_bboxes, watermark_regions = [], [], []
             for r in chunk:
                 # RESOLVED path: a watermark-cleaned image must reach the dataset
                 # cleaned, otherwise the two cleaning levels were run for nothing.
@@ -5149,13 +5292,29 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
                     # the dataset's Composition counter is right the moment the
                     # promotion lands (it only tallies rows that HAVE a framing).
                     frms.append(r.framing)
+                    # Preserve compatible source attribution and the current
+                    # watermark review state/mask alongside the normal caption
+                    # fields.  The Dataset importer validates provenance before
+                    # it reaches storage.
+                    source_meta.append(r.source_metadata)
+                    watermark_states.append(r.watermark_state)
+                    watermark_bboxes.append(r.watermark_bbox)
+                    watermark_regions.append(r.watermark_regions)
+                    # The importer recomputes the strict deterministic snapshot
+                    # from the final normalized Dataset WebP; no source score or
+                    # ML verdict is carried through this marker.
+                    snapshots.append(True)
                 except (OSError, TypeError):
                     failed += 1
             if blobs:
                 new_ids, bad = import_images(
                     user_id, dataset_id, blobs, dedupe=True, stats=stats,
                     captions=caps, bank_image_ids=[r.id for r in chunk_rows],
-                    framings=frms)
+                    framings=frms, source_metadata=source_meta,
+                    bank_analysis_snapshots=snapshots,
+                    watermark_states=watermark_states,
+                    watermark_bboxes=watermark_bboxes,
+                    watermark_regions=watermark_regions)
                 imported += len(new_ids)
                 failed += bad
                 # The dataset row now carries the link back (import_images writes

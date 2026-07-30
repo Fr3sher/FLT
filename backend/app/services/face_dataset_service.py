@@ -31,8 +31,11 @@ from ..extensions import db
 from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
-from . import dataset_activity, image_encoding, reference_edit_jobs, trash
+from . import (bank_transfer_metadata, dataset_activity, image_encoding,
+               reference_edit_jobs, trash)
 from .dataset_storage import dataset_path, ensure_dataset_dir
+from .image_provenance import provenance_metrics
+from .image_quality import quality_metrics
 
 # Garde le modèle vision chaud entre les images d'un même batch caption/classify
 # (sinon Ollama le recharge - cold start ~10s - à CHAQUE image). Déchargé en fin
@@ -2234,7 +2237,8 @@ _BACKUP_IMG_FIELDS = ('filename', 'source', 'framing', 'variation_label', 'statu
                       'caption', 'caption_short', 'variation_prompt', 'face_score', 'face_state',
                       'upscale_ratio', 'watermark_state', 'watermark_bbox',
                       'watermark_regions', 'parent_image_id', 'derivation_kind',
-                      'fail_reason', 'fail_kind', 'source_metadata')
+                      'fail_reason', 'fail_kind', 'source_metadata',
+                      'bank_analysis_snapshot')
 
 
 def _backup_basename(value):
@@ -2362,6 +2366,11 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
         # Archive a structured, revalidated object rather than the raw TEXT
         # column. A malformed legacy/local row can never export arbitrary links.
         row['source_metadata'] = normalize_source_metadata(img.source_metadata)
+        # A snapshot is durable only when it has the expected version, fingerprint
+        # and bounded analysis shape.  Invalid legacy/local text is deliberately
+        # omitted rather than becoming an opaque payload in a portable backup.
+        row['bank_analysis_snapshot'] = bank_transfer_metadata.normalized_snapshot_storage(
+            img.bank_analysis_snapshot)
         images_meta.append(row)
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as z:
         z.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=1))
@@ -2442,7 +2451,7 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     try:
         manifest = json.loads(z.read(metadata['manifest.json']).decode('utf-8'))
         images_meta = json.loads(z.read(metadata['images.json']).decode('utf-8'))
-    except (ValueError, UnicodeError, zipfile.BadZipFile):
+    except (ValueError, UnicodeError, RecursionError, MemoryError, zipfile.BadZipFile):
         raise ValueError('not a dataset backup (manifest.json/images.json missing or invalid)')
     if not isinstance(manifest, dict):
         raise ValueError('invalid backup manifest')
@@ -2581,6 +2590,9 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
             # while valid Pexels metadata is canonicalized back to JSON TEXT.
             values['source_metadata'] = _source_metadata_storage(
                 values.get('source_metadata'))
+            values['bank_analysis_snapshot'] = (
+                bank_transfer_metadata.normalized_snapshot_storage(
+                    values.get('bank_analysis_snapshot')))
             if is_candidate and not fn and values.get('status') in ('pending', 'keep'):
                 values['status'] = 'failed'
                 values['fail_reason'] = (
@@ -3692,7 +3704,9 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
 def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
                   source_metadata=None, captions=None, bank_image_ids=None,
-                  framings=None):
+                  framings=None, bank_analysis_snapshots=None,
+                  watermark_states=None, watermark_bboxes=None,
+                  watermark_regions=None):
     """Normalize (or head-crop) + persist + create import rows (status=keep).
     When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
     must then hold the GPU-exclusive window - and is by construction a face,
@@ -3730,6 +3744,14 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     that could NOT be linked (the matched row already belongs to another bank —
     a scalar column can only credit one) are listed in ``stats['bank_unlinked']``.
 
+    ``bank_analysis_snapshots`` is an internal Bank-promotion marker parallel to
+    ``files_bytes``.  When present, this importer recalculates the deterministic
+    quality/provenance values from the final normalized Dataset WebP, then seals
+    only those values with that file's fingerprint.  Source-file and ML verdicts
+    never enter the snapshot.  The regular user-facing fields stay separate:
+    ``watermark_*`` mirrors the current Bank watermark decision and mask without
+    treating either as a historical analysis value.
+
     Returns (ids, failed_count)."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
@@ -3743,6 +3765,11 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     captions_by_index = list(captions) if captions is not None else []
     bank_ids_by_index = list(bank_image_ids) if bank_image_ids is not None else []
     framings_by_index = list(framings) if framings is not None else []
+    snapshots_by_index = (list(bank_analysis_snapshots)
+                          if bank_analysis_snapshots is not None else [])
+    watermark_states_by_index = list(watermark_states) if watermark_states is not None else []
+    watermark_bboxes_by_index = list(watermark_bboxes) if watermark_bboxes is not None else []
+    watermark_regions_by_index = list(watermark_regions) if watermark_regions is not None else []
 
     def bank_id_at(i):
         return bank_ids_by_index[i] if i < len(bank_ids_by_index) else None
@@ -3755,6 +3782,24 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             return 'face'
         fr = framings_by_index[i] if i < len(framings_by_index) else None
         return fr if fr in ('face', 'bust', 'body', 'back') else None
+
+    def snapshot_at(i):
+        return snapshots_by_index[i] if i < len(snapshots_by_index) else None
+
+    def watermark_state_at(i):
+        state = (watermark_states_by_index[i]
+                 if i < len(watermark_states_by_index) else None)
+        return state if state in ('none', 'detected', 'dismissed', 'cleaned', 'failed', 'error') else None
+
+    def watermark_bbox_at(i):
+        value = (watermark_bboxes_by_index[i]
+                 if i < len(watermark_bboxes_by_index) else None)
+        return value if isinstance(value, str) else None
+
+    def watermark_regions_at(i):
+        value = (watermark_regions_by_index[i]
+                 if i < len(watermark_regions_by_index) else None)
+        return value if isinstance(value, str) else None
 
     ids = []
     failed = 0
@@ -3778,6 +3823,12 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             failed += 1
             logger.warning(f"dataset import: image skipped (dataset {dataset_id}): {e}")
             continue
+        analysis_snapshot = None
+        if snapshot_at(index) is not None:
+            final_analysis = bank_deterministic_analysis(webp)
+            if final_analysis is not None:
+                analysis_snapshot = bank_transfer_metadata.snapshot_storage(
+                    final_analysis, webp)
         fp = None
         if dedupe:
             try:
@@ -3797,7 +3848,8 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                     # photo first), report the id back: the caller has no verifiable
                     # trace here and needs to fall back on its own bookkeeping.
                     bid = bank_id_at(index)
-                    if bid and not _attach_bank_provenance(match, bid) \
+                    if bid and not _attach_bank_provenance(
+                            match, bid, bank_analysis_snapshot=analysis_snapshot) \
                             and stats is not None:
                         stats.setdefault('bank_unlinked', []).append(bid)
                     logger.info(f"dataset import: perceptual duplicate skipped (dataset {dataset_id})")
@@ -3811,6 +3863,10 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                                filename=fn, framing=framing_at(index),
                                upscale_ratio=scale, caption=cap,
                                bank_image_id=bank_id_at(index),
+                               bank_analysis_snapshot=analysis_snapshot,
+                               watermark_state=watermark_state_at(index),
+                               watermark_bbox=watermark_bbox_at(index),
+                               watermark_regions=watermark_regions_at(index),
                                source_metadata=_source_metadata_storage(
                                    metadata_by_index[index]
                                    if index < len(metadata_by_index) else None))
@@ -4040,6 +4096,46 @@ def _dhash(im: Image.Image) -> int:
     return bits
 
 
+def bank_deterministic_analysis(image_source) -> dict | None:
+    """Measure the deterministic Bank fields from one final image.
+
+    Bank -> Dataset always invokes this on its emitted WebP, and a transformed
+    Bank -> Bank copy invokes it on the copied derived file.  Keeping it here
+    next to the Dataset dHash makes both transfer directions use exactly the
+    same pure-Pillow formulas as the Bank quality scan, without carrying source
+    ML outputs across a byte-changing conversion.
+    """
+    try:
+        if isinstance(image_source, (bytes, bytearray)):
+            handle = io.BytesIO(image_source)
+            with Image.open(handle) as im:
+                im.load()
+                return _bank_deterministic_values(im)
+        with Image.open(image_source) as im:
+            im.load()
+            return _bank_deterministic_values(im)
+    except (OSError, TypeError, ValueError, SyntaxError, UnidentifiedImageError):
+        return None
+
+
+def _bank_deterministic_values(im: Image.Image) -> dict:
+    """The strict v2 snapshot schema, computed from an already decoded image."""
+    metrics = quality_metrics(im)
+    provenance = provenance_metrics(im)
+    return {
+        'quality_state': 'ok',
+        'blur_score': metrics['blur_score'],
+        'noise_score': metrics['noise_score'],
+        'uniformity_score': metrics['uniformity_score'],
+        'dhash': f'{_dhash(im):016x}',
+        'detail_ratio': provenance['detail_ratio'],
+        'bars_ratio': provenance['bars_ratio'],
+        'jpeg_quality': provenance['jpeg_quality'],
+        'origin': provenance['origin'],
+        'origin_evidence': provenance['origin_evidence'],
+    }
+
+
 def _hamming(a: int, b: int) -> int:
     return bin(a ^ b).count('1')
 
@@ -4070,20 +4166,42 @@ def _existing_dhashes(dataset_id) -> list:
     return [h for h, _id in _existing_dhash_rows(dataset_id)]
 
 
-def _attach_bank_provenance(image_id, bank_image_id) -> bool:
+def _attach_bank_provenance(image_id, bank_image_id, *, bank_analysis_snapshot=None) -> bool:
     """Raccroche une image de dataset DÉJÀ présente à la bank_image dont elle est
     le doublon perceptuel, et dit si le lien a été pris. N'écrase jamais une
     provenance existante : la première bank qui a fourni l'image la garde (sinon
     deux banks se voleraient le lien à chaque promotion croisée) — l'appelant
     apprend alors que CETTE bank n'a pas de trace vérifiable ici."""
-    if not image_id or not bank_image_id:
+    if not image_id:
         return False
     row = db.session.get(FaceDatasetImage, image_id)
-    if row is None or row.bank_image_id is not None:
+    if row is None:
         return False
-    row.bank_image_id = bank_image_id
-    db.session.commit()
-    return True
+    # A dHash duplicate can be only visually similar, not byte-identical.  Its
+    # source Bank scores are useful only when the Dataset file proves it is the
+    # exact normalized transfer output; never attach a stale-looking snapshot.
+    changed = False
+    # First Bank wins for the snapshot exactly as it does for bank_image_id.  A
+    # later Bank may hold a perceptual duplicate with different scores, but it
+    # must never rewrite the analysis attributed to the original provenance.
+    # The sole exception fills a legacy/mid-upgrade row that is already linked to
+    # this SAME Bank but has no snapshot yet.
+    owns_snapshot = (row.bank_image_id is None
+                     or (row.bank_image_id == bank_image_id
+                         and row.bank_analysis_snapshot is None))
+    if owns_snapshot and bank_analysis_snapshot and row.filename:
+        path = os.path.join(_dataset_dir(row.dataset_id), row.filename)
+        if bank_transfer_metadata.compatible_analysis(bank_analysis_snapshot, path) is not None:
+            row.bank_analysis_snapshot = bank_analysis_snapshot
+            changed = True
+    linked = bool(bank_image_id and row.bank_image_id == bank_image_id)
+    if bank_image_id and row.bank_image_id is None:
+        row.bank_image_id = bank_image_id
+        linked = True
+        changed = True
+    if changed:
+        db.session.commit()
+    return linked
 
 
 def _accept_scrape_bytes(raw, seen_hashes, skipped, rescue_small=False):

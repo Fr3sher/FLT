@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-30-dataset-to-bank-keeps-useful-context',
+    date: '2026-07-30',
+    title: '🗃️ Turn a dataset back into a bank without losing its useful context',
+    blurb:
+      '↑ Import to bank now carries captions, keep/reject curation, framing, watermark and provenance into the copied bank, so it can carry on from work already done. Its technical measures are recalculated for the final file, while Face and Score AI results are deliberately not reused after normalization. Want a blank slate instead? Choose Start fresh and it begins unanalysed; either way the original dataset is untouched. Suggested by the owner.',
+    to: '/datasets?section=export&panel=to-bank',
+  },
+  {
     id: '2026-07-29-test-studio-random-dataset-captions',
     date: '2026-07-29',
     title: 'Give Test Studio a real dataset caption in one click',

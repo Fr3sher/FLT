@@ -1007,7 +1007,13 @@ rule the whole flow rests on:
 
 - **Bank → dataset** (**⬆ Promote…**) writes new files into the dataset.
 - **Dataset → bank** (**🗃 Import to bank**, on the dataset) copies the dataset's
-  kept images into a folder of the bank's own.
+  kept images into a folder of the bank's own. Its dialog starts on **Keep
+  captions & valid analysis**: captions, keep/reject curation, framing,
+  watermark and provenance follow the copied images. Technical measures are
+  recalculated for the final file; the AI **Face** and **Score** results are not
+  reused after normalization or another transformation because they are no
+  longer proved. Pick **Start fresh** instead when you want a deliberately
+  unanalysed bank and plan to run the bank passes again.
 
 Neither ever *points* at the other's files. The reason is that the two containers
 have opposite contracts. A dataset **owns** its images; a bank merely **points**
