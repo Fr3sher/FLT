@@ -1938,7 +1938,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
           engineReason={(e) => localEngineUnavailableReason(e, caps)}
           datasetExtraCount={(d.ref_extra_filenames || []).length}
           liveActivity={ds.activity} referenceEdit={d.reference_edit}
-          onEdit={ds.editReference} onKeep={ds.keepEditedReference} onDiscard={ds.discardEditedReference}
+          onEdit={ds.editReference} onRetry={ds.retryReferenceEdit}
+          canRetry={ds.canRetryReferenceEdit}
+          onKeep={ds.keepEditedReference} onDiscard={ds.discardEditedReference}
           onClose={() => setRefEdit(false)} />
       )}
       {extraRefCrop && extraRefCropSource(d.ref_extra_filenames, d.ref_extra_crop_sources, extraRefCrop) && (

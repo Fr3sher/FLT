@@ -70,6 +70,14 @@ captioning rules and a few guards change with the dataset kind.
 11. **Export** — at any point, **Export ZIP** gives you the curated, captioned
     set as a standard ai-toolkit dataset. Nothing is locked in.
 
+## Retry a reference edit
+
+After an **✦ Edit** candidate appears, **Retry** repeats the exact prompt, selected
+engine and temporary reference files used for that candidate. Use **Try another
+prompt** only when you want to change the instruction. The candidate also names the
+engine/API that actually returned it, so you can see which service produced the
+image before you Keep or Discard it.
+
 ## Concept datasets (an object or action, not a person)
 
 Pick **Concept** at creation and describe the concept in the required field —

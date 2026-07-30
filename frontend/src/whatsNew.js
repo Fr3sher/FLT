@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-30-retry-reference-edit-show-engine',
+    date: '2026-07-30',
+    title: 'Retry a reference edit exactly as it ran',
+    blurb:
+      'An Edit reference candidate now names the engine/API that actually produced it. Retry repeats the same instruction, selected engine and temporary reference files; choose Try another prompt only when you want to change the edit.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-30-krea-shot-card-adherence',
     date: '2026-07-30',
     title: 'Krea 2 now follows the dataset shots you selected',
