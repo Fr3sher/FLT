@@ -176,6 +176,24 @@ def studio_run_cancel(run_id):
     return jsonify({'ok': True, 'cancelled': lts.cancel_run(LOCAL_USER, run_id=run_id)})
 
 
+@bp.post('/run/<run_id>/confirm-comfyui-restart')
+def studio_run_confirm_comfyui_restart(run_id):
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed_comfyui_restart') is not True:
+        return jsonify({'error': 'Confirm that you restarted ComfyUI before clearing this paused job.'}), 400
+    # This one action must observe a freshly responsive replacement process; a
+    # cached green capability result cannot act as a restart gate.
+    gate = _require_comfyui(force=True)
+    if gate:
+        return gate
+    try:
+        cancelled = lts.confirm_unknown_comfyui_restart(
+            LOCAL_USER, run_id=run_id, restart_confirmed=True)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, 'cancelled': cancelled, 'resumable': True})
+
+
 @bp.post('/run/<run_id>/resume')
 def studio_run_resume(run_id):
     gate = _require_comfyui()

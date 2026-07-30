@@ -1682,6 +1682,24 @@ def lora_test_cancel(dataset_id):
     return jsonify({'ok': True, 'cancelled': n})
 
 
+@bp.post('/dataset/<int:dataset_id>/lora-test/confirm-comfyui-restart')
+def lora_test_confirm_comfyui_restart(dataset_id):
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed_comfyui_restart') is not True:
+        return jsonify({'error': 'Confirm that you restarted ComfyUI before clearing this paused job.'}), 400
+    gate = _require_comfyui(force=True)
+    if gate:
+        return gate
+    try:
+        cancelled = lts.confirm_unknown_comfyui_restart(
+            LOCAL_USER, dataset_id=dataset_id, restart_confirmed=True)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, 'cancelled': cancelled, 'resumable': True})
+
+
 @bp.post('/dataset/<int:dataset_id>/lora-test/resume')
 def lora_test_resume(dataset_id):
     gate = _require_comfyui()

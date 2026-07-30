@@ -28,13 +28,14 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 
 from PIL import Image, ImageOps
 
 from .. import config as cfg
 from ..models import FaceDataset, FaceDatasetImage
-from ..job_queue import queue_manager
+from ..job_queue import GPU_ARBITER_LOCK, queue_manager
 from . import face_dataset_service as fds, face_mask, trash
 from .person_mask import generate_person_masks
 
@@ -48,17 +49,10 @@ logger = logging.getLogger(__name__)
 # (cadence prouvée). Curseur de tuning #1, un seul endroit.
 KREA_TRAIN_RESOLUTION = 1024
 
-# TTL des flags system_state d'un run (training_in_progress / _pid / _dataset_id /
-# _target_step). L'anti-concurrence repose sur le PID VIVANT, mais le GARDE lit
-# d'abord le flag `training_in_progress` (cf. is-training checks) : si son TTL
-# expire AU MILIEU d'un run, le flag retombe à False, le garde rouvre la porte et
-# la file lance un 2e entraînement par-dessus le 1er (collision mémoire → « page
-# file too small »). Un run Krea-2-Raw (non distillé, CFG 4 / 25 steps de preview)
-# dépasse 4 h → l'ancien TTL 4 h expirait avant la fin ET privait le snapshot du
-# checkpoint final de son target_step. 12 h couvre le plus long run réaliste ;
-# `process_training_queue` re-arme de toute façon les flags à chaque poll tant que
-# le PID vit, donc c'est une ceinture, pas la bretelle.
-_TRAIN_STATE_TTL = 12 * 3600
+# The local-training state is a durable GPU ownership fence. It must never
+# expire while a surviving ai-toolkit child may still own VRAM; only an exact
+# process identity check is allowed to release it after a restart.
+_TRAIN_STATE_TTL = None
 
 
 # --- Path accessors (replace SRC's module-level AITOOLKIT_DIR/HF_HOME/... constants) --
@@ -5683,7 +5677,7 @@ def _watch_training(app, proc, log_path, dataset_id) -> None:
     file (libère ComfyUI / lance le suivant) DÈS la fin, sans dépendre du polling
     client. Sur un crash (rc≠0), remonte la fin du log. process_training_queue()
     reste le filet de secours si Flask redémarre (le watcher meurt, le flag est
-    rattrapé au prochain poll ou à l'expiration du TTL)."""
+    rattrapé au prochain poll ou à la récupération de démarrage)."""
     try:
         proc.wait()
         rc = proc.returncode
@@ -5764,7 +5758,8 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # l'optimizer partagé (incident Test/Test 2). Un pid mort avec flag encore
     # levé (avance de file) passe : on ne bloque que sur un process réellement vivant.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError('a training is already in progress - wait for it to finish or queue this dataset')
     # Cheap refusal BEFORE the dataset export below: re-exporting a whole dataset
     # only to reject the launch under the spawn lock would burn minutes of disk
@@ -5912,35 +5907,23 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # check under `_queue_lock` refused it. Two reads of an in-memory flag; the
     # copy inside the lock stays the authority, this one only saves the work.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError(
             'a training is already in progress - wait for it to finish or '
             'queue this dataset')
     _prepared = checkpoint_registry.prepare_launch(
         user_id, dataset_id, base_model=base_model)
-    # ai-toolkit is about to claim the card. Give back the vision model's
-    # 7.5 GB if an isolated call leased it warm (no-op without a live lease).
-    #
-    # OUTSIDE `_queue_lock`, and it must stay outside: a live lease makes this an
-    # HTTP POST to Ollama with `timeout=(10, 30)` retried once — up to ~80 s of
-    # blocking. Held under the lock, that froze Stop, enqueue/dequeue and queue
-    # advancement for as long as Ollama took to answer: pressing Stop during a
-    # launch did nothing until the unload returned. Nothing here depends on the
-    # lock (the vision-pass guard already ran above), and the ordering that
-    # matters — VRAM handed back BEFORE Popen — is unchanged.
-    try:
-        from .vision_keepalive import revoke as _revoke_vision
-        _revoke_vision('training starting')
-    except Exception:
-        logger.warning('vision keep-warm revoke failed before training start',
-                       exc_info=True)
-    # The authoritative live-run check, identity state and PID publication are
-    # one transition under the SAME lock used by Stop and queue advancement.
-    # This closes both races: two launches spawning together, and a stale Stop
-    # clearing the identity of the next queued process between Popen and PID set.
-    with _queue_lock:
+    # The training queue lock serializes launch/Stop ownership; the shared GPU
+    # arbiter also covers vision's check -> flag handoff. Keep this lock order
+    # everywhere training launches: queue ownership first, GPU admission second.
+    # The verified Ollama handoff is intentionally *inside* both locks: releasing
+    # it before acquiring the shared arbiter would let a vision pass claim the
+    # GPU in the interval before Popen.
+    with _queue_lock, GPU_ARBITER_LOCK:
         if (queue_manager._get_system_state('training_in_progress', False)
-                and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+                and not _training_process_is_definitely_dead(
+                    queue_manager._get_system_state('training_pid', None))):
             raise ValueError(
                 'a training is already in progress - wait for it to finish or '
                 'queue this dataset')
@@ -5948,6 +5931,28 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         # export above. Checked under the SAME lock as the live-run test so the
         # two GPU owners can never both believe they won the card.
         _assert_no_vision_pass_on_gpu()
+        # ComfyUI keeps rendering while its worker polls outside this lock. The
+        # durable queue state is therefore the admission record for an already
+        # running prompt as well as for a pending one.
+        if queue_manager.has_comfyui_work():
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'ComfyUI has queued or active work, so local training cannot take the GPU. '
+                'Wait for it to finish or cancel it safely first.')
+        try:
+            from .ollama_gpu_fence import ensure_released_for_comfy
+            ollama_released = ensure_released_for_comfy()
+        except Exception as exc:
+            logger.exception('could not verify Ollama GPU release before training')
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'Could not verify that Ollama released the GPU before local training. '
+                'Check Ollama, then try again.') from exc
+        if not ollama_released:
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'Ollama still owns the GPU, so local training cannot start safely. '
+                'Wait for the vision task to finish or unload it, then try again.')
         # Provenance registry: record WHICH dataset version this launch trains on
         # only after this request has won the process slot.
         # Honest provenance: a launch waved through despite a readiness blocker
@@ -5989,8 +5994,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                 cwd=str(_aitoolkit_dir()), env=env, shell=False,
                 stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            queue_manager._set_system_state(
-                'training_pid', proc.pid, ttl_seconds=_TRAIN_STATE_TTL)
+            _record_training_process_identity(proc.pid)
         except (FileNotFoundError, OSError) as e:
             if logf is not None:
                 try:
@@ -6079,7 +6083,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # (so ComfyUI never grabs the GPU between jobs).  Only a *live* PID blocks;
     # a dead predecessor is precisely the normal queued-continue transition.
     if queue_manager._get_system_state('training_in_progress', False):
-        previous_is_dead = not _pid_alive(
+        previous_is_dead = _training_process_is_definitely_dead(
             queue_manager._get_system_state('training_pid', None))
         if not (_allow_dead_predecessor and previous_is_dead):
             raise ValueError('a training is already in progress')
@@ -6215,20 +6219,16 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
 
 
 def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
-    """Tue le process d'entraînement (s'il tourne) PUIS lève le flag → le
-    superviseur relance ComfyUI. L'ordre compte : si on levait le flag d'abord,
-    ComfyUI reprendrait le GPU pendant que l'entraînement tourne encore.
+    """Kill the local training process, then release its GPU ownership fence.
 
-    La vue Runs fournit dataset + jeton opaque. Les deux sont vérifiés SOUS le
-    même verrou que le kill : même si le run suivant utilise le même dataset,
-    une carte périmée ne peut pas l'arrêter. L'appel historique sans identité
-    reste un Stop global pour le gestionnaire de dataset."""
-    # Le verrou couvre TOUTE la transition, lecture/kill du PID compris. Sinon le
-    # watcher peut constater la mort entre le kill et le clear, entrer dans
-    # process_training_queue(), lancer le job suivant, puis voir Stop effacer ses
-    # flags. L'état « process arrêté + file vide + idle » doit devenir visible en
-    # une seule fois aux autres opérations de queue.
-    with _queue_lock:
+    The final state transition is deliberately fail-closed: a non-zero
+    taskkill result, a missing PID, or an unavailable PID probe leaves the
+    training fence in place. Releasing it without proof would let Vision or
+    ComfyUI allocate the GPU while ai-toolkit may still be running.
+    """
+    # Keep the launch lock order: training ownership first, then shared GPU
+    # admission. This makes the final clear atomic with Vision/ComfyUI admission.
+    with _queue_lock, GPU_ARBITER_LOCK:
         current_id = queue_manager._get_system_state('training_dataset_id', None)
         current_token = queue_manager._get_system_state('training_run_token', None)
         in_progress = bool(queue_manager._get_system_state(
@@ -6245,20 +6245,53 @@ def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
                 str(current_token), str(expected_run_token))
             if not in_progress or not token_ok:
                 return False
+
         pid = queue_manager._get_system_state('training_pid', None)
-        if pid:
+        pid_alive = _pid_alive(pid) if in_progress else False
+        if in_progress and pid_alive is None:
+            logger.error(
+                'stop_training: cannot prove whether training pid %r is still alive; '
+                'keeping the GPU fence', pid)
+            return False
+
+        if pid_alive:
+            # Recheck the birth-time identity immediately before the PID-only OS
+            # kill. If the old training exited and Windows recycled this PID between
+            # probes, the replacement is never a permitted taskkill target.
+            rechecked_pid_alive = _pid_alive(pid)
+            if rechecked_pid_alive is None:
+                logger.error(
+                    'stop_training: cannot re-prove training pid %r immediately before kill; ',
+                    'keeping the GPU fence', pid)
+                return False
+            pid_alive = rechecked_pid_alive
+
+        if pid_alive:
             try:
                 if os.name == 'nt':
-                    # /T tue aussi les sous-process (dataloaders, etc.).
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(int(pid))],
-                                   shell=False, capture_output=True)
+                    # /T terminates ai-toolkit children such as dataloaders too.
+                    completed = subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(int(pid))],
+                        shell=False, capture_output=True)
+                    if getattr(completed, 'returncode', 0) != 0:
+                        logger.warning(
+                            'stop_training: taskkill pid %s failed (rc=%s); '
+                            'keeping the GPU fence', pid,
+                            getattr(completed, 'returncode', None))
+                        return False
                 else:
                     os.kill(int(pid), 15)
-            except (ValueError, OSError) as e:
-                logger.warning(f"stop_training: kill pid {pid} échoué : {e}")
-        # Stop = arrêt voulu : on VIDE la file D'ABORD (sinon le prochain poll
-        # relancerait l'entraînement suivant), PUIS on lève le flag EN DERNIER
-        # (c'est lui qui signale à ComfyUI de reprendre le GPU).
+            except (ValueError, OSError) as exc:
+                logger.warning('stop_training: kill pid %s failed: %s', pid, exc)
+                return False
+
+            if not _wait_for_training_process_exit(pid):
+                logger.warning(
+                    'stop_training: pid %s did not become conclusively dead; '
+                    'keeping the GPU fence', pid)
+                return False
+
+        # Stop is intentional: clear the queue before publishing the idle state.
         _save_queue([])
         _clear_training_identity(ttl_seconds=None)
         return True
@@ -6399,16 +6432,29 @@ def _assert_no_vision_pass_on_gpu():
     Nothing raises and nothing OOMs — so a training started here would simply
     crawl for hours with no error to explain it. Refusing is the kinder failure.
 
-    The flag is TTL-bounded and cleared at startup (recover_stale_vision_window),
-    so this can never latch a training out permanently.
+    The persisted flag is TTL-bounded and cleared at startup. A process-local
+    companion stays closed while a currently running Vision window is alive,
+    including a transient heartbeat failure.
     """
-    if queue_manager._get_system_state('vision_in_progress', False):
-        from ..gpu_window import GpuBusyError
+    from ..gpu_window import GpuBusyError, vision_gpu_window_blocks_gpu
+    try:
+        active_vision_window = vision_gpu_window_blocks_gpu()
+    except Exception as exc:
+        raise GpuBusyError(
+            'Could not confirm whether a vision task owns the GPU; training was not started safely.'
+        ) from exc
+
+    if active_vision_window or queue_manager._get_system_state('vision_in_progress', False):
         raise GpuBusyError(
             'a vision pass (captioning, watermark or framing) is using the GPU - '
             'training would fight it for VRAM instead of failing outright, so it '
             'has to wait. Stop the pass, or queue this dataset and it will start '
             'by itself when the pass is done.')
+
+    if queue_manager.has_comfyui_stalled_barrier():
+        raise GpuBusyError(
+            'ComfyUI recovery is required before local training can take the GPU. '
+            'Recover ComfyUI, cancel the paused Test Studio job, then resume it.')
 
 
 def is_local_run_active(dataset_id) -> bool:
@@ -6567,7 +6613,8 @@ def retry_local_run(user_id, record_id, **confirmations) -> dict:
     # Run-in-progress → the exact collision message launch_training would raise,
     # surfaced before any preflight work.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError('a training is already in progress - wait for it to finish or queue this dataset')
     if _failed_local_record_id() != rec.id:
         raise ValueError('this run has no recorded failure to retry')
@@ -6817,7 +6864,8 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
     cur_id = queue_manager._get_system_state('training_dataset_id', None)
     active = (bool(queue_manager._get_system_state('training_in_progress', False))
               and cur_id is not None and int(cur_id) == int(dataset_id)
-              and _pid_alive(queue_manager._get_system_state('training_pid', None)))
+              and not _training_process_is_definitely_dead(
+                  queue_manager._get_system_state('training_pid', None)))
     log_path = _run_log_path(ds, base_model, family, variant)
     parsed = {'step': None, 'total': None, 'loss': None, 'speed': None, 'eta': None,
               'loss_curve': []}
@@ -6855,7 +6903,8 @@ TRAIN_QUEUE_KEY = 'lora_train_queue'
 _queue_lock = threading.RLock()
 
 _TRAIN_IDENTITY_KEYS = (
-    'training_pid', 'training_dataset_id', 'training_target_step',
+    'training_pid', 'training_pid_create_time', 'training_dataset_id',
+    'training_target_step',
     'training_run_token', 'training_train_type', 'training_variant',
     'training_base_model', 'training_effective_base',
     'training_training_adapter', 'training_recipe_version',
@@ -6869,12 +6918,90 @@ def _clear_training_identity(ttl_seconds=None) -> None:
         'training_in_progress', False, ttl_seconds=ttl_seconds)
 
 
-def _pid_alive(pid) -> bool:
+def _training_process_create_time(pid) -> float | None:
+    """Read a process birth time without ever treating an error as a death."""
     try:
         import psutil
-        return bool(pid) and psutil.pid_exists(int(pid))
-    except Exception:
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception as exc:
+        logger.warning('Could not capture training process identity for pid %r: %s', pid, exc)
+        return None
+
+
+def _record_training_process_identity(pid) -> None:
+    """Persist a PID plus birth time so a later PID reuse cannot be killed."""
+    queue_manager._set_system_state(
+        'training_pid', int(pid), ttl_seconds=_TRAIN_STATE_TTL)
+    birth_time = _training_process_create_time(pid)
+    if birth_time is None:
+        logger.error(
+            'training pid %s has no durable birth-time identity; keeping its GPU '
+            'fence fail-closed after a restart', pid)
+        return
+    queue_manager._set_system_state(
+        'training_pid_create_time', birth_time, ttl_seconds=_TRAIN_STATE_TTL)
+
+
+def _pid_alive(pid) -> bool | None:
+    """Return True (exact training child), False (confirmed old child gone), or None.
+
+    A persisted PID alone is not safe after Flask restarts because Windows can
+    reuse it. The stored process creation time turns a reused PID into a
+    confirmed dead old training identity, never a process to terminate.
+    """
+    if not pid:
+        return None
+    try:
+        import psutil
+        process = psutil.Process(int(pid))
+        current_birth_time = float(process.create_time())
+    except Exception as exc:
+        # psutil.NoSuchProcess is the one reliable proof that this exact PID is
+        # gone. Everything else (access denied, bad state, import failure) keeps
+        # the durable GPU fence in place.
+        try:
+            import psutil
+            no_such_process = psutil.NoSuchProcess
+        except Exception:
+            no_such_process = ()
+        if no_such_process and isinstance(exc, no_such_process):
+            return False
+        logger.warning('Could not inspect training pid %r: %s', pid, exc)
+        return None
+
+    expected_raw = queue_manager._get_system_state(
+        'training_pid_create_time', None)
+    try:
+        expected_birth_time = float(expected_raw)
+    except (TypeError, ValueError):
+        logger.error(
+            'training pid %s lacks a durable birth-time identity; keeping the GPU '
+            'fence fail-closed', pid)
+        return None
+
+    if abs(current_birth_time - expected_birth_time) > 0.01:
+        logger.warning(
+            'training pid %s was reused (expected birth %.6f, got %.6f); '
+            'the old training is confirmed gone and will never be taskkilled',
+            pid, expected_birth_time, current_birth_time)
         return False
+    return True
+
+
+def _training_process_is_definitely_dead(pid) -> bool:
+    """Only a trustworthy negative PID probe may release the GPU fence."""
+    return _pid_alive(pid) is False
+
+
+def _wait_for_training_process_exit(pid, timeout_seconds=5.0) -> bool:
+    """Bounded proof that a successful kill actually released this PID."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if _training_process_is_definitely_dead(pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 def get_train_queue() -> list:
@@ -7107,15 +7234,15 @@ def _launch_queued_item(item) -> None:
                         allow_unverified_weights=bool(item.get('allow_unverified_weights')))
 
 
-def process_training_queue() -> str | None:
-    """Avance la file : si le training courant est FINI (process mort mais flag
-    encore levé), lance le suivant ; sinon, si rien ne tourne et la file n'est pas
-    vide, lance le prochain. À appeler périodiquement (le poll de /train/status le
-    fait). Retourne un libellé d'action ou None. SÉRIALISÉ par _queue_lock : sans
-    ça, le watcher et un poll /train/status peuvent avancer la file en même temps
-    → double-lancement du même entraînement."""
-    with _queue_lock:
+def recover_training_fence() -> str | None:
+    """Reconcile the durable local-training GPU fence at boot or poll time."""
+    with _queue_lock, GPU_ARBITER_LOCK:
         return _advance_training_queue()
+
+
+def process_training_queue() -> str | None:
+    """Advance queued training through the same boot-safe GPU recovery path."""
+    return recover_training_fence()
 
 
 def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
@@ -7176,7 +7303,10 @@ def _advance_training_queue() -> str | None:
     q = get_train_queue()
 
     if flag:
-        if _pid_alive(pid):
+        pid_alive = _pid_alive(pid)
+        if pid_alive is not False:
+            # A failed PID probe is not evidence that ai-toolkit released
+            # the GPU, so it deliberately keeps the same durable fence.
             # Re-arm the 4h TTLs on every poll: without this, a training run
             # longer than 4h would see these flags silently expire mid-run,
             # and the GPU gate (job_queue / gpu_busy_reason) would think
@@ -7259,6 +7389,11 @@ def start_training_scheduler(app, interval_seconds=60):
     if _scheduler_started:
         return
     _scheduler_started = True
+    try:
+        with app.app_context():
+            recover_training_fence()
+    except Exception as exc:
+        logger.warning('training boot recovery failed closed: %s', exc)
 
     def _tick():
         import time
