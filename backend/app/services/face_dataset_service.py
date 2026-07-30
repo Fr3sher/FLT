@@ -38,6 +38,7 @@ from . import (bank_transfer_metadata, dataset_activity, image_encoding,
 from .dataset_storage import dataset_path, ensure_dataset_dir
 from .image_provenance import provenance_metrics
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
+from .ollama_control import normalize_ollama_model_ref
 
 # Garde le modèle vision chaud entre les images d'un même batch caption/classify
 # (sinon Ollama le recharge - cold start ~10s - à CHAQUE image). Déchargé en fin
@@ -877,7 +878,13 @@ def caption_options(ds) -> dict:
     backend = str(data.get('backend') or '').strip().lower()
     if backend in _CAPTION_BACKENDS:
         out['backend'] = backend
-    out['ollama_model'] = str(data.get('ollama_model') or '').strip()
+    try:
+        out['ollama_model'] = normalize_ollama_model_ref(
+            data.get('ollama_model', ''), allow_empty=True)
+    except ValueError:
+        # Legacy/manual DB blobs are untrusted input too. Keep every other valid
+        # option but fall back to the global model instead of propagating a bad ref.
+        out['ollama_model'] = ''
     out['instructions'] = str(data.get('instructions') or '').strip()[:_CAPTION_INSTRUCTIONS_MAX]
     vocab = str(data.get('vocabulary') or '').strip().lower()
     if vocab in _CAPTION_VOCABULARIES:
@@ -900,7 +907,8 @@ def set_caption_options(user_id, dataset_id, patch) -> dict:
             raise ValueError(f'invalid captioning backend: {b}')
         cur['backend'] = b
     if 'ollama_model' in patch:
-        cur['ollama_model'] = str(patch.get('ollama_model') or '').strip()
+        cur['ollama_model'] = normalize_ollama_model_ref(
+            patch.get('ollama_model'), allow_empty=True)
     if 'instructions' in patch:
         cur['instructions'] = str(patch.get('instructions') or '').strip()[:_CAPTION_INSTRUCTIONS_MAX]
     if 'vocabulary' in patch:
@@ -5422,11 +5430,18 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
             from .vision_ollama import describe_image_ollama, unload_vision_model
         except ImportError:
             raise RuntimeError('vision (Ollama) service not configured/available yet')
+        # Bind the per-dataset model once for EVERY Concept inference pass. Without
+        # this, only the main caption/refine used the override while blocklist
+        # expansion and omission rewrites silently loaded the global model.
+        def describe(image_bytes, prompt, **kwargs):
+            if ollama_model:
+                kwargs['model'] = ollama_model
+            return describe_image_ollama(image_bytes, prompt, **kwargs)
         # Ban-list (LLM expansion cached + desc words) -> leak regex, compiled ONCE per
         # batch, AFTER the Joy subprocess finished (never two models in VRAM at once).
         sample = refine_targets[0][1] if refine_targets else remaining[0][1]
         leak_re = _concept_terms_re(_get_concept_terms(ds, image_path=sample,
-                                                       describe=describe_image_ollama))
+                                                       describe=describe))
         try:
             for img, p, joycap in refine_targets:
                 if dataset_activity.cancel_requested(ds.id):
@@ -5447,9 +5462,9 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                                                          concept=concept_desc),
                     extra_instructions)
                 try:
-                    refined = describe_image_ollama(
+                    refined = describe(
                         data, refine_prompt,
-                        num_predict=5000, model=ollama_model,
+                        num_predict=5000,
                         keep_alive=_VISION_BATCH_KEEPALIVE,
                         timeout=(10, 300))
                 except Exception as e:  # noqa: BLE001 - refine best-effort
@@ -5463,21 +5478,20 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     logger.info('caption concept: refine rejected -> direct Qwen (image %s)', img.id)
                     alt = ''
                     try:
-                        alt = describe_image_ollama(data, cap_prompt, num_predict=2000,
-                                                    model=ollama_model,
-                                                    keep_alive=_VISION_BATCH_KEEPALIVE,
-                                                    timeout=(10, 300))
+                        alt = describe(data, cap_prompt, num_predict=2000,
+                                       keep_alive=_VISION_BATCH_KEEPALIVE,
+                                       timeout=(10, 300))
                     except Exception:  # noqa: BLE001
                         alt = ''
                     alt = (alt or '').strip().strip('"').strip()
                     final = alt or joycap
                 final = _enforce_concept_omission(final, leak_re, data, concept_desc,
-                                                  describe=describe_image_ollama) or final
+                                                  describe=describe) or final
                 if not _usable_caption(final):
                     # Refine AND direct both unusable → fall back to the Joy draft (clean
                     # prose), scrubbed of any leak; leave blank if even that fails.
                     final = _enforce_concept_omission(joycap, leak_re, data, concept_desc,
-                                                      describe=describe_image_ollama) or joycap
+                                                      describe=describe) or joycap
                     if not _usable_caption(final):
                         # force=re-do-all: overwrite any stale pre-fix caption with blank
                         # (trigger-only is valid for a concept LoRA) rather than retain it.
@@ -5495,14 +5509,14 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                 dataset_activity.bump(token)
                 with open(p, 'rb') as fh:
                     data = fh.read()
-                cap = describe_image_ollama(
-                    data, cap_prompt, num_predict=2000, model=ollama_model,
+                cap = describe(
+                    data, cap_prompt, num_predict=2000,
                     keep_alive=_VISION_BATCH_KEEPALIVE,
                     auto_start_local=True, timeout=(10, 300))
                 cap = (cap or '').strip().strip('"').strip()
                 if cap:
                     cap = _enforce_concept_omission(cap, leak_re, data, concept_desc,
-                                                    describe=describe_image_ollama) or cap
+                                                    describe=describe) or cap
                 if _usable_caption(cap):
                     img.caption = _cap_caption(cap)
                     db.session.commit()
@@ -5513,7 +5527,10 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                         db.session.commit()
                     logger.info('caption concept: no usable direct caption for image %s -> left blank', img.id)
         finally:
-            unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
+            if ollama_model:
+                unload_vision_model(model=ollama_model)
+            else:
+                unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
     return n
 
 
@@ -5919,7 +5936,7 @@ def vocabulary_instruction(vocabulary) -> str | None:
     return _VOCABULARY_INSTRUCTION.get((vocabulary or '').strip().lower())
 
 
-def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model=None,
+def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model='',
                     vocabulary=None, instructions=None, should_cancel=None) -> dict:
     """Caption ONE dataset image with a candidate config and return the text WITHOUT
     persisting it — the Caption Lab's ephemeral A/B probe. Reuses caption_paths(), so the
@@ -5954,7 +5971,8 @@ def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model
     if vocab and vocab not in _CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
     extra = _compose_preview_instructions(vocab, instructions)
-    ollama_model = (ollama_model or '').strip() or None
+    ollama_model = normalize_ollama_model_ref(
+        ollama_model, allow_empty=True) or None
     started = time.perf_counter()
     out = caption_paths([path], backend=backend, ollama_model=ollama_model,
                         extra_instructions=extra, should_cancel=should_cancel)

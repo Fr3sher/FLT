@@ -41,6 +41,15 @@ COMFYUI_UNKNOWN_SUBMIT_MESSAGE = (
     'ComfyUI /prompt result was lost. Restart ComfyUI before cancelling or resuming '
     'this batch; LDS cannot safely identify the remote prompt.'
 )
+COMFYUI_RECOVERY_REQUIRED_MESSAGE = (
+    'A previous ComfyUI job has an unresolved remote state. Recover or restart '
+    'ComfyUI, then resolve the paused job (confirm the restart when prompted, or '
+    'cancel/resume it) before starting another local generation.'
+)
+
+
+class ComfyUIRecoveryRequired(RuntimeError):
+    """Raised when new ComfyUI work must wait for explicit recovery."""
 
 
 class _ComfySubmitRejected(RuntimeError):
@@ -60,6 +69,19 @@ GPU_ARBITER_LOCK = threading.RLock()
 def gpu_arbiter_lock():
     """Shared in-process lock for the two local GPU consumers."""
     return GPU_ARBITER_LOCK
+
+
+def require_comfyui_enqueue_ready() -> None:
+    """Refuse new ComfyUI work while an unresolved remote owner is recorded.
+
+    Deliberately checks only the durable recovery barrier. Training and Vision
+    are temporary scheduling fences: jobs may queue behind them. A stalled
+    ComfyUI owner is different because accepting more work would leave rows
+    looking active even though the worker is intentionally fail-closed.
+    """
+    with GPU_ARBITER_LOCK:
+        if queue_manager.has_comfyui_stalled_barrier():
+            raise ComfyUIRecoveryRequired(COMFYUI_RECOVERY_REQUIRED_MESSAGE)
 
 # A DB status check is the source of truth, but this in-process event also wakes
 # the worker immediately when it is sleeping between two history requests.
@@ -1000,8 +1022,11 @@ class JobQueueManager:
                job_id=None, metadata=None, priority=10, *, commit=True) -> str:
         """``commit=False`` leaves the queue row PENDING in the caller's session so a
         fan-out (a Studio grid) can insert its own row and the job in ONE transaction
-        — one write lock per cell instead of three. The caller MUST then commit (or
-        roll back) itself; the worker only ever sees committed rows either way."""
+        — one write lock per cell instead of three. Such a caller MUST already hold
+        ``GPU_ARBITER_LOCK`` before beginning its DB transaction and retain it until
+        its own commit/rollback; otherwise a recovery barrier could be installed
+        between this readiness check and that commit.  The worker only ever sees
+        committed rows either way."""
         if job_type != 'image':
             raise ValueError(f'unsupported job_type: {job_type!r}')
         if not workflow_data:
@@ -1016,9 +1041,15 @@ class JobQueueManager:
             priority=priority,
             job_metadata=json.dumps(metadata) if metadata else None,
         )
-        db.session.add(job)
-        if commit:
-            db.session.commit()
+        # Route preflights provide a fast, actionable response, but this is the
+        # authoritative enqueue seam: the barrier may appear between a route
+        # check and a future service call.  For commit=False this nested RLock
+        # deliberately relies on the documented outer transaction guard.
+        with GPU_ARBITER_LOCK:
+            require_comfyui_enqueue_ready()
+            db.session.add(job)
+            if commit:
+                db.session.commit()
         return job_id
 
     def cancel_job(self, job_id, user_id=None, job_type='image', *, commit=True) -> bool:

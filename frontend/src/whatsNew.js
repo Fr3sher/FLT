@@ -68,7 +68,7 @@ export const WHATS_NEW = [
     date: '2026-07-30',
     title: '🛟 A Test Studio batch now pauses safely for ComfyUI recovery',
     blurb:
-      'If ComfyUI goes away mid-batch, Studio now pauses with a paste-safe reason and submits no later prompt. Recover or restart ComfyUI, then cancel and resume the batch. Setup’s “Start ComfyUI” uses the app’s fixed local-safe profile: it never reads, changes or runs a .bat file, so your own launcher stays untouched.',
+      'If ComfyUI goes away mid-batch, Studio now pauses with a paste-safe reason and submits no later prompt. Recover or restart ComfyUI, then cancel and resume the batch. Setup’s “Start ComfyUI” also works from a phone already allowed by LDS and uses the app’s fixed safe profile: it never reads, changes or runs a .bat file, so your own launcher stays untouched.',
     to: '/studio',
   },
   {
