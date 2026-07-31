@@ -9,6 +9,7 @@ ai-toolkit isn't configured, so it degrades to `{'available': False}` instead.
 import os
 import re
 from datetime import datetime
+from threading import Lock
 
 from flask import Blueprint, current_app, request, jsonify
 
@@ -26,6 +27,34 @@ from ..utils.comfyui import get_zimage_models, get_checkpoint_models
 from ._common import _map_error
 
 bp = Blueprint('training', __name__, url_prefix='/api')
+
+
+class _CloseCallbackFile:
+    """Delegate a file while running one callback on its first real close.
+
+    ``send_file`` uses a direct WSGI file wrapper.  Some servers close that
+    wrapper without invoking ``Response.call_on_close``; tying the lease to the
+    file itself keeps response concurrency slots from leaking in that path.
+    """
+
+    def __init__(self, wrapped, callback):
+        self._wrapped = wrapped
+        self._callback = callback
+        self._closed = False
+        self._close_lock = Lock()
+
+    def __getattr__(self, name):
+        return getattr(self._wrapped, name)
+
+    def close(self):
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            self._wrapped.close()
+        finally:
+            self._callback()
 
 
 def _require_aitoolkit():
@@ -2157,6 +2186,109 @@ def train_checkpoint_images_delete(record_id, step):
         return jsonify({'error': 'Could not delete these images — a file is '
                                  'locked or unreachable. Try again.'}), 500
     return jsonify({'ok': True, **out})
+
+
+@bp.get('/train/run/<int:record_id>/timeline')
+def train_run_timeline(record_id):
+    """Render-equivalent images across checkpoints, split into safe series."""
+    from ..services import checkpoint_timeline as timeline
+    try:
+        return jsonify(timeline.checkpoint_timeline(record_id))
+    except LookupError as exc:
+        return jsonify({'error': str(exc)}), 404
+
+
+@bp.get('/train/run/<int:record_id>/timeline/<series_id>/gif')
+def train_run_timeline_gif(record_id, series_id):
+    """Download a bounded animated GIF for one server-resolved timeline."""
+    from flask import send_file
+    from ..services import checkpoint_timeline as timeline
+    if not timeline.acquire_gif_response_slot():
+        response = jsonify({'error': 'too many timeline GIF downloads are active'})
+        response.status_code = 429
+        response.headers['Retry-After'] = '1'
+        return response
+    try:
+        output, filename = timeline.render_timeline_gif(
+            record_id,
+            series_id,
+            duration_ms=(request.args.get('duration_ms')
+                         if request.args.get('duration_ms') is not None
+                         else request.args.get('duration')),
+            fade_frames=(request.args.get('fade_frames')
+                         if request.args.get('fade_frames') is not None
+                         else request.args.get('fade')),
+            max_edge=request.args.get('max_edge'),
+        )
+    except timeline.GifRenderBusyError as exc:
+        timeline.release_gif_response_slot()
+        response = jsonify({'error': str(exc)})
+        response.status_code = 429
+        response.headers['Retry-After'] = '1'
+        return response
+    except timeline.GifRenderTooLargeError as exc:
+        timeline.release_gif_response_slot()
+        return jsonify({'error': str(exc)}), 413
+    except LookupError as exc:
+        timeline.release_gif_response_slot()
+        return jsonify({'error': str(exc)}), 404
+    except Exception:
+        timeline.release_gif_response_slot()
+        raise
+
+    leased_output = _CloseCallbackFile(
+        output, timeline.release_gif_response_slot)
+
+    try:
+        response = send_file(leased_output, mimetype='image/gif', as_attachment=True,
+                             download_name=filename, max_age=0)
+    except Exception:
+        leased_output.close()
+        raise
+    response.call_on_close(leased_output.close)
+    return response
+
+
+@bp.get('/train/run/<int:record_id>/timeline/<series_id>/frame/<int:image_id>')
+def train_run_timeline_frame(record_id, series_id, image_id):
+    """Serve a metadata-free bounded WebP for timeline playback and WebM."""
+    from flask import send_file
+    from ..services import checkpoint_timeline as timeline
+    if not timeline.acquire_preview_response_slot():
+        response = jsonify({'error': 'too many timeline previews are active'})
+        response.status_code = 429
+        response.headers['Retry-After'] = '1'
+        return response
+    try:
+        output, filename = timeline.render_timeline_preview(
+            record_id, series_id, image_id)
+    except timeline.GifRenderBusyError as exc:
+        timeline.release_preview_response_slot()
+        response = jsonify({'error': str(exc)})
+        response.status_code = 429
+        response.headers['Retry-After'] = '1'
+        return response
+    except timeline.GifRenderTooLargeError as exc:
+        timeline.release_preview_response_slot()
+        return jsonify({'error': str(exc)}), 413
+    except LookupError as exc:
+        timeline.release_preview_response_slot()
+        return jsonify({'error': str(exc)}), 404
+    except Exception:
+        timeline.release_preview_response_slot()
+        raise
+
+    leased_output = _CloseCallbackFile(
+        output, timeline.release_preview_response_slot)
+
+    try:
+        response = send_file(leased_output, mimetype='image/webp', as_attachment=False,
+                             download_name=filename, max_age=300, conditional=True)
+    except Exception:
+        leased_output.close()
+        raise
+    response.call_on_close(leased_output.close)
+    return response
 
 
 @bp.get('/train/run/<int:record_id>/images')

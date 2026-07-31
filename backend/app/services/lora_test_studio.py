@@ -1687,7 +1687,8 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
 
     Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
     an enqueue failure marks that row 'failed' and re-raises - already-enqueued cells
-    keep their rows AND their jobs. Returns {'created', 'seed', 'count', 'ids'}."""
+    keep their rows AND their jobs. Returns
+    {'created', 'seed', 'count', 'run_id', 'ids'}."""
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -1822,6 +1823,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
     # produces (see checkpoint_origins) — the canvas gallery reads these columns,
     # it never re-parses a filename.
     origin_of = checkpoint_origins(cps_in, origins)
+    # One opaque id per invocation is the strict boundary of a render-equivalent
+    # timeline.  A later launch with the same prompt/seed/settings must never be
+    # spliced into this one; resume_run reuses the ids already stored on rows.
+    run_id = uuid.uuid4().hex
     # Partition the complete base-model × cell plan, not each base separately:
     # after Krea starts applying a tested LoRA, it must not return to a
     # tested-LoRA-off control merely because the optional base axis advanced.
@@ -1843,6 +1848,7 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
           for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
             img = LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
                                 strength=strength, seed=cell_seed, run_seed=seed,
+                                run_id=run_id,
                                 status='pending', z_model=zm, aspect=cell_aspect,
                                 prompt=prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                 extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
@@ -1871,9 +1877,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
                                              trigger_word=ds.trigger_word,
                                              available_classes=available_classes))
             ids.append(img.id)
-    logger.info(f"lora-test: run dataset {dataset_id} -> {len(ids)} cellule(s) "
+    logger.info(f"lora-test: run {run_id} dataset {dataset_id} -> {len(ids)} cellule(s) "
                 f"({len(valid_models)} modèle(s)), base seed {seed} ×{count}")
-    return {'created': len(ids), 'seed': seed, 'count': count, 'ids': ids}
+    return {'created': len(ids), 'seed': seed, 'count': count,
+            'run_id': run_id, 'ids': ids}
 
 
 def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None,

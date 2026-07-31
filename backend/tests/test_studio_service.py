@@ -225,10 +225,12 @@ def test_create_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
         # before the insert, so row + queue job land in one commit) -- capture what
         # the enqueue was handed and assert the row matches it.
         seen = []
+        seen_run_ids = []
 
         def fake_enqueue(user_id, dataset_id, workflow, prompt, job_id=None,
                          commit=True, **_metadata):
             seen.append(job_id)
+            seen_run_ids.append(_metadata.get('run_id'))
             return job_id
         monkeypatch.setattr(lts, '_enqueue_cell', fake_enqueue)
         monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
@@ -238,6 +240,9 @@ def test_create_run_commits_rows_before_enqueue(app, monkeypatch, tmp_path):
         assert seen and all(j for j in seen)
         assert sorted(r.job_id for r in rows) == sorted(seen)
         assert all(r.status == 'pending' for r in rows)
+        assert len(out['run_id']) == 32
+        assert {r.run_id for r in rows} == {out['run_id']}
+        assert set(seen_run_ids) == {out['run_id']}
 
 
 def test_cell_enqueue_holds_gpu_arbiter_until_commit_before_recovery_barrier(
