@@ -5,7 +5,54 @@ import { useToast } from '../common/Toast'
 import { INPUT_CLASS, Card } from './primitives'
 import ResetToDefault from './ResetToDefault'
 
+/* managed-access:start -- kept dependency-free so its real production logic can
+   be exercised by the Node test suite without needing to transpile this JSX file. */
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1']
+
+export function managedBrowserAccess(origin) {
+  if (typeof origin !== 'string' || !origin.trim() || origin === 'null') return null
+  try {
+    const parsed = new URL(origin)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    const loopback = hostname === 'localhost'
+      || hostname.endsWith('.localhost')
+      || hostname === '::1'
+      || hostname === '::ffff:127.0.0.1'
+      || /^127(?:\.\d{1,3}){3}$/.test(hostname)
+      || hostname === '0.0.0.0'
+      || hostname === '::'
+    return {
+      origin: parsed.origin,
+      hostname,
+      port: Number(parsed.port || (parsed.protocol === 'https:' ? 443 : 80)),
+      lan: !loopback,
+    }
+  } catch {
+    return null
+  }
+}
+
+export function resolveServerAccess({ bindManaged, browserOrigin, configHost, configPort, runtimeLanIp }) {
+  if (bindManaged) {
+    const managed = managedBrowserAccess(browserOrigin)
+    return {
+      origin: managed?.origin || null,
+      host: managed?.hostname || null,
+      port: managed?.port ?? null,
+      lan: managed?.lan === true,
+      lanIp: null,
+    }
+  }
+  return {
+    origin: null,
+    host: configHost,
+    port: configPort,
+    lan: !LOOPBACK_HOSTS.includes(configHost),
+    lanIp: runtimeLanIp || null,
+  }
+}
+/* managed-access:end */
 
 /* Server bind (host/port/LAN access). host/port live in config.server and are only
    read by run.py at PROCESS START — Flask can't rebind mid-request — so this card
@@ -18,29 +65,41 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
   const [copied, setCopied] = useState(false)
   const [copiedUrl, setCopiedUrl] = useState(null)   // which reach-URL was just copied (by key)
   const bindManaged = runtime.bind_managed === true
-  const effectiveHost = bindManaged && runtime.host != null ? runtime.host : config.server.host
-  const lan = !LOOPBACK_HOSTS.includes(effectiveHost)
+  const access = resolveServerAccess({
+    bindManaged,
+    browserOrigin: typeof window === 'undefined' ? null : window.location?.origin,
+    configHost: config.server.host,
+    configPort: config.server.port,
+    runtimeLanIp: runtime.lan_ip,
+  })
+  const lan = access.lan
   const requireToken = !!config.server.require_token
   // Real LAN IPv4 of this machine (backend socket probe), so the remote-access
   // URL is copyable as-is instead of a <this-computer> placeholder. null when the
   // backend couldn't determine it (offline / loopback-only) -> keep the placeholder.
-  const lanIp = runtime.lan_ip || null
+  const lanIp = access.lanIp
   const tsIp = runtime.tailscale_ip || null
-  const knownRuntime = runtime.host != null && runtime.port != null
+  const knownRuntime = bindManaged ? !!access.origin : runtime.host != null && runtime.port != null
   const dirty = !bindManaged && knownRuntime
     && (runtime.host !== config.server.host || runtime.port !== config.server.port)
 
   // The exact URL(s) a phone should open. Token is appended ONLY when the token
   // gate is on (a tokenless URL would 403); when it's on but no token exists yet,
   // reachUrls stays empty and the card asks the user to generate one first.
-  const port = bindManaged && runtime.port != null ? runtime.port : config.server.port
+  const port = access.port
   const token = requireToken ? (config.server.access_token || '') : ''
   const tokenReady = !requireToken || !!token
   const tokenQS = token ? `?token=${token}` : ''
-  const reachUrls = tokenReady ? [
+  const reachUrls = tokenReady ? (bindManaged ? [
+    lan && access.origin && {
+      key: 'current',
+      label: 'Current browser address',
+      url: `${access.origin}/${tokenQS}`,
+    },
+  ] : [
     lanIp && { key: 'lan', label: 'Same Wi-Fi / LAN', url: `http://${lanIp}:${port}/${tokenQS}` },
     tsIp && { key: 'ts', label: 'From anywhere · Tailscale', url: `http://${tsIp}:${port}/${tokenQS}` },
-  ].filter(Boolean) : []
+  ]).filter(Boolean) : []
   const qrUrl = reachUrls[0]?.url || null
 
   const waitForHealthAndReload = async () => {
@@ -130,10 +189,15 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
 
       <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-raised px-3 py-2.5">
         <div>
-          <p className="text-sm font-medium text-content">Available on the local network</p>
+          <p className="text-sm font-medium text-content">
+            {bindManaged ? 'Opened through a network address' : 'Available on the local network'}
+          </p>
           <p className="mt-0.5 text-xs text-content-muted">
-            Off (default): only this computer can open the app. On: any device on your
-            Wi-Fi/LAN can reach it — e.g. from your phone — using the plain URL below.
+            {bindManaged
+              ? (lan
+                ? 'On because this browser is using a non-loopback address. Docker and network rules determine which other devices can reach it.'
+                : 'Off because this browser is using a local-only address. Change the Docker host mapping to expose it.')
+              : 'Off (default): only this computer can open the app. On: any device on your Wi-Fi/LAN can reach it — e.g. from your phone — using the plain URL below.'}
           </p>
         </div>
         <button id="server-lan" type="button" role="switch" aria-checked={lan}
@@ -141,7 +205,7 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
           disabled={bindManaged}
           aria-describedby={bindManaged ? 'server-bind-managed-note' : undefined}
           onClick={() => setField('server', 'host', lan ? '127.0.0.1' : '0.0.0.0')}
-          aria-label="Available on the local network"
+          aria-label={bindManaged ? 'Opened through a network address' : 'Available on the local network'}
           className={`relative h-6 w-11 shrink-0 scroll-mt-24 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${lan ? 'bg-emerald-500' : 'bg-surface border border-border-strong'}`}>
           <span aria-hidden
             className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${lan ? 'translate-x-5' : 'translate-x-0'}`} />
@@ -211,8 +275,9 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
                 )}
                 <div className="min-w-0 flex-1 space-y-2">
                   <p className="text-xs text-content-muted">
-                    Point your phone camera at the code — or open a link below. The LAN link
-                    needs the phone on the same Wi-Fi; the Tailscale link works from anywhere.
+                    {bindManaged
+                      ? 'Open the same address below from another device that can reach this Docker host.'
+                      : 'Point your phone camera at the code — or open a link below. The LAN link needs the phone on the same Wi-Fi; the Tailscale link works from anywhere.'}
                   </p>
                   {reachUrls.map((u) => (
                     <div key={u.key} className="flex items-center gap-2">
@@ -247,15 +312,21 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
       {knownRuntime && (
         <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2 text-xs ${
           dirty ? 'border-amber-400/50 bg-amber-400/10' : 'border-border bg-surface-raised'}`}>
-          <span className="text-content-muted">
-            Running: <span className="font-medium text-content">{runtime.host}:{runtime.port}</span>
-            {runtime.host === '0.0.0.0' && lanIp && (
-              <span className="text-content-subtle"> — reachable at http://{lanIp}:{runtime.port}/</span>
-            )}
-            {dirty && (
-              <> · Saved: <span className="font-medium text-content">{config.server.host}:{config.server.port}</span></>
-            )}
-          </span>
+          {bindManaged ? (
+            <span className="text-content-muted">
+              Opened at: <span className="font-medium text-content">{access.origin}</span>
+            </span>
+          ) : (
+            <span className="text-content-muted">
+              Running: <span className="font-medium text-content">{runtime.host}:{runtime.port}</span>
+              {runtime.host === '0.0.0.0' && lanIp && (
+                <span className="text-content-subtle"> — reachable at http://{lanIp}:{runtime.port}/</span>
+              )}
+              {dirty && (
+                <> · Saved: <span className="font-medium text-content">{config.server.host}:{config.server.port}</span></>
+              )}
+            </span>
+          )}
           {bindManaged ? (
             <span className="ml-auto text-sky-300">Docker-managed bind</span>
           ) : dirty ? (
