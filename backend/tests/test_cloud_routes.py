@@ -462,6 +462,7 @@ def test_continue_local_in_cloud_route_forwards_the_choice(client, monkeypatch):
     assert seen['overrides'] == {'sample_every': 250}
     assert seen['masked'] is False
     assert seen['training_mode'] == 'lora'
+    assert seen['resume_mode'] == 'weights_only'
 
 
 def test_continue_local_in_cloud_route_404_on_unknown_dataset(client, monkeypatch):

@@ -990,6 +990,24 @@ def retry_cloud_run(user_id, run_id) -> dict:
         train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET))
 
 
+_CLOUD_FULL_STATE_REASON = (
+    'This cloud image does not run the LDS state bridge; only the LoRA weights '
+    'were harvested. Optimizer, scheduler, RNG and dataloader state are unavailable.')
+
+
+def _cloud_resume_state() -> dict:
+    """Truthful capability stamp for a checkpoint produced by today's pod image."""
+    return {
+        'bundle_id': None,
+        'status': 'unsupported',
+        'integrity': 'unchecked',
+        'state_level': 'weights',
+        'size_bytes': 0,
+        'capabilities': {'weights': True, 'exact': False},
+        'reason': _CLOUD_FULL_STATE_REASON,
+    }
+
+
 def _run_staging_checkpoints(run) -> list:
     """This run's HARVESTED checkpoints that still live in staging (NOT the
     trash — trashed saves are moved out of staging_dir): list of
@@ -1010,7 +1028,8 @@ def _run_staging_checkpoints(run) -> list:
         m = re.search(r'_(\d{6,})\.safetensors$', name)
         out.append({'filename': name,
                     'step': int(m.group(1)) if m else target,
-                    'path': os.path.join(sd, name)})
+                    'path': os.path.join(sd, name),
+                    'resume_state': _cloud_resume_state()})
     # step asc; a suffixed save wins ties over the unsuffixed final (deterministic).
     out.sort(key=lambda e: (e['step'], bool(re.search(r'_(\d{6,})\.safetensors$',
                                                        e['filename']))))
@@ -1074,8 +1093,28 @@ def _resume_snapshot_with_recorded_topology(user_id, dataset_id, snapshot, topol
     return _merge_resume_overrides(fallback, topology) if topology else snapshot
 
 
+def _require_cloud_weights_only(resume_mode='weights_only', state_bundle_id=None):
+    """Validate the resume contract before any cloud-side effect.
+
+    The current pod image exposes only ai-toolkit's checkpoint upload seam. It
+    cannot activate LDS's in-process state bridge, so sending optimizer/RNG
+    artifacts would still replay a weights-only run. Refuse that lie explicitly
+    until the remote runtime advertises the bridge capability.
+    """
+    mode = str(resume_mode or '').strip().lower()
+    if mode not in ('weights_only', 'full_state'):
+        raise ValueError("resume_mode must be 'weights_only' or 'full_state'")
+    if mode == 'full_state':
+        raise ValueError(
+            'full-state resume is not supported by the current cloud runtime — '
+            'choose weights only, or continue this verified bundle locally')
+    if state_bundle_id is not None:
+        raise ValueError('state_bundle_id is only valid with resume_mode=full_state')
+
+
 def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
-                       overrides=None) -> dict:
+                       overrides=None, resume_mode='weights_only',
+                       state_bundle_id=None) -> dict:
     """Reprend un run cloud TERMINAL (done OU en échec) depuis un checkpoint
     harvesté et vise step_de_reprise + extra_steps — le pendant cloud de
     lora_training.continue_training. C'est un VRAI launch_cloud_training (pod
@@ -1092,6 +1131,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     ``overrides`` = mêmes réglages sûrs que le local (cadence/preview prompts),
     fusionnés dans le snapshot du run (jamais dans le dataset). register_launch
     reste un launch cloud normal — le resume est un détail d'exécution."""
+    _require_cloud_weights_only(resume_mode, state_bundle_id)
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
@@ -1194,7 +1234,9 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
                                 masked=None, allow_caption_mismatch=False,
                                 allow_uncaptioned=False, allow_caption_quality=False,
                                 allow_unverified_weights=False, allow_not_ready=False,
-                                gpu_name=None, training_mode='lora') -> dict:
+                                gpu_name=None, training_mode='lora',
+                                resume_mode='weights_only',
+                                state_bundle_id=None) -> dict:
     """▶ Continue a LOCAL run's checkpoint IN THE CLOUD — the mirror of
     continue_cloud_run, and the other half of "pick your lane" in the ▶ Continue
     dialog. Nothing new is invented: the pod-side resume is the SAME seam
@@ -1216,6 +1258,7 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     lr_factor), merged into THIS run's settings snapshot — the dataset's own
     persisted settings are never touched (the local lane's update_train_settings
     is a local-lane behaviour, not something to replicate on a cloud launch)."""
+    _require_cloud_weights_only(resume_mode, state_bundle_id)
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -4315,6 +4358,10 @@ def _run_payload(run) -> dict:
             # EARLIER epoch, not only its last (empty when staging was purged).
             'resume_steps': (sorted({c['step'] for c in _run_staging_checkpoints(run)})
                              if run.status == 'done' else []),
+            'resume_checkpoints': (
+                [{'step': c['step'], 'resume_state': c['resume_state']}
+                 for c in _run_staging_checkpoints(run)]
+                if run.status == 'done' else []),
             'train_type': family, 'variant': variant,
             'training_mode': training_mode,
             'artifact_kind': (_run_param(run, 'artifact_kind')
@@ -4554,6 +4601,7 @@ def _node_checkpoints(rec, crun):
             out.append({
                 'step': c['step'], 'filename': c['filename'],
                 'final': bool(final and crun.status == 'done'), 'present': True,
+                'resume_state': c['resume_state'],
                 'download_url': _checkpoint_download_url(
                     rec.dataset_id, 'cloud', crun.id, c['filename'])})
         return out
@@ -4567,6 +4615,7 @@ def _node_checkpoints(rec, crun):
         out.append({
             'step': c['step'], 'filename': c['filename'],
             'final': bool(c.get('final')), 'present': True,
+            'resume_state': c.get('resume_state'),
             'download_url': _checkpoint_download_url(
                 rec.dataset_id, 'local', rec.id, c['filename'],
                 family=rec.family, variant=rec.variant, base_model=rec.base_model)})
@@ -6136,6 +6185,7 @@ def cloud_checkpoint_groups(dataset_id, train_type=None, variant=None) -> list:
             entries.append({'filename': name, 'step': step, 'cloud': True,
                             'run_id': run.id, 'version': _run_param(run, 'version'),
                             'variant': run_variant,
+                            'resume_state': _cloud_resume_state(),
                             'final': bool(not m and run.status == 'done'),
                             'active': run.status in ACTIVE_STATES,
                             'trained_at': run.created_at.isoformat()

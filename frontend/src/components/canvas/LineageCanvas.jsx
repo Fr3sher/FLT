@@ -1502,7 +1502,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
           lanes={continueLanes}
           // This run's OWN saves — not the dataset's current selection. On a
           // board holding ten datasets that distinction is the feature.
-          checkpoints={continueSteps.map((step) => ({ step }))}
+          checkpoints={continueTarget.node.checkpoints || []}
           // THE point of opening from a pill: step 2500 of a 3500-step run, not
           // "the latest". initialResumeStep honours it only when it is a real
           // save of this run (unit-tested in lineageContinue.js).

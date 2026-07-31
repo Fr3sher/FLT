@@ -151,6 +151,12 @@ def dataset_train_continue(dataset_id):
         kw['from_step'] = d.get('from_step')
     if d.get('overrides') is not None:
         kw['overrides'] = d.get('overrides')
+    # Resume semantics are always explicit on the wire. Older clients safely
+    # degrade to weights-only; a full-state request must carry the opaque bundle
+    # id that the checkpoint listing advertised.
+    kw['resume_mode'] = d.get('resume_mode', 'weights_only')
+    if d.get('state_bundle_id') is not None:
+        kw['state_bundle_id'] = d.get('state_bundle_id')
     kw['masked'] = d.get('masked')
     kw['allow_unverified_weights'] = bool(d.get('allow_unverified_weights'))
     kw['allow_caption_mismatch'] = bool(d.get('allow_caption_mismatch'))
@@ -377,7 +383,7 @@ def dataset_train_checkpoints(dataset_id):
     # training evidence without records -> record the current state as the v1
     # baseline, so versioning covers the past, not only future runs. Runs
     # BEFORE list_checkpoints so the fresh baseline annotates this response.
-    had_training = (bool(lt.list_checkpoints(LOCAL_USER, dataset_id, **kw))
+    had_training = (lt.has_local_checkpoints(LOCAL_USER, dataset_id, **kw)
                     or any((ct._run_family(r) or fam_resolved) == fam_resolved
                            for r in CloudTrainingRun.query
                            .filter_by(dataset_id=dataset_id).all()))
@@ -1648,7 +1654,9 @@ def dataset_train_cloud_continue():
         res = ct.continue_cloud_run(LOCAL_USER, int(d.get('run_id') or 0),
                                     extra_steps=d.get('extra_steps', 1000),
                                     from_step=d.get('from_step'),
-                                    overrides=d.get('overrides'))
+                                    overrides=d.get('overrides'),
+                                    resume_mode=d.get('resume_mode', 'weights_only'),
+                                    state_bundle_id=d.get('state_bundle_id'))
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **res})
@@ -1696,6 +1704,9 @@ def dataset_train_cloud_continue_local(dataset_id):
         kw['from_step'] = d.get('from_step')
     if d.get('overrides') is not None:
         kw['overrides'] = d.get('overrides')
+    kw['resume_mode'] = d.get('resume_mode', 'weights_only')
+    if d.get('state_bundle_id') is not None:
+        kw['state_bundle_id'] = d.get('state_bundle_id')
     if d.get('gpu_name'):
         kw['gpu_name'] = d.get('gpu_name')
     kw['masked'] = d.get('masked')

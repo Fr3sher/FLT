@@ -512,6 +512,9 @@ def test_queued_continue_accepts_dead_predecessor_flag(monkeypatch):
         lt, 'list_checkpoints',
         lambda *_a, **_kw: [{'step': 1000, 'filename': 'ck.safetensors'}])
     monkeypatch.setattr(
+        lt, '_seed_continuation_from',
+        lambda *_a, **_kw: 'archived-run')
+    monkeypatch.setattr(
         lt, 'launch_training',
         lambda *_a, **kw: launched.update(kw) or {'started': True})
 

@@ -630,6 +630,8 @@ export default function CloudRunsPage() {
       ...(run.variant ? { variant: run.variant } : {}),
       ...(payload.fromStep != null ? { from_step: payload.fromStep } : {}),
       ...(payload.overrides ? { overrides: payload.overrides } : {}),
+      resume_mode: payload.resumeMode || 'weights_only',
+      ...(payload.stateBundleId ? { state_bundle_id: payload.stateBundleId } : {}),
       // The run's own masking, not a hub-wide default: the continuation must
       // train like the checkpoint it resumes. Absent on a legacy row → the
       // backend default (on), same as everywhere else.
@@ -660,7 +662,10 @@ export default function CloudRunsPage() {
         ? await postLocalContinue(run, payload)
         : await postJson('/api/dataset/train/cloud/continue',
           { run_id: run.run_id, extra_steps: payload.extraSteps,
-            from_step: payload.fromStep, overrides: payload.overrides });
+            from_step: payload.fromStep, overrides: payload.overrides,
+            resume_mode: payload.resumeMode || 'weights_only',
+            ...(payload.stateBundleId
+              ? { state_bundle_id: payload.stateBundleId } : {}) });
       outcome = continueAttemptOutcome(
         d === null && local ? { declined: true } : { response: d });
     } catch (e) {
@@ -736,6 +741,7 @@ export default function CloudRunsPage() {
       // target that dropped them could only ever be continued in the cloud.
       dataset_id: node.dataset_id, base_model: node.base_model,
       resume_steps: (node.checkpoints || []).map((c) => c.step),
+      resume_checkpoints: node.checkpoints || [],
     };
     if (isTrainingRecipeReplayBlocked(target)) {
       toast.error('This checkpoint uses an incompatible legacy Z-Image recipe and cannot be continued safely.');
@@ -1273,9 +1279,11 @@ export default function CloudRunsPage() {
             trainingRunVariantLabel(continueRunTarget.train_type, continueRunTarget.variant)
               ? ` · ${trainingRunVariantLabel(continueRunTarget.train_type, continueRunTarget.variant)}` : ''}`}
           where="cloud"
-          checkpoints={((continueRunTarget.resume_steps?.length
-            ? continueRunTarget.resume_steps
-            : [continueRunTarget.steps]).filter(Boolean)).map((step) => ({ step }))}
+          checkpoints={continueRunTarget.resume_checkpoints?.length
+            ? continueRunTarget.resume_checkpoints
+            : ((continueRunTarget.resume_steps?.length
+              ? continueRunTarget.resume_steps
+              : [continueRunTarget.steps]).filter(Boolean)).map((step) => ({ step }))}
           initialFromStep={continueInitialStep}
           lanes={continueLanes}
           settings={{ optimizer: continueRunTarget.settings?.optimizer,

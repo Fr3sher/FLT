@@ -1244,6 +1244,8 @@ export function useDataset() {
       // safe-subset settings (cadence / preview prompts). Both optional.
       ...(opts.fromStep != null ? { from_step: opts.fromStep } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
+      resume_mode: opts.resumeMode || 'weights_only',
+      ...(opts.stateBundleId ? { state_bundle_id: opts.stateBundleId } : {}),
     };
     const d = await postJson(`/api/dataset/${currentId}/train/continue`, body);
     if (d.ok) toast.success(`Resumed from step ${d.resumed_from} → ${d.target_steps} — ComfyUI paused`);
@@ -1279,6 +1281,8 @@ export function useDataset() {
       allow_not_ready: !!opts.allowNotReady,
       ...(opts.fromStep != null ? { from_step: opts.fromStep } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
+      resume_mode: opts.resumeMode || 'weights_only',
+      ...(opts.stateBundleId ? { state_bundle_id: opts.stateBundleId } : {}),
       ...(opts.gpuName ? { gpu_name: opts.gpuName } : {}),
     };
     const d = await postJson(`/api/dataset/${currentId}/train/cloud/continue-local`, body);

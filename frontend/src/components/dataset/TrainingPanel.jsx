@@ -1174,6 +1174,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         (continueOpts) => (inCloud ? ds.continueTrainingInCloud : ds.continueTraining)(
           payload.extraSteps, checkpointBase, checkpointVariant, checkpointTrainType,
           { ...continueOpts, fromStep: payload.fromStep, overrides: payload.overrides,
+            resumeMode: payload.resumeMode, stateBundleId: payload.stateBundleId,
             // The hook toasts refusals for its other callers; here the dialog
             // shows them, and two copies of one sentence a centimetre apart read
             // as a bug. Its SUCCESS toast is kept — the dialog is gone by then.
@@ -1206,7 +1207,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       const data = await ds.listCheckpoints(base, trainType, variant);
       existing = Array.isArray(data?.checkpoints) ? data.checkpoints : [];
     } catch { /* le lancement normal garde le preflight serveur comme autorité */ }
-    if (!existing.length) return 'resume';                     // pas de run → lancement normal
+    if (!existing.length) return 'new';                        // pas de run → lancement normal
     const latest = Math.max(...existing.map((c) => c.step));
     const final = existing.some((c) => c.final);
     return new Promise((resolve) => {
@@ -2042,6 +2043,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             // échoué AVANT l'archivage (assert_trainable), rien n'a été écarté.
             const mode = await askResumeOrFresh();
             if (!mode) return;
+            // The old "Resume" button called /train and let ai-toolkit infer
+            // what it would restore. Route every existing run through the
+            // shared dialog instead, where Full state vs Weights only is
+            // explicit and checkpoint-specific.
+            if (mode === 'continue') {
+              setContinueInitialStep(null); // null deliberately selects the latest save
+              setContinueOpen(true);
+              return;
+            }
             const fresh = mode === 'fresh';
             // ds.train takes camelCase opts — map the confirmable force flags.
             const OPT_FOR_FLAG = { allow_caption_mismatch: 'allowCaptionMismatch',
@@ -3739,10 +3749,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 className="px-3 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold">
                 ↺ Start fresh
               </button>
-              <button type="button" onClick={() => resolveResume('resume')}
-                title="Continue the existing LoRA from its last checkpoint (only useful with a HIGHER step target)."
+              <button type="button" onClick={() => resolveResume('continue')}
+                title="Choose the checkpoint and explicitly restore either its full verified state or its weights only."
                 className="px-3 py-1.5 rounded-lg border border-border bg-surface text-content text-sm hover:bg-surface-raised">
-                ▶ Continue from step {resumeAsk.latest}
+                ▶ Choose how to continue
               </button>
               <button type="button" onClick={() => resolveResume(null)}
                 className="ml-auto px-3 py-1.5 rounded-lg text-content-muted hover:text-content text-sm">

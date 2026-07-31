@@ -16,6 +16,7 @@ dropped - single local user, cf. plan's Global Constraints.
 """
 from __future__ import annotations
 import filecmp
+import functools
 import hashlib
 import json
 import logging
@@ -24,12 +25,14 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import struct
 import subprocess
 import sys
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 from PIL import Image, ImageOps
 
@@ -100,6 +103,20 @@ def _assert_local_training_mode(ds, requested=None) -> str:
 # process identity check is allowed to release it after a restart.
 _TRAIN_STATE_TTL = None
 
+# Serialises the entire mutable local-launch preparation (dataset export, fixed
+# job/config paths, live-lane context and spawn).  Exact continuation acquires
+# this before its short queue-lock sections, establishing one global lock order:
+# launch transaction -> queue ownership -> GPU arbiter.
+_launch_transaction_lock = threading.RLock()
+
+
+def _serial_local_launch(function):
+    @functools.wraps(function)
+    def guarded(*args, **kwargs):
+        with _launch_transaction_lock:
+            return function(*args, **kwargs)
+    return guarded
+
 
 # --- Path accessors (replace SRC's module-level AITOOLKIT_DIR/HF_HOME/... constants) --
 
@@ -115,6 +132,11 @@ def _hf_home():
     if not d:
         raise RuntimeError('ai-toolkit is not configured')
     return d
+
+
+def _hf_hub_cache() -> Path:
+    """The cache_dir consumed by huggingface_hub under the child process HF_HOME."""
+    return Path(_hf_home()) / 'hub'
 
 
 def _datasets_dir():
@@ -5045,10 +5067,23 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
     from . import checkpoint_registry
     ds = fds.get_dataset(user_id, dataset_id)
     fam = _train_type(ds, family) if ds else None
+    effective_base = (
+        getattr(ds, 'train_base_model', None)
+        if base_model is _PERSISTED else base_model)
+    effective_variant = (
+        getattr(ds, 'train_variant', None)
+        if variant is _PERSISTED else variant)
+    effective_variant = (
+        str(effective_variant or _default_variant_for(fam)).strip().lower()
+        if fam else effective_variant)
     for c in out:
         try:
             rec = checkpoint_registry.record_for_mtime(
-                dataset_id, fam, os.path.getmtime(os.path.join(run, c['filename'])))
+                dataset_id, fam,
+                os.path.getmtime(os.path.join(run, c['filename'])),
+                base_model=effective_base or '',
+                variant=effective_variant,
+                source=('local', 'legacy'))
         except OSError:
             rec = None
         if rec is not None:
@@ -5075,8 +5110,82 @@ def list_checkpoints(user_id, dataset_id, base_model=_PERSISTED, family=None,
             # does — its own run's target — whenever the record knows better.
             if c.get('final') and (rec.steps or 0) > c['step']:
                 c['step'] = rec.steps
+    # Exact resume is checkpoint-specific.  Old saves intentionally remain
+    # usable, but are labelled weights-only instead of inheriting ai-toolkit's
+    # mutable optimizer.pt by accident.  Verification is done here so the UI
+    # never advertises a bundle whose bytes no longer match its manifest.
+    from . import training_state_bundle
+    try:
+        state_by_step = {}
+        for inspection in training_state_bundle.list_bundles(
+                run, verify=True, include_invalid=True):
+            if inspection.completed_step is not None:
+                state_by_step.setdefault(inspection.completed_step, inspection)
+    except Exception:
+        logger.warning('could not inspect training-state bundles for %s',
+                       run, exc_info=True)
+        state_by_step = {}
+    unavailable_reason = None
+    try:
+        from . import aitoolkit_state_bridge
+        status_path = Path(run).parent / '.lds-state' / 'bridge-status.json'
+        bridge_status = aitoolkit_state_bridge.read_status(status_path)
+        if not isinstance(bridge_status, dict):
+            raise ValueError('missing or invalid bridge status')
+        bridge_reasons = bridge_status.get('reasons')
+        if (bridge_status.get('status') in ('unsupported', 'save_unsupported')
+                and isinstance(bridge_reasons, list)):
+            bridge_reasons = [
+                str(reason).strip() for reason in bridge_reasons
+                if str(reason).strip()
+            ]
+            if bridge_reasons:
+                unavailable_reason = (
+                    'Full-state resume is unavailable for this run: '
+                    + '; '.join(bridge_reasons))
+    except (OSError, ValueError, TypeError):
+        pass
+    for c in out:
+        state = state_by_step.get(int(c['step']))
+        if state is not None:
+            c['resume_state'] = state.to_ui_dict()
+        else:
+            c['resume_state'] = {
+                'bundle_id': None,
+                'status': 'missing',
+                'integrity': 'unchecked',
+                'state_level': 'weights',
+                'reason': unavailable_reason or (
+                    'Legacy checkpoint: only the LoRA weights were saved; '
+                    'optimizer, scheduler, RNG and dataloader state are unavailable.'),
+                'size_bytes': 0,
+                'capabilities': ['weights'],
+            }
     out.sort(key=lambda c: (c['step'], bool(c.get('final'))))
     return out
+
+
+def has_local_checkpoints(user_id, dataset_id, base_model=_PERSISTED,
+                          family=None, variant=_PERSISTED) -> bool:
+    """Cheap local-training evidence without bundle verification.
+
+    Baseline backfill needs to know only whether a public checkpoint exists.
+    Keeping this scan separate avoids hashing every exact-state bundle twice in
+    one checkpoints API request while preserving the required ordering:
+    baseline first, fully annotated listing second.
+    """
+    run = _run_dir(user_id, dataset_id, base_model, family, variant)
+    try:
+        final_name = os.path.basename(run) + '.safetensors'
+        with os.scandir(run) as entries:
+            for entry in entries:
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                if entry.name == final_name or _CK_RE.search(entry.name):
+                    return True
+    except OSError:
+        return False
+    return False
 
 
 def resume_source_checkpoint(checkpoints, step):
@@ -5283,7 +5392,16 @@ def import_checkpoint(user_id, dataset_id, filename, base_model=_PERSISTED, fami
         try:
             mtime = os.path.getmtime(os.path.join(run_dir, filename))
             rec = checkpoint_registry.record_for_mtime(
-                dataset_id, _train_type(ds, family), mtime)
+                dataset_id, _train_type(ds, family), mtime,
+                base_model=(
+                    getattr(ds, 'train_base_model', None)
+                    if base_model is _PERSISTED else base_model) or '',
+                variant=str(
+                    (getattr(ds, 'train_variant', None)
+                     if variant is _PERSISTED else variant)
+                    or _default_variant_for(_train_type(ds, family))
+                ).strip().lower(),
+                source=('local', 'legacy'))
         except OSError:
             rec = None
         if rec is not None:
@@ -5814,8 +5932,26 @@ def rename_training_artifacts(user_id, old_trigger_safe, new_trigger_safe) -> di
     return {'renamed': renamed, 'conflicts': [], 'ok': True}
 
 
-def write_job_config(ds, dataset_folder: str, steps: int = 3000) -> str:
-    job_cfg = build_job_config(ds, dataset_folder, steps=steps)
+def _configure_exact_state_dataloaders(job_cfg):
+    """Make the job's loader cursor synchronously replayable by the bridge."""
+    # A worker process may prefetch sampler indices and consume its own RNG ahead
+    # of the optimizer boundary. That state cannot be reconstructed after a
+    # crash, so exact bundles deliberately use the main process.
+    for process in job_cfg.get('config', {}).get('process', ()):
+        for dataset in process.get('datasets', ()):
+            dataset['num_workers'] = 0
+    return job_cfg
+
+
+def write_job_config(
+        ds, dataset_folder: str, steps: int = 3000,
+        *, exact_state_bridge: bool = False, job_config=None) -> str:
+    job_cfg = (
+        job_config
+        if isinstance(job_config, dict)
+        else build_job_config(ds, dataset_folder, steps=steps))
+    if exact_state_bridge:
+        _configure_exact_state_dataloaders(job_cfg)
     # Name by the base/family-aware run name, NOT the trigger alone: a zimage run
     # and a krea run of the same trigger have distinct run names everywhere else
     # (training_folder, dataset_folder), so keying this file by trigger only made
@@ -6738,21 +6874,140 @@ def _crash_payload(log_path, dataset_id, rc) -> dict:
     return payload
 
 
-def _watch_training(app, proc, log_path, dataset_id) -> None:
+def _exact_resume_bridge_failure(status_path, rc):
+    """Return a concrete pre-training bridge failure, else ``None``."""
+    from . import aitoolkit_state_bridge
+
+    status = aitoolkit_state_bridge.read_status(status_path) if status_path else None
+    if isinstance(status, dict) and status.get('training_started') is True:
+        return None
+    status_name = status.get('status') if isinstance(status, dict) else None
+    reasons = status.get('reasons') if isinstance(status, dict) else None
+    if isinstance(reasons, list):
+        reasons = [str(reason).strip() for reason in reasons if str(reason).strip()]
+    else:
+        reasons = []
+    if reasons:
+        return '; '.join(reasons)
+    if rc == 78 or status_name == 'bootstrap_error':
+        return 'the exact-state bridge failed during interpreter bootstrap'
+    if status_name == 'restored':
+        return 'the exact state was restored, but training failed before its first optimizer boundary'
+    if status_name == 'patched':
+        return 'the exact-state bridge failed before it could restore the bundle'
+    if rc in (0, None):
+        return 'the exact-state process ended before its first optimizer boundary'
+    return 'the exact-state bridge failed before training began'
+
+
+def _clear_exact_resume_journal_after_boundary(transaction) -> bool:
+    if not isinstance(transaction, dict):
+        return False
+    journal_path = transaction.get('journal_path')
+    if not journal_path:
+        return False
+    from . import aitoolkit_state_bridge
+    status = aitoolkit_state_bridge.read_status(
+        transaction.get('status_path'))
+    if not isinstance(status, dict) or status.get('training_started') is not True:
+        return False
+    try:
+        _delete_exact_resume_journal(journal_path)
+    except Exception:
+        logger.exception(
+            'could not clear exact-resume journal after optimizer boundary')
+        return False
+    transaction['journal_path'] = None
+    return True
+
+
+def _mark_exact_resume_launching(journal_path, run_token) -> None:
+    """Persist pre-spawn intent or clear the fence while no child can exist."""
+    try:
+        _update_exact_resume_journal(
+            journal_path,
+            phase='launching',
+            run_token=run_token,
+        )
+    except Exception:
+        # This helper is called immediately before Popen. A failure here proves
+        # no child was spawned, so retaining the just-published GPU fence would
+        # deadlock every later launch after continue() restores the source lane.
+        _clear_training_identity(ttl_seconds=1)
+        raise
+
+
+def _watch_training(
+        app, proc, log_path, dataset_id, exact_resume_transaction=None) -> None:
     """Thread daemon : attend la fin du process ai-toolkit puis fait avancer la
     file (libère ComfyUI / lance le suivant) DÈS la fin, sans dépendre du polling
     client. Sur un crash (rc≠0), remonte la fin du log. process_training_queue()
     reste le filet de secours si Flask redémarre (le watcher meurt, le flag est
     rattrapé au prochain poll ou à la récupération de démarrage)."""
     try:
-        proc.wait()
-        rc = proc.returncode
+        if exact_resume_transaction and callable(getattr(proc, 'poll', None)):
+            while True:
+                _clear_exact_resume_journal_after_boundary(
+                    exact_resume_transaction)
+                rc = proc.poll()
+                if rc is not None:
+                    break
+                time.sleep(0.25)
+        else:
+            proc.wait()
+            rc = proc.returncode
+        _clear_exact_resume_journal_after_boundary(
+            exact_resume_transaction)
     except Exception:
         return
     try:
         with app.app_context():
-            if rc not in (0, None):
+            bridge_reason = None
+            if exact_resume_transaction:
+                bridge_reason = _exact_resume_bridge_failure(
+                    exact_resume_transaction.get('status_path'), rc)
+            if rc not in (0, None) or bridge_reason:
                 payload = _crash_payload(log_path, dataset_id, rc)
+                if bridge_reason:
+                    try:
+                        # A dead exact child leaves a short interval where its PID
+                        # fence is conclusively dead but its source lane still
+                        # needs rollback.  Exclude every new local launch while
+                        # moving that lane back; otherwise a competitor could
+                        # spawn from the fresh lane and have it renamed underneath
+                        # the new process.
+                        with _launch_transaction_lock, _queue_lock:
+                            _rollback_unlaunched_exact_resume(
+                                exact_resume_transaction['training_folder'],
+                                exact_resume_transaction['archived'])
+                            journal_path = exact_resume_transaction.get(
+                                'journal_path')
+                            if journal_path:
+                                _delete_exact_resume_journal(journal_path)
+                    except Exception:
+                        logger.exception(
+                            'full-state resume rollback failed for dataset %s',
+                            dataset_id)
+                        rollback_message = (
+                            'The full-state bridge failed before training began, '
+                            'and LDS could not automatically restore the archived '
+                            'source run. Open the run folder before retrying.')
+                    else:
+                        rollback_message = (
+                            'The full-state bridge failed before training began. '
+                            'LDS restored the original run, so no source checkpoint '
+                            'was lost and the continuation can be retried.')
+                    payload['exact_resume'] = {
+                        'rolled_back': rollback_message.startswith(
+                            'The full-state bridge failed before training began. LDS'),
+                        'reason': bridge_reason,
+                        'message': rollback_message,
+                    }
+                    payload['excerpt'] = {
+                        'kind': 'error',
+                        'headline': 'Full-state resume did not start',
+                        'text': f'{rollback_message}\n\nBridge: {bridge_reason}',
+                    }
                 logger.error("Entraînement ai-toolkit dataset %s terminé en ERREUR (rc=%s). "
                              "Cause probable :\n%s", dataset_id, rc,
                              payload['excerpt']['text'] or payload['log_tail'])
@@ -6787,6 +7042,21 @@ def archive_previous_run(ds) -> str | None:
     return dest
 
 
+def _refuse_unresolved_exact_resume_transactions() -> None:
+    """Recover dead exact resumes, or keep launch admission fail-closed.
+
+    Callers already hold ``_launch_transaction_lock`` and take ``_queue_lock``
+    around this helper.  A journal with a live/indeterminate child is an active
+    lane owner; an invalid journal likewise requires operator recovery before
+    another child may touch any mutable run lane.
+    """
+    if _reconcile_exact_resume_journals():
+        raise ValueError(
+            'a full-state resume transaction is still active or requires '
+            'operator recovery before another local training can start')
+
+
+@_serial_local_launch
 def launch_training(user_id, dataset_id, steps: int | None = None, check_captions: bool = True,
                     base_model=None, variant: str | None = None, train_type: str | None = None,
                     allow_caption_mismatch: bool = False, masked: bool | None = None,
@@ -6796,7 +7066,13 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                     allow_unverified_weights: bool = False,
                     allow_not_ready: bool = False,
                     parent_record_id=None, resumed_from=None,
-                    training_mode=None) -> dict:
+                    training_mode=None,
+                    _state_restore_bundle=None,
+                    _state_bridge_required: bool = False,
+                    _state_resume_training_folder=None,
+                    _state_resume_archived=None,
+                    _state_model_pins=None,
+                    _state_resume_journal=None) -> dict:
     """Export + config + pause ComfyUI (flag) + lance l'entraînement ai-toolkit
     en CLI headless (`run.py <config>`).
 
@@ -6809,6 +7085,13 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     Retourne {pid, config_path, log_path}. Raises RuntimeError if ai-toolkit isn't
     installed/configured (route maps this to 409, not 400 - it's a backend
     availability problem, not a bad request)."""
+    # The decorator owns the launch transaction before this first action.  Exact
+    # continuation passes its newly-created journal only after the outer
+    # transaction has reconciled every older one; all other launches must recover
+    # or refuse orphaned exact lanes before touching dataset/config/run state.
+    if not _state_resume_journal:
+        with _queue_lock:
+            _refuse_unresolved_exact_resume_transactions()
     if not is_installed():
         raise RuntimeError('ai-toolkit is not configured')
     # The interpreter EXISTS; can it actually run ai-toolkit? Asked here, before a
@@ -6946,9 +7229,27 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     ds.train_vae_path = eff_vae
     ds.train_te_path = eff_te
     fds.db.session.commit()
+    # The bridge is an opt-in overlay around one inspected ai-toolkit source
+    # shape.  Unknown revisions keep training normally but cannot claim exact
+    # checkpoints.  A requested restore is fail-closed.
+    from . import aitoolkit_state_bridge
+    _bridge_probe = aitoolkit_state_bridge.probe(_aitoolkit_dir())
+    _bridge_candidate = bool(
+        _bridge_probe.get('supported')
+        and _bridge_probe.get('aitoolkit_revision'))
+    if _state_bridge_required and not _bridge_candidate:
+        reasons = '; '.join(_bridge_probe.get('reasons') or ())
+        raise ValueError(
+            'full-state resume is unavailable for this ai-toolkit installation'
+            + (f': {reasons}' if reasons else
+               ' because its revision/lifecycle cannot be verified'))
     # Repartir de zéro : écarter le run existant APRÈS la persistance base/variante
     # (_run_name lit les valeurs persistées → on archive bien LE run qui serait repris).
-    archived = archive_previous_run(ds) if fresh else None
+    # Serialise the first live-lane mutation with exact continuation.  An exact
+    # resume holds this same re-entrant lock from archive/seed through Popen, so
+    # a concurrent fresh launch cannot move or replace its newly seeded lane.
+    with _queue_lock:
+        archived = archive_previous_run(ds) if fresh else None
     # Steps adaptatifs si non imposés ; sinon override borné (jamais < 500).
     steps = (default_steps(ds, train_type=launch_fam, variant=variant)
              if steps is None else max(500, int(steps)))
@@ -6957,15 +7258,67 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # default, and what every fresh launch now sends) = read the dataset's stored
     # setting; an explicit bool is a per-RUN override replayed by ▶ Continue.
     masked = resolve_masked(ds, masked)
+    _bridge_model_pins = None
+    if _bridge_candidate:
+        try:
+            from . import training_state_identity
+            _pin_probe_config = build_job_config(
+                ds, '<lds-dataset>', steps=steps)
+            _configure_exact_state_dataloaders(_pin_probe_config)
+            _bridge_model_pins = training_state_identity.pin_job_model_artifacts(
+                _pin_probe_config,
+                cache_dir=_hf_hub_cache(),
+                token=cfg.secret('HF_TOKEN'),
+                pins=_state_model_pins,
+            )
+        except Exception as exc:
+            if _state_bridge_required:
+                raise ValueError(
+                    f'full-state resume model pinning could not be established: {exc}'
+                ) from exc
+            logger.warning(
+                'exact-state bridge disabled: model inputs could not be pinned: %s',
+                exc, exc_info=True)
+            _bridge_candidate = False
+            _bridge_model_pins = None
     dataset_folder = export_dataset_to_aitoolkit(user_id, dataset_id, masked=masked)
-    config_path = write_job_config(ds, dataset_folder, steps=steps)
+    _job_config = build_job_config(ds, dataset_folder, steps=steps)
+    if _bridge_candidate:
+        _configure_exact_state_dataloaders(_job_config)
+        try:
+            training_state_identity.pin_job_model_artifacts(
+                _job_config,
+                cache_dir=_hf_hub_cache(),
+                token=cfg.secret('HF_TOKEN'),
+                pins=_bridge_model_pins,
+            )
+        except Exception as exc:
+            if _state_bridge_required:
+                raise ValueError(
+                    f'full-state resume model pinning could not be established: {exc}'
+                ) from exc
+            logger.warning(
+                'exact-state bridge disabled while applying model pins: %s',
+                exc, exc_info=True)
+            _bridge_candidate = False
+            _job_config = build_job_config(ds, dataset_folder, steps=steps)
+    config_path = write_job_config(
+        ds, dataset_folder, steps=steps,
+        exact_state_bridge=_bridge_candidate,
+        job_config=_job_config)
     # Environnement du sous-process d'entraînement (HF_HOME + auth Hugging Face,
     # cf. training_subprocess_env). Jamais shell=True ; args en liste.
     env = training_subprocess_env()
-    run_dir = _run_root(ds, base_model=base_model, family=launch_fam, variant=variant)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    log_path = _run_log_path(ds, base_model=base_model, family=launch_fam,
-                             variant=variant)
+    # Context/status files live inside the mutable run lane.  Protect their
+    # publication with the same lock as lane archive/seed and final admission;
+    # otherwise a launch which passed the cheap preflight earlier could overwrite
+    # an exact resume's context before either request reaches the spawn lock.
+    with _queue_lock:
+        run_dir = _run_root(
+            ds, base_model=base_model, family=launch_fam, variant=variant)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        log_path = _run_log_path(
+            ds, base_model=base_model, family=launch_fam, variant=variant)
     run_token = secrets.token_hex(16)
     # Freeze the dataset (manifest + caption text + image content hashes +
     # environment) BEFORE taking the lock. All of the reading — file hashes,
@@ -6988,6 +7341,55 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             'queue this dataset')
     _prepared = checkpoint_registry.prepare_launch(
         user_id, dataset_id, base_model=base_model)
+    _bridge_identity_path = None
+    _bridge_status_path = None
+    with _queue_lock:
+        # A competing request may have completed its expensive freeze while this
+        # one waited. Re-check ownership before publishing context/status into
+        # the live lane; the final spawn check would be too late because those
+        # files are already consumed by the winning child.
+        if (queue_manager._get_system_state('training_in_progress', False)
+                and not _training_process_is_definitely_dead(
+                    queue_manager._get_system_state('training_pid', None))):
+            raise ValueError(
+                'a training is already in progress - wait for it to finish or '
+                'queue this dataset')
+        if _bridge_candidate:
+            try:
+                from . import training_state_identity
+                with open(config_path, encoding='utf-8') as _config_file:
+                    _job_config = json.load(_config_file)
+                _job_config['_lds_state'] = {'masked': bool(masked)}
+                _bridge_identity = training_state_identity.build_identity(
+                    job_config=_job_config,
+                    prepared=_prepared,
+                    toolkit_probe=_bridge_probe,
+                    python_path=_venv_python(),
+                )
+                _bridge_identity_path = training_state_identity.write_identity(
+                    run_dir / '.lds-state' / 'context.json',
+                    _bridge_identity,
+                )
+                _bridge_status_path = run_dir / '.lds-state' / 'bridge-status.json'
+                env = aitoolkit_state_bridge.subprocess_environment(
+                    aitoolkit_dir=_aitoolkit_dir(),
+                    status_file=_bridge_status_path,
+                    identity_file=_bridge_identity_path,
+                    restore_dir=_state_restore_bundle,
+                    keep=2,
+                    strict=bool(_state_restore_bundle),
+                    base=env,
+                )
+            except Exception as exc:
+                if _state_bridge_required:
+                    raise ValueError(
+                        'full-state resume compatibility could not be established: '
+                        f'{exc}'
+                    ) from exc
+                logger.warning(
+                    'exact-state bridge disabled for this launch: %s', exc,
+                    exc_info=True)
+                _bridge_candidate = False
     # The training queue lock serializes launch/Stop ownership; the shared GPU
     # arbiter also covers vision's check -> flag handoff. Keep this lock order
     # everywhere training launches: queue ownership first, GPU admission second.
@@ -7057,32 +7459,89 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             'training_recipe_version': (
                 recipe.get('recipe_version') if recipe else None),
         }
-        for key, value in identity.items():
-            queue_manager._set_system_state(
-                key, value, ttl_seconds=_TRAIN_STATE_TTL)
         logf = None
+        proc = None
         try:
+            # Publish the durable admission identity and launching intent in the
+            # same pre-spawn failure region as Popen. A queue write can fail after
+            # ``training_in_progress`` but before the rest of the identity; every
+            # such partial fence must be cleared while we still know no child
+            # exists.
+            for key, value in identity.items():
+                queue_manager._set_system_state(
+                    key, value, ttl_seconds=_TRAIN_STATE_TTL)
+            if _state_resume_journal:
+                # Durable intent precedes Popen. If Flask dies after spawn but
+                # before the journal's PID update, reconciliation keeps the
+                # transaction fail-closed.
+                _mark_exact_resume_launching(
+                    _state_resume_journal, run_token)
             logf = open(log_path, 'w', encoding='utf-8')
             proc = subprocess.Popen(
                 [str(_venv_python()), 'run.py', config_path],
                 cwd=str(_aitoolkit_dir()), env=env, shell=False,
                 stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            _record_training_process_identity(proc.pid)
-        except (FileNotFoundError, OSError) as e:
+        except Exception as e:
             if logf is not None:
                 try:
                     logf.close()
                 except OSError:
                     pass
-            _clear_training_identity(ttl_seconds=None)
-            raise ValueError(f"could not start training: {e}")
+            try:
+                _clear_training_identity(ttl_seconds=None)
+            except Exception:
+                logger.exception(
+                    'could not clear partial pre-spawn training identity')
+            if isinstance(e, (FileNotFoundError, OSError)):
+                raise ValueError(f"could not start training: {e}") from e
+            raise
+        # Popen success is the irreversible launch boundary.  From this point on,
+        # no persistence failure may escape to continue_training(), whose
+        # pre-spawn exception path restores the archived lane.  The already
+        # published run token and launching journal intentionally remain a
+        # fail-closed GPU fence if richer PID identity cannot be persisted.
+        birth_time = None
+        try:
+            birth_time = _record_training_process_identity(proc.pid)
+        except Exception:
+            logger.exception(
+                'could not persist spawned training process identity; '
+                'keeping the GPU fence fail-closed')
+        if _state_resume_journal:
+            try:
+                _update_exact_resume_journal(
+                    _state_resume_journal,
+                    phase='spawned',
+                    pid=int(proc.pid),
+                    pid_create_time=birth_time,
+                    run_token=run_token,
+                )
+            except Exception:
+                # The child already exists: never raise into continue() and
+                # roll its source lane back underneath a live process. The
+                # earlier launching intent + durable fence remain recoverable.
+                logger.exception(
+                    'could not attach process identity to exact-resume journal')
     # Watcher event-driven : libère ComfyUI / enchaîne la file dès la fin du
     # process (le poll de /train/status reste le filet de secours).
+    _exact_resume_transaction = None
+    if (_state_restore_bundle and _state_resume_training_folder
+            and _state_resume_archived):
+        _exact_resume_transaction = {
+            'training_folder': str(_state_resume_training_folder),
+            'archived': str(_state_resume_archived),
+            'status_path': (
+                str(_bridge_status_path) if _bridge_status_path is not None else None),
+            'journal_path': (
+                str(_state_resume_journal)
+                if _state_resume_journal is not None else None),
+        }
     try:
         from flask import current_app
         threading.Thread(target=_watch_training,
-                         args=(current_app._get_current_object(), proc, log_path, int(dataset_id)),
+                         args=(current_app._get_current_object(), proc, log_path,
+                               int(dataset_id), _exact_resume_transaction),
                          daemon=True).start()
     except Exception as e:
         logger.warning("watcher training non démarré : %s", e)
@@ -7092,21 +7551,433 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
             'run_token': run_token}
 
 
+def _validate_resume_contract(resume_mode, state_bundle_id):
+    mode = str(resume_mode or '').strip().lower()
+    if mode not in ('weights_only', 'full_state'):
+        raise ValueError("resume_mode must be 'weights_only' or 'full_state'")
+    if mode == 'full_state' and not state_bundle_id:
+        raise ValueError('full-state resume requires state_bundle_id')
+    if mode == 'weights_only' and state_bundle_id is not None:
+        raise ValueError(
+            'state_bundle_id is only valid with resume_mode=full_state')
+    return mode
+
+
+def _exact_resume_identity(ds, user_id, dataset_id, base, family, variant,
+                           target_steps, masked):
+    """Current context + compatibility spec, built before any run is moved."""
+    from . import aitoolkit_state_bridge, checkpoint_registry
+    from . import training_state_identity
+    probe = aitoolkit_state_bridge.probe(_aitoolkit_dir())
+    if not probe.get('supported') or not probe.get('aitoolkit_revision'):
+        reasons = '; '.join(probe.get('reasons') or ())
+        raise ValueError(
+            'full-state resume is unavailable for this ai-toolkit installation'
+            + (f': {reasons}' if reasons else
+               ' because its revision/lifecycle cannot be verified'))
+    launch_view = _train_context_view(
+        ds, family, variant, base_model=base)
+    job_config = build_job_config(
+        launch_view, '<lds-dataset>', steps=target_steps,
+        training_folder='<lds-training-folder>')
+    _configure_exact_state_dataloaders(job_config)
+    pins = training_state_identity.pin_job_model_artifacts(
+        job_config,
+        cache_dir=_hf_hub_cache(),
+        token=cfg.secret('HF_TOKEN'),
+    )
+    job_config['_lds_state'] = {'masked': bool(resolve_masked(ds, masked))}
+    prepared = checkpoint_registry.prepare_launch(
+        user_id, dataset_id, base_model=base)
+    try:
+        identity = training_state_identity.build_identity(
+            job_config=job_config,
+            prepared=prepared,
+            toolkit_probe=probe,
+            python_path=_venv_python(),
+        )
+    except Exception as exc:
+        raise ValueError(
+            f'full-state resume compatibility could not be established: {exc}'
+        ) from exc
+    return identity, training_state_identity.compatibility_spec(identity), pins
+
+
+_EXACT_RESUME_JOURNAL_SCHEMA = 'lds.exact-resume-transaction/v1'
+_EXACT_RESUME_JOURNAL_DIR = '.lds-exact-resume-transactions'
+_EXACT_RESUME_JOURNAL_RE = re.compile(r'^[0-9a-f]{32}\.json$')
+_REPARSE_POINT = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x0400)
+
+
+def _exact_resume_journal_root() -> Path:
+    return Path(_output_dir()) / _EXACT_RESUME_JOURNAL_DIR
+
+
+def _absolute_lexical(path) -> Path:
+    return Path(os.path.abspath(os.fspath(path)))
+
+
+def _fsync_directory(path) -> None:
+    try:
+        descriptor = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        pass
+    finally:
+        os.close(descriptor)
+
+
+def _journal_path(transaction_id: str) -> Path:
+    if not re.fullmatch(r'[0-9a-f]{32}', str(transaction_id or '')):
+        raise ValueError('invalid exact-resume transaction id')
+    return _exact_resume_journal_root() / f'{transaction_id}.json'
+
+
+def _validate_exact_resume_journal(path, value) -> dict:
+    """Validate every path before a journal can drive a rename."""
+    path = _absolute_lexical(path)
+    root = _absolute_lexical(_exact_resume_journal_root())
+    if path.parent != root or not _EXACT_RESUME_JOURNAL_RE.fullmatch(path.name):
+        raise ValueError('exact-resume journal path is outside its fixed root')
+    if not isinstance(value, dict):
+        raise ValueError('exact-resume journal is not an object')
+    if value.get('schema') != _EXACT_RESUME_JOURNAL_SCHEMA:
+        raise ValueError('unknown exact-resume journal schema')
+    if value.get('transaction_id') != path.stem:
+        raise ValueError('exact-resume journal id mismatch')
+    output = _absolute_lexical(_output_dir())
+    training_folder = _absolute_lexical(value.get('training_folder') or '')
+    archived = _absolute_lexical(value.get('archived') or '')
+    status_path = _absolute_lexical(value.get('status_path') or '')
+    try:
+        inside_training = (
+            os.path.commonpath((output, training_folder)) == str(output))
+        inside_archive = (
+            os.path.commonpath((output, archived)) == str(output))
+    except ValueError:
+        inside_training = inside_archive = False
+    if not inside_training or not inside_archive:
+        raise ValueError('exact-resume journal path escapes output root')
+    if (
+        archived.parent != training_folder.parent
+        or not archived.name.startswith(
+            f'{training_folder.name}_superseded_')
+    ):
+        raise ValueError('exact-resume archive is not the run sibling')
+    expected_status = training_folder / '.lds-state' / 'bridge-status.json'
+    if status_path != expected_status:
+        raise ValueError('exact-resume status path does not match the live run')
+    phase = value.get('phase')
+    if phase not in ('prepared', 'seeded', 'launching', 'spawned'):
+        raise ValueError('invalid exact-resume journal phase')
+    normalized = dict(value)
+    normalized.update({
+        'training_folder': str(training_folder),
+        'archived': str(archived),
+        'status_path': str(status_path),
+    })
+    return normalized
+
+
+def _write_exact_resume_journal(path, value) -> Path:
+    from ..training_bridge.lds_aitk_bridge_contract import atomic_json_nofollow
+
+    target = _absolute_lexical(path)
+    normalized = _validate_exact_resume_journal(target, value)
+    atomic_json_nofollow(target, normalized)
+    return target
+
+
+def _read_exact_resume_journal(path) -> dict:
+    from ..training_bridge.lds_aitk_bridge_contract import read_json_nofollow
+
+    target = _absolute_lexical(path)
+    value = read_json_nofollow(target, max_bytes=64 << 10)
+    return _validate_exact_resume_journal(target, value)
+
+
+def _update_exact_resume_journal(path, **changes) -> dict:
+    value = _read_exact_resume_journal(path)
+    value.update(changes)
+    _write_exact_resume_journal(path, value)
+    return value
+
+
+def _delete_exact_resume_journal(path) -> None:
+    target = _absolute_lexical(path)
+    root = _absolute_lexical(_exact_resume_journal_root())
+    if target.parent != root or not _EXACT_RESUME_JOURNAL_RE.fullmatch(target.name):
+        raise ValueError('refusing to delete an untrusted journal path')
+    if os.name != 'nt' and os.unlink in os.supports_dir_fd:
+        flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+        flags |= getattr(os, 'O_NOFOLLOW', 0)
+        try:
+            directory_fd = os.open(root, flags)
+        except FileNotFoundError:
+            return
+        try:
+            try:
+                info = os.stat(
+                    target.name, dir_fd=directory_fd,
+                    follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+                raise OSError('exact-resume journal target is unsafe')
+            os.unlink(target.name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+        return
+    if _journal_path_is_unsafe(root):
+        raise OSError('exact-resume journal parent is unsafe')
+    try:
+        info = os.lstat(target)
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or (getattr(info, 'st_file_attributes', 0) & _REPARSE_POINT)
+    ):
+        raise OSError('exact-resume journal target is unsafe')
+    os.unlink(target)
+    _fsync_directory(root)
+
+
+def _new_exact_resume_journal(
+        dataset_id, training_folder: Path, archived: Path) -> tuple[Path, dict]:
+    transaction_id = secrets.token_hex(16)
+    path = _journal_path(transaction_id)
+    training_folder = _absolute_lexical(training_folder)
+    archived = _absolute_lexical(archived)
+    value = {
+        'schema': _EXACT_RESUME_JOURNAL_SCHEMA,
+        'transaction_id': transaction_id,
+        'dataset_id': int(dataset_id),
+        'training_folder': str(training_folder),
+        'archived': str(archived),
+        'status_path': str(
+            training_folder / '.lds-state' / 'bridge-status.json'),
+        'phase': 'prepared',
+        'created_at': datetime.now().isoformat(),
+    }
+    _write_exact_resume_journal(path, value)
+    return path, value
+
+
+def _copy_verified_exact_checkpoint(source: Path, destination: Path, record) -> None:
+    """Copy one manifest artifact from one opened handle while re-verifying it."""
+    if _journal_path_is_unsafe(source.parent):
+        raise ValueError('the exact-state bundle path is unsafe')
+    try:
+        source_info = os.lstat(source)
+    except OSError as exc:
+        raise ValueError(
+            'the exact-state bundle checkpoint vanished before seeding') from exc
+    if (
+        not stat.S_ISREG(source_info.st_mode)
+        or stat.S_ISLNK(source_info.st_mode)
+        or (getattr(source_info, 'st_file_attributes', 0) & _REPARSE_POINT)
+    ):
+        raise ValueError('the exact-state bundle checkpoint is not a regular file')
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
+    flags |= getattr(os, 'O_NOFOLLOW', 0)
+    source_fd = os.open(source, flags)
+    temporary = destination.with_name(
+        f'.{destination.name}.{secrets.token_hex(8)}.tmp')
+    output_fd = None
+    try:
+        opened = os.fstat(source_fd)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or int(opened.st_size) != int(record.size_bytes)
+        ):
+            raise ValueError(
+                'the exact-state bundle checkpoint changed before seeding')
+        # Windows otherwise opens this descriptor in text mode.  ``os.write``
+        # then expands every LF byte to CRLF, silently corrupting arbitrary
+        # binary safetensors even though the source-side digest still matches.
+        out_flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        out_flags |= getattr(os, 'O_BINARY', 0)
+        out_flags |= getattr(os, 'O_NOFOLLOW', 0)
+        output_fd = os.open(temporary, out_flags, 0o600)
+        digest = hashlib.sha256()
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 8 << 20)
+            if not chunk:
+                break
+            digest.update(chunk)
+            copied += len(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(output_fd, view)
+                view = view[written:]
+        os.fsync(output_fd)
+        os.close(output_fd)
+        output_fd = None
+        if (
+            copied != int(record.size_bytes)
+            or digest.hexdigest() != record.sha256
+        ):
+            raise ValueError(
+                'the exact-state bundle checkpoint changed before seeding')
+        os.replace(temporary, destination)
+        _fsync_directory(destination.parent)
+    finally:
+        os.close(source_fd)
+        if output_fd is not None:
+            os.close(output_fd)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _archive_and_seed_exact_bundle(
+        user_id, dataset_id, base, family, variant, chosen_filename,
+        bundle_id, inspection):
+    """Move the source run aside and seed a fresh run from its verified bundle.
+
+    The canonical bundle stays immutable in the archived run and the bridge reads
+    it there.  Only its public safetensors checkpoint is copied into the new
+    save_root so ai-toolkit creates the same network before raw parameters/state
+    are restored.
+    """
+    from . import training_state_bundle
+    from ..training_bridge.lds_aitk_bridge_contract import ARTIFACT_FILENAMES
+
+    ds = fds.get_dataset(user_id, dataset_id)
+    trigger = _safe_trigger(ds)
+    training_folder = _run_root(ds, base, family, variant)
+    save_root = training_folder / f'lora_{trigger}'
+    if not training_folder.is_dir():
+        raise ValueError('run folder missing - cannot restore full training state')
+    token = secrets.token_hex(4)
+    archived = Path(
+        f'{training_folder}_superseded_'
+        f'{datetime.now().strftime("%Y%m%d-%H%M%S")}_{token}')
+    journal_path, _ = _new_exact_resume_journal(
+        dataset_id, training_folder, archived)
+    try:
+        os.rename(training_folder, archived)
+        _fsync_directory(training_folder.parent)
+    except Exception:
+        _delete_exact_resume_journal(journal_path)
+        raise
+    try:
+        archived_save_root = archived / f'lora_{trigger}'
+        bundle = training_state_bundle.resolve_bundle_path(
+            archived_save_root, bundle_id, require_exists=True)
+        checkpoint_name = ARTIFACT_FILENAMES['public_checkpoint']
+        record = next(
+            (item for item in inspection.artifacts
+             if item.name == checkpoint_name),
+            None)
+        if record is None:
+            raise ValueError(
+                'the exact-state bundle has no public checkpoint artifact')
+        source = bundle.joinpath(*record.path.split('/'))
+        save_root.mkdir(parents=True, exist_ok=False)
+        seeded = save_root / chosen_filename
+        _copy_verified_exact_checkpoint(source, seeded, record)
+        os.utime(seeded, None)
+        logger.info(
+            'full-state continuation: seeded %s; source run -> %s',
+            chosen_filename, archived)
+        _update_exact_resume_journal(journal_path, phase='seeded')
+        return str(archived), str(bundle), str(journal_path)
+    except Exception:
+        # Roll back without deleting evidence: if the fresh folder contains any
+        # partial work, move it beside the archive before restoring the source.
+        if training_folder.exists():
+            failed = Path(
+                f'{training_folder}_failed_full_state_'
+                f'{datetime.now().strftime("%Y%m%d-%H%M%S")}_{token}')
+            os.rename(training_folder, failed)
+        os.rename(archived, training_folder)
+        _fsync_directory(training_folder.parent)
+        _delete_exact_resume_journal(journal_path)
+        raise
+
+
+def _rollback_unlaunched_exact_resume(training_folder, archived):
+    """Restore the source lane when launch failed before a child process existed."""
+    training_folder = Path(training_folder)
+    archived = Path(archived)
+    if not archived.is_dir():
+        return
+    if training_folder.exists():
+        failed = Path(
+            f'{training_folder}_failed_full_state_'
+            f'{datetime.now().strftime("%Y%m%d-%H%M%S")}_{secrets.token_hex(4)}')
+        os.rename(training_folder, failed)
+    os.rename(archived, training_folder)
+    _fsync_directory(training_folder.parent)
+
+
+def _launch_exact_resume_transaction(
+        user_id, dataset_id, base, family, variant, chosen_filename,
+        bundle_id, inspection, training_folder, launch_kwargs,
+        *, allow_dead_predecessor=False):
+    """Archive, seed and launch one exact continuation under one ownership lock.
+
+    Validation and hashing deliberately stay outside this lock, but the first
+    live-lane rename through Popen (or pre-spawn rollback) is indivisible with
+    respect to every local launch/stop path.  This prevents a competing child
+    from taking ownership of the fresh lane before this transaction's exception
+    handler decides whether it is still safe to restore the archive.
+    """
+    with _launch_transaction_lock:
+        with _queue_lock:
+            _refuse_unresolved_exact_resume_transactions()
+            if queue_manager._get_system_state('training_in_progress', False):
+                previous_is_dead = _training_process_is_definitely_dead(
+                    queue_manager._get_system_state('training_pid', None))
+                if not (allow_dead_predecessor and previous_is_dead):
+                    raise ValueError('a training is already in progress')
+            archived, exact_bundle_path, journal_path = (
+                _archive_and_seed_exact_bundle(
+                    user_id, dataset_id, base, family, variant, chosen_filename,
+                    bundle_id, inspection))
+        try:
+            result = launch_training(
+                user_id,
+                dataset_id,
+                **launch_kwargs,
+                _state_restore_bundle=exact_bundle_path,
+                _state_bridge_required=True,
+                _state_resume_training_folder=training_folder,
+                _state_resume_archived=archived,
+                _state_resume_journal=journal_path,
+            )
+        except Exception:
+            # launch_training is required never to propagate after Popen. Thus an
+            # exception here is proof that no child exists. The transaction lock
+            # excludes competing launches; the queue lock makes the lane rename
+            # atomic with Stop/recovery ownership.
+            with _queue_lock:
+                _rollback_unlaunched_exact_resume(training_folder, archived)
+                _delete_exact_resume_journal(journal_path)
+            raise
+        return result, archived, exact_bundle_path, journal_path
+
+
 def _seed_continuation_from(user_id, dataset_id, base, family, variant,
                             chosen_filename) -> str:
-    """Prepare a LOCAL run to resume from a checkpoint that is NOT its latest (a
-    less-cooked earlier epoch — the classic « step 750 beat the over-cooked 1000 »).
-    ai-toolkit auto-resumes from the NEWEST file in the run's save_root, so a plain
-    relaunch would grab the latest checkpoint no matter what step we target. Instead
-    we set the whole run folder aside (rename to `_superseded_<ts>`, NEVER delete —
-    every original save stays on disk, recoverable, and still falls with the dataset
-    through the `lora_<trigger>` prefix) and seed ONLY the chosen checkpoint back into
-    a fresh save_root. ai-toolkit then finds that single file, loads its weights and
-    reads its resume step from the safetensors metadata — the exact mechanism the
-    cloud path uses to seed a checkpoint onto a fresh pod (_seed_resume_checkpoint).
-    The fresh save_root has no optimizer.pt, so the optimizer restarts clean from the
-    chosen step (correct — the latest run's optimizer state belongs to a later point).
-    Returns the archived folder path."""
+    """Prepare an explicit weights-only LOCAL continuation.
+
+    ai-toolkit otherwise auto-resumes from mutable sidecar state in the current
+    run folder.  That would make a UI choice labelled "weights only" untrue even
+    for the latest checkpoint.  Move the whole source run aside (never delete it)
+    and seed only the chosen public checkpoint into a fresh save_root.  Optimizer,
+    scheduler, scaler, RNG and dataloader state therefore restart deliberately.
+    Returns the archived folder path.
+    """
     ds = fds.get_dataset(user_id, dataset_id)
     trigger = _safe_trigger(ds)
     training_folder = _run_root(ds, base, family, variant)
@@ -7137,6 +8008,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       masked=None, allow_unverified_weights=False,
                       allow_caption_mismatch=False, allow_uncaptioned=False,
                       allow_caption_quality=False, from_step=None, overrides=None,
+                      resume_mode='weights_only', state_bundle_id=None,
                       allow_not_ready=False, _allow_dead_predecessor=False,
                       training_mode='lora') -> dict:
     """Reprend l'entraînement d'une base et vise ``step_de_reprise + extra_steps``.
@@ -7154,6 +8026,9 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     `base_model` absent → base persistée du dataset (ex. file d'attente). Fourni
     (sélection UI) → on reprend le run DE CETTE base précise : sinon on proposait
     « Continuer » sur une base sans run et on relançait en fait l'ancienne base."""
+    # Validate the caller-controlled restore contract before interpreter probes,
+    # dataset reads, archives or settings writes.
+    resume_mode = _validate_resume_contract(resume_mode, state_bundle_id)
     # Queue advancement calls this while the previous run's flag is still set
     # (so ComfyUI never grabs the GPU between jobs).  Only a *live* PID blocks;
     # a dead predecessor is precisely the normal queued-continue transition.
@@ -7194,10 +8069,12 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     if not cks:
         raise ValueError("no checkpoint to resume for this base - run a training first")
     latest = max(c['step'] for c in cks)
-    # Which checkpoint to resume FROM. Default = the latest (in-place, unchanged).
+    # Which checkpoint to resume FROM. Default = the latest.
     # A specific step lets the user restart from an earlier, better epoch.
     if from_step is None:
-        resume_step, chosen = latest, None
+        resume_step = latest
+        matches = [c for c in cks if c['step'] == resume_step]
+        chosen = min(matches, key=lambda c: bool(c.get('final')))
     else:
         try:
             resume_step = int(from_step)
@@ -7253,6 +8130,51 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         extra = max(100, int(extra_steps))
     except (TypeError, ValueError):
         extra = 1000
+    target_steps = resume_step + extra
+
+    # Exact continuation must preserve every trajectory-shaping setting. Save
+    # and sample boundaries affect ai-toolkit's main-vs-regularisation loader
+    # selection, so cadence changes are not merely presentation changes.
+    if resume_mode == 'full_state' and (
+            'lr_factor' in override_patch
+            or 'timestep_type' in override_patch
+            or 'save_every' in override_patch
+            or 'sample_every' in override_patch):
+        raise ValueError(
+            'full-state resume cannot change learning rate, timestep type, '
+            'save cadence or sample cadence; '
+            'keep the original trajectory or choose weights-only resume')
+
+    exact_inspection = None
+    exact_bundle_path = None
+    exact_model_pins = None
+    exact_journal_path = None
+    archived = None
+    if resume_mode == 'full_state':
+        from . import training_state_bundle
+        advertised = (chosen.get('resume_state') or {}).get('bundle_id')
+        if advertised != state_bundle_id:
+            raise ValueError(
+                'the selected state bundle does not belong to this checkpoint')
+        identity, expected, exact_model_pins = _exact_resume_identity(
+            ds, user_id, dataset_id, base, fam, var, target_steps, masked)
+        del identity
+        save_root = _run_dir(
+            user_id, dataset_id, base_model=base, family=fam, variant=var)
+        try:
+            exact_inspection = training_state_bundle.verify_bundle(
+                save_root, state_bundle_id, expected=expected)
+        except training_state_bundle.IncompatibleBundleError as exc:
+            raise ValueError(
+                'full-state bundle is incompatible with the current training '
+                f'context ({exc.reason}); choose weights-only resume') from exc
+        except training_state_bundle.InvalidBundleError as exc:
+            raise ValueError(
+                'full-state bundle is missing or corrupt '
+                f'({exc.reason}); choose weights-only resume') from exc
+        if exact_inspection.completed_step != resume_step:
+            raise ValueError(
+                'the selected state bundle does not belong to this checkpoint')
     # Resolve the LR factor (½/⅒) against THIS run's current effective settings into
     # an absolute learning_rate, refusing loudly on a Prodigy run BEFORE any side
     # effect (nothing archived or persisted). Keep current (factor absent) is a no-op.
@@ -7262,10 +8184,6 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # Apply the safe overrides (cadence / preview prompts / LR) before building the job.
     if override_patch:
         update_train_settings(user_id, dataset_id, override_patch)
-    # Restarting from BELOW the latest: seed the chosen checkpoint into a clean
-    # save_root so ai-toolkit resumes from IT, leaving the original saves intact.
-    if chosen is not None and resume_step < latest:
-        _seed_continuation_from(user_id, dataset_id, base, fam, var, chosen['filename'])
     # Reprendre AVEC la base/variante ciblée - sinon launch_training les remettrait
     # à l'officiel et ai-toolkit reprendrait depuis le mauvais run. vae/te restent
     # _PERSISTED (on garde le triplet du run). A custom Base/De-Turbo declaration
@@ -7281,19 +8199,66 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # explicit server-side acknowledgement.
     launch_allow_unverified = (allow_unverified_weights
                                or not needs_explicit_z_recipe)
-    res = launch_training(user_id, dataset_id, steps=resume_step + extra, check_captions=False,
-                          base_model=base, variant=var, train_type=fam,
-                          masked=masked,
-                          allow_caption_mismatch=allow_caption_mismatch,
-                          allow_uncaptioned=allow_uncaptioned,
-                          allow_caption_quality=allow_caption_quality,
-                          allow_not_ready=allow_not_ready,
-                          allow_unverified_weights=launch_allow_unverified,
-                          parent_record_id=(_parent.id if _parent else None),
-                          resumed_from=resume_step,
-                          training_mode=training_mode)
+    training_folder = (
+        _run_root(ds, base, fam, var)
+        if resume_mode == 'full_state' else None)
+    launch_kwargs = {
+        'steps': target_steps,
+        'check_captions': False,
+        'base_model': base,
+        'variant': var,
+        'train_type': fam,
+        'masked': masked,
+        'allow_caption_mismatch': allow_caption_mismatch,
+        'allow_uncaptioned': allow_uncaptioned,
+        'allow_caption_quality': allow_caption_quality,
+        'allow_not_ready': allow_not_ready,
+        'allow_unverified_weights': launch_allow_unverified,
+        'parent_record_id': (_parent.id if _parent else None),
+        'resumed_from': resume_step,
+        'training_mode': training_mode,
+        '_state_model_pins': (
+            exact_model_pins if resume_mode == 'full_state' else None),
+    }
+    # Both modes launch into a fresh lane. Weights-only seeds exactly one public
+    # checkpoint. Full-state keeps archive, seed, launch and any proven-pre-spawn
+    # rollback inside one queue ownership transaction.
+    if resume_mode == 'full_state':
+        res, archived, exact_bundle_path, exact_journal_path = (
+            _launch_exact_resume_transaction(
+                user_id,
+                dataset_id,
+                base,
+                fam,
+                var,
+                chosen['filename'],
+                state_bundle_id,
+                exact_inspection,
+                training_folder,
+                launch_kwargs,
+                allow_dead_predecessor=_allow_dead_predecessor,
+            )
+        )
+    else:
+        with _launch_transaction_lock:
+            with _queue_lock:
+                _refuse_unresolved_exact_resume_transactions()
+                if queue_manager._get_system_state(
+                        'training_in_progress', False):
+                    previous_is_dead = _training_process_is_definitely_dead(
+                        queue_manager._get_system_state('training_pid', None))
+                    if not (_allow_dead_predecessor and previous_is_dead):
+                        raise ValueError('a training is already in progress')
+                archived = _seed_continuation_from(
+                    user_id, dataset_id, base, fam, var, chosen['filename'])
+            res = launch_training(
+                user_id, dataset_id, **launch_kwargs)
     res['resumed_from'] = resume_step
-    res['target_steps'] = resume_step + extra
+    res['target_steps'] = target_steps
+    res['resume_mode'] = resume_mode
+    res['archived_run'] = archived
+    if resume_mode == 'full_state':
+        res['state_bundle_id'] = state_bundle_id
     return res
 
 
@@ -7985,7 +8950,7 @@ _TRAIN_IDENTITY_KEYS = (
     'training_pid', 'training_pid_create_time', 'training_dataset_id',
     'training_target_step',
     'training_run_token', 'training_train_type', 'training_variant',
-    'training_base_model', 'training_effective_base',
+    'training_base_model', 'training_effective_base', 'training_slider_mode',
     'training_training_adapter', 'training_recipe_version',
 )
 
@@ -8007,7 +8972,7 @@ def _training_process_create_time(pid) -> float | None:
         return None
 
 
-def _record_training_process_identity(pid) -> None:
+def _record_training_process_identity(pid) -> float | None:
     """Persist a PID plus birth time so a later PID reuse cannot be killed."""
     queue_manager._set_system_state(
         'training_pid', int(pid), ttl_seconds=_TRAIN_STATE_TTL)
@@ -8016,12 +8981,13 @@ def _record_training_process_identity(pid) -> None:
         logger.error(
             'training pid %s has no durable birth-time identity; keeping its GPU '
             'fence fail-closed after a restart', pid)
-        return
+        return None
     queue_manager._set_system_state(
         'training_pid_create_time', birth_time, ttl_seconds=_TRAIN_STATE_TTL)
+    return birth_time
 
 
-def _pid_alive(pid) -> bool | None:
+def _pid_alive_with_birth(pid, expected_raw) -> bool | None:
     """Return True (exact training child), False (confirmed old child gone), or None.
 
     A persisted PID alone is not safe after Flask restarts because Windows can
@@ -8048,8 +9014,6 @@ def _pid_alive(pid) -> bool | None:
         logger.warning('Could not inspect training pid %r: %s', pid, exc)
         return None
 
-    expected_raw = queue_manager._get_system_state(
-        'training_pid_create_time', None)
     try:
         expected_birth_time = float(expected_raw)
     except (TypeError, ValueError):
@@ -8065,6 +9029,12 @@ def _pid_alive(pid) -> bool | None:
             pid, expected_birth_time, current_birth_time)
         return False
     return True
+
+
+def _pid_alive(pid) -> bool | None:
+    expected_raw = queue_manager._get_system_state(
+        'training_pid_create_time', None)
+    return _pid_alive_with_birth(pid, expected_raw)
 
 
 def _training_process_is_definitely_dead(pid) -> bool:
@@ -8337,9 +9307,223 @@ def _launch_queued_item(item) -> None:
                         training_mode=mode)
 
 
+def _journal_path_is_unsafe(path: Path) -> bool:
+    """Reject links/reparses/non-directories in every existing ancestor."""
+    output = _absolute_lexical(_output_dir())
+    target = _absolute_lexical(path)
+    try:
+        if os.path.normcase(os.path.commonpath((output, target))) != os.path.normcase(
+                str(output)):
+            return True
+        relative = target.relative_to(output)
+    except (ValueError, OSError):
+        return True
+    current = output
+    candidates = [current]
+    for part in relative.parts:
+        current = current / part
+        candidates.append(current)
+    for candidate in candidates:
+        try:
+            info = os.lstat(candidate)
+        except FileNotFoundError:
+            # Missing descendants are not links. Every existing ancestor was
+            # checked before reaching the first absent component.
+            return False
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or (getattr(info, 'st_file_attributes', 0) & _REPARSE_POINT)
+            or not stat.S_ISDIR(info.st_mode)
+        ):
+            return True
+    return False
+
+
+def _rearm_exact_resume_fence(value, pid=None, birth_time=None) -> None:
+    queue_manager._set_system_state(
+        'training_in_progress', True, ttl_seconds=_TRAIN_STATE_TTL)
+    facts = {
+        'training_dataset_id': value.get('dataset_id'),
+        'training_run_token': value.get('run_token'),
+        'training_pid': pid,
+        'training_pid_create_time': birth_time,
+    }
+    for key, fact in facts.items():
+        if fact is not None:
+            queue_manager._set_system_state(
+                key, fact, ttl_seconds=_TRAIN_STATE_TTL)
+
+
+def _matching_journal_process_identity(value) -> tuple[object, object]:
+    pid = value.get('pid')
+    birth_time = value.get('pid_create_time')
+    if pid is not None and birth_time is not None:
+        return pid, birth_time
+    if not queue_manager._get_system_state('training_in_progress', False):
+        return pid, birth_time
+    persisted_token = queue_manager._get_system_state(
+        'training_run_token', None)
+    journal_token = value.get('run_token')
+    token_matches = bool(
+        journal_token and persisted_token == journal_token)
+    dataset_matches = (
+        not journal_token
+        and queue_manager._get_system_state(
+            'training_dataset_id', None) == value.get('dataset_id'))
+    if token_matches or dataset_matches:
+        return (
+            queue_manager._get_system_state('training_pid', pid),
+            queue_manager._get_system_state(
+                'training_pid_create_time', birth_time),
+        )
+    return pid, birth_time
+
+
+def _clear_matching_exact_resume_fence(value) -> None:
+    persisted_token = queue_manager._get_system_state(
+        'training_run_token', None)
+    journal_token = value.get('run_token')
+    if journal_token:
+        if persisted_token == journal_token:
+            _clear_training_identity(ttl_seconds=1)
+    elif persisted_token is None:
+        _clear_training_identity(ttl_seconds=1)
+
+
+def _reconcile_exact_resume_journals() -> bool:
+    """Recover exact-resume lane moves after watcher/Flask/process failure.
+
+    Returns True when at least one live or indeterminate transaction keeps the
+    GPU fence fail-closed.
+    """
+    try:
+        root = _exact_resume_journal_root()
+        entries = list(os.scandir(root))
+    except FileNotFoundError:
+        return False
+    except RuntimeError:
+        # The ordinary durable PID fence still works when ai-toolkit/output is
+        # temporarily unconfigured; there cannot be a discoverable journal root.
+        return False
+    except OSError:
+        logger.exception('could not inspect exact-resume recovery journals')
+        return True
+    held = False
+    candidates = []
+    for entry in entries:
+        if not _EXACT_RESUME_JOURNAL_RE.fullmatch(entry.name):
+            continue
+        try:
+            regular = entry.is_file(follow_symlinks=False)
+        except OSError:
+            logger.exception(
+                'could not validate exact-resume journal candidate %s',
+                entry.path)
+            held = True
+            continue
+        if not regular:
+            # A matching non-regular entry is untrusted recovery evidence. It
+            # cannot mask later real journals, and it must not make admission
+            # look clear merely because no-follow validation refused it.
+            logger.error(
+                'refusing non-regular exact-resume journal candidate %s',
+                entry.path)
+            held = True
+            continue
+        candidates.append(entry)
+    # Scan every validated candidate. The directory is private/local and a hard
+    # cap here is unsafe: enough junk names could otherwise push a live journal
+    # beyond the cap and make recovery incorrectly release launch admission.
+    for entry in candidates:
+        journal_path = Path(entry.path)
+        try:
+            value = _read_exact_resume_journal(journal_path)
+        except Exception:
+            logger.exception(
+                'refusing invalid exact-resume journal %s', journal_path)
+            held = True
+            continue
+        from . import aitoolkit_state_bridge
+        status = aitoolkit_state_bridge.read_status(value['status_path'])
+        if isinstance(status, dict) and status.get('training_started') is True:
+            try:
+                _delete_exact_resume_journal(journal_path)
+            except Exception:
+                logger.exception(
+                    'could not clear completed exact-resume journal %s',
+                    journal_path)
+                held = True
+            continue
+
+        training_folder = Path(value['training_folder'])
+        archived = Path(value['archived'])
+        if _journal_path_is_unsafe(training_folder) or _journal_path_is_unsafe(archived):
+            logger.error(
+                'refusing exact-resume rollback through unsafe run path: %s',
+                journal_path)
+            held = True
+            _rearm_exact_resume_fence(value)
+            continue
+        # Already rolled back (watcher won before Flask restarted), or the
+        # prepared intent was persisted before the source rename happened.
+        if training_folder.is_dir() and not archived.exists():
+            try:
+                _delete_exact_resume_journal(journal_path)
+            except Exception:
+                logger.exception(
+                    'could not clear idempotent exact-resume journal %s',
+                    journal_path)
+                held = True
+            continue
+
+        pid, birth_time = _matching_journal_process_identity(value)
+        if pid is not None:
+            alive = _pid_alive_with_birth(pid, birth_time)
+            if alive is not False:
+                held = True
+                _rearm_exact_resume_fence(
+                    value, pid=pid, birth_time=birth_time)
+                continue
+        elif value.get('phase') == 'launching':
+            # Flask may have died immediately after Popen returned but before a
+            # PID could be attached to either durable record. Absence of a PID is
+            # therefore never negative launch proof: keep the lane and GPU fence
+            # fail-closed until explicit operator recovery or stronger evidence.
+            held = True
+            _rearm_exact_resume_fence(value)
+            continue
+        elif value.get('phase') == 'spawned':
+            held = True
+            _rearm_exact_resume_fence(value)
+            continue
+
+        if not archived.is_dir():
+            # Neither a source archive nor a trusted live child can be proven.
+            # Keep evidence and the fence; guessing would risk data loss.
+            held = True
+            _rearm_exact_resume_fence(
+                value, pid=pid, birth_time=birth_time)
+            continue
+        try:
+            _rollback_unlaunched_exact_resume(
+                training_folder, archived)
+            _delete_exact_resume_journal(journal_path)
+            _clear_matching_exact_resume_fence(value)
+            logger.warning(
+                'recovered pre-boundary exact resume for dataset %s',
+                value.get('dataset_id'))
+        except Exception:
+            logger.exception(
+                'exact-resume restart rollback failed for %s', journal_path)
+            held = True
+            _rearm_exact_resume_fence(
+                value, pid=pid, birth_time=birth_time)
+    return held
+
+
 def recover_training_fence() -> str | None:
     """Reconcile the durable local-training GPU fence at boot or poll time."""
-    with _queue_lock, GPU_ARBITER_LOCK:
+    with _launch_transaction_lock, _queue_lock, GPU_ARBITER_LOCK:
         return _advance_training_queue()
 
 
@@ -8400,6 +9584,10 @@ def _due_index(q) -> int | None:
 
 
 def _advance_training_queue() -> str | None:
+    # First action under the launch locks: recover any exact-resume lane move
+    # whose watcher vanished with Flask. This must precede queue admission.
+    if _reconcile_exact_resume_journals():
+        return None
     flag = bool(queue_manager._get_system_state('training_in_progress', False))
     pid = queue_manager._get_system_state('training_pid', None)
     vision_busy = bool(queue_manager._get_system_state('vision_in_progress', False))
