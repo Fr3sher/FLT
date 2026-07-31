@@ -273,6 +273,144 @@ def test_capabilities_endpoint(client):
     caps = client.get('/api/capabilities').get_json()
     assert 'engines' in caps and 'studio_visible' in caps
 
+def _cloud_status(*, ok=True, namespace='lds-deliveries', error=None):
+    return {
+        'ok': ok,
+        'configured': True,
+        'code': 'ready' if ok else 'invalid',
+        'namespace': namespace if ok else None,
+        'settings_focus': 'HF_CLOUD_TOKEN',
+        'error': error,
+    }
+
+
+def test_put_settings_validates_cloud_token_candidate_before_saving(
+        client, monkeypatch):
+    import os
+    from app.services import cloud_training
+
+    candidate = 'hf_candidate_SECRET_MUST_NOT_BE_RETURNED'
+    seen = []
+
+    def validate(token, _api=None):
+        seen.append(token)
+        return _cloud_status()
+
+    monkeypatch.setattr(
+        cloud_training, 'full_transformer_token_status', validate)
+    response = client.put('/api/settings', json={
+        'secrets': {'HF_CLOUD_TOKEN': candidate},
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    check = payload['secret_checks']['HF_CLOUD_TOKEN']
+    assert seen == [candidate]
+    assert check == {
+        'ok': True,
+        'detail': (
+            'HF_CLOUD_TOKEN verified: krea/Krea-2-Raw is readable; '
+            'delivery namespace: lds-deliveries.'),
+        'code': 'ready',
+        'configured': True,
+        'settings_focus': 'HF_CLOUD_TOKEN',
+        'namespace': 'lds-deliveries',
+    }
+    assert payload['secrets']['HF_CLOUD_TOKEN'] is True
+    assert os.environ['HF_CLOUD_TOKEN'] == candidate
+    assert candidate not in response.get_data(as_text=True)
+
+
+def test_put_settings_rejects_invalid_cloud_token_atomically(
+        client, monkeypatch):
+    import os
+    from app import config
+    from app.services import cloud_training
+
+    previous = 'hf_previous_valid_token'
+    candidate = 'hf_bad_candidate_MUST_NOT_BE_RETURNED'
+    config.set_secrets({'HF_CLOUD_TOKEN': previous})
+    before_env = config.ENV_PATH.read_bytes()
+    before_url = client.get('/api/settings').get_json()['config']['ollama']['url']
+    seen = []
+
+    def reject(token, _api=None):
+        seen.append(token)
+        return _cloud_status(
+            ok=False,
+            error=(
+                'HF_CLOUD_TOKEN needs exact repo.content.read access to '
+                'krea/Krea-2-Raw.'))
+
+    monkeypatch.setattr(
+        cloud_training, 'full_transformer_token_status', reject)
+    response = client.put('/api/settings', json={
+        'config': {'ollama': {'url': 'http://must-not-save.invalid'}},
+        'secrets': {'HF_CLOUD_TOKEN': candidate},
+    })
+
+    assert response.status_code == 400
+    payload = response.get_json()
+    check = payload['secret_checks']['HF_CLOUD_TOKEN']
+    assert seen == [candidate]
+    assert check['ok'] is False
+    assert check['code'] == 'invalid'
+    assert 'repo.content.read' in check['detail']
+    assert candidate not in response.get_data(as_text=True)
+    assert client.get('/api/settings').get_json()['config']['ollama']['url'] == before_url
+    assert config.secret('HF_CLOUD_TOKEN') == previous
+    assert os.environ['HF_CLOUD_TOKEN'] == previous
+    assert config.ENV_PATH.read_bytes() == before_env
+
+
+def test_put_settings_skips_dense_validation_without_new_cloud_token(
+        client, monkeypatch):
+    from app.services import cloud_training
+
+    calls = []
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_status',
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    assert client.put('/api/settings', json={
+        'config': {'ollama': {'url': 'http://127.0.0.1:11501'}},
+    }).status_code == 200
+    assert client.put('/api/settings', json={
+        'secrets': {'HF_TOKEN': 'hf_classic_read_token'},
+    }).status_code == 200
+    assert calls == []
+
+
+def test_hf_cloud_connection_target_reports_ready_and_invalid(
+        client, monkeypatch):
+    from app.services import cloud_training
+
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_preflight',
+        lambda: _cloud_status(namespace='private-lds'),
+    )
+    ready = client.post('/api/settings/test/hf_cloud')
+    assert ready.status_code == 200
+    assert ready.get_json()['ok'] is True
+    assert ready.get_json()['namespace'] == 'private-lds'
+    assert 'krea/Krea-2-Raw is readable' in ready.get_json()['detail']
+
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_preflight',
+        lambda: _cloud_status(
+            ok=False, error='HF_CLOUD_TOKEN is not fine-grained.'),
+    )
+    invalid = client.post('/api/settings/test/hf_cloud')
+    assert invalid.status_code == 200
+    assert invalid.get_json()['ok'] is False
+    assert invalid.get_json()['detail'] == (
+        'HF_CLOUD_TOKEN is not fine-grained.')
+
+
 def test_test_connection_unknown_target(client):
     assert client.post('/api/settings/test/nope').status_code == 404
 

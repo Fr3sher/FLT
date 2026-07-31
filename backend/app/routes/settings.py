@@ -38,6 +38,30 @@ def _secret_presence() -> dict:
     return {name: bool(cfg.secret(name)) for name in cfg.SECRET_KEYS}
 
 
+def _hf_cloud_secret_check(status: dict) -> dict:
+    """Adapt the delivery preflight to the Settings TestResult contract."""
+    namespace = status.get('namespace')
+    if status.get('ok'):
+        detail = (
+            'HF_CLOUD_TOKEN verified: krea/Krea-2-Raw is readable; '
+            f'delivery namespace: {namespace}.')
+    else:
+        detail = (
+            status.get('error') or 'HF_CLOUD_TOKEN could not be verified.')
+    result = {
+        'ok': bool(status.get('ok')),
+        'detail': detail,
+        'code': status.get('code') or (
+            'ready' if status.get('ok') else 'invalid'),
+        'configured': bool(status.get('configured')),
+        'settings_focus': (
+            status.get('settings_focus') or 'HF_CLOUD_TOKEN'),
+    }
+    if namespace:
+        result['namespace'] = namespace
+    return result
+
+
 def _lan_ip():
     """This machine's primary LAN IPv4, or None. Uses the standard UDP-connect
     trick: opening a datagram socket toward a public address makes the OS pick the
@@ -221,6 +245,17 @@ def put_settings():
         node = config_partial.get(_managed)
         if isinstance(node, dict) and 'python' in node and not str(node.get('python') or '').strip():
             node.pop('python')
+    hf_cloud_check = None
+    hf_cloud_candidate = secrets_partial.get('HF_CLOUD_TOKEN')
+    if hf_cloud_candidate:
+        from ..services import cloud_training
+        hf_cloud_check = _hf_cloud_secret_check(
+            cloud_training.full_transformer_token_status(hf_cloud_candidate))
+        if not hf_cloud_check['ok']:
+            return jsonify({
+                'error': hf_cloud_check['detail'],
+                'secret_checks': {'HF_CLOUD_TOKEN': hf_cloud_check},
+            }), 400
     cfg.save_config(config_partial)
     cfg.set_secrets(secrets_partial)
     # A changed ComfyUI location must take effect NOW: the base/model listers cache
@@ -231,7 +266,10 @@ def put_settings():
     if 'comfyui' in config_partial:
         from ..utils import comfyui
         comfyui.clear_model_caches()
-    return jsonify(_settings_payload())
+    payload = _settings_payload()
+    if hf_cloud_check is not None:
+        payload['secret_checks'] = {'HF_CLOUD_TOKEN': hf_cloud_check}
+    return jsonify(payload)
 
 
 @bp.delete('/settings/secret/<name>')
@@ -332,6 +370,10 @@ def scoring_python_select():
 
 @bp.post('/settings/test/<target>')
 def test_connection(target):
+    if target == 'hf_cloud':
+        from ..services import cloud_training
+        return jsonify(_hf_cloud_secret_check(
+            cloud_training.full_transformer_token_preflight()))
     probe_fn = _TEST_TARGETS.get(target)
     if probe_fn is None:
         return jsonify({'error': f"unknown test target '{target}'"}), 404

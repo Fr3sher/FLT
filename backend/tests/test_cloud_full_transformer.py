@@ -860,6 +860,30 @@ def test_cloud_token_rejects_global_or_multiple_write_scopes_and_accepts_exact(
                 orgs=[{'name': 'unrelated-org'}]))
 
 
+def test_candidate_token_status_uses_the_candidate_and_scrubs_it(
+        ct, monkeypatch):
+    candidate = 'hf_candidate_NEVER_ECHO_THIS_VALUE'
+    saved = 'hf_saved_NEVER_ECHO_THIS_VALUE'
+    seen = []
+
+    def reject(token, _api=None):
+        seen.append(token)
+        raise ValueError(f'rejected credential {token}')
+
+    monkeypatch.setattr(ct, '_validate_full_transformer_token', reject)
+    candidate_status = ct.full_transformer_token_status(candidate)
+    assert seen == [candidate]
+    assert candidate_status['code'] == 'invalid'
+    assert candidate_status['configured'] is True
+    assert candidate not in str(candidate_status)
+
+    monkeypatch.setenv('HF_CLOUD_TOKEN', saved)
+    saved_status = ct.full_transformer_token_preflight()
+    assert seen[-1] == saved
+    assert saved_status['code'] == 'invalid'
+    assert saved not in str(saved_status)
+
+
 def test_echoed_remote_hf_token_is_discarded_immediately(ct):
     received = []
 
@@ -1063,8 +1087,19 @@ def test_supervisor_freeze_keeps_started_dense_pod(
 
 def test_cloud_token_presence_is_exposed_but_value_never_is(
         client, monkeypatch):
+    from app.services import cloud_training
+
     secret = 'hf_cloud_SUPERSECRET_NEVER_SERIALIZE'
     monkeypatch.delenv('HF_CLOUD_TOKEN', raising=False)
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_status',
+        lambda token, _api=None: {
+            'ok': True, 'configured': True, 'code': 'ready',
+            'namespace': 'tester', 'settings_focus': 'HF_CLOUD_TOKEN',
+            'error': None,
+        },
+    )
     saved = client.put(
         '/api/settings', json={'secrets': {'HF_CLOUD_TOKEN': secret}})
     assert saved.status_code == 200

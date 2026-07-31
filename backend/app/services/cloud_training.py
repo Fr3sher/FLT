@@ -376,14 +376,13 @@ def _validate_full_transformer_token(token, _api=None):
     return api, str(namespace)
 
 
-def full_transformer_token_preflight(_api=None) -> dict:
-    """Return a secret-free dense-token readiness state without renting a GPU.
+def full_transformer_token_status(token, _api=None) -> dict:
+    """Return a secret-free readiness state for one prospective cloud token.
 
     This intentionally performs the same authenticated scope/read checks as
     launch.  Launch calls the validator again as the authoritative TOCTOU-safe
     gate; callers may cache this serializable advisory response if desired.
     """
-    token = cfg.secret('HF_CLOUD_TOKEN')
     base = {
         'configured': bool(token),
         'namespace': None,
@@ -392,20 +391,28 @@ def full_transformer_token_preflight(_api=None) -> dict:
     if not token:
         return {
             **base, 'ok': False, 'code': 'missing',
-            'error': ('Dense Krea 2 cloud training requires a dedicated '
+            'error': ('Full-model Krea 2 cloud training requires a dedicated '
                       'HF_CLOUD_TOKEN.'),
         }
     try:
         _api_obj, namespace = _validate_full_transformer_token(token, _api=_api)
     except Exception as exc:
         # The validator deliberately raises only generic, token-free messages.
-        # Still scrub common token forms in case a future local seam regresses.
-        error = re.sub(r'\bhf_[A-Za-z0-9_-]{8,}\b', '[redacted]', str(exc))
+        # Still scrub both the exact candidate and common token forms in case a
+        # future local seam regresses.
+        error = str(exc).replace(str(token), '[redacted]')
+        error = re.sub(r'\bhf_[A-Za-z0-9_-]{8,}\b', '[redacted]', error)
         return {**base, 'ok': False, 'code': 'invalid', 'error': error}
     return {
         **base, 'ok': True, 'code': 'ready', 'namespace': namespace,
         'error': None,
     }
+
+
+def full_transformer_token_preflight(_api=None) -> dict:
+    """Check the saved dense-training token without exposing its value."""
+    return full_transformer_token_status(
+        cfg.secret('HF_CLOUD_TOKEN'), _api=_api)
 
 
 def _full_transformer_repo_name(run) -> str:
