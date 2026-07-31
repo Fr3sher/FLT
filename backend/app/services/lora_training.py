@@ -6318,14 +6318,17 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
                 'ok': False,
                 'configured': bool(cfg.secret('HF_CLOUD_TOKEN')),
                 'error': ('HF_CLOUD_TOKEN could not be validated. Configure a '
-                          'dedicated fine-grained Hugging Face token with Krea '
-                          'read and private-repository write access.'),
+                          'Hugging Face token with Krea read and repository '
+                          'write access; fine-grained is recommended and global '
+                          'write is accepted with a warning.'),
             }
         if hf_cloud_token_status.get('ok'):
             namespace = hf_cloud_token_status.get('namespace')
-            detail = ('Dedicated HF_CLOUD_TOKEN validated'
-                      + (f' for {namespace}' if namespace else ''))
-            _check('hf_cloud_token', 'Hugging Face cloud token', 'ok',
+            warning = hf_cloud_token_status.get('warning')
+            detail = warning or ('Dedicated HF_CLOUD_TOKEN validated'
+                                 + (f' for {namespace}' if namespace else ''))
+            _check('hf_cloud_token', 'Hugging Face cloud token',
+                   'warn' if warning else 'ok',
                    detail, scope='cloud')
         else:
             detail = (hf_cloud_token_status.get('error')
@@ -6334,9 +6337,10 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             _check(
                 'hf_cloud_token', 'Hugging Face cloud token', 'fail',
                 detail, 'gf-training', bypassable=False,
-                hint=('Add a dedicated fine-grained HF_CLOUD_TOKEN in Settings, '
-                      'with read access to krea/Krea-2-Raw and private-repository '
-                      'write access.'),
+                hint=('Add HF_CLOUD_TOKEN in Settings with read access to '
+                      'krea/Krea-2-Raw and repository write access. A '
+                      'fine-grained token is recommended; global write is '
+                      'accepted with a warning.'),
                 scope='cloud')
 
     # 1) minimum d'images par famille (slider : plancher substrat réduit)

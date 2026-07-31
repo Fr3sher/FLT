@@ -41,8 +41,9 @@ def _secret_presence() -> dict:
 def _hf_cloud_secret_check(status: dict) -> dict:
     """Adapt the delivery preflight to the Settings TestResult contract."""
     namespace = status.get('namespace')
+    warning = status.get('warning')
     if status.get('ok'):
-        detail = (
+        detail = warning or (
             'HF_CLOUD_TOKEN verified: krea/Krea-2-Raw is readable; '
             f'delivery namespace: {namespace}.')
     else:
@@ -54,9 +55,13 @@ def _hf_cloud_secret_check(status: dict) -> dict:
         'code': status.get('code') or (
             'ready' if status.get('ok') else 'invalid'),
         'configured': bool(status.get('configured')),
+        'severity': status.get('severity') or (
+            'success' if status.get('ok') else 'error'),
         'settings_focus': (
             status.get('settings_focus') or 'HF_CLOUD_TOKEN'),
     }
+    if warning:
+        result['warning'] = warning
     if namespace:
         result['namespace'] = namespace
     return result

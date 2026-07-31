@@ -138,7 +138,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | Scraping | `backend/requirements-scrape.txt`; Pexels also needs `PEXELS_API_KEY` and explicit authorization |
 | Local LoRA training: Z-Image / Krea 2 / FLUX.1 / FLUX.2 Klein / Anima | ai-toolkit; no ComfyUI is needed for official Hugging Face bases |
 | Local SDXL training | ai-toolkit + a base checkpoint discoverable in ComfyUI's model tree |
-| Cloud training | `VAST_API_KEY`; supported families are shown in the launch UI, and dense Krea 2 also needs the narrowly scoped `HF_CLOUD_TOKEN` |
+| Cloud training | `VAST_API_KEY`; supported families are shown in the launch UI. Full-model Krea 2 also needs `HF_CLOUD_TOKEN` with Krea base read and repository write access; fine-grained is recommended, global `role=write` is accepted with a warning, and read-only is rejected |
 | LoRA Canvas browsing, layout, notes and diffs | No external service; generating needs ComfyUI and same-family checkpoints, continuing needs the chosen local/cloud training lane |
 | Test Studio | ComfyUI reachable + assets for a supported Studio family |
 | Backup/restore and ZIP/folder merge | No external service |
@@ -249,7 +249,7 @@ The full path rules, model layouts and three-state Ollama detection are in the [
 | Hugging Face | Gated weights and optional publishing | [Hugging Face tokens](https://huggingface.co/settings/tokens) |
 | vast.ai | Optional cloud training | [vast.ai console](https://cloud.vast.ai/) |
 
-Secrets saved in Settings live in the git-ignored `.env`, never in `config.json` or a commit. Dense Krea 2 cloud runs use a separate, narrowly scoped `HF_CLOUD_TOKEN`; follow the [cloud-token instructions](docs/guide/settings-reference.md#cloud-training) rather than reusing a broad token.
+Secrets saved in Settings live in the git-ignored `.env`, never in `config.json` or a commit. Full-model Krea 2 cloud runs use a separate `HF_CLOUD_TOKEN`; a narrowly scoped fine-grained token is recommended, while a global `role=write` token is accepted with a broad-access warning and read-only is rejected. Follow the [cloud-token instructions](docs/guide/settings-reference.md#cloud-training).
 
 > **Pexels authorization required:** An API key alone does not authorize dataset or machine-learning use. Configure this integration only if Pexels has explicitly authorized this use case, and keep the attribution LDS displays. Read the [official Pexels terms and conditions](https://help.pexels.com/hc/en-us/articles/900005880463-What-are-the-Terms-and-Conditions/).
 

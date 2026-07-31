@@ -812,14 +812,20 @@ def test_dense_repo_preparation_failure_is_cleaned_and_repo_id_persisted(
         assert api.deleted == [{'repo_id': repo_id, 'repo_type': 'model'}]
 
 
-def test_cloud_token_must_be_fine_grained_with_real_read_write_rights(
+def test_cloud_token_accepts_global_write_and_requires_real_read_write_rights(
         ct, tmp_path):
-    with pytest.raises(ValueError, match='fine-grained'):
+    api, namespace, broad_access = ct._validate_full_transformer_token(
+        'hf-classic-write', _api=_FakeHfApi(tmp_path, role='write'))
+    assert namespace == 'tester'
+    assert broad_access is True
+    assert api.list_calls[-1]['repo_id'] == 'krea/Krea-2-Raw'
+
+    with pytest.raises(ValueError, match='requires write access'):
         ct._validate_full_transformer_token(
-            'hf-classic', _api=_FakeHfApi(tmp_path, role='write'))
+            'hf-classic-read', _api=_FakeHfApi(tmp_path, role='read'))
     with pytest.raises(ValueError, match='delivery namespace'):
         ct._validate_full_transformer_token(
-            'hf-read-only', _api=_FakeHfApi(
+            'hf-fine-grained-without-write', _api=_FakeHfApi(
                 tmp_path, permissions=['repo.content.read']))
     with pytest.raises(ValueError, match='cannot read'):
         ct._validate_full_transformer_token(
@@ -829,9 +835,10 @@ def test_cloud_token_must_be_fine_grained_with_real_read_write_rights(
 
 def test_cloud_token_rejects_global_or_multiple_write_scopes_and_accepts_exact(
         ct, tmp_path):
-    api, namespace = ct._validate_full_transformer_token(
+    api, namespace, broad_access = ct._validate_full_transformer_token(
         'hf-exact', _api=_FakeHfApi(tmp_path))
     assert namespace == 'tester'
+    assert broad_access is False
     assert api.list_calls[-1]['repo_id'] == 'krea/Krea-2-Raw'
 
     with pytest.raises(ValueError, match='global or broad'):
@@ -858,6 +865,32 @@ def test_cloud_token_rejects_global_or_multiple_write_scopes_and_accepts_exact(
             'hf-multiple-write', _api=_FakeHfApi(
                 tmp_path, scopes=broad_scopes,
                 orgs=[{'name': 'unrelated-org'}]))
+
+
+def test_cloud_token_status_distinguishes_scoped_global_and_read_only(
+        ct, tmp_path):
+    scoped = ct.full_transformer_token_status(
+        'hf-scoped', _api=_FakeHfApi(tmp_path))
+    assert scoped['code'] == 'ready'
+    assert scoped['severity'] == 'success'
+    assert scoped['warning'] is None
+
+    global_token = 'hf_global_NEVER_ECHO_THIS_VALUE'
+    broad = ct.full_transformer_token_status(
+        global_token, _api=_FakeHfApi(tmp_path, role='write'))
+    assert broad['ok'] is True
+    assert broad['code'] == 'broad_access'
+    assert broad['severity'] == 'warning'
+    assert broad['namespace'] == 'tester'
+    assert 'global write access' in broad['warning'].lower()
+    assert global_token not in str(broad)
+
+    read_only = ct.full_transformer_token_status(
+        'hf-read', _api=_FakeHfApi(tmp_path, role='read'))
+    assert read_only['ok'] is False
+    assert read_only['code'] == 'invalid'
+    assert read_only['severity'] == 'error'
+    assert 'write access' in read_only['error']
 
 
 def test_candidate_token_status_uses_the_candidate_and_scrubs_it(

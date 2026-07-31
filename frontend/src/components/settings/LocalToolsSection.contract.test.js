@@ -8,6 +8,8 @@ const primitives = readFileSync(
   new URL('./primitives.jsx', import.meta.url), 'utf8')
 const settingsPage = readFileSync(
   new URL('../../pages/SettingsPage.jsx', import.meta.url), 'utf8')
+const trainingPanel = readFileSync(
+  new URL('../dataset/TrainingPanel.jsx', import.meta.url), 'utf8')
 
 function handleSaveSource() {
   const start = settingsPage.indexOf('  const handleSave = async () => {')
@@ -64,13 +66,19 @@ test('dense cloud uses its own clearly scoped HF secret field', () => {
   assert.match(source, /contains only LDS deliveries/)
   assert.match(source, /per-run repository does not exist yet/)
   assert.doesNotMatch(source, /only its private delivery repositories/)
-  assert.match(source, /Never reuse a broad or general HF token/)
+  assert.match(source, /A global write token is also accepted/)
   const cloudTokenGuide = source.match(
     /<a\b[^>]*>\s*Create a fine-grained token on Hugging Face ↗\s*<\/a>/)
   assert.ok(cloudTokenGuide, 'the dedicated cloud-token guide link is present')
   assert.match(cloudTokenGuide[0], /href="https:\/\/huggingface\.co\/settings\/tokens\/new\?tokenType=fineGrained"/)
   assert.match(cloudTokenGuide[0], /target="_blank"/)
   assert.match(cloudTokenGuide[0], /rel="noreferrer"/)
+  const globalWriteGuide = source.match(
+    /<a\b[^>]*>\s*Create a global write token on Hugging Face ↗\s*<\/a>/)
+  assert.ok(globalWriteGuide, 'the global write-token guide link is present')
+  assert.match(globalWriteGuide[0], /tokenType=write/)
+  assert.match(globalWriteGuide[0], /target="_blank"/)
+  assert.match(globalWriteGuide[0], /rel="noreferrer"/)
   assert.match(source, /<SecretField field=\{HF_CLOUD_SECRET\}/)
   assert.match(source, /<SecretField field=\{HF_SECRET\}/)
 })
@@ -89,6 +97,10 @@ test('saving a pending HF cloud token consumes the PUT validation inline', () =>
   assert.match(successBody, /data\?\.secret_checks\?\.HF_CLOUD_TOKEN/)
   assert.match(successBody, /recordTestResult\('hf_cloud', cloudTokenCheck\)/)
   assert.match(successBody, /recordTestResult\('hf_cloud', cloudTokenCheck\)[\s\S]*toast\.success\('Settings saved\. Dedicated Hugging Face cloud token validated\.'\)/)
+  assert.match(successBody, /cloudTokenCheck\?\.code === 'broad_access'/)
+  assert.match(successBody, /cloudTokenCheck\?\.severity === 'warning'/)
+  assert.match(successBody, /toast\.warning\(/)
+  assert.match(successBody, /cloudTokenCheck\.warning/)
   assert.match(successBody, /else \{\s*toast\.success\('Settings saved\.'\)/)
   assert.doesNotMatch(handleSave, /postJson|\/api\/settings\/test\/hf_cloud/)
 })
@@ -110,6 +122,24 @@ test('a structured HF cloud validation failure stays inline and preserves the in
   )
 })
 
+test('HF validation results expose success, warning, and error without relying on color', () => {
+  assert.match(primitives, /result\.severity === 'warning' \|\| result\.code === 'broad_access'/)
+  assert.match(primitives, /success: \{ glyph: '\\u2713'.*text-emerald-400/)
+  assert.match(primitives, /warning: \{ glyph: '\\u26A0'.*text-amber-400/)
+  assert.match(primitives, /error: \{ glyph: '\\u2717'.*text-rose-400/)
+  assert.match(primitives, /role=\{level === 'error' \? 'alert' : 'status'\}/)
+  assert.match(primitives, /<span className="sr-only">\{presentation\.label\}: <\/span>\{detail\}/)
+})
+
+test('full-model notices recommend scoped access while accepting global write', () => {
+  assert.doesNotMatch(trainingPanel, /requires a fine-grained <code>HF_CLOUD_TOKEN<\/code>/)
+  assert.doesNotMatch(trainingPanel, /uploaded using a fine-grained <code>HF_CLOUD_TOKEN<\/code>/)
+  assert.equal((trainingPanel.match(/fine-grained token is recommended/g) || []).length, 2)
+  assert.equal(
+    (trainingPanel.match(/global\s+write token is also\s+accepted with a warning/g) || []).length,
+    2,
+  )
+})
 test('focus=HF_CLOUD_TOKEN lands on the secret input id', () => {
   assert.match(primitives, /id=\{f\.key\}/)
   assert.match(primitives, /htmlFor=\{f\.key\}/)

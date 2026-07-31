@@ -273,13 +273,16 @@ def test_capabilities_endpoint(client):
     caps = client.get('/api/capabilities').get_json()
     assert 'engines' in caps and 'studio_visible' in caps
 
-def _cloud_status(*, ok=True, namespace='lds-deliveries', error=None):
+def _cloud_status(*, ok=True, namespace='lds-deliveries', error=None,
+                  code=None, severity=None, warning=None):
     return {
         'ok': ok,
         'configured': True,
-        'code': 'ready' if ok else 'invalid',
+        'code': code or ('ready' if ok else 'invalid'),
+        'severity': severity or ('success' if ok else 'error'),
         'namespace': namespace if ok else None,
         'settings_focus': 'HF_CLOUD_TOKEN',
+        'warning': warning,
         'error': error,
     }
 
@@ -313,11 +316,46 @@ def test_put_settings_validates_cloud_token_candidate_before_saving(
             'delivery namespace: lds-deliveries.'),
         'code': 'ready',
         'configured': True,
+        'severity': 'success',
         'settings_focus': 'HF_CLOUD_TOKEN',
         'namespace': 'lds-deliveries',
     }
     assert payload['secrets']['HF_CLOUD_TOKEN'] is True
     assert os.environ['HF_CLOUD_TOKEN'] == candidate
+    assert candidate not in response.get_data(as_text=True)
+
+
+def test_put_settings_accepts_global_write_token_with_warning(
+        client, monkeypatch):
+    from app import config
+    from app.services import cloud_training
+
+    candidate = 'hf_global_write_SECRET_MUST_NOT_BE_RETURNED'
+    warning = (
+        'This global write token is accepted, but it can modify every '
+        'Hugging Face repository available to this account.')
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_status',
+        lambda token, _api=None: _cloud_status(
+            namespace='tester', code='broad_access', severity='warning',
+            warning=warning),
+    )
+
+    response = client.put('/api/settings', json={
+        'secrets': {'HF_CLOUD_TOKEN': candidate},
+    })
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    check = payload['secret_checks']['HF_CLOUD_TOKEN']
+    assert check['ok'] is True
+    assert check['code'] == 'broad_access'
+    assert check['severity'] == 'warning'
+    assert check['detail'] == warning
+    assert check['warning'] == warning
+    assert check['namespace'] == 'tester'
+    assert config.secret('HF_CLOUD_TOKEN') == candidate
     assert candidate not in response.get_data(as_text=True)
 
 
@@ -398,17 +436,33 @@ def test_hf_cloud_connection_target_reports_ready_and_invalid(
     assert ready.get_json()['namespace'] == 'private-lds'
     assert 'krea/Krea-2-Raw is readable' in ready.get_json()['detail']
 
+    warning = 'Global write access is accepted with a warning.'
     monkeypatch.setattr(
         cloud_training,
         'full_transformer_token_preflight',
         lambda: _cloud_status(
-            ok=False, error='HF_CLOUD_TOKEN is not fine-grained.'),
+            namespace='tester', code='broad_access', severity='warning',
+            warning=warning),
+    )
+    broad = client.post('/api/settings/test/hf_cloud')
+    assert broad.status_code == 200
+    assert broad.get_json()['ok'] is True
+    assert broad.get_json()['code'] == 'broad_access'
+    assert broad.get_json()['severity'] == 'warning'
+    assert broad.get_json()['detail'] == warning
+
+    monkeypatch.setattr(
+        cloud_training,
+        'full_transformer_token_preflight',
+        lambda: _cloud_status(
+            ok=False, error=('HF_CLOUD_TOKEN requires repository write access; '
+                             'read-only tokens cannot be used.')),
     )
     invalid = client.post('/api/settings/test/hf_cloud')
     assert invalid.status_code == 200
     assert invalid.get_json()['ok'] is False
     assert invalid.get_json()['detail'] == (
-        'HF_CLOUD_TOKEN is not fine-grained.')
+        'HF_CLOUD_TOKEN requires repository write access; read-only tokens cannot be used.')
 
 
 def test_test_connection_unknown_target(client):

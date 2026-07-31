@@ -442,8 +442,12 @@ def test_preflight_uses_exact_selected_base_and_variant(app, monkeypatch):
         ({'ok': False, 'configured': False,
           'error': 'HF_CLOUD_TOKEN is required in Settings'}, 'fail'),
         ({'ok': False, 'configured': True,
-          'error': 'HF_CLOUD_TOKEN needs fine-grained read/write scopes'}, 'fail'),
+          'error': ('HF_CLOUD_TOKEN requires repository write access; '
+                    'read-only tokens cannot be used')}, 'fail'),
         ({'ok': True, 'configured': True, 'namespace': 'tester'}, 'ok'),
+        ({'ok': True, 'configured': True, 'namespace': 'tester',
+          'severity': 'warning',
+          'warning': 'Global write access for tester is accepted with a warning.'}, 'warn'),
     ],
 )
 def test_dense_preflight_route_reports_dedicated_cloud_token(
@@ -472,7 +476,11 @@ def test_dense_preflight_route_reports_dedicated_cloud_token(
         assert token_status['error'] in payload['blockers']
         assert payload['verdict'] == 'blocked'
     else:
-        assert 'tester' in token_check['detail']
+        expected_warning = token_status.get('warning')
+        if expected_warning:
+            assert token_check['detail'] == expected_warning
+        else:
+            assert 'tester' in token_check['detail']
         assert not any('HF_CLOUD_TOKEN' in blocker
                        for blocker in payload['blockers'])
 

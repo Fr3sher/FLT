@@ -201,7 +201,12 @@ export default function SettingsPage() {
       // plain refresh() could leave onboarding/studio_visible stale right
       // after the config that determines them just changed.
       await refresh(true)
-      if (cloudTokenCheck?.ok) {
+      if (cloudTokenCheck?.code === 'broad_access' || cloudTokenCheck?.severity === 'warning') {
+        toast.warning(
+          cloudTokenCheck.warning || cloudTokenCheck.detail
+            || 'Settings saved, but this Hugging Face token has broad access.',
+        )
+      } else if (cloudTokenCheck?.ok) {
         toast.success('Settings saved. Dedicated Hugging Face cloud token validated.')
       } else {
         toast.success('Settings saved.')

@@ -2141,9 +2141,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             and at least 200 GB of disk.
           </p>
           <p className="m-0 mt-1 text-amber-100/95">
-            The ~26 GB model is uploaded using a fine-grained <code>HF_CLOUD_TOKEN</code> with no
-            global permissions: read access only to Krea 2 Raw and write access to a single dedicated
-            Hugging Face namespace containing only LDS deliveries. Configure it in{' '}
+            The ~26 GB model is uploaded using a dedicated <code>HF_CLOUD_TOKEN</code>. A tightly scoped
+            fine-grained token is recommended: read access only to Krea 2 Raw and write access to a single
+            dedicated Hugging Face namespace containing only LDS deliveries. A global write token is also
+            accepted with a warning. Configure it in{' '}
             <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>.
             {' '}Stopping the run or hitting the runtime cap may lose the latest full-model checkpoint if it has not been uploaded.
           </p>
@@ -4069,10 +4070,9 @@ function CloudLaunchDialog({
 
         {fullMode && (
           <p className="m-0 rounded-lg border border-amber-400/35 bg-amber-500/[0.08] px-3 py-2 text-amber-100 text-[0.75rem] leading-relaxed">
-            This run requires a fine-grained <code>HF_CLOUD_TOKEN</code> with no global permissions:
-            read access only to <code>krea/Krea-2-Raw</code> and write access to a single dedicated user
-            or organization namespace containing only LDS deliveries. A per-run repository does not
-            exist when this token is created. Configure it in{' '}
+            This run requires an <code>HF_CLOUD_TOKEN</code> that can read <code>krea/Krea-2-Raw</code> and
+            write the delivery repository. A tightly scoped fine-grained token is recommended. A global
+            write token is also accepted with a warning. Configure it in{' '}
             <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>
             {' '}before renting the GPU.
           </p>

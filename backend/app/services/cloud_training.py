@@ -341,8 +341,15 @@ def _full_transformer_delivery_namespace(who) -> str:
     return namespace
 
 
+_BROAD_HF_TOKEN_WARNING = (
+    'This Hugging Face token has global write access to every repository the '
+    'account can modify. It is accepted, but a dedicated fine-grained token '
+    'limited to Krea 2 reads and one LDS delivery namespace is strongly '
+    'recommended.')
+
+
 def _validate_full_transformer_token(token, _api=None):
-    """Require a dedicated fine-grained token with real read/write rights.
+    """Require real Krea read rights and usable delivery write rights.
 
     ``whoami`` proves the token type and advertised scopes; listing the gated
     official base proves that the token/account can actually read it.  Private
@@ -351,29 +358,38 @@ def _validate_full_transformer_token(token, _api=None):
     """
     if not token:
         raise ValueError(
-            'full_transformer cloud training requires a dedicated '
-            'HF_CLOUD_TOKEN (fine-grained read/write token)')
+            'full_transformer cloud training requires HF_CLOUD_TOKEN with '
+            'repository write access (fine-grained recommended; global write '
+            'accepted with a warning)')
     api = _api or _make_hf_api(token)
     try:
         who = api.whoami() or {}
     except Exception:
         raise ValueError(
-            'HF_CLOUD_TOKEN could not be authenticated; create a dedicated '
-            'fine-grained token and try again') from None
+            'HF_CLOUD_TOKEN could not be authenticated; verify the token and '
+            'try again (fine-grained recommended; global write accepted)') from None
     access = ((who.get('auth') or {}).get('accessToken') or {})
     role = re.sub(r'[^a-z]', '', str(access.get('role') or '').lower())
-    if role != 'finegrained':
+    if role == 'finegrained':
+        namespace = _full_transformer_delivery_namespace(who)
+        broad_access = False
+    elif role == 'write':
+        namespace = str((who or {}).get('name') or '').strip()
+        if not namespace:
+            raise ValueError(
+                'HF_CLOUD_TOKEN authenticated identity has no usable delivery namespace')
+        broad_access = True
+    else:
         raise ValueError(
-            'HF_CLOUD_TOKEN must be a dedicated fine-grained token, not a '
-            'classic or general-purpose token')
-    namespace = _full_transformer_delivery_namespace(who)
+            'HF_CLOUD_TOKEN requires write access to create and upload the '
+            'private delivery repository; read-only tokens cannot be used')
     try:
         api.list_repo_files(repo_id=_KREA_BASE_REPO, repo_type='model')
     except Exception:
         raise ValueError(
             'HF_CLOUD_TOKEN cannot read krea/Krea-2-Raw; accept its licence '
             'with the same Hugging Face account and grant this token access') from None
-    return api, str(namespace)
+    return api, str(namespace), broad_access
 
 
 def full_transformer_token_status(token, _api=None) -> dict:
@@ -387,25 +403,36 @@ def full_transformer_token_status(token, _api=None) -> dict:
         'configured': bool(token),
         'namespace': None,
         'settings_focus': 'HF_CLOUD_TOKEN',
+        'warning': None,
     }
     if not token:
         return {
-            **base, 'ok': False, 'code': 'missing',
+            **base, 'ok': False, 'code': 'missing', 'severity': 'error',
             'error': ('Full-model Krea 2 cloud training requires a dedicated '
                       'HF_CLOUD_TOKEN.'),
         }
     try:
-        _api_obj, namespace = _validate_full_transformer_token(token, _api=_api)
+        _api_obj, namespace, broad_access = _validate_full_transformer_token(
+            token, _api=_api)
     except Exception as exc:
         # The validator deliberately raises only generic, token-free messages.
         # Still scrub both the exact candidate and common token forms in case a
         # future local seam regresses.
         error = str(exc).replace(str(token), '[redacted]')
         error = re.sub(r'\bhf_[A-Za-z0-9_-]{8,}\b', '[redacted]', error)
-        return {**base, 'ok': False, 'code': 'invalid', 'error': error}
+        return {
+            **base, 'ok': False, 'code': 'invalid', 'severity': 'error',
+            'error': error,
+        }
+    if broad_access:
+        return {
+            **base, 'ok': True, 'code': 'broad_access',
+            'severity': 'warning', 'namespace': namespace, 'error': None,
+            'warning': _BROAD_HF_TOKEN_WARNING,
+        }
     return {
         **base, 'ok': True, 'code': 'ready', 'namespace': namespace,
-        'error': None,
+        'severity': 'success', 'warning': None, 'error': None,
     }
 
 
@@ -488,7 +515,8 @@ def _create_full_transformer_repo(run, token, _api=None) -> dict:
     errors can include request diagnostics, and secrets never belong in the
     run JSON or application log.
     """
-    api, namespace = _validate_full_transformer_token(token, _api=_api)
+    api, namespace, _broad_access = _validate_full_transformer_token(
+        token, _api=_api)
     repo_id = f'{namespace}/{_full_transformer_repo_name(run)}'
     try:
         api.create_repo(repo_id=repo_id, repo_type='model', private=True,
