@@ -17,13 +17,22 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
-import torch
-from torch.utils.data import DataLoader, TensorDataset
+
+try:
+    import torch
+except ModuleNotFoundError as exc:
+    if exc.name != "torch":
+        raise
+    torch = None
+
+if torch is not None:
+    from torch.utils.data import DataLoader, TensorDataset
+else:
+    DataLoader = TensorDataset = None
 
 from app.services import aitoolkit_state_bridge as activation
 from app.services import training_state_bundle as bundles
 from app.training_bridge import lds_aitk_bridge_contract as bridge_contract
-from app.training_bridge import lds_aitk_bridge_runtime as runtime
 from app.training_bridge.lds_aitk_bridge_contract import (
     BRIDGE_PROTOCOL,
     ENV_AITK_ROOT,
@@ -35,6 +44,19 @@ from app.training_bridge.lds_aitk_bridge_contract import (
     IDENTITY_SCHEMA,
     atomic_json_nofollow,
     probe_aitoolkit_source,
+)
+
+# requirements-dev intentionally excludes Torch.  The production runtime imports
+# it eagerly, so keep the activation/security contracts collectable in lean CI
+# and skip only the tests which need that runtime module.
+if torch is not None:
+    from app.training_bridge import lds_aitk_bridge_runtime as runtime
+else:
+    runtime = None
+
+_requires_torch_runtime = pytest.mark.skipif(
+    torch is None,
+    reason="the ai-toolkit bridge runtime requires torch",
 )
 
 
@@ -160,7 +182,10 @@ def _identity(path: Path) -> Path:
                 "base_hash": "base-v1",
                 "network_hash": "network-v1",
                 "toolkit_revision": "toolkit-v1",
-                "runtime": {"torch": torch.__version__, "device": "cpu"},
+                "runtime": {
+                    "torch": getattr(torch, "__version__", "not-installed"),
+                    "device": "cpu",
+                },
             }
         ),
         encoding="utf-8",
@@ -303,7 +328,10 @@ def _dataset_config():
     )
 
 
-class _BucketDataset(torch.utils.data.Dataset):
+_TorchDatasetBase = torch.utils.data.Dataset if torch is not None else object
+
+
+class _BucketDataset(_TorchDatasetBase):
     def __init__(self, root: Path, tokens, *, saved_layout: bool):
         root.mkdir(parents=True, exist_ok=True)
         self.dataset_config = _dataset_config()
@@ -426,7 +454,7 @@ def test_sitecustomize_defers_runtime_until_upstream_accelerator_returns(tmp_pat
     log = tmp_path / "bootstrap-order.log"
     status = tmp_path / "bridge-status.json"
 
-    sitecustomize_source = Path(runtime.__file__).with_name(
+    sitecustomize_source = Path(bridge_contract.__file__).with_name(
         "sitecustomize.py"
     ).read_text(encoding="utf-8")
     (bootstrap / "sitecustomize.py").write_text(
@@ -707,6 +735,7 @@ def test_environment_overlay_refuses_linked_restore_directory(
         _remove_directory_link(restore)
 
 
+@_requires_torch_runtime
 def test_capture_disk_preflight_fails_before_runtime_workdir(
     tmp_path, monkeypatch
 ):
@@ -727,6 +756,7 @@ def test_capture_disk_preflight_fails_before_runtime_workdir(
     assert bundles.list_bundles(trainer.save_root) == []
 
 
+@_requires_torch_runtime
 def test_restore_disk_preflight_fails_before_runtime_workdir_or_copy(
     tmp_path, monkeypatch
 ):
@@ -760,6 +790,7 @@ def test_restore_disk_preflight_fails_before_runtime_workdir_or_copy(
     assert runtime._EARLY_CACHE_ARCHIVE is None
 
 
+@_requires_torch_runtime
 def test_runtime_scavenger_requires_exact_old_name_and_proven_dead_owner(
     tmp_path, monkeypatch
 ):
@@ -812,6 +843,7 @@ def test_runtime_scavenger_requires_exact_old_name_and_proven_dead_owner(
     assert malformed.exists()
 
 
+@_requires_torch_runtime
 def test_exact_cpu_bundle_restores_rng_raw_ema_optimizer_scheduler_and_cursor(
     tmp_path, monkeypatch
 ):
@@ -876,6 +908,7 @@ def test_exact_cpu_bundle_restores_rng_raw_ema_optimizer_scheduler_and_cursor(
     assert torch.equal(actual_random[2], expected_random[2])
 
 
+@_requires_torch_runtime
 def test_exact_capture_refuses_non_boundary_and_worker_prefetch(tmp_path, monkeypatch):
     monkeypatch.setenv(ENV_IDENTITY_FILE, str(_identity(tmp_path / "identity.json")))
     trainer = _Trainer(tmp_path / "run")
@@ -891,6 +924,7 @@ def test_exact_capture_refuses_non_boundary_and_worker_prefetch(tmp_path, monkey
         runtime.instrument_dataloader(worker_loader, "main")
 
 
+@_requires_torch_runtime
 def test_exact_capture_refuses_non_bucket_random_crop(tmp_path, monkeypatch):
     monkeypatch.setenv(ENV_IDENTITY_FILE, str(_identity(tmp_path / "identity.json")))
     trainer = _Trainer(tmp_path / "random-crop")
@@ -905,6 +939,7 @@ def test_exact_capture_refuses_non_bucket_random_crop(tmp_path, monkeypatch):
     assert bundles.list_bundles(trainer.save_root) == []
 
 
+@_requires_torch_runtime
 def test_bucket_state_and_exact_cache_bytes_restore_before_fresh_cache(
     tmp_path, monkeypatch
 ):
@@ -1008,6 +1043,7 @@ def test_bucket_state_and_exact_cache_bytes_restore_before_fresh_cache(
     assert resumed.step_num == 4
 
 
+@_requires_torch_runtime
 def test_linear_cached_dataset_runs_epoch_zero_cache_hooks_before_saved_epoch(
     tmp_path, monkeypatch
 ):
@@ -1085,6 +1121,7 @@ def test_linear_cached_dataset_runs_epoch_zero_cache_hooks_before_saved_epoch(
     assert runtime._EARLY_CACHE_ARCHIVE is None
 
 
+@_requires_torch_runtime
 def test_existing_stream_late_state_load_does_not_draw_a_new_global_seed():
     torch.manual_seed(4321)
     original = DataLoader(
@@ -1117,6 +1154,7 @@ def test_existing_stream_late_state_load_does_not_draw_a_new_global_seed():
     assert torch.equal(torch.get_rng_state(), before)
 
 
+@_requires_torch_runtime
 def test_sampler_restore_preserves_exhaustion_epoch_transition():
     torch.manual_seed(7123)
     original = DataLoader(
@@ -1159,6 +1197,7 @@ def test_sampler_restore_preserves_exhaustion_epoch_transition():
     )
 
 
+@_requires_torch_runtime
 def test_dataset_content_or_mask_change_fails_before_cache_materialization(tmp_path):
     original = _BucketDataset(
         tmp_path / "identity-original",
@@ -1190,6 +1229,7 @@ def test_dataset_content_or_mask_change_fails_before_cache_materialization(tmp_p
     assert not (tmp_path / "identity-changed" / "_t_e_cache").exists()
 
 
+@_requires_torch_runtime
 def test_cached_dataset_rejects_missing_saved_cache_descriptors(tmp_path):
     original = _BucketDataset(
         tmp_path / "cache-original",
@@ -1222,6 +1262,7 @@ def test_cached_dataset_rejects_missing_saved_cache_descriptors(tmp_path):
     assert not (tmp_path / "cache-fresh" / "_latent_cache").exists()
 
 
+@_requires_torch_runtime
 def test_cache_materialization_refuses_linked_cache_parent_without_external_write(
     tmp_path, monkeypatch
 ):
@@ -1270,6 +1311,7 @@ def test_cache_materialization_refuses_linked_cache_parent_without_external_writ
         _remove_directory_link(linked_cache)
 
 
+@_requires_torch_runtime
 def test_cache_destination_refuses_linked_dataset_ancestor(tmp_path):
     outside = tmp_path / "outside-dataset"
     outside.mkdir()
@@ -1290,6 +1332,7 @@ def test_cache_destination_refuses_linked_dataset_ancestor(tmp_path):
         _remove_directory_link(linked_dataset)
 
 
+@_requires_torch_runtime
 def test_preprocessing_cache_archive_rejects_traversal_members(tmp_path):
     archive_path = tmp_path / "unsafe.tar"
     with tarfile.open(archive_path, mode="w") as archive:
@@ -1304,6 +1347,7 @@ def test_preprocessing_cache_archive_rejects_traversal_members(tmp_path):
     assert not (tmp_path.parent / "outside.safetensors").exists()
 
 
+@_requires_torch_runtime
 def test_terminal_bundle_uses_equal_completed_and_next_step(tmp_path, monkeypatch):
     monkeypatch.setenv(ENV_IDENTITY_FILE, str(_identity(tmp_path / "identity.json")))
     trainer = _Trainer(tmp_path / "terminal")
