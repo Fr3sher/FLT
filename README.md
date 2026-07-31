@@ -336,6 +336,7 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
   - [Run it your way](#run-it-your-way) — full local, API-only, **Docker**
   - [Setup & install](#setup--install)
     - [Docker (API-only, no GPU)](#option-3--docker-api-only)
+    - [Docker (GPU + ComfyUI)](#option-4--docker-gpu--comfyui)
   - [Minimum requirements](#minimum-requirements)
   - [Configuration & settings reference](#configuration--settings-reference)
   - [Exposing the app beyond localhost](#exposing-the-app-beyond-localhost)
@@ -705,9 +706,11 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 
 ## Run it your way
 
-**API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
+**API-only** — dataset creation, generation via Gemini/ChatGPT/OpenRouter, import, manual curation/captions, cloud training on vast.ai, publishing to Hugging Face, backup and export. Runs on any machine with Python and no GPU; this is what the API-only Docker image ships. No ComfyUI, ai-toolkit or local ML extras required.
 
-The Docker image installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What the container cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA. Local training needs ai-toolkit on the host.
+There are two Docker images. The **API-only** one (`Dockerfile` / `docker-compose.yml`) installs `backend/requirements.txt` only, so the scraper (`requirements-scrape.txt`) and the ML extras (`requirements-ml.txt`) are **not** in it — they can be installed from the app afterwards, but a container recreate wipes them. What it cannot do at all is the ComfyUI half: Klein/Krea generation, the Test Studio, and deploying a trained LoRA.
+
+The **GPU** one (`Dockerfile.gpu` / `docker-compose.gpu.yml`) runs ComfyUI inside the same container on an NVIDIA GPU, so that ComfyUI half works — see [Option 4](#option-4--docker-gpu--comfyui). It ships the ML extras too. Local training still needs ai-toolkit on the host in both cases.
 
 **Full local** — everything above plus Klein/Z-Image generation, captioning via JoyCaption, face scoring, masks, the Image bank scoring pass, training, and Test Studio. Requires ComfyUI and/or ai-toolkit running on the same host (or reachable over the network) and an NVIDIA GPU with 12 GB+ VRAM for Klein/Z-Image inference. Training VRAM depends on the model family — check the family's ai-toolkit preset before queuing a run. The face-scoring and masking helpers (`requirements-ml.txt`) run fine on CPU; they don't need the GPU.
 
@@ -812,7 +815,56 @@ Then build and run:
 docker compose up --build
 ```
 
-This builds and runs the API-only mode (see `Dockerfile` / `docker-compose.yml`) — ComfyUI and ai-toolkit are host-native tools and out of scope for the container. Data persists to `./data-docker` on the host, and your API keys are mounted in from `.env`.
+This builds and runs the API-only mode (see `Dockerfile` / `docker-compose.yml`) — ComfyUI and ai-toolkit are host-native tools and out of scope for this container. See [Option 4](#option-4--docker-gpu--comfyui) for the image that runs ComfyUI too. Data persists to `./data-docker` on the host, and your API keys are mounted in from `.env`.
+
+### Option 4 — Docker (GPU + ComfyUI)
+
+One container running **both** the app and ComfyUI on your NVIDIA GPU. This is the image to use if you want Klein/Z-Image generation, the Test Studio or LoRA deployment without installing ComfyUI yourself.
+
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The CUDA 12.x compatibility minimum is **525.60.13 on Linux** or **528.33 on Windows/WSL**. For the default CUDA 12.9 image, NVIDIA's recommended floor is **575.51.03 on Linux** or **576.02 on Windows**. The optional CUDA 13 image needs an **R580+** driver.
+
+```bash
+cp .env.example .env
+mkdir -p run basedir data-docker-gpu bank-images
+docker compose -f docker-compose.gpu.yml up --build
+```
+
+Create those four folders **yourself, before the first start**. Docker creates a missing bind-mount source as `root`, and the container runs as your own user — so if you skip the `mkdir`, the app refuses to start and says so in the log (ComfyUI still comes up). The same applies to `docker-compose.yml`'s `./data-docker`.
+
+The app is then on `http://127.0.0.1:5050/` and ComfyUI's own web UI on `http://127.0.0.1:8188/`, the container reports `healthy`, and Settings ▸ Local tools shows ComfyUI as reachable with a valid install folder — verified end to end on an NVIDIA RTX 3500 Ada with driver 580. Compose publishes both ports on the host's interfaces by default, so the same UIs remain reachable on your LAN at `http://<host-ip>:5050/` and `http://<host-ip>:8188/`. The ComfyUI folder settings are filled in for you on first boot, and anything you change in Settings afterwards survives a restart.
+
+It is built on [ComfyUI-Nvidia-Docker](https://github.com/mmartial/ComfyUI-Nvidia-Docker), which installs and updates ComfyUI itself — the first boot is slow because it creates ComfyUI's environment and downloads torch. `docker-compose.gpu.yml` runs under its own Compose project name, so it and the API-only stack can run at the same time — starting one does not stop the other. The two stacks also default to **separate** data directories (`./data-docker-gpu` here vs. `./data-docker` for Option 3), and that separation matters: pointing both at the same `LDS_DATA` puts two Flask processes on one SQLite database and one `config.json`, and must not be done.
+
+**Restarts and updates are container-managed.** When the Studio is asked to restart, it exits back to the launcher's supervisor, which respawns it immediately on the fixed `0.0.0.0:5050` container bind; it does not start a competing loopback process, and LAN access is preserved. The in-app updater cannot replace the image's `/app` files. Update the Studio source and recreate the image instead:
+
+```bash
+git pull
+docker compose -f docker-compose.gpu.yml up -d --build
+```
+
+Four host folders, all relocatable from `.env` (see the Docker block in `.env.example`):
+
+| Folder | Holds | Variable |
+|---|---|---|
+| `./run` | ComfyUI's own environment, checkout and HF cache | `LDS_COMFY_RUN` |
+| `./basedir` | parent containing ComfyUI's `models/`, `input/`, `output/` and `custom_nodes/` | `LDS_COMFY_BASEDIR` |
+| `./data-docker-gpu` | the app's datasets, database and `config.json` | `LDS_DATA` |
+| `./bank-images` | unsorted images for the 🗃️ Image bank to triage, mounted at `/images` | `LDS_BANK_SOURCES` |
+
+Point `LDS_COMFY_BASEDIR` at the **parent** that directly contains `models/`, `input/`, `output/` and `custom_nodes/` — never at `models/` itself — and nothing is downloaded twice. Point `LDS_BANK_SOURCES` at a photo dump you want to triage: a bank reads those images **in place** and copies only what you promote into a dataset. In **New bank**, type the path *inside* the container (`/images`, or a sub-folder like `/images/telegram-export`); the host path does not exist in there. 🗑 **Delete rejected** is the one bank action that writes to that folder, so mount it `:ro` if you want the originals untouchable. Set `LDS_UID`/`LDS_GID` to the owner of those folders (`id -u` / `id -g`; on Unraid usually `99`/`100`) or the container cannot write to them. As a last resort, `LDS_FORCE_CHOWN=true` recursively adopts the `LDS_DATA` mount (`/data`) **only**; it never changes ownership of the ComfyUI or image-bank mounts.
+
+On a shared box you can also cap what it takes — `LDS_MEM_LIMIT`, `LDS_MEMSWAP_LIMIT` (memory **and** swap combined, so it has to be ≥ the memory cap) and `LDS_CPUS`, all unlimited unless you set them. Cap generously: the first boot installs torch and ComfyUI's whole dependency tree, and a tight limit shows up as a *killed* install rather than a slow one. `LDS_DNS` sets the container's resolver, defaulting to `1.1.1.1` — point it at your own router or Pi-hole if you reach anything by internal hostname.
+
+**Limits worth knowing before you build:**
+
+- **About 20 GB of disk before you download a single model**: the image itself is 11.3 GB and ComfyUI's own environment in `./run` is a further 8.4 GB. `--build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu` saves roughly 7 GB and leaves the GPU entirely to ComfyUI — only ✨ Score falls back to the CPU.
+- **It needs working internet — and working DNS — on every start, not just the first one.** The upstream base image re-installs its installer (`uv`, from `astral.sh`) and updates ComfyUI before either service launches, and it exits if a hostname does not resolve. `curl: (6) Could not resolve host: astral.sh` followed by `!! ERROR: uv not found after installation` in the log is that: a name did not resolve inside the container — not the GPU, the driver or the app. First check whether the container is on a network at all: `docker inspect -f '{{json .NetworkSettings.Networks}}' lora-dataset-studio-gpu` answering `{}` means it is orphaned from a network that no longer exists, and `up` has been restarting it ever since — `down`, then `up --force-recreate`. On **Unraid** that is the usual cause, and the cure is **Settings → Docker → "Preserve user defined networks" = Yes**: on the default `No` it deletes Compose networks when the array stops. Otherwise it is a boot race (autostart before the host's network is up — `restart: unless-stopped` retries and the next attempt gets through) or a resolver the container cannot reach. The compose file has an **active** `dns: ${LDS_DNS:-1.1.1.1}` entry; set `LDS_DNS` to a reachable router or Pi-hole when Cloudflare DNS is inappropriate. There is no offline mode for this image.
+- **Ollama is not included**, so auto-captioning, framing auto-classify, head-crop and watermark detection need an Ollama elsewhere: uncomment the `extra_hosts` and `LDS_OLLAMA_URL` lines in the compose file to reach one running on the host.
+- **Local training is not included** — that is ai-toolkit on the host, or [cloud training](#no-gpu-train-in-the-cloud).
+- **Watermark inpainting does not currently work in Docker.**
+- **Neither port is authenticated**, exactly like Option 3. See [Exposing the app beyond localhost](#exposing-the-app-beyond-localhost) before putting them on a LAN.
+- **Extra installs may briefly fail right after a container recreate**: the launcher adopts `/app/.venv` in the background first (it walks ~7 GB), and installing extra dependencies from inside the app won't work until that finishes — the container logs say so. The image already ships the ML extras, so this rarely matters.
+- If you mount your own `/userscripts_dir` into the container you will shadow the app's launcher and only ComfyUI will start.
 
 ### External tools (install once, connect in Settings)
 
@@ -864,7 +916,7 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 |---|---|---|---|
 | **API-only** (generate via Gemini/ChatGPT, import/scrape, curate, caption manually, export/backup) | none | ~2 GB | Any machine with Python 3.10–3.12; Docker image available |
 | **Auto-captioning & framing** (Ollama vision, 8B model) | ~8 GB VRAM | ~7 GB | Runs alongside generation, not concurrently |
-| **Local generation** (Klein 9B **KV** fp8 via ComfyUI) | ~16 GB VRAM | ~30 GB (model + text encoder + VAE) | Free, NSFW-capable; Setup downloads the models. The KV build is up to **2.5× faster on multi-reference edits** at the same quality, and downloads publicly (no HF token) |
+| **Local generation** (Klein 9B **KV** fp8 via ComfyUI) | ~16 GB VRAM | ~30 GB (model + text encoder + VAE) | Free, NSFW-capable; Setup downloads the models. The KV build is up to **2.5× faster on multi-reference edits** at the same quality, and downloads publicly (no HF token). Available in Docker via `docker-compose.gpu.yml` |
 | **LoRA training — Z-Image / SDXL** (ai-toolkit) | 16 GB+ recommended | 10 GB+ free enforced per run | Quantized (qfloat8) + low-VRAM mode |
 | **LoRA training — Krea 2** (ai-toolkit) | **24 GB VRAM** at 1024px (enforced warning) | ~24 GB base download (Raw) + 10 GB+ free | 12B model. Under 24 GB, set **Resolution → 768 only** in ⚙️ Advanced options — the main VRAM lever |
 | **LoRA training — FLUX.2 Klein** (ai-toolkit) | 4B: **16–24 GB VRAM** · 9B: **32–48 GB** (cloud lane) | base download + 10 GB+ free | Both bases gated on Hugging Face (HF token required). Train the 9B via ☁️ cloud |

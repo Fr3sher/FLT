@@ -314,6 +314,13 @@ export const WHATS_NEW = [
     to: '/datasets?section=training',
   },
   {
+    id: '2026-07-28-docker-image-with-comfyui-and-your-gpu',
+    date: '2026-07-28',
+    title: 'A Docker image that brings its own ComfyUI — and uses your GPU',
+    blurb:
+      'The Docker image could not do the ComfyUI half of the app at all: no Klein or Z-Image generation, no Test Studio, no deploying a trained LoRA, because ComfyUI was a host-native tool the container could not see. A second image now runs ComfyUI inside the same container on your NVIDIA GPU, with the folder paths already filled in — start it with "docker compose -f docker-compose.gpu.yml up --build". The API-only image is unchanged for machines without a GPU. Two honest limits: it is a large download, about 20 GB before you download a single model, and local training still needs ai-toolkit on the host.',
+  },
+  {
     id: '2026-07-28-notifications-are-no-longer-hidden-behind-dialogs',
     date: '2026-07-28',
     title: 'Notifications no longer disappear behind an open dialog',
