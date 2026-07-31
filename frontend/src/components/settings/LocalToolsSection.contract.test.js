@@ -18,6 +18,12 @@ test('dense cloud uses its own clearly scoped HF secret field', () => {
   assert.match(source, /per-run repository does not exist yet/)
   assert.doesNotMatch(source, /only its private delivery repositories/)
   assert.match(source, /Never reuse a broad or general HF token/)
+  const cloudTokenGuide = source.match(
+    /<a\b[^>]*>\s*Create a fine-grained token on Hugging Face ↗\s*<\/a>/)
+  assert.ok(cloudTokenGuide, 'the dedicated cloud-token guide link is present')
+  assert.match(cloudTokenGuide[0], /href="https:\/\/huggingface\.co\/settings\/tokens\/new\?tokenType=fineGrained"/)
+  assert.match(cloudTokenGuide[0], /target="_blank"/)
+  assert.match(cloudTokenGuide[0], /rel="noreferrer"/)
   assert.match(source, /<SecretField field=\{HF_CLOUD_SECRET\}/)
   assert.match(source, /<SecretField field=\{HF_SECRET\}/)
 })

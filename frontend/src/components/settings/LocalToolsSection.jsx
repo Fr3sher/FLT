@@ -20,6 +20,16 @@ const HF_SECRET = {
 const HF_CLOUD_SECRET = {
   key: 'HF_CLOUD_TOKEN', label: 'Dedicated Hugging Face cloud token', testTarget: null,
   help: 'Required only for dense Krea 2 cloud training. Create a separate fine-grained token with zero global permissions: grant repo.content.read exactly on krea/Krea-2-Raw, then repo.content.read + repo.write on one dedicated HF user/org namespace that contains only LDS deliveries. A per-run repository does not exist yet when the token is created, so scope write access to that single dedicated namespace and nothing else. Never reuse a broad or general HF token here.',
+  guide: (
+    <a
+      href="https://huggingface.co/settings/tokens/new?tokenType=fineGrained"
+      target="_blank"
+      rel="noreferrer"
+      className="mb-2 inline-block max-w-full text-xs font-medium text-sky-300 underline underline-offset-2 hover:text-sky-200"
+    >
+      Create a fine-grained token on Hugging Face ↗
+    </a>
+  ),
 }
 
 /* Ollama's three live states, from capabilities (installed + reachable):
