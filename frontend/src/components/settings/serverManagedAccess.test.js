@@ -10,9 +10,9 @@ const helperBlock = source.match(
 assert.ok(helperBlock, 'managed access helpers must stay available to the unit test')
 
 const helpers = Function(
-  `${helperBlock.replace(/\bexport\s+/g, '')}\nreturn { managedBrowserAccess, resolveServerAccess }`,
+  `${helperBlock.replace(/\bexport\s+/g, '')}\nreturn { managedBrowserAccess, resolveServerAccess, shouldShowRemoteControls }`,
 )()
-const { managedBrowserAccess, resolveServerAccess } = helpers
+const { managedBrowserAccess, resolveServerAccess, shouldShowRemoteControls } = helpers
 
 test('managed access uses the browser origin instead of container addresses', () => {
   const access = resolveServerAccess({
@@ -52,6 +52,22 @@ test('managed loopback origins never claim LAN availability', () => {
     assert.equal(access.port, 8080, origin)
     assert.equal(access.lanIp, null, origin)
   }
+})
+
+test('managed loopback keeps token controls available without offering a QR link', () => {
+  const access = resolveServerAccess({
+    bindManaged: true,
+    browserOrigin: 'http://127.0.0.1:5050',
+    configHost: '0.0.0.0',
+    configPort: 5050,
+    runtimeLanIp: '172.19.0.2',
+  })
+
+  assert.equal(access.lan, false)
+  assert.equal(shouldShowRemoteControls(true, access.lan), true)
+  assert.equal(shouldShowRemoteControls(false, access.lan), false)
+  assert.match(source, /\{showRemoteControls && \([\s\S]*?Require an access token/)
+  assert.match(source, /\{lan && \([\s\S]*?Open it on your phone/)
 })
 
 test('managed browser-origin fallback is safe when no HTTP origin exists', () => {
@@ -104,4 +120,8 @@ test('managed UI wires URLs and status to browser access, never runtime LAN data
   assert.match(source, /lanIp: null/)
   assert.match(source, /url: `\$\{access\.origin\}\/\$\{tokenQS\}`/)
   assert.match(source, /Opened at:[\s\S]{0,120}\{access\.origin\}/)
+  assert.match(source, /Current browser address uses a network host/)
+  assert.match(source, /That does not reveal whether Docker is exposed/)
+  assert.match(source, /any device that can reach this Docker service/)
+  assert.doesNotMatch(source, /Change the Docker host mapping to expose it/)
 })

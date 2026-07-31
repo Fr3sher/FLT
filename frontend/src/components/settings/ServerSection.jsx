@@ -52,6 +52,10 @@ export function resolveServerAccess({ bindManaged, browserOrigin, configHost, co
     lanIp: runtimeLanIp || null,
   }
 }
+
+export function shouldShowRemoteControls(bindManaged, lan) {
+  return bindManaged || lan
+}
 /* managed-access:end */
 
 /* Server bind (host/port/LAN access). host/port live in config.server and are only
@@ -73,6 +77,7 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
     runtimeLanIp: runtime.lan_ip,
   })
   const lan = access.lan
+  const showRemoteControls = shouldShowRemoteControls(bindManaged, lan)
   const requireToken = !!config.server.require_token
   // Real LAN IPv4 of this machine (backend socket probe), so the remote-access
   // URL is copyable as-is instead of a <this-computer> placeholder. null when the
@@ -190,13 +195,13 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
       <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-raised px-3 py-2.5">
         <div>
           <p className="text-sm font-medium text-content">
-            {bindManaged ? 'Opened through a network address' : 'Available on the local network'}
+            {bindManaged ? 'Current browser address uses a network host' : 'Available on the local network'}
           </p>
           <p className="mt-0.5 text-xs text-content-muted">
             {bindManaged
               ? (lan
-                ? 'On because this browser is using a non-loopback address. Docker and network rules determine which other devices can reach it.'
-                : 'Off because this browser is using a local-only address. Change the Docker host mapping to expose it.')
+                ? 'On because this browser is using a non-loopback address. Docker and network rules still determine which other devices can reach it.'
+                : 'Off because this browser is using a loopback address. That does not reveal whether Docker is exposed; open the app through the host’s LAN address to get a shareable link and QR code.')
               : 'Off (default): only this computer can open the app. On: any device on your Wi-Fi/LAN can reach it — e.g. from your phone — using the plain URL below.'}
           </p>
         </div>
@@ -205,14 +210,14 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
           disabled={bindManaged}
           aria-describedby={bindManaged ? 'server-bind-managed-note' : undefined}
           onClick={() => setField('server', 'host', lan ? '127.0.0.1' : '0.0.0.0')}
-          aria-label={bindManaged ? 'Opened through a network address' : 'Available on the local network'}
+          aria-label={bindManaged ? 'Current browser address uses a network host' : 'Available on the local network'}
           className={`relative h-6 w-11 shrink-0 scroll-mt-24 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${lan ? 'bg-emerald-500' : 'bg-surface border border-border-strong'}`}>
           <span aria-hidden
             className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${lan ? 'translate-x-5' : 'translate-x-0'}`} />
         </button>
       </div>
 
-      {lan && (
+      {showRemoteControls && (
         <>
           {/* Trusted-LAN default: no token to type on a phone. The token is an
               opt-in extra layer, off by default (see backend server.require_token). */}
@@ -220,9 +225,13 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
             <div>
               <p className="text-sm font-medium text-content">Require an access token</p>
               <p className="mt-0.5 text-xs text-content-muted">
-                {requireToken
-                  ? 'On: remote devices must open the URL WITH the token once (a session cookie takes over after). Extra safety on a shared or untrusted network.'
-                  : 'Off (default): anyone on your Wi-Fi/LAN can open the app with no password. Fine for a home network; turn on if the network is shared or untrusted.'}
+                {bindManaged
+                  ? (requireToken
+                    ? 'On: devices that can reach this Docker service must open a tokenized URL once (a session cookie takes over after).'
+                    : 'Off: any device that can reach this Docker service can open it with no password. Docker and network rules determine whether it is exposed.')
+                  : (requireToken
+                    ? 'On: remote devices must open the URL WITH the token once (a session cookie takes over after). Extra safety on a shared or untrusted network.'
+                    : 'Off (default): anyone on your Wi-Fi/LAN can open the app with no password. Fine for a home network; turn on if the network is shared or untrusted.')}
               </p>
             </div>
             <button id="server-require-token" type="button" role="switch" aria-checked={requireToken}
@@ -262,50 +271,52 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
             </div>
           )}
 
-          {/* Open it on your phone: scannable QR + copyable URLs, detected from
-              the machine's real addresses — no more guessing which IP/port. */}
-          <div className="rounded-lg border border-border bg-surface-raised px-3 py-3">
-            <p className="text-sm font-medium text-content">Open it on your phone</p>
-            {reachUrls.length > 0 ? (
-              <div className="mt-2 flex items-start gap-4">
-                {qrUrl && (
-                  <div className="shrink-0 rounded-md bg-white p-2" title={qrUrl}>
-                    <QRCodeSVG value={qrUrl} size={128} level="M" marginSize={2} />
-                  </div>
-                )}
-                <div className="min-w-0 flex-1 space-y-2">
-                  <p className="text-xs text-content-muted">
-                    {bindManaged
-                      ? 'Open the same address below from another device that can reach this Docker host.'
-                      : 'Point your phone camera at the code — or open a link below. The LAN link needs the phone on the same Wi-Fi; the Tailscale link works from anywhere.'}
-                  </p>
-                  {reachUrls.map((u) => (
-                    <div key={u.key} className="flex items-center gap-2">
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] uppercase tracking-wide text-content-subtle">{u.label}</p>
-                        <code className="block truncate text-xs text-content">{u.url}</code>
-                      </div>
-                      <button type="button" onClick={() => copyUrl(u.key, u.url)}
-                        className="shrink-0 rounded-md border border-border-strong px-2 py-0.5 text-xs font-medium text-content hover:bg-surface-raised">
-                        {copiedUrl === u.key ? 'Copied ✓' : 'Copy'}
-                      </button>
+          {lan && (
+            /* Open it on your phone: scannable QR + copyable URLs, detected from
+               the machine's real addresses — no more guessing which IP/port. */
+            <div className="rounded-lg border border-border bg-surface-raised px-3 py-3">
+              <p className="text-sm font-medium text-content">Open it on your phone</p>
+              {reachUrls.length > 0 ? (
+                <div className="mt-2 flex items-start gap-4">
+                  {qrUrl && (
+                    <div className="shrink-0 rounded-md bg-white p-2" title={qrUrl}>
+                      <QRCodeSVG value={qrUrl} size={128} level="M" marginSize={2} />
                     </div>
-                  ))}
+                  )}
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <p className="text-xs text-content-muted">
+                      {bindManaged
+                        ? 'Open the same address below from another device that can reach this Docker host.'
+                        : 'Point your phone camera at the code — or open a link below. The LAN link needs the phone on the same Wi-Fi; the Tailscale link works from anywhere.'}
+                    </p>
+                    {reachUrls.map((u) => (
+                      <div key={u.key} className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] uppercase tracking-wide text-content-subtle">{u.label}</p>
+                          <code className="block truncate text-xs text-content">{u.url}</code>
+                        </div>
+                        <button type="button" onClick={() => copyUrl(u.key, u.url)}
+                          className="shrink-0 rounded-md border border-border-strong px-2 py-0.5 text-xs font-medium text-content hover:bg-surface-raised">
+                          {copiedUrl === u.key ? 'Copied ✓' : 'Copy'}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              </div>
-            ) : requireToken && !token ? (
-              <p className="mt-1 text-xs text-content-subtle">
-                Turn the token on, then <span className="text-content">Generate new token</span> (or
-                Save &amp; restart) — the scannable link appears once a token exists.
-              </p>
-            ) : (
-              <p className="mt-1 break-all text-xs text-content-subtle">
-                Couldn’t detect this machine’s address. From another device open{' '}
-                <code className="text-content">http://&lt;this-computer&apos;s LAN IP&gt;:{port}/</code>{' '}
-                (find the IP by running <code className="text-content">ipconfig</code>).
-              </p>
-            )}
-          </div>
+              ) : requireToken && !token ? (
+                <p className="mt-1 text-xs text-content-subtle">
+                  Turn the token on, then <span className="text-content">Generate new token</span> (or
+                  Save &amp; restart) — the scannable link appears once a token exists.
+                </p>
+              ) : (
+                <p className="mt-1 break-all text-xs text-content-subtle">
+                  Couldn’t detect this machine’s address. From another device open{' '}
+                  <code className="text-content">http://&lt;this-computer&apos;s LAN IP&gt;:{port}/</code>{' '}
+                  (find the IP by running <code className="text-content">ipconfig</code>).
+                </p>
+              )}
+            </div>
+          )}
         </>
       )}
 
