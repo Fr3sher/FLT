@@ -1356,7 +1356,9 @@ def test_klein_generate_activity_cleared_on_cancel(app, monkeypatch):
     # cancel_pending tries to cancel the queued job — stub the queue away.
     with app.app_context():
         import app.job_queue as jq
-        monkeypatch.setattr(jq.queue_manager, 'cancel_job', lambda *a, **k: True)
+        monkeypatch.setattr(
+            jq.queue_manager, 'cancel_job_outcome',
+            lambda *a, **k: 'cancelled')
         ds = svc.create_dataset(LOCAL_USER, 'KC', 'kc')
         d = svc._dataset_dir(ds.id); os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, 'ref.webp'), 'wb') as fh:
@@ -1367,6 +1369,80 @@ def test_klein_generate_activity_cleared_on_cancel(app, monkeypatch):
         assert da.get(ds.id)['kind'] == 'generate' and da.get(ds.id)['total'] == 2
         svc.cancel_pending(LOCAL_USER, ds.id)
         assert da.get(ds.id) is None
+
+
+def test_cancel_pending_keeps_card_when_comfyui_cancel_is_unconfirmed(app, monkeypatch):
+    """A failed remote proof must leave a second Stop/recovery handle in the UI."""
+    from app.config import LOCAL_USER
+    from app.job_queue import queue_manager
+    from app.models import FaceDatasetImage
+    from app.services import dataset_activity as da
+    from app.services import face_dataset_service as svc
+
+    with app.app_context():
+        da.reset()
+        ds = svc.create_dataset(LOCAL_USER, 'Recovery handle', 'recovery-handle')
+        image = FaceDatasetImage(
+            dataset_id=ds.id,
+            source='generated',
+            status='pending',
+            job_id='comfy-recovery-job',
+        )
+        svc.db.session.add(image)
+        svc.db.session.commit()
+        image_id = image.id
+        outcomes = iter(('retry', 'cancelled'))
+        monkeypatch.setattr(
+            queue_manager, 'cancel_job_outcome', lambda *a, **k: next(outcomes))
+
+        result = svc.cancel_pending(LOCAL_USER, ds.id)
+
+        assert result == {
+            'cancelled': 0, 'recovery_pending': 1,
+            'retry_pending': 1, 'restart_required': 0, 'recovery_error': 0,
+        }
+        preserved = svc.db.session.get(FaceDatasetImage, image_id)
+        assert preserved is not None
+        assert preserved.status == 'pending'
+        assert preserved.job_id == 'comfy-recovery-job'
+        activity = da.get(ds.id)
+        assert activity and activity['kind'] == 'generate'
+
+        retried = svc.cancel_pending(LOCAL_USER, ds.id)
+        assert retried == {
+            'cancelled': 1, 'recovery_pending': 0,
+            'retry_pending': 0, 'restart_required': 0, 'recovery_error': 0,
+        }
+        assert svc.db.session.get(FaceDatasetImage, image_id) is None
+        assert da.get(ds.id) is None
+        da.reset()
+
+
+def test_cancel_pending_preserves_card_behind_corrupt_global_barrier(app):
+    """Invalid barrier JSON is still a global lock, never proof a card is safe."""
+    from app.config import LOCAL_USER
+    from app.job_queue import COMFYUI_STALLED_BARRIER_KEY
+    from app.models import FaceDatasetImage, SystemState
+    from app.services import face_dataset_service as svc
+
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Corrupt recovery', 'corrupt-recovery')
+        card = FaceDatasetImage(
+            dataset_id=ds.id, source='generated', status='pending',
+            job_id='missing-but-not-safe')
+        svc.db.session.add(card)
+        svc.db.session.add(SystemState(
+            key=COMFYUI_STALLED_BARRIER_KEY, value='{invalid-json'))
+        svc.db.session.commit()
+        card_id = card.id
+
+        result = svc.cancel_pending(LOCAL_USER, ds.id)
+        assert result == {
+            'cancelled': 0, 'recovery_pending': 1,
+            'retry_pending': 0, 'restart_required': 0, 'recovery_error': 1,
+        }
+        preserved = svc.db.session.get(FaceDatasetImage, card_id)
+        assert preserved is not None and preserved.job_id == 'missing-but-not-safe'
 
 
 # --- Import d'un dataset existant (ZIP kohya) --------------------------------

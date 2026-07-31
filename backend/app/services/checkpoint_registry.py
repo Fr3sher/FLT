@@ -247,6 +247,18 @@ def network_geometry(rec):
     if network_type not in ('lora', 'lokr'):
         return out
     out['network_type'] = network_type
+    if network_type == 'lora':
+        # Conv LoRA adds a second set of adapter tensors. New snapshots record
+        # explicit nulls for linear-only; missing keys on legacy records remain
+        # unknown and are intentionally not inferred.
+        for key in ('conv', 'conv_alpha'):
+            if key not in cfg:
+                continue
+            val = cfg[key]
+            if val is None:
+                out[key] = None
+            elif isinstance(val, int) and not isinstance(val, bool) and val > 0:
+                out[key] = val
     # These keys only describe a LoKr checkpoint.  Their absence on an older
     # snapshot is meaningful: ai-toolkit's defaults changed, so guessing False
     # or auto would turn an unknown legacy fact into an unsafe assertion.

@@ -1185,8 +1185,30 @@ def dataset_delete(dataset_id):
 def dataset_cancel(dataset_id):
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    n = svc.cancel_pending(LOCAL_USER, dataset_id)
-    return jsonify({'ok': True, 'cancelled': n})
+    result = svc.cancel_pending(LOCAL_USER, dataset_id)
+    return jsonify({'ok': True, **result})
+
+
+@bp.post('/dataset/<int:dataset_id>/confirm-comfyui-restart')
+def dataset_confirm_comfyui_restart(dataset_id):
+    """Resolve an unknown generation submission after an explicit restart."""
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed_comfyui_restart') is not True:
+        return jsonify({
+            'error': 'Confirm that you restarted ComfyUI before clearing this paused job.',
+        }), 400
+    # Confirmation is meaningful only when the replacement ComfyUI answers now.
+    gate = _require_comfyui(force=True)
+    if gate:
+        return gate
+    try:
+        cancelled = svc.confirm_unknown_generation_restart(
+            LOCAL_USER, dataset_id, restart_confirmed=True)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, 'cancelled': cancelled})
 
 
 @bp.post('/dataset/image/<int:image_id>/delete')

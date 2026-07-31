@@ -566,7 +566,10 @@ export function useDataset() {
     setCaptioning(true);
     try {
       const d = await postJson(`/api/dataset/${currentId}/caption`, mode ? { mode } : {});
-      if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
+      if (!d.ok) {
+        toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
+        return;
+      }
       if (d.stopped) toast.info(`Stopped — ${d.captioned} captioned before you stopped; the rest stays uncaptioned.`);
       else toast.success(`${d.captioned} captioned`);
       await refresh();
@@ -582,7 +585,10 @@ export function useDataset() {
     setCaptioning(true);
     try {
       const d = await postJson(`/api/dataset/${currentId}/caption`, { force: true, ...(mode ? { mode } : {}) });
-      if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
+      if (!d.ok) {
+        toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
+        return;
+      }
       if (d.stopped) toast.info(`Stopped — ${d.captioned} re-captioned before you stopped; the rest keeps its previous caption.`);
       else toast.success(`${d.captioned} re-captioned`);
       await refresh();
@@ -1033,8 +1039,41 @@ export function useDataset() {
 
   const cancelPending = useCallback(async () => {
     const d = await postJson(`/api/dataset/${currentId}/cancel`);
-    if (d.ok) toast.success(`${d.cancelled} generation(s) cancelled`);
-    else toast.error(d.error || 'Unexpected error');
+    if (d.ok && d.recovery_error) {
+      toast.error(
+        `${d.recovery_error} generation(s) was preserved because LDS found an invalid ` +
+        'ComfyUI recovery record. Do not delete the cards; check the server logs before retrying.'
+      );
+    } else if (d.ok && d.restart_required) {
+      toast.error(
+        `${d.restart_required} generation(s) has an unknown ComfyUI submission. ` +
+        'Restart ComfyUI, then confirm the restart; LDS kept the card so recovery stays safe.'
+      );
+      const confirmed = globalThis.confirm?.(
+        'ComfyUI must be restarted before LDS can safely clear this generation.\n\n' +
+        'Click OK only if you have now restarted ComfyUI and it is responding.'
+      );
+      if (confirmed) {
+        const recovered = await postJson(
+          `/api/dataset/${currentId}/confirm-comfyui-restart`,
+          { confirmed_comfyui_restart: true },
+        );
+        if (recovered.ok) {
+          toast.success(`${recovered.cancelled} paused generation(s) recovered`);
+        } else {
+          toast.error(recovered.error || 'ComfyUI restart recovery failed');
+        }
+      }
+    } else if (d.ok && d.retry_pending) {
+      toast.error(
+        `${d.retry_pending} generation(s) still await exact ComfyUI recovery. ` +
+        'The cards were preserved — wait for ComfyUI to respond, then press Stop again.'
+      );
+    } else if (d.ok) {
+      toast.success(`${d.cancelled} generation(s) cancelled`);
+    } else {
+      toast.error(d.error || 'Unexpected error');
+    }
     await refresh();
   }, [currentId, refresh, toast]);
 

@@ -1287,6 +1287,10 @@ def set_train_type(user_id, dataset_id, train_type) -> bool:
     # --- family-scoped train_settings keys, same stash/restore contract --------
     scoped = _lt._FAMILY_SCOPED_SETTING_KEYS
     settings = _lt._train_settings(ds)
+    # An applied preset is itself family-scoped. Invalidate that replacement
+    # before stashing/restoring individual family values, otherwise its hidden
+    # topology/optimizer/step fields could survive under the new family's UI.
+    _lt.clear_active_preset_settings(settings)
     smemory = family_settings_memory(ds)
     smemory[old_fam] = {k: settings[k] for k in scoped if k in settings}
     incoming = smemory.get(new_fam)
@@ -2506,9 +2510,28 @@ def delete_dataset(user_id, dataset_id):
     return True
 
 
+def _finish_cancelled_generation_row(img):
+    """Remove one safely terminal generation while preserving rescue originals."""
+    if img.derivation_kind == KLEIN_SMALL_IMAGE:
+        img.status = 'failed'
+        img.fail_reason = 'Klein small-image rescue was cancelled.'
+    else:
+        db.session.delete(img)
+
+
 def cancel_pending(user_id, dataset_id):
-    """Cancel all in-flight (pending) generations of a dataset and drop their
-    rows. Returns the number cancelled.
+    """Cancel all in-flight (pending) generations of a dataset.
+
+    A local queue row is removed only after ``cancel_job`` proves that its exact
+    ComfyUI prompt is gone.  If that proof cannot be obtained yet, keep the image
+    row and its ``job_id``: it is the only UI handle from which the user can press
+    Stop again once ComfyUI answers.  Dropping that row used to leave the durable
+    global recovery barrier orphaned, making every GPU action report ``GPU busy``
+    with no recoverable card left.
+
+    Returns explicit recovery counts. ``retry_pending`` means LDS can retry the
+    exact known prompt; ``restart_required`` means ComfyUI must be restarted and
+    that restart explicitly confirmed before LDS may clear an unknown submission.
 
     ⏹ Stop generation also stops the server-side ✨ improve BATCH: cancelling the
     rows alone used to be pointless, because whatever was feeding the queue simply
@@ -2516,7 +2539,9 @@ def cancel_pending(user_id, dataset_id):
     image in between the arming and the row deletion."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
-        return 0
+        return {'cancelled': 0, 'recovery_pending': 0,
+                'retry_pending': 0, 'restart_required': 0,
+                'recovery_error': 0}
     dataset_activity.request_cancel(dataset_id, dataset_activity.IMPROVE_KINDS)
     # Only in-flight generations (pending AND no result file yet) - leave
     # completed-but-uncurated images alone.
@@ -2524,25 +2549,72 @@ def cancel_pending(user_id, dataset_id):
             .filter_by(dataset_id=dataset_id, status='pending')
             .filter(FaceDatasetImage.filename.is_(None)).all())
     n = 0
+    retry_pending = 0
+    restart_required = 0
+    recovery_error = 0
     for img in rows:
         if img.job_id:  # Klein rows only - API rows never carry a job_id
             try:
                 from ..job_queue import queue_manager
-                queue_manager.cancel_job(img.job_id, str(user_id), 'image')
+                outcome = queue_manager.cancel_job_outcome(
+                    img.job_id, str(user_id), 'image')
             except Exception:
-                pass
-        if img.derivation_kind == KLEIN_SMALL_IMAGE:
-            # Preserve the review pair and its original file. A cancelled rescue
-            # is equivalent to an engine failure: the original can still be kept.
-            img.status = 'failed'
-            img.fail_reason = 'Klein small-image rescue was cancelled.'
-        else:
-            db.session.delete(img)
+                logging.getLogger(__name__).exception(
+                    'could not safely cancel generation job %s', img.job_id)
+                outcome = 'retry'
+            if outcome == 'restart_required':
+                restart_required += 1
+                continue
+            if outcome == 'barrier_corrupt':
+                recovery_error += 1
+                continue
+            if outcome == 'retry':
+                retry_pending += 1
+                continue
+            # cancelled / terminal / missing are all safe: cancel_job_outcome
+            # proved that this exact job owns no durable recovery barrier.
+        _finish_cancelled_generation_row(img)
         n += 1
     db.session.commit()
     # Stop deleted the in-flight rows: clear the Klein 'generate' indicator now
     # (its completion callbacks won't fire for cancelled jobs). An API batch's own
     # begin/end entry is untouched — its worker unwinds and end()s on its own.
+    _sync_generate_activity(dataset_id)
+    return {
+        'cancelled': n,
+        'retry_pending': retry_pending,
+        'restart_required': restart_required,
+        'recovery_error': recovery_error,
+        'recovery_pending': retry_pending + restart_required + recovery_error,
+    }
+
+
+def confirm_unknown_generation_restart(user_id, dataset_id, *,
+                                       restart_confirmed=False) -> int:
+    """Clear this dataset's unknown-submit barrier after a human-confirmed restart.
+
+    The reachability check belongs to the route. This service owns the atomic
+    identity decision: only pending cards whose exact ``job_id`` matches the
+    durable unknown-submit barrier are finalized.
+    """
+    if not restart_confirmed:
+        raise ValueError('Confirm that ComfyUI was restarted before recovery.')
+    ds = get_dataset(user_id, dataset_id)
+    if not ds:
+        raise ValueError('dataset not found')
+    from ..job_queue import queue_manager
+    rows = (FaceDatasetImage.query
+            .filter_by(dataset_id=dataset_id, status='pending')
+            .filter(FaceDatasetImage.filename.is_(None))
+            .filter(FaceDatasetImage.job_id.isnot(None)).all())
+    n = 0
+    for img in rows:
+        if not queue_manager.confirm_unknown_comfyui_restart(
+                img.job_id, str(user_id), restart_confirmed=True):
+            continue
+        _finish_cancelled_generation_row(img)
+        n += 1
+    db.session.commit()
     _sync_generate_activity(dataset_id)
     return n
 

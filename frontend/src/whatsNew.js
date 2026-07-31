@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-31-community-tested-krea-zimage-presets',
+    date: '2026-07-31',
+    title: 'Start Krea 2 Raw and Z-Image Turbo from five community-tested recipes',
+    blurb:
+      'Training now includes five source-linked community presets for Krea 2 Raw character, fast LoKr character, compact style, a reported 16 GB concept setup, and Z-Image Turbo character. Each recipe carries its own image-count, step, optimizer, memory and network settings; switching family, dataset kind or variant can no longer leave its hidden settings active, and Conv checkpoints refuse an incompatible continuation instead of failing deep inside training.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
+    id: '2026-07-31-generation-stop-recovers-gpu-lock',
+    date: '2026-07-31',
+    title: 'Stop generation without stranding the GPU',
+    blurb:
+      'Stopping a local generation now distinguishes a finished job, a known ComfyUI prompt that can be retried, and an unknown submission that requires a confirmed ComfyUI restart. LDS keeps the exact recovery card until it is safe, removes terminal cards cleanly, and no longer leaves the whole app stuck behind an orphaned “GPU busy” lock.',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
     id: '2026-07-30-retry-reference-edit-show-engine',
     date: '2026-07-30',
     title: 'Retry a reference edit exactly as it ran',
