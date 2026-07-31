@@ -175,16 +175,14 @@ def put_settings():
         return jsonify({'error': "'secrets' must be an object"}), 400
     config_partial = body.get('config') or {}
     secrets_partial = body.get('secrets') or {}
-    # Secrets are persisted as one NAME=value line in .env.  A newline or NUL
-    # would escape that value and create a second environment assignment (for
-    # example LDS_RESTART_MODE=supervisor), changing lifecycle controls on the
-    # next load. Validate before saving config too, so a rejected request is
-    # fully atomic from the caller's perspective.
-    for name, value in secrets_partial.items():
-        if name not in cfg.SECRET_KEYS or not value:
-            continue
-        if not isinstance(value, str) or any(ch in value for ch in ('\r', '\n', '\x00')):
-            return jsonify({'error': f"secret '{name}' must be a single line of text"}), 400
+    # Validate through config's persistence boundary before saving config.json
+    # too, so a rejected combined request changes neither file.  This covers all
+    # control/format/Unicode line separators and a pre-existing poisoned .env,
+    # not only literal CR/LF.
+    try:
+        cfg.validate_secrets(secrets_partial)
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
     unknown = set(config_partial) - set(cfg.DEFAULTS)
     if unknown:
         return jsonify({'error': f"unknown config section '{sorted(unknown)[0]}'"}), 400

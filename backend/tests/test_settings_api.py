@@ -2,6 +2,23 @@ import pathlib
 import pytest
 
 
+UNSAFE_SECRET_CHARS = [
+    pytest.param('\r', id='cr'),
+    pytest.param('\n', id='lf'),
+    pytest.param('\x00', id='nul'),
+    pytest.param('\x0b', id='vertical-tab'),
+    pytest.param('\x0c', id='form-feed'),
+    pytest.param('\x1c', id='file-separator'),
+    pytest.param('\x1d', id='group-separator'),
+    pytest.param('\x1e', id='record-separator'),
+    pytest.param('\x85', id='next-line'),
+    pytest.param('\u2028', id='unicode-line-separator'),
+    pytest.param('\u2029', id='unicode-paragraph-separator'),
+    pytest.param('\t', id='other-control'),
+    pytest.param('\u200b', id='unicode-format'),
+]
+
+
 @pytest.fixture(autouse=True)
 def _no_real_network(monkeypatch):
     """GET /api/capabilities calls probe(), which hits every reachability
@@ -53,12 +70,9 @@ def test_put_settings_persists_config_and_secret(client, tmp_path):
     assert r.get_json()['secrets']['GEMINI_API_KEY'] is True
 
 
-@pytest.mark.parametrize('bad', [
-    'key\nLDS_RESTART_MODE=supervisor',
-    'key\r\nLDS_RUNTIME=docker-gpu',
-    'key\x00LDS_BIND_MANAGED=1',
-])
-def test_put_settings_rejects_secret_environment_injection(client, monkeypatch, bad):
+@pytest.mark.parametrize('separator', UNSAFE_SECRET_CHARS)
+def test_put_settings_rejects_secret_environment_injection(
+        client, monkeypatch, separator):
     """A secret occupies exactly one .env assignment; it cannot introduce the
     lifecycle variables that decide how this process updates or restarts."""
     import os
@@ -66,10 +80,11 @@ def test_put_settings_rejects_secret_environment_injection(client, monkeypatch, 
     monkeypatch.delenv('LDS_RESTART_MODE', raising=False)
     monkeypatch.delenv('LDS_RUNTIME', raising=False)
     monkeypatch.delenv('LDS_BIND_MANAGED', raising=False)
+    monkeypatch.delenv('FLASK_DEBUG', raising=False)
 
     response = client.put('/api/settings', json={
         'config': {'ollama': {'url': 'http://must-not-save.invalid'}},
-        'secrets': {'OPENAI_API_KEY': bad},
+        'secrets': {'OPENAI_API_KEY': f'key{separator}FLASK_DEBUG=1'},
     })
 
     assert response.status_code == 400
@@ -78,6 +93,34 @@ def test_put_settings_rejects_secret_environment_injection(client, monkeypatch, 
     assert 'LDS_RESTART_MODE' not in os.environ
     assert 'LDS_RUNTIME' not in os.environ
     assert 'LDS_BIND_MANAGED' not in os.environ
+    assert 'FLASK_DEBUG' not in os.environ
+
+
+@pytest.mark.parametrize('separator', [
+    pytest.param('\x0b', id='vertical-tab'),
+    pytest.param('\u2028', id='unicode-line-separator'),
+])
+def test_put_settings_refuses_poisoned_existing_env_before_saving_config(
+        client, monkeypatch, separator):
+    import os
+    from app import config
+    before_url = client.get('/api/settings').get_json()['config']['ollama']['url']
+    poisoned = f'OPENAI_API_KEY=old{separator}FLASK_DEBUG=1\n'.encode('utf-8')
+    config.ENV_PATH.write_bytes(poisoned)
+    monkeypatch.delenv('GEMINI_API_KEY', raising=False)
+    monkeypatch.delenv('FLASK_DEBUG', raising=False)
+
+    response = client.put('/api/settings', json={
+        'config': {'ollama': {'url': 'http://must-not-save.invalid'}},
+        'secrets': {'GEMINI_API_KEY': 'safe-value'},
+    })
+
+    assert response.status_code == 400
+    assert 'existing .env' in response.get_json()['error']
+    assert client.get('/api/settings').get_json()['config']['ollama']['url'] == before_url
+    assert config.ENV_PATH.read_bytes() == poisoned
+    assert 'GEMINI_API_KEY' not in os.environ
+    assert 'FLASK_DEBUG' not in os.environ
 
 def test_put_settings_clears_skip_when_dir_provided(client, tmp_path):
     """Entering a ComfyUI directory annuls a prior "continue without ComfyUI" skip —
