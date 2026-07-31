@@ -17,6 +17,7 @@ import {
 } from '../utils/trainingMode.js';
 import { refreshDatasetIfActive } from '../utils/datasetRefresh';
 import { ENGINE_LABELS } from '../components/dataset/engineSelection.js';
+import { retryRequestForReferenceEdit } from '../components/dataset/referenceEdit.js';
 import { classifyResultMessage } from '../components/dataset/classifyFramingGate.js';
 
 function post(url, body, isForm) {
@@ -942,21 +943,36 @@ export function useDataset() {
   // is rediscovered through the payload's `reference_edit`; refresh() here starts
   // the activity poll that tracks it. Returns false (with a toast) on a start
   // error; true once the job is queued.
-  const editReference = useCallback(async (prompt, engine, files = []) => {
-    const retryRequest = { prompt, engine, files: Array.from(files || []) };
+  const editReference = useCallback(async (
+    prompt, engineOrEngines, files = [], retryBatchId = null,
+  ) => {
+    const engines = [...new Set(
+      (Array.isArray(engineOrEngines) ? engineOrEngines : [engineOrEngines])
+        .filter(Boolean))];
+    if (!engines.length) {
+      toast.error('Select at least one edit engine');
+      return false;
+    }
+    const retryRequest = { prompt, engines, files: Array.from(files || []) };
     const fd = new FormData();
     fd.append('prompt', retryRequest.prompt);
-    fd.append('engine', retryRequest.engine);
+    retryRequest.engines.forEach((engine) => fd.append('engines', engine));
+    // Preserve the old one-engine request contract for older servers and direct
+    // clients. A real multi-engine batch uses only the repeated engines field.
+    if (retryRequest.engines.length === 1) fd.append('engine', retryRequest.engines[0]);
     retryRequest.files.forEach((f) => fd.append('ref', f));
+    if (retryBatchId) fd.append('retry_batch_id', retryBatchId);
     const d = await postJson(`/api/dataset/${currentId}/ref/edit`, fd, true);
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return false; }
     // The server remembers the prompt and engine for display/recovery, but not
     // request-scoped File objects. This snapshot is therefore the only honest
     // way to offer an exact Retry without changing backend storage semantics.
-    referenceEditRetryRef.current.set(String(currentId), retryRequest);
-    bumpReferenceEditRetryRevision((revision) => revision + 1);
     const refreshed = await refresh();
-    if (refreshed?.status !== 'applied') {
+    const confirmedRetry = retryRequestForReferenceEdit(
+      { ...retryRequest, batchId: d.batch_id },
+      refreshed?.data?.reference_edit,
+    );
+    if (refreshed?.status !== 'applied' || !confirmedRetry) {
       // The request was accepted, but stale status makes another Retry unsafe:
       // remove the in-memory files and force the modal to disable it until refresh.
       referenceEditRetryRef.current.delete(String(currentId));
@@ -964,19 +980,31 @@ export function useDataset() {
       toast.warning('Edit queued, but its status could not be refreshed. Refresh the page before trying another edit.');
       return false;
     }
+    referenceEditRetryRef.current.set(String(currentId), confirmedRetry);
+    bumpReferenceEditRetryRevision((revision) => revision + 1);
     return true;
   }, [currentId, refresh, toast]);
 
   const retryReferenceEdit = useCallback(async () => {
-    const retryRequest = referenceEditRetryRef.current.get(String(currentId));
+    const retryRequest = retryRequestForReferenceEdit(
+      referenceEditRetryRef.current.get(String(currentId)),
+      data?.reference_edit,
+    );
     if (!retryRequest) return false;
-    return editReference(retryRequest.prompt, retryRequest.engine, retryRequest.files);
-  }, [currentId, editReference]);
+    return editReference(
+      retryRequest.prompt, retryRequest.engines, retryRequest.files,
+      retryRequest.batchId,
+    );
+  }, [currentId, data, editReference]);
 
   // Keep the ready candidate: the server atomically swaps the reference (old files
   // removed only after the new ones are on disk) and deletes the candidate.
-  const keepEditedReference = useCallback(async () => {
-    const d = await postJson(`/api/dataset/${currentId}/ref/edit/keep`, {});
+  const keepEditedReference = useCallback(async (engine = null, batchId = null) => {
+    const payload = {};
+    if (engine) payload.engine = engine;
+    if (batchId) payload.batch_id = batchId;
+    const d = await postJson(`/api/dataset/${currentId}/ref/edit/keep`,
+      payload);
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return false; }
     referenceEditRetryRef.current.delete(String(currentId));
     bumpReferenceEditRetryRevision((revision) => revision + 1);
@@ -1493,7 +1521,10 @@ export function useDataset() {
   const watermarkingLive = watermarking
     || actKind === 'watermark_detect' || actKind === 'watermark_clean';
   const busyLive = busy || !!activity;
-  const canRetryReferenceEdit = referenceEditRetryRef.current.has(String(currentId));
+  const canRetryReferenceEdit = Boolean(retryRequestForReferenceEdit(
+    referenceEditRetryRef.current.get(String(currentId)),
+    data?.reference_edit,
+  ));
 
 
   return { datasets, currentId, data, busy: busyLive, localBusy: busy, captioning: captioningLive,

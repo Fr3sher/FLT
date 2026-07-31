@@ -280,19 +280,22 @@ def dataset_set_ref(dataset_id):
                 raw, pad=svc.REF_CROP_PAD, return_detected=True, use_vision=False)
     except Exception as e:
         return _map_error(e)
-    dsdir = ensure_dataset_dir(dataset_id)
-    # Keep the full-frame ORIGINAL (aspect-kept, capped ~2048) so the crop editor can
-    # widen back out later — the auto head-crop is only the default framing, not a
-    # one-way lossy door (the old behavior discarded it and re-crops could only tighten).
-    orig_fn = f"{LOCAL_USER}_datasetreforig_{uuid.uuid4().hex[:8]}.webp"
-    svc.write_image_atomic(os.path.join(dsdir, orig_fn),
-                           svc.normalize_to_webp(raw, size=2048))
-    fn = f"{LOCAL_USER}_datasetref_{uuid.uuid4().hex[:8]}.webp"
-    svc.write_image_atomic(os.path.join(dsdir, fn), webp)
-    ds.ref_original_filename = orig_fn
-    ds.ref_filename = fn
-    svc.db.session.commit()
-    svc.invalidate_reference_edit(dataset_id)   # any pending Before/After is now stale
+    # Serialize the physical files, DB pointer, and edit-epoch invalidation with
+    # Keep. A claimed stale candidate must never overwrite/delete this upload.
+    with svc.reference_mutation(dataset_id):
+        dsdir = ensure_dataset_dir(dataset_id)
+        # Keep the full-frame ORIGINAL (aspect-kept, capped ~2048) so the crop editor can
+        # widen back out later — the auto head-crop is only the default framing, not a
+        # one-way lossy door (the old behavior discarded it and re-crops could only tighten).
+        orig_fn = f"{LOCAL_USER}_datasetreforig_{uuid.uuid4().hex[:8]}.webp"
+        svc.write_image_atomic(os.path.join(dsdir, orig_fn),
+                               svc.normalize_to_webp(raw, size=2048))
+        fn = f"{LOCAL_USER}_datasetref_{uuid.uuid4().hex[:8]}.webp"
+        svc.write_image_atomic(os.path.join(dsdir, fn), webp)
+        ds.ref_original_filename = orig_fn
+        ds.ref_filename = fn
+        svc.db.session.commit()
+        svc.invalidate_reference_edit(dataset_id)   # pending Before/After is now stale
     resp = {'ok': True, 'ref_filename': fn, 'head_crop': head_detected}
     if want_auto and not head_detected:
         # GUARD-RAIL: don't silently ship a body-centered crop when auto WAS asked.
@@ -408,18 +411,25 @@ def dataset_ref_edit(dataset_id):
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     prompt = (request.form.get('prompt') or '').strip()
-    engine = (request.form.get('engine') or '').strip()
-    if engine not in svc.editable_engines():
-        return jsonify({'error': svc.edit_engine_choice_message()}), 400
+    # New clients repeat engines; legacy clients send one engine. Combining then
+    # normalizing makes mixed-version retries deterministic and de-duplicates
+    # without changing the requested order.
+    raw_engines = (request.form.getlist('engines')
+                   + request.form.getlist('engine'))
     # Transient edit-reference images added in the modal — ride along as identity
-    # anchors for THIS call only, never persisted as dataset extra refs. The local
-    # engines refuse them rather than drop them silently (see
-    # svc.LOCAL_EDIT_REF_SUPPORT); the modal hides the picker for those engines.
+    # anchors for THIS call only, never persisted as dataset extra refs. A local-
+    # only request refuses them; in a mixed batch they go to API engines only.
     try:
+        engines = svc.normalize_edit_engines(raw_engines)
         extra_bytes = []
-        for index, upload in enumerate(request.files.getlist('ref'), 1):
-            if not upload or not upload.filename:
-                continue
+        uploads = [upload for upload in request.files.getlist('ref')
+                   if upload and upload.filename]
+        # Reject before reading upload #4 (indeed before reading any upload), so
+        # the request-thread snapshot has both a per-file and a total-count bound.
+        if len(uploads) > svc.MAX_EDIT_REFERENCE_UPLOADS:
+            raise ValueError(
+                f'add at most {svc.MAX_EDIT_REFERENCE_UPLOADS} extra edit references')
+        for index, upload in enumerate(uploads, 1):
             # Bound the request-thread snapshot itself. The service repeats the
             # cap + full image sanitation before any external API worker starts.
             try:
@@ -431,8 +441,12 @@ def dataset_ref_edit(dataset_id):
                     f'extra edit reference {index} is too large '
                     f'(max {svc.EXTERNAL_REFERENCE_MAX_BYTES // (1024 * 1024)} MiB)')
             extra_bytes.append(raw)
-        svc.start_reference_edit(current_app._get_current_object(), LOCAL_USER,
-                                 dataset_id, engine, prompt, extra_edit_ref_bytes=extra_bytes)
+        retry_batch_id = request.form.get('retry_batch_id') or None
+        batch_id = svc.start_reference_edit(
+            current_app._get_current_object(), LOCAL_USER,
+            dataset_id, engines, prompt,
+            extra_edit_ref_bytes=extra_bytes,
+            retry_batch_id=retry_batch_id)
     except Exception as e:
         from ..services.klein_edit_helper import KleinModelsMissing
         from ..services.krea_edit_helper import KreaModelsMissing
@@ -441,7 +455,8 @@ def dataset_ref_edit(dataset_id):
         if isinstance(e, KreaModelsMissing):
             return _krea_missing_response(e)
         return _map_error(e)
-    return jsonify({'ok': True, 'status': 'running'}), 202
+    return jsonify({'ok': True, 'status': 'running',
+                    'engines': list(engines), 'batch_id': batch_id}), 202
 
 
 @bp.post('/dataset/<int:dataset_id>/ref/edit/keep')
@@ -451,8 +466,20 @@ def dataset_ref_edit_keep(dataset_id):
     then delete the candidate. 409 when there is no ready candidate to keep."""
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
+    body = request.get_json(silent=True)
+    raw_engine = body.get('engine') if isinstance(body, dict) else None
+    raw_batch_id = body.get('batch_id') if isinstance(body, dict) else None
+    if raw_engine is None:
+        raw_engine = request.form.get('engine')
+    if raw_batch_id is None:
+        raw_batch_id = request.form.get('batch_id')
+    engine = str(raw_engine).strip().lower() if raw_engine is not None else None
+    batch_id = str(raw_batch_id) if raw_batch_id is not None else None
     try:
-        fn = svc.keep_reference_edit(LOCAL_USER, dataset_id)
+        # The server resolves the filename from the current batch. Any client-
+        # supplied filename is intentionally ignored.
+        fn = svc.keep_reference_edit(LOCAL_USER, dataset_id, engine=engine,
+                                     batch_id=batch_id)
     except Exception:
         logger.exception('reference edit keep failed (dataset %s)', dataset_id)
         return jsonify({'error': "Couldn't save the edited reference — the previous "

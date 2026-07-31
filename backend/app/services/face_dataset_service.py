@@ -390,6 +390,10 @@ MAX_EXTRA_REFS = 3
 # from disk, because a restored backup can contain a preserved JPEG/PNG/BMP.
 EXTERNAL_REFERENCE_MAX_BYTES = 25 * 1024 * 1024
 EXTERNAL_REFERENCE_MAX_SIDE = 2048
+# The modal exposes three request-scoped anchors. Enforce the same bound before
+# route reads so a hand-written multipart request cannot create an unbounded
+# in-memory snapshot.
+MAX_EDIT_REFERENCE_UPLOADS = 3
 
 
 def extra_ref_filenames(ds) -> list:
@@ -3307,32 +3311,36 @@ def crop_reference(user_id, dataset_id, x, y, w, h):
     in the ORIGINAL's pixel space (the editor shows the original), and we write the
     derived square to ref_filename WITHOUT touching the original — so the user can
     re-crop wider or tighter any number of times."""
-    ds = get_dataset(user_id, dataset_id)
-    if not ds or not ds.ref_filename:
-        return False
-    ok, _scale = _crop_resize_file(_ref_crop_source_path(ds), x, y, w, h, dst=_ref_path(ds))
-    if ok:
-        invalidate_reference_edit(dataset_id)   # a pending Before/After is now stale
-    return ok
+    with reference_mutation(dataset_id):
+        ds = get_dataset(user_id, dataset_id)
+        if not ds or not ds.ref_filename:
+            return False
+        ok, _scale = _crop_resize_file(
+            _ref_crop_source_path(ds), x, y, w, h, dst=_ref_path(ds))
+        if ok:
+            invalidate_reference_edit(dataset_id)   # a pending Before/After is now stale
+        return ok
 
 
 def recrop_reference_auto(user_id, dataset_id):
     """Re-run the automatic head-crop on the ORIGINAL, overwriting ref_filename.
     Returns (ok, head_detected). CALLER holds the GPU vision window. Lets the user
     reset to the auto framing after manual edits, without re-uploading the photo."""
-    ds = get_dataset(user_id, dataset_id)
-    if not ds or not ds.ref_filename:
-        return False, False
-    try:
-        with open(_ref_crop_source_path(ds), 'rb') as fh:
-            raw = fh.read()
-    except OSError:
-        return False, False
-    webp, detected = face_crop_to_square_webp(raw, pad=REF_CROP_PAD, return_detected=True)
-    with open(_ref_path(ds), 'wb') as fh:
-        fh.write(webp)
-    invalidate_reference_edit(dataset_id)        # a pending Before/After is now stale
-    return True, detected
+    with reference_mutation(dataset_id):
+        ds = get_dataset(user_id, dataset_id)
+        if not ds or not ds.ref_filename:
+            return False, False
+        try:
+            with open(_ref_crop_source_path(ds), 'rb') as fh:
+                raw = fh.read()
+        except OSError:
+            return False, False
+        webp, detected = face_crop_to_square_webp(
+            raw, pad=REF_CROP_PAD, return_detected=True)
+        with open(_ref_path(ds), 'wb') as fh:
+            fh.write(webp)
+        invalidate_reference_edit(dataset_id)    # a pending Before/After is now stale
+        return True, detected
 
 
 def _edit_engine_call(engine, refs, prompt):
@@ -3352,7 +3360,39 @@ def _edit_engine_call(engine, refs, prompt):
     return generate(refs, prompt, **gen_kwargs)
 
 
-def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_ref_bytes=None):
+def normalize_edit_engines(engines):
+    """Canonical ordered engine selection for both legacy and batch requests."""
+    raw_values = [engines] if isinstance(engines, str) else list(engines or ())
+    selected = []
+    for raw in raw_values:
+        engine = str(raw or '').strip().lower()
+        if not engine:
+            raise ValueError('select at least one engine for the reference edit')
+        if engine not in selected:
+            selected.append(engine)
+    allowed = editable_engines()
+    if not selected:
+        raise ValueError('select at least one engine for the reference edit')
+    # Apply the finite bound after normalization/deduplication. Membership below
+    # makes it structurally unreachable today, but keeps the contract explicit.
+    if len(selected) > len(allowed):
+        raise ValueError(f'select at most {len(allowed)} edit engines')
+    if any(engine not in allowed for engine in selected):
+        raise ValueError(edit_engine_choice_message())
+    return tuple(selected)
+
+
+def _preflight_local_reference_edit(ds, engine):
+    """Run local preflights available without enqueuing a render."""
+    if engine == KREA_ENGINE:
+        from . import krea_edit_helper as helper
+        helper.preflight()
+    # Klein's complete admission check intentionally lives in enqueue_klein_edit;
+    # all local enqueues finish before any paid API thread is started below.
+
+
+def start_reference_edit(app, user_id, dataset_id, engine, prompt,
+                         extra_edit_ref_bytes=None, retry_batch_id=None):
     """Start a background reference-edit job and RETURN AT ONCE (the request no
     longer blocks 1-3 min, so a backgrounded mobile tab can't kill it). Snapshots
     the reference + extras + modal images HERE, in the request thread (never
@@ -3374,43 +3414,109 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
 
     Raises ValueError for a bad engine / empty prompt / missing reference (the
     route maps it to 400/404)."""
-    if engine not in editable_engines():
-        raise ValueError(edit_engine_choice_message())
+    engines = normalize_edit_engines(engine)
     prompt = (prompt or '').strip()
     if not prompt:
         raise ValueError('describe the edit first')
+    # Capture the mutation epoch before *any* dataset/reference-state read. If a
+    # mutation commits after this point, start_batch's CAS rejects the snapshot;
+    # if it committed before this point, the reads below see the new state.
+    reference_revision = reference_edit_jobs.reference_revision(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds or not ds.ref_filename:
         raise ValueError('reference image required')
     if not os.path.exists(_ref_path(ds)):
         raise ValueError('reference image file missing')
+    api_engines = tuple(item for item in engines if item in API_ENGINES)
+    local_engines = tuple(item for item in engines if item in LOCAL_ENGINES)
+    transient_refs = tuple(extra_edit_ref_bytes or ())
+    if len(transient_refs) > MAX_EDIT_REFERENCE_UPLOADS:
+        raise ValueError(
+            f'add at most {MAX_EDIT_REFERENCE_UPLOADS} extra edit references')
+
+    # One immutable primary+persistent-reference snapshot feeds every lane. API
+    # siblings consume the bytes directly; local siblings below consume temporary
+    # files written once from these exact bytes, never a later read of the master.
+    dataset_ref_bytes = tuple(_all_ref_bytes(ds))
     refs = None
-    if engine in API_ENGINES:
-        # Validate/sanitize every byte that could leave this machine BEFORE
-        # disrupting a previous edit or creating an async worker. In particular,
-        # transient modal uploads are request bytes, not trusted dataset files.
-        refs = _all_ref_bytes(ds)                 # primary + persistent extras
-        for index, raw in enumerate(extra_edit_ref_bytes or (), 1):
+    if api_engines:
+        snapshotted = list(dataset_ref_bytes)
+        for index, raw in enumerate(transient_refs, 1):
             if raw:
-                refs.append(sanitize_external_reference(
+                snapshotted.append(sanitize_external_reference(
                     raw, label=f'extra edit reference {index}'))
-    # Once the new request is valid, supersede whichever lane was running: a
-    # previous LOCAL edit still on the GPU is no longer wanted, and nothing else
-    # would ever stop it (its callback will find no entry). Switching from Klein
-    # to ChatGPT mid-thought used to leave the render — and its ✦ badge — behind.
-    prev_job, prev_act = reference_edit_jobs.pending_job(dataset_id)
-    _cancel_local_edit_job(prev_job, prev_act)
-    if engine in LOCAL_ENGINES:
-        return _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
-                                           extra_edit_ref_bytes)
+        refs = tuple(snapshotted)
+    elif transient_refs:
+        # Preserve the historical one-local-engine refusal. In a mixed batch the
+        # uploads are valid API-only inputs and are not silently discarded.
+        local = local_engines[0]
+        raise ValueError(
+            f'{engine_labels().get(local, local)} renders on your own GPU and cannot take '
+            'the extra reference images added here — remove them, or pick an API engine')
+
+    # Validate every selected local lane before replacing the current results.
+    # Full enqueue happens before API threads below, closing remaining admission
+    # gaps without ever billing a paid sibling first.
+    for local in local_engines:
+        _preflight_local_reference_edit(ds, local)
     dsdir = _dataset_dir(dataset_id)
-    token = reference_edit_jobs.start(dataset_id, dsdir, engine, prompt)
-    act_token = dataset_activity.begin(dataset_id, 'edit_reference', total=1, engine=engine)
-    threading.Thread(
-        target=_run_reference_edit,
-        args=(app, user_id, dataset_id, token, act_token, engine, refs, prompt),
-        daemon=True).start()
-    return token
+    started = reference_edit_jobs.start_batch(
+        dataset_id, dsdir, engines, prompt,
+        expected_revision=reference_revision,
+        expected_batch_id=retry_batch_id)
+    batch_token, tokens = started['batch_token'], started['tokens']
+    act_token = dataset_activity.begin(
+        dataset_id, 'edit_reference', total=len(engines),
+        engine=engines[0] if len(engines) == 1 else None)
+    if not reference_edit_jobs.attach_activity(dataset_id, batch_token, act_token):
+        dataset_activity.end(act_token)
+        raise RuntimeError('reference edit was superseded while it was starting')
+
+    # Prove admission for every local sibling before starting a paid API thread.
+    # If the second local enqueue fails, clear cancels the first queue job and
+    # closes the shared activity exactly once.
+    local_snapshot_paths = []
+    try:
+        if local_engines:
+            snapshot_tag = uuid.uuid4().hex[:8]
+            for index, raw in enumerate(dataset_ref_bytes):
+                filename = (
+                    f'{user_id}{reference_edit_jobs.CANDIDATE_MARKER}'
+                    f'snapshot_{snapshot_tag}_{index}.webp')
+                path = os.path.join(dsdir, filename)
+                local_snapshot_paths.append(path)
+                write_image_atomic(path, raw)
+        for local in local_engines:
+            _enqueue_local_reference_edit(
+                user_id, dataset_id, ds, local, prompt, tokens[local],
+                local_snapshot_paths[0], local_snapshot_paths[1:])
+    except Exception:
+        reference_edit_jobs.clear_batch(dataset_id, batch_token, dsdir)
+        raise
+    finally:
+        for path in local_snapshot_paths:
+            reference_edit_jobs._unlink(path)
+
+    for api_engine in api_engines:
+        token = tokens[api_engine]
+        try:
+            threading.Thread(
+                target=_run_reference_edit,
+                args=(app, user_id, dataset_id, token, act_token,
+                      api_engine, refs, prompt, True),
+                daemon=True).start()
+        except Exception as exc:
+            logger.exception(
+                'reference edit worker could not start (dataset %s, engine %s)',
+                dataset_id, api_engine)
+            reference_edit_jobs.set_failed(
+                dataset_id, token, f'{api_engine}: failed to start edit: {exc}')
+            _finish_reference_edit_activity(
+                dataset_id, token, act_token, shared_activity=True)
+
+    # The route returns this exact opaque id to the browser. Reading the registry
+    # after this function returns would race a second tab starting another batch.
+    return started['batch_id']
 
 
 #: Reference images each LOCAL engine actually consumes, so the UI can say it at
@@ -3426,8 +3532,8 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt, extra_edit_re
 LOCAL_EDIT_REF_SUPPORT = {'klein': 'dataset_only', 'krea': 'primary_only'}
 
 
-def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
-                                extra_edit_ref_bytes=None):
+def _enqueue_local_reference_edit(user_id, dataset_id, ds, engine, prompt, token,
+                                  ref_path, extra_ref_paths):
     """Reference edit on the user's OWN GPU: free, private, no key, no bill — and
     therefore the lane that makes "try five prompts until it's right" reasonable.
 
@@ -3437,34 +3543,15 @@ def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
     lands. The registry entry is what the modal polls either way, so the client
     sees one contract for both lanes (running -> ready|failed).
 
-    Preflight runs BEFORE anything is registered: a missing weight or node pack
-    then surfaces on the click as the SAME actionable 409 the generate route
-    returns (it even starts the download), instead of a spinner that ends in a raw
-    ComfyUI error three minutes later."""
-    if extra_edit_ref_bytes:
-        # Never silently dropped: the modal hides the picker for these engines, so
-        # reaching here means a client that didn't know. Say which engine and why.
-        raise ValueError(
-            f'{engine_labels().get(engine, engine)} renders on your own GPU and cannot take '
-            'the extra reference images added here — remove them, or pick an API engine')
-    dsdir = _dataset_dir(dataset_id)
-    ref_path = _ref_path(ds)
-    if engine == KREA_ENGINE:
-        # Krea checks assets AND the custom-node pack up front; Klein does its own
-        # check inside enqueue_klein_edit (it raises KleinModelsMissing there). The
-        # asymmetry is the helpers', not ours — either way the miss arrives before
-        # any render, as the same 409 the generate route returns.
-        from . import krea_edit_helper as helper
-        helper.preflight()
-
-    token = reference_edit_jobs.start(dataset_id, dsdir, engine, prompt)
-    act_token = dataset_activity.begin(dataset_id, 'edit_reference', total=1, engine=engine)
+    Every local enqueue completes before a selected API thread starts. A missing
+    weight or node pack therefore surfaces as the same actionable 409 as generate,
+    and any already-enqueued local sibling is cancelled without billing an API."""
     meta = {'is_reference_edit': True, 'dataset_id': dataset_id}
     try:
         if engine == KREA_ENGINE:
             from . import krea_edit_helper as helper
             job_id = helper.enqueue_krea_edit(
-                user_id=str(user_id), source_filename=ds.ref_filename,
+                user_id=str(user_id), source_filename=os.path.basename(ref_path),
                 source_path=ref_path, edit_prompt=prompt, extra_metadata=meta)
         else:
             from .klein_edit_helper import enqueue_klein_edit
@@ -3472,10 +3559,10 @@ def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
             # chaining) — the same anchors the API lane sends as bytes. Gated on
             # the table above rather than on the engine name, so the two can't
             # disagree.
-            extras = ([os.path.join(dsdir, fn) for fn in extra_ref_filenames(ds)]
+            extras = (list(extra_ref_paths)
                       if LOCAL_EDIT_REF_SUPPORT.get(engine) == 'dataset_only' else [])
             job_id = enqueue_klein_edit(
-                user_id=str(user_id), source_filename=ds.ref_filename,
+                user_id=str(user_id), source_filename=os.path.basename(ref_path),
                 source_path=ref_path, edit_prompt=prompt, extra_ref_paths=extras,
                 # The dataset's model, like every other Klein lane: this edit
                 # produces the REFERENCE the whole dataset is built from, so it is
@@ -3484,9 +3571,6 @@ def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
                 klein_model=dataset_klein_model(ds),
                 sampler_steps=_generation_steps(), extra_metadata=meta)
     except Exception as exc:
-        # Nothing queued: drop the entry rather than leave a spinner with no job.
-        reference_edit_jobs.clear(dataset_id, dsdir)
-        dataset_activity.end(act_token)
         from .klein_edit_helper import KleinModelsMissing
         from .krea_edit_helper import KreaModelsMissing
         if isinstance(exc, (KleinModelsMissing, KreaModelsMissing)):
@@ -3496,18 +3580,16 @@ def _start_local_reference_edit(user_id, dataset_id, ds, engine, prompt,
             raise
         logger.exception('local reference edit could not be queued (dataset %s)', dataset_id)
         raise ValueError(f'{engine_labels().get(engine, engine)}: {exc}') from exc
-    if not reference_edit_jobs.attach_job(dataset_id, token, job_id, act_token,
-                                          user_id=str(user_id)):
+    if not reference_edit_jobs.attach_job(
+            dataset_id, token, job_id, user_id=str(user_id)):
         # Superseded between the enqueue and here: cancel the render nobody awaits.
-        _cancel_local_edit_job(job_id, act_token)
-    return token
+        _cancel_local_edit_job(job_id)
+        raise RuntimeError('reference edit was superseded while it was starting')
+    return job_id
 
 
-def _cancel_local_edit_job(job_id, act_token=None):
-    """Best-effort cancel of an abandoned local edit + close its activity. Never
-    raises: an un-cancellable job just finishes and finds no entry to fill."""
-    if act_token is not None:
-        dataset_activity.end(act_token)
+def _cancel_local_edit_job(job_id):
+    """Best-effort cancel of one just-enqueued job not owned by a live batch."""
     if not job_id:
         return
     try:
@@ -3515,6 +3597,26 @@ def _cancel_local_edit_job(job_id, act_token=None):
         queue_manager.cancel_job(job_id)
     except Exception:
         logger.warning('reference edit: could not cancel queue job %s', job_id, exc_info=True)
+
+
+def _finish_reference_edit_activity(dataset_id, token, fallback_act_token=None,
+                                    shared_activity=False):
+    """Advance one candidate and close the batch activity exactly once."""
+    update = reference_edit_jobs.activity_update(dataset_id, token)
+    if update is not None:
+        progress_token = update.get('activity_token')
+        if progress_token is not None:
+            dataset_activity.progress(
+                progress_token, done=update['done'], total=update['total'])
+        if update.get('end_token') is not None:
+            dataset_activity.end(update['end_token'])
+        elif not update.get('managed') and not shared_activity:
+            dataset_activity.end(fallback_act_token)
+        return
+    # Legacy direct worker calls register no shared token. A managed batch that
+    # disappeared was already ended by its supersede/clear/TTL cleanup.
+    if not shared_activity:
+        dataset_activity.end(fallback_act_token)
 
 
 def link_completed_reference_edit(job_id, filename, failed=False, reason=None):
@@ -3558,47 +3660,165 @@ def link_completed_reference_edit(job_id, filename, failed=False, reason=None):
             reference_edit_jobs.set_failed(dataset_id, entry['token'],
                                            f"{entry['engine']}: {exc}")
     finally:
-        # AFTER set_ready/set_failed, never before: the payload poll stops the
-        # moment activity clears, with ONE final refresh that must already see the
-        # outcome — the same ordering rule as the API worker.
         if entry is not None:
-            dataset_activity.end(entry['act_token'])
+            _finish_reference_edit_activity(
+                dataset_id, entry['token'], entry.get('act_token'),
+                shared_activity=True)
+
+
+def _validated_comfy_output_name(filename):
+    """Return an opaque Comfy output basename, or ``None`` when untrusted.
+
+    Comfy completion payloads cross a trust boundary.  In particular, a stale
+    completion is still cleaned up, so accepting a path here would turn that
+    cleanup into an arbitrary-file delete.  Keep the accepted shape deliberately
+    narrower than a generic relative path: Comfy reference-edit outputs are
+    always direct children of its output directory.
+    """
+    if not isinstance(filename, str) or not filename or '\x00' in filename:
+        return None
+    if filename in {'.', '..'} or filename != filename.strip():
+        return None
+    if '/' in filename or '\\' in filename or ':' in filename:
+        return None
+    if (os.path.isabs(filename) or ntpath.isabs(filename)
+            or posixpath.isabs(filename) or ntpath.splitdrive(filename)[0]):
+        return None
+    if (os.path.basename(filename) != filename
+            or ntpath.basename(filename) != filename
+            or posixpath.basename(filename) != filename):
+        return None
+    return filename
+
+
+def _resolve_comfy_output(filename):
+    """Resolve a trusted direct-child output without traversing a reparse path.
+
+    The boolean is distinct from ``path is not None``: a valid basename with no
+    configured local output directory may still be fetched through Comfy's
+    ``/view`` endpoint, while any rejected path must fail closed everywhere.
+    """
+    name = _validated_comfy_output_name(filename)
+    d = _comfy_output_dir()
+    if name is None:
+        return None, None, False
+    if not d:
+        return name, None, True
+    try:
+        root = os.path.abspath(os.fspath(d))
+        candidate = os.path.abspath(os.path.join(root, name))
+        if os.path.normcase(os.path.commonpath((root, candidate))) != os.path.normcase(root):
+            return name, None, False
+    except (OSError, TypeError, ValueError):
+        return name, None, False
+
+    # Check the candidate and every existing ancestor using lstat, before a
+    # content read/delete can follow a symlink or Windows junction/reparse point.
+    current = candidate
+    while True:
+        _st, blocked = _safe_lstat(current)
+        if blocked:
+            return name, None, False
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+
+    try:
+        canonical_root = os.path.realpath(root)
+        canonical_candidate = os.path.realpath(candidate)
+        contained = os.path.commonpath((canonical_root, canonical_candidate))
+        if os.path.normcase(contained) != os.path.normcase(canonical_root):
+            return name, None, False
+    except (OSError, ValueError):
+        return name, None, False
+    return name, candidate, True
 
 
 def _comfy_output_path(filename):
-    d = _comfy_output_dir()
-    return os.path.join(d, filename) if d and filename else None
+    _name, candidate, allowed = _resolve_comfy_output(filename)
+    return candidate if allowed else None
+
+
+def _is_reparse_stat(st):
+    attrs = getattr(st, 'st_file_attributes', 0)
+    reparse_flag = getattr(stat, 'FILE_ATTRIBUTE_REPARSE_POINT', 0x400)
+    return stat.S_ISLNK(st.st_mode) or bool(attrs & reparse_flag)
+
+
+def _safe_lstat(path):
+    """Return (stat, blocked): metadata errors and reparse points fail closed."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None, False
+    except OSError:
+        return None, True
+    return st, _is_reparse_stat(st)
 
 
 def _read_comfy_output(filename):
     """Bytes of a finished ComfyUI output, from disk when we can see its folder,
     else over the /view API (a custom or unconfigured output path). None when
     neither works."""
-    p = _comfy_output_path(filename)
-    if p and os.path.exists(p):
-        try:
-            with open(p, 'rb') as fh:
-                return fh.read()
-        except OSError:
-            pass
-    if not filename:
+    name, p, allowed = _resolve_comfy_output(filename)
+    if not allowed:
         return None
+    if p:
+        root_st, root_blocked = _safe_lstat(os.path.dirname(p))
+        if root_blocked:
+            return None
+        file_st, file_blocked = _safe_lstat(p)
+        if file_blocked or (file_st is not None and not stat.S_ISREG(file_st.st_mode)):
+            return None
+        if root_st is not None and not stat.S_ISDIR(root_st.st_mode):
+            return None
+        if file_st is not None:
+            fd = None
+            try:
+                flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
+                flags |= getattr(os, 'O_NOFOLLOW', 0)
+                fd = os.open(p, flags)
+                opened_st = os.fstat(fd)
+                if (not stat.S_ISREG(opened_st.st_mode)
+                        or not os.path.samestat(file_st, opened_st)):
+                    return None
+                with os.fdopen(fd, 'rb') as fh:
+                    fd = None
+                    return fh.read()
+            except OSError:
+                # A file that changed after lstat is treated as hostile rather
+                # than retried through Comfy's /view endpoint.
+                return None
+            finally:
+                if fd is not None:
+                    os.close(fd)
     from ..utils.comfyui import fetch_output_image_bytes
-    return fetch_output_image_bytes(filename)
+    return fetch_output_image_bytes(name)
 
 
 def _drop_comfy_output(filename):
     """Remove an unlinked ComfyUI output. Only ever called on a file this app just
     produced for a transient candidate — never on user data."""
-    p = _comfy_output_path(filename)
-    if p and os.path.isfile(p):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
+    _name, p, allowed = _resolve_comfy_output(filename)
+    if not allowed:
+        return
+    if not p:
+        return
+    root_st, root_blocked = _safe_lstat(os.path.dirname(p))
+    file_st, file_blocked = _safe_lstat(p)
+    if (root_blocked or file_blocked or root_st is None or file_st is None
+            or not stat.S_ISDIR(root_st.st_mode)
+            or not stat.S_ISREG(file_st.st_mode)):
+        return
+    try:
+        os.remove(p)
+    except OSError:
+        pass
 
 
-def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs, prompt):
+def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs,
+                        prompt, shared_activity=False):
     """Worker body: call the engine, write the candidate, mark the job ready — all
     in a background thread (factored out so tests can call it synchronously).
 
@@ -3609,6 +3829,10 @@ def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs
     set_ready/set_failed and deletes its own orphan candidate."""
     with app.app_context():
         try:
+            # Last reversible boundary. A delayed worker whose batch was already
+            # discarded/superseded must not send (and bill) a provider request.
+            if not reference_edit_jobs.claim_api_dispatch(dataset_id, token):
+                return
             try:
                 out = _edit_engine_call(engine, refs, prompt)
             except SubscriptionQuotaExceeded as e:
@@ -3643,27 +3867,49 @@ def _run_reference_edit(app, user_id, dataset_id, token, act_token, engine, refs
             logger.exception('reference edit worker failed (dataset %s)', dataset_id)
             reference_edit_jobs.set_failed(dataset_id, token, f'{engine}: {e}')
         finally:
-            dataset_activity.end(act_token)
+            _finish_reference_edit_activity(
+                dataset_id, token, act_token,
+                shared_activity=shared_activity)
 
 
-def keep_reference_edit(user_id, dataset_id):
+def keep_reference_edit(user_id, dataset_id, engine=None, batch_id=None):
     """Promote the READY candidate to be the reference (reuses the atomic,
     fail-safe commit_edited_reference), then delete the candidate file + clear the
     job. Returns the new ref_filename, or None when there is no ready candidate
     (route -> 409) — including a candidate file that vanished under us."""
-    entry = reference_edit_jobs.peek(dataset_id)
-    if not entry or entry['status'] != 'ready' or not entry['candidate_filename']:
-        return None
-    dsdir = _dataset_dir(dataset_id)
-    try:
-        with open(os.path.join(dsdir, entry['candidate_filename']), 'rb') as fh:
-            data = fh.read()
-    except OSError:
-        reference_edit_jobs.clear(dataset_id, dsdir)
-        return None
-    new_ref = commit_edited_reference(user_id, dataset_id, data)
-    reference_edit_jobs.clear(dataset_id, dsdir)
-    return new_ref
+    # The mutation lock closes the claim -> file/DB promotion TOCTOU. Without it,
+    # an upload/crop could commit and invalidate after claim_ready(), only for this
+    # stale candidate to overwrite and delete that newer reference before the
+    # post-commit revision check noticed.
+    with reference_mutation(dataset_id):
+        claim = reference_edit_jobs.claim_ready(
+            dataset_id, engine, batch_id=batch_id)
+        if not claim:
+            return None
+        dsdir = _dataset_dir(dataset_id)
+        try:
+            with open(os.path.join(dsdir, claim['candidate_filename']), 'rb') as fh:
+                data = fh.read()
+        except OSError:
+            reference_edit_jobs.clear_claimed(
+                dataset_id, claim['batch_token'], claim['claim_token'], dsdir)
+            return None
+        try:
+            new_ref = commit_edited_reference(user_id, dataset_id, data)
+        except Exception:
+            # A failed write leaves both the old master and every candidate intact,
+            # so the user can retry Keep after fixing the storage problem.
+            reference_edit_jobs.release_claim(
+                dataset_id, claim['batch_token'], claim['claim_token'])
+            raise
+        cleared = reference_edit_jobs.clear_claimed(
+            dataset_id, claim['batch_token'], claim['claim_token'], dsdir,
+            reference_mutated=True)
+        if cleared is None:
+            # Defensive for TTL/process-lifecycle anomalies. Real reference
+            # mutations cannot interleave here because they use this same lock.
+            reference_edit_jobs.invalidate(dataset_id, dsdir)
+        return new_ref
 
 
 def _clear_reference_edit(dataset_id):
@@ -3671,9 +3917,7 @@ def _clear_reference_edit(dataset_id):
     rendering — cancel the ComfyUI job and close its activity. Without the cancel,
     abandoning a local edit left the GPU busy on a result nobody would ever see
     and the ✦ activity badge lit until the TTL."""
-    entry = reference_edit_jobs.clear(dataset_id, _dataset_dir(dataset_id))
-    if entry and entry.get('status') == 'running':
-        _cancel_local_edit_job(entry.get('_job_id'), entry.get('_act_token'))
+    reference_edit_jobs.clear(dataset_id, _dataset_dir(dataset_id))
 
 
 def discard_reference_edit(dataset_id):
@@ -3683,14 +3927,26 @@ def discard_reference_edit(dataset_id):
     _clear_reference_edit(dataset_id)
 
 
+def reference_mutation(dataset_id):
+    """Context manager shared by every primary-reference mutation path."""
+    return reference_edit_jobs.reference_mutation(dataset_id)
+
+
 def invalidate_reference_edit(dataset_id):
     """Drop any pending edit candidate when the reference itself changes
     (crop/recrop/change/keep): a Before/After computed from the OLD reference would
     be a visual lie. Idempotent — a no-op when nothing is pending."""
-    _clear_reference_edit(dataset_id)
+    with reference_mutation(dataset_id):
+        reference_edit_jobs.invalidate(dataset_id, _dataset_dir(dataset_id))
 
 
 def commit_edited_reference(user_id, dataset_id, image_bytes):
+    """Serialize and promote edited bytes as the dataset's reference."""
+    with reference_mutation(dataset_id):
+        return _commit_edited_reference_locked(user_id, dataset_id, image_bytes)
+
+
+def _commit_edited_reference_locked(user_id, dataset_id, image_bytes):
     """Promote an edited candidate (bytes) to BE the dataset reference. The edited
     image is the new source of truth, so it becomes BOTH ref_filename (working
     crop) and ref_original_filename (the full frame ✂ Crop re-reads) — a later
