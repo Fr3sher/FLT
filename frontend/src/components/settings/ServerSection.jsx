@@ -14,11 +14,15 @@ export function managedBrowserAccess(origin) {
   try {
     const parsed = new URL(origin)
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
-    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase()
+    const hostname = parsed.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '')
+    // WHATWG URL canonicalises IPv4-mapped IPv6 literals such as
+    // ::ffff:127.42.1.2 to ::ffff:7f2a:102. In that form, 127/8 is the
+    // 7f00-7fff range in the penultimate hextet.
+    const mappedIpv4Loopback = /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(hostname)
     const loopback = hostname === 'localhost'
       || hostname.endsWith('.localhost')
       || hostname === '::1'
-      || hostname === '::ffff:127.0.0.1'
+      || mappedIpv4Loopback
       || /^127(?:\.\d{1,3}){3}$/.test(hostname)
       || hostname === '0.0.0.0'
       || hostname === '::'

@@ -36,9 +36,12 @@ test('managed access uses the browser origin instead of container addresses', ()
 test('managed loopback origins never claim LAN availability', () => {
   for (const origin of [
     'http://localhost:8080',
+    'http://localhost.:8080',
     'http://127.0.0.1:8080',
     'http://127.42.0.7:8080',
     'http://[::1]:8080',
+    'http://[::ffff:127.0.0.1]:8080',
+    'http://[::ffff:127.42.3.4]:8080',
   ]) {
     const access = resolveServerAccess({
       bindManaged: true,
@@ -52,6 +55,26 @@ test('managed loopback origins never claim LAN availability', () => {
     assert.equal(access.port, 8080, origin)
     assert.equal(access.lanIp, null, origin)
   }
+})
+
+test('managed mapped non-loopback IPv4 origins remain network addresses', () => {
+  const access = resolveServerAccess({
+    bindManaged: true,
+    browserOrigin: 'http://[::ffff:192.168.1.10]:8080',
+    configHost: '0.0.0.0',
+    configPort: 5050,
+    runtimeLanIp: '172.19.0.2',
+  })
+
+  assert.equal(access.lan, true)
+  assert.equal(access.origin, 'http://[::ffff:c0a8:10a]:8080')
+})
+
+test('loopback classification does not rewrite the browser origin used for links', () => {
+  const access = managedBrowserAccess('http://localhost.:8080')
+  assert.equal(access.lan, false)
+  assert.equal(access.hostname, 'localhost')
+  assert.equal(access.origin, 'http://localhost.:8080')
 })
 
 test('managed loopback keeps token controls available without offering a QR link', () => {
