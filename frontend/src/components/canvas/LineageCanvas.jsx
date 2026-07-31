@@ -53,6 +53,7 @@ import CanvasGenerationPanel from './CanvasGenerationPanel';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
+import ExportGridModal from '../dataset/studio/ExportGridModal';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -198,7 +199,7 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
  *
  *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
-function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup,
+function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, onExportGrid,
   boardScale, hint }) {
   if (!layout.length) return null;
   // Edges are drawn from where each picture actually IS — a member's slot in
@@ -212,7 +213,7 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup,
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
           laneName={lane.name} onClose={onClose} onOpen={onOpen}
-          onCloseGroup={onCloseGroup} boardScale={boardScale}
+          onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} boardScale={boardScale}
           dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
       ) : (
         <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
@@ -257,6 +258,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const [selectedForDiff, setSelectedForDiff] = useState([]);
   const [noteEdits, setNoteEdits] = useState({});
   const [deletedIds, setDeletedIds] = useState([]);
+  const [exportGroup, setExportGroup] = useState(null);
 
   // A gone run removed from the inspector disappears without a refetch. It is
   // taken out of the TREE and the lane is laid out again — NOT filtered out of
@@ -1438,6 +1440,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                 <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || []}
                   onGeometry={handleImageGeometry} onClose={handleCloseImage}
                   onCloseGroup={handleCloseGroup}
+                  onExportGrid={(group) => setExportGroup({
+                    datasetId: lane.datasetId,
+                    imageIds: group.members.map((member) => member.node.imageId),
+                  })}
                   onOpen={(n) => setPinnedZoom(n.image)}
                   hint={dropHint?.datasetId === lane.datasetId ? dropHint : null}
                   boardScale={clampScale(view.scale)} />
@@ -1571,6 +1577,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           the facts stay one click away rather than crammed onto a thumbnail. */}
       <GeneratedImageLightbox img={pinnedZoom} alt="Pinned generated image"
         onClose={() => setPinnedZoom(null)} />
+
+      <ExportGridModal open={Boolean(exportGroup)} onClose={() => setExportGroup(null)}
+        datasetId={exportGroup?.datasetId} imageIds={exportGroup?.imageIds || []}
+        canvasMode />
 
       {/* An untouched board with picks waiting: say so, because the settings panel
           may be closed and the ✓ boxes are small. Also the only place the

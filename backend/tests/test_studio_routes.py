@@ -595,6 +595,7 @@ def _seed_done_cell(client, ds_id, *, filename='cell.png', aspect='16:9', run_se
             strength=1.0, aspect=aspect, filename=filename, status='done',
             run_seed=run_seed, seed=run_seed, prompt='p', cfg=1.0, steps=12))
         svc.db.session.commit()
+        return LoraTestImage.query.order_by(LoraTestImage.id.desc()).first().id
 
 
 def test_export_grid_unknown_dataset_404(client):
@@ -629,6 +630,28 @@ def test_export_grid_png_format_option(client):
                        json={'format': 'png'})
     assert resp.status_code == 200
     assert resp.mimetype == 'image/png' and resp.data[:4] == b'\x89PNG'
+
+
+def test_export_grid_accepts_ordered_canvas_image_ids(client, monkeypatch):
+    _comfy(monkeypatch, False)
+    ds_id = _create(client)
+    first = _seed_done_cell(client, ds_id, filename='first.png', run_seed=11)
+    second = _seed_done_cell(client, ds_id, filename='second.png', run_seed=22)
+    resp = client.post(f'/api/dataset/{ds_id}/lora-test/export-grid',
+                       json={'image_ids': [second, first], 'format': 'png'})
+    assert resp.status_code == 200
+    assert resp.mimetype == 'image/png'
+    assert '_canvas.png' in resp.headers['Content-Disposition']
+
+
+def test_export_grid_rejects_foreign_canvas_image(client):
+    first_ds = _create(client)
+    second_ds = _create(client)
+    foreign = _seed_done_cell(client, second_ds, filename='foreign.png')
+    resp = client.post(f'/api/dataset/{first_ds}/lora-test/export-grid',
+                       json={'image_ids': [foreign]})
+    assert resp.status_code == 400
+    assert 'another dataset' in resp.get_json()['error']
 
 
 # --- /api/index_config: deterministic field inventory ------------------------

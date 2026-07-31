@@ -1829,6 +1829,7 @@ def lora_test_export_grid(dataset_id):
         data, mime, meta = sge.export_grid(
             LOCAL_USER, dataset_id,
             family=d.get('family'), run_seed=d.get('run_seed'), prompt=d.get('prompt'),
+            image_ids=d.get('image_ids') if 'image_ids' in d else None,
             aspect=d.get('aspect'), include_prompt=bool(d.get('include_prompt')),
             cell_size=d.get('cell_size'), fmt=d.get('format'),
             footer=d.get('footer', True))
