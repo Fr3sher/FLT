@@ -259,6 +259,12 @@ def collect_canvas_grid(user_id, dataset_id, image_ids) -> dict | None:
             raise GridExportEmpty('one or more Canvas image files are missing')
         paths.append(path)
         parts = [f'#{row.id}']
+        if row.record_id is not None:
+            parts.append(f'run #{row.record_id}')
+        if row.z_model:
+            model_name = lts._basename(row.z_model).rsplit('.', 1)[0]
+            if model_name:
+                parts.append(model_name)
         if row.step is not None:
             parts.append(f'ckpt {row.step}')
         if row.steps is not None:
@@ -452,7 +458,7 @@ def render_canvas_strip_image(title, subtitle, paths, labels, *, footer_text=FOO
     if not sizes or any(not size for size in sizes):
         raise GridExportEmpty('one or more Canvas images could not be read')
     height = int(cell_size)
-    gap, margin, label_h, banner_h = 10, 28, 58, 100
+    gap, margin, label_h, banner_h = 10, 28, 76, 100
 
     def widths_for(h):
         return [max(1, round(w * h / h0)) for w, h0 in sizes]
@@ -475,7 +481,7 @@ def render_canvas_strip_image(title, subtitle, paths, labels, *, footer_text=FOO
     x = margin
     for path, label, width in zip(paths, labels, widths):
         label_font = _font(14)
-        lines = _fit_lines(draw, str(label), label_font, max(1, width - 4), max_lines=3)
+        lines = _fit_lines(draw, str(label), label_font, max(1, width - 4), max_lines=4)
         for line_no, line in enumerate(lines):
             draw.text((x, banner_h + line_no * 18), line, font=label_font, fill=_HEADER)
         with Image.open(path) as source:

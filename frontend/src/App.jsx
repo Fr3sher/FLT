@@ -428,6 +428,8 @@ function OnboardingRedirect() {
 }
 
 function Shell() {
+  const { pathname } = useLocation();
+  const canvasRoute = pathname === '/canvas';
   return (
     <>
       <NavBar />
@@ -437,7 +439,10 @@ function Shell() {
           "there is a newer version". */}
       <ConnectionBanner />
       <UpdateBanner />
-      <main id="main-content" tabIndex={-1} className="mx-auto max-w-5xl px-4 py-6">
+      <main id="main-content" tabIndex={-1}
+        className={canvasRoute
+          ? 'mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-4 sm:py-6'
+          : 'mx-auto max-w-5xl px-4 py-6'}>
         <Outlet />
       </main>
       <TipHost />

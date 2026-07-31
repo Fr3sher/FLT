@@ -245,12 +245,16 @@ def test_collect_canvas_grid_preserves_explicit_image_order(app, tmp_path):
         ds_id = _make_run(app, tmp_path, run_seed=808, strengths=[0.5, 1.0],
                           checkpoints=['z image\\lora_troubeau_000002000.safetensors'])
         rows = LoraTestImage.query.filter_by(dataset_id=ds_id).order_by(LoraTestImage.id).all()
+        rows[0].z_model = r'models\Krea-2-Turbo.safetensors'
+        rows[0].record_id = 321
+        from app.services import face_dataset_service as svc
+        svc.db.session.commit()
         grid = sge.collect_canvas_grid(LOCAL_USER, ds_id, [rows[1].id, rows[0].id])
         cells = grid['blocks'][0]['rows'][0]['cells']
         assert [os.path.basename(path) for path in cells] == [rows[1].filename, rows[0].filename]
         assert grid['blocks'][0]['col_labels'] == [
             f'#{rows[1].id} · 12 steps · ×1.0 · seed 808',
-            f'#{rows[0].id} · 12 steps · ×0.5 · seed 808',
+            f'#{rows[0].id} · run #321 · Krea-2-Turbo · 12 steps · ×0.5 · seed 808',
         ]
         assert grid['aspect'] == 'canvas' and grid['n_cells'] == 2
 
