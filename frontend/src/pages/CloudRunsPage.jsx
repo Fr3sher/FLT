@@ -146,7 +146,7 @@ function PodKeptNote({ fullModel = false }) {
       className="w-full rounded-md border border-amber-400/40 bg-amber-500/10 px-2.5 py-2 text-amber-200 text-[0.6875rem] leading-relaxed">
       <span className="font-semibold">⚠ Pod kept for manual checkpoint recovery</span> — it keeps
       billing until reaped. {fullModel
-        ? 'Verify or recover the dense weights on Hugging Face before the recovery window expires.'
+        ? 'Verify or recover the full-model weights on Hugging Face before the recovery window expires.'
         : 'Download its LoRA, then it is cleaned up automatically after the recovery window.'}
     </div>
   );
@@ -175,17 +175,17 @@ function FullArtifactStatus({ run, onRecheck, rechecking = false }) {
       )}
       {!view.href && view.repositoryHref && (
         <a href={view.repositoryHref} target="_blank" rel="noreferrer"
-          title="Ce lien ouvre seulement le dépôt : la présence des poids n’est pas encore vérifiée"
+          title="This link only opens the repository; the model weights have not been verified yet"
           className="mt-1 inline-block font-semibold text-amber-100 underline hover:text-white">
-          Inspecter le dépôt HF (livraison non vérifiée) ↗
+          Inspect Hugging Face repository (delivery not verified) ↗
         </a>
       )}
       {canRecheck && (
         <button type="button" onClick={() => onRecheck(run)} disabled={rechecking}
           className="mt-1.5 block rounded-md border border-amber-300/50 bg-amber-400/10 px-2.5 py-1 text-amber-50 font-semibold hover:bg-amber-400/20 disabled:opacity-40">
           {rechecking
-            ? (view.cleanupPending ? 'Nettoyage du pod…' : 'Vérification HF…')
-            : (view.cleanupPending ? 'Réessayer le nettoyage' : 'Vérifier la livraison HF')}
+            ? (view.cleanupPending ? 'Cleaning up pod…' : 'Verifying Hugging Face delivery…')
+            : (view.cleanupPending ? 'Retry pod cleanup' : 'Verify Hugging Face delivery')}
         </button>
       )}
     </div>
@@ -465,9 +465,9 @@ export default function CloudRunsPage() {
     const who = run.dataset_name || run.run_name || `run #${run.run_id}`;
     const fullModel = isFullTransformerRun(run);
     const consequence = fullModel
-      ? 'AI Toolkit envoie le modèle dense vers Hugging Face seulement à la fin propre du run. '
-        + 'Le dernier checkpoint qui n’a pas encore été téléversé peut être définitivement perdu, '
-        + 'même si un checkpoint plus ancien existe déjà sur le Hub.'
+      ? 'AI Toolkit uploads the full model to Hugging Face only when the run finishes cleanly. '
+        + 'The latest checkpoint can be permanently lost if it has not been uploaded yet, '
+        + 'even if an older checkpoint is already available on the Hub.'
       : 'The pod is terminated. Any LoRA checkpoint reached so far is still downloaded '
         + 'and importable — you only lose the remaining steps.';
     if (!window.confirm(`Stop the cloud run for “${who}”?\n\n${consequence}`)) return;
@@ -511,8 +511,8 @@ export default function CloudRunsPage() {
       await poll();
     } catch (error) {
       toast.error(error?.message
-        ? `Vérification Hugging Face impossible : ${error.message}`
-        : 'Vérification Hugging Face impossible. Le pod reste conservé et peut continuer à facturer.');
+        ? `Could not verify the model on Hugging Face: ${error.message}`
+        : 'Could not verify the model on Hugging Face. The pod remains available for recovery and may continue billing.');
     } finally {
       setRecheckingDelivery((current) => ({ ...current, [run.run_id]: false }));
     }

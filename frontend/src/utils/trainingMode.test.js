@@ -31,7 +31,7 @@ test('training mode enum is exact and every legacy or invalid value falls back t
   assert.equal(normalizeTrainingMode('full_model'), 'lora');
   assert.equal(normalizeTrainingMode(undefined), 'lora');
   assert.equal(trainingModeLabel('lora'), 'LoRA');
-  assert.equal(trainingModeLabel('full_transformer'), 'Modèle complet');
+  assert.equal(trainingModeLabel('full_transformer'), 'Full model');
 });
 
 test('dense eligibility is limited to the official Krea 2 Raw recipe', () => {
@@ -71,6 +71,7 @@ test('a full artifact link exists only after verified availability', () => {
   assert.equal(pending.href, null);
   assert.equal(pending.repositoryHref, 'https://huggingface.co/me/private');
   assert.equal(pending.tone, 'warning');
+  assert.equal(pending.label, 'Hugging Face verification pending');
   assert.match(pending.detail, /token timed out/);
 
   const missing = fullTransformerArtifactView({
@@ -78,12 +79,14 @@ test('a full artifact link exists only after verified availability', () => {
   });
   assert.equal(missing.href, null);
   assert.equal(missing.tone, 'error');
+  assert.equal(missing.label, 'Full model not found');
 
   const available = fullTransformerArtifactView({
     artifact_status: 'available', hf_url: 'https://huggingface.co/me/private',
   });
   assert.equal(available.href, 'https://huggingface.co/me/private');
   assert.equal(available.available, true);
+  assert.equal(available.label, 'Full model available');
   assert.equal(isFullTransformerRun({ training_mode: 'full_transformer' }), true);
 });
 
@@ -140,7 +143,7 @@ test('legacy verified kept rows default to visible cleanup-pending state', () =>
   assert.equal(legacy.cleanupPending, true);
   assert.equal(legacy.href, 'https://huggingface.co/me/private');
   assert.equal(legacy.tone, 'warning');
-  assert.match(legacy.detail, /peut encore facturer/);
+  assert.match(legacy.detail, /may still be billing/);
 });
 
 test('verified model and pending cleanup never produce a pod-released success', () => {
@@ -148,14 +151,14 @@ test('verified model and pending cleanup never produce a pod-released success', 
     ok: true, delivery: 'available', cleanup_pending: true,
   });
   assert.equal(pending.kind, 'warning');
-  assert.match(pending.text, /Modèle Hugging Face vérifié et disponible/);
-  assert.match(pending.text, /peut encore facturer/);
+  assert.match(pending.text, /Hugging Face model verified and available/);
+  assert.match(pending.text, /may still be billing/);
 
   const complete = fullTransformerRecheckOutcome({
     ok: true, delivery: 'available', cleanup_pending: false,
   });
   assert.equal(complete.kind, 'success');
-  assert.match(complete.text, /nettoyage du pod est confirmé/);
+  assert.match(complete.text, /pod cleanup is confirmed/);
 });
 
 test('dense offers never reuse an unlabelled or unavailable estimate', () => {
@@ -181,18 +184,20 @@ test('dense offers never reuse an unlabelled or unavailable estimate', () => {
 
 test('MVP copy and artifact actions distinguish a full model from a LoRA', () => {
   assert.match(panel, /LoRA/);
-  assert.match(panel, /Modèle complet/);
-  assert.match(panel, /GPU 80 Go/);
-  assert.match(panel, /200 Go de disque/);
-  assert.match(panel, /~26 Go/);
-  assert.match(panel, /dépôt Hugging Face privé/);
-  assert.match(panel, /dataset nettement plus grand et diversifié/);
-  assert.match(panel, /Ouvrir le modèle privé sur Hugging Face/);
+  assert.match(panel, /Full model/);
+  assert.match(panel, /80 GB VRAM GPU/);
+  assert.match(panel, /at least 200 GB disk/);
+  assert.match(panel, /~26 GB/);
+  assert.match(panel, /private Hugging Face repository/);
+  assert.match(panel, /much larger, more diverse dataset/);
+  assert.match(panel, /Open private model on Hugging Face/);
   assert.match(panel, /!fullMode && !cloudActiveHere/);
   assert.match(panel, /HF_CLOUD_TOKEN/);
   assert.match(panel, /ArrowLeft/);
   assert.match(panel, /tabIndex=\{!fullMode \|\| !fullTransformerEligible \? 0 : -1\}/);
   assert.match(panel, /aria-describedby/);
+  assert.doesNotMatch(panel,
+    /Modèle complet|Fine-tuning complet|Recette dense verrouillée|Lancer le fine-tuning complet|Choisir un GPU 80 Go|Livraison Hugging Face bloquée|estimation dense indisponible/);
 });
 
 test('dense Advanced renders only the locked server recipe and its honored steps input', () => {
@@ -200,14 +205,14 @@ test('dense Advanced renders only the locked server recipe and its honored steps
     panel.indexOf('// FULL_TRANSFORMER_ADVANCED_RECIPE_START'),
     panel.indexOf('// FULL_TRANSFORMER_ADVANCED_RECIPE_END'),
   );
-  assert.match(panel, /Recette dense verrouillée · étapes/);
-  assert.match(recipe, /Krea 2 Raw officiel · transformer complet non quantifié/);
+  assert.match(panel, /Locked full-model recipe · steps/);
+  assert.match(recipe, /Official Krea 2 Raw · full transformer · unquantized/);
   assert.match(recipe, /1024 px · batch 1 · bf16/);
   assert.match(recipe, /Adafactor · learning rate 1e-6/);
-  assert.match(recipe, /Gradient checkpointing · cache latents \+ embeddings texte/);
-  assert.match(recipe, /Checkpoint \+ preview toutes les 250 étapes · 1 checkpoint conservé/);
-  assert.match(recipe, /GPU 80 Go VRAM · 200 Go de disque minimum/);
-  assert.match(recipe, /Seul réglage modifiable de cette recette dense/);
+  assert.match(recipe, /Gradient checkpointing · cached latents \+ text embeddings/);
+  assert.match(recipe, /Checkpoint \+ preview every 250 steps · keep 1 checkpoint/);
+  assert.match(recipe, /80 GB VRAM GPU · at least 200 GB disk/);
+  assert.match(recipe, /The only editable setting in this full-model recipe/);
   assert.equal([...recipe.matchAll(/<input\b/g)].length, 1);
   assert.match(recipe, /setStepsOverride\(event\.target\.value\)/);
   assert.doesNotMatch(recipe, /<select\b|<button\b|saveAdv\(|setBase\(|setVariant\(|setMasked\(/,
@@ -243,7 +248,7 @@ test('local hook persists and launches with the canonical mode', () => {
 test('offers use the exact recipe and refetch when any recipe input changes', () => {
   assert.match(panel, /new URLSearchParams\(\{\s*train_type: trainType,\s*variant,\s*base_model: base \?\? '',\s*training_mode:/);
   assert.match(panel, /\[datasetId, trainType, variant, base, trainingMode, steps\]/);
-  assert.match(panel, /estimation dense indisponible — prix horaire uniquement/);
+  assert.match(panel, /full-model estimate unavailable — hourly price only/);
   assert.match(panel, /hasUsableEstimate/);
   assert.match(panel, /hfCloudTokenReadiness\(data \|\| \{\}\)/);
   assert.match(panel, /disabled=\{!selected \|\| launching \|\| !customBaseReady \|\| hfTokenBlocked\}/);
@@ -275,9 +280,15 @@ test('full run cards surface Hub status and suppress LoRA-only actions', () => {
   assert.match(runsPage, /!fullModel && run\.dataset_id != null/);
   assert.match(runsPage, /!fullModel && run\.record_id != null/);
   assert.match(runsPage, /isFullTransformerRun\(run\) && \([\s\S]*?<FullArtifactStatus run=\{run\}/);
-  assert.match(runsPage, /AI Toolkit envoie le modèle dense vers Hugging Face seulement à la fin propre/);
-  assert.match(runsPage, /Vérifier la livraison HF/);
-  assert.match(runsPage, /Réessayer le nettoyage/);
+  assert.match(runsPage, /AI Toolkit uploads the full model to Hugging Face only when the run finishes cleanly/);
+  assert.match(runsPage, /Verify Hugging Face delivery/);
+  assert.match(runsPage, /Retry pod cleanup/);
   assert.match(runsPage, /\/api\/dataset\/train\/cloud\/recheck-delivery/);
-  assert.match(runsPage, /Inspecter le dépôt HF \(livraison non vérifiée\)/);
+  assert.match(runsPage, /Inspect Hugging Face repository \(delivery not verified\)/);
+});
+
+test('user-facing full-model recovery copy never falls back to dense terminology', () => {
+  assert.match(panel, /the latest full-model checkpoint may not have reached Hugging Face/);
+  assert.match(runsPage, /Verify or recover the full-model weights on Hugging Face/);
+  assert.doesNotMatch(`${panel}\n${runsPage}`, /\bdense (?:checkpoint|weights)\b/i);
 });

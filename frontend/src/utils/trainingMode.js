@@ -9,7 +9,7 @@ export function normalizeTrainingMode(value) {
 
 export function trainingModeLabel(value) {
   return normalizeTrainingMode(value) === TRAINING_MODE_FULL_TRANSFORMER
-    ? 'Modèle complet'
+    ? 'Full model'
     : 'LoRA';
 }
 
@@ -69,8 +69,8 @@ export function hfCloudTokenReadiness(payload = {}) {
   let detail = combinedText;
   if (!detail && blocked) {
     detail = status?.configured === false
-      ? 'Le token dédié HF_CLOUD_TOKEN est absent.'
-      : 'Le token dédié HF_CLOUD_TOKEN est invalide ou ses permissions sont insuffisantes.';
+      ? 'The dedicated HF_CLOUD_TOKEN is missing.'
+      : 'The dedicated HF_CLOUD_TOKEN is invalid or does not have the required permissions.';
   }
   return {
     signaled,
@@ -104,42 +104,42 @@ export function fullTransformerArtifactView(run = {}) {
     return {
       status, available, cleanupPending, href, repositoryHref,
       tone: cleanupPending ? 'warning' : 'success',
-      label: 'Modèle complet disponible',
+      label: 'Full model available',
       detail: cleanupPending
         ? (cleanupDetail
-          || 'Le modèle est vérifié, mais le nettoyage du pod n’est pas confirmé et il peut encore facturer.')
+          || 'The model is verified, but pod cleanup has not been confirmed and the pod may still be billing.')
         : detail || (href
-        ? 'Le contenu du dépôt Hugging Face privé a été vérifié.'
-        : 'Le contenu a été vérifié, mais le lien du dépôt manque dans ce statut.'),
+        ? 'The private Hugging Face repository contents have been verified.'
+        : 'The contents were verified, but this status does not include the repository link.'),
     };
   }
   if (status === 'missing') {
     return {
       status, available: false, href: null, repositoryHref, tone: 'error',
-      label: 'Modèle complet introuvable',
-      detail: detail || 'Aucun poids complet vérifié dans le dépôt. Vérifiez les logs du run et le dépôt Hugging Face avant de supprimer toute copie de récupération.',
+      label: 'Full model not found',
+      detail: detail || 'No full-model weights were verified in the repository. Check the run logs and Hugging Face repository before deleting any recovery copy.',
     };
   }
   if (status === 'verification_pending') {
     return {
       status, available: false, href: null, repositoryHref, tone: 'warning',
-      label: 'Vérification Hugging Face en attente',
-      detail: detail || 'Vérifiez le token dédié HF_CLOUD_TOKEN dans Settings ▸ Local tools et la connexion, puis actualisez la page Runs. Le modèle ne doit pas encore être considéré comme récupérable.',
+      label: 'Hugging Face verification pending',
+      detail: detail || 'Check the dedicated HF_CLOUD_TOKEN in Settings ▸ Local tools and your connection, then refresh Runs. Do not treat the model as recoverable yet.',
     };
   }
   if (status === 'creating_repository' || status === 'pending' || status === 'uploading') {
     return {
       status, available: false, href: null, repositoryHref, tone: 'info',
       label: status === 'creating_repository'
-        ? 'Création du dépôt Hugging Face…'
-        : 'Envoi du modèle complet en cours…',
-      detail: detail || 'Gardez le run et son pod actifs jusqu’à la vérification du dépôt.',
+        ? 'Creating Hugging Face repository…'
+        : 'Uploading full model…',
+      detail: detail || 'Keep the run and pod active until the repository is verified.',
     };
   }
   return {
     status, available: false, href: null, repositoryHref, tone: 'warning',
-    label: 'Statut du modèle complet indisponible',
-    detail: detail || 'Actualisez la page Runs. Si le statut reste absent, vérifiez les logs du run et votre configuration Hugging Face.',
+    label: 'Full model status unavailable',
+    detail: detail || 'Refresh Runs. If the status remains unavailable, check the run logs and your Hugging Face configuration.',
   };
 }
 
@@ -161,26 +161,26 @@ export function fullTransformerRecheckOutcome(result = {}) {
     return {
       kind: 'error',
       text: result?.error
-        || 'La livraison Hugging Face n’a pas pu être vérifiée. Le pod reste conservé.',
+        || 'Hugging Face delivery could not be verified. The pod remains available for recovery.',
     };
   }
   if (result.delivery === 'available' && result.cleanup_pending) {
     return {
       kind: 'warning',
-      text: 'Modèle Hugging Face vérifié et disponible. Le nettoyage du pod reste en attente et il peut encore facturer ; réessayez le nettoyage.',
+      text: 'Hugging Face model verified and available. Pod cleanup is still pending, and the pod may still be billing; retry cleanup.',
     };
   }
   if (result.delivery === 'available') {
     return {
       kind: 'success',
-      text: 'Livraison Hugging Face vérifiée. Le modèle est disponible et le nettoyage du pod est confirmé.',
+      text: 'Hugging Face delivery verified. The model is available and pod cleanup is confirmed.',
     };
   }
   return {
     kind: 'info',
     text: result.delivery === 'missing'
-      ? 'Aucun poids dense vérifié dans le dépôt. Le pod reste conservé : consultez ses logs avant toute suppression.'
-      : 'Vérification Hugging Face toujours en attente. Corrigez HF_CLOUD_TOKEN si nécessaire, puis réessayez.',
+      ? 'No full-model weights were verified in the repository. The pod remains available for recovery; check its logs before deleting anything.'
+      : 'Hugging Face verification is still pending. Fix HF_CLOUD_TOKEN if needed, then try again.',
   };
 }
 
@@ -225,9 +225,9 @@ export function isFullTransformerEligible({
 }
 
 export function fullTransformerUnavailableReason(selection = {}) {
-  if (selection.trainType !== 'krea') return 'Choisissez la famille Krea 2.';
-  if (selection.variant !== 'base') return 'Choisissez Krea 2 Raw.';
-  if (selection.customBase === true) return 'Le MVP utilise uniquement la base officielle Krea 2 Raw.';
-  if (String(selection.baseModel || '').trim()) return 'Le MVP utilise uniquement la base officielle Krea 2 Raw.';
+  if (selection.trainType !== 'krea') return 'Choose the Krea 2 family.';
+  if (selection.variant !== 'base') return 'Choose Krea 2 Raw.';
+  if (selection.customBase === true) return 'This MVP supports only the official Krea 2 Raw base.';
+  if (String(selection.baseModel || '').trim()) return 'This MVP supports only the official Krea 2 Raw base.';
   return null;
 }
