@@ -237,9 +237,21 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     # FORCE_CHOWN is intentionally limited to the app-data bind. The launcher
     # must never recursively adopt ComfyUI's model/run trees or the image bank.
     launcher = _read('packaging/docker/studio_launch.sh')
-    force_block = launcher[launcher.index('LDS_FORCE_CHOWN'):
+    force_block = launcher[launcher.index('if [ "${LDS_FORCE_CHOWN'):
                            launcher.index('/usr/bin/python3')]
     assert '"${DATA_DIR}"' in force_block
+    # The parent bind can be writable while files created by a previous root
+    # container below it are not.  The explicit opt-in must therefore chown the
+    # full tree without using the parent's writability as a gate.
+    force_condition = re.search(
+        r'if\s+\[\s+"\$\{LDS_FORCE_CHOWN:-false\}"\s+=\s+"true"\s+\];\s+then',
+        force_block,
+    )
+    assert force_condition, 'LDS_FORCE_CHOWN must be the recursive chown gate'
+    chown = force_block.index('sudo chown -R', force_condition.end())
+    post_chown_check = force_block.index('if [ ! -w "${DATA_DIR}" ]', chown)
+    assert '! -w "${DATA_DIR}"' not in force_block[:chown]
+    assert force_condition.end() < chown < post_chown_check
     assert '/basedir' not in force_block
     assert '/comfy/mnt' not in force_block
     assert '/images' not in force_block

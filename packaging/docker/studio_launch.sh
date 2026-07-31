@@ -36,8 +36,10 @@ if [ ! -w "${STUDIO_DIR}/.venv" ]; then
 fi
 
 # /data is the user's bind mount: the host owns it, so its ownership is not rewritten
-# behind their back. Only on request, and otherwise say exactly what to run.
-if [ ! -w "${DATA_DIR}" ] && [ "${LDS_FORCE_CHOWN:-false}" = "true" ]; then
+# behind their back. Only on request, and otherwise say exactly what to run. The
+# opt-in adopts the entire tree even when /data itself is writable: files below it
+# may still be root-owned after an earlier container run.
+if [ "${LDS_FORCE_CHOWN:-false}" = "true" ]; then
   log "LDS_FORCE_CHOWN=true — taking ownership of ${DATA_DIR}"
   sudo chown -R "$(id -u):$(id -g)" "${DATA_DIR}" || log "chown of ${DATA_DIR} failed"
 fi

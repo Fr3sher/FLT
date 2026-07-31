@@ -493,6 +493,68 @@ def test_lifecycle_reservation_blocks_zip_worker_after_restart(monkeypatch, tmp_
     assert updater.zip_update_progress()['phase'] == 'idle'
 
 
+def test_start_zip_update_releases_lifecycle_when_worker_thread_cannot_start(
+        monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        updater, 'latest_release',
+        lambda: {'version': '9999.01.01', 'zip_url': 'https://x/z', 'zip_size': 42},
+    )
+
+    def cannot_start(_thread):
+        raise RuntimeError('thread quota exhausted')
+
+    monkeypatch.setattr(updater.threading.Thread, 'start', cannot_start)
+
+    result = updater.start_zip_update(root=tmp_path)
+
+    assert result['ok'] is False and result['async'] is False
+    assert 'worker could not start' in result['reason'].lower()
+    assert 'thread quota exhausted' in result['reason']
+    progress = updater.zip_update_progress()
+    assert progress['phase'] == 'error'
+    assert progress['error'] == result['reason']
+    assert progress['changed'] is False
+    assert progress['restart_required'] is False
+    assert progress['rolled_back'] is False
+    assert updater.zip_update_in_progress() is False
+
+
+def test_zip_update_restart_thread_failure_is_recoverable(monkeypatch, tmp_path):
+    monkeypatch.setenv('LDS_RESTART_MODE', 'supervisor')
+    monkeypatch.setattr(
+        updater, 'apply_zip_update',
+        lambda *a, **k: {'ok': True, 'changed': True, 'deps_changed': True},
+    )
+    starts = []
+
+    def fail_then_accept(thread):
+        starts.append(thread)
+        if len(starts) == 1:
+            raise RuntimeError('thread quota exhausted')
+
+    monkeypatch.setattr(updater.threading.Thread, 'start', fail_then_accept)
+
+    updater._run_zip_update(tmp_path, {'version': '9999.01.01'})
+
+    progress = updater.zip_update_progress()
+    assert progress['phase'] == 'error'
+    assert 'update was installed' in progress['error'].lower()
+    assert 'automatic restart could not be scheduled' in progress['error'].lower()
+    assert 'thread quota exhausted' in progress['error']
+    assert progress['changed'] is True
+    assert progress['restart_required'] is True
+    assert progress['deps_changed'] is True
+    assert progress['rolled_back'] is False
+    assert updater.zip_update_in_progress() is False
+    assert updater._restart_scheduled is False
+
+    # schedule_restart reset its process-lifetime flag when Thread.start failed,
+    # so a subsequent manual retry can reserve and launch a new restart thread.
+    assert updater.schedule_restart(delay=0) is True
+    assert updater._restart_scheduled is True
+    assert len(starts) == 2
+
+
 def test_start_zip_update_runs_worker_to_restarting(tmp_path, monkeypatch):
     import time
     repo = tmp_path / 'install'

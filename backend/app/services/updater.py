@@ -568,15 +568,29 @@ def start_zip_update(root=None) -> dict:
         _zip_state.update(phase='downloading', downloaded=0,
                           total=rel.get('zip_size') or 0,
                           **{'from': APP_VERSION, 'to': latest})
-    threading.Thread(target=_run_zip_update, args=(root, rel), daemon=True).start()
+    try:
+        threading.Thread(target=_run_zip_update, args=(root, rel), daemon=True).start()
+    except Exception as exc:
+        # Reserving the lifecycle happens before starting the worker so two
+        # requests cannot launch competing swaps.  If the runtime cannot start
+        # the thread, release that reservation immediately and report the real
+        # pre-install failure instead of leaving the UI stuck on downloading.
+        reason = f'The update worker could not start: {exc}'
+        with _zip_lock:
+            _zip_state.update(phase='error', error=reason, changed=False,
+                              restart_required=False, rolled_back=False)
+        return {'ok': False, 'async': False, 'reason': reason,
+                'from': APP_VERSION, 'to': latest,
+                'total': rel.get('zip_size') or 0}
     return {'ok': True, 'async': True, 'from': APP_VERSION, 'to': latest,
             'total': rel.get('zip_size') or 0}
 
 
 def _run_zip_update(root, rel) -> None:
     """Worker body: run the update, mirror its phase into `_zip_state`, and on
-    success schedule the restart. Any failure lands as phase 'error' (already
-    rolled back inside apply_zip_update), which the UI surfaces honestly."""
+    success schedule the restart. Apply failures land as phase ``error`` after
+    their rollback; a later restart-scheduling failure instead records that the
+    new files are installed and still require a manual restart."""
     def cb(phase, done=0, total=0):
         with _zip_lock:
             _zip_state['phase'] = phase
@@ -593,7 +607,21 @@ def _run_zip_update(root, rel) -> None:
         else:
             _zip_state.update(phase='error', error=res.get('reason'), rolled_back=True)
     if res.get('ok') and res.get('changed'):
-        schedule_restart(install_requirements=bool(res.get('deps_changed')))
+        try:
+            schedule_restart(install_requirements=bool(res.get('deps_changed')))
+        except Exception as exc:
+            # The file swap succeeded; calling this a rollback would be both
+            # inaccurate and dangerous because the process is now running old
+            # imports over new files.  Make the lifecycle inactive so a manual
+            # restart can be retried, while telling the UI that the installed
+            # update still requires that restart.
+            reason = (
+                'The update was installed, but the automatic restart could not '
+                f'be scheduled: {exc}. Restart the app manually.'
+            )
+            with _zip_lock:
+                _zip_state.update(phase='error', error=reason, changed=True,
+                                  restart_required=True, rolled_back=False)
 
 
 def _dependency_install_command(root=None, executable=None) -> list[str]:
