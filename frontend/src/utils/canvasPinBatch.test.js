@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
-  groupPinnedBatchBySource, pinBatchLabel, pinBatchPending,
+  groupPinnedBatchBySource, groupPinnedBatchTogether, pinBatchLabel, pinBatchPending,
   pinBatchPendingAcrossLanes, placeImageBatch,
 } from './canvasPinBatch.js';
 import { CARD_W } from './lineageGraph.js';
@@ -71,6 +71,25 @@ test('different checkpoints and unknown sources never auto-group', () => {
     { ...placed(3, null, null), image: { id: 3, url: '/img/3.png' } },
   ] });
   assert.ok(result.rows.every((r) => r.groupId == null));
+});
+
+test('Pin all concatenates one generated lot even when checkpoints differ', () => {
+  const result = groupPinnedBatchTogether({ placed: [
+    placed(1, 82, 500), placed(2, 82, 1000), placed(3, 86, 6000),
+  ] });
+  assert.ok(result.rows[0].groupId);
+  assert.ok(result.rows.every((r) => r.groupId === result.rows[0].groupId));
+  assert.deepEqual(result.rows.map((r) => r.groupPos), [0, 1, 2]);
+  assert.ok(result.undoRows.every((r) => r.visible === false && r.groupId == null));
+});
+
+test('separate Pin all gestures get separate groups', () => {
+  const first = groupPinnedBatchTogether({ placed: [placed(1, 82, 500), placed(2, 82, 1000)] });
+  const second = groupPinnedBatchTogether({
+    nodes: first.rows,
+    placed: [placed(3, 82, 1500), placed(4, 82, 2000)],
+  });
+  assert.notEqual(first.rows[0].groupId, second.rows[0].groupId);
 });
 
 test('a manual mixed-checkpoint group is never used as an automatic target', () => {

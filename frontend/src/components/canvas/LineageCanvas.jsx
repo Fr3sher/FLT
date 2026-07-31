@@ -44,7 +44,7 @@ import { canvasRunDatasetIds, readyImageCount, runPinCandidates } from '../../ut
 import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeChrome';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
-  groupPinnedBatchBySource,
+  groupPinnedBatchBySource, groupPinnedBatchTogether,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
@@ -1210,7 +1210,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         remembered: laneMap,
       });
       if (!res.placed.length) continue;
-      const grouped = groupPinnedBatchBySource({
+      const grouped = groupPinnedBatchTogether({
         nodes: Object.values(laneMap), placed: res.placed,
       });
       placedTotal += res.placed.length;

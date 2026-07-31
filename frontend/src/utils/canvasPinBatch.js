@@ -200,6 +200,36 @@ export function groupPinnedBatchBySource({ nodes = [], placed = [] } = {}) {
   return { rows: [...affected.values()].sort(byId), undoRows: [...undo.values()].sort(byId) };
 }
 
+/** Turn one freshly generated/pinned lot into a single strip.
+ * Different checkpoints are intentional here: Pin all represents one
+ * generation action. Existing groups are never reused, so separate runs stay
+ * as separate strips. */
+export function groupPinnedBatchTogether({ nodes = [], placed = [] } = {}) {
+  const before = new Map((nodes || []).filter((n) => n?.imageId != null)
+    .map((n) => [Number(n.imageId), { ...n }]));
+  const fresh = [...(placed || [])].filter((p) => p?.imageId != null)
+    .sort((a, b) => Number(a.imageId) - Number(b.imageId));
+  const groupId = fresh.length >= 2
+    ? nextGroupId([...(nodes || []), ...fresh], fresh[0].imageId)
+    : null;
+  const rows = fresh.map((p, pos) => {
+    const id = Number(p.imageId);
+    const old = before.get(id);
+    return {
+      imageId: id, x: p.x, y: p.y, w: p.w, h: p.h, visible: true,
+      groupId, groupPos: groupId ? pos : null,
+      image: p.image || old?.image,
+    };
+  });
+  const undoRows = rows.map((row) => {
+    const old = before.get(row.imageId);
+    return old ? { ...old } : {
+      ...row, visible: false, groupId: null, groupPos: null,
+    };
+  });
+  return { rows, undoRows };
+}
+
 /**
  * Where a source's column WANTS to start, horizontally: the x of the card that
  * produced it. An image whose run is not on the board (deleted, filtered off)
