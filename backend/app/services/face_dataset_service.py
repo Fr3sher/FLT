@@ -23,6 +23,7 @@ import time
 import uuid
 import warnings
 import zipfile
+from functools import wraps
 from types import SimpleNamespace
 from typing import BinaryIO
 from urllib.parse import urlsplit
@@ -326,11 +327,40 @@ _IMAGE_PIXEL_EDIT_LOCKS = tuple(threading.Lock() for _ in range(64))
 # requests serial without retaining an unbounded lock map; a collision only
 # makes an unrelated request retry, never permits concurrent scorers.
 _FACE_SCORING_LOCKS = tuple(threading.Lock() for _ in range(64))
+# LDS runs one threaded Flask process (backend/run.py and Dockerfile). Striped
+# locks therefore serialize dataset dedupe snapshots without an unbounded map.
+# RLock permits a promotion to hold the stripe across all chunks while nested
+# import_images calls retain the same protection.
+_DATASET_INGEST_LOCKS = tuple(threading.RLock() for _ in range(64))
 _FACE_SCORING_BUSY_DETAIL = 'face scoring is already running; try again shortly'
 
 
 def _face_scoring_lock(dataset_id):
     return _FACE_SCORING_LOCKS[hash(str(dataset_id)) % len(_FACE_SCORING_LOCKS)]
+
+
+def _dataset_ingest_lock(user_id, dataset_id):
+    return _DATASET_INGEST_LOCKS[
+        hash((str(user_id), str(dataset_id))) % len(_DATASET_INGEST_LOCKS)]
+
+
+def _serialize_dataset_ingest(fn):
+    @wraps(fn)
+    def wrapped(user_id, dataset_id, *args, **kwargs):
+        with _dataset_ingest_lock(user_id, dataset_id):
+            return fn(user_id, dataset_id, *args, **kwargs)
+    return wrapped
+
+
+def _serialize_dataset_image_ingest(fn):
+    @wraps(fn)
+    def wrapped(user_id, image_id, *args, **kwargs):
+        image = db.session.get(FaceDatasetImage, image_id)
+        if image is None:
+            return fn(user_id, image_id, *args, **kwargs)
+        with _dataset_ingest_lock(user_id, image.dataset_id):
+            return fn(user_id, image_id, *args, **kwargs)
+    return wrapped
 
 
 def _face_scoring_busy_error():
@@ -1832,6 +1862,7 @@ def _undo_rekeep_parent_after_reimprove_trash_failure(img, old_state):
     return bool(result.rowcount)
 
 
+@_serialize_dataset_image_ingest
 def set_image_status(user_id, image_id, status):
     if status not in _VALID_STATUS:
         raise ValueError('invalid status')
@@ -2054,6 +2085,7 @@ def _crop_resize_file(path, x, y, w, h, size=1024, dst=None):
     return True, scale
 
 
+@_serialize_dataset_image_ingest
 def crop_image(user_id, image_id, x, y, w, h):
     """Crop a dataset image to (x,y,w,h), long side capped at 1024, no pad (a box
     smaller than that keeps its own size). Returns bool."""
@@ -2224,6 +2256,7 @@ def _rotated_image_bytes(path, degrees):
     return transformed_image_bytes(path, rotate_transform(degrees))
 
 
+@_serialize_dataset_image_ingest
 def _edit_image_in_place(user_id, image_id, make_payload, *, tag):
     """Promote a re-encoded copy of one owned dataset image over its own file.
 
@@ -2361,6 +2394,7 @@ def rotate_image(user_id, image_id, degrees):
         tag='rotate')
 
 
+@_serialize_dataset_image_ingest
 def delete_image(user_id, image_id):
     """Delete a dataset image row and move its file to the app trash.
 
@@ -2421,6 +2455,7 @@ def _guard_no_active_training(dataset_id, *, action='deleting'):
         raise RuntimeError(_ACTIVE_RUN_TEMPLATE.format(action=action))
 
 
+@_serialize_dataset_ingest
 def delete_dataset(user_id, dataset_id):
     """Delete an owned dataset and move its complete folder to app trash.
 
@@ -3207,6 +3242,7 @@ def replace_in_captions(user_id, dataset_id, find, replace, mode='text'):
 BATCH_ACTIONS = ('keep', 'reject', 'pending', 'delete', 'clear_caption')
 
 
+@_serialize_dataset_ingest
 def batch_image_action(user_id, dataset_id, image_ids, action):
     """Apply one whitelisted action to a set of this dataset's images in one call
     (the grid's multi-select). Ownership is checked once on the dataset; ids that
@@ -4364,11 +4400,12 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 
 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
+@_serialize_dataset_ingest
 def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
                   source_metadata=None, captions=None, bank_image_ids=None,
                   framings=None, bank_analysis_snapshots=None,
                   watermark_states=None, watermark_bboxes=None,
-                  watermark_regions=None):
+                  watermark_regions=None, dedupe_seen=None):
     """Store original static bytes (or head-crop) + create import rows (status=keep).
     When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
     must then hold the GPU-exclusive window - and is by construction a face,
@@ -4414,6 +4451,10 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     ``watermark_*`` mirrors the current Bank watermark decision and mask without
     treating either as a historical analysis value.
 
+    ``dedupe_seen`` is an optional internal mutable cache of ``(dhash, row_id)``
+    pairs for chunked imports. When omitted, the importer loads the dataset's
+    existing hashes itself, preserving the standalone-call behavior.
+
     Returns (ids, failed_count)."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
@@ -4422,7 +4463,8 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     # chemin « carré padé » ajoutait des bandes noires que le LoRA apprendrait, et
     # forçait tous les imports personnage en carré — un plan buste/corps importé
     # doit rester tel quel (ai-toolkit gère le bucketing multi-ratios).
-    seen = _existing_dhash_rows(dataset_id) if dedupe else None
+    seen = (dedupe_seen if dedupe_seen is not None
+            else _existing_dhash_rows(dataset_id)) if dedupe else None
     metadata_by_index = list(source_metadata) if source_metadata is not None else []
     captions_by_index = list(captions) if captions is not None else []
     bank_ids_by_index = list(bank_image_ids) if bank_image_ids is not None else []
@@ -4500,8 +4542,39 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             except (OSError, ValueError):
                 fp = None   # unreadable output would have failed above; belt & braces
             if fp is not None:
-                match = next((mid for h, mid in seen
-                              if _hamming(fp, h) <= SCRAPE_DHASH_MAX_DISTANCE), None)
+                match = None
+                stale_ids = set()
+                for cached_hash, mid in tuple(seen):
+                    if _hamming(fp, cached_hash) > SCRAPE_DHASH_MAX_DISTANCE:
+                        continue
+                    live = (FaceDatasetImage.query
+                            .filter(
+                                FaceDatasetImage.id == mid,
+                                FaceDatasetImage.dataset_id == dataset_id,
+                                FaceDatasetImage.status.in_(('keep', 'pending')))
+                            .first())
+                    if live is None or not live.filename:
+                        stale_ids.add(mid)
+                        continue
+                    try:
+                        with Image.open(os.path.join(
+                                _dataset_dir(dataset_id), live.filename)) as im:
+                            live_hash = _dhash(im)
+                    except (OSError, ValueError):
+                        stale_ids.add(mid)
+                        continue
+                    if live_hash != cached_hash:
+                        for cache_index, (_old_hash, cached_id) in enumerate(seen):
+                            if cached_id == mid:
+                                seen[cache_index] = (live_hash, mid)
+                                break
+                    if _hamming(fp, live_hash) <= SCRAPE_DHASH_MAX_DISTANCE:
+                        match = mid
+                        break
+                if stale_ids:
+                    seen[:] = [
+                        (h, mid) for h, mid in seen if mid not in stale_ids
+                    ]
                 if match is not None:
                     if stats is not None:
                         stats['duplicates'] = stats.get('duplicates', 0) + 1
@@ -4555,6 +4628,7 @@ DATASET_ZIP_MAX_IMAGE_BYTES = 128 * 1024 * 1024
 _DATASET_ZIP_IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 
+@_serialize_dataset_ingest
 def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
     """Cœur commun ZIP/dossier : `entries` = liste de (stem, display_name, getter)
     où `getter()` rend les bytes de l'image, `captions` = {stem: texte}. Chaque
@@ -6857,6 +6931,7 @@ def _clean_inpaint_engine(route, method):
     return 'lama' if route == 'lama' else 'review'
 
 
+@_serialize_dataset_ingest
 def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='auto',
                      allow_crop=None):
     """Apply the crop/inpaint/review routing to every image marked 'detected'. Returns
@@ -7149,6 +7224,7 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
         dataset_activity.end(token)
 
 
+@_serialize_dataset_ingest
 def restore_watermark_original(user_id, dataset_id, image_id) -> dict | None:
     """Undo a watermark Clean on ONE image: copy the preserved `<stem>.orig<ext>` back
     over the current file and flip the row from 'cleaned' (or 'failed') back to
