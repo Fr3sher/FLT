@@ -248,6 +248,10 @@ def test_collect_canvas_grid_preserves_explicit_image_order(app, tmp_path):
         grid = sge.collect_canvas_grid(LOCAL_USER, ds_id, [rows[1].id, rows[0].id])
         cells = grid['blocks'][0]['rows'][0]['cells']
         assert [os.path.basename(path) for path in cells] == [rows[1].filename, rows[0].filename]
+        assert grid['blocks'][0]['col_labels'] == [
+            f'image #{rows[1].id} · 12 generation steps · ×1.0 · seed 808',
+            f'image #{rows[0].id} · 12 generation steps · ×0.5 · seed 808',
+        ]
         assert grid['aspect'] == 'canvas' and grid['n_cells'] == 2
 
 

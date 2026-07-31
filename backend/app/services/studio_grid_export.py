@@ -258,7 +258,20 @@ def collect_canvas_grid(user_id, dataset_id, image_ids) -> dict | None:
         if not os.path.isfile(path):
             raise GridExportEmpty('one or more Canvas image files are missing')
         paths.append(path)
-        labels.append(str(row.step) if row.step is not None else str(image_id))
+        parts = [f'image #{row.id}']
+        if row.step is not None:
+            parts.append(f'checkpoint {row.step}')
+        if row.steps is not None:
+            gen_steps = str(row.steps)
+            if row.steps2 is not None:
+                gen_steps += f'+{row.steps2}'
+            parts.append(f'{gen_steps} generation steps')
+        if row.strength is not None:
+            parts.append(f'×{_fmt_strength(row.strength)}')
+        seed = row.seed if row.seed is not None else row.run_seed
+        if seed is not None:
+            parts.append(f'seed {seed}')
+        labels.append(' · '.join(parts))
     title = (ds.trigger_word or ds.name or f'dataset {dataset_id}').strip()
     return {
         'title': title, 'subtitle': f'{len(paths)} Canvas images', 'family': None,
