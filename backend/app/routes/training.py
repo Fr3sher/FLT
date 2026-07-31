@@ -1113,6 +1113,7 @@ def dataset_train_preset_apply(dataset_id):
     if not ds:
         return jsonify({'error': 'not found'}), 404
     applied_id = None
+    applied_scope = None
     if d.get('preset_id') is not None:
         raw_id = d.get('preset_id')
         applied_id = raw_id
@@ -1126,6 +1127,15 @@ def dataset_train_preset_apply(dataset_id):
                 return scoped
             settings = dict(builtin.get('settings') or {})
             applied_id = builtin['id']
+            applied_scope = {
+                'preset_id': applied_id,
+                'train_type': builtin.get('train_type'),
+                'dataset_kind': builtin.get('dataset_kind'),
+                'variants': builtin.get('variants') or [],
+                'selected_variant': (
+                    d.get('variant') or ds.train_variant
+                    or lt._default_variant_for(ds.train_type or 'zimage')),
+            }
         else:
             try:
                 numeric_id = int(raw_id)
@@ -1160,12 +1170,22 @@ def dataset_train_preset_apply(dataset_id):
             if not isinstance(settings, dict):
                 settings = {}
             applied_id = row.id
+            applied_scope = {
+                'preset_id': applied_id,
+                'train_type': row.train_type,
+                'dataset_kind': row.dataset_kind,
+                'variants': row_variants,
+                'selected_variant': (
+                    d.get('variant') or ds.train_variant
+                    or lt._default_variant_for(ds.train_type or 'zimage')),
+            }
     else:
         settings = d.get('settings')
         if not isinstance(settings, dict):
             return jsonify({'error': "'settings' must be an object"}), 400
     try:
-        eff, ignored, rejected = lt.apply_train_settings_dict(LOCAL_USER, dataset_id, settings)
+        eff, ignored, rejected = lt.apply_train_settings_dict(
+            LOCAL_USER, dataset_id, settings, preset_scope=applied_scope)
     except ValueError as e:
         return _map_error(e)
     return jsonify({'ok': True, 'preset_id': applied_id,

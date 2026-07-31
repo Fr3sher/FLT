@@ -48,12 +48,52 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-07-31-community-tested-krea-zimage-presets',
+    date: '2026-07-31',
+    title: 'Start Krea 2 Raw and Z-Image Turbo from five community-tested recipes',
+    blurb:
+      'Training now includes five source-linked community presets for Krea 2 Raw character, fast LoKr character, compact style, a reported 16 GB concept setup, and Z-Image Turbo character. Each recipe carries its own image-count, step, optimizer, memory and network settings; switching family, dataset kind or variant can no longer leave its hidden settings active, and Conv checkpoints refuse an incompatible continuation instead of failing deep inside training.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
+    id: '2026-07-31-generation-stop-recovers-gpu-lock',
+    date: '2026-07-31',
+    title: 'Stop generation without stranding the GPU',
+    blurb:
+      'Stopping a local generation now distinguishes a finished job, a known ComfyUI prompt that can be retried, and an unknown submission that requires a confirmed ComfyUI restart. LDS keeps the exact recovery card until it is safe, removes terminal cards cleanly, and no longer leaves the whole app stuck behind an orphaned “GPU busy” lock.',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
+    id: '2026-07-30-retry-reference-edit-show-engine',
+    date: '2026-07-30',
+    title: 'Retry a reference edit exactly as it ran',
+    blurb:
+      'An Edit reference candidate now names the engine/API that actually produced it. Retry repeats the same instruction, selected engine and temporary reference files; choose Try another prompt only when you want to change the edit.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-07-30-krea-shot-card-adherence',
     date: '2026-07-30',
     title: 'Krea 2 now follows the dataset shots you selected',
     blurb:
       'Krea 2 Edit used to let the reference photo dominate a dataset run, so distinct cards could repeat its pose. Its calibrated Krea-only profile now gives the selected card priority for angle, expression, pose and scene, while keeping identity from the reference. Face cards render 1:1 and bust/body/back cards 3:4 through Krea Fit v1.2, so a square reference no longer squeezes a full-body or sitting card into a bust crop. ChatGPT, Nano Banana, OpenRouter and Klein keep their own generation paths unchanged.',
     to: '/datasets?section=add',
+  },
+  {
+    id: '2026-07-30-studio-safe-pause-comfyui-start',
+    date: '2026-07-30',
+    title: '🛟 A Test Studio batch now pauses safely for ComfyUI recovery',
+    blurb:
+      'If ComfyUI goes away mid-batch, Studio now pauses with a paste-safe reason and submits no later prompt. Recover or restart ComfyUI, then cancel and resume the batch. Setup’s “Start ComfyUI” also works from a phone already allowed by LDS and uses the app’s fixed safe profile: it never reads, changes or runs a .bat file, so your own launcher stays untouched.',
+    to: '/studio',
+  },
+  {
+    id: '2026-07-30-runs-test-in-studio',
+    date: '2026-07-30',
+    title: 'Open the right Test Studio straight from a training run',
+    blurb:
+      'Every run that still belongs to a dataset now carries 🧪 Test in Studio in Runs — active local and cloud runs, recent cards, and even a folded dataset group. One click opens Test Studio with that run’s dataset already selected, so you can compare its checkpoints without first hunting through the library.',
+    to: '/cloud',
   },
   {
     id: '2026-07-30-keep-an-improvement-without-training-on-both',

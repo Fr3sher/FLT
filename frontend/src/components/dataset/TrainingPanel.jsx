@@ -38,6 +38,7 @@ import {
   filterTrainingPresets,
   trainingPresetApplyPayload,
   trainingPresetDatasetKind,
+  trainingPresetOwnsSteps,
   trainingPresetSnapshotScope,
 } from '../../utils/trainingPresets';
 import { runConfirmableTrainingRequest } from '../../utils/trainingConfirmations';
@@ -628,9 +629,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       if (d.ok === false) return toastTrainError(d, 'Preset apply failed');
       setAdv(d.train_settings);
       if (payload.variant && payload.variant !== variant) setVariant(payload.variant);
-      // Quick Style recipes own their researched step policy. Do not let a
-      // temporary cap from a previous run silently override that policy.
-      if (selPreset.builtin && trainingPresetDatasetKind(selPreset) === 'style') {
+      // Any recipe with a researched step policy owns that target. Do not let a
+      // temporary cap from a previous run silently override it.
+      if (trainingPresetOwnsSteps(selPreset)) {
         setStepsOverride('');
       }
       const checkpointData = await ds.listCheckpoints?.(base, trainType, payload.variant);

@@ -35,7 +35,8 @@ BOTH custom nodes are mandatory:
 
 MEASURED CONSTRAINTS (2026-07-25, live install — do not "simplify" these away)
 ------------------------------------------------------------------------------
-  * cfg 1.0, 10 steps, euler/simple, edit LoRA at 1.0 — the pack's own numbers.
+  * cfg 1.0, 8 steps, euler/simple, edit LoRA at 1.0 — the calibrated
+    dataset-restaging profile.
   * Dataset variations can request their catalog card's aspect ratio and stay <=
     2 MP. The installed v1.2 node's ``fit`` geometry supports that target even
     when it differs from the source; free-prompt reference edits keep the source
@@ -623,7 +624,7 @@ def grounding_px():
 
 
 def _steps():
-    return int(_clamp(cfg.get('krea.steps'), 1, 50, 10.0))
+    return int(_clamp(cfg.get('krea.steps'), 1, 50, 8.0))
 
 
 def _identity_strength():
@@ -631,7 +632,7 @@ def _identity_strength():
 
 
 def _ref_boost():
-    return _clamp(cfg.get('krea.ref_boost'), 0.0, 10.0, 1.0)
+    return _clamp(cfg.get('krea.ref_boost'), 0.0, 10.0, 0.25)
 
 
 # --- Graph -------------------------------------------------------------------
@@ -648,9 +649,9 @@ def build_workflow(source_image, prompt, *, unet, clip, vae, lora_name,
     workflow, and a guidance-distilled model ignores anything else. The NEGATIVE
     branch is a grounded encode of the EMPTY prompt, not a bare CLIPTextEncode —
     that is what the reference workflow does and what the model expects."""
-    steps = 10 if steps is None else max(1, int(steps))
+    steps = 8 if steps is None else max(1, int(steps))
     grounding = 512 if grounding is None else int(grounding)
-    ref_boost = 1.0 if ref_boost is None else float(ref_boost)
+    ref_boost = 0.25 if ref_boost is None else float(ref_boost)
     lora_strength = 1.0 if lora_strength is None else float(lora_strength)
     g = {
         '1': {'class_type': 'UNETLoader',

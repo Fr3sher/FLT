@@ -47,7 +47,7 @@ from ..gpu_window import GpuBusyError
 from ..models import FaceDataset, ImageGenerationQueue, LoraTestImage
 from . import face_dataset_service as fds, trash
 from . import lora_training as lt
-from ..job_queue import queue_manager
+from ..job_queue import GPU_ARBITER_LOCK, queue_manager
 from ..utils.comfyui import (FAMILY_LABELS, KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS,
                              KREA_ALLOWED_WEIGHT_DTYPES, apply_optimal_sampler_params,
                              family_of_lora, format_trained_lora_label, get_krea_loras,
@@ -442,6 +442,43 @@ def list_all_testable_checkpoints(user_id) -> list[dict]:
 
 
 # --- Guards ------------------------------------------------------------------
+def _comfyui_recovery_target() -> dict | None:
+    """Return the exact Studio view owning the durable ComfyUI barrier.
+
+    The barrier is global, so the dataset currently displayed by the UI may not
+    be the one that needs recovery.  Only expose a navigation target when the
+    durable owner, queue row and unfinished Studio cell still agree.
+    """
+    owner = queue_manager.get_comfyui_stalled_barrier()
+    if not isinstance(owner, dict) or not isinstance(owner.get('job_id'), str):
+        return None
+    job_id = owner['job_id']
+    queue_row = ImageGenerationQueue.query.filter_by(job_id=job_id, status='stalled').first()
+    cells = (LoraTestImage.query
+             .filter_by(job_id=job_id, status='pending')
+             .filter(LoraTestImage.filename.is_(None)).limit(2).all())
+    if queue_row is None or len(cells) != 1:
+        return None
+    cell = cells[0]
+    if (('dataset_id' in owner and owner.get('dataset_id') != str(cell.dataset_id))
+            or ('run_id' in owner and owner.get('run_id') != cell.run_id)
+            or ('cell_id' in owner and owner.get('cell_id') != str(cell.id))):
+        return None
+    kind = owner.get('kind', 'prompt')
+    if kind == 'unknown_submit':
+        if queue_row.comfyui_prompt_id is not None or owner.get('prompt_id') is not None:
+            return None
+    elif (kind != 'prompt'
+          or str(queue_row.comfyui_prompt_id or '') != str(owner.get('prompt_id') or '')):
+        return None
+    return {
+        'dataset_id': cell.dataset_id,
+        'run_id': cell.run_id,
+        'family': family_of_lora(cell.checkpoint) or 'zimage',
+        'kind': kind,
+    }
+
+
 def gpu_busy_reason() -> str | None:
     """Return a human error when the GPU is held by a long-running exclusive
     task (LoRA training / vision pass), else None. The queue itself serializes
@@ -450,6 +487,13 @@ def gpu_busy_reason() -> str | None:
         return "LoRA training in progress - the studio is unavailable (GPU busy)."
     if queue_manager._get_system_state('vision_in_progress', False):
         return "Vision pass in progress (GPU busy) - try again in a moment."
+    if queue_manager.has_comfyui_stalled_barrier():
+        target = _comfyui_recovery_target()
+        if target and target['kind'] == 'unknown_submit':
+            return ('A Test Studio image is paused because its ComfyUI submission outcome is unknown. '
+                    'Restart ComfyUI, open the paused test, confirm the restart, then resume it.')
+        return ('A Test Studio image is paused because ComfyUI stopped answering. '
+                'Open the paused test, click Stop to recover it, then Resume.')
     return None
 
 
@@ -479,17 +523,24 @@ def _queue_activity(rows) -> dict:
     queue_rows = (ImageGenerationQueue.query
                   .filter(ImageGenerationQueue.job_id.in_(job_ids)).all()
                   if job_ids else [])
-    raw_by_job = {q.job_id: q.status for q in queue_rows}
+    queue_by_job = {q.job_id: q for q in queue_rows}
+    raw_by_job = {job_id: q.status for job_id, q in queue_by_job.items()}
 
     def _display_status(raw):
         if raw == 'pending':
             return 'queued'
         if raw in ('processing', 'sent_to_comfy'):
             return 'generating'
+        if raw in ('cancel_requested', 'stalled'):
+            return 'stalled'
         return raw
 
     queue_status = {job_id: _display_status(status)
                     for job_id, status in raw_by_job.items()}
+    queue_error = {
+        job_id: q.error_message for job_id, q in queue_by_job.items()
+        if q.status == 'stalled' and isinstance(q.error_message, str) and q.error_message.strip()
+    }
     queued = sum(1 for r in live if raw_by_job.get(r.job_id) == 'pending')
     generating = sum(1 for r in live
                      if raw_by_job.get(r.job_id) in ('processing', 'sent_to_comfy'))
@@ -500,6 +551,43 @@ def _queue_activity(rows) -> dict:
         # Alias for consumers that use queue terminology rather than UI copy.
         'running': generating,
         'queue_status': queue_status,
+        'queue_error': queue_error,
+    }
+
+
+def _unknown_submit_recovery(rows, activity):
+    """UI-safe recovery metadata for the one exact paused Studio cell.
+
+    A generic stalled tile may still have a known ComfyUI prompt and must use
+    remote reconciliation instead. Expose this action only when the durable raw
+    barrier, queue state, and linked cell all agree on an unknown submission.
+    """
+    owner = queue_manager.get_comfyui_stalled_barrier()
+    if (owner is None or owner.get('kind') != 'unknown_submit'
+            or owner.get('prompt_id') is not None
+            or not isinstance(owner.get('job_id'), str)):
+        return None
+    job_id = owner['job_id']
+    matching = [row for row in rows
+                if row.status == 'pending' and not row.filename and row.job_id == job_id]
+    if len(matching) != 1 or activity['queue_status'].get(job_id) != 'stalled':
+        return None
+    cell = matching[0]
+    try:
+        cell_id = int(owner.get('cell_id'))
+    except (TypeError, ValueError):
+        return None
+    if str(cell_id) != owner.get('cell_id') or cell.id != cell_id:
+        return None
+    if (('dataset_id' in owner and owner.get('dataset_id') != str(cell.dataset_id))
+            or ('run_id' in owner and owner.get('run_id') != cell.run_id)):
+        return None
+    return {
+        'required': True,
+        'kind': 'unknown_submit',
+        'job_id': job_id,
+        'cell_id': cell.id,
+        'requires_comfyui_restart_confirmation': True,
     }
 
 
@@ -570,6 +658,27 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
             for c in cps for s in sts for a in asp for cf in cfs for sp in sps for sp2 in sps2]
 
 
+def _krea_zero_strength_first(items, run_family, strength_of) -> list:
+    """Stable-partition Krea around controls with the tested LoRA switched off.
+
+    Moving every exact-zero tested-LoRA cell before its non-zero counterparts
+    avoids returning to a tested-LoRA-free graph after Krea has begun loading
+    the tested LoRAs. Both partitions keep their original order
+    (base-model/checkpoint/aspect axes included), negative strengths remain in
+    the non-zero partition, and other model families are deliberately left
+    byte-for-byte ordered as before. Permanent/batch LoRAs remain untouched and
+    may still patch a zero-strength control.
+    """
+    planned = list(items)
+    if run_family != 'krea':
+        return planned
+    zero = []
+    nonzero = []
+    for item in planned:
+        (zero if strength_of(item) == 0.0 else nonzero).append(item)
+    return zero + nonzero
+
+
 # --- « 🔎 Describe » : image → TEST PROMPT via le modèle vision Ollama ---------
 # Upload guard (l'endpoint plafonne aussi, ceci est la borne de service).
 STUDIO_DESCRIBE_MAX_BYTES = 20 * 1024 * 1024
@@ -615,6 +724,8 @@ def describe_test_prompt(image_bytes: bytes) -> str:
         webp = fds.normalize_to_webp(image_bytes, size=1024)
     except Exception as e:
         raise ValueError('unreadable image — expected a webp, png or jpg file') from e
+    # The /describe-image route owns the one GPU-exclusive Vision window. Keep
+    # this service callable without recursively claiming it a second time.
     from .vision_ollama import describe_image_ollama
     from .vision_keepalive import keep_alive_for_isolated_call
     text = describe_image_ollama(
@@ -1023,22 +1134,28 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
     return _resolve_workflow_node_classes(workflow, available_classes)
 
 
-def _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=None, commit=True) -> str:
-    """Enqueue one cell as a normal (serialized) image job. Free: never
-    debited - the failure path in job_queue skips the refund for
-    is_lora_test jobs exactly like is_dataset (no credit minting).
+def _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=None, commit=True,
+                  *, cell_id=None, run_id=None) -> str:
+    """Enqueue one serialized Test Studio cell with durable cell identity.
 
-    `job_id` lets the caller mint the id BEFORE inserting its own row (so the row
-    carries its job_id from the start instead of being re-written afterwards) and
-    `commit=False` keeps the queue row in the caller's open transaction — together
-    they turn a cell into ONE commit instead of three."""
+    ``job_id`` is minted before the cell insert. ``cell_id`` / ``run_id`` are
+    deliberately copied into queue metadata once the cell has an id, so a paused
+    ComfyUI prompt can be shown and recovered without guessing which grid tile it
+    belongs to. ``commit=False`` retains the one-transaction cell + queue insert.
+    """
     job_id = job_id or str(uuid.uuid4())
+    metadata = {
+        'model_name': 'zimage_lora_test',
+        'is_lora_test': True,
+        'dataset_id': dataset_id,
+    }
+    if cell_id is not None:
+        metadata['cell_id'] = int(cell_id)
+    if run_id:
+        metadata['run_id'] = str(run_id)
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=workflow, prompt=prompt, job_id=job_id,
-                          metadata={'model_name': 'zimage_lora_test',
-                                    'is_lora_test': True,
-                                    'dataset_id': dataset_id},
-                          commit=commit)
+                          metadata=metadata, commit=commit)
     return job_id
 
 
@@ -1055,19 +1172,25 @@ def _persist_and_enqueue_cell(img, user_id, dataset_id, prompt, build_workflow) 
     back is exactly the profile that starves a concurrent writer into
     'database is locked'.
 
+    The workflow is built before taking the GPU arbiter: resolving files/nodes
+    must not hold local GPU scheduling.  The arbiter is then acquired *before*
+    the first cell write and retained through the cell + queue commit.  This
+    keeps the only safe lock order (GPU_ARBITER_LOCK -> SQLite transaction) and
+    prevents a recovery barrier from appearing after ``add_job(commit=False)``
+    checked readiness but before this transaction becomes durable.
+
     On failure the half-built transaction is rolled back (dropping the queue row that
     may already have been staged) and the cell is re-inserted as 'failed' with the
     reason, so the caller's `raise` still surfaces a visible, explained tile."""
     job_id = str(uuid.uuid4())
     img.job_id = job_id
-    db.session.add(img)
+
     try:
         workflow = build_workflow()
-        _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=job_id, commit=False)
-        db.session.commit()
     except Exception as e:
-        # rollback expunges the pending cell + job rows; the cell object goes back to
-        # transient and can be re-added as the failed marker.
+        # Workflow construction has not touched the queue transaction.  Roll
+        # back any read/autoflush side effect from a builder before recording
+        # the explained failure marker.
         db.session.rollback()
         img.job_id = None
         img.status = 'failed'
@@ -1075,6 +1198,28 @@ def _persist_and_enqueue_cell(img, user_id, dataset_id, prompt, build_workflow) 
         db.session.add(img)
         db.session.commit()
         raise
+
+    with GPU_ARBITER_LOCK:
+        db.session.add(img)
+        try:
+            # A flush is not a commit: it gives the queue metadata the exact cell id
+            # while preserving the one-transaction insert invariant below.
+            db.session.flush()
+            _enqueue_cell(user_id, dataset_id, workflow, prompt, job_id=job_id,
+                          commit=False, cell_id=img.id, run_id=img.run_id)
+            db.session.commit()
+        except Exception as e:
+            # rollback expunges the pending cell + job rows; the cell object goes back
+            # to transient and can be re-added as the failed marker.  Keep the outer
+            # arbiter through this replacement commit too: never acquire it after a
+            # SQLite write transaction has begun.
+            db.session.rollback()
+            img.job_id = None
+            img.status = 'failed'
+            img.error = str(e)[:400] or 'enqueue failed'
+            db.session.add(img)
+            db.session.commit()
+            raise
     return job_id
 
 
@@ -1677,47 +1822,55 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
     # produces (see checkpoint_origins) — the canvas gallery reads these columns,
     # it never re-parses a filename.
     origin_of = checkpoint_origins(cps_in, origins)
+    # Partition the complete base-model × cell plan, not each base separately:
+    # after Krea starts applying a tested LoRA, it must not return to a
+    # tested-LoRA-off control merely because the optional base axis advanced.
+    cell_plan = _krea_zero_strength_first(
+        ((zm, cell) for zm in valid_models for cell in cells),
+        run_family,
+        lambda planned: planned[1][1],
+    )
     ids = []
-    for zm in valid_models:                       # AXE modèle de base (multi-sélection)
-        for checkpoint, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 in cells:
-            # Format/CFG/steps (1 et 2) testés comme axes à part entière (multi-sélection).
-            width, height = _aspect_dims(cell_aspect, run_family, knobs['resolution_tier'],
-                                         knobs['resolution_multiplier'])
-            for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
-              row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
-              wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
-              cell_extra_json = json.dumps(row_extra) if row_extra else None
-              for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
-                img = LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
-                                    strength=strength, seed=cell_seed, run_seed=seed,
-                                    status='pending', z_model=zm, aspect=cell_aspect,
-                                    prompt=prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
-                                    extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
-                                    negative=knobs['negative'], sampler=knobs['sampler'],
-                                    scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                    enhancer_strength=knobs['enhancer_strength'],
-                                    detail_amount=knobs['detail_amount'],
-                                    resolution_tier=knobs['resolution_tier'],
-                                    resolution_multiplier=knobs['resolution_multiplier'],
-                                    init_image=knobs['init_image'], denoise=knobs['denoise'],
-                                    record_id=origin_of.get(checkpoint, (None, None))[0],
-                                    step=origin_of.get(checkpoint, (None, None))[1])
-                _persist_and_enqueue_cell(
-                    img, user_id, dataset_id, prompt,
-                    lambda: _build_cell_workflow(user_id, checkpoint, strength,
-                                                 prompt, cell_seed, zm, allowed,
-                                                 width=width, height=height,
-                                                 cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
-                                                 dataset_id=dataset_id,
-                                                 train_type=run_family, extra_loras=wf_extra,
-                                                 rebalance=cell_rebalance,
-                                                 negative=knobs['negative'], sampler=knobs['sampler'],
-                                                 scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                                 enhancer_strength=knobs['enhancer_strength'],
-                                                 detail_amount=knobs['detail_amount'],
-                                                 trigger_word=ds.trigger_word,
-                                                 available_classes=available_classes))
-                ids.append(img.id)
+    for zm, cell in cell_plan:
+        checkpoint, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
+        # Format/CFG/steps (1 et 2) testés comme axes à part entière (multi-sélection).
+        width, height = _aspect_dims(cell_aspect, run_family, knobs['resolution_tier'],
+                                     knobs['resolution_multiplier'])
+        for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
+          row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
+          wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
+          cell_extra_json = json.dumps(row_extra) if row_extra else None
+          for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
+            img = LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
+                                strength=strength, seed=cell_seed, run_seed=seed,
+                                status='pending', z_model=zm, aspect=cell_aspect,
+                                prompt=prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
+                                extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
+                                negative=knobs['negative'], sampler=knobs['sampler'],
+                                scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                enhancer_strength=knobs['enhancer_strength'],
+                                detail_amount=knobs['detail_amount'],
+                                resolution_tier=knobs['resolution_tier'],
+                                resolution_multiplier=knobs['resolution_multiplier'],
+                                init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                record_id=origin_of.get(checkpoint, (None, None))[0],
+                                step=origin_of.get(checkpoint, (None, None))[1])
+            _persist_and_enqueue_cell(
+                img, user_id, dataset_id, prompt,
+                lambda: _build_cell_workflow(user_id, checkpoint, strength,
+                                             prompt, cell_seed, zm, allowed,
+                                             width=width, height=height,
+                                             cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
+                                             dataset_id=dataset_id,
+                                             train_type=run_family, extra_loras=wf_extra,
+                                             rebalance=cell_rebalance,
+                                             negative=knobs['negative'], sampler=knobs['sampler'],
+                                             scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                             enhancer_strength=knobs['enhancer_strength'],
+                                             detail_amount=knobs['detail_amount'],
+                                             trigger_word=ds.trigger_word,
+                                             available_classes=available_classes))
+            ids.append(img.id)
     logger.info(f"lora-test: run dataset {dataset_id} -> {len(ids)} cellule(s) "
                 f"({len(valid_models)} modèle(s)), base seed {seed} ×{count}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'ids': ids}
@@ -1861,8 +2014,21 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
          if s.get('checkpoint') and s.get('record_id') is not None
          and s.get('step') is not None})
     run_id = uuid.uuid4().hex
-    ids = []
+    # Materialize the original selection-major plan, then stable-partition it
+    # once for Krea. Zero tested-LoRA-off controls across *all* selected
+    # checkpoints therefore finish before the first non-zero tested-LoRA cell,
+    # while each group's checkpoint-major and strength order stays unchanged.
+    cell_plan = []
     for sel in selections:
+        checkpoint = sel.get('checkpoint')
+        for cell in build_matrix([checkpoint], strengths, aspects, cfgs,
+                                 steps_list, steps2_list):
+            cell_plan.append((sel, cell))
+    cell_plan = _krea_zero_strength_first(
+        cell_plan, run_type, lambda planned: planned[1][1])
+
+    ids = []
+    for sel, cell in cell_plan:
         ds, allowed = _dataset_and_checkpoints(sel.get('dataset_id'))
         if not ds:
             raise ValueError(f"dataset {sel.get('dataset_id')} not found")
@@ -1870,44 +2036,43 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         if checkpoint not in allowed:
             raise ValueError(f'unknown checkpoint for {ds.name}: {checkpoint}')
         cell_prompt = common_prompt or identity_prompt(ds)
-        cells = build_matrix([checkpoint], strengths, aspects, cfgs, steps_list, steps2_list)
-        for cp, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 in cells:
-            width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
-                                         knobs['resolution_multiplier'])
-            for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
-              row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
-              wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
-              cell_extra_json = json.dumps(row_extra) if row_extra else None
-              for cell_seed in seeds:
-                img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
-                                    seed=cell_seed, run_seed=seed, run_id=run_id,
-                                    status='pending', z_model=z_model, aspect=cell_aspect,
-                                    prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
-                                    extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
-                                    negative=knobs['negative'], sampler=knobs['sampler'],
-                                    scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                    enhancer_strength=knobs['enhancer_strength'],
-                                    detail_amount=knobs['detail_amount'],
-                                    resolution_tier=knobs['resolution_tier'],
-                                    resolution_multiplier=knobs['resolution_multiplier'],
-                                    init_image=knobs['init_image'], denoise=knobs['denoise'],
-                                    record_id=origin_of.get(cp, (None, None))[0],
-                                    step=origin_of.get(cp, (None, None))[1])
-                _persist_and_enqueue_cell(
-                    img, user_id, ds.id, cell_prompt,
-                    lambda: _build_cell_workflow(user_id, cp, strength, cell_prompt,
-                                         cell_seed, z_model, allowed, width=width,
-                                         height=height, cfg=cell_cfg, steps=cell_steps,
-                                         steps2=cell_steps2, dataset_id=ds.id,
-                                         train_type=run_type, extra_loras=wf_extra,
-                                         rebalance=cell_rebalance,
-                                         negative=knobs['negative'], sampler=knobs['sampler'],
-                                         scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
-                                         enhancer_strength=knobs['enhancer_strength'],
-                                         detail_amount=knobs['detail_amount'],
-                                         trigger_word=ds.trigger_word,
-                                         available_classes=available_classes))
-                ids.append(img.id)
+        cp, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
+        width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
+                                     knobs['resolution_multiplier'])
+        for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
+          row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
+          wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
+          cell_extra_json = json.dumps(row_extra) if row_extra else None
+          for cell_seed in seeds:
+            img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
+                                seed=cell_seed, run_seed=seed, run_id=run_id,
+                                status='pending', z_model=z_model, aspect=cell_aspect,
+                                prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
+                                extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
+                                negative=knobs['negative'], sampler=knobs['sampler'],
+                                scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                enhancer_strength=knobs['enhancer_strength'],
+                                detail_amount=knobs['detail_amount'],
+                                resolution_tier=knobs['resolution_tier'],
+                                resolution_multiplier=knobs['resolution_multiplier'],
+                                init_image=knobs['init_image'], denoise=knobs['denoise'],
+                                record_id=origin_of.get(cp, (None, None))[0],
+                                step=origin_of.get(cp, (None, None))[1])
+            _persist_and_enqueue_cell(
+                img, user_id, ds.id, cell_prompt,
+                lambda: _build_cell_workflow(user_id, cp, strength, cell_prompt,
+                                     cell_seed, z_model, allowed, width=width,
+                                     height=height, cfg=cell_cfg, steps=cell_steps,
+                                     steps2=cell_steps2, dataset_id=ds.id,
+                                     train_type=run_type, extra_loras=wf_extra,
+                                     rebalance=cell_rebalance,
+                                     negative=knobs['negative'], sampler=knobs['sampler'],
+                                     scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
+                                     enhancer_strength=knobs['enhancer_strength'],
+                                     detail_amount=knobs['detail_amount'],
+                                     trigger_word=ds.trigger_word,
+                                     available_classes=available_classes))
+            ids.append(img.id)
     logger.info(f"lora-test: comparison run {run_id} -> {len(ids)} cellule(s), {len(selections)} LoRA, seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
 
@@ -1920,48 +2085,131 @@ def _run_owned(user_id, run_id) -> bool:
 
 
 def cancel_run(user_id, dataset_id=None, run_id=None) -> int:
-    """Stoppe les cellules en vol : annule les jobs de queue et marque les
-    cellules 'cancelled' (au lieu de les supprimer) pour pouvoir REPRENDRE le
-    run plus tard avec leurs réglages exacts (prompt/seed/modèle/format).
-    Retourne le nombre stoppé.
+    """Cancel only cells whose exact ComfyUI work is safely gone.
 
-    Cible : si `run_id` est fourni, opère sur ce run ; sinon, comportement
-    historique par `dataset_id`."""
+    The entire selection and cancellation sweep holds the same GPU arbiter as
+    ``process_one``. A worker therefore cannot claim the next grid cell between
+    two safe cancellations. An uncertain prompt stays attached to its pending
+    cell and is rendered as paused until a later Cancel can reconcile it.
+    """
     if run_id is not None:
         if not _run_owned(user_id, run_id):
             return 0
-        rows = (LoraTestImage.query
-                .filter_by(run_id=run_id, status='pending')
-                .filter(LoraTestImage.filename.is_(None)).all())
     else:
         ds = fds.get_dataset(user_id, dataset_id)
         if not ds:
             return 0
-        rows = (LoraTestImage.query
-                .filter_by(dataset_id=dataset_id, status='pending')
-                .filter(LoraTestImage.filename.is_(None)).all())
-    n = 0
-    interruptions = []
-    for img in rows:
-        if img.job_id:
+
+    with GPU_ARBITER_LOCK:
+        if run_id is not None:
+            rows = (LoraTestImage.query
+                    .filter_by(run_id=run_id, status='pending')
+                    .filter(LoraTestImage.filename.is_(None)).all())
+        else:
+            rows = (LoraTestImage.query
+                    .filter_by(dataset_id=dataset_id, status='pending')
+                    .filter(LoraTestImage.filename.is_(None)).all())
+
+        cancelled = 0
+        for img in rows:
+            if not img.job_id:
+                img.status = 'cancelled'
+                cancelled += 1
+                continue
             try:
-                queue_job = ImageGenerationQueue.query.filter_by(job_id=img.job_id).first()
-                if (queue_job and queue_job.status in ('processing', 'sent_to_comfy')
-                        and queue_job.comfyui_prompt_id):
-                    interruptions.append((queue_job.comfyui_prompt_id, queue_job.job_id))
-                # Stop the whole batch in one transaction. Otherwise an HTTP
-                # /interrupt round-trip on the first cell gives the worker time
-                # to claim the second cell before this loop reaches it.
-                queue_manager.cancel_job(img.job_id, str(user_id), 'image', commit=False)
+                safe = queue_manager.cancel_job(img.job_id, str(user_id), 'image')
             except Exception:
-                pass
-        img.status = 'cancelled'
-        img.job_id = None
-        n += 1
-    db.session.commit()
-    for prompt_id, job_id in interruptions:
-        queue_manager.interrupt_comfyui_job(prompt_id, job_id)
-    return n
+                logger.exception('lora-test: could not safely cancel queue job %s', img.job_id)
+                safe = False
+            if not safe:
+                # Recover a request interrupted after the queue row committed but
+                # before this cell could be committed. A terminal cancelled queue
+                # row is durable proof that clearing this cell is safe.
+                queue_row = ImageGenerationQueue.query.filter_by(job_id=img.job_id).first()
+                safe = queue_row is not None and queue_row.status == 'cancelled'
+            if not safe:
+                continue
+            img.status = 'cancelled'
+            img.job_id = None
+            cancelled += 1
+
+        if cancelled:
+            db.session.commit()
+        return cancelled
+
+
+def confirm_unknown_comfyui_restart(user_id, *, dataset_id=None, run_id=None,
+                                    restart_confirmed=False) -> int:
+    """Make exactly one unknown-submit Test Studio cell resumable again.
+
+    A user must explicitly confirm an external ComfyUI restart at the route
+    boundary. We then cancel only the stalled queue job identified by the raw
+    barrier and its one linked pending cell in the same commit. Known prompt
+    barriers keep their stricter remote reconciliation path.
+    """
+    if restart_confirmed is not True:
+        raise ValueError('Confirm that you restarted ComfyUI before clearing this paused job.')
+    if (dataset_id is None) == (run_id is None):
+        raise ValueError('choose exactly one Test Studio run or dataset')
+    if run_id is not None:
+        if not _run_owned(user_id, run_id):
+            raise ValueError('run not found')
+    else:
+        ds = fds.get_dataset(user_id, dataset_id)
+        if not ds:
+            raise ValueError('dataset not found')
+
+    with GPU_ARBITER_LOCK:
+        owner = queue_manager.get_comfyui_stalled_barrier()
+        if (owner is None or owner.get('kind') != 'unknown_submit'
+                or not isinstance(owner.get('job_id'), str)
+                or owner.get('prompt_id') is not None):
+            raise RuntimeError('There is no unknown ComfyUI submission awaiting restart confirmation.')
+        job_id = owner['job_id']
+
+        # The queue job is the authoritative remote identity. The cell match is
+        # deliberately exact too: metadata protects current rows, while job_id
+        # protects legacy rows created before cell_id/run_id were persisted.
+        queue_job = (ImageGenerationQueue.query
+                     .filter_by(job_id=job_id, user_id=str(user_id), status='stalled')
+                     .filter(ImageGenerationQueue.comfyui_prompt_id.is_(None)).first())
+        if queue_job is None:
+            raise RuntimeError('The paused ComfyUI job changed; refresh its status before retrying.')
+
+        try:
+            cell_id = int(owner.get('cell_id'))
+        except (TypeError, ValueError):
+            raise RuntimeError('This paused job has no exact Test Studio cell to recover.')
+        if str(cell_id) != owner.get('cell_id'):
+            raise RuntimeError('This paused job has an invalid Test Studio cell identity.')
+
+        cell_query = (LoraTestImage.query.filter_by(id=cell_id, job_id=job_id, status='pending')
+                      .filter(LoraTestImage.filename.is_(None)))
+        if run_id is not None:
+            cell_query = cell_query.filter_by(run_id=str(run_id))
+        else:
+            cell_query = cell_query.filter_by(dataset_id=dataset_id)
+        cell = cell_query.first()
+        if cell is None:
+            raise RuntimeError('The paused ComfyUI job does not belong to this Test Studio view.')
+        for key, value in (('dataset_id', str(cell.dataset_id)), ('run_id', cell.run_id)):
+            if key in owner and owner.get(key) != value:
+                raise RuntimeError('The paused ComfyUI job identity does not match its Test Studio cell.')
+
+        if not queue_manager.confirm_unknown_comfyui_restart(
+                job_id, str(user_id), restart_confirmed=True, commit=False):
+            db.session.rollback()
+            raise RuntimeError('The paused ComfyUI job changed; refresh its status before retrying.')
+        cell.status = 'cancelled'
+        cell.job_id = None
+        cell.error = None
+        try:
+            db.session.commit()  # Test Studio cell + exact queue job + raw barrier
+        except Exception as exc:
+            db.session.rollback()
+            logger.exception('lora-test: could not confirm unknown ComfyUI restart for %s', job_id)
+            raise RuntimeError('Could not record the ComfyUI recovery; nothing was resumed.') from exc
+        return 1
 
 
 def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
@@ -2069,7 +2317,8 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
                                             detail_amount=getattr(img, 'detail_amount', None),
                                             trigger_word=getattr(cell_ds, 'trigger_word', None),
                                             available_classes=available_classes)
-            job_id = _enqueue_cell(user_id, img.dataset_id, workflow, prompt)
+            job_id = _enqueue_cell(user_id, img.dataset_id, workflow, prompt,
+                                   cell_id=img.id, run_id=img.run_id)
             img.status = 'pending'
             img.filename = None
             img.job_id = job_id
@@ -2122,7 +2371,7 @@ def link_completed_test_image(job_id, filename, failed=False, reason=None):
     # Ne finaliser que les cellules ENCORE en attente : une complétion tardive d'un
     # job dont la ligne a été annulée/reprise (nouveau job_id, statut ≠ pending) ne
     # doit pas écraser le bon run - on jette son fichier au lieu de le déplacer.
-    if not failed and img.status != 'pending':
+    if img.status != 'pending':
         logger.info(f"lora-test link: ligne {img.id} déjà {img.status} pour job {job_id} - ignoré")
         _cleanup_output_file(filename, failed)
         return
@@ -2610,48 +2859,57 @@ def face_ranking(dataset_id, family) -> list:
 
 
 def delete_prompt(user_id, dataset_id, prompt) -> int:
-    """Supprime toutes les cellules de test d'un PROMPT donné (+ leurs fichiers) :
-    retire ce prompt du menu « prompts récents » et nettoie ses images de test.
-    Annule les jobs encore en vol. Ownership scoped (anti-IDOR). Retourne le nombre
-    de cellules supprimées."""
+    """Delete one prompt’s Test Studio cells only after safe queue cancellation.
+
+    A pending cell can be cancelled locally. A sent/running prompt must first be
+    proven absent by ``queue_manager.cancel_job``; otherwise its row and files
+    remain intact. This avoids turning an ambiguous ComfyUI request into an
+    orphaned GPU job while the user is trying to delete the prompt.
+    """
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
     p = (prompt or '').strip()
     if not p:
         return 0
-    rows = LoraTestImage.query.filter_by(dataset_id=dataset_id, prompt=p).all()
-    if not rows:
-        return 0
     dataset_dir = fds._dataset_path(dataset_id)
-    moved = []
-    seen_paths = set()
-    try:
-        for r in rows:
-            # Cancellation and row deletion share one DB transaction. If moving
-            # any file or committing fails, rollback also restores live jobs.
-            if (r.job_id and r.status not in ('done', 'failed', 'cancelled')):
-                queue_manager.cancel_job(
-                    r.job_id, str(user_id), 'image', commit=False)
-            if r.filename:
-                fp = os.path.join(dataset_dir, r.filename)
-                path_key = os.path.normcase(os.path.abspath(fp))
-                if path_key not in seen_paths and os.path.exists(fp):
-                    destination = trash.send_to_trash(
-                        fp, context=f'dataset-{dataset_id}-studio-prompt')
-                    moved.append((destination, fp))
-                    seen_paths.add(path_key)
-            db.session.delete(r)
-        db.session.commit()
-    except Exception:
-        db.session.rollback()
-        for destination, original in reversed(moved):
-            fds._restore_from_trash(destination, original)
-        raise
+
+    with GPU_ARBITER_LOCK:
+        rows = LoraTestImage.query.filter_by(dataset_id=dataset_id, prompt=p).all()
+        if not rows:
+            return 0
+        # Do every safe cancellation before touching a file. A refusal retains
+        # the prompt identity so the normal ComfyUI recovery flow can reconcile
+        # it later; earlier safe cancellations are harmless and visible.
+        for row in rows:
+            if row.job_id and row.status not in ('done', 'failed', 'cancelled'):
+                if not queue_manager.cancel_job(row.job_id, str(user_id), 'image'):
+                    raise ValueError(
+                        'ComfyUI work for this prompt is still running or needs recovery; '
+                        'recover ComfyUI, cancel the paused cell, then try again.')
+
+        moved = []
+        seen_paths = set()
+        try:
+            for row in rows:
+                if row.filename:
+                    fp = os.path.join(dataset_dir, row.filename)
+                    path_key = os.path.normcase(os.path.abspath(fp))
+                    if path_key not in seen_paths and os.path.exists(fp):
+                        destination = trash.send_to_trash(
+                            fp, context=f'dataset-{dataset_id}-studio-prompt')
+                        moved.append((destination, fp))
+                        seen_paths.add(path_key)
+                db.session.delete(row)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            for destination, original in reversed(moved):
+                fds._restore_from_trash(destination, original)
+            raise
     n = len(rows)
     logger.info(f"lora-test: prompt supprimé sur dataset {dataset_id} -> {n} cellule(s)")
     return n
-
 
 # --- Payload (poll) ------------------------------------------------------------
 def studio_payload(user_id, dataset_id, family=None) -> dict | None:
@@ -2720,6 +2978,7 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
                    'strength': r.strength, 'aspect': r.aspect, 'filename': r.filename,
                    'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed, 'status': r.status,
                    'queue_status': activity['queue_status'].get(r.job_id),
+                   'queue_error': activity['queue_error'].get(r.job_id),
                    'prompt': r.prompt, 'z_model': r.z_model,
                    'z_model_label': (_basename(r.z_model).rsplit('.', 1)[0] if r.z_model else None),
                    'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
@@ -2749,6 +3008,8 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         # run - GLOBAUX à l'utilisateur (tous datasets), plus cloisonnés par dataset.
         'recent_prompts': user_recent_prompts(ds.user_id),
         'gpu_busy': gpu_busy_reason(),
+        'comfyui_recovery': _unknown_submit_recovery(rows, activity),
+        'comfyui_recovery_target': _comfyui_recovery_target(),
         'best_settings': best,
     }
 
@@ -2800,7 +3061,8 @@ def studio_payload_run(user_id, run_id) -> dict | None:
                    'label': _basename(r.checkpoint).rsplit('.', 1)[0], 'strength': r.strength,
                    'aspect': r.aspect, 'filename': r.filename, 'rating': r.rating, 'seed': r.seed,
                    'run_seed': r.run_seed, 'status': r.status,
-                   'queue_status': activity['queue_status'].get(r.job_id), 'prompt': r.prompt,
+                   'queue_status': activity['queue_status'].get(r.job_id),
+                   'queue_error': activity['queue_error'].get(r.job_id), 'prompt': r.prompt,
                    'z_model': r.z_model, 'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
                    'batch_lora': _batch_lora_label(r),
                    'error': r.error if r.status == 'failed' else None} for r in rows],
@@ -2811,6 +3073,8 @@ def studio_payload_run(user_id, run_id) -> dict | None:
         'running': activity['running'],
         'resumable': sum(1 for r in rows if r.status in ('cancelled', 'failed')),
         'gpu_busy': gpu_busy_reason(),
+        'comfyui_recovery': _unknown_submit_recovery(rows, activity),
+        'comfyui_recovery_target': _comfyui_recovery_target(),
     }
 
 

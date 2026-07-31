@@ -62,6 +62,51 @@ def test_studio_run_reachable_forwards_to_service(client, monkeypatch):
     assert body == {'ok': True, 'created': 2, 'seed': 42, 'count': 1, 'run_id': 'r1'}
 
 
+def test_recovery_barrier_blocks_run_and_resume_but_not_recovery_routes(
+        client, monkeypatch):
+    """Only enqueue paths are gated; cancel and explicit restart confirmation
+    remain available so the user can clear the condition."""
+    _comfy(monkeypatch, True)
+    ds_id = _create(client)
+    from app.job_queue import COMFYUI_STALLED_BARRIER_KEY, queue_manager
+    from app.services import lora_test_studio as lts
+
+    with client.application.app_context():
+        queue_manager._set_system_state(
+            COMFYUI_STALLED_BARRIER_KEY, {'job_id': 'unresolved'})
+
+    def must_not_enqueue(*_args, **_kwargs):
+        raise AssertionError('enqueue service must not run')
+
+    monkeypatch.setattr(lts, 'create_comparison_run', must_not_enqueue)
+    monkeypatch.setattr(lts, 'resume_run', must_not_enqueue)
+    monkeypatch.setattr(lts, 'create_run', must_not_enqueue)
+
+    blocked = [
+        client.post('/api/studio/run', json={}),
+        client.post('/api/studio/run/run-1/resume'),
+        client.post(f'/api/dataset/{ds_id}/lora-test/run', json={}),
+        client.post(f'/api/dataset/{ds_id}/lora-test/resume'),
+    ]
+    assert all(response.status_code == 409 for response in blocked)
+    assert all(response.get_json()['code'] == 'comfyui_recovery_required'
+               for response in blocked)
+
+    monkeypatch.setattr(lts, 'cancel_run', lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        lts, 'confirm_unknown_comfyui_restart',
+        lambda *_args, **_kwargs: 1)
+    assert client.post('/api/studio/run/run-1/cancel').status_code == 200
+    assert client.post(
+        '/api/studio/run/run-1/confirm-comfyui-restart',
+        json={'confirmed_comfyui_restart': True}).status_code == 200
+    assert client.post(
+        f'/api/dataset/{ds_id}/lora-test/cancel').status_code == 200
+    assert client.post(
+        f'/api/dataset/{ds_id}/lora-test/confirm-comfyui-restart',
+        json={'confirmed_comfyui_restart': True}).status_code == 200
+
+
 # --- /api/studio/describe-image (image -> test prompt via Ollama vision) ------
 
 def _png_bytes(color=(120, 60, 30), size=(48, 64)):
@@ -73,9 +118,11 @@ def _png_bytes(color=(120, 60, 30), size=(48, 64)):
 
 
 def _mock_vram(monkeypatch):
-    # The GPU-exclusive vision window frees ComfyUI VRAM on entry (best-effort);
-    # stub it so the test never reaches a real ComfyUI.
-    monkeypatch.setattr('app.utils.comfyui.free_comfyui_vram', lambda *a, **k: True)
+    # The GPU-exclusive vision window frees ComfyUI VRAM on entry; stub it so
+    # this route test never reaches a real ComfyUI.
+    from app.utils.comfyui import ComfyVramFreeVerdict
+    monkeypatch.setattr('app.utils.comfyui.free_comfyui_vram',
+                        lambda *a, **k: ComfyVramFreeVerdict.FREED)
 
 
 def test_describe_image_returns_prompt(client, monkeypatch):

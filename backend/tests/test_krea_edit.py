@@ -432,7 +432,7 @@ def test_the_sampler_settings_are_the_measured_ones():
     ks = next(n for n in g.values() if n['class_type'] == 'KSampler')['inputs']
     assert ks['cfg'] == 1.0, 'guidance-distilled: any other cfg is a mistake'
     assert (ks['sampler_name'], ks['scheduler']) == ('euler', 'simple')
-    assert ks['steps'] == 10
+    assert ks['steps'] == 8
 
 
 def test_the_krea_graph_defaults_favor_prompt_adherence_without_weakening_identity():
@@ -441,7 +441,7 @@ def test_the_krea_graph_defaults_favor_prompt_adherence_without_weakening_identi
     patch = next(n for n in g.values() if n['class_type'] == 'Krea2EditModelPatch')
     lora = next(n for n in g.values() if n['class_type'] == 'LoraLoaderModelOnly')
     assert {n['inputs']['grounding_px'] for n in encodes} == {512}
-    assert patch['inputs']['ref_boost'] == 1.0
+    assert patch['inputs']['ref_boost'] == 0.25
     assert lora['inputs']['strength_model'] == 1.0
 
 
@@ -468,9 +468,9 @@ def test_no_loader_value_is_ever_hardcoded_in_the_graph_builder():
 def test_grounding_is_clamped_and_snapped_and_junk_degrades_to_the_default(krea):
     keh, _base, config = krea
     assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 1.0
+    assert config.get('krea.ref_boost') == 0.25
     assert keh.grounding_px() == 512
-    assert keh._ref_boost() == 1.0
+    assert keh._ref_boost() == 0.25
     config.save_config({'krea': {'grounding_px': 700}})
     assert keh.grounding_px() == 704, 'snapped to the 64px patch grid'
     config.save_config({'krea': {'grounding_px': 99999}})
@@ -566,7 +566,8 @@ def test_krea_pose_cards_override_conflicting_generic_framing_details(
     out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
                                  label=entry['label'])
     final_card = fv.krea_card_pose_priority(
-        fv.krea_outfit_directive(entry['prompt'], entry['label']))
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'),
+        true_profile=entry_id == 'face_profile_l')
 
     assert requested_card_text in out
     assert conflicting_detail not in out
@@ -575,6 +576,7 @@ def test_krea_pose_cards_override_conflicting_generic_framing_details(
     # tail, not merely referred to as an earlier instruction.
     assert out.rfind(requested_card_text) > out.rfind(
         fv.get_identity_prompt('render_tail_sfw', 'human'))
+    assert (fv.KREA_TRUE_PROFILE_REQUIREMENT in out) == (entry_id == 'face_profile_l')
 
 
 def test_krea_card_priority_is_scoped_to_krea_not_klein_or_api_wrappers():
@@ -608,6 +610,21 @@ def test_krea_card_priority_stays_human_and_uses_the_current_regenerate_prompt()
     assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in animal
 
 
+def test_krea_three_quarter_profile_is_not_rewritten_as_a_true_side_profile():
+    out = fv.wrap_variation_krea('close-up portrait, three-quarter profile, smiling',
+                                 framing='face', label='Face 3/4')
+    assert 'both eyes in crisp focus' in out
+    assert fv.KREA_CARD_POSE_PRIORITY_PREFIX not in out
+    assert fv.KREA_TRUE_PROFILE_REQUIREMENT not in out
+
+
+def test_krea_profile_priority_is_not_disabled_by_an_age():
+    out = fv.wrap_variation_krea('close-up portrait, left profile view, 34-year-old',
+                                 framing='face', label='Profile left')
+    assert 'both eyes in crisp focus' not in out
+    assert fv.KREA_TRUE_PROFILE_REQUIREMENT in out
+
+
 def test_krea_card_priority_does_not_duplicate_a_dataset_suffix():
     entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
     suffix = 'shot on 35mm film'
@@ -621,8 +638,24 @@ def test_krea_card_priority_does_not_repeat_edited_or_custom_prompt_text():
     custom = 'left profile view, ' + ('deliberate detail ' * 800)
     out = fv.wrap_variation_krea(custom, framing='face', label='Custom profile')
     assert out.count(custom) == 1
-    assert out.endswith(fv.krea_card_pose_priority())
+    assert out.endswith(fv.krea_card_pose_priority(true_profile=True))
     assert not out.endswith(fv.krea_card_pose_priority(custom))
+
+
+def test_krea_card_priority_tail_is_not_built_from_the_editable_palette(monkeypatch):
+    """A palette choice may shape the description, never the post-SFW tail."""
+    entry = next(e for e in fv.VARIATION_CATALOG if e['id'] == 'face_profile_l')
+    palette_text = 'untrusted palette text that must remain before identity'
+    monkeypatch.setattr(fv, 'outfit_palette', lambda *_args: (palette_text,))
+
+    out = fv.wrap_variation_krea(entry['prompt'], framing=entry['framing'],
+                                 label=entry['label'])
+    assert out.count(palette_text) == 1
+    assert out.rfind(palette_text) < out.rfind(
+        fv.get_identity_prompt('klein_identity', 'human'))
+    assert out.endswith(fv.krea_card_pose_priority(
+        fv._krea_builtin_card_prompt(entry['prompt'], entry['label'], 'human'),
+        true_profile=True))
 
 
 def test_the_wrapper_respects_the_subject_type_and_the_nsfw_switch():
@@ -713,6 +746,85 @@ def test_krea_dataset_batch_and_regenerate_forward_the_catalog_card_aspect(app, 
         assert row.klein_model == 'krea'
 
     assert [call['aspect_ratio'] for call in calls] == ['16:9', '16:9']
+
+
+def test_plain_krea_retry_uses_row_engine_without_klein_preflight(client, app, monkeypatch):
+    """Retry sends no override, so the saved Krea tag decides the lane.
+
+    In particular the route must not inspect the Klein graph before the service
+    can resolve a failed Krea row: an unavailable Klein node is irrelevant to a
+    Krea retry and must not reject it before the Krea lane is selected.
+    """
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc
+    from app.services import krea_edit_helper as keh
+    from app.services import klein_edit_helper as kleh
+
+    seen = []
+    monkeypatch.setattr(
+        kleh, 'klein_missing_nodes',
+        lambda: (_ for _ in ()).throw(AssertionError('Klein preflight must not run for Krea')))
+    monkeypatch.setattr(
+        svc, '_api_generate_fn',
+        lambda _engine: (_ for _ in ()).throw(AssertionError('API must not run for Krea')))
+    monkeypatch.setattr(
+        keh, 'enqueue_krea_edit',
+        lambda **kwargs: (seen.append(kwargs), 'krea-retry-job')[1])
+
+    with app.app_context():
+        ds = svc.create_dataset('local', 'Krea retry', 'krea_retry')
+        ds.ref_filename = 'ref.png'
+        row = FaceDatasetImage(
+            dataset_id=ds.id, source='generated', status='failed',
+            variation_label='Bust, front', framing='bust',
+            variation_prompt='upper body portrait', klein_model='krea')
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+
+    response = client.post(f'/api/dataset/image/{row_id}/regenerate', json={})
+    assert response.status_code == 200
+    assert response.get_json() == {'ok': True, 'job_id': 'krea-retry-job'}
+    assert len(seen) == 1
+
+    with app.app_context():
+        retried = db.session.get(FaceDatasetImage, row_id)
+        assert (retried.status, retried.job_id, retried.klein_model) == (
+            'pending', 'krea-retry-job', 'krea')
+
+
+def test_plain_klein_retry_keeps_its_node_preflight_and_maps_the_409(
+        client, app, monkeypatch):
+    """Moving preflight behind origin resolution must not weaken Klein retries."""
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc
+    from app.services import klein_edit_helper as kleh
+
+    missing = [{'class_type': 'ExampleKleinNode', 'pack': 'Example-Pack',
+                'url': 'https://example.invalid/pack'}]
+    monkeypatch.setattr(kleh, 'klein_missing_nodes', lambda: missing)
+    monkeypatch.setattr(kleh, 'klein_missing_assets', lambda: [])
+
+    with app.app_context():
+        ds = svc.create_dataset('local', 'Klein retry', 'klein_retry')
+        ds.ref_filename = 'ref.png'
+        row = FaceDatasetImage(
+            dataset_id=ds.id, source='generated', status='failed',
+            variation_label='Bust, front', framing='bust',
+            variation_prompt='upper body portrait',
+            klein_model='flux-2-klein.safetensors')
+        db.session.add(row)
+        db.session.commit()
+        row_id = row.id
+
+    response = client.post(f'/api/dataset/image/{row_id}/regenerate', json={})
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body['ok'] is False
+    assert body['klein_nodes_missing'] == missing
+    assert 'ExampleKleinNode' in body['error']
 
 
 # --- route: the 409 is the ONLY thing standing between a fresh install and a

@@ -124,6 +124,19 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
       };
       if (prompt.trim()) body.prompt = prompt.trim();
       const dResp = await postJson('/api/studio/run', body);
+      // Keep this defensive path even though apiFetch currently throws on
+      // non-2xx: alternate clients/tests may return the structured 409 body.
+      // Never announce success or retain a bogus run id in that case.
+      if (!dResp?.ok) {
+        let errorBody = dResp;
+        if (typeof dResp?.json === 'function') {
+          try { errorBody = await dResp.json(); } catch { errorBody = {}; }
+        }
+        setPreflight(errorBody?.studio_missing || null);
+        setArchMismatch(errorBody?.studio_arch_mismatch || null);
+        toast.error(errorBody?.error || 'Error on launch');
+        return;
+      }
       toast.success(`${dResp.created} generation(s) queued (seed ${dResp.seed}${dResp.count > 1 ? ` ×${dResp.count}` : ''})`);
       setRunId(dResp.run_id);
       setSeed(rollSeed());
@@ -197,6 +210,18 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
       <main id="st-results" className="flex flex-col gap-3 min-w-0 scroll-mt-16">
         <StudioPreflightBanner missing={preflight} archMismatch={archMismatch}
           onDismiss={() => { setPreflight(null); setArchMismatch(null); }} />
+        {data?.comfyui_recovery?.requires_comfyui_restart_confirmation && (
+          <div className="flex items-center gap-2 flex-wrap rounded-lg border border-amber-400/40 bg-amber-400/10 px-3 py-2" role="status">
+            <span aria-hidden>⚠</span>
+            <span className="text-content text-sm">A ComfyUI submission has an unknown outcome. Restart ComfyUI first, then confirm it here; the paused cell will become resumable.</span>
+            <button type="button" disabled={run.confirmingComfyuiRestart}
+              onClick={run.confirmComfyuiRestart}
+              className="ml-auto px-2.5 py-1 rounded-lg bg-gradient-primary text-white text-xs font-semibold disabled:opacity-40">
+              {run.confirmingComfyuiRestart ? 'Confirming…' : '✓ J’ai redémarré ComfyUI'}
+            </button>
+          </div>
+        )}
+
         {data?.pending > 0 && (
           <div className="flex items-center gap-2 rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-3 py-2" role="status">
             <span className="inline-block w-4 h-4 border-2 border-indigo-400/40 border-t-indigo-400 rounded-full animate-spin" aria-hidden />

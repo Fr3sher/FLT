@@ -166,7 +166,7 @@ def test_reimprove_trash_failure_restores_candidate_and_parent_states(app, monke
     monkeypatch.setattr(
         svc.trash, 'send_to_trash',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('Trash unavailable')))
-    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: True)
 
     with app.app_context():
         ds, parent, candidate = _improved_pair(svc, FaceDatasetImage, LOCAL_USER)
@@ -283,7 +283,7 @@ def test_reimprove_trash_rollback_preserves_a_concurrent_candidate_decision(
 
     queued = []
     _stub_klein(monkeypatch, keh, queued)
-    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: True)
 
     with app.app_context():
         ds, parent, candidate = _improved_pair(svc, FaceDatasetImage, LOCAL_USER)
@@ -322,7 +322,7 @@ def test_reimprove_trash_rollback_preserves_a_caption_edited_during_trash(
 
     queued = []
     _stub_klein(monkeypatch, keh, queued)
-    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: True)
 
     with app.app_context():
         ds, parent, candidate = _improved_pair(svc, FaceDatasetImage, LOCAL_USER)
@@ -361,7 +361,7 @@ def test_reimprove_trash_rollback_restores_an_unchanged_blank_caption(app, monke
 
     queued = []
     _stub_klein(monkeypatch, keh, queued)
-    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(job_queue.queue_manager, 'cancel_job', lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         svc.trash, 'send_to_trash',
         lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError('Trash unavailable')))
@@ -477,3 +477,20 @@ def test_reimprove_refuses_a_row_that_is_not_an_improvement(app, monkeypatch):
 def test_reimprove_route_answers_404_for_an_unknown_image(app, client):
     r = client.post('/api/dataset/image/999999/reimprove')
     assert r.status_code == 404
+
+
+def test_reimprove_route_recovery_barrier_has_no_service_side_effect(
+        client, monkeypatch):
+    from app.job_queue import COMFYUI_STALLED_BARRIER_KEY, queue_manager
+    from app.services import face_dataset_service as svc
+
+    with client.application.app_context():
+        queue_manager._set_system_state(
+            COMFYUI_STALLED_BARRIER_KEY, {'job_id': 'unresolved'})
+    monkeypatch.setattr(
+        svc, 'reimprove_image',
+        lambda *_args: (_ for _ in ()).throw(AssertionError('service must not run')))
+
+    response = client.post('/api/dataset/image/7/reimprove')
+    assert response.status_code == 409
+    assert response.get_json()['code'] == 'comfyui_recovery_required'

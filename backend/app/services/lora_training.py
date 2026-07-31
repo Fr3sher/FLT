@@ -28,13 +28,14 @@ import struct
 import subprocess
 import sys
 import threading
+import time
 from datetime import datetime
 
 from PIL import Image, ImageOps
 
 from .. import config as cfg
 from ..models import FaceDataset, FaceDatasetImage
-from ..job_queue import queue_manager
+from ..job_queue import GPU_ARBITER_LOCK, queue_manager
 from . import face_dataset_service as fds, face_mask, trash
 from .person_mask import generate_person_masks
 
@@ -48,17 +49,10 @@ logger = logging.getLogger(__name__)
 # (cadence prouvée). Curseur de tuning #1, un seul endroit.
 KREA_TRAIN_RESOLUTION = 1024
 
-# TTL des flags system_state d'un run (training_in_progress / _pid / _dataset_id /
-# _target_step). L'anti-concurrence repose sur le PID VIVANT, mais le GARDE lit
-# d'abord le flag `training_in_progress` (cf. is-training checks) : si son TTL
-# expire AU MILIEU d'un run, le flag retombe à False, le garde rouvre la porte et
-# la file lance un 2e entraînement par-dessus le 1er (collision mémoire → « page
-# file too small »). Un run Krea-2-Raw (non distillé, CFG 4 / 25 steps de preview)
-# dépasse 4 h → l'ancien TTL 4 h expirait avant la fin ET privait le snapshot du
-# checkpoint final de son target_step. 12 h couvre le plus long run réaliste ;
-# `process_training_queue` re-arme de toute façon les flags à chaque poll tant que
-# le PID vit, donc c'est une ceinture, pas la bretelle.
-_TRAIN_STATE_TTL = 12 * 3600
+# The local-training state is a durable GPU ownership fence. It must never
+# expire while a surviving ai-toolkit child may still own VRAM; only an exact
+# process identity check is allowed to release it after a restart.
+_TRAIN_STATE_TTL = None
 
 
 # --- Path accessors (replace SRC's module-level AITOOLKIT_DIR/HF_HOME/... constants) --
@@ -419,6 +413,29 @@ def _aitoolkit_supports_anima() -> bool:
             except OSError:
                 continue
     return False
+
+
+def _aitoolkit_supports_automagic3() -> bool:
+    """Whether this checkout can resolve the Automagic3 optimizer.
+
+    Automagic3 is newer than the other optimizer choices and older ai-toolkit
+    checkouts fail only when constructing the optimizer.  Detect the concrete
+    implementation and registry entry so local preflight/launch can fail early
+    with an actionable update instruction.
+    """
+    root = cfg.aitoolkit_path('dir')
+    if not root:
+        return False
+    implementation = root / 'toolkit' / 'optimizers' / 'automagic3.py'
+    registry = root / 'toolkit' / 'optimizer.py'
+    if not implementation.is_file() or not registry.is_file():
+        return False
+    try:
+        return bool(re.search(
+            r"(?:lower_type|optimizer_type)\s*==\s*['\"]automagic3['\"]",
+            registry.read_text(encoding='utf-8', errors='ignore')))
+    except OSError:
+        return False
 
 
 def _safe_trigger(ds) -> str:
@@ -1105,7 +1122,12 @@ _KLEIN_STYLE_RANK = 128
 _RANK_CHOICES = (8, 16, 24, 32, 48, 64)
 # multi-échelle par défaut ; '768' seul = LE levier basse-VRAM (Krea 12B : 1024
 # sature un 24 GB à ~180 s/it, 768 mesuré ~3,5 s/it — cf. commentaire de tête).
-_RES_CHOICES = {'768,1024': [768, 1024], '1024': [1024], '768': [768]}
+_RES_CHOICES = {
+    '512,768': [512, 768],
+    '768,1024': [768, 1024],
+    '1024': [1024],
+    '768': [768],
+}
 _SAVE_CHOICES = (250, 500, 1000)
 # --- Expert levers (train_settings, ALL default to current behaviour when absent,
 #     so a newcomer who never touches them gets the exact same config as before) ---
@@ -1116,7 +1138,8 @@ _DEFAULT_TIMESTEP = {'zimage': 'sigmoid', 'krea': 'linear', 'flux': 'sigmoid',
                      'flux2klein': 'weighted', 'anima': 'weighted'}   # ce que « Auto » résout (sdxl : aucun) ; flux subject → sigmoid (reco ai-toolkit) ; flux2klein → weighted (défaut canonique options.ts, PAS sigmoid) ; anima → weighted (défaut options.ts PR #860)
 # Batch 2 — optimiseur / planning du LR / batch effectif (valeurs VÉRIFIÉES dans
 # ai-toolkit : get_optimizer + toolkit/scheduler.py). CAME n'est PAS supporté.
-_OPTIMIZER_CHOICES = ('adamw8bit', 'adafactor', 'automagic', 'automagic2', 'prodigy')
+_OPTIMIZER_CHOICES = (
+    'adamw8bit', 'adafactor', 'automagic', 'automagic2', 'automagic3', 'prodigy')
 _LR_SCHEDULER_CHOICES = ('constant', 'linear', 'cosine', 'cosine_with_restarts', 'constant_with_warmup')
 _WARMUP_CHOICES = (50, 100, 200, 500)          # num_warmup_steps ; UNIQUEMENT avec constant_with_warmup
 _GRAD_ACCUM_CHOICES = (1, 2, 4)
@@ -1137,6 +1160,10 @@ _EMA_CHOICES = (0.99, 0.999)
 # concerns Krea 2 and we do not turn one anecdotal recipe into a global default.
 _CONTENT_OR_STYLE_CHOICES = ('balanced', 'style', 'content')
 _DIFFERENTIAL_GUIDANCE_SCALE_RANGE = (0.1, 10.0)
+_LOSS_TYPE_CHOICES = ('mse',)
+_QTYPE_CHOICES = ('qfloat8', 'float8', 'int8')
+_SAVE_DTYPE_CHOICES = ('float16', 'bf16')
+_OFFLOADING_PERCENT_RANGE = (0.0, 1.0)
 
 # --- Memory-saving levers (quantisation + low-VRAM streaming) --------------------
 # Community request (GitHub issue #14, bobba84): the recipes hard-coded quantize /
@@ -1217,11 +1244,25 @@ def _model_memory_block(ds, family) -> dict:
     q = _memory_flag_eff(ds, 'quantize', d['quantize'])
     qte = _memory_flag_eff(ds, 'quantize_te', d['quantize_te'])
     lv = _memory_flag_eff(ds, 'low_vram', d['low_vram'])
+    s = _train_settings(ds)
     out = {'quantize': q, 'quantize_te': qte}
     if lv:
         out['low_vram'] = True
     if q or qte:
-        out['qtype'] = 'qfloat8'
+        out['qtype'] = (s.get('qtype') if s.get('qtype') in _QTYPE_CHOICES
+                        else 'qfloat8')
+    if s.get('qtype_te') in _QTYPE_CHOICES:
+        out['qtype_te'] = s['qtype_te']
+    if isinstance(s.get('layer_offloading'), bool):
+        out['layer_offloading'] = s['layer_offloading']
+    if s.get('layer_offloading') is True:
+        for key in ('layer_offloading_transformer_percent',
+                    'layer_offloading_text_encoder_percent'):
+            value = s.get(key)
+            if (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and _OFFLOADING_PERCENT_RANGE[0] <= float(value)
+                    <= _OFFLOADING_PERCENT_RANGE[1]):
+                out[key] = float(value)
     return out
 
 
@@ -1317,6 +1358,70 @@ def memory_saving_risk(ds, family) -> dict | None:
 #     someone's 768 back to 768,1024 on a family switch — a NEW silent change.
 _FAMILY_SCOPED_SETTING_KEYS = ('timestep_type',)
 
+# Private provenance stored beside the explicit settings of an applied preset.
+# It is deliberately not part of TRAIN_SETTING_KEYS and never appears in exports:
+# it only prevents a family/kind/variant-scoped recipe from continuing to affect a
+# dataset after that context changes.
+_ACTIVE_PRESET_SCOPE_KEY = '_active_preset_scope'
+
+
+class _TrainContextView:
+    """Read-only dataset view with the family/variant selected for one action."""
+
+    def __init__(self, ds, family=None, variant=None):
+        self._ds = ds
+        self._family = family
+        self._variant = variant
+
+    @property
+    def train_type(self):
+        return self._family if self._family is not None else self._ds.train_type
+
+    @property
+    def train_variant(self):
+        return self._variant if self._variant is not None else self._ds.train_variant
+
+    def __getattr__(self, name):
+        return getattr(self._ds, name)
+
+
+def _train_context_view(ds, family=None, variant=None):
+    if ds is None:
+        return None
+    fam = _train_type(ds, family)
+    selected = str(
+        variant or getattr(ds, 'train_variant', None)
+        or _default_variant_for(fam)).strip().lower()
+    return _TrainContextView(ds, fam, selected)
+
+
+def _preset_scope_matches(ds, scope) -> bool:
+    if not isinstance(scope, dict):
+        return True
+    family = str(getattr(ds, 'train_type', None) or 'zimage').strip().lower()
+    kind = str(getattr(ds, 'kind', None) or 'character').strip().lower()
+    variant = str(
+        getattr(ds, 'train_variant', None)
+        or _default_variant_for(family)).strip().lower()
+    if scope.get('train_type') and scope.get('train_type') != family:
+        return False
+    if scope.get('dataset_kind') and scope.get('dataset_kind') != kind:
+        return False
+    variants = scope.get('variants')
+    if isinstance(variants, list) and variants and variant not in variants:
+        return False
+    return True
+
+
+def clear_active_preset_settings(settings: dict) -> dict:
+    """Drop an applied preset and every setting that replacement owned."""
+    scope = settings.pop(_ACTIVE_PRESET_SCOPE_KEY, None)
+    if isinstance(scope, dict):
+        for key in scope.get('keys') or []:
+            if key in TRAIN_SETTING_KEYS:
+                settings.pop(key, None)
+    return settings
+
 
 def _train_settings(ds) -> dict:
     """Parse le blob JSON `train_settings` en dict (jamais lève ; {} si absent/cassé)."""
@@ -1327,7 +1432,18 @@ def _train_settings(ds) -> dict:
         d = json.loads(raw)
     except (ValueError, TypeError):
         return {}
-    return d if isinstance(d, dict) else {}
+    if not isinstance(d, dict):
+        return {}
+    scope = d.get(_ACTIVE_PRESET_SCOPE_KEY)
+    if isinstance(scope, dict) and not _preset_scope_matches(ds, scope):
+        # Return an inert VIEW while preserving the stored provenance. If the
+        # user comes back to the scoped context the recipe is restored; outside
+        # it, not one of its owned settings reaches preflight/config/step policy.
+        d = dict(d)
+        for key in scope.get('keys') or []:
+            if key in TRAIN_SETTING_KEYS:
+                d.pop(key, None)
+    return d
 
 
 def _klein_style(ds, family) -> bool:
@@ -1431,7 +1547,13 @@ def _network_block(ds, rank, family) -> dict:
         factor = _lokr_factor_eff(ds)
         if factor is not None:
             net['lokr_factor'] = factor
-    if _klein_style(ds, family) and net['type'] == 'lora':
+    s = _train_settings(ds)
+    explicit_conv = _numeric_choice(s.get('conv'), _RANK_CHOICES)
+    if explicit_conv is not None and net['type'] == 'lora':
+        net['conv'] = explicit_conv
+        conv_alpha = _numeric_choice(s.get('conv_alpha'), _ALPHA_CHOICES)
+        net['conv_alpha'] = conv_alpha if conv_alpha is not None else explicit_conv
+    elif _klein_style(ds, family) and net['type'] == 'lora':
         # FLUX.2 Klein STYLE : ajoute un LoRA Conv2d aux moitiés du linear (conv_alpha
         # au quart) → dims 128/64/64/32 au rank par défaut. Combo dominant du sweep
         # Herbst (64 runs, fév. 2026) et de l'exemple de training officiel BFL. Clés
@@ -1443,6 +1565,48 @@ def _network_block(ds, rank, family) -> dict:
     if isinstance(d, (int, float)) and d in _DROPOUT_CHOICES:
         net['dropout'] = d
     return net
+
+
+def _save_dtype_eff(ds) -> str:
+    value = _train_settings(ds).get('save_dtype')
+    return value if value in _SAVE_DTYPE_CHOICES else 'float16'
+
+
+def _dataset_cache_text_embeddings(ds, default=None) -> dict:
+    """Dataset-level cache override; absent keeps each family's old emission."""
+    value = _train_settings(ds).get('cache_text_embeddings')
+    if isinstance(value, bool):
+        return {'cache_text_embeddings': value}
+    if isinstance(default, bool):
+        return {'cache_text_embeddings': default}
+    return {}
+
+
+# These families cache text embeddings in their untouched LDS recipe.  An
+# explicit per-preset override may now change that fact, so callers that care
+# about the effective capability must use ``_cache_text_embeddings_eff`` rather
+# than checking this tuple directly.
+DUAL_CAPTION_UNSUPPORTED_FAMILIES = ('krea', 'anima')
+
+
+def _cache_text_embeddings_eff(ds, family) -> bool:
+    value = _train_settings(ds).get('cache_text_embeddings')
+    if isinstance(value, bool):
+        return value
+    return (family or '').lower() in DUAL_CAPTION_UNSUPPORTED_FAMILIES
+
+
+def _train_serializer_fields(ds) -> dict:
+    """Optional real TrainConfig fields, omitted for untouched datasets."""
+    s = _train_settings(ds)
+    out = {}
+    decay = s.get('weight_decay')
+    if (isinstance(decay, (int, float)) and not isinstance(decay, bool)
+            and 0 <= float(decay) <= 1):
+        out['optimizer_params'] = {'weight_decay': float(decay)}
+    if s.get('loss_type') in _LOSS_TYPE_CHOICES:
+        out['loss_type'] = s['loss_type']
+    return out
 
 
 def _timestep_type_eff(ds, default: str) -> str:
@@ -1554,6 +1718,13 @@ def _differential_guidance_scale_eff(ds) -> float:
     return 3.0
 
 
+def _content_or_style_fields(ds) -> dict:
+    """Explicit generic TrainConfig content/style balance, omitted by default."""
+    value = _train_settings(ds).get('content_or_style')
+    return ({'content_or_style': value}
+            if value in _CONTENT_OR_STYLE_CHOICES else {})
+
+
 def _krea_recipe_fields(ds) -> dict:
     """Optional Krea 2 community-recipe controls for ai-toolkit's TrainConfig.
 
@@ -1562,10 +1733,7 @@ def _krea_recipe_fields(ds) -> dict:
     emits exactly what it announced, so the run config and provenance stay
     reproducible.
     """
-    s = _train_settings(ds)
-    out = {}
-    if s.get('content_or_style') in _CONTENT_OR_STYLE_CHOICES:
-        out['content_or_style'] = _content_or_style_eff(ds)
+    out = _content_or_style_fields(ds)
     if _differential_guidance_enabled(ds):
         out['do_differential_guidance'] = True
         out['differential_guidance_scale'] = _differential_guidance_scale_eff(ds)
@@ -1950,11 +2118,12 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
         'optimizer': _optimizer_eff(ds),
         'lr': _lr_eff(ds),
     }
-    if _klein_style(ds, fam) and _network_type_eff(ds) == 'lora':
-        # FLUX.2 Klein style adds a Conv2d LoRA (128/64/64/32) — carry the conv dims
-        # in provenance / ⎘ Share config so the emitted recipe is reproducible.
-        snap['conv'] = max(1, rank // 2)
-        snap['conv_alpha'] = max(1, rank // 4)
+    network = _network_block(ds, rank, fam)
+    if network['type'] == 'lora':
+        # ``None`` is an explicit topology fact for new records: linear-only.
+        # Older records lacking these keys remain unknown and permissive.
+        snap['conv'] = network.get('conv')
+        snap['conv_alpha'] = network.get('conv_alpha')
     if slider_mode_enabled(ds):
         # Slider mode (Beta): the prompt pair IS the recipe — it must travel in
         # provenance and ⎘ Share config. Like Style, the trigger is only an
@@ -2021,8 +2190,9 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
         snap['lokr_factor'] = factor if factor is not None else 'auto'
     em = _ema_eff(ds)
     snap['ema'] = em if em is not None else 'off'
-    if fam == 'krea':
+    if fam == 'krea' or s.get('content_or_style') in _CONTENT_OR_STYLE_CHOICES:
         snap['content_or_style'] = _content_or_style_eff(ds)
+    if fam == 'krea':
         dg_enabled = _differential_guidance_enabled(ds)
         snap['do_differential_guidance'] = dg_enabled
         snap['differential_guidance_scale'] = (
@@ -2033,12 +2203,12 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     # Fixed at 1 by every family's recipe today. Recorded anyway: the day it stops
     # being 1, the runs on either side of the change have to be comparable.
     snap['batch_size'] = 1
-    # Stamped EFFECTIVE, like `ema` and the memory keys: krea/anima cannot train a second
-    # caption (they cache their text embeddings — see _dual_captions_unsupported_reason),
+    # Stamped EFFECTIVE, like `ema` and the memory keys: a recipe that caches text
+    # embeddings cannot train a second caption (see _dual_captions_unsupported_reason),
     # so recording the preference there would make the run comparison claim two runs
     # differ by dual captions when the trainer saw exactly the same captions.
     snap['dual_captions'] = (bool(s.get('dual_captions'))
-                             and fam not in DUAL_CAPTION_UNSUPPORTED_FAMILIES)
+                             and not _cache_text_embeddings_eff(ds, fam))
     # Face masking is a per-run FACT, not a preference: two concept runs that
     # differ only by it are not the same experiment, so it is stamped effective
     # (concept-only, hence the kind check) exactly like `ema` and the memory keys.
@@ -2058,6 +2228,15 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     _memdef = _memory_saving_defaults(ds, fam)
     for _k in _MEMORY_SETTING_KEYS:
         snap[_k] = _memory_flag_eff(ds, _k, _memdef[_k])
+    for _k in (
+        'weight_decay', 'loss_type', 'qtype', 'qtype_te',
+        'layer_offloading', 'layer_offloading_transformer_percent',
+        'layer_offloading_text_encoder_percent', 'cache_text_embeddings',
+        'save_dtype', 'preset_steps_per_image', 'preset_steps_min',
+        'preset_steps_max', 'preset_steps_fixed',
+    ):
+        if _k in s:
+            snap[_k] = s[_k]
     return snap
 
 
@@ -2073,6 +2252,7 @@ def effective_train_settings(ds, family=None) -> dict:
     res = s.get('resolution')
     trig = _safe_trigger(ds)
     stored_prompts = s.get('sample_prompts')
+    network = _network_block(ds, eff_rank, fam)
     return {'rank': stored_rank,                       # None → Auto (défaut family-aware)
             'effective_rank': eff_rank,                # ce qui part à ai-toolkit
             'alpha': _lora_alpha_eff(ds, eff_rank, fam),   # alpha EFFECTIF (override-aware) — libellé
@@ -2089,6 +2269,7 @@ def effective_train_settings(ds, family=None) -> dict:
             'timestep_type_supported': fam != 'sdxl',
             'optimizer': s.get('optimizer') if s.get('optimizer') in _OPTIMIZER_CHOICES else None,   # None → adamw8bit
             'optimizer_choices': list(_OPTIMIZER_CHOICES),
+            'automagic3_supported': _aitoolkit_supports_automagic3(),
             # Effective LR (absolute) this run trains at — the ▶ Continue dialog's LR
             # factor shows the resulting rate and hides the knob when it's adaptive
             # (Prodigy). Not an editable Advanced-options control; read-only here.
@@ -2108,6 +2289,10 @@ def effective_train_settings(ds, family=None) -> dict:
             'lokr_factor': (_lokr_factor_eff(ds) if _network_type_eff(ds) == 'lokr'
                             else None),
             'lokr_factor_choices': list(_LOKR_FACTOR_CHOICES),
+            'lokr_full_rank': (network.get('lokr_full_rank')
+                               if network['type'] == 'lokr' else False),
+            'conv': network.get('conv'),
+            'conv_alpha': network.get('conv_alpha'),
             'ema': s.get('ema') if s.get('ema') in _EMA_CHOICES else None,   # None → off
             'ema_choices': list(_EMA_CHOICES),
             # The four fields below are deliberately Krea-only in LDS. ai-toolkit
@@ -2163,6 +2348,26 @@ def effective_train_settings(ds, family=None) -> dict:
             # before the GPU (or the rented pod) is paid for. Both read the same
             # function — one rule, two surfaces.
             'memory_risk': memory_saving_risk(ds, fam),
+            # Serializer-backed preset primitives. Stored None means the family/
+            # ai-toolkit default remains in force; effective save dtype is explicit.
+            'weight_decay': s.get('weight_decay'),
+            'loss_type': (s.get('loss_type')
+                          if s.get('loss_type') in _LOSS_TYPE_CHOICES else None),
+            'qtype': s.get('qtype') if s.get('qtype') in _QTYPE_CHOICES else None,
+            'qtype_te': (s.get('qtype_te')
+                         if s.get('qtype_te') in _QTYPE_CHOICES else None),
+            'layer_offloading': (s.get('layer_offloading')
+                                 if isinstance(s.get('layer_offloading'), bool)
+                                 else None),
+            'layer_offloading_transformer_percent':
+                s.get('layer_offloading_transformer_percent'),
+            'layer_offloading_text_encoder_percent':
+                s.get('layer_offloading_text_encoder_percent'),
+            'cache_text_embeddings': (s.get('cache_text_embeddings')
+                                      if isinstance(s.get('cache_text_embeddings'), bool)
+                                      else None),
+            'save_dtype': _save_dtype_eff(ds),
+            'preset_steps_policy': _preset_steps_policy(ds),
             # Family label, so the panel can name the family in that sentence
             # without shipping a second copy of the map.
             'family_label': _FAMILY_LABEL.get(fam, fam),
@@ -2273,6 +2478,12 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
         if v in (None, 'auto', '', 'adamw8bit'):
             cur.pop('optimizer', None)                     # défaut → clé retirée
         elif v in _OPTIMIZER_CHOICES:
+            if (v == 'automagic3'
+                    and _numeric_choice(cur.get('grad_accum'),
+                                        _GRAD_ACCUM_CHOICES) not in (None, 1)):
+                raise ValueError(
+                    'Automagic3 does not support gradient accumulation above 1; '
+                    'set grad_accum to 1/auto or choose another optimizer')
             cur['optimizer'] = v
         else:
             raise ValueError(f'optimizer must be one of {_OPTIMIZER_CHOICES} (or auto)')
@@ -2297,6 +2508,10 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
         if v in (None, 'auto') or (type(v) is int and v == 1):
             cur.pop('grad_accum', None)                    # 1 = défaut → clé retirée
         elif type(v) is int and v in _GRAD_ACCUM_CHOICES:
+            if v > 1 and cur.get('optimizer') == 'automagic3':
+                raise ValueError(
+                    'Automagic3 does not support gradient accumulation above 1; '
+                    'set grad_accum to 1/auto or choose another optimizer')
             cur['grad_accum'] = v
         else:
             raise ValueError(f'grad_accum must be one of {_GRAD_ACCUM_CHOICES} (or auto)')
@@ -2316,6 +2531,24 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur['lokr_factor'] = v
         else:
             raise ValueError(f'lokr_factor must be one of {_LOKR_FACTOR_CHOICES} (or auto)')
+    if 'lokr_full_rank' in patch:
+        v = patch['lokr_full_rank']
+        if isinstance(v, bool):
+            cur['lokr_full_rank'] = v
+        elif v in (None, 'auto', ''):
+            cur.pop('lokr_full_rank', None)
+        else:
+            raise ValueError('lokr_full_rank must be true, false or auto')
+    for key, choices in (('conv', _RANK_CHOICES), ('conv_alpha', _ALPHA_CHOICES)):
+        if key not in patch:
+            continue
+        v = patch[key]
+        if v in (None, 'auto', '', 0):
+            cur.pop(key, None)
+        elif type(v) is int and v in choices:
+            cur[key] = v
+        else:
+            raise ValueError(f'{key} must be one of {choices} (or auto)')
     if 'ema' in patch:
         v = patch['ema']
         if v in (None, 'off', '', 0, 0.0):
@@ -2407,6 +2640,75 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             cur['learning_rate'] = float(v)
         else:
             raise ValueError('learning_rate must be a positive number (or auto)')
+    if 'weight_decay' in patch:
+        v = patch['weight_decay']
+        if v in (None, 'auto', '', 'off'):
+            cur.pop('weight_decay', None)
+        elif (isinstance(v, (int, float)) and not isinstance(v, bool)
+              and 0 <= float(v) <= 1):
+            cur['weight_decay'] = float(v)
+        else:
+            raise ValueError('weight_decay must be between 0 and 1 (or auto)')
+    if 'loss_type' in patch:
+        v = patch['loss_type']
+        if v in (None, 'auto', ''):
+            cur.pop('loss_type', None)
+        elif v in _LOSS_TYPE_CHOICES:
+            cur['loss_type'] = v
+        else:
+            raise ValueError(f'loss_type must be one of {_LOSS_TYPE_CHOICES} (or auto)')
+    for key in ('qtype', 'qtype_te'):
+        if key not in patch:
+            continue
+        v = patch[key]
+        if v in (None, 'auto', ''):
+            cur.pop(key, None)
+        elif v in _QTYPE_CHOICES:
+            cur[key] = v
+        else:
+            raise ValueError(f'{key} must be one of {_QTYPE_CHOICES} (or auto)')
+    for key in ('layer_offloading', 'cache_text_embeddings'):
+        if key not in patch:
+            continue
+        v = patch[key]
+        if isinstance(v, bool):
+            cur[key] = v
+        elif v in (None, 'auto', ''):
+            cur.pop(key, None)
+        else:
+            raise ValueError(f'{key} must be true, false or auto')
+    for key in ('layer_offloading_transformer_percent',
+                'layer_offloading_text_encoder_percent'):
+        if key not in patch:
+            continue
+        v = patch[key]
+        lo, hi = _OFFLOADING_PERCENT_RANGE
+        if v in (None, 'auto', ''):
+            cur.pop(key, None)
+        elif (isinstance(v, (int, float)) and not isinstance(v, bool)
+              and lo <= float(v) <= hi):
+            cur[key] = float(v)
+        else:
+            raise ValueError(f'{key} must be between {lo:g} and {hi:g} (or auto)')
+    if 'save_dtype' in patch:
+        v = patch['save_dtype']
+        if v in (None, 'auto', ''):
+            cur.pop('save_dtype', None)
+        elif v in _SAVE_DTYPE_CHOICES:
+            cur['save_dtype'] = v
+        else:
+            raise ValueError(f'save_dtype must be one of {_SAVE_DTYPE_CHOICES} (or auto)')
+    for key in ('preset_steps_per_image', 'preset_steps_min',
+                'preset_steps_max', 'preset_steps_fixed'):
+        if key not in patch:
+            continue
+        v = patch[key]
+        if v in (None, 'auto', ''):
+            cur.pop(key, None)
+        elif type(v) is int and v > 0:
+            cur[key] = v
+        else:
+            raise ValueError(f'{key} must be a positive integer (or auto)')
     if _settings is not None:
         return cur
     ds.train_settings = json.dumps(cur) if cur else None
@@ -2420,10 +2722,18 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
 TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'sample_every', 'sample_prompts', 'dropout', 'alpha',
                       'timestep_type', 'optimizer', 'lr_scheduler', 'warmup',
-                      'grad_accum', 'network_type', 'lokr_factor', 'ema',
+                      'grad_accum', 'network_type', 'lokr_factor',
+                      'lokr_full_rank', 'conv', 'conv_alpha', 'ema',
                       'content_or_style', 'do_differential_guidance',
                       'differential_guidance_scale', 'dual_captions',
-                      'mask_faces', 'masked', 'learning_rate', *_MEMORY_SETTING_KEYS)
+                      'mask_faces', 'masked', 'learning_rate', 'weight_decay',
+                      'loss_type', 'qtype', 'qtype_te', 'layer_offloading',
+                      'layer_offloading_transformer_percent',
+                      'layer_offloading_text_encoder_percent',
+                      'cache_text_embeddings', 'save_dtype',
+                      'preset_steps_per_image', 'preset_steps_min',
+                      'preset_steps_max', 'preset_steps_fixed',
+                      *_MEMORY_SETTING_KEYS)
 
 # The ONLY settings a resume/continue may change. ai-toolkit rebuilds the job
 # config from scratch on every launch, so a re-read setting is honored on resume —
@@ -2652,6 +2962,251 @@ BUILTIN_TRAIN_PRESETS = [
             'differential_guidance_scale': 3.0,
         },
     },
+    {
+        'id': 'builtin-krea-raw-character-balanced',
+        'name': 'Krea 2 Raw · Character Balanced',
+        'train_type': 'krea',
+        'dataset_kind': 'character',
+        'variants': ['base', 'raw'],
+        'builtin': True,
+        'approved': True,
+        'community': True,
+        'confidence': 'medium',
+        'evidence_label': 'community-tested',
+        'source_url': (
+            'https://www.reddit.com/r/StableDiffusion/comments/1upiocf/'
+            'character_loras_with_krea2_again/'),
+        'recommended_images': {'min': 40, 'max': 60, 'target': 50},
+        'recommended_steps': {'per_image': 50, 'min': 2000, 'max': 3000},
+        'checkpoint_targets': [1500, 2000, 2500, 3000],
+        'caption_guidance': (
+            'Describe visible identity, pose, framing and lighting; keep the trigger '
+            'consistent and avoid inferred traits.'),
+        'limitations': [
+            'The community source did not publish rank or alpha; LDS therefore uses '
+            'its Krea Character defaults (32/32).',
+            'Community-tested starting point, not a guarantee for every face or dataset.',
+        ],
+        'description': (
+            'Community Krea Raw character recipe using Automagic3, sigmoid and '
+            'Balanced at 1024. The source did not publish rank/alpha, so LDS '
+            'transparently falls back to its 32/32 Krea defaults.'),
+        'settings': {
+            'resolution': '1024',
+            'save_every': 500,
+            'max_step_saves': 10,
+            'sample_every': 500,
+            'sample_prompts': list(_CHARACTER_SAMPLE_PROMPTS),
+            'optimizer': 'automagic3',
+            'learning_rate': 1e-4,
+            'weight_decay': 1e-4,
+            'timestep_type': 'sigmoid',
+            'content_or_style': 'balanced',
+            'preset_steps_per_image': 50,
+            'preset_steps_min': 2000,
+            'preset_steps_max': 3000,
+        },
+    },
+    {
+        'id': 'builtin-krea-raw-character-lokr-fast',
+        'name': 'Krea 2 Raw · Character LoKr Fast',
+        'train_type': 'krea',
+        'dataset_kind': 'character',
+        'variants': ['base', 'raw'],
+        'builtin': True,
+        'approved': True,
+        'community': True,
+        'confidence': 'medium',
+        'evidence_label': 'community-tested',
+        'source_url': (
+            'https://www.reddit.com/r/StableDiffusion/comments/1uyk9fz/'
+            'struggling_with_krea2_lora_training_looking_for/'),
+        'recommended_images': {'min': 20, 'max': 40, 'target': 30},
+        'recommended_steps': {'per_image': 100, 'min': 1500, 'max': 3000},
+        'checkpoint_targets': [1500, 2000, 2500, 3000],
+        'caption_guidance': (
+            'Use concise identity captions with varied pose, distance and lighting; '
+            'keep the same trigger in every caption.'),
+        'limitations': [
+            'Full-rank LoKr produces a different checkpoint topology from normal LoKr.',
+            'Fast convergence can overfit; compare the 250-step checkpoints.',
+        ],
+        'description': (
+            'Fast Krea Raw full-rank LoKr recipe: factor 4, Automagic2, EMA 0.99, '
+            'MSE and Differential Guidance ×3, with cached text embeddings.'),
+        'settings': {
+            'resolution': '1024',
+            'save_every': 250,
+            'max_step_saves': 10,
+            'sample_every': 250,
+            'sample_prompts': list(_CHARACTER_SAMPLE_PROMPTS),
+            'network_type': 'lokr',
+            'lokr_full_rank': True,
+            'lokr_factor': 4,
+            'optimizer': 'automagic2',
+            'learning_rate': 1e-4,
+            'weight_decay': 1e-4,
+            'timestep_type': 'sigmoid',
+            'content_or_style': 'balanced',
+            'loss_type': 'mse',
+            'ema': 0.99,
+            'do_differential_guidance': True,
+            'differential_guidance_scale': 3.0,
+            'cache_text_embeddings': True,
+            'preset_steps_per_image': 100,
+            'preset_steps_min': 1500,
+            'preset_steps_max': 3000,
+        },
+    },
+    {
+        'id': 'builtin-krea-raw-style-compact',
+        'name': 'Krea 2 Raw · Style Compact',
+        'train_type': 'krea',
+        'dataset_kind': 'style',
+        'variants': ['base', 'raw'],
+        'builtin': True,
+        'approved': True,
+        'community': True,
+        'confidence': 'medium',
+        'evidence_label': 'community-tested',
+        'source_url': (
+            'https://www.reddit.com/r/StableDiffusion/comments/1uzuypa/'
+            'made_another_style_lora_on_krea2/'),
+        'recommended_images': {'min': 37, 'max': 70, 'target': 50},
+        'recommended_steps': {'fixed': 2250},
+        'checkpoint_targets': [1000, 1500, 2000, 2250],
+        'caption_guidance': (
+            'Caption image content only: never name the style, and keep each caption '
+            'under 50 words.'),
+        'limitations': [
+            'Fixed 2250-step policy is tuned for the reported 37–70 image range.',
+            'Rank 16 is compact and may underfit unusually broad styles.',
+        ],
+        'description': (
+            'Compact rank-16 Krea Raw style LoRA at 512/768, fixed at 2250 '
+            'steps with content-only probes every 250 steps. Alpha is derived.'),
+        'settings': {
+            'rank': 16,
+            'resolution': '512,768',
+            'save_every': 250,
+            'max_step_saves': 10,
+            'sample_every': 250,
+            'sample_prompts': [
+                'a woman reading in a sunlit cafe',
+                'a city street at night, rain, neon reflections',
+                'a mountain landscape, wide shot, morning mist',
+                'a still life of fruit on a wooden table',
+                'a cozy interior, warm lamp light',
+                'a runner mid-stride on a bridge, motion',
+                'a cat sleeping on a windowsill',
+                'a modern building facade, strong shadows',
+            ],
+            'preset_steps_fixed': 2250,
+        },
+    },
+    {
+        'id': 'builtin-krea-raw-concept-16gb',
+        'name': 'Krea 2 Raw · General Concept (16 GB reported)',
+        'train_type': 'krea',
+        'dataset_kind': 'concept',
+        'variants': ['base', 'raw'],
+        'builtin': True,
+        'approved': True,
+        'community': True,
+        'confidence': 'medium',
+        'evidence_label': 'community-tested',
+        'source_url': (
+            'https://www.reddit.com/r/StableDiffusion/comments/1v9yl1u/'
+            'krea_2_lora_training_the_very_easy_guide_for_16gb/'),
+        'recommended_images': {'min': 50, 'max': 60, 'target': 55},
+        'recommended_steps': {'per_image': 55, 'min': 3000, 'max': 3250},
+        'checkpoint_targets': [2000, 2500, 3000],
+        'caption_guidance': (
+            'Describe the concept and its visible context precisely; vary composition, '
+            'viewpoint and lighting rather than repeating one caption.'),
+        'limitations': [
+            'Reported on a 16 GB setup; memory use is not guaranteed across drivers '
+            'or ai-toolkit revisions.',
+            'Layer offloading trades speed for memory and does not replace the normal '
+            'VRAM preflight.',
+        ],
+        'description': (
+            'Community Krea Raw concept recipe reported on 16 GB: Automagic3, '
+            'int8 quantization, 50% layer offloading and cached text embeddings. '
+            'Reported fit is not guaranteed.'),
+        'settings': {
+            'resolution': '1024',
+            'save_every': 500,
+            'max_step_saves': 10,
+            'sample_every': 500,
+            'sample_prompts': list(_CONCEPT_SAMPLE_PROMPTS),
+            'optimizer': 'automagic3',
+            'learning_rate': 1e-4,
+            'weight_decay': 1e-4,
+            'timestep_type': 'sigmoid',
+            'content_or_style': 'balanced',
+            'low_vram': True,
+            'layer_offloading': True,
+            'layer_offloading_transformer_percent': 0.5,
+            'layer_offloading_text_encoder_percent': 0.5,
+            'cache_text_embeddings': True,
+            'qtype': 'int8',
+            'qtype_te': 'int8',
+            'preset_steps_per_image': 55,
+            'preset_steps_min': 3000,
+            'preset_steps_max': 3250,
+        },
+    },
+    {
+        'id': 'builtin-zimage-turbo-character-balanced',
+        'name': 'Z-Image Turbo · Character Balanced',
+        'train_type': 'zimage',
+        'dataset_kind': 'character',
+        'variants': ['turbo'],
+        'builtin': True,
+        'approved': True,
+        'community': True,
+        'confidence': 'medium',
+        'evidence_label': 'community-tested',
+        'source_url': (
+            'https://www.reddit.com/r/StableDiffusion/comments/1q1ahx9/'
+            'some_zimageturbo_training_presets_for_12gb_vram/'),
+        'recommended_images': {'min': 30, 'max': 40, 'target': 35},
+        'recommended_steps': {'per_image': 100, 'min': 3000, 'max': 4000},
+        'checkpoint_targets': [3000, 3250, 3500, 3750, 4000],
+        'caption_guidance': (
+            'Keep the trigger stable; describe pose, framing, expression and lighting '
+            'without repeating fixed identity traits.'),
+        'limitations': [
+            'Turbo-only recipe; do not apply its float8/offloading balance to Base or '
+            'De-Turbo checkpoints.',
+            'Conv LoRA increases adapter size relative to the linear-only default.',
+        ],
+        'description': (
+            'Z-Image Turbo character recipe: LoRA 32/32 plus Conv 16/16, '
+            'sigmoid/Balanced, 512/768, float8 model and text encoder, BF16 saves.'),
+        'settings': {
+            'rank': 32,
+            'alpha': 32,
+            'conv': 16,
+            'conv_alpha': 16,
+            'resolution': '512,768',
+            'save_every': 250,
+            'max_step_saves': 10,
+            'sample_every': 250,
+            'sample_prompts': list(_CHARACTER_SAMPLE_PROMPTS),
+            'learning_rate': 1e-4,
+            'timestep_type': 'sigmoid',
+            'content_or_style': 'balanced',
+            'qtype': 'float8',
+            'qtype_te': 'float8',
+            'save_dtype': 'bf16',
+            'cache_text_embeddings': True,
+            'preset_steps_per_image': 100,
+            'preset_steps_min': 3000,
+            'preset_steps_max': 4000,
+        },
+    },
     # 32/32 is the AI-Toolkit-community default and the "lower-regret choice
     # for hard faces" (vault 2026-07-10; options.ts + neurocanvas ship 32) —
     # drop rank to 16 manually for small clean frontal sets. sigmoid pinned:
@@ -2875,12 +3430,15 @@ def snapshot_train_settings(user_id, dataset_id) -> dict:
         raise ValueError('dataset not found')
     settings = _train_settings(ds)
     return {key: value for key, value in settings.items()
-            if (key == 'alpha' and _numeric_choice(value, _ALPHA_CHOICES) is not None)
-            or (key == 'grad_accum' and _numeric_choice(value, _GRAD_ACCUM_CHOICES) is not None)
-            or key not in ('alpha', 'grad_accum')}
+            if key in TRAIN_SETTING_KEYS and (
+                (key == 'alpha' and _numeric_choice(value, _ALPHA_CHOICES) is not None)
+                or (key == 'grad_accum'
+                    and _numeric_choice(value, _GRAD_ACCUM_CHOICES) is not None)
+                or key not in ('alpha', 'grad_accum'))}
 
 
-def apply_train_settings_dict(user_id, dataset_id, settings: dict):
+def apply_train_settings_dict(user_id, dataset_id, settings: dict, *,
+                              preset_scope=None):
     """REPLACE the dataset's explicit settings with a preset's dict, running
     every key through the validated update_train_settings path. Content is
     never fatal: unknown keys (newer/older app versions) are ignored, invalid
@@ -2900,6 +3458,30 @@ def apply_train_settings_dict(user_id, dataset_id, settings: dict):
                                   _settings=candidate)
         except ValueError as e:
             rejected.append({'key': k, 'reason': str(e)})
+    if isinstance(preset_scope, dict):
+        variants = [
+            str(v).strip().lower() for v in (preset_scope.get('variants') or [])
+            if str(v).strip()
+        ]
+        selected_variant = str(
+            preset_scope.get('selected_variant') or '').strip().lower()
+        if variants and selected_variant in variants:
+            # Applying a variant-scoped preset and showing its effective values
+            # must be one atomic server truth; otherwise the still-persisted old
+            # variant would immediately make the just-applied recipe inert.
+            ds.train_variant = selected_variant
+        candidate[_ACTIVE_PRESET_SCOPE_KEY] = {
+            'preset_id': preset_scope.get('preset_id'),
+            'train_type': str(
+                preset_scope.get('train_type') or ds.train_type or 'zimage'
+            ).strip().lower(),
+            'dataset_kind': str(
+                preset_scope.get('dataset_kind') or getattr(ds, 'kind', None)
+                or 'character'
+            ).strip().lower(),
+            'variants': variants,
+            'keys': sorted(k for k in candidate if k in TRAIN_SETTING_KEYS),
+        }
     # A concurrent Train observes either the old preset or this fully validated
     # replacement — never the previous clear plus a prefix of its keys.
     ds.train_settings = json.dumps(candidate) if candidate else None
@@ -3333,14 +3915,6 @@ def _apply_style_overrides(ds, process: dict, family: str | None = None) -> dict
     return process
 
 
-# Families whose recipe caches the text embeddings and unloads the text encoder to fit
-# their 12B/2B DiT — and which therefore CANNOT honour dual captions (see
-# _dual_captions_unsupported_reason). Kept as data so the preflight can warn before the
-# launch without building a job config; test_dual_captions asserts it stays in sync with
-# what the recipes actually emit, so a new caching family cannot slip in unnoticed.
-DUAL_CAPTION_UNSUPPORTED_FAMILIES = ('krea', 'anima')
-
-
 def _dual_captions_unsupported_reason(process: dict) -> str | None:
     """Why this ai-toolkit process cannot train dual captions. None = it can.
 
@@ -3545,7 +4119,7 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _zrank, 'zimage'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
@@ -3555,6 +4129,7 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                     # sujet ; l'identité doit vivre dans le trigger, pas les mots).
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
+                    **_dataset_cache_text_embeddings(ds),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3572,6 +4147,8 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
+                    **_content_or_style_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                 },
@@ -3638,7 +4215,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _krank, 'krea'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
@@ -3648,7 +4225,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     # Pré-cache les embeddings du Qwen3-VL pour pouvoir le DÉCHARGER pendant le
                     # training (cf. unload_text_encoder) → libère ~4-8 Go → 1024 tient sans offload.
                     # Valide ici car train_text_encoder=False (sorties figées → cachables sans perte).
-                    'cache_text_embeddings': True,
+                    **_dataset_cache_text_embeddings(ds, default=True),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3658,13 +4235,16 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'gradient_accumulation': _grad_accum(ds),
                     'train_unet': True,
                     'train_text_encoder': False,
-                    'unload_text_encoder': True,  # décharge le Qwen3-VL après caching → VRAM pour le DiT 12B → 1024 rapide
+                    **({'unload_text_encoder': True}
+                       if _dataset_cache_text_embeddings(
+                           ds, default=True)['cache_text_embeddings'] else {}),
                     'gradient_checkpointing': True,
                     'noise_scheduler': 'flowmatch',
                     'timestep_type': _timestep_type_eff(ds, 'linear'),  # défaut canonique krea2 (options.ts)
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                     **_krea_recipe_fields(ds),
@@ -3721,13 +4301,14 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _frank, 'flux'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
                     'caption_ext': 'txt',
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
+                    **_dataset_cache_text_embeddings(ds),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3745,6 +4326,8 @@ def _build_job_config_flux(ds, dataset_folder: str, steps: int, training_folder=
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
+                    **_content_or_style_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                 },
@@ -3811,13 +4394,14 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _fkrank, 'flux2klein'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
                     'caption_ext': 'txt',
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
+                    **_dataset_cache_text_embeddings(ds),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3833,6 +4417,8 @@ def _build_job_config_flux2klein(ds, dataset_folder: str, steps: int, training_f
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
+                    **_content_or_style_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                 },
@@ -3897,7 +4483,7 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _arank, 'anima'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
@@ -3907,7 +4493,7 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                     # Pré-cache les embeddings du Qwen3 pour pouvoir le DÉCHARGER pendant
                     # le training (unload_text_encoder) → libère de la VRAM. Valide car
                     # train_text_encoder=False (sorties figées → cachables sans perte).
-                    'cache_text_embeddings': True,
+                    **_dataset_cache_text_embeddings(ds, default=True),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3917,13 +4503,17 @@ def _build_job_config_anima(ds, dataset_folder: str, steps: int, training_folder
                     'gradient_accumulation': _grad_accum(ds),
                     'train_unet': True,
                     'train_text_encoder': False,
-                    'unload_text_encoder': True,
+                    **({'unload_text_encoder': True}
+                       if _dataset_cache_text_embeddings(
+                           ds, default=True)['cache_text_embeddings'] else {}),
                     'gradient_checkpointing': True,
                     'noise_scheduler': 'flowmatch',
                     'timestep_type': _timestep_type_eff(ds, 'weighted'),  # défaut canonique anima (options.ts)
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
+                    **_content_or_style_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                 },
@@ -3977,13 +4567,14 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
                 'device': 'cuda:0',
                 'trigger_word': trigger,
                 'network': _network_block(ds, _srank, 'sdxl'),
-                'save': {'dtype': 'float16', 'save_every': _save_every(ds),
+                'save': {'dtype': _save_dtype_eff(ds), 'save_every': _save_every(ds),
                          'max_step_saves_to_keep': _max_step_saves(ds)},
                 'datasets': [{
                     'folder_path': dataset_folder,
                     'caption_ext': 'txt',
                     'caption_dropout_rate': 0.05,
                     'cache_latents_to_disk': True,
+                    **_dataset_cache_text_embeddings(ds),
                     'resolution': _train_res(ds),
                     **_mask_fields(dataset_folder),
                 }],
@@ -3998,6 +4589,8 @@ def _build_job_config_sdxl(ds, dataset_folder: str, steps: int, training_folder=
                     'optimizer': _optimizer_eff(ds),
                     'lr': _lr_eff(ds),
                     'dtype': 'bf16',
+                    **_train_serializer_fields(ds),
+                    **_content_or_style_fields(ds),
                     **_lr_sched_fields(ds),
                     **_ema_fields(ds),
                 },
@@ -4204,7 +4797,8 @@ def legacy_lokr_resume_error(parent_geometry, fallback_settings=None):
 
 
 def describe_geometry_conflict(parent_geometry, rank, alpha, *, network_type=None,
-                               lokr_factor=None, lokr_full_rank=None):
+                               lokr_factor=None, lokr_full_rank=None,
+                               conv=None, conv_alpha=None):
     """Explain a known checkpoint/topology mismatch, or return ``None``.
 
     Adapter type, rank/alpha, and LoKr's decomposition parameters all determine
@@ -4245,6 +4839,18 @@ def describe_geometry_conflict(parent_geometry, rank, alpha, *, network_type=Non
                     f'lokr_full_rank={lokr_full_rank}. Full-rank mode changes the '
                     'checkpoint tensor geometry; restore the original mode or start '
                     'a fresh run.')
+    if parent_type == network_type == 'lora':
+        for key, current, label in (
+                ('conv', conv, 'Conv rank'),
+                ('conv_alpha', conv_alpha, 'Conv alpha')):
+            if key not in geo or geo[key] == current:
+                continue
+            before = 'off' if geo[key] is None else geo[key]
+            after = 'off' if current is None else current
+            return (f'this LoRA checkpoint was trained with {label} {before}, and '
+                    f'this run would use {label} {after}. Conv LoRA changes the '
+                    'checkpoint tensor geometry; restore the original Conv settings '
+                    'or start a fresh run.')
     return None
 
 
@@ -4914,6 +5520,33 @@ def _style_steps_policy(ds, train_type=None, variant=None) -> dict:
             'max_steps': high, 'recipe': recipe}
 
 
+def _preset_steps_policy(ds) -> dict | None:
+    """Validated built-in step policy stored with the applied preset."""
+    s = _train_settings(ds)
+    fixed = s.get('preset_steps_fixed')
+    if type(fixed) is int and fixed > 0:
+        return {'preset_steps_fixed': fixed, 'fixed_steps': fixed,
+                'recipe': 'preset_fixed'}
+    per_image = s.get('preset_steps_per_image')
+    if type(per_image) is not int or per_image <= 0:
+        return None
+    low = s.get('preset_steps_min')
+    high = s.get('preset_steps_max')
+    low = low if type(low) is int and low > 0 else 1
+    high = high if type(high) is int and high > 0 else 2_000_000_000
+    if low > high:
+        low, high = high, low
+    return {
+        'preset_steps_per_image': per_image,
+        'preset_steps_min': low,
+        'preset_steps_max': high,
+        'per_image': per_image,
+        'min_steps': low,
+        'max_steps': high,
+        'recipe': 'preset_per_image',
+    }
+
+
 def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
     """Steps cibles selon le *type* de dataset — la recette suit le dataset, pas l'inverse.
 
@@ -4935,7 +5568,8 @@ def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
     sont optionnels et rétrocompatibles ; fournis par les routes ils décrivent le
     lancement en cours plutôt qu'un ancien choix persisté.
     """
-    ds = FaceDataset.query.get(dataset_id)
+    ds = _train_context_view(
+        FaceDataset.query.get(dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     if ds is not None and slider_mode_enabled(ds):
         # Slider (mode, Beta) : la direction est définie par les prompts, pas par
@@ -4943,6 +5577,12 @@ def recommended_steps(dataset_id, train_type=None, variant=None) -> int:
         # recette slider d'Ostris (500 steps, « rarement au-dessus de 1000 ») ;
         # le trainer moderne entraîne les deux polarités à chaque step.
         return SLIDER_DEFAULT_STEPS
+    policy = _preset_steps_policy(ds) if ds is not None else None
+    if policy:
+        if 'fixed_steps' in policy:
+            return policy['fixed_steps']
+        target = n * policy['per_image']
+        return max(policy['min_steps'], min(policy['max_steps'], target))
     if ds is not None and fds.is_style(ds):
         policy = _style_steps_policy(ds, train_type, variant)
         target = int(math.ceil((50 * max(n, 1)) / 100.0) * 100)
@@ -4966,7 +5606,8 @@ def recommended_steps_info(dataset_id, train_type=None, variant=None) -> dict:
     """Version « transparente » de recommended_steps pour l'UI : le nombre + le
     pourquoi, afin que l'app apprenne au débutant au lieu de décider en boîte
     noire. Ne mute rien."""
-    ds = FaceDataset.query.get(dataset_id)
+    ds = _train_context_view(
+        FaceDataset.query.get(dataset_id), train_type, variant)
     n = FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep').count()
     kind = (ds.kind or 'character') if ds is not None else 'character'
     steps = recommended_steps(dataset_id, train_type=train_type, variant=variant)
@@ -4978,6 +5619,20 @@ def recommended_steps_info(dataset_id, train_type=None, variant=None) -> dict:
                      "early if the sweep collapses.")
         return {'steps': steps, 'kind': kind, 'n_images': n, 'rationale': rationale,
                 'slider': True}
+    policy = _preset_steps_policy(ds) if ds is not None else None
+    if policy:
+        if 'fixed_steps' in policy:
+            rationale = (
+                f"{kind.title()} preset — fixed {steps} steps, independent of the "
+                f"{n} kept images; inspect the announced checkpoints.")
+        else:
+            views = round(steps / n, 1) if n else 0
+            rationale = (
+                f"{kind.title()} preset — {policy['per_image']} steps/image, clamped "
+                f"{policy['min_steps']}–{policy['max_steps']} ({n} kept images, "
+                f"~{views}/img here).")
+        return {'steps': steps, 'kind': kind, 'n_images': n,
+                'rationale': rationale, **policy}
     if kind == 'style' and ds is not None:
         policy = _style_steps_policy(ds, train_type, variant)
         views = round(steps / n, 1) if n else 0
@@ -5097,10 +5752,11 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     warning about a mask nobody asked for is exactly the noise that teaches people
     to click through preflights."""
     from .face_variations import caption_has_identity_leak
-    ds = fds.get_dataset(user_id, dataset_id)
-    if not ds:
+    stored_ds = fds.get_dataset(user_id, dataset_id)
+    if not stored_ds:
         raise ValueError('dataset not found')
-    ttype = _train_type(ds, train_type)
+    ttype = _train_type(stored_ds, train_type)
+    ds = _train_context_view(stored_ds, ttype, variant)
     label = _FAMILY_LABEL.get(ttype, ttype)
     blockers, warnings = [], []
     checks = []
@@ -5131,6 +5787,14 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     rows = FaceDatasetImage.query.filter_by(dataset_id=dataset_id).all()
     kept = [r for r in rows if r.status == 'keep' and r.filename]
     n = len(kept)
+    if (_optimizer_eff(ds) == 'automagic3'
+            and (lane or 'local') != 'cloud'
+            and not _aitoolkit_supports_automagic3()):
+        message = ("Automagic3 is selected, but this ai-toolkit checkout does not "
+                   "provide it. Update ai-toolkit (git pull) or choose another optimizer.")
+        _machine_warn(message)
+        _check('automagic3', 'Automagic3 available', 'fail', message,
+               'gf-training', bypassable=False, scope='machine')
     # CONCEPT / STYLE : plusieurs dimensions ci-dessous (équilibre de composition,
     # fuite d'identité) sont des heuristiques de LoRA PERSONNAGE sans objet quand
     # l'invariant du set n'est pas une identité — on les saute pour ne pas générer
@@ -5244,17 +5908,15 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         else:
             _check('captioned', 'Every kept image captioned', 'ok', f'{n}/{n} captioned')
 
-    # 3ter) DUAL CAPTIONS vs famille. Krea/Anima pré-cachent les embeddings de texte et
-    # déchargent l'encodeur : la caption courte n'a aucun encodeur pour la lire, et l'émettre
-    # quand même faisait planter le run au 1er step (issue #22, 1Tomber). La combinaison est
-    # refusée à la construction de la config — on le DIT ici, avant le launch, plutôt que de
-    # laisser l'utilisateur croire qu'il entraîne sur deux libellés. scope='dataset' : c'est
-    # une propriété de la recette de famille, vraie sur n'importe quelle voie.
+    # 3ter) DUAL CAPTIONS vs effective recipe. A family default or a selected preset
+    # may pre-cache text embeddings and unload the encoder: the short caption then
+    # has no encoder to read it, and emitting it used to crash at step 1 (issue #22).
+    # Say so before launch instead of pretending the second caption will train.
     # Slider mode is excluded: its guided loss ignores captions entirely, and the
     # 'captioned' row above already says so — a second row promising two wordings would
     # contradict it.
     if fds.dual_captions_enabled(ds) and not slider:
-        if ttype in DUAL_CAPTION_UNSUPPORTED_FAMILIES:
+        if _cache_text_embeddings_eff(ds, ttype):
             warnings.append(
                 f'Dual captions are ON but {label} cannot train them — it pre-caches its '
                 'text embeddings and unloads the text encoder, so only the long caption is '
@@ -5683,7 +6345,7 @@ def _watch_training(app, proc, log_path, dataset_id) -> None:
     file (libère ComfyUI / lance le suivant) DÈS la fin, sans dépendre du polling
     client. Sur un crash (rc≠0), remonte la fin du log. process_training_queue()
     reste le filet de secours si Flask redémarre (le watcher meurt, le flag est
-    rattrapé au prochain poll ou à l'expiration du TTL)."""
+    rattrapé au prochain poll ou à la récupération de démarrage)."""
     try:
         proc.wait()
         rc = proc.returncode
@@ -5764,7 +6426,8 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # l'optimizer partagé (incident Test/Test 2). Un pid mort avec flag encore
     # levé (avance de file) passe : on ne bloque que sur un process réellement vivant.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError('a training is already in progress - wait for it to finish or queue this dataset')
     # Cheap refusal BEFORE the dataset export below: re-exporting a whole dataset
     # only to reject the launch under the spawn lock would burn minutes of disk
@@ -5795,6 +6458,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         variant = recipe['variant']
     elif variant not in _valid_variants_for(launch_fam):
         variant = _default_variant_for(launch_fam)
+    launch_view = _train_context_view(ds, launch_fam, variant)
     if train_type is not None:
         ds.train_type = train_type
     # Conversion diffusers : UNIQUEMENT pour Z-Image (SDXL = single-file direct,
@@ -5853,6 +6517,11 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before training an Anima LoRA.")
+    if (_optimizer_eff(launch_view) == 'automagic3'
+            and not _aitoolkit_supports_automagic3()):
+        raise ValueError(
+            "ai-toolkit doesn't support Automagic3 yet - update it (git pull) "
+            "or choose another optimizer before training.")
     # Slider mode (Beta) : the modern `concept_slider` trainer is an ai-toolkit
     # EXTENSION — an older install would crash at job boot on the unknown process
     # type. Refuse early with the fix, like the krea2/flux2klein arch guards.
@@ -5912,35 +6581,23 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     # check under `_queue_lock` refused it. Two reads of an in-memory flag; the
     # copy inside the lock stays the authority, this one only saves the work.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError(
             'a training is already in progress - wait for it to finish or '
             'queue this dataset')
     _prepared = checkpoint_registry.prepare_launch(
         user_id, dataset_id, base_model=base_model)
-    # ai-toolkit is about to claim the card. Give back the vision model's
-    # 7.5 GB if an isolated call leased it warm (no-op without a live lease).
-    #
-    # OUTSIDE `_queue_lock`, and it must stay outside: a live lease makes this an
-    # HTTP POST to Ollama with `timeout=(10, 30)` retried once — up to ~80 s of
-    # blocking. Held under the lock, that froze Stop, enqueue/dequeue and queue
-    # advancement for as long as Ollama took to answer: pressing Stop during a
-    # launch did nothing until the unload returned. Nothing here depends on the
-    # lock (the vision-pass guard already ran above), and the ordering that
-    # matters — VRAM handed back BEFORE Popen — is unchanged.
-    try:
-        from .vision_keepalive import revoke as _revoke_vision
-        _revoke_vision('training starting')
-    except Exception:
-        logger.warning('vision keep-warm revoke failed before training start',
-                       exc_info=True)
-    # The authoritative live-run check, identity state and PID publication are
-    # one transition under the SAME lock used by Stop and queue advancement.
-    # This closes both races: two launches spawning together, and a stale Stop
-    # clearing the identity of the next queued process between Popen and PID set.
-    with _queue_lock:
+    # The training queue lock serializes launch/Stop ownership; the shared GPU
+    # arbiter also covers vision's check -> flag handoff. Keep this lock order
+    # everywhere training launches: queue ownership first, GPU admission second.
+    # The verified Ollama handoff is intentionally *inside* both locks: releasing
+    # it before acquiring the shared arbiter would let a vision pass claim the
+    # GPU in the interval before Popen.
+    with _queue_lock, GPU_ARBITER_LOCK:
         if (queue_manager._get_system_state('training_in_progress', False)
-                and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+                and not _training_process_is_definitely_dead(
+                    queue_manager._get_system_state('training_pid', None))):
             raise ValueError(
                 'a training is already in progress - wait for it to finish or '
                 'queue this dataset')
@@ -5948,6 +6605,28 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
         # export above. Checked under the SAME lock as the live-run test so the
         # two GPU owners can never both believe they won the card.
         _assert_no_vision_pass_on_gpu()
+        # ComfyUI keeps rendering while its worker polls outside this lock. The
+        # durable queue state is therefore the admission record for an already
+        # running prompt as well as for a pending one.
+        if queue_manager.has_comfyui_work():
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'ComfyUI has queued or active work, so local training cannot take the GPU. '
+                'Wait for it to finish or cancel it safely first.')
+        try:
+            from .ollama_gpu_fence import ensure_released_for_comfy
+            ollama_released = ensure_released_for_comfy()
+        except Exception as exc:
+            logger.exception('could not verify Ollama GPU release before training')
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'Could not verify that Ollama released the GPU before local training. '
+                'Check Ollama, then try again.') from exc
+        if not ollama_released:
+            from ..gpu_window import GpuBusyError
+            raise GpuBusyError(
+                'Ollama still owns the GPU, so local training cannot start safely. '
+                'Wait for the vision task to finish or unload it, then try again.')
         # Provenance registry: record WHICH dataset version this launch trains on
         # only after this request has won the process slot.
         # Honest provenance: a launch waved through despite a readiness blocker
@@ -5989,8 +6668,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                 cwd=str(_aitoolkit_dir()), env=env, shell=False,
                 stdout=logf, stderr=subprocess.STDOUT,
                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-            queue_manager._set_system_state(
-                'training_pid', proc.pid, ttl_seconds=_TRAIN_STATE_TTL)
+            _record_training_process_identity(proc.pid)
         except (FileNotFoundError, OSError) as e:
             if logf is not None:
                 try:
@@ -6079,7 +6757,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     # (so ComfyUI never grabs the GPU between jobs).  Only a *live* PID blocks;
     # a dead predecessor is precisely the normal queued-continue transition.
     if queue_manager._get_system_state('training_in_progress', False):
-        previous_is_dead = not _pid_alive(
+        previous_is_dead = _training_process_is_definitely_dead(
             queue_manager._get_system_state('training_pid', None))
         if not (_allow_dead_predecessor and previous_is_dead):
             raise ValueError('a training is already in progress')
@@ -6164,7 +6842,9 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
         _live_geometry['rank'], _live_geometry['alpha'],
         network_type=_live_geometry.get('network_type'),
         lokr_factor=_live_geometry.get('lokr_factor'),
-        lokr_full_rank=_live_geometry.get('lokr_full_rank'))
+        lokr_full_rank=_live_geometry.get('lokr_full_rank'),
+        conv=_live_geometry.get('conv'),
+        conv_alpha=_live_geometry.get('conv_alpha'))
     if _conflict:
         raise ValueError(_conflict)
     try:
@@ -6215,20 +6895,16 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
 
 
 def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
-    """Tue le process d'entraînement (s'il tourne) PUIS lève le flag → le
-    superviseur relance ComfyUI. L'ordre compte : si on levait le flag d'abord,
-    ComfyUI reprendrait le GPU pendant que l'entraînement tourne encore.
+    """Kill the local training process, then release its GPU ownership fence.
 
-    La vue Runs fournit dataset + jeton opaque. Les deux sont vérifiés SOUS le
-    même verrou que le kill : même si le run suivant utilise le même dataset,
-    une carte périmée ne peut pas l'arrêter. L'appel historique sans identité
-    reste un Stop global pour le gestionnaire de dataset."""
-    # Le verrou couvre TOUTE la transition, lecture/kill du PID compris. Sinon le
-    # watcher peut constater la mort entre le kill et le clear, entrer dans
-    # process_training_queue(), lancer le job suivant, puis voir Stop effacer ses
-    # flags. L'état « process arrêté + file vide + idle » doit devenir visible en
-    # une seule fois aux autres opérations de queue.
-    with _queue_lock:
+    The final state transition is deliberately fail-closed: a non-zero
+    taskkill result, a missing PID, or an unavailable PID probe leaves the
+    training fence in place. Releasing it without proof would let Vision or
+    ComfyUI allocate the GPU while ai-toolkit may still be running.
+    """
+    # Keep the launch lock order: training ownership first, then shared GPU
+    # admission. This makes the final clear atomic with Vision/ComfyUI admission.
+    with _queue_lock, GPU_ARBITER_LOCK:
         current_id = queue_manager._get_system_state('training_dataset_id', None)
         current_token = queue_manager._get_system_state('training_run_token', None)
         in_progress = bool(queue_manager._get_system_state(
@@ -6245,20 +6921,53 @@ def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
                 str(current_token), str(expected_run_token))
             if not in_progress or not token_ok:
                 return False
+
         pid = queue_manager._get_system_state('training_pid', None)
-        if pid:
+        pid_alive = _pid_alive(pid) if in_progress else False
+        if in_progress and pid_alive is None:
+            logger.error(
+                'stop_training: cannot prove whether training pid %r is still alive; '
+                'keeping the GPU fence', pid)
+            return False
+
+        if pid_alive:
+            # Recheck the birth-time identity immediately before the PID-only OS
+            # kill. If the old training exited and Windows recycled this PID between
+            # probes, the replacement is never a permitted taskkill target.
+            rechecked_pid_alive = _pid_alive(pid)
+            if rechecked_pid_alive is None:
+                logger.error(
+                    'stop_training: cannot re-prove training pid %r immediately before kill; ',
+                    'keeping the GPU fence', pid)
+                return False
+            pid_alive = rechecked_pid_alive
+
+        if pid_alive:
             try:
                 if os.name == 'nt':
-                    # /T tue aussi les sous-process (dataloaders, etc.).
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(int(pid))],
-                                   shell=False, capture_output=True)
+                    # /T terminates ai-toolkit children such as dataloaders too.
+                    completed = subprocess.run(
+                        ['taskkill', '/F', '/T', '/PID', str(int(pid))],
+                        shell=False, capture_output=True)
+                    if getattr(completed, 'returncode', 0) != 0:
+                        logger.warning(
+                            'stop_training: taskkill pid %s failed (rc=%s); '
+                            'keeping the GPU fence', pid,
+                            getattr(completed, 'returncode', None))
+                        return False
                 else:
                     os.kill(int(pid), 15)
-            except (ValueError, OSError) as e:
-                logger.warning(f"stop_training: kill pid {pid} échoué : {e}")
-        # Stop = arrêt voulu : on VIDE la file D'ABORD (sinon le prochain poll
-        # relancerait l'entraînement suivant), PUIS on lève le flag EN DERNIER
-        # (c'est lui qui signale à ComfyUI de reprendre le GPU).
+            except (ValueError, OSError) as exc:
+                logger.warning('stop_training: kill pid %s failed: %s', pid, exc)
+                return False
+
+            if not _wait_for_training_process_exit(pid):
+                logger.warning(
+                    'stop_training: pid %s did not become conclusively dead; '
+                    'keeping the GPU fence', pid)
+                return False
+
+        # Stop is intentional: clear the queue before publishing the idle state.
         _save_queue([])
         _clear_training_identity(ttl_seconds=None)
         return True
@@ -6399,16 +7108,29 @@ def _assert_no_vision_pass_on_gpu():
     Nothing raises and nothing OOMs — so a training started here would simply
     crawl for hours with no error to explain it. Refusing is the kinder failure.
 
-    The flag is TTL-bounded and cleared at startup (recover_stale_vision_window),
-    so this can never latch a training out permanently.
+    The persisted flag is TTL-bounded and cleared at startup. A process-local
+    companion stays closed while a currently running Vision window is alive,
+    including a transient heartbeat failure.
     """
-    if queue_manager._get_system_state('vision_in_progress', False):
-        from ..gpu_window import GpuBusyError
+    from ..gpu_window import GpuBusyError, vision_gpu_window_blocks_gpu
+    try:
+        active_vision_window = vision_gpu_window_blocks_gpu()
+    except Exception as exc:
+        raise GpuBusyError(
+            'Could not confirm whether a vision task owns the GPU; training was not started safely.'
+        ) from exc
+
+    if active_vision_window or queue_manager._get_system_state('vision_in_progress', False):
         raise GpuBusyError(
             'a vision pass (captioning, watermark or framing) is using the GPU - '
             'training would fight it for VRAM instead of failing outright, so it '
             'has to wait. Stop the pass, or queue this dataset and it will start '
             'by itself when the pass is done.')
+
+    if queue_manager.has_comfyui_stalled_barrier():
+        raise GpuBusyError(
+            'ComfyUI recovery is required before local training can take the GPU. '
+            'Recover ComfyUI, cancel the paused Test Studio job, then resume it.')
 
 
 def is_local_run_active(dataset_id) -> bool:
@@ -6567,7 +7289,8 @@ def retry_local_run(user_id, record_id, **confirmations) -> dict:
     # Run-in-progress → the exact collision message launch_training would raise,
     # surfaced before any preflight work.
     if (queue_manager._get_system_state('training_in_progress', False)
-            and _pid_alive(queue_manager._get_system_state('training_pid', None))):
+            and not _training_process_is_definitely_dead(
+                queue_manager._get_system_state('training_pid', None))):
         raise ValueError('a training is already in progress - wait for it to finish or queue this dataset')
     if _failed_local_record_id() != rec.id:
         raise ValueError('this run has no recorded failure to retry')
@@ -6817,7 +7540,8 @@ def training_progress(user_id, dataset_id, base_model=_PERSISTED, family=None,
     cur_id = queue_manager._get_system_state('training_dataset_id', None)
     active = (bool(queue_manager._get_system_state('training_in_progress', False))
               and cur_id is not None and int(cur_id) == int(dataset_id)
-              and _pid_alive(queue_manager._get_system_state('training_pid', None)))
+              and not _training_process_is_definitely_dead(
+                  queue_manager._get_system_state('training_pid', None)))
     log_path = _run_log_path(ds, base_model, family, variant)
     parsed = {'step': None, 'total': None, 'loss': None, 'speed': None, 'eta': None,
               'loss_curve': []}
@@ -6855,7 +7579,8 @@ TRAIN_QUEUE_KEY = 'lora_train_queue'
 _queue_lock = threading.RLock()
 
 _TRAIN_IDENTITY_KEYS = (
-    'training_pid', 'training_dataset_id', 'training_target_step',
+    'training_pid', 'training_pid_create_time', 'training_dataset_id',
+    'training_target_step',
     'training_run_token', 'training_train_type', 'training_variant',
     'training_base_model', 'training_effective_base',
     'training_training_adapter', 'training_recipe_version',
@@ -6869,12 +7594,90 @@ def _clear_training_identity(ttl_seconds=None) -> None:
         'training_in_progress', False, ttl_seconds=ttl_seconds)
 
 
-def _pid_alive(pid) -> bool:
+def _training_process_create_time(pid) -> float | None:
+    """Read a process birth time without ever treating an error as a death."""
     try:
         import psutil
-        return bool(pid) and psutil.pid_exists(int(pid))
-    except Exception:
+        return float(psutil.Process(int(pid)).create_time())
+    except Exception as exc:
+        logger.warning('Could not capture training process identity for pid %r: %s', pid, exc)
+        return None
+
+
+def _record_training_process_identity(pid) -> None:
+    """Persist a PID plus birth time so a later PID reuse cannot be killed."""
+    queue_manager._set_system_state(
+        'training_pid', int(pid), ttl_seconds=_TRAIN_STATE_TTL)
+    birth_time = _training_process_create_time(pid)
+    if birth_time is None:
+        logger.error(
+            'training pid %s has no durable birth-time identity; keeping its GPU '
+            'fence fail-closed after a restart', pid)
+        return
+    queue_manager._set_system_state(
+        'training_pid_create_time', birth_time, ttl_seconds=_TRAIN_STATE_TTL)
+
+
+def _pid_alive(pid) -> bool | None:
+    """Return True (exact training child), False (confirmed old child gone), or None.
+
+    A persisted PID alone is not safe after Flask restarts because Windows can
+    reuse it. The stored process creation time turns a reused PID into a
+    confirmed dead old training identity, never a process to terminate.
+    """
+    if not pid:
+        return None
+    try:
+        import psutil
+        process = psutil.Process(int(pid))
+        current_birth_time = float(process.create_time())
+    except Exception as exc:
+        # psutil.NoSuchProcess is the one reliable proof that this exact PID is
+        # gone. Everything else (access denied, bad state, import failure) keeps
+        # the durable GPU fence in place.
+        try:
+            import psutil
+            no_such_process = psutil.NoSuchProcess
+        except Exception:
+            no_such_process = ()
+        if no_such_process and isinstance(exc, no_such_process):
+            return False
+        logger.warning('Could not inspect training pid %r: %s', pid, exc)
+        return None
+
+    expected_raw = queue_manager._get_system_state(
+        'training_pid_create_time', None)
+    try:
+        expected_birth_time = float(expected_raw)
+    except (TypeError, ValueError):
+        logger.error(
+            'training pid %s lacks a durable birth-time identity; keeping the GPU '
+            'fence fail-closed', pid)
+        return None
+
+    if abs(current_birth_time - expected_birth_time) > 0.01:
+        logger.warning(
+            'training pid %s was reused (expected birth %.6f, got %.6f); '
+            'the old training is confirmed gone and will never be taskkilled',
+            pid, expected_birth_time, current_birth_time)
         return False
+    return True
+
+
+def _training_process_is_definitely_dead(pid) -> bool:
+    """Only a trustworthy negative PID probe may release the GPU fence."""
+    return _pid_alive(pid) is False
+
+
+def _wait_for_training_process_exit(pid, timeout_seconds=5.0) -> bool:
+    """Bounded proof that a successful kill actually released this PID."""
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if _training_process_is_definitely_dead(pid):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.1)
 
 
 def get_train_queue() -> list:
@@ -6929,6 +7732,7 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         var = recipe['variant']
     elif var not in _valid_variants_for(ttype):
         var = _default_variant_for(ttype)
+    queue_view = _train_context_view(ds, ttype, var)
     assert_zimage_custom_recipe_confirmed(
         ttype, base, var,
         allow_unverified_weights=allow_unverified_weights)
@@ -6980,6 +7784,11 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         raise ValueError(
             "ai-toolkit doesn't support Anima yet (anima arch missing) - "
             "update it (git pull) before queuing an Anima LoRA.")
+    if (_optimizer_eff(queue_view) == 'automagic3'
+            and not _aitoolkit_supports_automagic3()):
+        raise ValueError(
+            "ai-toolkit doesn't support Automagic3 yet - update it (git pull) "
+            "or choose another optimizer before queuing.")
     # Même garde-fou de collision qu'au lancement : pas de mise en file d'un job
     # qui partagerait le dossier de run d'un autre dataset (même trigger + base + recette).
     clash = find_run_collision(user_id, dataset_id, base_model=base, variant=var)
@@ -7107,15 +7916,15 @@ def _launch_queued_item(item) -> None:
                         allow_unverified_weights=bool(item.get('allow_unverified_weights')))
 
 
-def process_training_queue() -> str | None:
-    """Avance la file : si le training courant est FINI (process mort mais flag
-    encore levé), lance le suivant ; sinon, si rien ne tourne et la file n'est pas
-    vide, lance le prochain. À appeler périodiquement (le poll de /train/status le
-    fait). Retourne un libellé d'action ou None. SÉRIALISÉ par _queue_lock : sans
-    ça, le watcher et un poll /train/status peuvent avancer la file en même temps
-    → double-lancement du même entraînement."""
-    with _queue_lock:
+def recover_training_fence() -> str | None:
+    """Reconcile the durable local-training GPU fence at boot or poll time."""
+    with _queue_lock, GPU_ARBITER_LOCK:
         return _advance_training_queue()
+
+
+def process_training_queue() -> str | None:
+    """Advance queued training through the same boot-safe GPU recovery path."""
+    return recover_training_fence()
 
 
 def _snapshot_final_checkpoint(dataset_id, step, base_model=_PERSISTED,
@@ -7176,7 +7985,10 @@ def _advance_training_queue() -> str | None:
     q = get_train_queue()
 
     if flag:
-        if _pid_alive(pid):
+        pid_alive = _pid_alive(pid)
+        if pid_alive is not False:
+            # A failed PID probe is not evidence that ai-toolkit released
+            # the GPU, so it deliberately keeps the same durable fence.
             # Re-arm the 4h TTLs on every poll: without this, a training run
             # longer than 4h would see these flags silently expire mid-run,
             # and the GPU gate (job_queue / gpu_busy_reason) would think
@@ -7259,6 +8071,11 @@ def start_training_scheduler(app, interval_seconds=60):
     if _scheduler_started:
         return
     _scheduler_started = True
+    try:
+        with app.app_context():
+            recover_training_fence()
+    except Exception as exc:
+        logger.warning('training boot recovery failed closed: %s', exc)
 
     def _tick():
         import time

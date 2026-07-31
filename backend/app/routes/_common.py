@@ -6,6 +6,7 @@ from sqlalchemy.exc import IntegrityError
 
 from .. import capabilities
 from ..gpu_window import GpuBusyError
+from ..job_queue import ComfyUIRecoveryRequired, require_comfyui_enqueue_ready
 
 logger = logging.getLogger(__name__)
 
@@ -31,11 +32,11 @@ def _map_error(e: Exception):
     raise e
 
 
-def _require_comfyui():
+def _require_comfyui(*, force=False):
     """None if ComfyUI is reachable, else the (body, status) 409 to return.
     Shared by studio.py and datasets.py's lora-test routes that actually enqueue
     a ComfyUI job (run/resume) — read-only/history/DB-only routes stay ungated."""
-    comfy = capabilities.probe()['comfyui']
+    comfy = capabilities.probe(force=force)['comfyui']
     if not comfy['reachable']:
         # Two causes, two sentences: "not reachable / check the URL" was returned
         # for a ComfyUI that was up and merely slow to enumerate itself, which sent
@@ -45,6 +46,19 @@ def _require_comfyui():
         return jsonify({'error': ('ComfyUI is answering too slowly' if slow
                                   else 'ComfyUI is not reachable'),
                         'hint': comfy.get('hint') or 'Check the URL in Settings'}), 409
+    return None
+
+
+def _require_no_stalled_comfyui():
+    """Structured route guard for the durable ComfyUI recovery barrier."""
+    try:
+        require_comfyui_enqueue_ready()
+    except ComfyUIRecoveryRequired as e:
+        return jsonify({
+            'ok': False,
+            'code': 'comfyui_recovery_required',
+            'error': str(e),
+        }), 409
     return None
 
 

@@ -17,9 +17,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The notes are the diff of frontend/src/whatsNew.js against the
-          # PREVIOUS tag, so the job needs real history and every tag - the
-          # default shallow, tag-less checkout cannot resolve either.
+          # The notes are the diff of frontend/src/whatsNew.js against the tag of
+          # the LAST PUBLISHED GitHub release, so the job needs real history and
+          # every tag - the default shallow, tag-less checkout cannot resolve it.
           fetch-depth: 0
           fetch-tags: true
 
@@ -40,6 +40,8 @@ jobs:
       - name: Build the release notes from 🎁 What's new
         shell: pwsh
         working-directory: frontend
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Runs BEFORE the 10-minute build on purpose: a release that announces
           # nothing must fail in seconds, not after packaging a ZIP nobody will
@@ -49,7 +51,20 @@ jobs:
           $msg = git tag -l --format='%(contents)' "${{ github.ref_name }}"
           $extra = @()
           if ("$msg" -match '\[no-notes\]') { $extra += '--allow-empty' }
-          node scripts/releaseNotes.mjs --tag "${{ github.ref_name }}" --out ../release-notes.md @extra
+
+          # Failed tag workflows may leave newer Git tags with NO release. Diff
+          # from the last release users could actually download, never from the
+          # nearest tag in Git history.
+          $previousRelease = gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName'
+          if ($LASTEXITCODE -ne 0) {
+            throw "cannot resolve the previous published GitHub release (gh release list exited $LASTEXITCODE)"
+          }
+          $previousRelease = "$previousRelease".Trim()
+          if (-not $previousRelease) {
+            throw "cannot resolve the previous published GitHub release: gh release list returned no release"
+          }
+
+          node scripts/releaseNotes.mjs --tag "${{ github.ref_name }}" --prev $previousRelease --out ../release-notes.md @extra
           if ($LASTEXITCODE -ne 0) { throw "release notes generation failed (exit $LASTEXITCODE)" }
           # Same body in the run log, so an empty or wrong release is visible
           # from the Actions page without downloading anything.

@@ -29,8 +29,8 @@ from ..services.face_variations import (NSFW_VARIATION_CATALOG, VARIATION_CATALO
                                         sanitize_custom_shots,
                                         MAX_CUSTOM_SHOTS_PER_SUBJECT)
 from ..utils.comfyui import KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS, get_krea_loras
-from ._common import (_map_error, _require_comfyui, _studio_arch_mismatch_response,
-                      _studio_missing_response)
+from ._common import (_map_error, _require_comfyui, _require_no_stalled_comfyui,
+                      _studio_arch_mismatch_response, _studio_missing_response)
 
 bp = Blueprint('datasets', __name__, url_prefix='/api')
 
@@ -716,6 +716,10 @@ def dataset_generate(dataset_id):
     # first, since it ran the preflight itself).
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'ok': False, 'error': 'dataset not found'}), 400
+    if any(generator in svc.LOCAL_ENGINES for generator, _ in batches):
+        gate = _require_no_stalled_comfyui()
+        if gate:
+            return gate
     # Runs BEFORE any dispatch, and covers the MODEL FILES as well as the nodes:
     # generate_variations checks the assets itself, but by then the API batches of
     # a mixed run would already be in flight — the user would be told the batch
@@ -970,7 +974,11 @@ def dataset_image_caption_preview(dataset_id, image_id):
     ds = svc.get_dataset(LOCAL_USER, dataset_id)
     if not ds:
         return jsonify({'error': 'not found'}), 404
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    elif not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
     active = dataset_activity.get(dataset_id)
     if active and active.get('kind') in dataset_activity.CANCELLABLE_KINDS:
         return jsonify({'error': 'a captioning batch is in progress on this dataset'}), 409
@@ -979,7 +987,7 @@ def dataset_image_caption_preview(dataset_id, image_id):
         with gpu_exclusive_vision_window(flag_ttl=600):
             result = svc.preview_caption(
                 LOCAL_USER, dataset_id, image_id,
-                backend=data.get('backend'), ollama_model=data.get('ollama_model'),
+                backend=data.get('backend'), ollama_model=data.get('ollama_model', ''),
                 vocabulary=data.get('vocabulary'), instructions=data.get('instructions'),
                 should_cancel=lambda: dataset_activity.cancel_requested(dataset_id))
     except Exception as e:
@@ -1001,6 +1009,20 @@ def dataset_analyze_faces(dataset_id):
         return _map_error(e)
     return jsonify({'ok': True, 'states': counts, 'analyzed': sum(counts.values()),
                     'scoring_error': scoring_error})
+
+
+@bp.post('/dataset/image/<int:image_id>/analyze-face')
+def dataset_image_analyze_face(image_id):
+    if image_id > (1 << 63) - 1:
+        return jsonify({'error': 'not found'}), 404
+    # CPU (onnxruntime CPU-only) -> no GPU-exclusive window or ComfyUI pause.
+    try:
+        result = svc.analyze_image_face(LOCAL_USER, image_id)
+    except Exception as e:
+        return _map_error(e)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
 
 
 @bp.post('/dataset/<int:dataset_id>/watermarks/detect')
@@ -1163,8 +1185,30 @@ def dataset_delete(dataset_id):
 def dataset_cancel(dataset_id):
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
-    n = svc.cancel_pending(LOCAL_USER, dataset_id)
-    return jsonify({'ok': True, 'cancelled': n})
+    result = svc.cancel_pending(LOCAL_USER, dataset_id)
+    return jsonify({'ok': True, **result})
+
+
+@bp.post('/dataset/<int:dataset_id>/confirm-comfyui-restart')
+def dataset_confirm_comfyui_restart(dataset_id):
+    """Resolve an unknown generation submission after an explicit restart."""
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed_comfyui_restart') is not True:
+        return jsonify({
+            'error': 'Confirm that you restarted ComfyUI before clearing this paused job.',
+        }), 400
+    # Confirmation is meaningful only when the replacement ComfyUI answers now.
+    gate = _require_comfyui(force=True)
+    if gate:
+        return gate
+    try:
+        cancelled = svc.confirm_unknown_generation_restart(
+            LOCAL_USER, dataset_id, restart_confirmed=True)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, 'cancelled': cancelled})
 
 
 @bp.post('/dataset/image/<int:image_id>/delete')
@@ -1237,6 +1281,9 @@ def dataset_klein_model_set(dataset_id):
 @bp.post('/dataset/image/<int:image_id>/improve')
 def dataset_image_improve(image_id):
     """Create a regular Klein-upscaled candidate without touching the source."""
+    gate = _require_no_stalled_comfyui()
+    if gate:
+        return gate
     try:
         result = svc.improve_existing_image(LOCAL_USER, image_id)
     except Exception as e:
@@ -1258,6 +1305,9 @@ def dataset_image_reimprove(image_id):
 
     The generic /regenerate route stays closed to these rows on purpose (it would
     restart from the dataset reference and make an unrelated variation)."""
+    gate = _require_no_stalled_comfyui()
+    if gate:
+        return gate
     try:
         result = svc.reimprove_image(LOCAL_USER, image_id)
     except Exception as e:
@@ -1283,6 +1333,9 @@ def dataset_improve_batch(dataset_id):
     ids = data.get('image_ids')
     if not isinstance(ids, list):
         return jsonify({'error': 'image_ids must be a list'}), 400
+    gate = _require_no_stalled_comfyui()
+    if gate:
+        return gate
     try:
         result = svc.start_bulk_improve(
             current_app._get_current_object(), LOCAL_USER, dataset_id, ids)
@@ -1309,24 +1362,10 @@ def dataset_image_regenerate(image_id):
     klein_model = (data.get('klein_model') or '').strip() or None
     try:
         from flask import current_app
-        # Klein node preflight (skip when the user explicitly picked an API engine,
-        # which doesn't touch ComfyUI): surface a missing custom node as one 409
-        # instead of a silent failed re-roll. Fail-open if /object_info is down;
-        # combined with the model scan (same rationale as the batch generate).
-        if engine == 'krea':
-            # Krea's own preflight (weights + node pack). Explicit engine only:
-            # when none is given the service picks the row's origin, and its
-            # KreaModelsMissing is mapped below.
-            from ..services import krea_edit_helper as krh
-            try:
-                krh.preflight()
-            except krh.KreaModelsMissing as e:
-                return _krea_missing_response(e)
-        elif engine not in svc.API_ENGINES:
-            from ..services import klein_edit_helper as keh
-            missing_nodes = keh.klein_missing_nodes()
-            if missing_nodes:
-                return _klein_missing_response(keh.klein_missing_assets(), missing_nodes)
+        # `engine` is absent for an ordinary Retry. The service then resolves the
+        # stored row provenance (Krea/API tag or Klein model filename) before its
+        # target-specific preflight; doing a Klein check here would reject a Krea
+        # retry before it ever reached Krea's own preflight.
         job_id = svc.regenerate_image(LOCAL_USER, image_id,
                                       lora_strength=data.get('lora_strength'),
                                       prompt=edited_prompt,
@@ -1336,6 +1375,8 @@ def dataset_image_regenerate(image_id):
     except Exception as e:
         from ..services.klein_edit_helper import KleinModelsMissing
         from ..services.krea_edit_helper import KreaModelsMissing
+        if isinstance(e, svc.KleinNodesMissing):
+            return _klein_missing_response(e.missing, e.missing_nodes)
         if isinstance(e, KleinModelsMissing):
             return _klein_missing_response(e.missing)  # auto-download, tell them to retry
         if isinstance(e, KreaModelsMissing):
@@ -1634,6 +1675,9 @@ def lora_test_run(dataset_id):
     gate = _require_comfyui()
     if gate:
         return gate
+    gate = _require_no_stalled_comfyui()
+    if gate:
+        return gate
     d = request.get_json(silent=True) or {}
     try:
         res = lts.create_run(LOCAL_USER, dataset_id,
@@ -1682,9 +1726,30 @@ def lora_test_cancel(dataset_id):
     return jsonify({'ok': True, 'cancelled': n})
 
 
+@bp.post('/dataset/<int:dataset_id>/lora-test/confirm-comfyui-restart')
+def lora_test_confirm_comfyui_restart(dataset_id):
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    data = request.get_json(silent=True) or {}
+    if data.get('confirmed_comfyui_restart') is not True:
+        return jsonify({'error': 'Confirm that you restarted ComfyUI before clearing this paused job.'}), 400
+    gate = _require_comfyui(force=True)
+    if gate:
+        return gate
+    try:
+        cancelled = lts.confirm_unknown_comfyui_restart(
+            LOCAL_USER, dataset_id=dataset_id, restart_confirmed=True)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, 'cancelled': cancelled, 'resumable': True})
+
+
 @bp.post('/dataset/<int:dataset_id>/lora-test/resume')
 def lora_test_resume(dataset_id):
     gate = _require_comfyui()
+    if gate:
+        return gate
+    gate = _require_no_stalled_comfyui()
     if gate:
         return gate
     if not svc.get_dataset(LOCAL_USER, dataset_id):

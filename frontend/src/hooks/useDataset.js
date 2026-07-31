@@ -72,6 +72,21 @@ export async function postJson(url, body, isForm) {
   }
 }
 
+export function faceScoringErrorMessage(scoringError) {
+  const { kind, detail } = scoringError || {};
+  if (kind === 'unavailable') {
+    return 'Face scoring is not installed — run the Quality tools step in Setup.';
+  }
+  if (kind === 'subject_not_photographic') return detail || 'Face scoring is unavailable for this dataset.';
+  if (kind === 'busy') {
+    return 'Face scoring is already running. Wait for the current image to finish, then try again.';
+  }
+  if (kind === 'ref_unusable') return detail
+    ? `The reference photo is not usable for scoring: ${detail}`
+    : 'The reference photo is not usable for scoring.';
+  return detail ? `Face scoring failed: ${detail}` : 'Face scoring failed.';
+}
+
 /**
  * Compose the 🧽 Clean summary toast from the server's counts — PURE (no React,
  * no toast) so the honest-message logic is testable on its own.
@@ -145,9 +160,20 @@ export function useDataset() {
   // synchronous ref guard against a double-click enqueuing the same image twice.
   const [recaptioningIds, setRecaptioningIds] = useState(() => new Set());
   const recaptioningRef = useRef(new Set());
+  // Face scoring is GPU-heavy: allow one tile at a time and use a synchronous
+  // ref guard so rapid clicks cannot queue additional InsightFace work.
+  const [scoringFaceIds, setScoringFaceIds] = useState(() => new Set());
+  const scoringFaceRef = useRef(new Set());
   const [refNonce, setRefNonce] = useState(0);
   const pollRef = useRef(null);
   const busyRef = useRef(false); // re-entrancy guard for GPU-bound actions (I2)
+  // A retry must replay the exact request, including File objects temporarily
+  // attached to the modal. Keep those bytes in memory only for this browser
+  // session: persisting them in storage would be surprising and can leak space.
+  const referenceEditRetryRef = useRef(new Map());
+  // A ref retains transient File objects; this state tick makes availability
+  // reactive when a queued edit cannot be refreshed safely.
+  const [, bumpReferenceEditRetryRevision] = useState(0);
 
   const fetchList = useCallback(async () => {
     try {
@@ -540,7 +566,10 @@ export function useDataset() {
     setCaptioning(true);
     try {
       const d = await postJson(`/api/dataset/${currentId}/caption`, mode ? { mode } : {});
-      if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
+      if (!d.ok) {
+        toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
+        return;
+      }
       if (d.stopped) toast.info(`Stopped — ${d.captioned} captioned before you stopped; the rest stays uncaptioned.`);
       else toast.success(`${d.captioned} captioned`);
       await refresh();
@@ -556,7 +585,10 @@ export function useDataset() {
     setCaptioning(true);
     try {
       const d = await postJson(`/api/dataset/${currentId}/caption`, { force: true, ...(mode ? { mode } : {}) });
-      if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
+      if (!d.ok) {
+        toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
+        return;
+      }
       if (d.stopped) toast.info(`Stopped — ${d.captioned} re-captioned before you stopped; the rest keeps its previous caption.`);
       else toast.success(`${d.captioned} re-captioned`);
       await refresh();
@@ -625,17 +657,7 @@ export function useDataset() {
       // Un scorer cassé disait « 0 analyzed » en VERT : le backend remonte
       // maintenant scoring_error {kind, detail} — dire POURQUOI.
       if (d.scoring_error) {
-        const { kind, detail } = d.scoring_error;
-        toast.error(kind === 'unavailable'
-          ? 'Face scoring is not installed — run the Quality tools step in Setup.'
-          // The scorer can't read this KIND of image (a drawn face): the server's
-          // sentence already explains it and names the way out — pass it through
-          // verbatim rather than paraphrasing it into "failed".
-          : kind === 'subject_not_photographic'
-            ? detail
-          : kind === 'ref_unusable'
-            ? `The reference photo is not usable for scoring: ${detail}`
-            : `Face scoring failed: ${detail}`);
+        toast.error(faceScoringErrorMessage(d.scoring_error));
         return;
       }
       const grey = (d.states?.too_small || 0) + (d.states?.no_face || 0)
@@ -646,6 +668,46 @@ export function useDataset() {
       setAnalyzing(false);
     }
   }), [wrap, currentId, refresh, toast]);
+
+  // Score one image without launching the dataset-wide scan. Its busy state stays
+  // on this tile so independent curation actions remain available elsewhere.
+  const scoreFace = useCallback(async (imageId) => {
+    if (data?.face_scoring_blocked) {
+      const error = data.face_scoring_blocked;
+      toast.error(error);
+      return { ok: false, error };
+    }
+    if (scoringFaceRef.current.size > 0) {
+      return { ok: false, error: faceScoringErrorMessage({ kind: 'busy' }) };
+    }
+    scoringFaceRef.current.add(imageId);
+    setScoringFaceIds((prev) => {
+      const next = new Set(prev);
+      next.add(imageId);
+      return next;
+    });
+    try {
+      const d = await postJson(`/api/dataset/image/${imageId}/analyze-face`);
+      if (!d.ok) {
+        toast.error(d.scoring_error ? faceScoringErrorMessage(d.scoring_error)
+          : (d.error || 'Unexpected error'));
+        return d;
+      }
+      if (d.scoring_error) {
+        toast.error(faceScoringErrorMessage(d.scoring_error));
+        return d;
+      }
+      await refresh();
+      return d;
+    } finally {
+      scoringFaceRef.current.delete(imageId);
+      setScoringFaceIds((prev) => {
+        const next = new Set(prev);
+        next.delete(imageId);
+        return next;
+      });
+    }
+  }, [data, refresh, toast]);
 
   // Watermark scan (Qwen3-VL, GPU window). Marks kept images with an overlaid
   // watermark → 🚩 badges + a "Clean (N)" button. Deletes nothing.
@@ -877,21 +939,43 @@ export function useDataset() {
   // the activity poll that tracks it. Returns false (with a toast) on a start
   // error; true once the job is queued.
   const editReference = useCallback(async (prompt, engine, files = []) => {
+    const retryRequest = { prompt, engine, files: Array.from(files || []) };
     const fd = new FormData();
-    fd.append('prompt', prompt);
-    fd.append('engine', engine);
-    files.forEach((f) => fd.append('ref', f));
+    fd.append('prompt', retryRequest.prompt);
+    fd.append('engine', retryRequest.engine);
+    retryRequest.files.forEach((f) => fd.append('ref', f));
     const d = await postJson(`/api/dataset/${currentId}/ref/edit`, fd, true);
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return false; }
-    await refresh();
+    // The server remembers the prompt and engine for display/recovery, but not
+    // request-scoped File objects. This snapshot is therefore the only honest
+    // way to offer an exact Retry without changing backend storage semantics.
+    referenceEditRetryRef.current.set(String(currentId), retryRequest);
+    bumpReferenceEditRetryRevision((revision) => revision + 1);
+    const refreshed = await refresh();
+    if (refreshed?.status !== 'applied') {
+      // The request was accepted, but stale status makes another Retry unsafe:
+      // remove the in-memory files and force the modal to disable it until refresh.
+      referenceEditRetryRef.current.delete(String(currentId));
+      bumpReferenceEditRetryRevision((revision) => revision + 1);
+      toast.warning('Edit queued, but its status could not be refreshed. Refresh the page before trying another edit.');
+      return false;
+    }
     return true;
   }, [currentId, refresh, toast]);
+
+  const retryReferenceEdit = useCallback(async () => {
+    const retryRequest = referenceEditRetryRef.current.get(String(currentId));
+    if (!retryRequest) return false;
+    return editReference(retryRequest.prompt, retryRequest.engine, retryRequest.files);
+  }, [currentId, editReference]);
 
   // Keep the ready candidate: the server atomically swaps the reference (old files
   // removed only after the new ones are on disk) and deletes the candidate.
   const keepEditedReference = useCallback(async () => {
     const d = await postJson(`/api/dataset/${currentId}/ref/edit/keep`, {});
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return false; }
+    referenceEditRetryRef.current.delete(String(currentId));
+    bumpReferenceEditRetryRevision((revision) => revision + 1);
     toast.success('Reference updated');
     await refresh();
     setRefNonce((n) => n + 1);
@@ -902,6 +986,8 @@ export function useDataset() {
   const discardEditedReference = useCallback(async () => {
     const d = await postJson(`/api/dataset/${currentId}/ref/edit/discard`, {});
     if (!d.ok) { toast.error(d.error || 'Unexpected error'); return false; }
+    referenceEditRetryRef.current.delete(String(currentId));
+    bumpReferenceEditRetryRevision((revision) => revision + 1);
     await refresh();
     return true;
   }, [currentId, refresh, toast]);
@@ -953,8 +1039,41 @@ export function useDataset() {
 
   const cancelPending = useCallback(async () => {
     const d = await postJson(`/api/dataset/${currentId}/cancel`);
-    if (d.ok) toast.success(`${d.cancelled} generation(s) cancelled`);
-    else toast.error(d.error || 'Unexpected error');
+    if (d.ok && d.recovery_error) {
+      toast.error(
+        `${d.recovery_error} generation(s) was preserved because LDS found an invalid ` +
+        'ComfyUI recovery record. Do not delete the cards; check the server logs before retrying.'
+      );
+    } else if (d.ok && d.restart_required) {
+      toast.error(
+        `${d.restart_required} generation(s) has an unknown ComfyUI submission. ` +
+        'Restart ComfyUI, then confirm the restart; LDS kept the card so recovery stays safe.'
+      );
+      const confirmed = globalThis.confirm?.(
+        'ComfyUI must be restarted before LDS can safely clear this generation.\n\n' +
+        'Click OK only if you have now restarted ComfyUI and it is responding.'
+      );
+      if (confirmed) {
+        const recovered = await postJson(
+          `/api/dataset/${currentId}/confirm-comfyui-restart`,
+          { confirmed_comfyui_restart: true },
+        );
+        if (recovered.ok) {
+          toast.success(`${recovered.cancelled} paused generation(s) recovered`);
+        } else {
+          toast.error(recovered.error || 'ComfyUI restart recovery failed');
+        }
+      }
+    } else if (d.ok && d.retry_pending) {
+      toast.error(
+        `${d.retry_pending} generation(s) still await exact ComfyUI recovery. ` +
+        'The cards were preserved — wait for ComfyUI to respond, then press Stop again.'
+      );
+    } else if (d.ok) {
+      toast.success(`${d.cancelled} generation(s) cancelled`);
+    } else {
+      toast.error(d.error || 'Unexpected error');
+    }
     await refresh();
   }, [currentId, refresh, toast]);
 
@@ -962,26 +1081,16 @@ export function useDataset() {
   // AND failed tiles — it is the recovery path for failures. `prompt` (optional)
   // is the user-edited core prompt from the tile's ✏️ bubble; omitted → the
   // server reuses the row's / label's prompt (plain 🔄 and reject→regenerate).
-  // The generator CURRENTLY selected in the workspace (persisted by
-  // VariationCatalog) is sent along so the regenerate follows the user's
-  // selection instead of being pinned to the engine that made the tile.
-  // Missing keys = server keeps the legacy reuse-the-row's-engine behaviour.
-  // The Klein MODEL is deliberately NOT sent any more: it used to ride from
-  // localStorage (editPage_flux2KleinModel_v1), which could contradict the
-  // dataset's own pick on the one path that reads it (a row born on an API
-  // engine switching to Klein). The server resolves that from the dataset now —
-  // one setting, one answer.
+  // A normal retry intentionally does NOT send the workspace generator. Each
+  // row owns its provenance (API/Klein/Krea) and the server reuses it; otherwise
+  // retrying a failed Krea card after selecting Nano Banana would silently bill
+  // the API and change its rendering lane.
   /* Returns {ok, error}, and `silent` is for the ✏️ edit-prompt bubble: it shows
      the refusal itself, right under the prompt it was about, instead of losing a
      hand-written rewrite to a toast that names no field. */
   const regenerate = useCallback(async (imageId, loraStrength, prompt, { silent = false } = {}) => {
-    let engine = null;
-    try {
-      engine = localStorage.getItem('datasetGenerator') || null;
-    } catch { /* private mode — legacy behaviour */ }
     const d = await postJson(`/api/dataset/image/${imageId}/regenerate`,
-      { lora_strength: loraStrength, ...(prompt ? { prompt } : {}),
-        ...(engine ? { engine } : {}) });
+      { lora_strength: loraStrength, ...(prompt ? { prompt } : {}) });
     if (d.ok) { toast.success('Regeneration started'); await refresh(); return { ok: true }; }
     const error = d.error || 'Unexpected error';
     if (!silent) toast.error(error);
@@ -1332,13 +1441,15 @@ export function useDataset() {
   const watermarkingLive = watermarking
     || actKind === 'watermark_detect' || actKind === 'watermark_clean';
   const busyLive = busy || !!activity;
+  const canRetryReferenceEdit = referenceEditRetryRef.current.has(String(currentId));
+
 
   return { datasets, currentId, data, busy: busyLive, localBusy: busy, captioning: captioningLive,
            analyzing: analyzingLive, watermarking: watermarkingLive, activity,
-           nonces, mirroringIds, refNonce, recaptioningIds, create, open,
+           nonces, mirroringIds, refNonce, scoringFaceIds, recaptioningIds, create, open,
            deleteDataset, updateSettings, setCurrentId, setRef, addExtraRef, removeExtraRef,
            generate, importFiles, scrapeImport, resolveSmallImageRescue, improveImage, reimproveImage, improveBatch, classify, caption, recaption, recaptionImages,
-           setStatus, setCaption, mirrorImage, rotateImage, crop, cropRef, cropExtraRef, recropRefAuto, editReference, keepEditedReference, discardEditedReference, setDatasetTrainType, setDatasetFidelity, deleteImage, batchImages, replaceCaptions, writeCaptionFiles, openDatasetFolder, cancelPending, cancelCaption, regenerate, analyzeFaces,
+           setStatus, setCaption, mirrorImage, rotateImage, crop, cropRef, cropExtraRef, recropRefAuto, editReference, retryReferenceEdit, canRetryReferenceEdit, keepEditedReference, discardEditedReference, setDatasetTrainType, setDatasetFidelity, deleteImage, batchImages, replaceCaptions, writeCaptionFiles, openDatasetFolder, cancelPending, cancelCaption, regenerate, analyzeFaces, scoreFace,
            findWatermarks, cleanWatermarks, cleanWatermarkImages, restoreWatermarkImage, dismissWatermarks, saveWatermarkRegions,
            purgeUnused, exportZip, exportBackup, exportZipFor, exportBackupFor, importBackup, importDatasetZip, importDatasetFolder,
            backupEverything, backupJob, downloadBackup, openBackupsFolder, dismissBackup, restoreJob, dismissRestore,

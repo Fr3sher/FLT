@@ -153,6 +153,26 @@ def get_vision_model() -> str:
     return cfg.get('ollama.vision_model') or 'huihui_ai/qwen3-vl-abliterated:8b-instruct'
 
 
+class LocalOllamaFenceError(RuntimeError):
+    """A local inference lost its verified Vision GPU ownership."""
+
+
+def _admit_local_ollama(url, model) -> None:
+    """Record a local request and renew its outer Vision ownership when present."""
+    from . import ollama_gpu_fence
+    scope = ollama_gpu_fence.mark_before_generate(url, model)
+    if scope == 'blocked':
+        raise LocalOllamaFenceError(
+            'A local Ollama model is already in use outside LDS. LDS will not change it; '
+            'unload it first or configure a dedicated Ollama endpoint for LDS.')
+    if scope != 'local':
+        return
+    from ..gpu_window import renew_gpu_exclusive_vision_window, vision_window_is_owned
+    if vision_window_is_owned() and not renew_gpu_exclusive_vision_window():
+        raise LocalOllamaFenceError(
+            'The Vision GPU window expired before Ollama could start safely.')
+
+
 def describe_image_ollama(image_bytes: bytes, prompt: str, *,
                           ollama_url: str | None = None,
                           model: str | None = None,
@@ -197,12 +217,13 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
         return ''
     try:
         url = (ollama_url or _ollama_url()).rstrip('/')
+        model_name = model or get_vision_model()
         # Every valid source was converted above to a bounded, metadata-free JPEG.
         # Without this, WebP dataset bytes hit HTTP 400 "Failed to load image or
         # audio file" on llama.cpp-backed runners (issue #6).
         b64 = base64.b64encode(prepared).decode('ascii')
         payload = {
-            'model': model or get_vision_model(),
+            'model': model_name,
             'prompt': prompt,
             'images': [b64],
             'stream': False,
@@ -215,6 +236,7 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
         # stops the abliterated model from rambling prose instead of the object.
         if fmt:
             payload['format'] = fmt
+        _admit_local_ollama(url, model_name)
         resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -248,6 +270,8 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
                 return '\n\n'.join(parts[-3:])
             return parts[-1]
         return ''
+    except LocalOllamaFenceError:
+        raise
     except Exception as e:
         # If Ollama answered with a 4xx/5xx it told us WHY in the body — carry that
         # exact reason into both the log and the user-facing error. '' when the
@@ -262,7 +286,7 @@ def describe_image_ollama(image_bytes: bytes, prompt: str, *,
                 logger.warning('vision_ollama: %s', reject)
                 raise RuntimeError(reject) from e
             from . import ollama_control
-            ready = ollama_control.ensure_captioning_ready()
+            ready = ollama_control.ensure_captioning_ready(model=model_name)
             if not ready.get('ok'):
                 raise RuntimeError(ready.get('error') or 'Ollama is unavailable') from e
             retried = describe_image_ollama(
@@ -298,8 +322,9 @@ def generate_text_ollama(prompt: str, *,
     extraction as describe_image_ollama so the -instruct answer is read correctly."""
     try:
         url = (ollama_url or _ollama_url()).rstrip('/')
+        model_name = model or get_vision_model()
         payload = {
-            'model': model or get_vision_model(),
+            'model': model_name,
             'prompt': prompt,
             'stream': False,
             'options': {'temperature': 0.3, 'num_ctx': int(num_ctx),
@@ -307,6 +332,7 @@ def generate_text_ollama(prompt: str, *,
                         'repeat_penalty': float(repeat_penalty)},
             'keep_alive': keep_alive,
         }
+        _admit_local_ollama(url, model_name)
         resp = requests.post(f'{url}/api/generate', json=payload, timeout=timeout)
         resp.raise_for_status()
         data = resp.json()
@@ -324,30 +350,52 @@ def generate_text_ollama(prompt: str, *,
 
 
 def unload_vision_model(*, ollama_url: str | None = None, model: str | None = None) -> bool:
-    """Décharge le modèle vision d'Ollama (libère la VRAM). À appeler à la FIN d'un
-    batch caption/classify (où les appels ont gardé le modèle chaud via keep_alive)
-    AVANT que ComfyUI reprenne le GPU, sinon le modèle resterait chargé et ComfyUI
-    pourrait manquer de VRAM. Retente une fois car un unload raté = ~5 min résident
-    (keep_alive). Retourne True si l'appel a réussi."""
+    """Release all LDS-owned local Vision models and verify their absence.
+
+    For a configured remote Ollama endpoint, no local GPU is involved, so this
+    keeps the old targeted best-effort semantics but still requires a strict
+    successful HTTP acknowledgement. Local ownership is delegated to the fence:
+    a bare call releases every tracked custom model, not just today's default.
+    """
     try:
-        url = (ollama_url or _ollama_url()).rstrip('/')
-        payload = {'model': model or get_vision_model(), 'keep_alive': 0}
-    except Exception as e:
-        logger.warning('vision_ollama: unload url/model resolution échouée : %s', e)
+        url = ollama_url or _ollama_url()
+        if not isinstance(url, str) or not url.strip():
+            raise ValueError('invalid Ollama URL')
+        url = url.rstrip('/')
+    except Exception as exc:
+        logger.warning('vision_ollama: unload url/model resolution failed: %s', exc)
         return False
-    # Whatever the outcome, this process is no longer *asking* for the model to
-    # stay resident: drop any keep-warm lease so a later revoke() doesn't fire a
-    # second, pointless unload. Batch passes end with this call, which is exactly
-    # where their (unleased) warm period ends too.
-    try:
-        from .vision_keepalive import forget_lease
-        forget_lease()
-    except Exception:
-        pass
+
+    from . import ollama_gpu_fence
+    # With no explicit endpoint a batch's finally must release every local LDS
+    # model it used, including a custom model that differs from current Settings.
+    # A RESOLVED remote endpoint must still be passed to the fence so it returns
+    # None and lets the targeted remote keep_alive=0 POST below run. For a resolved
+    # local endpoint, keep the bare-call "all LDS-owned local models" behavior.
+    scope, _ = ollama_gpu_fence._endpoint_scope(url)
+    fence_url = url if ollama_url is not None or scope == 'remote' else None
+    released = ollama_gpu_fence.release_owned_models(
+        ollama_url=fence_url,
+        model=model)
+    if released is not None:
+        if released:
+            from .vision_keepalive import forget_lease
+            forget_lease()
+        return released
+
+    # Remote Ollama: it cannot contend with this machine's ComfyUI GPU. Keep the
+    # request narrowly targeted and never use the local residency registry.
+    payload = {'model': model or get_vision_model(), 'keep_alive': 0}
     for attempt in (1, 2):
         try:
-            requests.post(f'{url}/api/generate', json=payload, timeout=(10, 30))
-            return True
-        except Exception as e:
-            logger.warning('vision_ollama: unload attempt %d échoué : %s', attempt, e)
+            response = requests.post(f'{url}/api/generate', json=payload, timeout=(10, 30))
+            status = getattr(response, 'status_code', None)
+            if type(status) is int and 200 <= status < 300:
+                from .vision_keepalive import forget_lease
+                forget_lease()
+                return True
+            logger.warning('vision_ollama: remote unload attempt %d returned invalid/non-2xx status %r',
+                           attempt, status)
+        except Exception as exc:
+            logger.warning('vision_ollama: remote unload attempt %d failed: %s', attempt, exc)
     return False

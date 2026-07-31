@@ -1176,6 +1176,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 <DatasetGrid images={gridImages} datasetId={d.id} onStatus={ds.setStatus} onCaption={ds.setCaption}
                   onCrop={setCropImg} onDelete={ds.deleteImage}
                   onMirror={ds.mirrorImage} mirroringIds={ds.mirroringIds}
+                  onScoreFace={ds.scoreFace} scoringFaceIds={ds.scoringFaceIds}
                   onRegenerate={(id, loraStrength, prompt, opts) => ds.regenerate(id, loraStrength, prompt, opts)}
                   onReimprove={ds.reimproveImage} onView={setViewImg}
                   onBatch={ds.batchImages} busy={ds.busy}
@@ -1938,7 +1939,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
           engineReason={(e) => localEngineUnavailableReason(e, caps)}
           datasetExtraCount={(d.ref_extra_filenames || []).length}
           liveActivity={ds.activity} referenceEdit={d.reference_edit}
-          onEdit={ds.editReference} onKeep={ds.keepEditedReference} onDiscard={ds.discardEditedReference}
+          onEdit={ds.editReference} onRetry={ds.retryReferenceEdit}
+          canRetry={ds.canRetryReferenceEdit}
+          onKeep={ds.keepEditedReference} onDiscard={ds.discardEditedReference}
           onClose={() => setRefEdit(false)} />
       )}
       {extraRefCrop && extraRefCropSource(d.ref_extra_filenames, d.ref_extra_crop_sources, extraRefCrop) && (
@@ -1989,7 +1992,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onClose={() => setFolderBrowseOpen(false)} />
       )}
       {captionOptionsOpen && (
-        <CaptionOptionsPopover datasetId={d.id}
+        <CaptionOptionsPopover datasetId={d.id} trainType={d.train_type}
           onClose={() => setCaptionOptionsOpen(false)} />
       )}
       {reviewQueue && reviewQueue.length > 0 && (

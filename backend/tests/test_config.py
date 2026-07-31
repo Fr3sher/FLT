@@ -69,7 +69,8 @@ def test_legacy_krea_default_pair_migrates_on_read_and_persists_on_next_save(tmp
     # Reads do not rewrite user configuration, but the corrected profile applies
     # immediately to generation on an upgraded install.
     assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 1.0
+    assert config.get('krea.ref_boost') == 0.25
+    assert config.get('krea.steps') == 8
     untouched = json.loads(path.read_text(encoding='utf-8'))
     assert untouched['krea'] == {'grounding_px': 1024, 'ref_boost': 4.0}
 
@@ -77,8 +78,37 @@ def test_legacy_krea_default_pair_migrates_on_read_and_persists_on_next_save(tmp
     config.save_config({'server': {'port': 5051}})
     saved = json.loads(path.read_text(encoding='utf-8'))['krea']
     assert saved['grounding_px'] == 512
-    assert saved['ref_boost'] == 1.0
+    assert saved['ref_boost'] == 0.25
+    assert saved['steps'] == 8
     assert saved['calibration_version'] == config.KREA_CALIBRATION_VERSION
+
+
+def test_previous_krea_default_profile_migrates_but_a_v2_custom_profile_survives(
+        tmp_path, monkeypatch):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'krea': {
+        'calibration_version': 2, 'grounding_px': 512, 'ref_boost': 1.0, 'steps': 10,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 512
+    assert config.get('krea.ref_boost') == 0.25
+    assert config.get('krea.steps') == 8
+
+    path.write_text(json.dumps({'krea': {
+        'calibration_version': 2, 'grounding_px': 512, 'ref_boost': 0.5, 'steps': 8,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 512
+    assert config.get('krea.ref_boost') == 0.5
+    assert config.get('krea.steps') == 8
+
+    path.write_text(json.dumps({'krea': {
+        'calibration_version': 2, 'grounding_px': 1024, 'ref_boost': 4.0, 'steps': 10,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 10
 
 
 def test_a_custom_legacy_krea_calibration_is_not_rewritten(tmp_path, monkeypatch):
@@ -97,3 +127,14 @@ def test_a_custom_legacy_krea_calibration_is_not_rewritten(tmp_path, monkeypatch
     assert config.get('krea.ref_boost') == 4.0
     saved = json.loads(path.read_text(encoding='utf-8'))['krea']
     assert saved['calibration_version'] == config.KREA_CALIBRATION_VERSION
+
+
+def test_a_legacy_krea_pair_with_custom_steps_is_not_rewritten(tmp_path, monkeypatch):
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'krea': {
+        'grounding_px': 1024, 'ref_boost': 4.0, 'steps': 20,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 20
