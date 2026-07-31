@@ -29,6 +29,12 @@ import { continueAttemptOutcome } from '../utils/continueOutcome';
 import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
+  canRecheckFullTransformerDelivery,
+  fullTransformerArtifactView,
+  fullTransformerRecheckOutcome,
+  isFullTransformerRun,
+} from '../utils/trainingMode.js';
+import {
   TRASH_REMINDER,
   purgeAllResultMessage,
   purgeRunResultMessage,
@@ -134,13 +140,54 @@ function RunThumb({ run, broken, onBroken }) {
 
 /** error_pod_kept billing warning — INSIDE the concerned card (it used to be
  * an orphan full-width banner above the whole history). */
-function PodKeptNote() {
+function PodKeptNote({ fullModel = false }) {
   return (
     <div role="alert"
       className="w-full rounded-md border border-amber-400/40 bg-amber-500/10 px-2.5 py-2 text-amber-200 text-[0.6875rem] leading-relaxed">
       <span className="font-semibold">⚠ Pod kept for manual checkpoint recovery</span> — it keeps
-      billing until reaped. Download its LoRA, then it is cleaned up automatically after the
-      recovery window.
+      billing until reaped. {fullModel
+        ? 'Verify or recover the dense weights on Hugging Face before the recovery window expires.'
+        : 'Download its LoRA, then it is cleaned up automatically after the recovery window.'}
+    </div>
+  );
+}
+
+const FULL_ARTIFACT_TONE = {
+  success: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-100',
+  error: 'border-rose-400/45 bg-rose-500/10 text-rose-100',
+  warning: 'border-amber-400/45 bg-amber-500/10 text-amber-100',
+  info: 'border-sky-400/40 bg-sky-500/10 text-sky-100',
+};
+
+function FullArtifactStatus({ run, onRecheck, rechecking = false }) {
+  const view = fullTransformerArtifactView(run);
+  const canRecheck = canRecheckFullTransformerDelivery(run) && !!onRecheck;
+  return (
+    <div role={view.tone === 'error' || view.tone === 'warning' ? 'alert' : 'status'}
+      className={`w-full rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${FULL_ARTIFACT_TONE[view.tone]}`}>
+      <span className="font-semibold">{view.label}</span>
+      <span className="block opacity-90">{view.detail}</span>
+      {view.href && (
+        <a href={view.href} target="_blank" rel="noreferrer"
+          className="mt-1 inline-block font-semibold text-sky-200 underline hover:text-sky-100">
+          Open private model on Hugging Face ↗
+        </a>
+      )}
+      {!view.href && view.repositoryHref && (
+        <a href={view.repositoryHref} target="_blank" rel="noreferrer"
+          title="Ce lien ouvre seulement le dépôt : la présence des poids n’est pas encore vérifiée"
+          className="mt-1 inline-block font-semibold text-amber-100 underline hover:text-white">
+          Inspecter le dépôt HF (livraison non vérifiée) ↗
+        </a>
+      )}
+      {canRecheck && (
+        <button type="button" onClick={() => onRecheck(run)} disabled={rechecking}
+          className="mt-1.5 block rounded-md border border-amber-300/50 bg-amber-400/10 px-2.5 py-1 text-amber-50 font-semibold hover:bg-amber-400/20 disabled:opacity-40">
+          {rechecking
+            ? (view.cleanupPending ? 'Nettoyage du pod…' : 'Vérification HF…')
+            : (view.cleanupPending ? 'Réessayer le nettoyage' : 'Vérifier la livraison HF')}
+        </button>
+      )}
     </div>
   );
 }
@@ -235,6 +282,7 @@ export default function CloudRunsPage() {
   const location = useLocation();
   const [data, setData] = useState(null);
   const [stopping, setStopping] = useState({});     // run_id -> bool
+  const [recheckingDelivery, setRecheckingDelivery] = useState({});
   const [stoppingLocal, setStoppingLocal] = useState(false);
   // Recent-history depth. The 5 s poll stays light by default (15); "Load older
   // runs" bumps this on demand (backend caps the history at 100), so a long
@@ -361,7 +409,7 @@ export default function CloudRunsPage() {
   // less-cooked epoch is the flagship of the Continue dialog and easy to miss.
   useEffect(() => {
     const runs = [...(data?.actives || []), ...(data?.recent || [])];
-    if (runs.some((r) => r.status === 'done' && r.checkpoint_ready)) {
+    if (runs.some((r) => !isFullTransformerRun(r) && r.status === 'done' && r.checkpoint_ready)) {
       requestHelpTip('continue-any-epoch');
     }
   }, [data]);
@@ -415,9 +463,14 @@ export default function CloudRunsPage() {
 
   const stop = async (run) => {
     const who = run.dataset_name || run.run_name || `run #${run.run_id}`;
-    if (!window.confirm(`Stop the cloud run for “${who}”?\n\n`
-      + 'The pod is terminated. Any checkpoint reached so far is still downloaded '
-      + 'and importable — you only lose the remaining steps.')) return;
+    const fullModel = isFullTransformerRun(run);
+    const consequence = fullModel
+      ? 'AI Toolkit envoie le modèle dense vers Hugging Face seulement à la fin propre du run. '
+        + 'Le dernier checkpoint qui n’a pas encore été téléversé peut être définitivement perdu, '
+        + 'même si un checkpoint plus ancien existe déjà sur le Hub.'
+      : 'The pod is terminated. Any LoRA checkpoint reached so far is still downloaded '
+        + 'and importable — you only lose the remaining steps.';
+    if (!window.confirm(`Stop the cloud run for “${who}”?\n\n${consequence}`)) return;
     setStopping((m) => ({ ...m, [run.run_id]: true }));
     try {
       const d = await postJson('/api/dataset/train/cloud/stop', { run_id: run.run_id });
@@ -436,6 +489,32 @@ export default function CloudRunsPage() {
       20000);
     } finally {
       setStopping((m) => ({ ...m, [run.run_id]: false }));
+    }
+  };
+
+  // A dense upload can finish successfully while the final Hub verification is
+  // temporarily unable to authenticate. The pod is deliberately kept in that
+  // state; this action rechecks the durable artifact and lets the backend reap
+  // the pod only after a positive verification.
+  const recheckFullDelivery = async (run) => {
+    if (!canRecheckFullTransformerDelivery(run) || recheckingDelivery[run.run_id]) return;
+    setRecheckingDelivery((current) => ({ ...current, [run.run_id]: true }));
+    try {
+      const result = await postJson('/api/dataset/train/cloud/recheck-delivery', {
+        run_id: run.run_id,
+      });
+      const outcome = fullTransformerRecheckOutcome(result);
+      if (outcome.kind === 'error') toast.error(outcome.text);
+      else if (outcome.kind === 'success') toast.success(outcome.text);
+      else toast.info(outcome.text, outcome.kind === 'warning' ? 12000 : undefined);
+      if (outcome.kind === 'error') return;
+      await poll();
+    } catch (error) {
+      toast.error(error?.message
+        ? `Vérification Hugging Face impossible : ${error.message}`
+        : 'Vérification Hugging Face impossible. Le pod reste conservé et peut continuer à facturer.');
+    } finally {
+      setRecheckingDelivery((current) => ({ ...current, [run.run_id]: false }));
     }
   };
 
@@ -673,6 +752,7 @@ export default function CloudRunsPage() {
      per-run warning (Z-Image legacy recipe, kept pod billing) renders INSIDE
      its card. Primary actions are filled buttons, Share config stays ghost. */
   const renderRunCard = (run, i) => {
+    const fullModel = isFullTransformerRun(run);
     const ident = runIdentityOf(run);
     const key = run.run_id ? `c${run.run_id}` : `l${run.record_id || `${run.dataset_id}-${run.created_at || i}`}`;
     const variantLabel = trainingRunVariantLabel(run.train_type, run.variant);
@@ -701,6 +781,11 @@ export default function CloudRunsPage() {
               {run.dataset_name || run.run_name || `Dataset #${run.dataset_id}`}
             </button>
             <StatusBadge status={run.status} />
+            {fullModel && (
+              <span className="rounded border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-100 text-[0.625rem] font-semibold uppercase">
+                full model · experimental
+              </span>
+            )}
             <AutoRetryBadges run={run} />
             <span className="ml-auto whitespace-nowrap text-content-subtle text-[0.625rem]">
               {timeAgo(run.finished_at || run.created_at)}
@@ -714,7 +799,7 @@ export default function CloudRunsPage() {
                 only a CUSTOM base adds new info here (which checkpoint file). */}
             {baseLabel?.custom && <BaseModelChip label={baseLabel} />}
             <DatasetVersionChip version={run.version} />
-            {run.resumed_from != null && (
+            {!fullModel && run.resumed_from != null && (
               <button type="button"
                 onClick={() => run.record_id != null && toggleLineage(run.record_id)}
                 title="This run resumed from an earlier checkpoint — open its lineage"
@@ -728,7 +813,7 @@ export default function CloudRunsPage() {
               </span>
             )}
             {run.steps ? <span className="tabular-nums">{run.steps} steps</span> : null}
-            {run.source === 'cloud' && run.saves > 0 && (
+            {!fullModel && run.source === 'cloud' && run.saves > 0 && (
               <span className="tabular-nums" title="Checkpoints this run saved (synced locally)">
                 💾 {run.saves} save{run.saves > 1 ? 's' : ''}
               </span>
@@ -761,6 +846,10 @@ export default function CloudRunsPage() {
               {run.error}
             </p>
           )}
+          {fullModel && (
+            <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
+              rechecking={!!recheckingDelivery[run.run_id]} />
+          )}
           {line && (
             <p className="m-0 truncate text-content-subtle text-[0.625rem]"
               title="The effective ai-toolkit settings this launch used">
@@ -768,7 +857,7 @@ export default function CloudRunsPage() {
             </p>
           )}
           <RecipeWarning run={run} />
-          {run.status === 'error_pod_kept' && <PodKeptNote />}
+          {run.status === 'error_pod_kept' && <PodKeptNote fullModel={fullModel} />}
           <div className="mt-0.5 flex flex-wrap items-center gap-2">
             {run.status === 'error' && (
               <button type="button" onClick={() => retry(run)}
@@ -782,7 +871,7 @@ export default function CloudRunsPage() {
                 {retrying[runRetryKey(run)] ? '↻ Retrying…' : '↻ Retry'}
               </button>
             )}
-            {run.source === 'cloud' && run.status === 'done' && run.checkpoint_ready && (
+            {!fullModel && run.source === 'cloud' && run.status === 'done' && run.checkpoint_ready && (
               <button type="button" onClick={() => continueRun(run)}
                 disabled={isTrainingRecipeReplayBlocked(run) || !!continuing[run.run_id]}
                 title={isTrainingRecipeReplayBlocked(run)
@@ -792,14 +881,14 @@ export default function CloudRunsPage() {
                 {continuing[run.run_id] ? '▶ Continuing…' : '▶ Continue…'}
               </button>
             )}
-            {run.checkpoint_ready && (
+            {!fullModel && run.checkpoint_ready && (
               <a href={checkpointHref(run)}
                 title="Download this run's LoRA checkpoint"
                 className="px-3 py-1.5 rounded-lg bg-emerald-600/80 hover:bg-emerald-600 text-white text-xs font-semibold no-underline">
                 ⬇ LoRA
               </a>
             )}
-            {run.dataset_id != null && (
+            {!fullModel && run.dataset_id != null && (
               <button type="button" onClick={() => openTestStudio(run.dataset_id)}
                 title="Open Test Studio with this run's dataset selected"
                 className="rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-2 py-1 text-indigo-100 hover:bg-indigo-500/20 text-xs font-semibold">
@@ -809,7 +898,7 @@ export default function CloudRunsPage() {
             {/* The graph opens for ANY run with saved checkpoints (a single run
                 already shows its epochs), and labels as Lineage once it has a
                 parent or a branch. */}
-            {run.record_id != null && (run.lineage || run.checkpoint_ready) && (
+            {!fullModel && run.record_id != null && (run.lineage || run.checkpoint_ready) && (
               <button type="button" onClick={() => toggleLineage(run.record_id)}
                 aria-expanded={!!lineageOpen[run.record_id]}
                 title={run.lineage
@@ -844,7 +933,7 @@ export default function CloudRunsPage() {
               </button>
             )}
           </div>
-          {run.record_id != null && (run.lineage || run.checkpoint_ready) && lineageOpen[run.record_id] && (
+          {!fullModel && run.record_id != null && (run.lineage || run.checkpoint_ready) && lineageOpen[run.record_id] && (
             <RunLineageTree
               tree={lineageData[run.record_id]?.tree}
               loading={lineageData[run.record_id]?.loading}
@@ -881,7 +970,7 @@ export default function CloudRunsPage() {
         </div>
         <p className="m-0 text-content-muted text-sm">
           Every training in one place — cloud and local: watch progress, stop a run,
-          download a finished LoRA, and see the exact settings each launch used.
+          recover a verified artifact, and see the exact settings each launch used.
         </p>
       </header>
 
@@ -1004,6 +1093,11 @@ export default function CloudRunsPage() {
                 <BaseModelChip label={runBaseModelLabel(run)} />
                 <DatasetVersionChip version={run.version} />
                 <StatusBadge status={run.status} />
+                {isFullTransformerRun(run) && (
+                  <span className="rounded border border-sky-400/40 bg-sky-500/10 px-1.5 py-0.5 text-sky-100 text-[0.625rem] font-semibold uppercase">
+                    full model · experimental
+                  </span>
+                )}
                 <AutoRetryBadges run={run} />
                 <span className="text-content-subtle text-[0.625rem]">{timeAgo(run.created_at)}</span>
                 <span className="ml-auto text-content-muted text-[0.6875rem] tabular-nums">
@@ -1015,13 +1109,17 @@ export default function CloudRunsPage() {
               <RecipeWarning run={run} />
               <SilenceWarning run={run} />
               <TrainingProgress datasetId={run.dataset_id} trainType={run.train_type} variant={run.variant} cloud />
+              {isFullTransformerRun(run) && (
+                <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
+                  rechecking={!!recheckingDelivery[run.run_id]} />
+              )}
 
               <div className="flex flex-wrap items-center gap-2">
                 <button type="button" onClick={() => stop(run)} disabled={stopping[run.run_id]}
                   className="px-3 py-1.5 rounded-lg bg-red-600/80 text-white text-xs font-semibold disabled:opacity-40">
                   {stopping[run.run_id] ? 'Stopping…' : 'Stop run'}
                 </button>
-                {run.checkpoint_ready && (
+                {!isFullTransformerRun(run) && run.checkpoint_ready && (
                   <a href={checkpointHref(run)}
                     className="px-3 py-1.5 rounded-lg border border-emerald-400/40 bg-emerald-500/10 text-emerald-200 text-xs font-semibold no-underline">
                     ⬇ Download the LoRA
@@ -1049,7 +1147,7 @@ export default function CloudRunsPage() {
                     className="px-2 py-1 rounded-lg text-content-muted hover:text-content text-xs">
                     Open dataset ↗
                   </button>
-                  {run.dataset_id != null && (
+                  {!isFullTransformerRun(run) && run.dataset_id != null && (
                     <button type="button" onClick={() => openTestStudio(run.dataset_id)}
                       title="Open Test Studio with this run's dataset selected"
                       className="px-2 py-1 rounded-lg text-indigo-200 hover:bg-indigo-500/10 hover:text-indigo-100 text-xs font-semibold">
@@ -1117,6 +1215,7 @@ export default function CloudRunsPage() {
               const collapsed = !!groupsCollapsed[gkey];
               const head = group.runs[0];
               const name = head.dataset_name || head.run_name || `Dataset #${group.datasetId}`;
+              const hasLoraRun = group.runs.some((run) => !isFullTransformerRun(run));
               return (
                 <section key={`g${gi}-${gkey}`}
                   className="flex flex-col rounded-xl border border-border bg-surface">
@@ -1139,7 +1238,7 @@ export default function CloudRunsPage() {
                       className="ml-auto whitespace-nowrap rounded-lg px-2 py-0.5 text-content-muted hover:text-content text-[0.6875rem]">
                       Open dataset ↗
                     </button>
-                    {group.datasetId != null && (
+                    {hasLoraRun && group.datasetId != null && (
                       <button type="button" onClick={() => openTestStudio(group.datasetId)}
                         title="Open Test Studio with this run's dataset selected"
                         className="whitespace-nowrap rounded-lg px-2 py-0.5 text-indigo-200 hover:bg-indigo-500/10 hover:text-indigo-100 text-[0.6875rem] font-semibold">

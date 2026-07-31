@@ -11,6 +11,10 @@ import { useJobs } from '../context/JobsContext';
 import { serializeWatermarkRegions } from '../utils/watermarkRegions';
 import { summarizeScrapeImport } from '../utils/smallImageRescue';
 import { trainingRunSelection } from '../utils/checkpointBrowser';
+import {
+  normalizeTrainingMode,
+  trainingModeSettingsPayload,
+} from '../utils/trainingMode.js';
 import { refreshDatasetIfActive } from '../utils/datasetRefresh';
 import { ENGINE_LABELS } from '../components/dataset/engineSelection.js';
 import { classifyResultMessage } from '../components/dataset/classifyFramingGate.js';
@@ -1107,6 +1111,7 @@ export function useDataset() {
     const d = await postJson(`/api/dataset/${currentId}/train`,
       { base_model: opts.baseModel || '', variant: opts.variant || 'turbo',
         train_type: opts.trainType || 'zimage',
+        training_mode: normalizeTrainingMode(opts.trainingMode),
         allow_caption_mismatch: !!opts.allowCaptionMismatch,
         // Images sans caption : plus un mur — confirm « train anyway » dans
         // TrainingPanel (marqueur UNCAPTIONED:), même flux que le mismatch.
@@ -1153,6 +1158,49 @@ export function useDataset() {
     const r = await fetch(`/api/dataset/${currentId}/train/base-info`, { credentials: 'include' });
     return r.ok ? await r.json() : null;
   }, [currentId]);
+
+  // Persists the adapter-vs-dense recipe independently from the other advanced
+  // settings. The server returns the canonical exact enum; callers use null as a
+  // rollback signal so a failed save never leaves the control lying.
+  const setDatasetTrainingMode = useCallback(async (trainingMode, selection = {}) => {
+    if (!currentId) {
+      toast.error('No dataset selected');
+      return null;
+    }
+    const payload = trainingModeSettingsPayload(trainingMode, selection);
+    let d;
+    try {
+      d = await postJson(`/api/dataset/${currentId}/train/settings`, payload);
+    } catch (error) {
+      toast.error(error?.message || 'Could not save the training mode');
+      return null;
+    }
+    if (!d.ok) {
+      toast.error(d.error || 'Could not save the training mode');
+      return null;
+    }
+    const saved = {
+      trainingMode: normalizeTrainingMode(d.training_mode || payload.training_mode),
+      trainType: d.train_type ?? selection.trainType,
+      baseModel: Object.prototype.hasOwnProperty.call(d, 'base_model')
+        ? d.base_model
+        : selection.baseModel,
+      variant: d.variant ?? selection.variant,
+      slider: d.slider ?? null,
+    };
+    // A family change must refresh the library grouping and the live dataset,
+    // just like setDatasetTrainType. Refresh is best-effort AFTER the atomic
+    // commit: a failed list poll must never make the caller roll back a save that
+    // the server already accepted.
+    if (selection.trainType !== undefined) {
+      try {
+        await Promise.all([fetchList(), refresh(currentId)]);
+      } catch {
+        toast.warning('Training recipe saved, but the dataset list could not be refreshed yet.');
+      }
+    }
+    return saved;
+  }, [currentId, fetchList, refresh, toast]);
 
   // Persiste un patch de réglages avancés ai-toolkit (rank / resolution /
   // save_every). Renvoie les réglages effectifs, ou null en cas d'échec.
@@ -1455,5 +1503,5 @@ export function useDataset() {
            backupEverything, backupJob, downloadBackup, openBackupsFolder, dismissBackup, restoreJob, dismissRestore,
            refresh, train, stopTraining, continueTraining, continueTrainingInCloud,
            listCheckpoints, importCheckpoint, deleteCheckpoint,
-           trainBaseInfo, setTrainSettings, prepareBase };
+           trainBaseInfo, setTrainSettings, setDatasetTrainingMode, prepareBase };
 }

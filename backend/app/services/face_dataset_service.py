@@ -1240,7 +1240,8 @@ def remembered_family_settings(ds, family):
     return family_settings_memory(ds).get(normalize_train_type(family))
 
 
-def set_train_type(user_id, dataset_id, train_type) -> bool:
+def set_train_type(user_id, dataset_id, train_type, *, commit=True,
+                   target_training_mode=None) -> bool:
     """Change the target model family later (kept in sync with the TrainingPanel
     selector so the menu re-groups). Normalizes; unknown -> zimage. False if absent.
 
@@ -1259,21 +1260,32 @@ def set_train_type(user_id, dataset_id, train_type) -> bool:
     incoming family's own default) when that family has nothing remembered. The
     other advanced settings stay global on purpose — see the comment on
     _FAMILY_SCOPED_SETTING_KEYS for why quantisation and resolution are not
-    here."""
+    here. ``commit=False`` lets a caller join this family transition to a wider
+    validated settings transaction without an intermediate database state.
+    ``target_training_mode`` is reserved for that wider transaction: the legacy
+    family-only endpoint must validate against the currently persisted mode."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return False
     new_fam = normalize_train_type(train_type)
     old_fam = normalize_train_type(getattr(ds, 'train_type', None))
+    from . import lora_training as _lt
+    intended_mode = (_lt.training_mode(ds) if target_training_mode is None
+                     else _lt.normalize_training_mode(target_training_mode))
+    if intended_mode == 'full_transformer' and new_fam != 'krea':
+        raise ValueError(
+            'full_transformer training requires the Krea 2 model family. '
+            'Switch the training mode to LoRA in Training settings before '
+            'changing the model family.')
     if new_fam == old_fam:
-        db.session.commit()
+        if commit:
+            db.session.commit()
         return True
     memory = family_base_memory(ds)
     # Never remember a base the OUTGOING family provably cannot load. Datasets
     # created before this column exist in exactly that state (a Z-Image merge
     # left attached to a Krea 2 dataset); stashing it under 'krea' would freeze
     # the bug into the memory and hand it back on the way home.
-    from . import lora_training as _lt
     outgoing = ds.train_base_model or ''
     if _lt.foreign_base_reason(old_fam, outgoing):
         outgoing = ''
@@ -1307,7 +1319,8 @@ def set_train_type(user_id, dataset_id, train_type) -> bool:
     ds.train_family_settings = json.dumps(smemory)
 
     ds.train_type = new_fam
-    db.session.commit()
+    if commit:
+        db.session.commit()
     return True
 
 
@@ -2808,6 +2821,10 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
         'kind': ds.kind, 'fidelity': ds.fidelity,
         'concept_desc': ds.concept_desc, 'concept_terms': ds.concept_terms,
         'train_type': ds.train_type,
+        # Optional in backup v1: old archives omit it and restore as LoRA.
+        'training_mode': (ds.training_mode
+                          if ds.training_mode in ('lora', 'full_transformer')
+                          else 'lora'),
         'train_base_model': _portable_train_base_model(ds.train_base_model),
         'train_variant': ds.train_variant, 'train_settings': ds.train_settings,
         'best_settings': ds.best_settings,
@@ -2928,6 +2945,9 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         value = manifest.get(field)
         if value is not None and not isinstance(value, str):
             raise ValueError(f'invalid backup {field}')
+    restored_training_mode = manifest.get('training_mode', 'lora')
+    if restored_training_mode not in ('lora', 'full_transformer'):
+        raise ValueError('invalid backup training_mode')
     if not isinstance(images_meta, list):
         raise ValueError('invalid backup image metadata')
     if len(images_meta) > _BACKUP_MAX_ROWS:
@@ -3022,6 +3042,7 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         for field in ('concept_terms', 'train_variant', 'train_settings',
                       'best_settings', 'fidelity'):
             setattr(ds, field, manifest.get(field))
+        ds.training_mode = restored_training_mode
         ds.train_base_model = _portable_train_base_model(manifest.get('train_base_model'))
         ds.ref_filename = _backup_basename(manifest.get('ref_filename'))
         ds.ref_original_filename = _backup_basename(

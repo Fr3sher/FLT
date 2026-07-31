@@ -489,6 +489,7 @@ def test_queued_continue_replays_captured_base_variant_and_confirmation(monkeypa
         'allow_uncaptioned': False,
         'allow_caption_quality': False,
         'allow_not_ready': False,
+        'training_mode': 'lora',
         '_allow_dead_predecessor': True,
     }
 
@@ -522,6 +523,7 @@ def test_queued_continue_accepts_dead_predecessor_flag(monkeypatch):
     assert launched['base_model'] == ''
     assert launched['variant'] == 'base'
     assert launched['train_type'] == 'zimage'
+    assert launched['training_mode'] == 'lora'
 
 
 def test_stop_holds_queue_lock_during_kill_before_watcher_advance(monkeypatch):

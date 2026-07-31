@@ -44,14 +44,50 @@ def _require_cloud():
     return None
 
 
+def _full_transformer_artifact_response(run):
+    """409 redirect metadata for routes that otherwise treat a file as a LoRA.
+
+    Dense checkpoints are delivered as a private Hugging Face repository.  A
+    stray/staging ``.safetensors`` file is never sufficient proof that one can
+    be deployed to ComfyUI as an adapter.
+    """
+    if not run or not ct._is_full_transformer_run(run):
+        return None
+    return jsonify({
+        'error': ('full_transformer artifacts are delivered through Hugging Face '
+                  'and cannot be imported or downloaded as a LoRA checkpoint'),
+        'training_mode': 'full_transformer',
+        'artifact_kind': (ct._run_param(run, 'artifact_kind')
+                          or 'full_transformer'),
+        'artifact_status': ct._run_param(run, 'artifact_status'),
+        'artifact_status_detail': ct._run_param(
+            run, 'artifact_status_detail'),
+        'hf_url': ct._run_param(run, 'hf_url'),
+        'status': run.status,
+    }), 409
+
+
 @bp.post('/dataset/<int:dataset_id>/train')
 def dataset_train(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    if not svc.get_dataset(LOCAL_USER, dataset_id):
-        return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
+    has_training_mode = 'training_mode' in d
+    try:
+        mode = lt.training_mode(
+            ds, d.get('training_mode') if has_training_mode else None)
+    except Exception as e:
+        return _map_error(e)
+    if mode == 'full_transformer':
+        return jsonify({
+            'error': ('full_transformer training is cloud-only; choose Cloud training '
+                      'or switch to LoRA'),
+            'training_mode': mode,
+        }), 400
     try:
         # steps optionnel : None → adaptatif. base_model='' → officiel ; sinon merge
         # (doit être converti d'abord). variant règle l'adapter de de-distillation.
@@ -64,6 +100,8 @@ def dataset_train(dataset_id):
             kw['vae_path'] = d.get('vae_path')
         if 'te_path' in d:
             kw['te_path'] = d.get('te_path')
+        if has_training_mode:
+            kw['training_mode'] = mode
         res = lt.launch_training(LOCAL_USER, dataset_id, steps=d.get('steps'),
                                  base_model=d.get('base_model'),
                                  variant=d.get('variant', 'turbo'),
@@ -91,9 +129,14 @@ def dataset_train_continue(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    if not svc.get_dataset(LOCAL_USER, dataset_id):
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
+    # Every checkpoint in the local ai-toolkit lane is a LoRA.  Its source
+    # artifact decides the continuation mode; today's dataset selector (or a
+    # stale client body) cannot reinterpret those weights as a dense model.
+    mode = 'lora'
     # base_model/variant = base sélectionnée (absente → base persistée du run).
     kw = {'extra_steps': d.get('extra_steps', 1000)}
     if 'base_model' in d:
@@ -114,6 +157,7 @@ def dataset_train_continue(dataset_id):
     kw['allow_uncaptioned'] = bool(d.get('allow_uncaptioned'))
     kw['allow_caption_quality'] = bool(d.get('allow_caption_quality'))
     kw['allow_not_ready'] = bool(d.get('allow_not_ready'))
+    kw['training_mode'] = mode
     try:
         res = lt.continue_training(LOCAL_USER, dataset_id, **kw)
     except Exception as e:
@@ -141,11 +185,23 @@ def dataset_train_enqueue(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    if not svc.get_dataset(LOCAL_USER, dataset_id):
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
+    has_training_mode = 'training_mode' in d
+    try:
+        mode = lt.training_mode(
+            ds, d.get('training_mode') if has_training_mode else None)
+    except Exception as e:
+        return _map_error(e)
+    if mode == 'full_transformer':
+        return jsonify({'error': 'full_transformer training is cloud-only and cannot be queued locally',
+                        'training_mode': mode}), 400
     # base_model/variant = base CHOISIE pour le job en file (absente → persistée).
     kw = {'extra_steps': d.get('extra_steps'), 'masked': d.get('masked')}
+    if has_training_mode:
+        kw['training_mode'] = mode
     if 'base_model' in d:
         kw['base_model'] = d.get('base_model')
     if d.get('variant'):
@@ -186,9 +242,19 @@ def dataset_train_schedule(dataset_id):
     gate = _require_aitoolkit()
     if gate:
         return gate
-    if not svc.get_dataset(LOCAL_USER, dataset_id):
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
+    has_training_mode = 'training_mode' in d
+    try:
+        mode = lt.training_mode(
+            ds, d.get('training_mode') if has_training_mode else None)
+    except Exception as e:
+        return _map_error(e)
+    if mode == 'full_transformer':
+        return jsonify({'error': 'full_transformer training is cloud-only and cannot be scheduled locally',
+                        'training_mode': mode}), 400
     raw = str(d.get('at') or '').strip()   # datetime-local: "YYYY-MM-DDTHH:MM"
     try:
         at = datetime.fromisoformat(raw)
@@ -201,6 +267,8 @@ def dataset_train_schedule(dataset_id):
         return jsonify({'error': 'invalid schedule time'}), 400
     kw = {'extra_steps': d.get('extra_steps'), 'not_before': at.isoformat(timespec='minutes'),
           'masked': d.get('masked')}
+    if has_training_mode:
+        kw['training_mode'] = mode
     if 'base_model' in d:
         kw['base_model'] = d.get('base_model')
     if d.get('variant'):
@@ -435,11 +503,18 @@ def dataset_train_preflight(dataset_id):
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     try:
+        preflight_kw = {}
+        # Presence matters: ``?base_model=`` is the explicit official base,
+        # whereas an absent parameter means "use the persisted selection".
+        if 'base_model' in request.args:
+            preflight_kw['base_model'] = request.args.get('base_model') or ''
         return jsonify({'ok': True, **lt.training_preflight(
             LOCAL_USER, dataset_id,
             train_type=request.args.get('train_type') or None,
             variant=request.args.get('variant') or None,
-            lane=lane, masked=masked)})
+            lane=lane, masked=masked,
+            training_mode=request.args.get('training_mode') or None,
+            **preflight_kw)})
     except Exception as e:
         return _map_error(e)
 
@@ -591,7 +666,7 @@ def dataset_train_base_info(dataset_id):
     """Bases entraînables (officielle + merges Z-Image), base/variante choisies du
     dataset, et statut de conversion - pour le sélecteur du TrainingPanel."""
     gate = _require_aitoolkit()
-    if gate:
+    if gate and not capabilities.probe().get('cloud_training'):
         return gate
     ds = svc.get_dataset(LOCAL_USER, dataset_id)
     if not ds:
@@ -655,6 +730,9 @@ def dataset_train_base_info(dataset_id):
                     'converted': converted,
                     'convert': zc.convert_status(),
                     'train_type': ds.train_type or 'zimage',
+                    # First-class provenance/launch selector. Old databases are
+                    # migrated to lora and NULL test doubles resolve identically.
+                    'training_mode': lt.training_mode(ds),
                     'comfyui_configured': comfyui_configured,
                     'models_dir': str(models_dir) if models_dir else '',
                     # Réglages avancés effectifs (persistés ∪ défauts family-aware) pour
@@ -682,14 +760,23 @@ def dataset_train_settings(dataset_id):
     """Persiste un patch de réglages avancés {rank?, resolution?, save_every?} sur le
     dataset (validé + borné côté service). Renvoie les réglages effectifs résultants."""
     gate = _require_aitoolkit()
-    if gate:
+    if gate and not capabilities.probe().get('cloud_training'):
         return gate
     d = request.get_json(silent=True) or {}
     try:
         eff = lt.update_train_settings(LOCAL_USER, dataset_id, d)
     except ValueError as e:
         return _map_error(e)
-    return jsonify({'ok': True, 'train_settings': eff})
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    return jsonify({'ok': True, 'train_settings': eff,
+                    'training_mode': lt.training_mode(ds),
+                    'train_type': ds.train_type,
+                    'base_model': ds.train_base_model or '',
+                    'variant': (ds.train_variant
+                                or lt._default_variant_for(ds.train_type)),
+                    # Canonical post-commit state.  The UI must only flip its
+                    # Slider switch after this response confirms ``enabled=false``.
+                    'slider': lt.effective_slider_settings(ds)})
 
 
 @bp.post('/dataset/<int:dataset_id>/train/slider')
@@ -1377,7 +1464,12 @@ def dataset_train_import(dataset_id):
     if body.get('cloud_run_id'):
         from ..models import CloudTrainingRun
         crun = CloudTrainingRun.query.get(int(body['cloud_run_id']))
-        if not crun or crun.dataset_id != dataset_id or not crun.staging_dir:
+        if not crun or crun.dataset_id != dataset_id:
+            return jsonify({'error': 'unknown cloud run'}), 404
+        dense_response = _full_transformer_artifact_response(crun)
+        if dense_response:
+            return dense_response
+        if not crun.staging_dir:
             return jsonify({'error': 'unknown cloud run'}), 404
         kw['src_dir'] = crun.staging_dir
         kw['version'] = ct._run_param(crun, 'version')
@@ -1414,7 +1506,12 @@ def dataset_train_cloud(dataset_id):
     if gate:
         return gate
     d = request.get_json(silent=True) or {}
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
     try:
+        mode = lt.training_mode(
+            ds, d.get('training_mode') if 'training_mode' in d else None)
         res = ct.launch_cloud_training(
             LOCAL_USER, dataset_id,
             # No hardcoded 'turbo' default: an absent variant now resolves to
@@ -1423,6 +1520,7 @@ def dataset_train_cloud(dataset_id):
             base_model=d.get('base_model', ''),
             variant=d.get('variant'),
             train_type=d.get('train_type'),
+            training_mode=mode,
             masked=d.get('masked'),
             allow_caption_mismatch=bool(d.get('allow_caption_mismatch')),
             allow_uncaptioned=bool(d.get('allow_uncaptioned')),
@@ -1556,6 +1654,19 @@ def dataset_train_cloud_continue():
     return jsonify({'ok': True, **res})
 
 
+@bp.post('/dataset/train/cloud/recheck-delivery')
+def dataset_train_cloud_recheck_delivery():
+    """Re-verify one dense run's Hugging Face delivery without renting a GPU."""
+    body = request.get_json(silent=True) or {}
+    if body.get('run_id') in (None, ''):
+        return jsonify({'error': 'run_id is required'}), 400
+    try:
+        result = ct.recheck_full_transformer_delivery(body['run_id'])
+    except Exception as exc:
+        return _map_error(exc)
+    return jsonify(result)
+
+
 @bp.post('/dataset/<int:dataset_id>/train/cloud/continue-local')
 def dataset_train_cloud_continue_local(dataset_id):
     """▶ Continue d'un checkpoint LOCAL dans le CLOUD (voie « Cloud » de la modale
@@ -1566,10 +1677,15 @@ def dataset_train_cloud_continue_local(dataset_id):
     gate = _require_cloud()
     if gate:
         return gate
-    if not svc.get_dataset(LOCAL_USER, dataset_id):
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
         return jsonify({'error': 'not found'}), 404
     d = request.get_json(silent=True) or {}
-    kw = {'extra_steps': d.get('extra_steps', 1000)}
+    # The seed comes from the local lane, whose checkpoints are all LoRAs.
+    # Freeze the source artifact kind instead of consulting mutable UI state.
+    mode = 'lora'
+    kw = {'extra_steps': d.get('extra_steps', 1000),
+          'training_mode': mode}
     if 'base_model' in d:
         kw['base_model'] = d.get('base_model')
     if d.get('variant'):
@@ -1602,11 +1718,16 @@ def dataset_train_cloud_offers(dataset_id):
     gate = _require_cloud()
     if gate:
         return gate
+    ds = svc.get_dataset(LOCAL_USER, dataset_id)
+    if not ds:
+        return jsonify({'error': 'not found'}), 404
     try:
+        mode = lt.training_mode(ds, request.args.get('training_mode') or None)
         data = ct.gpu_tiers(LOCAL_USER, dataset_id,
                             train_type=request.args.get('train_type'),
                             variant=request.args.get('variant'),
-                            steps=request.args.get('steps', type=int))
+                            steps=request.args.get('steps', type=int),
+                            training_mode=mode)
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **data})
@@ -1883,6 +2004,9 @@ def dataset_train_cloud_checkpoint(dataset_id):
         run = ct.latest_run_for(dataset_id, request.args.get('train_type'))
     if not run:
         abort(404)
+    dense_response = _full_transformer_artifact_response(run)
+    if dense_response:
+        return dense_response
     # ?filename targets ONE harvested epoch in this run's staging (the ◉ Graph's
     # per-checkpoint ⬇). Path-guarded: basename only, and it must really be a
     # .safetensors sitting in THIS run's staging_dir. Absent → the run's final

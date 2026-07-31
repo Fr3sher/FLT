@@ -29,7 +29,8 @@ load_dotenv(ENV_PATH)
 # (Settings > Scraping & sources). Sources read their env var at request time,
 # and set_secrets() stamps os.environ on save, so changes apply without restart.
 SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOKEN',
-               'VAST_API_KEY', 'REDDIT_CLIENT_ID', 'CIVITAI_API_KEY', 'PEXELS_API_KEY')
+               'HF_CLOUD_TOKEN', 'VAST_API_KEY', 'REDDIT_CLIENT_ID',
+               'CIVITAI_API_KEY', 'PEXELS_API_KEY')
 
 # A Krea install saved by a previous release can carry its old *defaults* in
 # config.json, so a changed DEFAULTS value alone would never reach it. This
@@ -217,6 +218,21 @@ DEFAULTS = {
         # 32 — le 9B (32-48 GB) est la voie cloud principale de cette famille, et un
         # pod 32 GB entraîne aussi le 4B sans problème (l'inverse serait faux).
         'min_vram_gb': {'zimage': 24, 'sdxl': 16, 'krea': 24, 'flux2klein': 32},
+        # Dedicated dense Krea 2 lane.  A full-transformer checkpoint is ~26 GB
+        # and training keeps the official base, working weights/caches and the
+        # save side by side; it must never inherit the 24 GB / 60 GB LoRA lane.
+        # Price and runtime deliberately keep using the regular cloud knobs so
+        # operators can tune those two policy limits in one place.
+        'full_transformer': {
+            'min_vram_gb': 80,
+            'disk_gb': 200,
+            # HF is eventually consistent and ai-toolkit may finish just before
+            # the uploaded files become visible through the Hub listing API.
+            # Verification is bounded: exhaustion keeps the paid pod for manual
+            # recovery instead of declaring success or destroying the only copy.
+            'verification_attempts': 3,
+            'verification_retry_seconds': 5,
+        },
         'onstart': '',                 # raw-image fallback: optional startup command
     },
     'face_scoring': {'python': '', 'models_root': '', 'green': 0.50, 'orange': 0.45},

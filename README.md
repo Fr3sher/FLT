@@ -699,7 +699,7 @@ Not every feature needs every backend. The app degrades gracefully — API keys 
 | Concept-caption inversion / concept-leak checks | Ollama **or** ai-toolkit (JoyCaption) |
 | LoRA training (Z-Image / Krea 2 / FLUX.1 / FLUX.2 Klein / Anima) | ai-toolkit installed and configured — **no ComfyUI needed**: the base weights come from Hugging Face |
 | LoRA training (SDXL) | ai-toolkit **and** ComfyUI — SDXL is the one family whose base is a checkpoint picked from ComfyUI's `models/checkpoints` |
-| Cloud training (vast.ai) | `VAST_API_KEY`; Z-Image / Krea 2 / FLUX.2 Klein only |
+| Cloud training (vast.ai) | `VAST_API_KEY`; Z-Image / Krea 2 / FLUX.2 Klein only. Dense Krea 2 additionally requires the dedicated fine-grained `HF_CLOUD_TOKEN` |
 | Test Studio (Z-Image / SDXL / Krea 2) | ComfyUI reachable + the selected family's model assets |
 | Portable backup/restore and ZIP/folder dataset merge | No external service |
 | Publish kept pairs to Hugging Face | Write-enabled `HF_TOKEN`; repositories are private by default |
@@ -904,6 +904,7 @@ Trained LoRAs land in `models/loras/<family>` automatically after training. Gene
 - **Gemini** (for Nano Banana Pro): go to [aistudio.google.com](https://aistudio.google.com), click **Get API key**, and paste it into the app's Settings page.
 - **OpenAI** (for ChatGPT / `gpt-image-2`): go to [platform.openai.com](https://platform.openai.com) → **API keys**, create a key, and paste it into Settings.
 - **Hugging Face** (gated model downloads and dataset publishing): create a token at [huggingface.co/settings/tokens](https://huggingface.co/settings/tokens). Read access is enough for accepted gated models; publishing requires a write-enabled token.
+- **Dedicated Hugging Face cloud token** (dense Krea 2 training only): create a separate **fine-grained** token as `HF_CLOUD_TOKEN` with exact `repo.content.read` access to `krea/Krea-2-Raw`, plus only `repo.content.read` and `repo.write` on one dedicated user or organization namespace containing **only** LDS delivery repositories. Hugging Face cannot scope repository creation to a per-run repository before it exists, so isolating that namespace is required; grant no global permissions. Do not reuse a broad/general `HF_TOKEN`; dense runs never receive it.
 - **vast.ai** (optional cloud training): create/copy your key from [cloud.vast.ai](https://cloud.vast.ai/) and save it as `VAST_API_KEY` in Settings.
 
 Secrets entered through Settings are stored in a git-ignored `.env` file (see `.env.example`) — they are never written to `config.json` or committed.
@@ -934,7 +935,7 @@ The app scales from "no GPU at all" to a full local training rig — each capabi
 The short version:
 
 - **Ordinary settings** are written to `config.json` (git-ignored, in your data directory). Copy `config.example.json` to `config.json` to edit by hand — but almost everything has a UI control in **Settings**.
-- **Secrets** (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, `VAST_API_KEY`, optional scraper keys) live in `.env`, never in `config.json` or a commit — copy `.env.example` to `.env`, or paste keys into Settings and let the app write them.
+- **Secrets** (`GEMINI_API_KEY`, `OPENAI_API_KEY`, `HF_TOKEN`, dedicated `HF_CLOUD_TOKEN`, `VAST_API_KEY`, optional scraper keys) live in `.env`, never in `config.json` or a commit — copy `.env.example` to `.env`, or paste keys into Settings and let the app write them.
 - **A handful of environment variables** override paths for containerized setups: `LDS_DATA_DIR` (runtime data), `LDS_CONFIG` (path to `config.json`), `LDS_ENV` (path to `.env`), `LDS_HOST` (bind host, beats `server.host`), `FLASK_DEBUG` (`1` for Flask debug).
 - **The keys you most often touch** — `server.port` (default `5050`), `comfyui.api_url`, `ollama.vision_model`, `aitoolkit.dir`, `training.default_family`, the `cloud.*` guard-rails — are all in the [full reference](docs/guide/settings-reference.md#configjson-key-reference-all-keys).
 

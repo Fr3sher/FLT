@@ -551,7 +551,9 @@ def test_backup_roundtrip_preserves_optional_watermark_regions_and_accepts_legac
     from app.config import LOCAL_USER
 
     with app.app_context():
-        ds = svc.create_dataset(LOCAL_USER, 'Watermark backup', 'wmbackup')
+        ds = svc.create_dataset(LOCAL_USER, 'Watermark backup', 'wmbackup',
+                                train_type='krea')
+        ds.training_mode = 'full_transformer'
         d = svc._dataset_dir(ds.id)
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, 'marked.webp'), 'wb').write(_webp())
@@ -565,9 +567,12 @@ def test_backup_roundtrip_preserves_optional_watermark_regions_and_accepts_legac
         data = svc.build_backup_zip(LOCAL_USER, ds.id)
         with zipfile.ZipFile(io.BytesIO(data)) as z:
             exported = json.loads(z.read('images.json'))
+            manifest = json.loads(z.read('manifest.json'))
         assert exported[0]['watermark_regions'] == regions
+        assert manifest['training_mode'] == 'full_transformer'
 
         restored = svc.import_backup_zip(LOCAL_USER, data)
+        assert restored.training_mode == 'full_transformer'
         restored_img = FaceDatasetImage.query.filter_by(dataset_id=restored.id).one()
         assert restored_img.watermark_regions == regions
 
@@ -583,8 +588,26 @@ def test_backup_roundtrip_preserves_optional_watermark_regions_and_accepts_legac
             ]))
             z.writestr('images/legacy.webp', _webp((0, 0, 255)))
         legacy_restored = svc.import_backup_zip(LOCAL_USER, legacy.getvalue())
+        assert legacy_restored.training_mode == 'lora'
         legacy_img = FaceDatasetImage.query.filter_by(dataset_id=legacy_restored.id).one()
         assert legacy_img.watermark_regions is None
+
+
+def test_backup_restore_rejects_unknown_training_mode(app):
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as svc
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, 'w') as z:
+        z.writestr('manifest.json', json.dumps({
+            'format': svc.BACKUP_FORMAT, 'version': svc.BACKUP_VERSION,
+            'name': 'Bad mode', 'trigger_word': 'bad_mode',
+            'training_mode': 'FULL_TRANSFORMER',
+        }))
+        z.writestr('images.json', '[]')
+    with app.app_context(), pytest.raises(
+            ValueError, match='invalid backup training_mode'):
+        svc.import_backup_zip(LOCAL_USER, archive.getvalue())
 
 
 def test_backup_import_rejects_garbage_and_traversal(app):

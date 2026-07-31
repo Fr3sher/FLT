@@ -122,7 +122,10 @@ def dataset_set_train_type(dataset_id):
     Dataset metadata — NOT ai-toolkit-gated, so you can organize the menu even
     before training is configured. Keeps the TrainingPanel and the grouped menu in sync."""
     data = request.get_json(silent=True) or {}
-    ok = svc.set_train_type(LOCAL_USER, dataset_id, data.get('train_type'))
+    try:
+        ok = svc.set_train_type(LOCAL_USER, dataset_id, data.get('train_type'))
+    except ValueError as e:
+        return _map_error(e)
     return (jsonify({'ok': True}), 200) if ok else (jsonify({'error': 'not found'}), 404)
 
 

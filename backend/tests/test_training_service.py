@@ -456,15 +456,20 @@ def test_enqueue_snapshots_steps_and_not_before(app, monkeypatch):
                             allow_caption_quality=True)
         q = lt.get_train_queue()
         assert q[0]['steps'] == 2000 and q[0]['not_before'].startswith('2999')
+        assert q[0]['training_mode'] == 'lora'
         assert q[0]['allow_caption_mismatch'] is True
         assert q[0]['allow_uncaptioned'] is True
         assert q[0]['allow_caption_quality'] is True
         assert lt._due_index(q) is None                   # scheduled in the future -> not due
 
         captured = {}
+        # A later selector change cannot reinterpret the queued execution plan.
+        ds.training_mode = 'full_transformer'
+        svc.db.session.commit()
         monkeypatch.setattr(lt, 'launch_training',
                             lambda *a, **kw: captured.update(kw) or {'started': True})
         lt._launch_queued_item(q[0])
+        assert captured['training_mode'] == 'lora'
         assert captured['allow_caption_mismatch'] is True
         assert captured['allow_uncaptioned'] is True
         assert captured['allow_caption_quality'] is True
@@ -565,6 +570,7 @@ def test_queued_resume_replays_confirmation_flags(monkeypatch):
     assert captured['allow_caption_mismatch'] is True
     assert captured['allow_uncaptioned'] is True
     assert captured['allow_caption_quality'] is True
+    assert captured['training_mode'] == 'lora'  # legacy queue item => historical LoRA
 
 
 def test_step_cap_floor_500(app, tmp_path, monkeypatch):

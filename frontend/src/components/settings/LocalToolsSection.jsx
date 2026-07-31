@@ -17,6 +17,11 @@ const HF_SECRET = {
   help: 'Needed for gated training bases (Krea 2, FLUX.1, FLUX.2 Klein) and to read your private custom-base cloud repos — accept each model license, then read a token from hf.co/settings/tokens. Local Klein generation (9B KV) downloads without a token.',
 }
 
+const HF_CLOUD_SECRET = {
+  key: 'HF_CLOUD_TOKEN', label: 'Dedicated Hugging Face cloud token', testTarget: null,
+  help: 'Required only for dense Krea 2 cloud training. Create a separate fine-grained token with zero global permissions: grant repo.content.read exactly on krea/Krea-2-Raw, then repo.content.read + repo.write on one dedicated HF user/org namespace that contains only LDS deliveries. A per-run repository does not exist yet when the token is created, so scope write access to that single dedicated namespace and nothing else. Never reuse a broad or general HF token here.',
+}
+
 /* Ollama's three live states, from capabilities (installed + reachable):
      not installed   → install hint (the app can't start what isn't there)
      installed, down → "Installed but not running" + ▶ Start Ollama (starts the
@@ -252,6 +257,9 @@ export default function LocalToolsSection(props) {
             config={config} configDefaults={configDefaults} setField={setField} />
         </div>
         <SecretField field={HF_SECRET} {...props} />
+        <div className="rounded-lg border border-sky-400/25 bg-sky-400/5 p-3">
+          <SecretField field={HF_CLOUD_SECRET} {...props} />
+        </div>
       </Card>
 
       <Card

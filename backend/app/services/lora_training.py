@@ -49,6 +49,52 @@ logger = logging.getLogger(__name__)
 # (cadence prouvée). Curseur de tuning #1, un seul endroit.
 KREA_TRAIN_RESOLUTION = 1024
 
+# Dense checkpoints are roughly 26 GB.  These values are intentionally NOT
+# inherited from hidden LoRA advanced settings: one recoverable checkpoint at a
+# predictable cadence bounds disk use while preserving restartability.
+FULL_TRANSFORMER_SAVE_EVERY = 250
+FULL_TRANSFORMER_SAMPLE_EVERY = 250
+FULL_TRANSFORMER_BASE = 'krea/Krea-2-Raw'
+FULL_TRANSFORMER_VAE = 'Qwen/Qwen-Image-2512'
+
+# Persisted/API contract. Keep this deliberately tiny: accepting aliases here
+# would make provenance ambiguous and could silently turn a requested dense run
+# back into a LoRA. Legacy/NULL rows resolve to the historical LoRA behaviour.
+TRAINING_MODES = ('lora', 'full_transformer')
+
+
+def normalize_training_mode(value) -> str:
+    """Return one canonical training mode, or reject the request explicitly."""
+    mode = 'lora' if value is None else value
+    if mode not in TRAINING_MODES:
+        raise ValueError("training_mode must be 'lora' or 'full_transformer'")
+    return mode
+
+
+def training_mode(ds, override=None) -> str:
+    """Effective mode for a dataset/action; missing legacy state means LoRA."""
+    value = getattr(ds, 'training_mode', None) if override is None else override
+    return normalize_training_mode(value)
+
+
+def _is_full_transformer(ds, override=None) -> bool:
+    return training_mode(ds, override) == 'full_transformer'
+
+
+def _assert_local_training_mode(ds, requested=None) -> str:
+    """Reject dense training before any local export/spawn side effect."""
+    mode = training_mode(ds, requested)
+    if mode == 'full_transformer':
+        raise ValueError(
+            'full_transformer training is cloud-only; choose Cloud training or switch to LoRA')
+    # An explicit LoRA selection switches a dataset back from a previously
+    # persisted cloud dense mode before build_job_config reads the row.
+    if (requested is not None and hasattr(ds, 'training_mode')
+            and getattr(ds, 'training_mode', None) != mode):
+        ds.training_mode = mode
+        fds.db.session.commit()
+    return mode
+
 # The local-training state is a durable GPU ownership fence. It must never
 # expire while a surviving ai-toolkit child may still own VRAM; only an exact
 # process identity check is allowed to release it after a restart.
@@ -1366,12 +1412,22 @@ _ACTIVE_PRESET_SCOPE_KEY = '_active_preset_scope'
 
 
 class _TrainContextView:
-    """Read-only dataset view with the family/variant selected for one action."""
+    """Read-only dataset view with the exact selections for one action.
 
-    def __init__(self, ds, family=None, variant=None):
+    A falsey value can be meaningful here: ``base_model=''`` explicitly selects
+    the official base.  Sentinels therefore distinguish "not supplied" from an
+    empty UI selection instead of falling through to the mutable dataset row.
+    """
+
+    def __init__(self, ds, family=None, variant=None, *,
+                 base_model=_PERSISTED, mode=_PERSISTED,
+                 train_slider=_PERSISTED):
         self._ds = ds
         self._family = family
         self._variant = variant
+        self._base_model = base_model
+        self._mode = mode
+        self._train_slider = train_slider
 
     @property
     def train_type(self):
@@ -1381,18 +1437,37 @@ class _TrainContextView:
     def train_variant(self):
         return self._variant if self._variant is not None else self._ds.train_variant
 
+    @property
+    def train_base_model(self):
+        return (self._ds.train_base_model if self._base_model is _PERSISTED
+                else self._base_model)
+
+    @property
+    def training_mode(self):
+        return (getattr(self._ds, 'training_mode', None)
+                if self._mode is _PERSISTED else self._mode)
+
+    @property
+    def train_slider(self):
+        return (getattr(self._ds, 'train_slider', None)
+                if self._train_slider is _PERSISTED else self._train_slider)
+
     def __getattr__(self, name):
         return getattr(self._ds, name)
 
 
-def _train_context_view(ds, family=None, variant=None):
+def _train_context_view(ds, family=None, variant=None, *,
+                        base_model=_PERSISTED, training_mode=_PERSISTED,
+                        train_slider=_PERSISTED):
     if ds is None:
         return None
     fam = _train_type(ds, family)
     selected = str(
         variant or getattr(ds, 'train_variant', None)
         or _default_variant_for(fam)).strip().lower()
-    return _TrainContextView(ds, fam, selected)
+    return _TrainContextView(
+        ds, fam, selected, base_model=base_model, mode=training_mode,
+        train_slider=train_slider)
 
 
 def _preset_scope_matches(ds, scope) -> bool:
@@ -1842,6 +1917,10 @@ def update_slider_settings(user_id, dataset_id, patch: dict) -> dict:
     cur = _slider_settings(ds)
     if 'enabled' in patch:
         if patch['enabled']:
+            if _is_full_transformer(ds):
+                raise ValueError(
+                    'Slider mode cannot be enabled during full_transformer '
+                    'training. Switch the training mode to LoRA first.')
             cur['enabled'] = True
         else:
             cur.pop('enabled', None)
@@ -2103,11 +2182,58 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
     Runs l'affiche par run (« quels réglages sont partis ? »). Compact : les
     leviers experts n'apparaissent que s'ils dévient du défaut."""
     fam = family or _train_type(ds)
+    mode = training_mode(ds)
+    if mode == 'full_transformer':
+        # Dense Krea is a different artifact and a different optimiser recipe,
+        # not a LoRA with a few toggles changed.  Keep its provenance free of
+        # rank/alpha/network keys: those fields would claim adapter geometry that
+        # the emitted config intentionally does not contain.
+        dense_ds = (_train_context_view(
+            ds, fam, getattr(ds, 'train_variant', None),
+            base_model=getattr(ds, 'train_base_model', None),
+            training_mode=mode) if fam != _train_type(ds) else ds)
+        _assert_full_transformer_recipe(dense_ds)
+        return {
+            'training_mode': 'full_transformer',
+            'artifact_kind': 'full_transformer',
+            'model_arch': 'krea2',
+            'effective_base': FULL_TRANSFORMER_BASE,
+            'vae_path': FULL_TRANSFORMER_VAE,
+            'resolution': [KREA_TRAIN_RESOLUTION],
+            'caption_dropout_rate': 0.05,
+            'cache_latents_to_disk': True,
+            'cache_text_embeddings': True,
+            'save_every': FULL_TRANSFORMER_SAVE_EVERY,
+            'max_step_saves': 1,
+            'save_dtype': 'bf16',
+            'batch_size': 1,
+            'grad_accum': 1,
+            'train_unet': True,
+            'train_text_encoder': False,
+            'unload_text_encoder': True,
+            'gradient_checkpointing': True,
+            'noise_scheduler': 'flowmatch',
+            'timestep_type': 'linear',
+            'optimizer': 'adafactor',
+            'lr': 1e-6,
+            'dtype': 'bf16',
+            'quantize': False,
+            'quantize_te': False,
+            'low_vram': False,
+            'sample_every': FULL_TRANSFORMER_SAMPLE_EVERY,
+            'guidance_scale': 4,
+            'sample_steps': 25,
+            'trigger': _safe_trigger(dense_ds),
+            'masked': (bool(masked) if isinstance(masked, bool)
+                       else person_masking_enabled(dense_ds)),
+        }
     rank = _lora_rank(ds, fam)
     zrecipe = (zimage_training_recipe(getattr(ds, 'train_variant', None),
                                       getattr(ds, 'train_base_model', None))
                if fam == 'zimage' else None)
     snap = {
+        'training_mode': 'lora',
+        'artifact_kind': 'lora',
         'rank': rank,
         'alpha': _lora_alpha_eff(ds, rank, fam),
         # The resolution ACTUALLY emitted (slider mode defaults to 768 only), so
@@ -2389,6 +2515,83 @@ def effective_train_settings(ds, family=None) -> dict:
             'max_sample_prompts': _MAX_SAMPLE_PROMPTS}
 
 
+def _training_selection_candidate(ds, patch: dict, requested_mode) -> dict:
+    """Validate the mode/family/base/variant tuple without mutating ``ds``.
+
+    The TrainingPanel saves those four controls together.  Dense Krea only has
+    one legal tuple, so validating the mode against yesterday's persisted base
+    before applying today's explicit ``base_model=''`` would reject a perfectly
+    valid save.  Build one exact candidate first, validate it, then let the
+    caller perform a single database commit.
+    """
+    disable_slider = False
+    if 'disable_slider_for_full_transformer' in patch:
+        disable_slider = patch['disable_slider_for_full_transformer']
+        if not isinstance(disable_slider, bool):
+            raise ValueError(
+                'disable_slider_for_full_transformer must be true or false')
+
+    current_family = _train_type(ds)
+    family = current_family
+    if 'train_type' in patch:
+        raw_family = patch.get('train_type')
+        if not isinstance(raw_family, str):
+            raise ValueError('train_type must be a supported model family')
+        family = raw_family.strip().lower()
+        if family not in fds.TRAIN_TYPES:
+            raise ValueError('train_type must be one of ' + ', '.join(fds.TRAIN_TYPES))
+    family_changed = family != current_family
+
+    if family_changed:
+        remembered_base, remembered_variant = fds.remembered_family_base(ds, family)
+        base_model = remembered_base if remembered_base is not None else ''
+        variant = remembered_variant or _default_variant_for(family)
+    else:
+        base_model = getattr(ds, 'train_base_model', None) or ''
+        variant = (getattr(ds, 'train_variant', None)
+                   or _default_variant_for(family))
+
+    if 'base_model' in patch:
+        raw_base = patch.get('base_model')
+        if raw_base is not None and not isinstance(raw_base, str):
+            raise ValueError('base_model must be a string or empty')
+        base_model = (raw_base or '').strip()
+    if 'variant' in patch:
+        raw_variant = patch.get('variant')
+        if not isinstance(raw_variant, str) or not raw_variant.strip():
+            raise ValueError('variant must be a supported model variant')
+        variant = raw_variant.strip().lower()
+    else:
+        variant = str(variant or _default_variant_for(family)).strip().lower()
+    if family == 'krea' and variant == 'raw':
+        variant = 'base'
+    if variant not in _valid_variants_for(family):
+        raise ValueError(
+            f'variant must be one of {", ".join(_valid_variants_for(family))} '
+            f'for {family}')
+
+    mode = (normalize_training_mode(requested_mode)
+            if requested_mode is not None else training_mode(ds))
+    if disable_slider and mode != 'full_transformer':
+        raise ValueError(
+            'disable_slider_for_full_transformer requires '
+            "training_mode='full_transformer'")
+    candidate_slider = _PERSISTED
+    if disable_slider:
+        slider_settings = _slider_settings(ds)
+        slider_settings.pop('enabled', None)
+        candidate_slider = (json.dumps(slider_settings)
+                            if slider_settings else None)
+    candidate = _train_context_view(
+        ds, family, variant, base_model=base_model, training_mode=mode,
+        train_slider=candidate_slider)
+    _assert_full_transformer_recipe(candidate)
+    return {'family': family, 'base_model': base_model, 'variant': variant,
+            'mode': mode, 'family_changed': family_changed,
+            'disable_slider': disable_slider,
+            'train_slider': candidate_slider}
+
+
 def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -> dict:
     """Valide + fusionne un patch {rank?, resolution?, save_every?, sample_every?,
     sample_prompts?} dans train_settings. Une clé à None/'auto'/vide est RETIRÉE
@@ -2396,6 +2599,23 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    # `training_mode` is a first-class dataset column, not an ai-toolkit expert
+    # knob and not part of presets. It shares this endpoint so the TrainingPanel
+    # can persist the selector atomically with any advanced-options patch.
+    requested_training_mode = None
+    selection = None
+    if _settings is None:
+        if 'training_mode' in patch:
+            requested_training_mode = normalize_training_mode(patch['training_mode'])
+        if any(key in patch for key in
+               ('training_mode', 'train_type', 'base_model', 'variant',
+                'disable_slider_for_full_transformer')):
+            selection = _training_selection_candidate(
+                ds, patch, requested_training_mode)
+            if (selection['family_changed']
+                    and any(key in patch for key in TRAIN_SETTING_KEYS)):
+                raise ValueError(
+                    'change train_type separately from advanced training settings')
     # ``_settings`` is the preset path's private, unpersisted candidate.  Reusing
     # this validator keeps every acceptance/rejection rule identical while a
     # preset validates its complete replacement before making one DB write.
@@ -2711,8 +2931,33 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
             raise ValueError(f'{key} must be a positive integer (or auto)')
     if _settings is not None:
         return cur
+    if selection and selection['family_changed']:
+        # Stash/restore the family-scoped base/settings in-memory only.  The
+        # explicit base/variant below and train_settings above then join it in
+        # the endpoint's one authoritative commit.
+        fds.set_train_type(
+            user_id, dataset_id, selection['family'], commit=False,
+            target_training_mode=selection['mode'])
+        cur = _train_settings(ds)
+    if selection:
+        if 'train_type' in patch or selection['family_changed']:
+            ds.train_type = selection['family']
+        if 'base_model' in patch or selection['family_changed']:
+            ds.train_base_model = selection['base_model'] or None
+        if 'variant' in patch or selection['family_changed']:
+            ds.train_variant = selection['variant']
+        if selection['disable_slider']:
+            ds.train_slider = selection['train_slider']
     ds.train_settings = json.dumps(cur) if cur else None
-    fds.db.session.commit()
+    if requested_training_mode is not None:
+        ds.training_mode = requested_training_mode
+    try:
+        fds.db.session.commit()
+    except Exception:
+        # A family transition and Slider disable can touch several columns.
+        # Never leave their in-memory half-state visible after a failed commit.
+        fds.db.session.rollback()
+        raise
     return effective_train_settings(ds)
 
 
@@ -4044,6 +4289,20 @@ def _apply_slider_overrides(ds, process: dict, family: str | None = None) -> dic
     return process
 
 
+def _assert_full_transformer_recipe(ds) -> None:
+    """Validate the intentionally narrow Krea 2 dense-training MVP."""
+    if not _is_full_transformer(ds):
+        return
+    if _train_type(ds) != 'krea':
+        raise ValueError('full_transformer training is supported only for Krea 2')
+    if not _krea_is_raw(ds):
+        raise ValueError('full_transformer training requires Krea-2-Raw (Turbo is not supported)')
+    if str(getattr(ds, 'train_base_model', None) or '').strip():
+        raise ValueError('full_transformer training does not support a custom base model')
+    if slider_mode_enabled(ds):
+        raise ValueError('full_transformer training is incompatible with Slider LoRA mode')
+
+
 def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder=None) -> dict:
     """Job-config ai-toolkit pour la recette Z-Image validée (Turbo/Base/De-Turbo).
     Clés alignées sur ce que génère
@@ -4061,6 +4320,9 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
     dans les 3 familles - aucun appel à _output_dir() (pas d'ai-toolkit local requis).
     Défaut (None) = comportement historique inchangé (`_run_root(ds)`) - c'est aussi
     le dossier où atterrit training.log, l'invariant que « 📂 Run folder » ouvre."""
+    mode = training_mode(ds)
+    if mode == 'full_transformer' and _train_type(ds) != 'krea':
+        _assert_full_transformer_recipe(ds)
     if _train_type(ds) == 'sdxl':
         cfg_ = _build_job_config_sdxl(ds, dataset_folder, steps, training_folder=training_folder)
         _apply_style_overrides(ds, cfg_['config']['process'][0], 'sdxl')
@@ -4069,6 +4331,10 @@ def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder
         return cfg_
     if _train_type(ds) == 'krea':
         cfg_ = _build_job_config_krea(ds, dataset_folder, steps, training_folder=training_folder)
+        # Dense training must stay free of every LoRA-specific post-processor.
+        # The dedicated builder already emits the complete conservative recipe.
+        if mode == 'full_transformer':
+            return cfg_
         _apply_style_overrides(ds, cfg_['config']['process'][0], 'krea')
         _apply_slider_overrides(ds, cfg_['config']['process'][0], 'krea')
         _apply_dual_captions(ds, cfg_['config']['process'][0], dataset_folder)
@@ -4188,6 +4454,69 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
     (garde _aitoolkit_supports_krea). Réseau = 'lora' : VÉRIFIÉ canonique 2026-06-26.
     Résolution KREA_TRAIN_RESOLUTION (1024, TE déchargé) car 768 seul tenait sinon."""
     trigger = _safe_trigger(ds)
+    if _is_full_transformer(ds):
+        _assert_full_transformer_recipe(ds)
+        return {
+            'job': 'extension',
+            'config': {
+                # Krea 2 Community License requires derivative model names to
+                # begin with "Krea"; the job/save root inherits this value.
+                'name': f'Krea_full_{trigger}',
+                'process': [{
+                    'type': 'sd_trainer',
+                    'training_folder': (training_folder if training_folder
+                                        else str(_run_root(ds))),
+                    'device': 'cuda:0',
+                    'trigger_word': trigger,
+                    # Deliberately NO `network` key: ai-toolkit interprets its
+                    # absence as optimisation of the actual transformer weights.
+                    'save': {
+                        'dtype': 'bf16',
+                        'save_every': FULL_TRANSFORMER_SAVE_EVERY,
+                        'max_step_saves_to_keep': 1,
+                    },
+                    'datasets': [{
+                        'folder_path': dataset_folder,
+                        'caption_ext': 'txt',
+                        'caption_dropout_rate': 0.05,
+                        'cache_latents_to_disk': True,
+                        'cache_text_embeddings': True,
+                        'resolution': [KREA_TRAIN_RESOLUTION],
+                        **_mask_fields(dataset_folder),
+                    }],
+                    'train': {
+                        'batch_size': 1,
+                        'steps': steps,
+                        'gradient_accumulation': 1,
+                        'train_unet': True,
+                        'train_text_encoder': False,
+                        'unload_text_encoder': True,
+                        'gradient_checkpointing': True,
+                        'noise_scheduler': 'flowmatch',
+                        'timestep_type': 'linear',
+                        'optimizer': 'adafactor',
+                        'lr': 1e-6,
+                        'dtype': 'bf16',
+                    },
+                    'model': {
+                        'arch': 'krea2',
+                        'name_or_path': FULL_TRANSFORMER_BASE,
+                        'quantize': False,
+                        'low_vram': False,
+                        'quantize_te': False,
+                        'model_kwargs': {'vae_path': FULL_TRANSFORMER_VAE},
+                    },
+                    'sample': {
+                        'sampler': 'flowmatch',
+                        'neg': '',
+                        'sample_every': FULL_TRANSFORMER_SAMPLE_EVERY,
+                        'guidance_scale': 4,
+                        'sample_steps': 25,
+                        'prompts': _sample_prompts(ds, trigger),
+                    },
+                }],
+            },
+        }
     is_raw = _krea_is_raw(ds)
     _krank = _lora_rank(ds, 'krea')   # défaut 32/32 (recherche) ; éditable via train_settings
     # Custom weights (local-only, same krea2 arch) override name_or_path; the TE/VAE
@@ -5722,7 +6051,8 @@ _VRAM24_FAMILIES = ('krea', 'flux')   # familles 12B qui recommandent ~24 GB à 
 
 
 def training_preflight(user_id, dataset_id, train_type=None, variant=None,
-                       lane=None, masked=None) -> dict:
+                       lane=None, masked=None, training_mode=None,
+                       base_model=_PERSISTED) -> dict:
     """Pre-launch sanity report: {'blockers': [...], 'warnings': [...]}. Blockers
     stop the launch (too few images for the family); warnings ask for one explicit
     confirm in the UI. Pure reads — never mutates, never raises on probe failures
@@ -5756,10 +6086,16 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     if not stored_ds:
         raise ValueError('dataset not found')
     ttype = _train_type(stored_ds, train_type)
-    ds = _train_context_view(stored_ds, ttype, variant)
+    mode = normalize_training_mode(
+        training_mode if training_mode is not None
+        else getattr(stored_ds, 'training_mode', None))
+    ds = _train_context_view(
+        stored_ds, ttype, variant, base_model=base_model,
+        training_mode=mode)
     label = _FAMILY_LABEL.get(ttype, ttype)
     blockers, warnings = [], []
     checks = []
+    hf_cloud_token_status = None
     # `warnings` is a flat list of strings (the modal renders it verbatim), so the
     # lane filter cannot recognise a machine-scope line by reading it. Record the
     # indices as they are appended instead — the only reliable pairing.
@@ -5775,7 +6111,8 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         # "Continue anyway" ack can waive; False = a physical impossibility the ack
         # never covers. `hint` = the honest one-line risk shown next to the ack.
         # `scope`: 'dataset' = a property of the images/captions (true on any lane);
-        # 'machine' = a read of THIS box, meaningless when the job runs elsewhere.
+        # 'machine' = a read of THIS box, meaningless when the job runs elsewhere;
+        # 'cloud' = a remote-lane prerequisite such as the dedicated HF token.
         entry = {'id': cid, 'label': clabel, 'status': status,
                  'detail': detail, 'target': target, 'scope': scope}
         if bypassable is not None:
@@ -5806,6 +6143,65 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
     # caption/composition/identité sans objet ; la vraie exigence est la paire de
     # prompts qui définit la direction du slider.
     slider = slider_mode_enabled(ds)
+
+    # Dense Krea is intentionally a separate, cloud-only lane. Surface every
+    # physical incompatibility in the normal structured preflight instead of
+    # letting a paid pod discover it after provisioning.
+    if mode == 'full_transformer':
+        dense_issues = []
+        if (lane or 'local') != 'cloud':
+            dense_issues.append('full_transformer training is cloud-only')
+        if ttype != 'krea':
+            dense_issues.append('it is supported only for Krea 2')
+        elif not _krea_is_raw(ds):
+            dense_issues.append('Krea-2-Raw is required (Turbo is not supported)')
+        if str(getattr(ds, 'train_base_model', None) or '').strip():
+            dense_issues.append('custom base models are not supported')
+        if slider:
+            dense_issues.append('Slider LoRA mode must be disabled')
+        if dense_issues:
+            message = '; '.join(dense_issues)
+            blockers.append(message)
+            _check('training_mode', 'Dense training compatibility', 'fail',
+                   message, 'gf-training', bypassable=False)
+        else:
+            _check('training_mode', 'Dense training compatibility', 'ok',
+                   'Krea-2-Raw full transformer training will run in the cloud')
+
+        # Reuse the launch's definitive credential validator.  This may contact
+        # Hugging Face, but it never reserves a pod/GPU; a paid run must not be
+        # the first place an absent token, wrong token type/scope, or unaccepted
+        # Krea licence is discovered.
+        try:
+            from . import cloud_training as cloud
+            hf_cloud_token_status = cloud.full_transformer_token_preflight()
+            if not isinstance(hf_cloud_token_status, dict):
+                raise RuntimeError('invalid token preflight response')
+        except Exception:
+            hf_cloud_token_status = {
+                'ok': False,
+                'configured': bool(cfg.secret('HF_CLOUD_TOKEN')),
+                'error': ('HF_CLOUD_TOKEN could not be validated. Configure a '
+                          'dedicated fine-grained Hugging Face token with Krea '
+                          'read and private-repository write access.'),
+            }
+        if hf_cloud_token_status.get('ok'):
+            namespace = hf_cloud_token_status.get('namespace')
+            detail = ('Dedicated HF_CLOUD_TOKEN validated'
+                      + (f' for {namespace}' if namespace else ''))
+            _check('hf_cloud_token', 'Hugging Face cloud token', 'ok',
+                   detail, scope='cloud')
+        else:
+            detail = (hf_cloud_token_status.get('error')
+                      or 'HF_CLOUD_TOKEN is missing or invalid')
+            blockers.append(detail)
+            _check(
+                'hf_cloud_token', 'Hugging Face cloud token', 'fail',
+                detail, 'gf-training', bypassable=False,
+                hint=('Add a dedicated fine-grained HF_CLOUD_TOKEN in Settings, '
+                      'with read access to krea/Krea-2-Raw and private-repository '
+                      'write access.'),
+                scope='cloud')
 
     # 1) minimum d'images par famille (slider : plancher substrat réduit)
     floor, reco = (TRAIN_MIN_IMAGES_SLIDER if slider
@@ -6226,6 +6622,8 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             # Echoed so the modal can say WHERE this run is headed (and, implicitly,
             # why no GPU-memory row is listed) without re-deriving it client-side.
             'lane': ('cloud' if (lane or 'local') == 'cloud' else 'local'),
+            'training_mode': mode,
+            'hf_cloud_token_status': hf_cloud_token_status,
             'kept': n, 'floor': floor, 'recommended': reco}
 
 
@@ -6397,7 +6795,8 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
                     vae_path=_PERSISTED, te_path=_PERSISTED,
                     allow_unverified_weights: bool = False,
                     allow_not_ready: bool = False,
-                    parent_record_id=None, resumed_from=None) -> dict:
+                    parent_record_id=None, resumed_from=None,
+                    training_mode=None) -> dict:
     """Export + config + pause ComfyUI (flag) + lance l'entraînement ai-toolkit
     en CLI headless (`run.py <config>`).
 
@@ -6419,6 +6818,7 @@ def launch_training(user_id, dataset_id, steps: int | None = None, check_caption
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    _assert_local_training_mode(ds, training_mode)
     # Disque plein à mi-run = checkpoints corrompus ; refuser AVANT d'exporter.
     assert_free_disk(_output_dir(), MIN_FREE_GB_TRAIN, 'a training run')
     # Garde-fou anti double-lancement : un entraînement DÉJÀ vivant (flag levé +
@@ -6737,7 +7137,8 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                       masked=None, allow_unverified_weights=False,
                       allow_caption_mismatch=False, allow_uncaptioned=False,
                       allow_caption_quality=False, from_step=None, overrides=None,
-                      allow_not_ready=False, _allow_dead_predecessor=False) -> dict:
+                      allow_not_ready=False, _allow_dead_predecessor=False,
+                      training_mode='lora') -> dict:
     """Reprend l'entraînement d'une base et vise ``step_de_reprise + extra_steps``.
     ai-toolkit auto-resume depuis le training_folder ; il faut donc qu'au moins un
     checkpoint existe POUR CETTE BASE.
@@ -6770,6 +7171,7 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    _assert_local_training_mode(ds, training_mode)
     base = (ds.train_base_model if ds else None) if base_model is _PERSISTED else base_model
     fam = _train_type(ds, train_type) if ds else train_type
     var = (variant or (ds.train_variant if ds else None)
@@ -6888,7 +7290,8 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
                           allow_not_ready=allow_not_ready,
                           allow_unverified_weights=launch_allow_unverified,
                           parent_record_id=(_parent.id if _parent else None),
-                          resumed_from=resume_step)
+                          resumed_from=resume_step,
+                          training_mode=training_mode)
     res['resumed_from'] = resume_step
     res['target_steps'] = resume_step + extra
     return res
@@ -7297,7 +7700,7 @@ def retry_local_run(user_id, record_id, **confirmations) -> dict:
     return launch_training(
         user_id, rec.dataset_id, steps=rec.steps,
         base_model=(rec.base_model or None), variant=rec.variant,
-        train_type=rec.family, masked=bool(rec.masked),
+        train_type=rec.family, masked=bool(rec.masked), training_mode='lora',
         **{k: bool(confirmations.get(k)) for k in CONFIRMATION_FLAGS})
 
 
@@ -7689,13 +8092,20 @@ def _save_queue(q: list) -> None:
     queue_manager._set_system_state(TRAIN_QUEUE_KEY, q, ttl_seconds=None)
 
 
+def _queued_training_mode(item: dict) -> str:
+    """Frozen queue mode; pre-feature or damaged rows stay LoRA-safe."""
+    value = item.get('training_mode', 'lora')
+    return value if value in TRAINING_MODES else 'lora'
+
+
 def enqueue_training(user_id, dataset_id, extra_steps=None,
                      base_model=_PERSISTED, variant=None, train_type=None,
                      allow_caption_mismatch=False, not_before=None, masked=None,
                      steps=None, allow_uncaptioned=False,
                      allow_caption_quality=False,
                      vae_path=_PERSISTED, te_path=_PERSISTED,
-                     allow_unverified_weights=False, allow_not_ready=False) -> dict:
+                     allow_unverified_weights=False, allow_not_ready=False,
+                     training_mode=None) -> dict:
     """Ajoute un dataset à la file (lancé à la fin du training courant).
 
     `base_model`/`variant` permettent de CHOISIR explicitement la base du job en
@@ -7710,6 +8120,7 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
+    mode = _assert_local_training_mode(ds, training_mode)
     # Every queued job re-exports the CURRENT dataset, including +N checkpoint
     # resumes. Validate now and again when the item reaches the GPU.
     assert_trainable(dataset_id, train_type=train_type,
@@ -7732,7 +8143,8 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         var = recipe['variant']
     elif var not in _valid_variants_for(ttype):
         var = _default_variant_for(ttype)
-    queue_view = _train_context_view(ds, ttype, var)
+    queue_view = _train_context_view(
+        ds, ttype, var, base_model=base, training_mode=mode)
     assert_zimage_custom_recipe_confirmed(
         ttype, base, var,
         allow_unverified_weights=allow_unverified_weights)
@@ -7808,6 +8220,9 @@ def enqueue_training(user_id, dataset_id, extra_steps=None,
         steps_target = None
     item = {'dataset_id': int(dataset_id), 'user_id': str(user_id), 'extra_steps': extra_steps,
             'base_model': base, 'variant': var, 'train_type': ttype,
+            # Execution mode is a queued-run fact.  A later panel save must not
+            # reinterpret an already planned LoRA as dense training.
+            'training_mode': mode,
             # Resolved HERE, at enqueue: the queue item freezes what the user saw
             # when they queued it (like base/variant/steps just above). `None` =
             # no explicit request → the dataset's stored setting.
@@ -7869,6 +8284,7 @@ def train_queue_view(user_id) -> list:
                     'base_model': bm, 'base_label': base_label,
                     'train_type': it.get('train_type'),
                     'variant': it.get('variant'),
+                    'training_mode': _queued_training_mode(it),
                     'recipe_version': it.get('recipe_version'),
                     'effective_base': it.get('effective_base'),
                     'training_adapter': it.get('training_adapter'),
@@ -7881,6 +8297,9 @@ def _launch_queued_item(item) -> None:
     ds_id = item['dataset_id']
     uid = item.get('user_id')
     extra = item.get('extra_steps')
+    # Queue rows written before training modes existed are historical LoRA
+    # plans.  Missing/corrupt state therefore degrades to LoRA, never dense.
+    mode = _queued_training_mode(item)
     if extra:
         continue_training(
             uid, ds_id, extra_steps=extra,
@@ -7895,6 +8314,7 @@ def _launch_queued_item(item) -> None:
             allow_not_ready=bool(item.get('allow_not_ready')),
             allow_unverified_weights=bool(
                 item.get('allow_unverified_weights')),
+            training_mode=mode,
             # _advance_training_queue deliberately keeps the dead predecessor's
             # flag raised until the next PID is published (no ComfyUI GPU flap).
             _allow_dead_predecessor=True)
@@ -7913,7 +8333,8 @@ def _launch_queued_item(item) -> None:
                         # was already preflighted, so re-clear the confirmable gate.
                         vae_path=item.get('vae_path', _PERSISTED),
                         te_path=item.get('te_path', _PERSISTED),
-                        allow_unverified_weights=bool(item.get('allow_unverified_weights')))
+                        allow_unverified_weights=bool(item.get('allow_unverified_weights')),
+                        training_mode=mode)
 
 
 def recover_training_fence() -> str | None:

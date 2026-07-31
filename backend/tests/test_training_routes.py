@@ -165,6 +165,9 @@ def test_continue_forwards_kwargs(client, monkeypatch):
         'allow_uncaptioned': True,
         'allow_caption_quality': True,
         'allow_not_ready': False,   # always forwarded like the other confirm flags
+        # The source is a historical local checkpoint, therefore always a LoRA
+        # regardless of the dataset selector's current value.
+        'training_mode': 'lora',
     }
 
 
