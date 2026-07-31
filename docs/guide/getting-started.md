@@ -68,8 +68,9 @@ git pull
 docker compose -f docker-compose.gpu.yml up -d --build
 ```
 
-If `/data` alone is not writable, `LDS_FORCE_CHOWN=true` is the last resort: it
-changes ownership only for the `LDS_DATA` mount, never the ComfyUI or bank mounts.
+If `/data` or existing contents beneath it are not writable, `LDS_FORCE_CHOWN=true`
+is the last resort: it recursively changes ownership only for the `LDS_DATA` mount,
+never the ComfyUI or bank mounts.
 
 The full install matrix (Windows release ZIP, GPU requirements, external tools)
 lives in the README on GitHub.

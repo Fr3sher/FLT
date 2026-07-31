@@ -86,8 +86,8 @@ services:
       # Ollama is NOT in this image (auto-captioning, framing, watermark detection).
       # Run it on the host, then uncomment this AND the extra_hosts block below.
       #- LDS_OLLAMA_URL=http://ollama.internal:11434
-      # Last resort if /data cannot be made writable from the host. This is
-      # deliberately interpolated and applies ONLY to /data, never the other mounts.
+      # Last resort if /data or existing contents beneath it cannot be made writable
+      # from the host. This recursively adopts ONLY LDS_DATA (/data), never other mounts.
       - LDS_FORCE_CHOWN=${LDS_FORCE_CHOWN:-false}
       # --- upstream's ComfyUI image ---
       # Must match the owner of the folders mounted above (`id -u` / `id -g`).
