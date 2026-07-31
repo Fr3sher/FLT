@@ -1,4 +1,10 @@
 export const CANVAS_FAMILY_SELECTION_KEY = 'lds.canvasModelFamilies';
+export const CANVAS_EXTRA_FILTERS_KEY = 'lds.canvasExtraFilters';
+export const CANVAS_STATUS_ORDER = ['active', 'completed', 'error', 'unknown'];
+
+const ACTIVE_STATUSES = new Set([
+  'preparing', 'provisioning', 'uploading', 'training', 'downloading', 'terminating',
+]);
 
 export const CANVAS_FAMILY_LABELS = {
   zimage: 'Z-Image', krea: 'Krea 2', sdxl: 'SDXL',
@@ -13,6 +19,53 @@ const asFamilies = (value) => (Array.isArray(value) ? value : [])
   .filter((family, index, all) => all.indexOf(family) === index);
 
 export const familyLabel = (family) => CANVAS_FAMILY_LABELS[family] || family;
+
+export function runStatusCategory(node) {
+  const status = String(node?.status || '').trim().toLowerCase();
+  if (ACTIVE_STATUSES.has(status)) return 'active';
+  if (status === 'done') return 'completed';
+  if (status.includes('error') || ['failed', 'cancelled', 'stopped'].includes(status)) return 'error';
+  // Successful local runs have no CloudTrainingRun row, hence no status. The
+  // backend stamps the one failed local record as `error`; every other local
+  // provenance record is a completed run even after its saves were cleaned up.
+  if (!status && node?.source === 'local') return 'completed';
+  if (!status && (node?.checkpoint_ready === true || (node?.checkpoints || []).length > 0)) {
+    return 'completed';
+  }
+  return 'unknown';
+}
+
+export function availableStatusCategories(trees) {
+  const found = new Set();
+  for (const state of Object.values(trees || {})) {
+    for (const node of (state?.tree?.nodes || [])) found.add(runStatusCategory(node));
+  }
+  return CANVAS_STATUS_ORDER.filter((status) => found.has(status));
+}
+
+export function readCanvasExtraFilters(store, key = CANVAS_EXTRA_FILTERS_KEY) {
+  try {
+    const value = JSON.parse(store?.getItem(key));
+    return {
+      statuses: Array.isArray(value?.statuses) ? value.statuses.filter((s) => CANVAS_STATUS_ORDER.includes(s)) : null,
+      showPinned: value?.showPinned !== false,
+    };
+  } catch {
+    return { statuses: null, showPinned: true };
+  }
+}
+
+export function writeCanvasExtraFilters(store, value, key = CANVAS_EXTRA_FILTERS_KEY) {
+  try {
+    store?.setItem(key, JSON.stringify({
+      statuses: Array.isArray(value?.statuses) ? value.statuses.filter((s) => CANVAS_STATUS_ORDER.includes(s)) : null,
+      showPinned: value?.showPinned !== false,
+    }));
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export function availableModelFamilies(datasets) {
   const found = asFamilies((datasets || []).flatMap((d) => d?.families || []));
@@ -72,9 +125,24 @@ export function filterDatasetIdsByFamilies(datasets, selectedIds, selectedFamili
 /** Remove runs from unselected model families while keeping the lineage shape
  * valid: edges to hidden runs disappear and a retained orphan becomes a root. */
 export function filterLineageTreeByFamilies(tree, selectedFamilies) {
+  return filterLineageTree(tree, { families: selectedFamilies });
+}
+
+export function filterLineageTree(tree, {
+  families = null, statuses = null, query = '', datasetName = '',
+} = {}) {
   if (!tree || !Array.isArray(tree.nodes)) return tree;
-  const wanted = new Set(asFamilies(selectedFamilies));
-  const nodes = tree.nodes.filter((node) => wanted.has(node?.train_type));
+  const wantedFamilies = families == null ? null : new Set(asFamilies(families));
+  const wantedStatuses = statuses == null ? null : new Set(statuses);
+  const needle = String(query || '').trim().toLowerCase();
+  const nodes = tree.nodes.filter((node) => {
+    if (wantedFamilies && !wantedFamilies.has(node?.train_type)) return false;
+    if (wantedStatuses && !wantedStatuses.has(runStatusCategory(node))) return false;
+    if (!needle) return true;
+    return [datasetName, node?.dataset_name, node?.record_id, node?.run_id,
+      node?.train_type, node?.variant, node?.base_model, node?.note]
+      .some((value) => String(value ?? '').toLowerCase().includes(needle));
+  });
   const ids = new Set(nodes.map((node) => node.record_id));
   const fallbackCurrent = nodes[nodes.length - 1]?.record_id ?? null;
   return {

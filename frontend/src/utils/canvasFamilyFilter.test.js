@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   CANVAS_FAMILY_SELECTION_KEY, availableModelFamilies,
-  filterDatasetIdsByFamilies, filterLineageTreeByFamilies,
-  readFamilySelection, resolveFamilySelection,
+  availableStatusCategories, filterDatasetIdsByFamilies, filterLineageTree,
+  filterLineageTreeByFamilies, readCanvasExtraFilters, readFamilySelection,
+  resolveFamilySelection, runStatusCategory,
   toggleFamilySelection, writeFamilySelection,
 } from './canvasFamilyFilter.js';
 
@@ -71,4 +72,36 @@ test('mixed datasets retain only runs and edges from selected model families', (
   assert.equal(filtered.root_id, 2);
   assert.equal(filtered.current_id, 3);
   assert.equal(tree.nodes.length, 3, 'the cached raw tree is untouched');
+});
+
+test('run statuses collapse backend states into useful canvas categories', () => {
+  assert.equal(runStatusCategory({ status: 'training' }), 'active');
+  assert.equal(runStatusCategory({ status: 'done' }), 'completed');
+  assert.equal(runStatusCategory({ status: null, checkpoint_ready: true }), 'completed');
+  assert.equal(runStatusCategory({ status: null, source: 'local', checkpoints: [] }), 'completed');
+  assert.equal(runStatusCategory({ status: 'error_pod_kept' }), 'error');
+  assert.equal(runStatusCategory({ status: null }), 'unknown');
+  assert.deepEqual(availableStatusCategories({ one: { tree: { nodes: [
+    { status: 'done' }, { status: 'training' }, { status: 'error' },
+  ] } } }), ['active', 'completed', 'error']);
+});
+
+test('combined run filters search fields and prune dangling edges', () => {
+  const tree = { root_id: 1, current_id: 2,
+    nodes: [
+      { record_id: 1, train_type: 'krea', variant: 'photo', status: 'done' },
+      { record_id: 2, train_type: 'zimage', status: 'error' },
+    ], edges: [{ parent: 1, child: 2 }] };
+  const filtered = filterLineageTree(tree, { families: ['krea'], statuses: ['completed'],
+    query: 'alice', datasetName: 'Alice portraits' });
+  assert.deepEqual(filtered.nodes.map((node) => node.record_id), [1]);
+  assert.deepEqual(filtered.edges, []);
+  assert.equal(tree.nodes.length, 2, 'the cached raw tree is untouched');
+});
+
+test('extra filters keep an explicit empty status choice and safe defaults', () => {
+  const store = memoryStore();
+  assert.deepEqual(readCanvasExtraFilters(store), { statuses: null, showPinned: true });
+  store.setItem('lds.canvasExtraFilters', JSON.stringify({ statuses: [], showPinned: false }));
+  assert.deepEqual(readCanvasExtraFilters(store), { statuses: [], showPinned: false });
 });

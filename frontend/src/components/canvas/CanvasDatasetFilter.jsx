@@ -15,6 +15,8 @@ import { familyLabel } from '../../utils/canvasFamilyFilter';
 export default function CanvasDatasetFilter({
   datasets, selected, onToggle, onAll, onNone,
   families, selectedFamilies, onToggleFamily, onAllFamilies, onNoFamilies,
+  query, onQueryChange, statuses, selectedStatuses, onToggleStatus,
+  showPinned, onTogglePinned, onResetFilters, visibleRuns,
 }) {
   const wide = typeof window !== 'undefined' && window.matchMedia
     ? window.matchMedia('(min-width: 640px)').matches
@@ -44,6 +46,7 @@ export default function CanvasDatasetFilter({
           className="flex h-9 items-center gap-1.5 rounded-md border border-border bg-app/60 px-2.5 text-content text-[0.75rem] font-semibold hover:border-indigo-400/50">
           <span aria-hidden>{open ? '▾' : '▸'}</span> Datasets
           <span className="font-normal text-content-muted">· {selectionSummary(sel.size, total)}</span>
+          <span className="font-normal text-content-subtle">· {visibleRuns} runs shown</span>
         </button>
         {open && total > 0 && (
           <div className="flex items-center gap-1.5">
@@ -66,7 +69,38 @@ export default function CanvasDatasetFilter({
           </p>
         ) : (
           <>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 border-t border-border pt-2"
+          <div className="mt-2 grid gap-2 border-t border-border pt-2 sm:grid-cols-[minmax(12rem,1fr)_auto_auto]">
+            <label className="sr-only" htmlFor="canvas-filter-search">Search canvas runs</label>
+            <input id="canvas-filter-search" type="search" value={query}
+              onChange={(e) => onQueryChange(e.target.value)}
+              placeholder="Search dataset, run ID, model or variant…"
+              className="h-9 min-w-0 rounded-md border border-border bg-app/60 px-3 text-content text-[0.75rem] placeholder:text-content-subtle" />
+            <label className="flex min-h-9 cursor-pointer items-center gap-2 rounded-md border border-border bg-app/50 px-2 text-content text-[0.75rem]">
+              <input type="checkbox" checked={showPinned} onChange={onTogglePinned}
+                className="h-4 w-4 accent-indigo-500" />
+              Pinned images
+            </label>
+            <button type="button" onClick={onResetFilters}
+              className="h-9 rounded-md border border-border px-3 text-content-muted text-[0.75rem] hover:text-content">
+              Reset filters
+            </button>
+          </div>
+          {!!statuses?.length && (
+            <fieldset className="mt-2 flex flex-wrap items-center gap-1.5">
+              <legend className="sr-only">Filter by run status</legend>
+              <span className="text-content-muted text-[0.6875rem] font-semibold">Status</span>
+              {statuses.map((status) => (
+                <label key={status}
+                  className="flex min-h-9 cursor-pointer items-center gap-1.5 rounded-md border border-border bg-app/50 px-2 text-content text-[0.6875rem]">
+                  <input type="checkbox" checked={selectedStatuses.includes(status)}
+                    onChange={() => onToggleStatus(status)} className="h-4 w-4 accent-indigo-500" />
+                  {status === 'active' ? 'Active' : status === 'completed' ? 'Completed'
+                    : status === 'error' ? 'Errors' : 'Unknown'}
+                </label>
+              ))}
+            </fieldset>
+          )}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 pt-2"
             aria-label="Filter canvas by model">
             <span className="mr-0.5 text-content-muted text-[0.6875rem] font-semibold">Models</span>
             {(families || []).map((family) => (

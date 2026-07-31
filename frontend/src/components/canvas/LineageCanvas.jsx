@@ -243,7 +243,7 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup,
   );
 }
 
-export default function LineageCanvas({ entries, positions, imageNodes, onPinLane,
+export default function LineageCanvas({ entries, positions, imageNodes, allImageNodes = imageNodes, onPinLane,
   onSaveImageNodes, onTidyUp, onRefetchDataset }) {
   const toast = useToast();
   // ▶ Continue's LOCAL lane guard (is ai-toolkit set up at all) — the app's own
@@ -1140,7 +1140,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
   const handlePinImage = useCallback((img) => {
     const dsId = img?.dataset_id;
     if (dsId == null || img?.id == null) return;
-    const map = imageNodes?.[dsId] || {};
+    const map = allImageNodes?.[dsId] || {};
     const lane = placedRef.current.find((l) => l.datasetId === dsId);
     const geo = openGeometry(map, img.id,
       defaultImageSpot(lane?.graph, img.record_id, img.step, visibleImageNodes(map)));
@@ -1152,7 +1152,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
       image_id: row.imageId, x: row.x, y: row.y, w: row.w, h: row.h,
       visible: row.visible, group_id: row.groupId, group_pos: row.groupPos, image: row.image,
     })));
-  }, [imageNodes, onSaveImageNodes]);
+  }, [allImageNodes, onSaveImageNodes]);
 
   /* 📌 Pin ALL of a finished run's images, in one click.
      A lot spanning four checkpoints used to mean opening four galleries and
@@ -1169,8 +1169,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
   const pinCandidates = useMemo(
     () => runPinCandidates(tracker.run.data), [tracker.run.data]);
   const pinPending = useMemo(
-    () => pinBatchPendingAcrossLanes(pinCandidates, imageNodes).pending,
-    [pinCandidates, imageNodes]);
+    () => pinBatchPendingAcrossLanes(pinCandidates, allImageNodes).pending,
+    [pinCandidates, allImageNodes]);
 
   const handlePinAll = useCallback(async () => {
     const wanted = new Set(pinPending.map((c) => c.id));
@@ -1197,13 +1197,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     const undo = [];
     for (const [dsId, images] of byLane) {
       const lane = placedRef.current.find((l) => l.datasetId === dsId);
-      const laneMap = imageNodes?.[dsId] || {};
+      const laneMap = allImageNodes?.[dsId] || {};
       const res = placeImageBatch({
         graph: lane?.graph,
         // The boxes actually OCCUPIED: a strip, not the members' remembered
         // spots — a fresh pin landing squarely on a group would be exactly the
         // "nothing lands on top of anything" promise broken.
-        existing: layoutBoxes(layoutRef.current[dsId] || []),
+        existing: layoutBoxes(layoutImageNodes(visibleImageNodes(laneMap))),
         images,
         remembered: laneMap,
       });
@@ -1233,7 +1233,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
       }),
       undo,
     });
-  }, [pinPending, trackerTargets, imageNodes, onSaveImageNodes]);
+  }, [pinPending, trackerTargets, allImageNodes, onSaveImageNodes]);
 
   /* The way back. Pinning thirty pictures with one tap and offering no way out
      would be the board rearranging itself on the user's behalf; this closes

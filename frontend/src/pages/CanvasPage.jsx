@@ -5,9 +5,10 @@ import {
   readSelection, resolveSelection, toggleSelection, writeSelection,
 } from '../utils/canvasSelection';
 import {
-  availableModelFamilies, filterDatasetIdsByFamilies, readFamilySelection,
-  filterLineageTreeByFamilies, resolveFamilySelection,
-  toggleFamilySelection, writeFamilySelection,
+  availableModelFamilies, availableStatusCategories, filterDatasetIdsByFamilies,
+  filterLineageTree, readCanvasExtraFilters, readFamilySelection,
+  resolveFamilySelection, toggleFamilySelection, writeCanvasExtraFilters,
+  writeFamilySelection,
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
@@ -42,6 +43,9 @@ export default function CanvasPage() {
   const [stored, setStored] = useState(() => readSelection(
     typeof localStorage !== 'undefined' ? localStorage : null));
   const [storedFamilies, setStoredFamilies] = useState(() => readFamilySelection(
+    typeof localStorage !== 'undefined' ? localStorage : null));
+  const [query, setQuery] = useState('');
+  const [extraFilters, setExtraFilters] = useState(() => readCanvasExtraFilters(
     typeof localStorage !== 'undefined' ? localStorage : null));
   // dataset_id -> { status: 'loading'|'ready'|'error', tree, error }
   const [trees, setTrees] = useState({});
@@ -156,18 +160,27 @@ export default function CanvasPage() {
   const visibleSelected = useMemo(
     () => filterDatasetIdsByFamilies(index.datasets, selected, selectedFamilies),
     [index.datasets, selected, selectedFamilies]);
+  const statuses = useMemo(() => availableStatusCategories(trees), [trees]);
+  const selectedStatuses = useMemo(() => (extraFilters.statuses == null
+    ? statuses : statuses.filter((status) => extraFilters.statuses.includes(status))),
+  [statuses, extraFilters.statuses]);
   const modelFilterActive = selectedFamilies.length !== families.length;
   const filteredTrees = useMemo(() => {
-    if (!modelFilterActive) return trees;
     const next = {};
     for (const [id, state] of Object.entries(trees)) {
+      const row = index.datasets.find((dataset) => Number(dataset.id) === Number(id));
       next[id] = { ...state,
-        tree: state?.tree ? filterLineageTreeByFamilies(state.tree, selectedFamilies) : state?.tree };
+        tree: state?.tree ? filterLineageTree(state.tree, {
+          families: selectedFamilies, statuses: selectedStatuses, query, datasetName: row?.name,
+        }) : state?.tree };
     }
     return next;
-  }, [trees, modelFilterActive, selectedFamilies]);
+  }, [trees, selectedFamilies, selectedStatuses, query, index.datasets]);
   const filteredImageNodes = useMemo(() => {
-    if (!modelFilterActive) return imageNodes;
+    if (!extraFilters.showPinned) return {};
+    const treeFilterActive = modelFilterActive || selectedStatuses.length !== statuses.length
+      || query.trim().length > 0;
+    if (!treeFilterActive) return imageNodes;
     const next = {};
     for (const [id, map] of Object.entries(imageNodes)) {
       const allowed = new Set((filteredTrees[id]?.tree?.nodes || []).map((node) => node.record_id));
@@ -175,7 +188,8 @@ export default function CanvasPage() {
         .filter(([, node]) => allowed.has(node?.image?.record_id)));
     }
     return next;
-  }, [imageNodes, filteredTrees, modelFilterActive]);
+  }, [imageNodes, filteredTrees, modelFilterActive, selectedStatuses, statuses,
+    query, extraFilters.showPinned]);
 
   /* ✦ Tidy up: forget every moved card on the VISIBLE board. Scoped to what is
      on screen — a lane the user unticked is not on the board they are looking
@@ -276,6 +290,25 @@ export default function CanvasPage() {
     persistFamilies(toggleFamilySelection(selectedFamilies, family, families));
   }, [persistFamilies, selectedFamilies, families]);
 
+  const persistExtraFilters = useCallback((next) => {
+    setExtraFilters(next);
+    writeCanvasExtraFilters(typeof localStorage !== 'undefined' ? localStorage : null, next);
+  }, []);
+
+  const onToggleStatus = useCallback((status) => {
+    const next = selectedStatuses.includes(status)
+      ? selectedStatuses.filter((item) => item !== status)
+      : [...selectedStatuses, status];
+    persistExtraFilters({ ...extraFilters, statuses: next });
+  }, [selectedStatuses, persistExtraFilters, extraFilters]);
+
+  const onResetFilters = useCallback(() => {
+    setQuery('');
+    persist(availableIds);
+    persistFamilies(families);
+    persistExtraFilters({ statuses: null, showPinned: true });
+  }, [persist, availableIds, persistFamilies, families, persistExtraFilters]);
+
   // Fetch the genealogy of every selected dataset that has none yet, a few at a
   // time. A dataset unticked and re-ticked keeps its cached tree — the board must
   // not re-scan the disk for a filter click.
@@ -318,7 +351,10 @@ export default function CanvasPage() {
       // out again when a run is removed from the board (see LineageCanvas).
       tree: state?.tree || null,
     };
-  }), [visibleSelected, index.datasets, filteredTrees]);
+  }).filter((entry) => entry.status !== 'ready' || (entry.tree?.nodes || []).length > 0),
+  [visibleSelected, index.datasets, filteredTrees]);
+  const visibleRuns = useMemo(() => entries.reduce(
+    (count, entry) => count + (entry.tree?.nodes || []).length, 0), [entries]);
 
   return (
     <div>
@@ -350,13 +386,25 @@ export default function CanvasPage() {
         selectedFamilies={selectedFamilies}
         onToggleFamily={onToggleFamily}
         onAllFamilies={() => persistFamilies(families)}
-        onNoFamilies={() => persistFamilies([])} />
+        onNoFamilies={() => persistFamilies([])}
+        query={query}
+        onQueryChange={setQuery}
+        statuses={statuses}
+        selectedStatuses={selectedStatuses}
+        onToggleStatus={onToggleStatus}
+        showPinned={extraFilters.showPinned}
+        onTogglePinned={() => persistExtraFilters({
+          ...extraFilters, showPinned: !extraFilters.showPinned,
+        })}
+        onResetFilters={onResetFilters}
+        visibleRuns={visibleRuns} />
 
       {index.status === 'loading'
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
-            imageNodes={filteredImageNodes} onSaveImageNodes={onSaveImageNodes}
+            imageNodes={filteredImageNodes} allImageNodes={imageNodes}
+            onSaveImageNodes={onSaveImageNodes}
             onPinLane={onPinLane} onTidyUp={onTidyUp}
             onRefetchDataset={onRefetchDataset} />
         )}
