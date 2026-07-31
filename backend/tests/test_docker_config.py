@@ -135,6 +135,28 @@ def test_launcher_can_never_abort_the_upstream_boot():
     assert '/app/.venv' in script or '${STUDIO_DIR}/.venv' in script
 
 
+def test_launcher_preserves_backend_exit_status_and_restart_pacing():
+    """The logging pipe must not turn every backend exit into sed's status 0.
+    Code 75 is the intentional Settings restart and must be immediate; a crash is
+    delayed so a broken install cannot become a hot respawn loop."""
+    script = _read('packaging/docker/studio_launch.sh')
+
+    capture = script.index('studio_status=${PIPESTATUS[0]}')
+    deliberate = script.index('if [ "${studio_status}" -eq 75 ]', capture)
+    immediate = script.index('continue', deliberate)
+    delay = script.index('sleep 10', immediate)
+
+    assert capture < deliberate < immediate < delay
+
+
+def test_docker_boot_scripts_are_pinned_to_lf_and_launcher_has_no_crlf():
+    attributes = _read('.gitattributes')
+    launcher = (REPO_ROOT / 'packaging' / 'docker' / 'studio_launch.sh').read_bytes()
+
+    assert 'packaging/docker/*.sh text eol=lf' in attributes
+    assert b'\r\n' not in launcher
+
+
 def test_healthcheck_covers_both_halves_of_the_gpu_image(monkeypatch):
     """One container, two services: a live ComfyUI with a dead studio is a broken
     stack, and Docker only gets one exit code to say so in. Imported rather than
@@ -159,6 +181,9 @@ def test_gpu_image_layers_on_the_comfyui_base_without_hijacking_it():
     assert image_env['LDS_CONFIG'] == '/data/config.json'
     assert image_env['LDS_HOST'] == '0.0.0.0'
     assert image_env['LDS_PORT'] == str(port)
+    assert image_env['LDS_RUNTIME'] == 'docker-gpu'
+    assert image_env['LDS_RESTART_MODE'] == 'supervisor'
+    assert image_env['LDS_BIND_MANAGED'] == '1'
     assert f'EXPOSE {port}' in dockerfile
     assert 'EXPOSE 8188' in dockerfile
 
@@ -204,6 +229,20 @@ def test_gpu_compose_publishes_both_uis_and_reserves_the_gpu():
     assert f'LDS_PORT={port}' in compose
     assert 'LDS_HOST=0.0.0.0' in compose
     assert 'LDS_CONFIG=/data/config.json' in compose
+    assert 'LDS_RUNTIME=docker-gpu' in compose
+    assert 'LDS_RESTART_MODE=supervisor' in compose
+    assert 'LDS_BIND_MANAGED=1' in compose
+    assert 'LDS_FORCE_CHOWN=${LDS_FORCE_CHOWN:-false}' in compose
+
+    # FORCE_CHOWN is intentionally limited to the app-data bind. The launcher
+    # must never recursively adopt ComfyUI's model/run trees or the image bank.
+    launcher = _read('packaging/docker/studio_launch.sh')
+    force_block = launcher[launcher.index('LDS_FORCE_CHOWN'):
+                           launcher.index('/usr/bin/python3')]
+    assert '"${DATA_DIR}"' in force_block
+    assert '/basedir' not in force_block
+    assert '/comfy/mnt' not in force_block
+    assert '/images' not in force_block
 
     # Its own compose project, or `up` here recreates docker-compose.yml's container:
     # both files call the service `studio`.

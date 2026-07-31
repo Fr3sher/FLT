@@ -8,7 +8,9 @@ ComfyUI has to write them down, or the user would have to type container-interna
 paths into Settings by hand.
 
 Only keys that are EMPTY or MISSING are filled, so a path changed in Settings
-survives every restart: this seeds a default, it does not enforce one.
+survives every restart: this seeds a default, it does not enforce one. A first boot
+that races ComfyUI leaves base_dir unset and retries next boot; it never persists a
+path that the filesystem probe could not verify.
 
 Plain stdlib JSON, run by the system python3 without activating either venv: a boot
 step that decides where ComfyUI lives must not be able to fail because an app import
@@ -26,7 +28,6 @@ from pathlib import Path
 # because upstream re-execs its init script through `sudo su comfy` and the variable
 # does not survive — it is absent from the /tmp/comfy_env.txt it saves.
 COMFY_ROOT_CANDIDATES = ('/basedir', '/comfy/mnt/ComfyUI')
-FALLBACK_COMFY_ROOT = '/comfy/mnt/ComfyUI'
 API_URL = 'http://127.0.0.1:8188'      # same container, so loopback
 
 
@@ -38,16 +39,18 @@ def comfy_root(candidates=None):
     for candidate in (candidates or COMFY_ROOT_CANDIDATES):
         if Path(candidate, 'models').is_dir():
             return candidate
-    return FALLBACK_COMFY_ROOT
+    return None
 
 
-def wanted(base_dir: str, ollama_url: str) -> dict:
+def wanted(base_dir: str | None, ollama_url: str) -> dict:
     """The values this container knows to be true, as a nested config fragment.
 
     No models_dir/input_dir/output_dir/loras_dir: config.resolve_comfyui_dir derives
     all four from base_dir, and writing them would only pin paths that are already
     right — while going stale the moment the layout changes."""
-    fragment = {'comfyui': {'base_dir': base_dir, 'api_url': API_URL}}
+    fragment = {'comfyui': {'api_url': API_URL}}
+    if base_dir:
+        fragment['comfyui']['base_dir'] = base_dir
     if ollama_url:
         fragment['ollama'] = {'url': ollama_url}
     return fragment
@@ -61,10 +64,15 @@ def fill_empty(current: dict, defaults: dict) -> tuple:
     space in a path field is a blank field, not a choice."""
     filled = []
     for section, values in defaults.items():
-        node = current.get(section)
-        if not isinstance(node, dict):
+        if section not in current:
             node = {}
             current[section] = node
+        else:
+            node = current[section]
+            if not isinstance(node, dict):
+                # A scalar/list/null section is unusual, but it is still user data.
+                # Replacing it with an object would silently discard that data.
+                continue
         for key, value in values.items():
             existing = node.get(key)
             if isinstance(existing, str):
@@ -88,16 +96,17 @@ def main() -> int:
               flush=True)
         return 0
     if not isinstance(current, dict):
-        current = {}
+        print(f'[studio] {path} has a non-object JSON root — leaving it untouched. '
+              f'Set the ComfyUI folders in Settings > Local tools.', flush=True)
+        return 0
 
     root = comfy_root()
-    if any(Path(candidate, 'models').is_dir() for candidate in COMFY_ROOT_CANDIDATES):
+    if root is not None:
         print(f'[studio] ComfyUI root: {root}', flush=True)
     else:
-        print(f'[studio] ComfyUI root: {root} — none of {COMFY_ROOT_CANDIDATES} has a '
-              f'models/ directory yet, so this is the fallback guess, not a probed '
-              f'result. It may need correcting in Settings > Local tools once '
-              f'ComfyUI has actually created its models folder.', flush=True)
+        print(f'[studio] none of {COMFY_ROOT_CANDIDATES} has a models/ directory '
+              f'yet — leaving comfyui.base_dir unset and trying again on the next '
+              f'boot.', flush=True)
 
     merged, filled = fill_empty(current, wanted(
         root,

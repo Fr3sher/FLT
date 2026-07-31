@@ -60,7 +60,14 @@ fi
   while true; do
     env -u VIRTUAL_ENV -u PYTHONPATH -u PYTHONHOME \
       "${STUDIO_PY}" "${STUDIO_DIR}/backend/run.py" 2>&1 | sed -u 's/^/[studio] /'
-    log "the studio exited — restarting it in 10s"
+    # `$?` here would be sed's result and would hide the backend's deliberate
+    # restart code. PIPESTATUS must be captured before any other command runs.
+    studio_status=${PIPESTATUS[0]}
+    if [ "${studio_status}" -eq 75 ]; then
+      log "restart requested — restarting immediately"
+      continue
+    fi
+    log "the studio exited with status ${studio_status} — restarting it in 10s"
     sleep 10
   done
 ) &

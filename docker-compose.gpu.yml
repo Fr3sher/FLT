@@ -35,8 +35,8 @@ services:
     volumes:
       # ComfyUI's own venv, source checkout and Hugging Face cache.
       - ${LDS_COMFY_RUN:-./run}:/comfy/mnt
-      # models, input, output, custom_nodes. Point this at a models tree you already
-      # have and you do not download it twice:  LDS_COMFY_BASEDIR=/srv/comfyui
+      # models, input, output, custom_nodes. Point this at their PARENT directory,
+      # never at models/ itself:  LDS_COMFY_BASEDIR=/srv/comfyui
       - ${LDS_COMFY_BASEDIR:-./basedir}:/basedir
       # The studio's data and its config.json. Defaults to a folder of its own,
       # NOT the API-only stack's ./data-docker: sharing it would put two Flask
@@ -78,12 +78,17 @@ services:
       - LDS_CONFIG=/data/config.json
       - LDS_HOST=0.0.0.0
       - LDS_PORT=5050
+      # The app cannot replace image files or own its bind address here. Restart
+      # exits back to studio_launch.sh, whose supervisor respawns it immediately.
+      - LDS_RUNTIME=docker-gpu
+      - LDS_RESTART_MODE=supervisor
+      - LDS_BIND_MANAGED=1
       # Ollama is NOT in this image (auto-captioning, framing, watermark detection).
       # Run it on the host, then uncomment this AND the extra_hosts block below.
       #- LDS_OLLAMA_URL=http://ollama.internal:11434
-      # Last resort if /data cannot be made writable from the host: lets the
-      # container take ownership of your bind mount.
-      #- LDS_FORCE_CHOWN=true
+      # Last resort if /data cannot be made writable from the host. This is
+      # deliberately interpolated and applies ONLY to /data, never the other mounts.
+      - LDS_FORCE_CHOWN=${LDS_FORCE_CHOWN:-false}
       # --- upstream's ComfyUI image ---
       # Must match the owner of the folders mounted above (`id -u` / `id -g`).
       # On Unraid that is usually 99 / 100.

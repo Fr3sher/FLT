@@ -17,7 +17,9 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
   const [restarting, setRestarting] = useState(false)
   const [copied, setCopied] = useState(false)
   const [copiedUrl, setCopiedUrl] = useState(null)   // which reach-URL was just copied (by key)
-  const lan = !LOOPBACK_HOSTS.includes(config.server.host)
+  const bindManaged = runtime.bind_managed === true
+  const effectiveHost = bindManaged && runtime.host != null ? runtime.host : config.server.host
+  const lan = !LOOPBACK_HOSTS.includes(effectiveHost)
   const requireToken = !!config.server.require_token
   // Real LAN IPv4 of this machine (backend socket probe), so the remote-access
   // URL is copyable as-is instead of a <this-computer> placeholder. null when the
@@ -25,12 +27,13 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
   const lanIp = runtime.lan_ip || null
   const tsIp = runtime.tailscale_ip || null
   const knownRuntime = runtime.host != null && runtime.port != null
-  const dirty = knownRuntime && (runtime.host !== config.server.host || runtime.port !== config.server.port)
+  const dirty = !bindManaged && knownRuntime
+    && (runtime.host !== config.server.host || runtime.port !== config.server.port)
 
   // The exact URL(s) a phone should open. Token is appended ONLY when the token
   // gate is on (a tokenless URL would 403); when it's on but no token exists yet,
   // reachUrls stays empty and the card asks the user to generate one first.
-  const port = config.server.port
+  const port = bindManaged && runtime.port != null ? runtime.port : config.server.port
   const token = requireToken ? (config.server.access_token || '') : ''
   const tokenReady = !requireToken || !!token
   const tokenQS = token ? `?token=${token}` : ''
@@ -52,6 +55,7 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
   }
 
   const restart = async () => {
+    if (bindManaged) return
     setRestarting(true)
     // Save first: "Restart to apply" must apply what's on screen, not whatever
     // was last persisted — otherwise a restart right after editing the port
@@ -90,18 +94,38 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
 
   return (
     <Card title="Server"
-      help="Where the app listens. Host/port and LAN access need a restart to take effect — edit below, then use “Restart to apply”.">
+      help={bindManaged
+        ? 'Docker Compose manages the host and port; change the host-side mapping and recreate the container.'
+        : 'Where the app listens. Host/port and LAN access need a restart to take effect — edit below, then use “Restart to apply”.'}>
+      {bindManaged && (
+        <div id="server-bind-managed-note" role="note"
+          className="rounded-lg border border-sky-400/30 bg-sky-500/10 px-3 py-2.5 text-sm text-content">
+          <p className="font-medium">Host and port are managed by Docker Compose.</p>
+          <p className="mt-1 text-xs text-content-muted">
+            Set <code className="text-content">LDS_HOST_PORT</code> in the host checkout&apos;s{' '}
+            <code className="text-content">.env</code> (for example <code className="text-content">127.0.0.1:5050</code>),
+            then recreate the container:
+          </p>
+          <code className="mt-2 block overflow-x-auto whitespace-nowrap rounded bg-app/70 px-2 py-1.5 text-xs text-content">
+            docker compose -f docker-compose.gpu.yml up -d --force-recreate
+          </code>
+        </div>
+      )}
       <div>
         <label htmlFor="server-port" className="block text-sm font-medium text-content">Port</label>
         <input id="server-port" type="number" min={1} max={65535}
-          value={config.server.port ?? ''}
+          value={port ?? ''}
+          disabled={bindManaged}
+          aria-describedby={bindManaged ? 'server-bind-managed-note' : undefined}
           onChange={(e) => setField('server', 'port', Math.max(1, Math.min(65535, Number(e.target.value) || 1)))}
-          className={`${INPUT_CLASS} max-w-[8rem]`} />
+          className={`${INPUT_CLASS} max-w-[8rem] disabled:cursor-not-allowed disabled:opacity-60`} />
         {/* The shipped port is 5050 and nothing on this screen said so — a user
             who typed 8080 to test something had no way back to the value
             start.bat binds by default. */}
-        <ResetToDefault label="Port" section="server" field="port"
-          config={config} configDefaults={configDefaults} setField={setField} />
+        {!bindManaged && (
+          <ResetToDefault label="Port" section="server" field="port"
+            config={config} configDefaults={configDefaults} setField={setField} />
+        )}
       </div>
 
       <div className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface-raised px-3 py-2.5">
@@ -114,9 +138,11 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
         </div>
         <button id="server-lan" type="button" role="switch" aria-checked={lan}
           data-focus-gate="server-require-token server-token"
+          disabled={bindManaged}
+          aria-describedby={bindManaged ? 'server-bind-managed-note' : undefined}
           onClick={() => setField('server', 'host', lan ? '127.0.0.1' : '0.0.0.0')}
           aria-label="Available on the local network"
-          className={`relative h-6 w-11 shrink-0 scroll-mt-24 rounded-full transition-colors ${lan ? 'bg-emerald-500' : 'bg-surface border border-border-strong'}`}>
+          className={`relative h-6 w-11 shrink-0 scroll-mt-24 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${lan ? 'bg-emerald-500' : 'bg-surface border border-border-strong'}`}>
           <span aria-hidden
             className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white transition-transform ${lan ? 'translate-x-5' : 'translate-x-0'}`} />
         </button>
@@ -230,7 +256,9 @@ export default function ServerSection({ config, setField, runtime, handleSave, c
               <> · Saved: <span className="font-medium text-content">{config.server.host}:{config.server.port}</span></>
             )}
           </span>
-          {dirty ? (
+          {bindManaged ? (
+            <span className="ml-auto text-sky-300">Docker-managed bind</span>
+          ) : dirty ? (
             <button type="button" onClick={restart} disabled={restarting}
               className="ml-auto shrink-0 rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
               {restarting ? '↻ Restarting…' : 'Save & restart to apply'}
