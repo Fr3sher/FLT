@@ -44,6 +44,7 @@ import { canvasRunDatasetIds, readyImageCount, runPinCandidates } from '../../ut
 import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeChrome';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
+  groupPinnedBatchBySource,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
@@ -1143,7 +1144,14 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
     const lane = placedRef.current.find((l) => l.datasetId === dsId);
     const geo = openGeometry(map, img.id,
       defaultImageSpot(lane?.graph, img.record_id, img.step, visibleImageNodes(map)));
-    onSaveImageNodes?.(dsId, [{ image_id: img.id, ...geo, visible: true, image: img }]);
+    const grouped = groupPinnedBatchBySource({
+      nodes: Object.values(map),
+      placed: [{ imageId: img.id, ...geo, image: img }],
+    });
+    onSaveImageNodes?.(dsId, grouped.rows.map((row) => ({
+      image_id: row.imageId, x: row.x, y: row.y, w: row.w, h: row.h,
+      visible: row.visible, group_id: row.groupId, group_pos: row.groupPos, image: row.image,
+    })));
   }, [imageNodes, onSaveImageNodes]);
 
   /* 📌 Pin ALL of a finished run's images, in one click.
@@ -1200,20 +1208,22 @@ export default function LineageCanvas({ entries, positions, imageNodes, onPinLan
         remembered: laneMap,
       });
       if (!res.placed.length) continue;
+      const grouped = groupPinnedBatchBySource({
+        nodes: Object.values(laneMap), placed: res.placed,
+      });
       placedTotal += res.placed.length;
       skippedTotal += res.skipped.length;
-      onSaveImageNodes?.(dsId, res.placed.map((p) => ({
+      onSaveImageNodes?.(dsId, grouped.rows.map((p) => ({
         image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h,
-        visible: true, image: p.image,
+        visible: p.visible, group_id: p.groupId, group_pos: p.groupPos, image: p.image,
       })));
       // What Undo has to put back: these rows, closed again, at the geometry
       // they had BEFORE (a picture that had been closed keeps the spot it was
       // closed at, so undoing does not quietly rewrite it).
-      undo.push({ datasetId: dsId, rows: res.placed.map((p) => {
-        const was = laneMap[p.imageId];
-        return { image_id: p.imageId, visible: false, image: p.image,
-          x: was?.x ?? p.x, y: was?.y ?? p.y, w: was?.w ?? p.w, h: was?.h ?? p.h };
-      }) });
+      undo.push({ datasetId: dsId, rows: grouped.undoRows.map((p) => ({
+        image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h,
+        visible: p.visible, group_id: p.groupId, group_pos: p.groupPos, image: p.image,
+      })) });
     }
     const missing = wanted.size - placedTotal - skippedTotal;
     setPinAllState({

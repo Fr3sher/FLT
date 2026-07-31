@@ -4,6 +4,11 @@ import { buildLineageGraph } from '../utils/lineageGraph';
 import {
   readSelection, resolveSelection, toggleSelection, writeSelection,
 } from '../utils/canvasSelection';
+import {
+  availableModelFamilies, filterDatasetIdsByFamilies, readFamilySelection,
+  filterLineageTreeByFamilies, resolveFamilySelection,
+  toggleFamilySelection, writeFamilySelection,
+} from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
 import { layoutImageNodes } from '../utils/canvasImageGroups';
@@ -35,6 +40,8 @@ const MAX_PARALLEL_FETCHES = 3;
 export default function CanvasPage() {
   const [index, setIndex] = useState({ status: 'loading', datasets: [], error: null });
   const [stored, setStored] = useState(() => readSelection(
+    typeof localStorage !== 'undefined' ? localStorage : null));
+  const [storedFamilies, setStoredFamilies] = useState(() => readFamilySelection(
     typeof localStorage !== 'undefined' ? localStorage : null));
   // dataset_id -> { status: 'loading'|'ready'|'error', tree, error }
   const [trees, setTrees] = useState({});
@@ -143,6 +150,32 @@ export default function CanvasPage() {
 
   const availableIds = useMemo(() => index.datasets.map((d) => d.id), [index.datasets]);
   const selected = useMemo(() => resolveSelection(availableIds, stored), [availableIds, stored]);
+  const families = useMemo(() => availableModelFamilies(index.datasets), [index.datasets]);
+  const selectedFamilies = useMemo(
+    () => resolveFamilySelection(families, storedFamilies), [families, storedFamilies]);
+  const visibleSelected = useMemo(
+    () => filterDatasetIdsByFamilies(index.datasets, selected, selectedFamilies),
+    [index.datasets, selected, selectedFamilies]);
+  const modelFilterActive = selectedFamilies.length !== families.length;
+  const filteredTrees = useMemo(() => {
+    if (!modelFilterActive) return trees;
+    const next = {};
+    for (const [id, state] of Object.entries(trees)) {
+      next[id] = { ...state,
+        tree: state?.tree ? filterLineageTreeByFamilies(state.tree, selectedFamilies) : state?.tree };
+    }
+    return next;
+  }, [trees, modelFilterActive, selectedFamilies]);
+  const filteredImageNodes = useMemo(() => {
+    if (!modelFilterActive) return imageNodes;
+    const next = {};
+    for (const [id, map] of Object.entries(imageNodes)) {
+      const allowed = new Set((filteredTrees[id]?.tree?.nodes || []).map((node) => node.record_id));
+      next[id] = Object.fromEntries(Object.entries(map || {})
+        .filter(([, node]) => allowed.has(node?.image?.record_id)));
+    }
+    return next;
+  }, [imageNodes, filteredTrees, modelFilterActive]);
 
   /* ✦ Tidy up: forget every moved card on the VISIBLE board. Scoped to what is
      on screen — a lane the user unticked is not on the board they are looking
@@ -150,10 +183,10 @@ export default function CanvasPage() {
   const onTidyUp = useCallback(() => {
     setPositions((p) => {
       const next = { ...p };
-      for (const id of selected) delete next[id];
+      for (const id of visibleSelected) delete next[id];
       return next;
     });
-    for (const id of selected) del(`/api/dataset/${id}/canvas/positions`).catch(() => {});
+    for (const id of visibleSelected) del(`/api/dataset/${id}/canvas/positions`).catch(() => {});
     /* And the pinned images RE-FLOW rather than being deleted or left behind.
        Neither of the obvious answers is right: deleting them would make a
        "rebuild the automatic tree" button destroy content the user placed
@@ -174,7 +207,7 @@ export default function CanvasPage() {
        other PICTURES — it could park one squarely on a run card. */
     setImageNodes((cur) => {
       const next = { ...cur };
-      for (const id of selected) {
+      for (const id of visibleSelected) {
         const map = next[id];
         if (!map) continue;
         const tree = trees[id]?.tree;
@@ -212,7 +245,7 @@ export default function CanvasPage() {
       }
       return next;
     });
-  }, [selected, trees]);
+  }, [visibleSelected, trees]);
 
   /* Re-read ONE lane from the server and put it back on the board. Used after a
      deploy launched from the canvas: the pills of that dataset have to come back
@@ -234,11 +267,20 @@ export default function CanvasPage() {
     persist(toggleSelection(selected, id, availableIds));
   }, [persist, selected, availableIds]);
 
+  const persistFamilies = useCallback((next) => {
+    setStoredFamilies(next);
+    writeFamilySelection(typeof localStorage !== 'undefined' ? localStorage : null, next);
+  }, []);
+
+  const onToggleFamily = useCallback((family) => {
+    persistFamilies(toggleFamilySelection(selectedFamilies, family, families));
+  }, [persistFamilies, selectedFamilies, families]);
+
   // Fetch the genealogy of every selected dataset that has none yet, a few at a
   // time. A dataset unticked and re-ticked keeps its cached tree — the board must
   // not re-scan the disk for a filter click.
   useEffect(() => {
-    const missing = selected.filter((id) => !trees[id] && !inflight.current.has(id));
+    const missing = visibleSelected.filter((id) => !trees[id] && !inflight.current.has(id));
     if (!missing.length) return;
     const room = MAX_PARALLEL_FETCHES - inflight.current.size;
     if (room <= 0) return;
@@ -255,11 +297,11 @@ export default function CanvasPage() {
           setTrees((t) => ({ ...t }));
         });
     }
-  }, [selected, trees]);
+  }, [visibleSelected, trees]);
 
-  const entries = useMemo(() => selected.map((id) => {
+  const entries = useMemo(() => visibleSelected.map((id) => {
     const row = index.datasets.find((d) => d.id === id);
-    const state = trees[id];
+    const state = filteredTrees[id];
     return {
       datasetId: id,
       name: row?.name || `Dataset ${id}`,
@@ -276,7 +318,7 @@ export default function CanvasPage() {
       // out again when a run is removed from the board (see LineageCanvas).
       tree: state?.tree || null,
     };
-  }), [selected, index.datasets, trees]);
+  }), [visibleSelected, index.datasets, filteredTrees]);
 
   return (
     <div>
@@ -303,13 +345,18 @@ export default function CanvasPage() {
         selected={selected}
         onToggle={onToggle}
         onAll={() => persist(availableIds)}
-        onNone={() => persist([])} />
+        onNone={() => persist([])}
+        families={families}
+        selectedFamilies={selectedFamilies}
+        onToggleFamily={onToggleFamily}
+        onAllFamilies={() => persistFamilies(families)}
+        onNoFamilies={() => persistFamilies([])} />
 
       {index.status === 'loading'
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
-            imageNodes={imageNodes} onSaveImageNodes={onSaveImageNodes}
+            imageNodes={filteredImageNodes} onSaveImageNodes={onSaveImageNodes}
             onPinLane={onPinLane} onTidyUp={onTidyUp}
             onRefetchDataset={onRefetchDataset} />
         )}

@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
-  pinBatchLabel, pinBatchPending, pinBatchPendingAcrossLanes, placeImageBatch,
+  groupPinnedBatchBySource, pinBatchLabel, pinBatchPending,
+  pinBatchPendingAcrossLanes, placeImageBatch,
 } from './canvasPinBatch.js';
 import { CARD_W } from './lineageGraph.js';
 
@@ -41,6 +42,57 @@ const GRAPH = {
 
 const img = (id, recordId, step) => ({
   id, dataset_id: 3, record_id: recordId, step, url: `/img/${id}.png`,
+});
+
+const placed = (id, recordId, step) => ({
+  imageId: id, x: id * 10, y: 500, w: 320, h: 320, image: img(id, recordId, step),
+});
+
+test('successive pins from the same checkpoint automatically form one strip', () => {
+  const first = { imageId: 1, x: 10, y: 10, w: 320, h: 320, visible: true,
+    groupId: null, groupPos: null, image: img(1, 106, 2500) };
+  const result = groupPinnedBatchBySource({ nodes: [first], placed: [placed(2, 106, 2500)] });
+  assert.equal(result.rows[0].groupId, result.rows[1].groupId);
+  assert.deepEqual(result.rows.map((r) => r.groupPos), [0, 1]);
+});
+
+test('a later generation joins the homogeneous group for that checkpoint', () => {
+  const nodes = [1, 2].map((id, pos) => ({ imageId: id, x: id * 10, y: 10,
+    w: 320, h: 320, visible: true, groupId: 'g1', groupPos: pos,
+    image: img(id, 106, 2500) }));
+  const result = groupPinnedBatchBySource({ nodes, placed: [placed(3, 106, 2500)] });
+  assert.ok(result.rows.every((r) => r.groupId === 'g1'));
+  assert.deepEqual(result.rows.map((r) => r.groupPos), [0, 1, 2]);
+});
+
+test('different checkpoints and unknown sources never auto-group', () => {
+  const result = groupPinnedBatchBySource({ placed: [
+    placed(1, 106, 2500), placed(2, 106, 3000),
+    { ...placed(3, null, null), image: { id: 3, url: '/img/3.png' } },
+  ] });
+  assert.ok(result.rows.every((r) => r.groupId == null));
+});
+
+test('a manual mixed-checkpoint group is never used as an automatic target', () => {
+  const nodes = [
+    { imageId: 1, x: 10, y: 10, w: 320, h: 320, visible: true,
+      groupId: 'mixed', groupPos: 0, image: img(1, 106, 2500) },
+    { imageId: 2, x: 20, y: 10, w: 320, h: 320, visible: true,
+      groupId: 'mixed', groupPos: 1, image: img(2, 107, 2500) },
+  ];
+  const result = groupPinnedBatchBySource({ nodes,
+    placed: [placed(3, 106, 2500), placed(4, 106, 2500)] });
+  assert.equal(result.rows.find((r) => r.imageId === 1), undefined);
+  assert.notEqual(result.rows.find((r) => r.imageId === 3).groupId, 'mixed');
+});
+
+test('undo restores existing membership and closes newly pinned images', () => {
+  const nodes = [1, 2].map((id, pos) => ({ imageId: id, x: id * 10, y: 10,
+    w: 320, h: 320, visible: true, groupId: 'g1', groupPos: pos,
+    image: img(id, 106, 2500) }));
+  const result = groupPinnedBatchBySource({ nodes, placed: [placed(3, 106, 2500)] });
+  assert.deepEqual(result.undoRows.map((r) => [r.imageId, r.visible, r.groupId, r.groupPos]),
+    [[1, true, 'g1', 0], [2, true, 'g1', 1], [3, false, null, null]]);
 });
 
 // The lot from the report: five images, four different runs.
