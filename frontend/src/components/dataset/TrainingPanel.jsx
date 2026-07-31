@@ -4106,8 +4106,10 @@ function CloudLaunchDialog({
         )}
         {!loading && !error && tiers.length === 0 && (
           <p className="m-0 text-content-muted text-sm">
-            No GPU available under ${data?.max_price_per_hour}/h right now — raise the
-            price cap in Settings, or try again shortly.
+            No GPU available under ${data?.max_price_per_hour}/h right now. Try again shortly, or{' '}
+            <SettingsLink section="training" focus="cloud-max-price-per-hour">
+              increase the price cap in Settings
+            </SettingsLink>.
           </p>
         )}
 

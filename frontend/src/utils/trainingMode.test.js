@@ -256,6 +256,21 @@ test('offers use the exact recipe and refetch when any recipe input changes', ()
   assert.match(panel, /checksDenseCloudToken/);
 });
 
+test('empty cloud offers preserve the cap message and link to its exact setting', () => {
+  const emptyOffersStart = panel.indexOf('{!loading && !error && tiers.length === 0 && (');
+  const populatedOffersStart = panel.indexOf('{tiers.length > 0 && (', emptyOffersStart);
+  assert.ok(emptyOffersStart >= 0 && populatedOffersStart > emptyOffersStart,
+    'the empty-offers branch must remain distinct from the populated offer list');
+
+  const emptyOffersBranch = panel.slice(emptyOffersStart, populatedOffersStart);
+  assert.match(emptyOffersBranch,
+    /No GPU available under \$\{data\?\.max_price_per_hour\}\/h right now/);
+  assert.match(emptyOffersBranch,
+    /<SettingsLink section="training" focus="cloud-max-price-per-hour">\s*increase the price cap in Settings\s*<\/SettingsLink>/);
+  assert.equal([...panel.matchAll(/focus="cloud-max-price-per-hour"/g)].length, 1,
+    'the price-cap link must appear only in the tiers.length === 0 branch');
+});
+
 test('mode persistence is atomic and the incompatible fallback is not optimistic', () => {
   assert.match(panel, /setDatasetTrainingMode\?\.\(TRAINING_MODE_LORA, nextSelection\)/);
   assert.match(panel, /setDatasetTrainingMode\?\.\(\s*TRAINING_MODE_LORA,\s*fullTransformerSelection/);
