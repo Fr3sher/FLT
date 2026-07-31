@@ -258,14 +258,14 @@ def collect_canvas_grid(user_id, dataset_id, image_ids) -> dict | None:
         if not os.path.isfile(path):
             raise GridExportEmpty('one or more Canvas image files are missing')
         paths.append(path)
-        parts = [f'image #{row.id}']
+        parts = [f'#{row.id}']
         if row.step is not None:
-            parts.append(f'checkpoint {row.step}')
+            parts.append(f'ckpt {row.step}')
         if row.steps is not None:
             gen_steps = str(row.steps)
             if row.steps2 is not None:
                 gen_steps += f'+{row.steps2}'
-            parts.append(f'{gen_steps} generation steps')
+            parts.append(f'{gen_steps} steps')
         if row.strength is not None:
             parts.append(f'×{_fmt_strength(row.strength)}')
         seed = row.seed if row.seed is not None else row.run_seed
@@ -452,7 +452,7 @@ def render_canvas_strip_image(title, subtitle, paths, labels, *, footer_text=FOO
     if not sizes or any(not size for size in sizes):
         raise GridExportEmpty('one or more Canvas images could not be read')
     height = int(cell_size)
-    gap, margin, label_h, banner_h = 10, 28, 34, 100
+    gap, margin, label_h, banner_h = 10, 28, 58, 100
 
     def widths_for(h):
         return [max(1, round(w * h / h0)) for w, h0 in sizes]
@@ -474,7 +474,10 @@ def render_canvas_strip_image(title, subtitle, paths, labels, *, footer_text=FOO
         draw.text((canvas_w - margin - fw, 24), footer_text, font=_font(14), fill=_MUTED)
     x = margin
     for path, label, width in zip(paths, labels, widths):
-        draw.text((x, banner_h), str(label), font=_font(16), fill=_HEADER)
+        label_font = _font(14)
+        lines = _fit_lines(draw, str(label), label_font, max(1, width - 4), max_lines=3)
+        for line_no, line in enumerate(lines):
+            draw.text((x, banner_h + line_no * 18), line, font=label_font, fill=_HEADER)
         with Image.open(path) as source:
             tile = source.convert('RGB')
             tile.thumbnail((width, height), Image.Resampling.LANCZOS)
