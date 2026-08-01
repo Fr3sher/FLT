@@ -462,7 +462,27 @@ const TOPICS = [
      'one click pin', 'bulk pin', 'pin all 5', 'images ready button',
      'undo pin all', 'too many images pinned', 'left out', 'contact sheet',
      'why are my images under the tree', 'where did the pinned images go',
-     'pin all button missing', 'pin all does nothing', 'already pinned'],
+     'pin all button missing', 'pin all does nothing', 'already pinned',
+     // Two runs read as one lot until the strip was keyed on the GENERATION
+     // rather than on the checkpoint. Both the symptom and the fix are things
+     // someone searches for by describing what they see.
+     'two runs mixed together', 'my two runs merged', 'runs concatenated',
+     'second run joined the first', 'separate my runs', 'compare two runs',
+     'images in the wrong order', 'epochs out of order', 'steps out of order',
+     'strip not sorted', 'order of the checkpoints on the board'],
+    '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
+  // 🪪 The reference face on the board. Worth its own topic: it is the only
+  // picture on the canvas that is NOT a pinned render, so every question about
+  // it ("why can't I move it / close it / export it") misses the topics above.
+  action('canvas-reference-image', '🪪 The dataset reference face on the board',
+    ['reference image on the canvas', 'reference face', 'dataset reference',
+     'show the reference', 'compare with the reference', 'who is this supposed to be',
+     'likeness', 'does it look like her', 'does it look like him',
+     'reference next to the dataset name', 'ref image canvas', 'enlarge the reference',
+     // …and when it is absent, which is by design for two dataset kinds.
+     'no reference on the canvas', 'reference missing', 'reference not showing',
+     'concept dataset has no reference', 'style dataset has no reference',
+     'why can i not move the reference', 'cannot pin the reference'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-pinned-images', '📌 Pin an image onto the board',
     ['pin an image', 'pin to canvas', 'image on the canvas', 'put an image on the board',

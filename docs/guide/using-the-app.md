@@ -1175,6 +1175,13 @@ zoom, and **Fit** puts the whole board back in view. The board only fits itself
 automatically until you first touch it — after that a dataset finishing its load
 never yanks your view away.
 
+**The reference face.** A character dataset's lane opens with its reference
+image, next to the dataset name — the person the renders on that lane are meant
+to be. Click it to open it full size against them. It is part of the lane label,
+not a pinned picture: it cannot be moved, closed, grouped or exported. Concept
+and style datasets show nothing there, because they are not built around a
+reference face.
+
 **Reading a run.** Click a run card to open **everything that run produced**:
 its images grouped by the checkpoint that made them, most-trained step first, so
 you can see where the LoRA stopped getting better without opening one pill at a
@@ -1412,6 +1419,14 @@ the board without opening a single gallery.
   pill. The band starts below everything already on the lane, which is what makes
   the guarantee a real one: **nothing is ever placed on top of a run card, a
   checkpoint pill or a picture you positioned yourself.**
+- **One strip per generation, always in training order.** The pictures of one
+  run fuse into a single strip that reads left to right by step — 500, 1000,
+  1500 — so the strip is an epoch axis. A **second** generation, even fired at
+  the same checkpoint, gets its **own** strip: two runs stay two runs on the
+  board, which is the only way to compare them. Pinning one picture at a time
+  from a gallery follows the same rule — it joins the strip of the generation it
+  came from, in its place in the order, never the end. Images generated before
+  LDS recorded which launch made them fall back to grouping by checkpoint.
 - **Big lots become a contact sheet.** A pair of renders lands full size; twenty
   or thirty land as thumbnails, which is the size you actually compare that many
   pictures at. Each one is still resizable afterwards like any other node.

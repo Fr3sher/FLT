@@ -56,6 +56,22 @@ export const WHATS_NEW = [
     to: '/setup',
   },
   {
+    id: '2026-08-01-canvas-runs-stay-separate-and-in-epoch-order',
+    date: '2026-08-01',
+    title: 'Pin two generation runs to the canvas and compare them side by side',
+    blurb:
+      'Pinning a second run at the same checkpoint no longer folds its images into the first run’s strip — each generation keeps its own strip on the board, so two runs stay two runs. Every strip now reads left to right in training order (500, 1000, 1500…) instead of alphabetically, and an over-cap batch keeps the early epochs rather than an arbitrary slice.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-01-canvas-shows-the-dataset-reference-face',
+    date: '2026-08-01',
+    title: 'See who the renders are meant to be, right on the canvas',
+    blurb:
+      'Each character dataset’s lane on the LoRA Canvas now opens with its reference image, next to the dataset name. Click it to open it full size against the pinned renders. Concept and style datasets are unaffected — they have no reference face.',
+    to: '/canvas',
+  },
+  {
     id: '2026-07-31-community-tested-krea-zimage-presets',
     date: '2026-07-31',
     title: 'Start Krea 2 Raw and Z-Image Turbo from five community-tested recipes',
