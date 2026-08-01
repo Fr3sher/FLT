@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-01-setup-checks-in-the-background',
+    date: '2026-08-01',
+    title: 'Stop re-running Setup every time you come back',
+    blurb:
+      'Once LDS has seen your install working, coming back — a new tab, a new browser, another machine, a restarted server — drops you straight into the app instead of the wizard. The same checks now run in the background while you work, with one small line in the corner that fades on its own. You are only interrupted when something that used to work has stopped: the warning names what broke, ignores ComfyUI or Ollama simply not running, and takes "that was on purpose" for an answer.',
+    to: '/setup',
+  },
+  {
     id: '2026-07-31-community-tested-krea-zimage-presets',
     date: '2026-07-31',
     title: 'Start Krea 2 Raw and Z-Image Turbo from five community-tested recipes',

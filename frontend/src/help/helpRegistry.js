@@ -365,7 +365,12 @@ const TOPICS = [
     '/bank', 'using-the-app', 'sort-a-grid-to-review-faster'),
   { id: 'page-setup', kind: 'page', title: 'Setup wizard',
     keywords: ['setup', 'wizard', 'onboarding', 'install', 'install everything',
-      'install all', 'connect', 'tools'],
+      'install all', 'connect', 'tools',
+      // The background re-check: what someone types when they see the corner
+      // line, or the warning that something stopped working.
+      'checking your setup', 'background', 'setup check', 're-check', 'recheck',
+      'why does it keep asking', 'run setup again', 'skip setup',
+      'stopped working', 'no longer responding', 'that was on purpose'],
     guide: { chapter: 'getting-started', anchor: 'the-setup-wizard' },
     app: { route: '/setup' } },
   setupStep('setup-comfyui', 'comfyui', 'Set up ComfyUI & download the Klein model',

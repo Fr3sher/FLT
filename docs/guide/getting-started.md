@@ -149,6 +149,21 @@ Nothing is mandatory: **Skip setup** is always available, and every step can be
 revisited later from **Settings**, where each tool has a Test button that tells
 you immediately whether the app can see it.
 
+**Setup is a first run, not a toll gate.** Once the app has seen your install
+working — configured, with at least one image engine answering — it stops
+sending you to the wizard. Coming back later (a new tab, a new browser, another
+machine on your network, or a restarted server) drops you straight into the app,
+and the same checks the wizard runs happen in the background while you work. A
+short line in the corner says so and then fades.
+
+You are only interrupted when something that *used to* work has stopped —
+an API key that no longer answers, an ML helper that no longer imports. The
+warning names what broke and links to Setup. It does **not** fire because
+ComfyUI or Ollama simply isn't running (you start those on demand), and it does
+not fire because something was never installed in the first place. If you
+removed a component deliberately, **That was on purpose** stops the app
+mentioning it again.
+
 ## Around the app
 
 - **Datasets** — the home tab and your **library**: photo tiles of every
