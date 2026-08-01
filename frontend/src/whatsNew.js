@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-01-bank-image-ceiling-raised',
+    date: '2026-08-01',
+    title: 'A bank now takes 200,000 images, and stops miscounting the ones you deleted',
+    blurb:
+      'The per-bank ceiling went from 50,000 to 200,000 images. It is also counted correctly at last: images you had deleted from the folder still counted against it, so a folder that once hit the limit could refuse every new file for ever — with a message claiming it "now holds more than 50000 images" when it held a fraction of that. Reaching the ceiling no longer refuses the whole batch either: everything that fits is added and the app tells you exactly how many were left out.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-01-delete-rejected-shows-progress',
+    date: '2026-08-01',
+    title: 'Watch 🗑 Delete rejected work, and stop it whenever you like',
+    blurb:
+      'Deleting thousands of rejected files used to freeze the dialog on "Deleting…" for minutes with no count, no way to stop, and no way to tell a slow run from a crashed one. It is an ordinary bank pass now: the progress bar at the top of the bank counts the files as they go, Stop works, and the finished run reports how many left the disk and where they went.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-01-verified-cloud-token-stops-nagging',
     date: '2026-08-01',
     title: 'Full-model training confirms your Hugging Face token instead of re-asking for it',

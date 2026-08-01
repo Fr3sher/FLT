@@ -315,7 +315,10 @@ touching the folder itself:
    for the next scan — your existing keep/reject decisions, scores and captions
    are never touched. Files you removed from the folder are reported at the top
    of the bank, never deleted from it, so an unplugged drive can't wipe your
-   triage.
+   triage. One bank holds up to **200,000 images**; past that the refresh adds
+   as many as fit and tells you how many it left out, so nothing you already
+   triaged stops working. That ceiling counts what is in the folder now — files
+   you deleted from it don't count against it.
 1bis. **🕸 Scrape the web into a bank** — you don't need a folder you prepared
    by hand. Unfold **🕸 Scrape the web into a bank** on the bank list, choose a
    destination (a **new bank**, or **add to an existing one**), then scan a
@@ -441,6 +444,11 @@ app's own Trash otherwise (recoverable until you empty it from Settings), and a
 permanent delete only when neither can take the file. Kept and undecided images
 are never touched, and a file it can't remove (locked, read-only) is reported
 and left alone rather than aborting the batch.
+
+It runs as a normal bank pass: the confirmation closes straight away and the
+progress bar at the top of the bank counts the files as they go, with a **Stop**
+that takes effect between files. Stopping is safe — whatever already left the
+disk has left the bank too, and the rest are still marked ✕ for a second run.
 
 ⚠️ A bank doesn't own its folder, so two banks can point at nested folders and
 list the **same files**. That's harmless while you triage — decisions live on
