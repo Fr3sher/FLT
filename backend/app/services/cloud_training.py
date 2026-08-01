@@ -5023,6 +5023,13 @@ def _gallery_image(r) -> dict:
         # node draws its link to the source pill from these two, so the link
         # cannot drift from the image.
         'record_id': r.record_id,
+        # WHICH LAUNCH made it. Already grouped every cell of one "Generate"
+        # (it is what a grid resumes from) and never left the database. The
+        # canvas needs it: without it, two runs fired at the SAME checkpoint
+        # were indistinguishable, so pinning the second one appended its
+        # pictures to the first one's strip and the board showed one lot where
+        # there were two. Null on images that predate the column.
+        'run_id': r.run_id,
         'created_at': r.created_at.isoformat() if r.created_at else None,
         # ── What the image was actually MADE with ────────────────────────────
         # Every one of these was already persisted per cell (for a faithful
@@ -5806,6 +5813,16 @@ def canvas_dataset_index(user_id) -> dict:
             # same route, same trash, but the user was not told what they were
             # about to break.
             'best_settings_loras': studio.best_settings_lora_filenames(ds),
+            # 🪪 The dataset's REFERENCE face, and what kind of dataset it is.
+            # Read off the row already in hand — no extra query, no disk, so
+            # the "cheap by design" invariant above still holds. The canvas
+            # draws it beside the lane's name: a board full of renders of a
+            # person with the person nowhere on it made every comparison a
+            # memory test. Only meaningful for a character dataset (a concept
+            # or a style has no reference face); `kind` travels so the canvas
+            # decides that instead of guessing from a filename.
+            'ref_filename': ds.ref_filename,
+            'kind': (ds.kind or '').lower() or 'character',
         })
     out.sort(key=lambda d: (d['last_run_at'] or '', d['id']), reverse=True)
     return {'datasets': out}
