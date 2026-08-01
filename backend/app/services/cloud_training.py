@@ -968,6 +968,32 @@ def _set(run, **fields):
             _sleep(_COMMIT_RETRY_BASE_SECONDS * (2 ** attempt))
 
 
+def _set_soft(run, **fields) -> bool:
+    """Write purely informational monitor state; never fail the run over it.
+
+    ``_set`` is the authoritative writer and must keep raising: a lost status
+    transition would leave a rented pod misrepresented. The per-poll progress
+    heartbeat is different — it only refreshes cosmetic ``phase_detail`` text.
+    On 2026-08-01 a local write lock outlived the retry budget while run #137
+    was training normally on a rented 5090; the heartbeat commit raised out of
+    the monitor thread and the run was recorded as failed with
+    'database is locked', GPU time and all. A cosmetic refresh is allowed to be
+    skipped; the next poll writes the same text a few seconds later.
+
+    Returns whether the write landed, so callers can log the miss.
+    """
+    try:
+        _set(run, **fields)
+        return True
+    except Exception as e:                        # noqa: BLE001 - deliberate
+        if not _is_locked_error(e):
+            raise
+        logger.warning('run %s: progress heartbeat skipped — the database '
+                       'stayed write-locked; training is unaffected',
+                       getattr(run, 'id', '?'))
+        return False
+
+
 def _reconcile_before_launch(app):
     """Seam around the launch-time reconcile_orphans() call (defined below).
     A thin indirection rather than calling reconcile_orphans directly so
@@ -3629,7 +3655,7 @@ def _monitor(app, run_id):
                     _sync_latest_checkpoint(run, remote)
                 status = job.get('status')
                 info = job.get('info') or ''
-                _set(run, phase_detail=f"{status}: {info}"[:500])
+                _set_soft(run, phase_detail=f"{status}: {info}"[:500])
 
                 if status == 'completed':
                     if _is_full_transformer_run(run):

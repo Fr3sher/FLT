@@ -256,6 +256,20 @@ test('offers use the exact recipe and refetch when any recipe input changes', ()
   assert.match(panel, /checksDenseCloudToken/);
 });
 
+test('a verified cloud token stops asking the user to configure it', () => {
+  // Regression 2026-08-01: the "configure it before renting the GPU" banner was
+  // rendered on `fullMode` alone, so a token the backend had just verified was
+  // still greeted with setup instructions on every launch.
+  assert.doesNotMatch(panel, /\{fullMode && \(\s*\n\s*<p className="m-0 rounded-lg border border-amber-400\/35/);
+  assert.match(panel, /\{fullMode && !hfTokenIssue && \(/);
+  assert.match(panel, /const hfTokenVerified = offerTokenStatus\?\.ok === true/);
+  assert.match(panel, /const hfTokenBroad = hfTokenVerified && offerTokenStatus\?\.code === 'broad_access'/);
+  assert.match(panel, /Hugging Face delivery ready\./);
+  assert.match(panel, /Hugging Face delivery ready \(broad token\)\./);
+  // The setup instructions must survive for the case they were written for.
+  assert.match(panel, /before renting the GPU/);
+});
+
 test('empty cloud offers preserve the cap message and link to its exact setting', () => {
   const emptyOffersStart = panel.indexOf('{!loading && !error && tiers.length === 0 && (');
   const populatedOffersStart = panel.indexOf('{tiers.length > 0 && (', emptyOffersStart);

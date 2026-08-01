@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-01-verified-cloud-token-stops-nagging',
+    date: '2026-08-01',
+    title: 'Full-model training confirms your Hugging Face token instead of re-asking for it',
+    blurb:
+      'The 80 GB GPU picker used to show the same “configure a token before renting the GPU” notice even when your saved token had just been verified. It now reports the verified delivery namespace, keeps a distinct amber note for a global write token, and shows the setup instructions only when something is genuinely missing.',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-08-01-progress-heartbeat-cannot-fail-a-run',
+    date: '2026-08-01',
+    title: 'A busy database no longer marks a healthy cloud run as failed',
+    blurb:
+      'A cloud run whose progress text could not be saved — because another long operation held the local database — was recorded as failed with “database is locked” while the rented GPU was still training normally. The progress refresh is now allowed to be skipped and retried on the next poll; only real status changes still stop a run.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-01-klein-edits-follow-the-instruction',
     date: '2026-08-01',
     title: 'Klein edits follow what you asked again',

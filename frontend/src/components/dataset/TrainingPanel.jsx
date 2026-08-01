@@ -4049,6 +4049,12 @@ function CloudLaunchDialog({
     cloudTierEstimateView(tier, { fullMode }).available
   ));
   const offerTokenReadiness = fullMode ? hfCloudTokenReadiness(data || {}) : null;
+  // The saved token is verified server-side on every offer fetch. Repeating
+  // "configure it before renting the GPU" once it has passed reads as a refusal
+  // and sent users hunting for a Settings problem that does not exist.
+  const offerTokenStatus = fullMode ? (data?.hf_cloud_token || null) : null;
+  const hfTokenVerified = offerTokenStatus?.ok === true;
+  const hfTokenBroad = hfTokenVerified && offerTokenStatus?.code === 'broad_access';
   const hfTokenIssue = fullMode && (preflightTokenIssue
     || (offerTokenReadiness?.blocked
       ? offerTokenReadiness.detail
@@ -4068,14 +4074,32 @@ function CloudLaunchDialog({
             : 'Choose GPU speed for this run'}
         </h3>
 
-        {fullMode && (
-          <p className="m-0 rounded-lg border border-amber-400/35 bg-amber-500/[0.08] px-3 py-2 text-amber-100 text-[0.75rem] leading-relaxed">
-            This run requires an <code>HF_CLOUD_TOKEN</code> that can read <code>krea/Krea-2-Raw</code> and
-            write the delivery repository. A tightly scoped fine-grained token is recommended. A global
-            write token is also accepted with a warning. Configure it in{' '}
-            <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>
-            {' '}before renting the GPU.
-          </p>
+        {fullMode && !hfTokenIssue && (
+          hfTokenVerified ? (
+            <p className={`m-0 rounded-lg border px-3 py-2 text-[0.75rem] leading-relaxed ${
+              hfTokenBroad
+                ? 'border-amber-400/35 bg-amber-500/[0.08] text-amber-100'
+                : 'border-emerald-400/35 bg-emerald-500/[0.08] text-emerald-100'}`}>
+              <span className="font-semibold">
+                {hfTokenBroad
+                  ? 'Hugging Face delivery ready (broad token).'
+                  : 'Hugging Face delivery ready.'}
+              </span>{' '}
+              {hfTokenBroad
+                ? (offerTokenStatus?.warning
+                  || 'This token has global write access. It works, but a fine-grained token limited to Krea 2 reads and one delivery namespace is safer.')
+                : 'The dedicated token can read the official base and write the delivery repository.'}
+              {offerTokenStatus?.namespace ? ` Delivery namespace: ${offerTokenStatus.namespace}.` : ''}
+            </p>
+          ) : (
+            <p className="m-0 rounded-lg border border-amber-400/35 bg-amber-500/[0.08] px-3 py-2 text-amber-100 text-[0.75rem] leading-relaxed">
+              This run requires an <code>HF_CLOUD_TOKEN</code> that can read <code>krea/Krea-2-Raw</code> and
+              write the delivery repository. A tightly scoped fine-grained token is recommended. A global
+              write token is also accepted with a warning. Configure it in{' '}
+              <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>
+              {' '}before renting the GPU.
+            </p>
+          )
         )}
 
         {hfTokenIssue && (
