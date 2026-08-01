@@ -322,6 +322,19 @@ DEFAULTS = {
               # Raised on request by ashish.sinha (Discord). Separate from improve_steps,
               # which drives the manual "Upscale & improve" pass only.
               'generation_steps': 5,
+              # Enhancement LoRA strength for every Klein EDIT/generation lane
+              # (reference edit, variations, regenerate, small-image rescue) —
+              # node 139 of improve skin.json, klein/realistic.safetensors.
+              # The workflow pins that node at 0.8 and NO lane except "Upscale &
+              # improve" ever overrode it, which did not matter while the file
+              # shipped with nobody: the node was bypassed on every install. Once
+              # Setup started downloading it (klein_enhancement_lora), a detail/
+              # style LoRA at 0.8 quietly joined every edit and pulled results
+              # away from the instruction — the "edits are not conformant" report.
+              # 0.0 = the behaviour every install had before the LoRA existed
+              # locally. Raise it to let the LoRA add detail on purpose.
+              # Mirror of improve_base_lora_strength, which already defaults to 0.
+              'edit_base_lora_strength': 0.0,
               # Manual "Upscale & improve" quality profile. Its INSTRUCTION was
               # already editable (identity_prompts.klein_improve) but the knobs
               # deciding how much the pass actually changes were hardcoded at the

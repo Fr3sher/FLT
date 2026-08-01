@@ -307,6 +307,25 @@ def _generation_steps() -> int:
     (reported by ashish.sinha, Discord). Default 5 = that exact behaviour; a bad
     config value degrades to it rather than crashing the enqueue."""
     return _improve_int('generation_steps', 5)
+
+
+def _generation_base_lora_strength() -> float:
+    """Enhancement-LoRA strength (node 139, klein/realistic.safetensors) for every
+    Klein lane that is NOT "Upscale & improve": the reference edit, variations,
+    regenerate, and the small-image rescue.
+
+    The shipped workflow pins that node at 0.8 and none of those lanes ever passed
+    a value, so the LoRA applied at full 0.8 with nothing to turn it down. That was
+    invisible while the file existed on no install (enqueue_klein_edit bypasses a
+    missing LoRA), and became real the day Setup started downloading it
+    (klein_enhancement_lora, 031766f): a detail/style LoRA at 0.8 on top of every
+    edit steers the render toward its own look instead of the instruction — the
+    "Klein edits are not conformant" report.
+
+    Default 0.0 = what every install rendered before that download existed, and the
+    same default the improve pass already carries. Raising it is now a choice, on a
+    setting, instead of a hardcoded workflow widget."""
+    return _improve_float('edit_base_lora_strength', 0.0)
 # KLEIN_IMAGE_IMPROVE_PROMPT is the shipped DEFAULT of the editable klein_improve
 # prompt (imported from face_variations, which owns the identity/quality prompt
 # registry). Re-exported here so `svc.KLEIN_IMAGE_IMPROVE_PROMPT` keeps resolving.
@@ -3569,7 +3588,12 @@ def _enqueue_local_reference_edit(user_id, dataset_id, ds, engine, prompt, token
                 # the last place that should run on a different model than the
                 # images it anchors. None (never chose) = the historical auto pick.
                 klein_model=dataset_klein_model(ds),
-                sampler_steps=_generation_steps(), extra_metadata=meta)
+                sampler_steps=_generation_steps(),
+                # An EDIT must obey the instruction, not a style LoRA nobody
+                # picked: node 139 is pinned at 0.8 in the workflow file and the
+                # setting (default 0) is what decides it here.
+                base_lora_strength=_generation_base_lora_strength(),
+                extra_metadata=meta)
     except Exception as exc:
         from .klein_edit_helper import KleinModelsMissing
         from .krea_edit_helper import KreaModelsMissing
@@ -5363,6 +5387,7 @@ def _save_small_scrape_pair(user_id, dataset_id, raw, prompt, source_metadata=No
             # to stop. None (never chose) = the historical auto pick.
             klein_model=dataset_klein_model(get_dataset(user_id, dataset_id)),
             edit_prompt=prompt, sampler_steps=_generation_steps(),
+            base_lora_strength=_generation_base_lora_strength(),
             extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                             'variation_label': label,
                             'derivation_kind': KLEIN_SMALL_IMAGE,
@@ -7641,6 +7666,7 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                         klein_model=klein_model,
                         lora_strength=lora_strength, extra_ref_paths=extra_paths,
                         generation_loras=run_loras, sampler_steps=_generation_steps(),
+                        base_lora_strength=_generation_base_lora_strength(),
                         extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                                         'variation_label': v.get('label')})
                 except Exception:
@@ -8372,6 +8398,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
             lora_strength=lora_strength, extra_ref_paths=extra_paths,
             generation_loras=resolve_generation_lora_preset(generation_lora_preset),
             sampler_steps=_generation_steps(),
+            base_lora_strength=_generation_base_lora_strength(),
             extra_metadata={'is_dataset': True, 'dataset_id': img.dataset_id,
                             'variation_label': img.variation_label})
 

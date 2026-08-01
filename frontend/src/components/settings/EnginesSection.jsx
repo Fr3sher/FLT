@@ -179,6 +179,7 @@ function KleinLorasCard({ config, setField }) {
    card, next to the other Klein knobs and clearly NOT the "Upscale & improve"
    steps, which drive a different pass. */
 const KLEIN_GENERATION_STEPS_MAX = 50   // face_dataset_service._IMPROVE_MAX_STEPS
+const KLEIN_EDIT_LORA_MAX = 2           // face_dataset_service._IMPROVE_MAX_STRENGTH
 
 function KleinGenerationCard({ config, setField, configDefaults }) {
   // The shipped 5 is read from the server payload, never retyped here: it used
@@ -186,11 +187,17 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
   // that nothing kept in sync.
   const shipped = defaultValueAt(configDefaults, 'klein', 'generation_steps')
   const steps = config.klein?.generation_steps ?? shipped
+  // Enhancement LoRA on the EDIT lanes. The workflow pins node 139 at 0.8 and no
+  // lane but "Upscale & improve" overrode it, which only became visible once
+  // Setup started downloading the file: every edit gained a style LoRA at 0.8.
+  // Default 0 = the render before that download existed.
+  const editLoraShipped = defaultValueAt(configDefaults, 'klein', 'edit_base_lora_strength')
+  const editLora = config.klein?.edit_base_lora_strength ?? editLoraShipped
   return (
     <Card
       id="klein-generation"
       title="Klein generation quality"
-      help="How many sampler steps the local Klein engine spends on each generated variation. 5 is the value the app used before this was exposed, so leaving it alone keeps today's result. More steps render more cleanly but take proportionally longer — 10 steps is roughly twice the wait per image. It will not fix a wrong prompt: anatomy problems (extra limbs, tails) come from the identity prompt, not from the step count. Raised by ashish.sinha (Discord)."
+      help="How many sampler steps the local Klein engine spends on each generated variation, and how much of the enhancement LoRA it mixes in. 5 steps is the value the app used before this was exposed, so leaving it alone keeps today's result. More steps render more cleanly but take proportionally longer — 10 steps is roughly twice the wait per image. It will not fix a wrong prompt: anatomy problems (extra limbs, tails) come from the identity prompt, not from the step count. Raised by ashish.sinha (Discord)."
     >
       <div className="sm:max-w-xs">
         <label htmlFor="klein-generation-steps" className="block text-xs font-medium text-content">
@@ -213,6 +220,32 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
           “Upscale &amp; improve”, which has its own Steps below.
         </p>
         <ResetToDefault label="Generation steps" section="klein" field="generation_steps"
+          config={config} configDefaults={configDefaults} setField={setField} />
+      </div>
+      <div className="mt-4 sm:max-w-xs">
+        <label htmlFor="klein-edit-lora" className="block text-xs font-medium text-content">
+          Enhancement LoRA on edits
+        </label>
+        <input
+          id="klein-edit-lora"
+          type="number"
+          min={0}
+          max={KLEIN_EDIT_LORA_MAX}
+          step={0.05}
+          value={editLora}
+          onChange={(e) => setField('klein', 'edit_base_lora_strength',
+            e.target.value === '' ? editLoraShipped : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          0 = off. The workflow carries a detail LoRA (klein/realistic.safetensors) at
+          0.8, and until now nothing turned it down on an edit — it pulled results
+          away from the instruction you typed. Raise it to add its detail on purpose.
+          Applies to reference edits, variations, regenerations and the small-image
+          rescue — “Upscale &amp; improve” keeps its own Enhancement LoRA below.
+        </p>
+        <ResetToDefault label="Enhancement LoRA on edits"
+          section="klein" field="edit_base_lora_strength"
           config={config} configDefaults={configDefaults} setField={setField} />
       </div>
     </Card>

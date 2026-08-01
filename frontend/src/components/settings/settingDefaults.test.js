@@ -151,6 +151,7 @@ const COVERED = [
   ['EnginesSection.jsx', 'engines', 'chatgpt_image_model'],
   ['EnginesSection.jsx', 'engines', 'openrouter_model'],
   ['EnginesSection.jsx', 'klein', 'generation_steps'],
+  ['EnginesSection.jsx', 'klein', 'edit_base_lora_strength'],
   ['EnginesSection.jsx', 'klein', 'improve_megapixels'],
   ['EnginesSection.jsx', 'klein', 'improve_base_lora_strength'],
   ['EnginesSection.jsx', 'klein', 'improve_consistency_strength'],

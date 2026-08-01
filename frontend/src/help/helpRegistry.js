@@ -654,6 +654,11 @@ const TOPICS = [
       text: 'Build named generation-LoRA presets in Settings → Image engines, then pick one per run.' }),
   setting('klein.generation_steps', 'engines', 'klein-generation', 'Klein generation steps',
     ['klein', 'steps', 'sampler', 'generation', 'quality', 'slower', 'cleaner', 'sampling', '5 steps']),
+  setting('klein.edit_base_lora_strength', 'engines', 'klein-generation',
+    'Klein enhancement LoRA on edits',
+    ['klein', 'lora', 'realistic', 'enhancement', 'detail', 'edit', 'conformity',
+     'not following', 'ignores the prompt', 'drift', 'style', 'reference edit',
+     'variations', 'regenerate', 'node 139']),
   // Krea 2 Identity Edit — the second LOCAL engine. `grounding_px` first: it is
   // THE consistency ↔ prompt dial, and a bare pixel count means nothing without
   // that sentence, so it carries the widest keyword set of the four.

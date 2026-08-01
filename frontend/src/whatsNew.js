@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-01-klein-edits-follow-the-instruction',
+    date: '2026-08-01',
+    title: 'Klein edits follow what you asked again',
+    blurb:
+      'Every local Klein edit — the ✦ reference edit, variations, regenerations and the small-image rescue — was quietly mixing in a detail LoRA at 0.8 strength, which pulled results away from the instruction you typed. It only started happening once that LoRA became an automatic download, and nothing showed it or could turn it down. Edits now run without it by default, and a new "Enhancement LoRA on edits" setting lets you add it back on purpose.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-01-studio-combine-loras',
     date: '2026-08-01',
     title: 'Load two of your LoRAs in the same test image',

@@ -199,6 +199,8 @@ How presets are used matters:
 
 It is a **rendering** knob, not an anatomy fix: extra limbs, tails or wrong body parts come from the identity prompt describing the wrong kind of subject (see the subject-type note below), and no number of steps repairs that.
 
+**Enhancement LoRA on edits** → `klein.edit_base_lora_strength` (0–2, default **0**). How much of the detail LoRA (`klein/realistic.safetensors`) Klein mixes into an **edit**: the ✦ reference edit, variations, regenerations and the small-image rescue. The shipped workflow carries that LoRA at **0.8** and nothing on these lanes ever turned it down — which stayed invisible while the file existed on no install (the node was skipped), and became real once Setup started downloading it: from then on every Klein edit ran with a style LoRA at 0.8 pulling the result away from the instruction you typed. The default **0** is the render every install had before that download existed; raise it to let the LoRA add detail on purpose. “Upscale & improve” is unaffected — it has its own `klein.improve_base_lora_strength`.
+
 Separate from **Upscale & improve ▸ Steps** (`klein.improve_steps`), which drives the manual improve pass only.
 
 ### Klein model (per dataset)
@@ -802,6 +804,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `klein.consistency_lora` | Filename of the Klein consistency LoRA, relative to ComfyUI's LoRA folder. |
 | `klein.consistency_strength` | Strength (0–1) applied to the Klein consistency LoRA. |
 | `klein.generation_steps` | Sampler steps for Klein **generation** (variations, regenerate, small-image rescue). Default `5` = the value hardcoded in the shipped workflow; 1–50. Not the improve pass (`klein.improve_steps`). |
+| `klein.edit_base_lora_strength` | Strength of the enhancement LoRA (`klein/realistic.safetensors`, node 139) on Klein **edits** — reference edit, variations, regenerate, small-image rescue. Default `0` = off, the render before that LoRA became a Setup download; 0–2. Not the improve pass (`klein.improve_base_lora_strength`). |
 | `klein.generation_lora_presets` | Named generation-LoRA stacks (default empty) picked per run in Klein tuning; each has a name and up to 8 `{file, strength}` rows. Managed in Settings → Image engines. |
 | `identity_prompts.markings_lock` | Krea's “hold the skin” order — forbids inventing or redrawing marks. Blank = shipped default. Naming a body feature here summons it. |
 | `identity_prompts.outfit_vary` | The outfit directive injected into every human shot with no named garment. Blank = shipped default. |
