@@ -260,6 +260,23 @@ def _prompt_with_trigger(prompt, trigger_word):
     return f'{t}, {p}'
 
 
+def _prompt_with_triggers(prompt, trigger_words):
+    """Same as `_prompt_with_trigger` but for a STACK of LoRA loaded together
+    (combine mode): every trigger is prefixed, in selection order, so
+    `["a", "b"], "portrait"` gives `"a, b, portrait"`.
+
+    Accepts a bare string (the historical single-LoRA call) or any iterable.
+    Folding runs right-to-left because each step prepends; the dedup of
+    `_prompt_with_trigger` also collapses two LoRA that share a trigger, so a
+    stack never emits the same token twice."""
+    if trigger_words is None or isinstance(trigger_words, str):
+        return _prompt_with_trigger(prompt, trigger_words)
+    p = (prompt or '').strip()
+    for t in reversed(list(trigger_words)):
+        p = _prompt_with_trigger(p, t)
+    return p
+
+
 # --- Discovery ---------------------------------------------------------------
 # Familles testables, dans l'ordre d'affichage du sélecteur. Libellés = source
 # unique partagée avec le label de LoRA (app.utils.comfyui.FAMILY_LABELS).
@@ -739,6 +756,63 @@ def describe_test_prompt(image_bytes: bytes) -> str:
     return text
 
 
+STUDIO_ENHANCE_MAX_CHARS = 4000
+# Enrichissement d'un prompt de test (texte→texte, PAS de vision). Contraintes dures :
+# ne rien inventer sur l'IDENTITÉ (le LoRA la porte) et ne PAS toucher au trigger word
+# (le Studio l'injecte au montage — un trigger recopié/déformé par le LLM créerait un
+# doublon ou un token mort).
+STUDIO_ENHANCE_PROMPT = (
+    "You are rewriting a TEXT-TO-IMAGE GENERATION PROMPT so it renders better.\n\n"
+    "Keep every subject, action, clothing item, setting and camera choice the author "
+    "already wrote — you enrich, you do not replace. Add what a good prompt states and "
+    "this one leaves out: shot type and framing, pose, lighting, background, mood, "
+    "lens/photographic quality.\n\n"
+    "ABSOLUTE RULES - do not describe WHO the person is: no hair, face, eyes, skin, age, "
+    "gender or ethnicity (a LoRA supplies the identity). Do not add, repeat, translate or "
+    "invent any trigger word, token or name. Do not add negatives, weights, "
+    "parentheses-emphasis or LoRA tags.\n\n"
+    "Output ONE compact paragraph of plain natural-language prose, ready to paste. Output "
+    "only the prompt itself - no preamble, no \"Here is\", no quotation marks, no "
+    "commentary.\n\n"
+    "PROMPT TO ENHANCE:\n{prompt}")
+
+
+def enhance_test_prompt(prompt: str) -> str:
+    """Enrich a Studio test prompt with the LOCAL Ollama text model — the same
+    abliterated model the app captions with (a vanilla model refuses the NSFW prompts
+    this app produces), through the SAME client as captioning (`vision_ollama`); no
+    second Ollama seam exists.
+
+    A stopped LOCAL Ollama is started on demand, exactly like Describe. Whether the
+    model stays resident afterwards is decided by contention (vision_keepalive), so
+    enhancing three prompts in a row doesn't pay the cold load three times.
+
+    Raises ValueError on an empty/oversized prompt, and RuntimeError when Ollama is
+    unreachable, has no usable model, or answers nothing — the caller maps those to
+    400 / 409 so the button never fails silently on an install without Ollama."""
+    p = (prompt or '').strip()
+    if not p:
+        raise ValueError('write a prompt first — there is nothing to enhance')
+    if len(p) > STUDIO_ENHANCE_MAX_CHARS:
+        raise ValueError(f'prompt too long to enhance (max {STUDIO_ENHANCE_MAX_CHARS} characters)')
+    from .ollama_control import ensure_captioning_ready
+    from .vision_keepalive import keep_alive_for_isolated_call
+    from .vision_ollama import generate_text_ollama
+    ready = ensure_captioning_ready()
+    if not ready.get('ok'):
+        raise RuntimeError(
+            (ready.get('error') or 'Ollama is unavailable')
+            + ' — Enhance needs the local Ollama model configured in Settings › Local tools.')
+    text = generate_text_ollama(STUDIO_ENHANCE_PROMPT.format(prompt=p), num_predict=500,
+                                keep_alive=keep_alive_for_isolated_call())
+    text = (text or '').strip().strip('"').strip()
+    if not text:
+        raise RuntimeError(
+            'The model returned an empty prompt — check the configured Ollama model in '
+            'Settings and the application log.')
+    return text
+
+
 # --- Workflow build + enqueue -------------------------------------------------
 def apply_sdxl_lora_test_settings(workflow, *, base_ckpt, lora_name, strength,
                                   prompt, seed, width, height, cfg=None, steps=None,
@@ -1063,7 +1137,8 @@ def _build_cell_workflow(user_id, checkpoint, strength, prompt, seed, z_model,
     dans le studio d'un autre LoRA). L'uuid garantit l'unicité même au sein d'un
     dataset (re-runs après restart ComfyUI)."""
     # Trigger word auto-injecté ICI (montage seul) - le prompt reste brut en base.
-    prompt = _prompt_with_trigger(prompt, trigger_word)
+    # `trigger_word` peut être une LISTE (combine : un trigger par LoRA de la pile).
+    prompt = _prompt_with_triggers(prompt, trigger_word)
     ds_tag = f"d{dataset_id}_" if dataset_id is not None else ""
     fname = f"{user_id}_{ds_tag}LoraTest_{uuid.uuid4().hex[:8]}"
     extra_loras = extra_loras or []
@@ -1682,6 +1757,22 @@ def _batch_lora_label(row):
     return None
 
 
+def _combined_lora_labels(row) -> list:
+    """Noms lisibles des LoRA EMPILÉS avec celui de la cellule (entrées
+    `combined:true` de son JSON extra_loras) — badge « + X » de la grille et de
+    la lightbox. Liste vide quand la cellule n'est pas une pile."""
+    out = []
+    try:
+        for e in json.loads(row.extra_loras or '[]'):
+            if isinstance(e, dict) and e.get('combined'):
+                name = _basename(e.get('filename', '')).rsplit('.', 1)[0]
+                out.append({'label': format_trained_lora_label(e.get('filename', '')) or name,
+                            'weight': e.get('strength')})
+    except (ValueError, TypeError):
+        pass
+    return out
+
+
 def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None) -> dict:
     """Validate + materialize the grid and enqueue every cell.
 
@@ -1883,13 +1974,22 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
             'run_id': run_id, 'ids': ids}
 
 
+def _combine_weight(sel) -> float:
+    """Poids d'un LoRA dans une pile combinée : 0..2, arrondi au centième,
+    1.0 par défaut/valeur illisible (même clamp que les LoRA always-on)."""
+    try:
+        return max(0.0, min(2.0, round(float((sel or {}).get('weight', 1.0)), 2)))
+    except (TypeError, ValueError):
+        return 1.0
+
+
 def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None,
                           z_model=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None,
                           count=1, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None,
                           negative=None, sampler=None, scheduler=None, weight_dtype=None,
                           enhancer=None, enhancer_strength=None, detail_amount=None,
                           resolution_tier=None, resolution_multiplier=None,
-                          init_image=None, denoise=None) -> dict:
+                          init_image=None, denoise=None, combine=None) -> dict:
     """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
     [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
     (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
@@ -1900,7 +2000,16 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
 
     Parité Generate (2026-07-01) : always-on LoRA, rebalance Krea, steps2 SDXL et les
     réglages globaux (négatif/sampler/scheduler/precision/enhancer/detail/tier) sont
-    partagés par TOUTES les cellules du run (gatés + validés par famille via _sanitize_gen_knobs)."""
+    partagés par TOUTES les cellules du run (gatés + validés par famille via _sanitize_gen_knobs).
+
+    `combine=True` (≥2 sélections) bascule du mode COMPARAISON (1 cellule par LoRA,
+    chacun seul) au mode PILE : les LoRA sélectionnés sont chargés ENSEMBLE dans la
+    MÊME génération, chacun au `weight` porté par sa sélection, et les triggers des
+    datasets correspondants sont TOUS injectés dans le prompt. L'axe `strengths`
+    n'a alors plus de sens (chaque LoRA a son poids) : il est remplacé par le poids
+    du 1er LoRA de la pile. La règle « un run = une seule famille » vaut aussi ici —
+    combiner un LoRA Krea et un LoRA SDXL est impossible (bases et workflows
+    différents), et c'est refusé avec un message nommant les familles."""
     if not selections:
         raise ValueError('no LoRA selected')
     reason = gpu_busy_reason()
@@ -1914,7 +2023,12 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     fams = {family_of_lora(str(sel.get('checkpoint') or '')) for sel in (selections or [])}
     fams.discard(None)
     if len(fams) > 1:
-        raise ValueError('a test run cannot mix multiple families (ZIT/SDXL/Krea)')
+        # Nommer les familles en cause : « ZIT/SDXL/Krea » ne disait pas LESQUELLES
+        # étaient cochées, et en mode combine c'est l'erreur la plus probable.
+        named = ' + '.join(_MODE_LABEL_BY_FAMILY.get(f, f) for f in sorted(fams))
+        raise ValueError(
+            f'a test run cannot mix LoRA families ({named}) — they need different '
+            'base models and workflows. Keep one family per run.')
     run_type = (next(iter(fams), None) or 'zimage').lower()
     if run_type == 'sdxl':
         models = [m['filename'] for m in list_sdxl_base_models()]
@@ -2020,6 +2134,36 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         {s['checkpoint']: s for s in selections
          if s.get('checkpoint') and s.get('record_id') is not None
          and s.get('step') is not None})
+
+    # --- Mode PILE (combine) ---------------------------------------------------
+    # En comparaison, chaque sélection produit ses PROPRES cellules (un LoRA seul par
+    # image). En combine, la sélection décrit UNE pile : le 1er LoRA reste le
+    # « testé » (il porte la colonne de la grille et le dataset dont le prompt par
+    # défaut est tiré), les suivants sont chaînés dans le MÊME graphe via le canal
+    # `extra_loras` — celui des always-on, déjà câblé pour les trois familles
+    # (inject_zimage_loras / inject_krea_loras / inject_sdxl_loras). Chaque
+    # secondaire est revalidé contre les checkpoints réellement déployés de SON
+    # dataset : la whitelist des extras est permissive côté montage, l'anti
+    # path-injection se joue donc ici.
+    combine = bool(combine) and len(selections) > 1
+    stack_extra, stack_row, stack_triggers = [], [], []
+    if combine:
+        for sel in selections[1:]:
+            _ds_i, _allowed_i = _dataset_and_checkpoints(sel.get('dataset_id'))
+            if not _ds_i:
+                raise ValueError(f"dataset {sel.get('dataset_id')} not found")
+            fn = sel.get('checkpoint')
+            if fn not in _allowed_i:
+                raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
+            entry = {'filename': fn, 'strength': _combine_weight(sel)}
+            stack_extra.append(entry)
+            stack_row.append({**entry, 'combined': True})
+            if getattr(_ds_i, 'trigger_word', None):
+                stack_triggers.append(_ds_i.trigger_word)
+        # L'axe strengths perd son sens quand chaque LoRA porte son propre poids :
+        # il est réduit au poids du LoRA de tête pour garder UNE seule cellule.
+        selections, strengths = selections[:1], [_combine_weight(selections[0])]
+
     run_id = uuid.uuid4().hex
     # Materialize the original selection-major plan, then stable-partition it
     # once for Krea. Zero tested-LoRA-off controls across *all* selected
@@ -2047,8 +2191,8 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
                                      knobs['resolution_multiplier'])
         for batch_lora in batch_axis:  # AXE ⚖ batch : sans, puis avec chaque LoRA coché
-          row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
-          wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
+          row_extra = extra_loras + stack_row + ([{**batch_lora, 'batch': True}] if batch_lora else [])
+          wf_extra = extra_loras + stack_extra + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
           for cell_seed in seeds:
             img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
@@ -2077,10 +2221,14 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                                      scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
                                      enhancer_strength=knobs['enhancer_strength'],
                                      detail_amount=knobs['detail_amount'],
-                                     trigger_word=ds.trigger_word,
+                                     # Pile combinée : TOUS les triggers de la pile,
+                                     # celui du LoRA de tête en premier.
+                                     trigger_word=([ds.trigger_word] + stack_triggers
+                                                   if combine else ds.trigger_word),
                                      available_classes=available_classes))
             ids.append(img.id)
-    logger.info(f"lora-test: comparison run {run_id} -> {len(ids)} cellule(s), {len(selections)} LoRA, seed {seed}")
+    logger.info(f"lora-test: {'combined' if combine else 'comparison'} run {run_id} -> "
+                f"{len(ids)} cellule(s), {len(selections) + len(stack_extra)} LoRA, seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
 
 
@@ -2990,6 +3138,7 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
                    'z_model_label': (_basename(r.z_model).rsplit('.', 1)[0] if r.z_model else None),
                    'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
                    'batch_lora': _batch_lora_label(r),
+                   'combined_loras': _combined_lora_labels(r),
                    # Why the tile is empty (failed cells only) → shown on hover (P0-b).
                    'error': r.error if r.status == 'failed' else None,
                    'face_score': r.face_score, 'face_state': r.face_state}
@@ -3072,6 +3221,7 @@ def studio_payload_run(user_id, run_id) -> dict | None:
                    'queue_error': activity['queue_error'].get(r.job_id), 'prompt': r.prompt,
                    'z_model': r.z_model, 'cfg': r.cfg, 'steps': r.steps, 'steps2': r.steps2,
                    'batch_lora': _batch_lora_label(r),
+                   'combined_loras': _combined_lora_labels(r),
                    'error': r.error if r.status == 'failed' else None} for r in rows],
         'lora_ranking': lora_net_scores(run_id),
         'pending': activity['pending'],

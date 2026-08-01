@@ -20,7 +20,9 @@ import { useQuickVote } from '../../../hooks/useQuickVote';
 import { fmt } from '../../../utils/studioFormat';
 import { flipOrder } from './flipOrder';
 import { DEFAULT_STRENGTHS, FAMILY_LABELS } from './constants';
+import { buildSelectionsPayload, combineBlocker } from './loraStack';
 import StudioRunSetup from './StudioRunSetup';
+import LoraStackPanel from './LoraStackPanel';
 import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
@@ -46,6 +48,18 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
     try { return localStorage.getItem('studioComp_prompt') || ''; } catch { return ''; }
   });
   const [seed, setSeed] = useState(() => rollSeed());
+  // 'compare' (historique : un LoRA seul par cellule) ou 'combine' (pile : tous les
+  // LoRA cochés dans la MÊME image, chacun à son poids). Persisté comme le reste.
+  const [mode, setMode] = useState(() => {
+    try { return localStorage.getItem('studioComp_mode') === 'combine' ? 'combine' : 'compare'; }
+    catch { return 'compare'; }
+  });
+  // Poids par LoRA de la pile, indexés par `${dataset_id}:${checkpoint}` → un poids
+  // réglé survit au décochage d'un AUTRE LoRA.
+  const [stackWeights, setStackWeights] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('studioComp_weights') || '{}') || {}; }
+    catch { return {}; }
+  });
   const [count, setCount] = useState(() => {
     try { return Math.max(1, parseInt(localStorage.getItem('studioComp_count'), 10) || 1); } catch { return 1; }
   });
@@ -54,8 +68,10 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
       localStorage.setItem('studioComp_strengths', JSON.stringify(strengths));
       localStorage.setItem('studioComp_prompt', prompt);
       localStorage.setItem('studioComp_count', String(count));
+      localStorage.setItem('studioComp_mode', mode);
+      localStorage.setItem('studioComp_weights', JSON.stringify(stackWeights));
     } catch { /* private mode */ }
-  }, [strengths, prompt, count]);
+  }, [strengths, prompt, count, mode, stackWeights]);
   const [launching, setLaunching] = useState(false);
   // 409 `studio_missing` au lancement (P0-a) → bandeau des modèles/nodes manquants.
   const [preflight, setPreflight] = useState(null);
@@ -106,13 +122,19 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
     [cells],
   );
 
+  const combine = mode === 'combine';
+  const combineBlocked = combine ? combineBlocker(selection) : null;
+
   const launch = async () => {
-    if (!selection.length || !strengths.length) return;
+    if (!selection.length || combineBlocked) return;
+    if (!combine && !strengths.length) return;
     setLaunching(true);
     try {
       const body = {
-        selections: selection.map((s) => ({ dataset_id: s.dataset_id, checkpoint: s.checkpoint })),
-        strengths,
+        selections: buildSelectionsPayload(selection, { combine, weights: stackWeights }),
+        // En combine chaque LoRA porte son poids : l'axe strengths n'est plus envoyé
+        // (le backend le remplace par le poids du LoRA de tête).
+        ...(combine ? { combine: true } : { strengths }),
         seed,
         count,
         // Base du run : '' (entrée « Official », Krea) ou rien de coché → absent,
@@ -176,6 +198,9 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
             </select>
           </div>
         )}
+        <LoraStackPanel selection={selection} mode={mode} onMode={setMode}
+          weights={stackWeights}
+          onWeight={(k, v) => setStackWeights((cur) => ({ ...cur, [k]: v }))} />
         <div id="st-setup" className="scroll-mt-16">
           <StudioRunSetup
             selectionCount={selection.length}
@@ -191,6 +216,8 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
             launching={launching}
             gpuBusy={data?.gpu_busy}
             batchMult={1 + ((genSettings.batch_loras || []).length)}
+            combine={combine}
+            combineBlocked={combineBlocked}
           />
         </div>
         {/* Réglages de génération globaux (parité Generate, hors prompt builder).
@@ -247,7 +274,9 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
 
         {!runId ? (
           <p className="text-content-subtle text-sm rounded-lg border border-border bg-surface px-3 py-6 text-center">
-            Set up the run on the left then “🚀 Launch the test” to compare the {selection.length} LoRAs side by side.
+            Set up the run on the left then “🚀 Run the test”{combine
+              ? ` to render the ${selection.length} LoRAs together in one image.`
+              : ` to compare the ${selection.length} LoRAs side by side.`}
           </p>
         ) : (
           <div className="flex flex-col gap-2">

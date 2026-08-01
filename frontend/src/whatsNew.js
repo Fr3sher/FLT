@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-01-studio-combine-loras',
+    date: '2026-08-01',
+    title: 'Load two of your LoRAs in the same test image',
+    blurb:
+      'Test Studio can now COMBINE the LoRAs you check instead of only comparing them side by side. Switch to 🧬 Combine, give each LoRA its own weight, and they render together in one image with every trigger word injected for you. Mixing families stays blocked — Krea and SDXL LoRAs need different base models — and the message now names which two you picked.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-01-studio-enhance-prompt',
+    date: '2026-08-01',
+    title: 'Turn a one-line test prompt into a full one',
+    blurb:
+      'A ✨ Enhance button next to the Test Studio prompt rewrites what you typed into a richer prompt using your local Ollama model — framing, pose, lighting and mood added, identity and trigger words left alone. Without Ollama the button is simply greyed out and tells you what is missing.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-01-setup-checks-in-the-background',
     date: '2026-08-01',
     title: 'Stop re-running Setup every time you come back',
