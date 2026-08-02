@@ -570,7 +570,7 @@ Defaults for new runs, plus everything about the optional cloud training lane.
 
 ### Defaults
 
-- **Default training family** → `training.default_family`. The model family preselected when you start a new run. One of `zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, `anima`. Default **`zimage`**. Purely a starting point — you can switch family per run. `anima` trains the open [Anima](https://huggingface.co/circlestone-labs/Anima-Base-v1.0-Diffusers) anime model on its public base (no gated download); it is **local-only** for now (needs an up-to-date ai-toolkit + diffusers — cloud training arrives once the GPU pod image is verified).
+- **Default training family** → `training.default_family`. The model family preselected when you start a new run. One of `zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, `anima`. Default **`zimage`**. Purely a starting point — you can switch family per run. `anima` trains the open [Anima](https://huggingface.co/circlestone-labs/Anima-Base-v1.0-Diffusers) anime model on its public base (no gated download); it is **local-only** for now (needs an up-to-date ai-toolkit + diffusers — cloud training arrives once the GPU pod image is verified). **Anima is the one family with hybrid prompting:** booru tags *and* natural language are both first-class on it, so the caption-style guard says nothing there — prose is merely the preselected default, and a booru-captioned Anima dataset trains without being flagged or forced. Every other family keeps its single expected form (SDXL = booru tags, the rest = prose).
 
 ### Training base & variant are per FAMILY
 

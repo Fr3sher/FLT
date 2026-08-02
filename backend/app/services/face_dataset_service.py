@@ -6053,7 +6053,11 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
         finally:
             dataset_activity.end(token)
     # Style de caption : prose (Z-Image) vs tags booru (SDXL booru-native type bigLove).
-    # Défaut AUTO selon le type entraîné ; un mode explicite (UI) l'emporte.
+    # Défaut AUTO selon le type entraîné ; un mode explicite (UI) l'emporte — c'est ce
+    # qui rend le captioning « model-matched » réglable sans 2e mécanisme.
+    # Anima est HYBRIDE (booru ET langage naturel sont natifs) : son défaut reste la
+    # prose, mais mode='booru' est un choix légitime, pas un contournement — le garde
+    # MISMATCH_CAPTION du lancement ne dit rien sur anima (lora_training.assert_trainable).
     ttype = (getattr(ds, 'train_type', None) or 'zimage').lower()
     mode = (mode or ('booru' if ttype == 'sdxl' else 'prose')).lower()
     style = is_style(ds)

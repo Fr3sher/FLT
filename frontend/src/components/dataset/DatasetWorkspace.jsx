@@ -569,7 +569,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const leakingImages = images.filter((i) => i.leak);
   // Overlaid watermarks still awaiting removal → drives the "🧽 Clean (N)" button.
   const watermarkDetected = images.filter((i) => i.watermark_state === 'detected').length;
-  // Style de caption : défaut AUTO (SDXL booru-native → booru tags ; sinon prose), surchargé par le sélecteur.
+  // Style de caption : défaut AUTO (SDXL booru-native → booru tags ; sinon prose),
+  // surchargé par le sélecteur. Anima est HYBRIDE (les deux formes sont natives) :
+  // le défaut prose n'est qu'un point de départ, basculer sur booru est légitime et
+  // ne déclenche aucun garde-fou au lancement.
   const effCaptionMode = captionMode || (d.train_type === 'sdxl' ? 'booru' : 'prose');
   // ── Grid tag-filter (session-only) ──────────────────────────────────────────
   // A tag is toggled in its list and mutually excluded from the other (a tag can't
@@ -1481,7 +1484,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
                 className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2 scroll-mt-20">
                 {!isConceptual && (
                   <select value={effCaptionMode} onChange={(e) => setCaptionMode(e.target.value)} disabled={ds.busy}
-                    title="Caption style — Prose (Z-Image) or Booru tags (SDXL booru-native, e.g. bigLove). Defaults to auto based on the dataset's type."
+                    title={d.train_type === 'anima'
+                      ? "Caption style — Anima reads BOTH: booru tags and natural language are first-class on this model. Prose is only the default; switching to Booru tags trains fine and is never flagged as a mismatch."
+                      : "Caption style — Prose (Z-Image) or Booru tags (SDXL booru-native, e.g. bigLove). Defaults to auto based on the dataset's type."}
                     className="px-2 py-1.5 rounded-lg bg-surface border border-border text-content text-[0.8125rem] disabled:opacity-40">
                     <option value="prose">📝 Prose</option>
                     <option value="booru">🏷️ Booru tags</option>

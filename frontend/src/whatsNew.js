@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-anima-hybrid-captions',
+    date: '2026-08-03',
+    title: 'Anima takes booru tags too — the app stops calling them a mistake',
+    blurb:
+      'Anima is a hybrid-prompting model: booru tags and natural language are both first-class on it. The app only knew half of that and treated a booru-captioned Anima dataset as a caption mismatch, so a perfectly valid dataset had to be force-launched past a red warning. Both forms now train without a warning and without forcing, the caption-style selector says so on Anima, and prose stays the preselected default. Every other family keeps its guard exactly as it was — SDXL still refuses prose. Prompted by a correction from Witty_Mycologist_995 (Reddit).',
+    to: '/datasets?section=captions&panel=generate',
+  },
+  {
+    id: '2026-08-03-improve-note-cites-the-setting',
+    date: '2026-08-03',
+    title: 'The amber “drawn dataset” note now names the setting it came from',
+    blurb:
+      'Next to Improve, a caution used to announce “This dataset is drawn.” — a verdict the app never actually reached, because it only ever read the subject type you picked. On a photoreal dataset left marked Anime the sentence was simply wrong, with nothing to tell you where it came from. It now says the subject type is set to anime, so when the setting and your images disagree you can see which one to change. The advice itself is unchanged.',
+    to: '/datasets?section=images&panel=review',
+  },
+  {
     id: '2026-08-03-folder-picker-paste-a-path',
     date: '2026-08-03',
     title: 'You can finally paste a path when choosing a folder',

@@ -1985,7 +1985,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <select value={trainType} onChange={(e) => onTypeChange(e.target.value)}
           disabled={trainTypeBusy || presetBusy || trainingModeBusy}
           aria-label="Training model family"
-          title="Z-Image (prose, Qwen3 encoder) ~20 img · SDXL (ComfyUI checkpoints) ~30 img · Krea 2 (prose, base fixe Turbo) ~20 img · FLUX.1-dev (prose, gated HF, local-only) ~20 img · FLUX.2 Klein (prose, gated HF, 4B local / 9B cloud) ~20 img · Anima (prose, Qwen3 encoder, anime, public base, local-only) ~20 img"
+          title="Z-Image (prose, Qwen3 encoder) ~20 img · SDXL (ComfyUI checkpoints) ~30 img · Krea 2 (prose, base fixe Turbo) ~20 img · FLUX.1-dev (prose, gated HF, local-only) ~20 img · FLUX.2 Klein (prose, gated HF, 4B local / 9B cloud) ~20 img · Anima (prose OR booru tags — both native, Qwen LLM encoder, anime, public base, local-only) ~20 img"
           className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
           <option value="zimage">Z-Image (~20 img)</option>
           <option value="sdxl">SDXL (~30 img)</option>

@@ -1140,7 +1140,11 @@ const TOPICS = [
      'flip', 'bank', 'crop'],
     '/datasets', 'using-the-app', 'rotate-a-sideways-image'),
   action('action-caption-generate', 'Generate captions',
-    ['caption', 'generate', 'joycaption', 'ollama', 'text'],
+    ['caption', 'generate', 'joycaption', 'ollama', 'text',
+     // Caption STYLE lives on this control: the prose/booru selector next to the
+     // button. Anima accepts both forms, so a user searching "booru" or "anima"
+     // must land here rather than conclude the app only does one of them.
+     'prose', 'booru', 'tags', 'style', 'anima', 'hybrid'],
     '/datasets?section=captions&panel=generate', 'dataset-guide', '3-captions-the-make-or-break-step'),
   action('action-caption-options', 'Caption method options',
     ['caption', 'options', 'engine', 'model', 'ollama', 'pull', 'instructions', 'prompt',

@@ -40,6 +40,15 @@ this family). Both bases are *gated* on Hugging Face: accept the license of
 testing (Test Studio) is coming — until then, test your Klein LoRA in your own
 ComfyUI.
 
+**Anima note (the one family that takes BOTH caption styles):** Anima is an anime
+model with **hybrid prompting** — its model card documents *booru tags* and *natural
+language* as equally supported, which its LLM text encoder is what makes possible. So
+this is the family where the "match the style" rule below does **not** apply: caption
+in prose, caption in booru tags, or keep an existing dataset as it is — the app will
+not flag either as a mismatch, and you never have to force the launch. Prose is only
+the preselected default. It trains on the open `Anima-Base-v1.0-Diffusers` (no gated
+download) and is **local-only** for now.
+
 ---
 
 ## 2. How many images, and which ones
@@ -98,7 +107,9 @@ Concretely:
    captions under ~8 words are too weak to isolate the identity.
 5. **Match the style to the family.** Prose for Z-Image and Krea; booru tags for
    SDXL booru-native checkpoints. The app blocks a mismatch for a reason —
-   a prose-captioned SDXL LoRA produces disjointed images.
+   a prose-captioned SDXL LoRA produces disjointed images. **Anima is the
+   exception:** it reads both forms natively, so neither is ever blocked there
+   (see the Anima note above).
 
 **Concept datasets** (training a *thing/style/act*, not a person) invert the rule:
 describe everything **except the concept** — the concept is what must bind to the
@@ -189,7 +200,7 @@ The app runs these checks when you hit Train — here's the list to self-check e
 - [ ] Framing balanced — not 100% face shots (some bust/body/back)
 - [ ] Every kept image captioned *(strongly recommended — a blank caption won't block the launch, it just asks you to confirm "train anyway")*
 - [ ] **Zero identity leaks** (no hair/face/skin words — the leak badge shows 0)
-- [ ] Captions varied, ≥ 8 words, style matches the family (prose vs booru)
+- [ ] Captions varied, ≥ 8 words, style matches the family (prose vs booru — Anima takes either)
 - [ ] Near-duplicate pairs resolved (keep one of each)
 - [ ] Body fidelity: if ON, actual full-body shots exist
 
