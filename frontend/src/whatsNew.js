@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-dataset-coverage-panel',
+    date: '2026-08-02',
+    title: 'Your dataset can hit a green composition target and still be twenty-five copies of the same shot — a new panel says so',
+    blurb:
+      'The Composition bar counts face / bust / body / back against a target, so it goes green on a set that is entirely front-on, in one outfit, under one light. Those are not things it counts, and that set trains a LoRA that can only reproduce that one look. The new 🔍 Coverage panel, folded under that bar, is the second question: it reads the captions you already generated and reports what your set never shows — no profile views, only one outfit, eye level only, never outdoors — with a plain "generate or import more: profile, three-quarter" line under it. It is honest about being a keyword read of your captions rather than a look at the pixels: with no captions it says so instead of drawing empty bars, under five captions it refuses to judge, and it never keeps, rejects or changes anything. Style and concept datasets are judged on their own axes — "one outfit" is not a defect when the outfit is not what you are teaching.',
+    to: '/datasets?section=add',
+  },
+  {
     id: '2026-08-02-pinokio-one-click-install',
     date: '2026-08-02',
     title: 'Install LDS in one click from Pinokio',

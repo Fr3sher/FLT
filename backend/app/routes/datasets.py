@@ -243,6 +243,17 @@ def dataset_get(dataset_id):
     return (jsonify(payload), 200) if payload else (jsonify({'error': 'not found'}), 404)
 
 
+@bp.get('/dataset/<int:dataset_id>/coverage')
+def dataset_coverage_get(dataset_id):
+    """Read-only variety report: what the captions never mention (camera view,
+    lighting, setting, outfit, expression) and how many images the composition
+    bar had to ignore. Composes the framing column and the existing captions —
+    no model runs. 404 when the dataset is gone."""
+    from ..services import dataset_coverage as cov
+    payload = cov.coverage(LOCAL_USER, dataset_id)
+    return (jsonify(payload), 200) if payload else (jsonify({'error': 'not found'}), 404)
+
+
 @bp.post('/dataset/<int:dataset_id>/ref')
 def dataset_set_ref(dataset_id):
     ds = svc.get_dataset(LOCAL_USER, dataset_id)

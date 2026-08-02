@@ -1090,6 +1090,20 @@ const TOPICS = [
      'face', 'bust', 'body', 'back', 'sort shots', 'imported', 'import', 'drag and drop',
      'no crop', 'head crop off', 'ollama', 'vision', 'qwen'],
     '/datasets?section=add', 'dataset-guide', '2-how-many-images-and-which-ones'),
+  // The composition bar can be fully green on a set that is one pose, one outfit,
+  // one light. This is the panel that says so — keyworded on the SYMPTOM ("all my
+  // images look the same", "lora only makes one pose"), because that is what
+  // someone types before they know a coverage panel exists.
+  action('action-dataset-coverage', '🔍 Coverage: what your dataset never shows',
+    ['coverage', 'variety', 'variation', 'diversity', 'diverse', 'missing',
+     'what is missing', 'gaps', 'balanced', 'unbalanced', 'all the same',
+     'look the same', 'same pose', 'same outfit', 'same background',
+     'same lighting', 'one outfit', 'no profile', 'profile', 'side view',
+     'angles', 'camera angle', 'view', 'lighting', 'outfit', 'clothes',
+     'expression', 'setting', 'background', 'overfit', 'overfitting',
+     'baked in', 'generalise', 'generalize', 'only makes one', 'captions',
+     'caption keywords', 'composition green', 'target reached'],
+    '/datasets?section=add', 'dataset-guide', '9-coverage-what-your-set-never-showed'),
   // Krea's Fit path applies the selected card's frame to a reference that still
   // anchors identity. Keep the stable id/anchor so old help links continue to land.
   action('krea-reference-shape', 'Krea follows the selected shot framing',

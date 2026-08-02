@@ -380,5 +380,54 @@ purpose — see the settings reference.
 
 ---
 
+## 9. Coverage — what your set never showed
+
+Section 2 says "vary everything except the person". The Composition bar cannot
+check that: it counts face / bust / body / back against a target, so a set of
+twenty-five front-on studio portraits in one outfit reaches a **fully green
+target** while having no profile, no daylight and no second outfit. The LoRA that
+comes out reproduces that one look and nothing else.
+
+**🔍 Coverage**, the collapsible panel right under the Composition bar, is that
+second check. Open it and it reports, per axis, what your captions describe and
+what they never mention:
+
+| Axis | What a gap means |
+|---|---|
+| Camera view | frontal / three-quarter / profile — a character with no profile has a side nobody ever saw |
+| Camera height | eye level / low / high / overhead — eye-level-only is the default trap |
+| Lighting | daylight, indoor, golden hour, studio, night, backlit, overcast |
+| Setting | indoor, outdoor, urban, plain backdrop, water, vehicle |
+| Outfit | counts how many **distinct** outfit types appear — one outfit gets learned as part of the person |
+| Expression | counts how many distinct expressions appear |
+
+Which axes apply depends on the dataset kind. A **style** dataset is judged on
+lighting, setting and view only — "one outfit" is not a defect when the outfit is
+not what you are teaching. A **concept** dataset drops the expression axis.
+
+### What it can and cannot see
+
+This is deliberately a cheap check, not a second model. It reads **the words in
+the captions you already generated** — nothing new runs, there is no GPU cost,
+and the numbers appear instantly. That comes with real limits, and the panel
+repeats them on screen rather than hiding them:
+
+- **No captions, no reading.** With an uncaptioned dataset the panel says so
+  instead of drawing empty bars. Run the caption pass first.
+- **It sees descriptions, not pixels.** A profile shot the captioner described
+  without the word "profile" is invisible here. An absence is strong evidence,
+  not proof.
+- **Negation is not parsed.** "not smiling" counts as a smile.
+- **Under five captions it refuses to judge** — at that size everything looks
+  missing for the wrong reason.
+- **It never selects, keeps, rejects or changes anything.** It is advice.
+
+The panel reads the same pool the Composition bar counts: everything that is not
+rejected and not failed. It also tells you how many images have **no shot type
+yet**, which is the one thing the bar above silently drops.
+
+---
+
 *Everything above is enforced or surfaced by the app itself (pre-flight checks,
-leak badge, composition bar, advanced options). This page just explains why.*
+leak badge, composition bar, coverage panel, advanced options). This page just
+explains why.*
