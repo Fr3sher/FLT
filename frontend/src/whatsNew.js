@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-ollama-fence-waits-and-offers-the-unload',
+    date: '2026-08-02',
+    title: 'When another tool is holding the Ollama model, LDS now waits for it — or takes it, if you say so',
+    blurb:
+      'If you run another AI tool on the same machine, ✨ Enhance and 🔎 Describe would sometimes refuse with "a local Ollama model is already in use outside LDS". That refusal was right — LDS must never unload a model another app is using — but it was also a dead end: it told you to go unload it by hand, then forgot what you had asked for. Now the refusal carries its own way out. LDS keeps watching, and the moment the model is free (Ollama unloads an idle one by itself after a few minutes) your Enhance or Describe starts again on its own, with the prompt and the image you had. If you would rather not wait, one click on "Unload it and continue" evicts the other model and resumes — and nothing evicts it without that click. One more thing fixed while we were here: restarting LDS while its OWN model was still warm used to make it mistake that model for a stranger\'s and block itself out of it.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-02-anima-shows-its-own-base',
     date: '2026-08-02',
     title: 'Anima no longer says it trains on a Z-Image base',

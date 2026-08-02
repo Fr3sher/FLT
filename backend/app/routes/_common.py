@@ -8,6 +8,7 @@ from .. import capabilities
 from ..gpu_window import GpuBusyError
 from ..job_queue import (ComfyUIRecoveryRequired, auto_resolve_comfyui_barrier,
                          require_comfyui_enqueue_ready)
+from ..services.vision_ollama import LocalOllamaFenceError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,12 @@ def _map_error(e: Exception):
         return jsonify({'error': 'GPU busy', 'detail': str(e)}), 503
     if isinstance(e, ValueError):
         return jsonify({'error': str(e)}), 400
+    if isinstance(e, LocalOllamaFenceError):
+        # The one refusal that carries its own remedy: the model in the way can
+        # be unloaded with the user's consent, and it often goes away on its own
+        # (Ollama's idle unload). A code — not a sentence to string-match —
+        # tells the UI it may offer both instead of ending the story here.
+        return jsonify({'error': str(e), 'code': 'ollama_fence_blocked'}), 409
     if isinstance(e, RuntimeError):
         return jsonify({'error': str(e)}), 409
     if isinstance(e, IntegrityError):
