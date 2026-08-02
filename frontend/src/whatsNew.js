@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-review-opens-instantly',
+    date: '2026-08-03',
+    title: '▶ Review opens instantly, even on a 20 000-image bank',
+    blurb:
+      'Pressing ▶ on a tile used to sit there for seconds on a big bank — longer still with a sort active. It was building its list of images the slow way: asking the server for the whole grid, 500 rows at a time, and keeping only the identifiers. On a 22 940-image bank that was 46 requests and 16 MB to end up with 23 000 numbers. It now asks once, for the numbers alone: 3.8 s down to 44 ms, on the same bank. "Select all in filter" took the same shortcut and got the same gain.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-02-bank-passes-survive-a-deleted-image',
     date: '2026-08-02',
     title: 'Deleting a bank image while a long pass is running no longer throws the whole pass away',
