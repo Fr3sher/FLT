@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-docker-first-boot-opens-setup',
+    date: '2026-08-02',
+    title: 'A brand-new Docker install now opens Setup instead of hiding it',
+    blurb:
+      'On the Docker GPU install, ComfyUI comes bundled — which made the app look fully configured on its very first boot, so it dropped you straight into Datasets and never offered the wizard. Meanwhile the launcher window sat waiting up to fifteen minutes for an Ollama choice that only Setup can ask for. A first boot that still owes that choice now opens Setup. Nothing changes for an install that has been seen working: it is still never interrupted, and once you have picked an option you are not asked again.',
+    to: '/setup',
+  },
+  {
     id: '2026-08-02-dataset-upload-is-visible',
     date: '2026-08-02',
     title: 'You can now watch the dataset go up to the rented machine — and it stops billing if it does not',
