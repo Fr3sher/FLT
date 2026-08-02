@@ -19,9 +19,9 @@ A real Character LoRA built end to end in seven minutes, unedited and without na
 https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
 
 <p align="center">
-  <img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace with a progress rail mapping reference, generation, curation, captioning and training" width="820">
+  <img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace: a progress rail mapping reference, generation, curation, captioning and training, next to the curation grid and its bulk actions" width="820">
 </p>
-<p align="center"><em>One workspace for the full route. All screenshots use a synthetic, AI-generated demo person; no real individual is depicted.</em></p>
+<p align="center"><em>One workspace for the full route. Every person shown in these screenshots was produced by the app's own generation engines; no real individual is depicted.</em></p>
 
 ## What it does
 
@@ -99,7 +99,7 @@ API generation follows each provider's billing and content policy. Read the dire
       <sub><strong>Image Bank</strong> — score, search and shortlist large collections.</sub>
     </td>
     <td align="center" width="50%">
-      <a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset curation grid with image decisions and composition tools" width="380"></a><br>
+      <a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset image grid with keep/reject decisions, face-similarity scores and per-tile caption fields" width="380"></a><br>
       <sub><strong>Curate</strong> — review, repair and balance the training set.</sub>
     </td>
   </tr>
@@ -116,8 +116,8 @@ API generation follows each provider's billing and content policy. Read the dire
 </table>
 
 <p align="center">
-  <a href="docs/screenshots/07-lineage-graph.png"><img src="docs/screenshots/07-lineage-graph.png" alt="Experiment lineage graph connecting training runs and continuation checkpoints" width="780"></a><br>
-  <sub><strong>Experiment lineage</strong> — see exactly where every continuation came from.</sub>
+  <a href="docs/screenshots/canvas/canvas-board.png"><img src="docs/screenshots/canvas/canvas-board.png" alt="LoRA Canvas board with run cards, checkpoint pills and the run inspector showing the frozen training settings" width="780"></a><br>
+  <sub><strong>LoRA Canvas</strong> — every run on one board, and the exact recipe behind each one.</sub>
 </p>
 
 The detailed journey, screenshots and operational notes now live in the [workflow guide](docs/guide/workflow.md).
