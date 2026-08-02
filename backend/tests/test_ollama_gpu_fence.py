@@ -4,6 +4,11 @@ import pytest
 
 from app.services import ollama_gpu_fence as fence
 
+# This file IS the fence's own test: it drives /api/ps through `requests`
+# itself, so it opts out of the autouse stub that keeps the rest of the
+# suite off this machine's Ollama (see conftest).
+pytestmark = pytest.mark.ollama_fence
+
 
 class _Response:
     def __init__(self, payload, status_code=200):
