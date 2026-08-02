@@ -198,20 +198,27 @@ const KLEIN_MODEL_SLOTS = [
   { key: 'klein-model-consistency_lora', cfg: 'consistency_lora', slot: 'consistency_lora',
     label: 'Consistency LoRA',
     placeholder: 'Empty = no consistency LoRA',
+    missText: 'Not found — the LoRA is skipped (Setup can download it)',
     hint: 'Full path, or relative to models/loras — the structure-anchoring LoRA chained onto the Klein edit graph. Unlike the three above, this one has a shipped default and clearing it disables the LoRA rather than turning on auto-detection.' },
 ]
 
-/* One badge per resolve status from caps.comfyui.klein_overrides. 'outside_roots'
-   is deliberately NOT worded as "not found": the file is there, ComfyUI simply
-   cannot reach it, and only one action fixes that. */
-function overrideBadge(st) {
+/* One badge per resolve status from caps.comfyui.klein_overrides. Two wordings
+   are deliberate rather than cosmetic:
+   - 'outside_roots' is NOT "not found" — the file IS there, ComfyUI simply
+     cannot reach it, and a different action fixes that;
+   - what happens after a miss is not the same for every slot, so the badge does
+     not claim it: the three model slots fall back to auto-detection, while the
+     consistency LoRA has no detection to fall back to (it is just skipped, and
+     reported as a missing asset Setup can download). Saying "auto-detection is
+     used" on that row would name a mechanism that does not exist for it. */
+function overrideBadge(st, missText) {
   if (!st) return null
   if (st.found) return { cls: 'text-emerald-400', text: 'Found' }
   if (st.status === 'outside_roots') {
     return { cls: 'text-amber-400',
              text: "Could not be linked into ComfyUI's model folders — check permissions, or move the file" }
   }
-  return { cls: 'text-amber-400', text: 'Not found — auto-detection is used' }
+  return { cls: 'text-amber-400', text: missText || 'Not found — auto-detection is used' }
 }
 
 function KleinModelFilesCard({ config, setField, caps }) {
@@ -222,8 +229,8 @@ function KleinModelFilesCard({ config, setField, caps }) {
       title="Klein model files (optional)"
       help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Each field takes a full absolute path OR a ComfyUI-relative loader name. A path under one of ComfyUI's model folders (extra_model_paths.yaml roots included) is converted automatically to what the loader needs; a path from anywhere else is hardlinked into an lds-pinned/ folder so ComfyUI can load it without you moving a multi-GB file. Leave a field empty to keep auto-detection for that slot. A pinned file that cannot be resolved falls back to auto-detection and shows a badge here rather than blocking generation. Contributed by socrasteeze (GitHub)."
     >
-      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint, placeholder }) => {
-        const badge = overrideBadge(overrides[slot])
+      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint, placeholder, missText }) => {
+        const badge = overrideBadge(overrides[slot], missText)
         return (
           <div key={key}>
             <div className="flex flex-wrap items-center justify-between gap-x-2">
