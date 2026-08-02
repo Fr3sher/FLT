@@ -1,6 +1,6 @@
 /* The SeedVR2 surfaces must SAY where the thing comes from.
 
-   Three links, asked for by Jeremy on the Setup card, each answering a question
+   Three links, asked for by a user on the Setup card, each answering a question
    the card raises and could not answer:
      * the node pack — the card tells you to install it through ComfyUI-Manager,
        and someone who would rather clone it by hand had no repo to go to;

@@ -161,7 +161,7 @@ export default function DatasetLightbox({
      image you want to fix, and until now it only offered Klein — so on a DRAWN
      dataset the amber note warned that Klein pulls the skin towards realism
      while the pass that does not, SeedVR2, was two screens away (reported by
-     Jeremy with a screenshot of exactly that). The wording, the gating and the
+     a user with a screenshot of exactly that). The wording, the gating and the
      per-engine disabled reasons all come from the shared pure module, so this
      surface can never drift from the toolbar's. */
   const improveButtons = onImprove

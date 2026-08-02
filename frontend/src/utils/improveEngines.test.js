@@ -86,7 +86,7 @@ test('the progress label reads the running batch engine', () => {
 })
 
 // --- The lightbox's per-image buttons ---------------------------------------
-// Jeremy's case, from a screenshot: a DRAWN dataset where the amber note already
+// A user's case, from a screenshot: a DRAWN dataset where the amber note already
 // warns that Klein's instruction pulls anime skin towards realism — and SeedVR2,
 // the pass that does not do that, was offered in the selection toolbar but not
 // in the lightbox, which is where you are when you are looking at that one image.
