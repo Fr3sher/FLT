@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-anima-shows-its-own-base',
+    date: '2026-08-02',
+    title: 'Anima no longer says it trains on a Z-Image base',
+    blurb:
+      'Picking the Anima family left the Base selector — and the summary line under the Train button — announcing "Official - Z-Image-Turbo", and offered your Z-Image merges as if an Anima run could load them. Anima now names its own base, Anima-Base, and offers nothing else. Your runs were never affected: the launcher always used the official Anima base and ignored the foreign selection, so this was the panel lying about a run it was going to get right. The cloud button on Anima also stops pretending: it says Anima is local-only until the pod image is verified, instead of enabling itself and being refused after the click.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
     id: '2026-08-02-seedvr2-results-come-back',
     date: '2026-08-02',
     title: 'SeedVR2 upscales now actually appear — and the ones you already ran are recovered',
