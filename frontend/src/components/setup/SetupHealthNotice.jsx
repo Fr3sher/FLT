@@ -42,7 +42,7 @@ export default function SetupHealthNotice() {
     ;(async () => {
       let s
       try {
-        s = await apiFetch('/api/setup-state')
+        s = await apiFetch('/api/setup-state', { background: true })
       } catch {
         // Server unreachable or an older backend: fall back to "never verified",
         // which is exactly the behaviour that shipped before this feature.
@@ -65,7 +65,7 @@ export default function SetupHealthNotice() {
       if (pathname === '/setup') { setResult({ regressions: [], skipped: true }); return }
       setChecking(true)
       try {
-        const r = await postJson('/api/setup-state/recheck', {})
+        const r = await postJson('/api/setup-state/recheck', {}, { background: true })
         if (!alive) return
         setResult(r)
         // The forced probe just refreshed the server-side cache; this reads it
