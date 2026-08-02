@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-bank-passes-survive-a-deleted-image',
+    date: '2026-08-02',
+    title: 'Deleting a bank image while a long pass is running no longer throws the whole pass away',
+    blurb:
+      'Score, watermark, framing, faces, captions and the quality scan all walk thousands of images for minutes or hours. If an image disappeared underneath one of them — most often because you deleted the bank, or its rejected images, while it was still working — the pass died on the spot with a cryptic error, and every image it had already analysed was lost with it. Now the vanished image is simply skipped and the pass finishes; the line at the end tells you how many were skipped, so a pass never quietly claims it analysed more than it did.',
+  },
+  {
     id: '2026-08-02-dataset-coverage-panel',
     date: '2026-08-02',
     title: 'Your dataset can hit a green composition target and still be twenty-five copies of the same shot — a new panel says so',

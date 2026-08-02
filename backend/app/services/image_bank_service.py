@@ -1580,6 +1580,7 @@ def _scan_job(bank_id, rescan):
         workers = min(8, os.cpu_count() or 4)
         done = 0
         missing = 0
+        vanished = 0
         with ThreadPoolExecutor(max_workers=workers) as ex:
             it = iter(items)
             futures = deque()
@@ -1608,8 +1609,12 @@ def _scan_job(bank_id, rescan):
                     if not bank_jobs.cancelled(job):
                         submit_next()
                     continue
-                row = db.session.get(BankImage, res['id'])
-                if row is not None:
+                row = _live_image(res['id'])
+                if row is None:
+                    # Deleted while the pass ran (see _live_image): skip it and
+                    # keep going rather than sinking a scan of thousands.
+                    vanished += 1
+                else:
                     row.quality_state = res['quality_state']
                     row.width, row.height = res['width'], res['height']
                     if res['file_size'] is not None:
@@ -1642,6 +1647,8 @@ def _scan_job(bank_id, rescan):
             groups = rebuild_dup_groups(bank_id)
             tail = (f' — {missing} file(s) were not on disk and were left '
                     'untouched') if missing else ''
+            if vanished:
+                tail += f', {vanished} skipped (deleted while the pass ran)'
             bank_jobs.progress(
                 job, detail=f'done — {groups} duplicate group(s){tail}')
     return run
@@ -3318,6 +3325,48 @@ def _stopped_detail(noun, data, cache_path, total):
             'relaunch to finish and cluster')
 
 
+# --- rows that can vanish under a long pass ---------------------------------
+# A pass reads its rows, then spends minutes to hours walking them, committing as
+# it goes. `expire_on_commit` is on, so every row it has not reached yet becomes
+# a lazy re-SELECT — and that re-SELECT can come back empty, because a bank's
+# rows CAN disappear mid-pass: `delete_bank` cancels the live job cooperatively
+# and then drops every row and the bank itself immediately, so the still-running
+# thread keeps iterating over rows that are already gone (`delete_rejected` can
+# do the same if the job registry has aged the pass out as stale).
+#
+# What SQLAlchemy does then is the trap: plain attribute access on an expired
+# row whose database row is gone raises ObjectDeletedError, and so does a commit
+# carrying a write staged on one. Either killed the WHOLE pass — one deleted
+# image and thousands of analysed ones never got written. `Session.get(...,
+# populate_existing=True)` is the one access that answers None instead of
+# raising, so every long pass re-reads through the helper below immediately
+# before it touches a row, and skips (and counts) what is no longer there.
+def _live_image(image_id):
+    """The bank row as the database has it RIGHT NOW, or None when it is gone.
+
+    Always re-reads (``populate_existing``): a row the session still holds
+    unexpired would otherwise be returned from the identity map, and the whole
+    point here is to ask the database whether the image still exists."""
+    if image_id is None:
+        return None
+    return db.session.get(BankImage, image_id, populate_existing=True)
+
+
+def _detach_bank(bank):
+    """Take the ImageBank row OUT of the session so a pass can keep reading it.
+
+    Passes read the bank (its source folder) once per image, for hours. Left in
+    the session, it is expired by each commit exactly like the images are — and
+    it is deleted by the very same `delete_bank` that removes them, so it turns
+    into an ObjectDeletedError of its own. Detaching a fully loaded instance
+    keeps every column readable and immune to expiry; the passes doing this only
+    ever READ the bank, so nothing is lost by leaving the session's copy behind.
+    """
+    if bank is not None:
+        db.session.expunge(bank)
+    return bank
+
+
 def _release_db_before_inference():
     """End the session's transaction before an inference subprocess we may sit
     in for an HOUR (bank scoring on CPU is measured near that on a big bank).
@@ -3510,10 +3559,11 @@ def _faces_job(bank_id):
                                        f'(rc={returncode})')
         results = data.get('results') or {}
         clusters = data.get('clusters') or {}
-        done = 0
+        done = vanished = 0
         for p, image_id in by_path.items():
-            row = db.session.get(BankImage, image_id)
-            if row is None:
+            row = _live_image(image_id)
+            if row is None:      # deleted while the pass ran — see _live_image
+                vanished += 1
                 continue
             res = results.get(p) or {}
             row.face_state = res.get('state')
@@ -3523,12 +3573,16 @@ def _faces_job(bank_id):
             if done % 200 == 0:
                 db.session.commit()
         db.session.commit()
+        if vanished:
+            logger.info('bank face pass: %s image(s) were deleted while it ran', vanished)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
         multi = sum(1 for n in sizes.values() if n >= 2)
-        bank_jobs.progress(job, detail=f'done — {multi} person cluster(s) '
-                                       f'of 2+ images')
+        detail = f'done — {multi} person cluster(s) of 2+ images'
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
+        bank_jobs.progress(job, detail=detail)
     return run
 
 
@@ -3679,10 +3733,11 @@ def _score_job(bank_id):
                                        f'(rc={returncode})')
         results = data.get('results') or {}
         clusters = data.get('clusters') or {}
-        done = 0
+        done = vanished = 0
         for p, image_id in by_path.items():
-            row = db.session.get(BankImage, image_id)
-            if row is None:
+            row = _live_image(image_id)
+            if row is None:      # deleted while the pass ran — see _live_image
+                vanished += 1
                 continue
             res = results.get(p) or {}
             row.aesthetic_score = res.get('aesthetic')
@@ -3692,6 +3747,9 @@ def _score_job(bank_id):
             if done % 200 == 0:
                 db.session.commit()
         db.session.commit()
+        if vanished:
+            logger.info('bank scoring pass: %s image(s) were deleted while it ran',
+                        vanished)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
@@ -3706,6 +3764,8 @@ def _score_job(bank_id):
             missing.append('NSFW')
         detail = (f'done — scored {len(ok)} image(s), '
                   f'{multi} style group(s) of 2+')
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
         if missing:
             detail += f' ({" + ".join(missing)} head unavailable)'
         bank_jobs.progress(job, detail=detail)
@@ -3768,14 +3828,15 @@ def _watermark_job(bank_id, rescan):
         from .vision_ollama import describe_image_ollama, unload_vision_model
         from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
-        bank = db.session.get(ImageBank, bank_id)
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
         rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
         if not rows:
             return
-        detected = clean = errors = unanswered = 0
+        row_ids = [r.id for r in rows]
+        detected = clean = errors = unanswered = vanished = 0
 
         def prepared():
             """Yielded on the JOB's thread, one image per free slot in the pool.
@@ -3783,20 +3844,28 @@ def _watermark_job(bank_id, rescan):
             so it stays off the workers, keeps its original order, and is only
             paid for by images the pass actually reaches (which matters: the
             discard below is destructive)."""
-            for row in rows:
+            nonlocal vanished
+            for rid in row_ids:
+                row = _live_image(rid)
+                if row is None:      # deleted since the pass started — see _live_image
+                    logger.info('bank watermark scan: image %s was deleted mid-pass, '
+                                'skipping it', rid)
+                    vanished += 1
+                    bank_jobs.bump(job)
+                    continue
                 # Always detect on the SOURCE pixels: a re-scan of an already
                 # cleaned image drops its cleaned version first (otherwise we
                 # would be asking "is there a watermark?" about our own edit).
                 if row.watermark_clean_method:
                     _discard_clean_blob(bank_id, row)
-                yield row, abs_image_path(bank, row)
+                yield rid, abs_image_path(bank, row)
 
         def ask(item):
             """WORKER thread: read the file, ask Ollama. Touches no session — the
             path was resolved above, on the owning thread. Returns None (not '')
             for a file that is gone, so the caller can tell "nothing to analyse"
             from "the model answered nothing"."""
-            _row, path = item
+            _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
             return describe_image_ollama(
@@ -3808,9 +3877,18 @@ def _watermark_job(bank_id, rescan):
             try:
                 # The calls overlap (see vision_pool); the loop body — every
                 # database write below — still runs here, on this one thread.
-                for (row, _path), raw, error in map_vision(
+                for (rid, _path), raw, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
+                    # Re-read: the answer we are about to store took ~1.7 s to
+                    # arrive, and the image can have been deleted in that time.
+                    row = _live_image(rid)
+                    if row is None:
+                        logger.info('bank watermark scan: image %s was deleted while '
+                                    'it was being analysed, skipping it', rid)
+                        vanished += 1
+                        bank_jobs.bump(job)
+                        continue
                     if error is not None:  # one bad file never sinks the pass
                         row.watermark_state = 'error'
                         errors += 1
@@ -3862,6 +3940,8 @@ def _watermark_job(bank_id, rescan):
                                            f'so far')
             return
         detail = f'done — {detected} with a watermark, {clean} clean'
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
         if unanswered:
             detail += (f', {unanswered} not analysed (the vision model returned '
                        'nothing — check Ollama in Settings, then run it again)')
@@ -3913,15 +3993,25 @@ def _needs_rescan_count(bank_id) -> int:
             .filter(BankImage.watermark_regions.is_(None)).count())
 
 
+def _drop_clean_blob_by_id(bank_id, image_id) -> None:
+    """_discard_clean_blob for an image whose ROW is gone (deleted mid-pass).
+
+    Only the blob and the derived thumbnails are left to clean up — there is no
+    `watermark_clean_method` to clear, because there is no row. Without this a
+    cancelled or interrupted cleaning level would leave the staged copy behind
+    with nothing pointing at it."""
+    try:
+        clean_image_path(bank_id, image_id).unlink()
+    except OSError:
+        pass
+    drop_derived(bank_id, image_id)
+
+
 def _discard_clean_blob(bank_id, row) -> None:
     """Forget a cleaned version: delete the blob, drop the stale thumbnail and
     clear the method so the readers fall back to the source. No commit (the
     caller owns the transaction)."""
-    try:
-        clean_image_path(bank_id, row.id).unlink()
-    except OSError:
-        pass
-    drop_derived(bank_id, row.id)
+    _drop_clean_blob_by_id(bank_id, row.id)
     row.watermark_clean_method = None
 
 
@@ -4045,16 +4135,24 @@ def start_watermark_crop(app, user_id, bank_id):
 def _watermark_crop_job(bank_id):
     def run(job):
         from .face_dataset_service import _apply_watermark_crop, _route_watermark
-        bank = db.session.get(ImageBank, bank_id)
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
         rows = _clean_pool_query(bank_id).order_by(BankImage.id.asc()).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='auto-crop')
-        cropped = left = failed = 0
+        row_ids = [r.id for r in rows]
+        cropped = left = failed = vanished = 0
         try:
-            for row in rows:
+            for rid in row_ids:
                 if bank_jobs.cancelled(job):
                     break
+                row = _live_image(rid)
+                if row is None:      # deleted since the pass started — see _live_image
+                    logger.info('bank auto-crop: image %s was deleted mid-pass, '
+                                'skipping it', rid)
+                    vanished += 1
+                    bank_jobs.bump(job)
+                    continue
                 boxes, manual, _problem = _clean_regions(row)
                 if manual:
                     # A hand mask is level 2's material, mask emptied or not. It
@@ -4100,6 +4198,8 @@ def _watermark_crop_job(bank_id):
             bank_jobs.progress(job, detail=f'cancelled — {cropped} cropped so far')
             return
         detail = f'done — {cropped} cropped, {left} left for inpainting'
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
         if failed:
             detail += f', {failed} unreadable'
         bank_jobs.progress(job, detail=detail)
@@ -4151,13 +4251,14 @@ def _watermark_inpaint_job(bank_id, method):
         from . import watermark_klein, watermark_lama
         from .face_dataset_service import _clean_inpaint_engine, _route_watermark
         from ..gpu_window import gpu_exclusive_vision_window
-        bank = db.session.get(ImageBank, bank_id)
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
         rows = _clean_pool_query(bank_id).order_by(BankImage.id.asc()).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='inpainting')
+        row_ids = [r.id for r in rows]
         counts = {'inpainted': 0, 'klein': 0, 'review': 0, 'failed': 0,
-                  'skipped': 0, 'empty': 0}
+                  'skipped': 0, 'empty': 0, 'vanished': 0}
         error = None
         lama_ok = watermark_lama.is_available()
         klein_ok = method == 'klein' and watermark_klein.is_available()
@@ -4165,14 +4266,24 @@ def _watermark_inpaint_job(bank_id, method):
         # Klein must NOT take that window — ComfyUI owns the GPU there and
         # holding it would deadlock its worker (same split as the dataset route).
         device = 'cpu' if method == 'klein' else watermark_lama.resolve_device()
-        pending = []            # (row, dst_path, [bbox]) for the single LaMa batch
+        # (image_id, dst_path, [bbox]) for the single LaMa batch — ids, not ORM
+        # rows: this list is held across a batch that can run for minutes, and a
+        # row deleted in that window must be skippable rather than fatal.
+        pending = []
         window = (gpu_exclusive_vision_window(flag_ttl=1800)
                   if device == 'cuda' else nullcontext())
         try:
             with window:
-                for row in rows:
+                for rid in row_ids:
                     if bank_jobs.cancelled(job):
                         break
+                    row = _live_image(rid)
+                    if row is None:  # deleted since the pass started — _live_image
+                        logger.info('bank inpaint: image %s was deleted mid-pass, '
+                                    'skipping it', rid)
+                        counts['vanished'] += 1
+                        bank_jobs.bump(job)
+                        continue
                     boxes, manual, problem = _clean_regions(row)
                     src, width, height = _source_size(bank, row)
                     if problem or not src:
@@ -4245,20 +4356,29 @@ def _watermark_inpaint_job(bank_id, method):
                         db.session.commit()
                         bank_jobs.bump(job)
                         continue
-                    pending.append((row, dst, [list(b) for b in boxes]))
+                    pending.append((rid, dst, [list(b) for b in boxes]))
                     bank_jobs.bump(job)
                 if pending and bank_jobs.cancelled(job):
                     # Stop means stop: the staged copies of rows we never got to
                     # repaint are thrown away rather than running a long batch
                     # after the user asked out (they stay 'detected', retryable).
-                    for row, _dst, _boxes in pending:
-                        _discard_clean_blob(bank_id, row)
+                    for pid, _dst, _boxes in pending:
+                        _drop_clean_blob_by_id(bank_id, pid)
                     pending = []
                 if pending:
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': str(dst), 'bboxes': boxes}
-                         for _row, dst, boxes in pending], device=device)
-                    for row, dst, _boxes in pending:
+                         for _rid, dst, boxes in pending], device=device)
+                    for pid, dst, _boxes in pending:
+                        row = _live_image(pid)
+                        if row is None:
+                            # Deleted while the batch ran: no row is left to point
+                            # at the repainted copy, so throw the copy away too.
+                            logger.info('bank inpaint: image %s was deleted while the '
+                                        'batch ran, skipping it', pid)
+                            _drop_clean_blob_by_id(bank_id, pid)
+                            counts['vanished'] += 1
+                            continue
                         ok, err = results.get(str(dst), (
                             False, {'kind': 'failed', 'detail': 'missing inpaint result'}))
                         if ok:
@@ -4286,6 +4406,9 @@ def _watermark_inpaint_job(bank_id, method):
             # Klein for images where the honest answer is "your mask is empty".
             detail += (f", {counts['empty']} with an empty mask (draw a zone in "
                        '▶ Review, or dismiss them)')
+        if counts['vanished']:
+            detail += (f", {counts['vanished']} skipped "
+                       '(deleted while the pass ran)')
         if counts['skipped']:
             detail += f", {counts['skipped']} skipped (engine unavailable)"
         if counts['failed']:
@@ -4475,7 +4598,7 @@ def _framing_job(bank_id, rescan):
         from .vision_ollama import describe_image_ollama, unload_vision_model
         from .vision_pool import map_vision
         from ..gpu_window import gpu_exclusive_vision_window
-        bank = db.session.get(ImageBank, bank_id)
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
         q = (BankImage.query.filter_by(bank_id=bank_id)
@@ -4486,18 +4609,27 @@ def _framing_job(bank_id, rescan):
         bank_jobs.progress(job, done=0, total=len(rows), detail='framing')
         if not rows:
             return
-        classified = errors = 0
+        row_ids = [r.id for r in rows]
+        classified = errors = vanished = 0
 
         def prepared():
             """Path resolution reads the row, so it belongs on the job's own
             thread — pulled one image per free slot in the pool."""
-            for row in rows:
-                yield row, abs_image_path(bank, row)
+            nonlocal vanished
+            for rid in row_ids:
+                row = _live_image(rid)
+                if row is None:      # deleted since the pass started — see _live_image
+                    logger.info('bank framing pass: image %s was deleted mid-pass, '
+                                'skipping it', rid)
+                    vanished += 1
+                    bank_jobs.bump(job)
+                    continue
+                yield rid, abs_image_path(bank, row)
 
         def ask(item):
             """WORKER thread: file + network only, no session. None means the
             file is gone, as opposed to '' meaning the model said nothing."""
-            _row, path = item
+            _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
             return describe_image_ollama(
@@ -4509,9 +4641,18 @@ def _framing_job(bank_id, rescan):
             try:
                 # The calls overlap (see vision_pool); every write below still
                 # happens here, on this one thread.
-                for (row, _path), raw, error in map_vision(
+                for (rid, _path), raw, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
+                    # Re-read: the classification we are about to store took a
+                    # model call to arrive, and the image can be gone by now.
+                    row = _live_image(rid)
+                    if row is None:
+                        logger.info('bank framing pass: image %s was deleted while it '
+                                    'was being classified, skipping it', rid)
+                        vanished += 1
+                        bank_jobs.bump(job)
+                        continue
                     if error is not None:  # one bad file never sinks the pass
                         errors += 1
                     elif raw is None:      # file gone: leave the row as it was
@@ -4535,6 +4676,8 @@ def _framing_job(bank_id, rescan):
             bank_jobs.progress(job, detail=f'cancelled — {classified} classified so far')
             return
         detail = f'done — {classified} classified'
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
         bank_jobs.progress(job, detail=detail)
@@ -4606,15 +4749,22 @@ def _caption_job(bank_id, ids, force, vocabulary=None):
         bank_jobs.progress(job, done=0, total=len(paths), detail='captioning')
         if not paths:
             return
-        captioned = 0
+        captioned = vanished = 0
 
         def _on_caption(path, caption):
-            nonlocal captioned
-            row = db.session.get(BankImage, by_path.get(path))
-            if row is not None:
-                row.caption = caption
-                db.session.commit()
-                captioned += 1
+            nonlocal captioned, vanished
+            image_id = by_path.get(path)
+            if image_id is None:
+                return           # a path this pass never asked about — not ours
+            row = _live_image(image_id)
+            if row is None:      # deleted while it was being captioned — _live_image
+                logger.info('bank caption pass: image %s was deleted mid-pass, '
+                            'skipping its caption', image_id)
+                vanished += 1
+                return
+            row.caption = caption
+            db.session.commit()
+            captioned += 1
 
         # GPU-exclusive for the whole pass, exactly like the score/watermark passes:
         # frees ComfyUI VRAM and blocks a training start for the duration.
@@ -4631,7 +4781,10 @@ def _caption_job(bank_id, ids, force, vocabulary=None):
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {captioned} captioned so far')
             return
-        bank_jobs.progress(job, detail=f'done — {captioned} captioned')
+        detail = f'done — {captioned} captioned'
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
+        bank_jobs.progress(job, detail=detail)
     return run
 
 
