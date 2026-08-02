@@ -936,17 +936,41 @@ def _res_bucket_counts(bank_id) -> dict:
 #   res       megapixels (width×height) — the original sort, kept as-is.
 #   aesthetic the ✨ Score pass's 1–10 rating: ↓ surfaces the keepers, ↑ the duds.
 #   sharp     the 🔎 Scan pass's Laplacian variance: ↑ surfaces the blurry misses.
-# Deliberately NOT here: noise / uniformity / bars / detail_ratio / NSFW. Each
-# already has a chip that filters AND orders worst-first, so a sort entry would
-# duplicate an existing gesture — and a fifteen-line menu slows the review down
-# more than the missing order costs.
+# The first version stopped there, reasoning that noise / uniformity / bars /
+# detail_ratio / NSFW each already have a CHIP that filters and orders worst-first.
+# That reasoning does not survive contact with a real dump (asked again on
+# Discord): a chip only ranks the rows that CROSS its threshold, so "the noisiest
+# images I am keeping" — every one of them under the threshold — was unreachable,
+# and no chip ranks the other way at all ("the cleanest first", "the safest
+# first"). Sorting is not filtering, so the two do not duplicate each other; the
+# precedent was already in this table, since 'sharp' coexists with the blur chip
+# and 'res' with the small chip. So: EVERY quantity a pass persists on bank_image
+# is sortable, both ways. The menu is grouped by pass in the UI to stay readable.
+#   noise/flat/detail/bars/jpeg  the 🔎 Scan + provenance passes' raw figures.
+#   nsfw                         the ✨ Score pass's 0–1 probability.
+#   face                         the 🎭 Face pass's detection confidence.
+#   size                         bytes on disk — the one figure NO chip exposes.
+# Deliberately still NOT here: anything that is a LABEL rather than a measure
+# (framing, origin, cluster and group ids, watermark/quality state). Those are
+# facets — ordering by an id number means nothing to a reviewer.
 _SORT_KEYS = {
     'aesthetic': lambda: BankImage.aesthetic_score,
     'sharp': lambda: BankImage.blur_score,
     'res': lambda: BankImage.width * BankImage.height,
+    'noise': lambda: BankImage.noise_score,
+    'flat': lambda: BankImage.uniformity_score,
+    'detail': lambda: BankImage.detail_ratio,
+    'bars': lambda: BankImage.bars_ratio,
+    'jpeg': lambda: BankImage.jpeg_quality,
+    'nsfw': lambda: BankImage.nsfw_score,
+    'face': lambda: BankImage.face_det,
+    'size': lambda: BankImage.file_size,
 }
-GRID_SORTS = tuple(f'{k}_{d}' for k in ('res', 'aesthetic', 'sharp')
-                   for d in ('desc', 'asc'))
+# Menu order (the UI renders it in this order); ids are stored query values, so a
+# key may be added here but never renamed without an alias.
+_SORT_ORDER = ('res', 'size', 'aesthetic', 'nsfw', 'sharp', 'noise', 'flat',
+               'detail', 'bars', 'jpeg', 'face')
+GRID_SORTS = tuple(f'{k}_{d}' for k in _SORT_ORDER for d in ('desc', 'asc'))
 
 
 def _sort_order(sort):
@@ -1197,21 +1221,73 @@ def _preview_ids(bank_id, limit=PREVIEW_COUNT) -> list:
     return [r[0] for r in rows]
 
 
+# --- free-text matching (the search bar, and its inverse) --------------------
+# ONE definition of "this image's text mentions <term>", used by the search
+# filter, by the exclude filter and by the curation pool, so the three can never
+# drift into disagreeing about what a term matches.
+_MAX_TEXT_TERMS = 12          # a checklist has a handful of tags, not a corpus
+
+
+def _text_match(term):
+    """Rows whose CAPTION or RELPATH contains `term`, case-insensitively. LIKE
+    metacharacters in the term are escaped so a literal '%'/'_' matches itself.
+    The caption is COALESCED to '' because this criterion is also used NEGATED:
+    in SQL, NULL LIKE x is NULL, and NOT NULL is still NULL — so an uncaptioned
+    row would be dropped by an exclude filter instead of kept, which is the exact
+    opposite of "show me what does NOT have this tag yet"."""
+    esc = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    like = f'%{esc}%'
+    return or_(func.coalesce(BankImage.caption, '').ilike(like, escape='\\'),
+               BankImage.relpath.ilike(like, escape='\\'))
+
+
+def _text_terms(value) -> list:
+    """Split an exclude field into terms on commas, trimmed, de-duplicated
+    case-insensitively and capped. One field, several tags ('nsfw, logo') — a
+    checklist pass usually hides more than one thing at a time."""
+    out, seen = [], set()
+    for tok in str(value or '').split(','):
+        tok = tok.strip()
+        if tok and tok.lower() not in seen:
+            seen.add(tok.lower())
+            out.append(tok)
+    return out[:_MAX_TEXT_TERMS]
+
+
+def _apply_text_filters(q, search=None, exclude=None):
+    """search ∩ NOT(exclude₁) ∩ NOT(exclude₂)… — the positive term narrows to what
+    mentions it, each exclude term hides what mentions it. They compose: searching
+    'dress' while excluding 'red' is a legitimate (and useful) question. An
+    exclude term that is ALSO the search term simply yields nothing, honestly."""
+    term = (search or '').strip()
+    if term:
+        q = q.filter(_text_match(term))
+    for bad in _text_terms(exclude):
+        q = q.filter(~_text_match(bad))
+    return q
+
+
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
-                origin=None, ids=None, offset=0, limit=200) -> dict | None:
+                origin=None, ids=None, exclude=None, offset=0, limit=200) -> dict | None:
     """One PAGE of the bank grid (a 9 000-image bank must never ship whole).
     Filters compose: status ∩ flag ∩ cluster ∩ dup-group ∩ style ∩ subfolder ∩ search.
     ``search`` is a plain full-text term matched (case-insensitive LIKE) against the
     caption AND the relpath — so captions double as searchable tags for a big dump
-    ("red dress"), combinable with every other filter. Flag filters sort by the
-    relevant score (worst first) so the review reads top-down.
-    ``sort`` (a GRID_SORTS id — resolution / aesthetic / sharpness, each way)
-    overrides that order: resolution ranks on megapixels (width×height, so
-    900×900 outranks 1200×300), aesthetic on the ✨ Score rating, sharpness on
-    the 🔎 Scan Laplacian variance. Rows the matching pass never reached (NULL)
-    always sink to the end, in BOTH directions. It composes with every filter,
+    ("red dress"), combinable with every other filter.
+    ``exclude`` is the INVERSE of that search and the reason both live here: a
+    comma-separated list of terms, each HIDING the images whose caption or path
+    mentions it. Searching answers "where is X"; excluding answers "what have I
+    not done yet", which is how a captioned bank gets worked through as a
+    checklist. Uncaptioned rows are never hidden by it (see _text_match).
+    Flag filters sort by the relevant score (worst first) so the review reads
+    top-down. ``sort`` (a GRID_SORTS id) overrides that order and covers EVERY
+    quantity the passes persist — resolution (megapixels, so 900×900 outranks
+    1200×300), file size, aesthetic rating, NSFW probability, sharpness, noise,
+    flatness, detail ratio, letterbox bars, JPEG quality, face confidence — each
+    way. Rows the matching pass never reached (NULL) always sink to the end, in
+    BOTH directions (see _sort_order). It composes with every filter,
     and — since "Select all in filter" / ▶ Review page this SAME endpoint — the
     selection walks the order the user is looking at.
     ``res_bucket`` (a _RES_BUCKETS id) narrows to one resolution tier — a
@@ -1316,14 +1392,8 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
             q = q.filter(~BankImage.relpath.contains(os.sep))
         else:
             q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
-    term = (search or '').strip()
-    if term:
-        # Full-text over caption + relpath. Escape LIKE metacharacters so a literal
-        # '%'/'_' in the query matches itself, then wrap in wildcards.
-        esc = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        like = f'%{esc}%'
-        q = q.filter(or_(BankImage.caption.ilike(like, escape='\\'),
-                         BankImage.relpath.ilike(like, escape='\\')))
+    # Full-text over caption + relpath, positive (search) and negative (exclude).
+    q = _apply_text_filters(q, search, exclude)
     if res_bucket in _RES_BOUNDS:
         # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
         # guards drop unscanned rows (a NULL product would satisfy neither bound
@@ -2135,10 +2205,11 @@ _CURATION_MAX_N = 2000       # a curated LoRA set is 20–200 images; this is ge
 
 
 def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
-                style=None, subfolder=None, search=None):
+                style=None, subfolder=None, search=None, exclude=None):
     """The candidate-pool query for the curation selectors — the SAME filter
     composition as list_images (status ∩ flag ∩ cluster ∩ style ∩ subfolder ∩
-    search), minus the ordering/pagination, so "give me 60 diverse images" is
+    search ∩ NOT exclude), minus the ordering/pagination, so "give me 60 diverse
+    images" is
     composable with whatever the grid is currently showing.
 
     Kept as its own function (a small, deliberate mirror of the list_images WHERE
@@ -2182,13 +2253,7 @@ def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
             q = q.filter(~BankImage.relpath.contains(os.sep))
         else:
             q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
-    term = (search or '').strip()
-    if term:
-        esc = term.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-        like = f'%{esc}%'
-        q = q.filter(or_(BankImage.caption.ilike(like, escape='\\'),
-                         BankImage.relpath.ilike(like, escape='\\')))
-    return q
+    return _apply_text_filters(q, search, exclude)
 
 
 def _pool_embeddings(bank, emb_by_path, filters):

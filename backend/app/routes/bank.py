@@ -227,6 +227,7 @@ def bank_images(bank_id):
         semantic_group=_int('semantic_group'),
         subfolder=subfolder if subfolder is not None else None,
         search=args.get('search') or None,
+        exclude=args.get('exclude') or None,
         sort=args.get('sort') or None,
         res_bucket=args.get('res_bucket') or None,
         framing=args.get('framing') or None,
@@ -622,8 +623,9 @@ def bank_apply_flags(bank_id):
 
 def _curation_filters(data):
     """The shared candidate-pool filters for the curation selectors — the same
-    facets as the grid (status ∩ flag ∩ cluster ∩ style ∩ subfolder ∩ search),
-    read out of a JSON body. Unknown keys (e.g. the grid's ``sort``) are ignored."""
+    facets as the grid (status ∩ flag ∩ cluster ∩ style ∩ subfolder ∩ search ∩
+    NOT exclude), read out of a JSON body. Unknown keys (e.g. the grid's ``sort``,
+    which only orders) are ignored."""
     def _int(name):
         v = data.get(name)
         try:
@@ -640,6 +642,10 @@ def _curation_filters(data):
         # '' is a meaningful subfolder (bank root); '__all__'/None mean "no scope".
         'subfolder': subfolder if subfolder not in (None, '__all__') else None,
         'search': data.get('search') or None,
+        # Hiding images in the grid must hide them from a curation pick too —
+        # otherwise "select 60 diverse" would hand back the very images the user
+        # just declared done.
+        'exclude': data.get('exclude') or None,
     }
 
 

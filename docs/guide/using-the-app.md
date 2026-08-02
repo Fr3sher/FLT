@@ -760,6 +760,33 @@ half-working one would be worse than none:
 
 The 🔄 rotate button needs no undo entry: turn the other way and the image is
 byte-for-byte the original again.
+## Hide images you have already handled
+
+The bank's 🔍 search box narrows the grid *to* a word. Next to it, the 🚫
+**Exclude words** box does the opposite: it hides every image whose **caption or
+file name** contains what you type. That turns a captioned bank into a checklist
+— *what have I not tagged yet?* — instead of a list you have to keep re-reading.
+
+- **Several words at once**, comma-separated: `logo, watermark, screenshot` hides
+  anything mentioning any of them.
+- **It composes with everything else** — the search box included. Searching
+  `dress` while excluding `red` gives you the dresses that are not red, and the
+  filter chips, subfolder, resolution tier and framing all still apply.
+- **It travels with the filter**: **Select all in filter**, **▶ Review one by
+  one** and the curation picks (🎨 diverse, ⚖️ balanced, similar) all work on the
+  visible set, so an image you hid is never handed back to you by a pick.
+
+Two limits worth knowing:
+
+- **It matches anywhere in the text**, like the search box — so `car` also hides
+  `scarf`. Type the longer word when that matters.
+- **Images with no caption are never hidden.** They have nothing to match, and
+  hiding them would remove exactly the images a checklist is looking for.
+
+Unlike the sort, the exclude box is **not remembered** between visits: an order
+you can see in a menu is a habit, but images missing from a grid for a reason you
+set last week reads as data loss.
+
 ## Sort a grid to review faster
 
 Filters answer *which images*; sorting answers *which one first*. Both grids
@@ -767,13 +794,31 @@ have a **Sort** control, and it changes nothing but the order — the same image
 match, the counts stay put, and every bulk action keeps operating on exactly
 what the filters left.
 
-In a **bank** (View ▸ Sort, next to the tile size):
+In a **bank** (View ▸ Sort, next to the tile size) you can order by *anything the
+passes measured*, either way. The menu is grouped by the pass that produces the
+figure, so a greyed-out section also tells you which pass to run:
 
-- **Resolution ↓ / ↑** — megapixels, so a 900×900 outranks a wider 1200×300.
-- **Aesthetic ↓ / ↑** — the 1–10 rating from **✨ Score**. ↓ puts your keepers on
-  the first page; ↑ puts the duds there, which is usually the faster way to prune.
-- **Sharpness ↓ / ↑** — the Laplacian variance from **🔎 Scan quality**. ↑ brings
-  the blurry misses to you instead of making you hunt for them.
+- **📁 File** — **Resolution ↓ / ↑** (megapixels, so a 900×900 outranks a wider
+  1200×300) and **File size ↓ / ↑** (bytes on disk — the one figure no filter
+  chip exposes).
+- **✨ Score** — **Aesthetic ↓ / ↑** (the 1–10 rating; ↓ puts your keepers on the
+  first page, ↑ puts the duds there, which is usually the faster way to prune)
+  and **NSFW likelihood ↓ / ↑**.
+- **🔎 Scan quality** — **Sharpness** (↑ brings the blurry misses to you),
+  **Noise**, **Contrast** (↑ = the flattest, near-empty frames first), **Detail**
+  (↑ = the enlargements pretending to be big images), **Letterbox bars** and
+  **JPEG quality**.
+- **🎭 Faces** — **Face confidence ↓ / ↑**, the detection score: ↑ surfaces the
+  tiny, turned or half-hidden faces.
+
+A chip and a sort answer different questions. A chip only ranks the images that
+*cross* its threshold, so "the noisiest of the ones I am keeping" — all of them
+below the threshold — is a question only the sort can answer, and no chip ranks
+the other way round at all.
+
+**The bank remembers the order you chose, per bank.** Reopen it tomorrow and it
+opens the way you were reviewing it; other banks keep their own. Pick **Default**
+to forget the preference.
 
 In a **dataset** (above the grid, next to the decision chips): **Face similarity
 ↓ / ↑**, the ArcFace cosine against your reference photo computed by **🎭 Analyze

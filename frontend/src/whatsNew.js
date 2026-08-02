@@ -64,6 +64,22 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-08-02-bank-exclude-words',
+    date: '2026-08-02',
+    title: 'Hide the bank images you have already handled, and work the rest as a checklist',
+    blurb:
+      'The bank search box narrows the grid TO a word. Next to it there is now a 🚫 Exclude box that does the opposite: it hides every image whose caption or file name carries one of the words you type (comma-separated, so "logo, watermark" is one gesture). It composes with the search and every chip — "dresses that are not red" is one line — and it travels with the filter, so Select all, ▶ Review and the curation picks never hand back an image you just hid. Images with no caption are never hidden: they are exactly what the checklist is looking for.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-02-bank-sort-every-measure',
+    date: '2026-08-02',
+    title: 'Sort a bank by anything its passes measured — and it remembers the order you chose',
+    blurb:
+      'The Sort menu covered resolution, aesthetics and sharpness. It now covers every figure the passes persist, both ways: file size, NSFW likelihood, noise, contrast, detail, letterbox bars, JPEG quality and face confidence — grouped by the pass that produces them, so a greyed-out section tells you which pass to run. A chip only ranks what crosses its threshold, so "the noisiest of the ones I am keeping" was a question nothing could answer. Each bank also remembers its own order now, so the dump you review by sharpness opens that way tomorrow.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-02-writes-refuse-an-unreadable-body',
     date: '2026-08-02',
     title: 'A save that cannot be read now says so instead of answering OK and storing nothing',
