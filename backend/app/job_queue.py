@@ -405,7 +405,16 @@ def _execution_error_detail(status) -> str | None:
 DATASET_IMAGE_JOB_NAMES = frozenset({
     'klein_edit_dataset',           # Klein (FLUX.2)
     'krea_identity_edit_dataset',   # Krea 2 Identity Edit
+    'seedvr2_upscale',              # SeedVR2 (fidelity upscale)
 })
+# It happened a SECOND time, with SeedVR2, for the same reason and with the same
+# clean logs: rendered, `execution_success`, 2.2 MB PNG on disk, candidate row
+# still pending with a NULL filename. The guard written after Krea promised to
+# catch exactly that and could not — it walked a hardcoded tuple of two helper
+# modules, so a third helper was invisible to it. `test_dataset_job_harvest.py`
+# now DISCOVERS the engines (AST over app/services) and forces every stamped job
+# name to be classified, and `_harvest_unlinked_completed_jobs` below repairs the
+# rows a future miss would strand instead of requiring hand-written SQL.
 
 
 def _drop_staged_inputs(md) -> None:
@@ -842,6 +851,10 @@ class JobQueueManager:
             return
         with self._app.app_context():
             self._recover_stuck_jobs()
+            # AFTER recovery on purpose: that pass moves every uncertain job to
+            # `stalled`, and _dispatch_completion refuses to route a stalled job.
+            # So the harvest can only ever see rows whose outcome is settled.
+            self._harvest_unlinked_completed_jobs()
             self._prune_staged_inputs()
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, name='job-queue-worker', daemon=True)
@@ -897,6 +910,53 @@ class JobQueueManager:
                     logger.critical(
                         'job_queue: startup could not durably pause uncertain job %s; '
                         'leaving it active and blocking new GPU work', job.job_id)
+
+    def _harvest_unlinked_completed_jobs(self):
+        """Attach results that FINISHED but were never linked to their row.
+
+        The net under the routing table. Twice now an engine has shipped
+        stamping a job name `_dispatch_completion` did not know: the image
+        rendered, the queue row went `completed` with its filename, and the
+        dataset row stayed `pending` with a NULL filename — no error, no log,
+        nothing on screen. Fixing the table repairs the NEXT run; it does not
+        give anyone back the images they already paid GPU time for, and the only
+        remedy was hand-written SQL. This is that remedy, run automatically at
+        boot, so an "Update & restart" is the whole fix.
+
+        Driven from the ROWS, not from the queue: candidates are dataset images
+        still `pending` with no file and a job id — naturally a handful, even on
+        an install with tens of thousands of finished jobs. A row is only
+        re-dispatched when its queue row is genuinely TERMINAL; anything still in
+        flight (or paused by the recovery above, which runs first) is left alone.
+
+        Guarded end to end: this runs before the worker starts, and a boot that
+        cannot repair must still boot.
+        """
+        try:
+            from .models import FaceDatasetImage
+            stranded = (FaceDatasetImage.query
+                        .filter(FaceDatasetImage.status == 'pending',
+                                FaceDatasetImage.filename.is_(None),
+                                FaceDatasetImage.job_id.isnot(None))
+                        .all())
+            if not stranded:
+                return
+            repaired = 0
+            for row in stranded:
+                job = ImageGenerationQueue.query.filter_by(job_id=row.job_id).first()
+                if job is None or job.status not in ('completed', 'failed'):
+                    continue          # never finished, or still owed a real dispatch
+                try:
+                    _dispatch_completion(job, job.result_filename,
+                                         job.status == 'failed')
+                    repaired += 1
+                except Exception:
+                    logger.exception('job_queue: harvest failed for job %s', job.job_id)
+            if repaired:
+                logger.info('job_queue: harvested %d finished job(s) whose result had '
+                            'never been linked to its row', repaired)
+        except Exception:
+            logger.exception('job_queue: unlinked-result harvest failed')
 
     def _prune_staged_inputs(self):
         """Boot sweep for staged input copies no live job can still need.
