@@ -12,13 +12,20 @@ const settings = readFileSync(new URL('../settings/ScrapingSection.jsx', import.
 const attribution = readFileSync(new URL('./PexelsAttribution.jsx', import.meta.url), 'utf8');
 
 test('lightbox exposes an accessible responsive image improvement action', () => {
-  assert.match(lightbox, /✨ Upscale & improve/);
-  assert.match(lightbox, /✨ Improving…/);
-  assert.match(lightbox, /Review improvement first/);
+  // ONE button per engine, from the shared pure module — the labels, the
+  // per-engine disabled reasons and the trade-off sentences are asserted in
+  // utils/improveEngines.test.js, so this file only pins the wiring.
+  assert.match(lightbox, /improveButtons\.map\(\(btn\) => \(/);
+  assert.match(lightbox, /lightboxImproveButtons\(\{/);
   assert.match(lightbox, /aria-busy=\{improvementActive\}/);
   assert.match(lightbox, /w-full sm:w-auto/);
-  assert.match(lightbox, /Klein creates a new 2 MP version to validate and leaves the original intact/);
-  assert.match(lightbox, /busy \|\| improvementActive \|\| improveReady \|\| !kleinAvailable/);
+  // The engine pressed travels to the handler; a single-✨ surface passes none
+  // and the improve.engine setting decides instead.
+  assert.match(lightbox, /onImprove\(img\.id, engineId\)/);
+  // Klein's amber note follows KLEIN's button, never SeedVR2's: it is about
+  // Klein's instruction pulling drawn skin towards realism, and SeedVR2 sends
+  // no instruction at all.
+  assert.match(lightbox, /\{btn\.showKleinNote &&/);
 });
 
 // The comparison is what makes an improvement judgeable: before this, the
@@ -67,11 +74,18 @@ test('workspace guards rescue rows and detects a pending improvement child', () 
   assert.match(workspace, /image\.parent_image_id === viewImgLive\.id/);
   assert.match(workspace, /const viewImgImproving[\s\S]*image\.status === 'pending'[\s\S]*\)\) : false/);
   assert.match(workspace, /const viewImgImprovementReady[\s\S]*image\.status === 'pending'[\s\S]*!!image\.filename/);
-  assert.match(workspace, /kleinAvailable=\{Boolean\(caps\.engines\?\.klein\)\}/);
+  // Engine readiness is read from capabilities INSIDE the lightbox now, per
+  // engine — a `kleinAvailable` prop would be a second source of truth for
+  // one of the two engines and none for the other.
+  assert.match(workspace, /onImprove=\{canImproveViewImg/);
+  assert.match(workspace, /ds\.improveImage\(imageId, \{ engine \}\)/);
 });
 
 test('dataset hook starts improvement, reports the preserved original, then refreshes', () => {
-  assert.match(hook, /`\/api\/dataset\/image\/\$\{imageId\}\/improve`, \{\}/);
+  assert.match(hook, /`\/api\/dataset\/image\/\$\{imageId\}\/improve`,/);
+  // The engine rides along when the caller names one (the lightbox's two
+  // buttons); absent, the server falls back to the improve.engine setting.
+  assert.match(hook, /engine \? \{ engine \} : \{\}/);
   assert.match(hook, /original stays intact while a separate 2 MP candidate is generated for validation/);
   assert.match(hook, /Could not start image improvement/);
   assert.match(hook, /resolveSmallImageRescue, improveImage, reimproveImage, improveBatch, classify/);

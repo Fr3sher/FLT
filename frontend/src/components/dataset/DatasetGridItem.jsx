@@ -1,4 +1,5 @@
 /** One curation tile: image + keep/reject + source/framing badges + caption + crop. */
+import { improvementBadge } from './improveCandidates.js';
 import { useEffect, useRef, useState } from 'react';
 import { displayLabel } from '../../utils/labels';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
@@ -11,10 +12,16 @@ import { rememberImageRatio } from './lightboxActionPlacement.js';
 import { FACE_BADGE_CLASS, PROVENANCE_BADGE_CLASS, TILE_BADGE_STACK_CLASS,
   WATERMARK_BADGE_CLASS } from './tileBadgeLayout.js';
 
+/* Provenance wording per STORED derivation kind. `klein_image_improve` is a
+   legacy key: it predates the second engine and is written in user databases,
+   so a SeedVR2 result carries it too and the badge must NOT claim Klein made
+   it. The engine is named by the candidate's own label ('Klein upscale &
+   improve' / 'SeedVR2 upscale'), which is where a per-row truth belongs; this
+   badge says only what KIND of row it is, which is true for both. */
 const DERIVATION_LABEL = {
   klein_small_image: 'Klein rescue',
   small_image_source: 'rescue original',
-  klein_image_improve: 'Klein improve',
+  klein_image_improve: 'upscale candidate',
 };
 
 const STATUS_CLS = {
@@ -74,7 +81,8 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
                                           onScoreFace, scoreFaceBusy = false, faceScoringBusy = false, faceScoringBlocked = null,
                                           onRegenerate, onReimprove, onView, nonce = 0, faceThresholds,
                                           selected = false, onToggleSelect, tileSize = 'M',
-                                          datasetKind = 'character', dualCaptions = false }) {
+                                          datasetKind = 'character', dualCaptions = false,
+                                          improvementState = undefined }) {
   const [cap, setCap] = useState(img.caption || '');
   const [captionEditorOpen, setCaptionEditorOpen] = useState(false);
   // ✏️ edit-prompt bubble open state (regenerate this tile with an edited prompt).
@@ -122,6 +130,9 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
   // can go into title/aria-label — the badge is clamped to two lines at the
   // bottom of a narrow tile, and a truncated engine name must stay readable
   // on hover and to a screen reader.
+  // 'ready' | 'generating' | undefined, decided once for the whole grid
+  // (DatasetGrid) so each tile is a lookup, not a scan of every sibling.
+  const improvementBadgeInfo = improvementBadge(improvementState);
   const originText = DERIVATION_LABEL[img.derivation_kind]
     || (img.source === 'import' ? 'real' : 'generated');
   const engineLabel = ENGINE_ACCENTS[img.engine] ? ENGINE_LABELS[img.engine] : null;
@@ -180,6 +191,19 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
             provenance badge back to the top-left as soon as the TILE — not the
             window — is wide enough to hold it next to the action buttons. */}
         <div className={TILE_BADGE_STACK_CLASS}>
+          {/* An upscale of THIS image is waiting (or still rendering). The
+              candidate is a separate row that lands on its own tile elsewhere
+              in the grid, so from here nothing looked like it had happened —
+              and the pass got re-run on images that already had a result,
+              paying GPU time for a duplicate. */}
+          {improvementBadgeInfo && (
+            <span className={`${WATERMARK_BADGE_CLASS} bg-black/70 ${
+              improvementBadgeInfo.tone === 'ready'
+                ? 'text-indigo-200' : 'text-white/70'}`}
+              title={improvementBadgeInfo.title} aria-label={improvementBadgeInfo.title}>
+              {improvementBadgeInfo.text}
+            </span>
+          )}
           {wb && (
             <span className={`${WATERMARK_BADGE_CLASS} bg-black/70 ${wb.cls}`}
               title={(img.watermark_state === 'detected' && WATERMARK_ROUTE_HINT[img.watermark_route]) || wb.label}>

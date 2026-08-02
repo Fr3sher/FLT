@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-upscale-candidate-visible',
+    date: '2026-08-02',
+    title: 'You can finally see that an upscale is waiting for you',
+    blurb:
+      'An upscale never touches your original: it arrives as a separate tile you keep or reject. Which also meant that from the image you had just sent, nothing appeared to happen — so the pass got re-run on images that already had a result waiting, paying GPU time for a duplicate. The source tile now says it, both while the result is rendering and once it is ready to review. And the candidate names the engine that actually made it, instead of always crediting Klein.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-02-seedvr2-in-the-lightbox',
+    date: '2026-08-02',
+    title: 'Pick your upscaler while you are looking at the image',
+    blurb:
+      'The full-screen inspector only ever offered the Klein pass. That is the one place where the choice matters most: on a drawn dataset the panel already warns you that Klein’s instruction pulls anime skin towards realism, and the pass that does not do that was two screens away in the selection toolbar. Both engines are now side by side in the inspector, each saying what it does to the original — and that warning stays under Klein alone, because SeedVR2 sends no instruction at all.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-02-writes-refuse-an-unreadable-body',
     date: '2026-08-02',
     title: 'A save that cannot be read now says so instead of answering OK and storing nothing',

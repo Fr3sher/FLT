@@ -1181,8 +1181,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   onReimprove={ds.reimproveImage} onView={setViewImg}
                   onBatch={ds.batchImages} busy={ds.busy}
                   onImproveBatch={ds.improveBatch} activity={act}
-                  kleinAvailable={Boolean(caps.engines?.klein)}
-                  subjectType={d.subject_type || 'human'}
+                          subjectType={d.subject_type || 'human'}
                   eligibilityImages={images}
                   nonces={ds.nonces} faceThresholds={d.face_thresholds} datasetKind={d.kind || 'character'}
                   faceScoringBlocked={d.face_scoring_blocked}
@@ -1965,7 +1964,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onMirror={viewImgLive._rescueReviewPreview ? undefined : ds.mirrorImage}
           onRotate={viewImgLive._rescueReviewPreview ? undefined : ds.rotateImage}
           mirrorBusy={Boolean(ds.mirroringIds?.has(viewImgLive.id))}
-          onImprove={canImproveViewImg ? ds.improveImage : undefined}
+          // The lightbox hands back WHICH engine was pressed; a single-✨
+          // surface passes none and the improve.engine setting decides.
+          onImprove={canImproveViewImg
+            ? ((imageId, engine) => ds.improveImage(imageId, { engine }))
+            : undefined}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy}

@@ -504,8 +504,13 @@ export function useDataset() {
   // Manually improve an existing dataset image with Klein. The backend always
   // creates a separate candidate row: the source pixels and their current
   // keep/reject state remain untouched until the user reviews the new version.
-  const improveImage = useCallback(async (imageId, { silent = false, refreshAfter = true } = {}) => {
-    const d = await postJson(`/api/dataset/image/${imageId}/improve`, {});
+  const improveImage = useCallback(async (imageId, { silent = false, refreshAfter = true,
+    engine } = {}) => {
+    // `engine` is the button that was pressed in the lightbox ('klein' |
+    // 'seedvr2'). Absent = the improve.engine setting decides, which is what
+    // every single-✨ surface does.
+    const d = await postJson(`/api/dataset/image/${imageId}/improve`,
+      engine ? { engine } : {});
     if (!d.ok) {
       if (!silent) toast.error(d.error || 'Could not start image improvement');
       return d;

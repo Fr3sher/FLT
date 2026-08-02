@@ -37,10 +37,14 @@ test('a settings link never triggers the surface it sits on', () => {
 
 test('the improve link is offered where the improve action is', () => {
   const lightbox = read('../dataset/DatasetLightbox.jsx');
-  assert.match(lightbox, /Upscale & improve/);
+  assert.match(lightbox, /lightboxImproveButtons\(/);
   assert.match(lightbox, /<KleinImproveNote\b/);
+  // ...but under KLEIN's button only: the note is about Klein's INSTRUCTION
+  // pulling drawn skin towards realism, and SeedVR2 sends no instruction — a
+  // drawn dataset is exactly where SeedVR2 is the right click, so warning
+  // under it would argue against the pass that fixes the complaint.
   // hidden while it runs — a settings trip mid-job is not the offer being made
-  assert.match(lightbox, /\{onImprove && !improvementActive && \(/);
+  assert.match(lightbox, /\{btn\.showKleinNote && !improvementActive && \(/);
   // The BULK improve is the same action at scale, and it went targetless for a
   // long time: the instruction that spoils one tile spoils the whole selection.
   assert.match(read('../dataset/DatasetGrid.jsx'), /<KleinImproveNote\b/);

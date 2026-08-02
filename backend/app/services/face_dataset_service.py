@@ -7783,9 +7783,31 @@ def _improve_prompt() -> str:
     return ''
 
 
-def _improve_candidate_label(source) -> str:
-    """Label of the candidate produced from ``source`` (its parent image)."""
-    base_label = 'Klein upscale & improve'
+# The tile label of an improve candidate, per engine. STORED in
+# FaceDatasetImage.variation_label, so the rule about stored strings applies —
+# and it is the reason Klein's wording is byte-identical to what it always was:
+# renaming it would strand every candidate already in every user's database
+# behind a label nothing produces any more, and would need an alias table to
+# read them back. SeedVR2 gets its OWN new string instead, so nothing is
+# renamed and no alias path is needed.
+#
+# Checked before writing this (2026-08-02): the literal 'Klein upscale &
+# improve' is matched by NO runtime code, front or back — it is a display label
+# only (grep hits are this builder, test fixtures, and prose in Settings/help).
+# Had anything keyed off it, adding a second value would have needed the alias
+# table, not just a new branch.
+_IMPROVE_LABELS = {
+    'klein': 'Klein upscale & improve',   # NEVER change: stored in user databases
+    'seedvr2': 'SeedVR2 upscale',
+}
+
+
+def _improve_candidate_label(source, engine='klein') -> str:
+    """Label of the candidate produced from ``source`` (its parent image).
+
+    Names the engine that ACTUALLY ran: a SeedVR2 result labelled "Klein upscale
+    & improve" tells the user the one thing they chose this pass to avoid."""
+    base_label = _IMPROVE_LABELS.get(engine, _IMPROVE_LABELS['klein'])
     source_label = (source.variation_label or '').strip()
     return (f'{base_label} · {source_label}' if source_label else base_label)[:120]
 
@@ -7969,7 +7991,7 @@ def _improve_existing_image_locked(user_id, image_id, engine=None):
     # image. The honest value is the pass that ran.
     stored_prompt = (prompt[:500] if engine == 'klein'
                      else 'SeedVR2 upscale (no prompt — restoration pass)')
-    label = _improve_candidate_label(img)
+    label = _improve_candidate_label(img, engine)
     candidate = FaceDatasetImage(
         dataset_id=img.dataset_id, source='generated', status='pending',
         parent_image_id=img.id, derivation_kind=KLEIN_IMAGE_IMPROVE,
@@ -8081,7 +8103,7 @@ def _reimprove_image_locked(user_id, image_id):
             f'too many generations in flight ({in_flight}), wait or cancel')
 
     prompt = _improve_prompt()
-    label = _improve_candidate_label(parent)
+    label = _improve_candidate_label(parent, engine)
 
     # Enqueue BEFORE touching the row (regenerate_image's ordering): a ComfyUI
     # refusal must leave the current result on screen, not a broken tile.

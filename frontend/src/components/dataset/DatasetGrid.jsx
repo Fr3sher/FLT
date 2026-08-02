@@ -4,6 +4,7 @@ import TileSizeControl from '../shared/TileSizeControl';
 import KleinImproveNote from './KleinImproveNote';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import { partitionKleinImproveSelection } from '../../utils/kleinBulkImprove';
+import { improvementStateByParent } from './improveCandidates.js';
 import {
   availableImproveEngines,
   describeImproveLaunch,
@@ -182,6 +183,11 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   // SeedVR2 joins the toolbar only once it is actually installed — until then it
   // is a Setup task, not a choice.
   const improveEngines = useMemo(() => availableImproveEngines(caps), [caps]);
+  // Which SOURCE tiles have an upscale waiting for review (or still rendering).
+  // Computed ONCE for the whole grid: per tile it would be a scan of every
+  // sibling on every render, and a 400-image dataset renders a lot.
+  const improvementStates = useMemo(
+    () => improvementStateByParent(images), [images]);
   const bulkBusy = busy || launchingImprove;
   useEffect(() => {
     setSelected(new Set());
@@ -359,6 +365,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
       <div className={`grid ${TILE_SIZE_COLS[tileSize]} gap-2`}>
         {images.map((img) => (
           <DatasetGridItem key={img.id} img={img} datasetId={datasetId} onStatus={onStatus} onCaption={onCaption}
+            improvementState={improvementStates.get(img.id)}
             onCrop={onCrop} onDelete={onDelete} onMirror={onMirror}
             mirrorBusy={Boolean(mirroringIds?.has(img.id))} busy={bulkBusy}
             onScoreFace={onScoreFace} scoreFaceBusy={Boolean(scoringFaceIds?.has(img.id))}

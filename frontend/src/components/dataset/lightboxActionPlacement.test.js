@@ -199,7 +199,9 @@ test('tab order follows the eye: one DOM order, no CSS reordering', () => {
     '⇆ Mirror horizontally',
     'Rotate left',
     'Rotate right',
-    '✨ Upscale & improve',
+    // The improve actions are now rendered from a list (one button per engine),
+    // so the DOM-order anchor is the map that emits them rather than one label.
+    'improveButtons.map',
     '<KleinImproveNote',
   ].map(at);
   for (let i = 1; i < order.length; i += 1) {
@@ -214,9 +216,12 @@ test('tab order follows the eye: one DOM order, no CSS reordering', () => {
 
 test('the rail keeps words — these actions rotate, recrop and spend GPU time', () => {
   for (const label of ['✂ Crop', '⇆ Mirror horizontally', 'Rotate left',
-    'Rotate right', '✨ Upscale & improve']) {
+    'Rotate right']) {
     assert.ok(lightbox.includes(label), `${label} must stay spelled out`);
   }
+  // The improve labels are built in improveEngines.js ('✨ Improve via Klein',
+  // '🔍 Upscale via SeedVR2'); that they stay spelled out is asserted there.
+  assert.ok(lightbox.includes('{btn.label}'), 'the improve buttons must render their label');
   // No placement branch may swap a label for a bare glyph.
   assert.ok(!/rail \? '[↺↻✂⇆✨]'/.test(lightbox));
 });
