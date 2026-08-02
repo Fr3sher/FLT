@@ -87,3 +87,18 @@ test('the anime caution fires only for a drawn dataset with an instruction ON', 
   assert.equal(improveAnimeCaution({ ...on, enabled: false, subjectType: 'anime' }), null);
   assert.equal(improveAnimeCaution({ loaded: false, subjectType: 'anime' }), null);
 });
+
+test('the caution CITES the subject type instead of asserting the images are drawn', () => {
+  // A photoreal dataset left marked Anime used to be told "This dataset is drawn."
+  // — a claim the app cannot make, since it never looked at the pixels. Quoting
+  // the setting keeps the note true in that case AND points at the fix.
+  const caution = improveAnimeCaution({
+    ...readImproveInstruction(payload()), subjectType: 'anime' });
+  assert.match(caution, /subject type is set to anime/i);
+  assert.ok(!/this dataset is drawn/i.test(caution),
+    'the note must not assert what the images are, only what the setting says');
+  // The actual advice is unchanged — this was a rewording, not a removal.
+  assert.match(caution, /detailed texture/);
+  assert.match(caution, /sharp details/);
+  assert.match(caution, /turn it off and upscale only/);
+});

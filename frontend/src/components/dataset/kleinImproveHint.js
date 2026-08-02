@@ -55,11 +55,19 @@ export const IMPROVE_LINE_OFF =
   'Improve currently sends NO instruction — it only upscales.';
 
 /** Anime/drawn datasets, when an instruction IS being sent. Amber, because on
-    those datasets the default is actively working against the user. */
+    those datasets the default is actively working against the user.
+
+    It CITES its source instead of asserting a fact about the images. The old
+    wording ("This dataset is drawn.") read as a verdict the app had reached by
+    looking at the pictures — it had not: the only thing it knows is the subject
+    type someone picked. On a photoreal dataset left marked Anime, that verdict
+    is simply false, and the reader has no way to guess which setting produced
+    it. Naming the setting makes the note both checkable and actionable: if the
+    sentence is wrong, the fix is one field away. */
 export const IMPROVE_ANIME_CAUTION =
-  'This dataset is drawn. Words like “detailed texture” and “sharp details” describe a '
-  + 'photograph — they are what pushes anime skin and fabric towards realism. Edit the '
-  + 'instruction, or turn it off and upscale only.';
+  'This dataset’s subject type is set to anime. Words like “detailed texture” and '
+  + '“sharp details” describe a photograph — they are what pushes anime skin and fabric '
+  + 'towards realism. Edit the instruction, or turn it off and upscale only.';
 
 /** Longest quote kept inline; the full text always rides in the title attribute. */
 export const QUOTE_MAX = 120;
