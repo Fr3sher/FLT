@@ -431,6 +431,18 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
           : 'Not ready yet. Setup ▸ ComfyUI lists what is missing and can download the weights; the node pack itself is installed from ComfyUI (search “SeedVR2” in ComfyUI-Manager), then restart ComfyUI.'}
       </p>
 
+      <p className="mt-1 text-[0.6875rem] text-content-subtle">
+        <a href="https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler" target="_blank"
+          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Node pack →</a>
+        {' · '}
+        <a href="https://huggingface.co/numz/SeedVR2_comfyUI" target="_blank"
+          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Model weights →</a>
+        {' · '}
+        <a href="https://github.com/ByteDance-Seed/SeedVR" target="_blank"
+          rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">SeedVR2 by ByteDance-Seed →</a>
+        {' — all Apache-2.0.'}
+      </p>
+
       <div className="mt-3 sm:max-w-md">
         <label htmlFor="improve-engine" className="block text-xs font-medium text-content">
           Default engine for ✨ Upscale &amp; improve

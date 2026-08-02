@@ -22,7 +22,14 @@ function fmtSize(b) {
   return `${Math.max(0, Math.round(b / 1e3))} KB`
 }
 
+/* The three places this feature actually comes from. Verified 2026-08-02 (HTTP
+   200 on each), and worth linking rather than naming: the pack URL is what
+   someone who prefers cloning by hand needs, the weights repo is what the
+   button below downloads (3.9 GB — say where from), and the original project is
+   the credit. Apache-2.0 throughout. */
 const PACK_URL = 'https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler'
+const WEIGHTS_URL = 'https://huggingface.co/numz/SeedVR2_comfyUI'
+const PROJECT_URL = 'https://github.com/ByteDance-Seed/SeedVR'
 
 // SeedVR2 — the FIDELITY upscaler (issue #32, requested by SurpassHR).
 //
@@ -135,6 +142,14 @@ export default function SeedVr2InstallCard({ caps, onDone }) {
         (<span className="whitespace-nowrap">~3.9 GB</span>), so it is installed on request,
         not by &ldquo;Install everything&rdquo;.
       </p>
+      <p className="mt-1 text-xs text-content-subtle">
+        <a href={PACK_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Node pack →</a>
+        {' · '}
+        <a href={WEIGHTS_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">Model weights →</a>
+        {' · '}
+        <a href={PROJECT_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">SeedVR2 by ByteDance-Seed →</a>
+        {' — all Apache-2.0.'}
+      </p>
 
       {!dirValid ? (
         <p className="mt-3 text-xs text-content-subtle">
@@ -210,8 +225,9 @@ export default function SeedVr2InstallCard({ caps, onDone }) {
           <span className="text-content-muted"> Install it from ComfyUI itself — search
             &ldquo;SeedVR2&rdquo; in ComfyUI-Manager — then restart ComfyUI. The app does not
             install this one for you: it pulls thirteen Python packages that have to go into
-            ComfyUI&rsquo;s own environment, and a plain copy of the folder would not work.
-            Source: <span className="break-all">{PACK_URL}</span> (Apache-2.0).</span>
+            ComfyUI&rsquo;s own environment, and a plain copy of the folder would not work.{' '}
+            <a href={PACK_URL} target="_blank" rel="noreferrer" className="text-sky-300 underline hover:text-sky-200">
+              Open the node pack on GitHub →</a></span>
         </p>
       )}
     </section>
