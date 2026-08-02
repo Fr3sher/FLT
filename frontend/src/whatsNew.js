@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-quiet-polls-when-the-server-is-unhappy',
+    date: '2026-08-02',
+    title: 'A server that is still starting up no longer buries the app in error toasts',
+    blurb:
+      'Background checks — the progress polls, the setup re-check, the "is ComfyUI up yet?" watcher — already stayed quiet when they could not reach the server at all. They now stay just as quiet when the server answers badly: a container still booting replies "not ready" every few seconds, and that used to become one "Server error. Please try again later." toast per reply until it finished. The screens that depend on those checks still show what went wrong where it belongs, and the moment the server comes back you still get the single "Back online" line.',
+  },
+  {
     id: '2026-08-01-bank-image-ceiling-raised',
     date: '2026-08-01',
     title: 'A bank now takes 200,000 images, and stops miscounting the ones you deleted',
