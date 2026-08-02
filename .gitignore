@@ -34,6 +34,8 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+# Pinokio builds the app's venv here (install.js), next to the sources it runs.
+/env/
 .pytest_cache/
 .pytest-basetemp-*/
 **/.pytest-basetemp-*/

@@ -48,6 +48,20 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-pinokio-one-click-install',
+    date: '2026-08-02',
+    title: 'Install LDS in one click from Pinokio',
+    blurb:
+      'LDS now ships a Pinokio launcher. In Pinokio, paste the repository URL under "Download from URL", click Install, then Start — the Python environment, the requirements and the browser tab are handled for you, with no terminal, no Python install and nothing added to your PATH. Only the core app is set up that way: ComfyUI, Ollama, ai-toolkit and the ML helpers are still connected from Setup, so nothing heavy is downloaded behind your back. Update from Pinokio\'s own Update tab — it fast-forwards the same checkout the in-app updater uses.',
+  },
+  {
+    id: '2026-08-02-terminal-prints-the-address',
+    date: '2026-08-02',
+    title: 'The terminal finally tells you where the app is',
+    blurb:
+      'Starting the server by hand (python backend/run.py) printed no address at all — the usual "Running on http://..." line was being swallowed into data/app.log — so you had to guess the port, which is exactly the case where it may have moved because 5050 was taken. The console now prints "[LDS] Ready on http://…" once the app really answers, whichever way you launched it.',
+  },
+  {
     id: '2026-08-02-bank-text-search-push-down',
     date: '2026-08-02',
     title: 'Text search can finally get rid of what you do not want',
