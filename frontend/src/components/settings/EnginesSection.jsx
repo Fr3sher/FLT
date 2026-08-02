@@ -184,6 +184,55 @@ function KleinLorasCard({ config, setField }) {
   )
 }
 
+/* The three pinnable Klein model slots. `key` is the DOM id the help registry
+   focuses (the contract test scans these literals); `cfg` is the klein.* config
+   key; `slot` matches caps.comfyui.klein_overrides.
+   Ported from socrasteeze's branch (GitHub #20). */
+const KLEIN_MODEL_SLOTS = [
+  { key: 'klein-model-unet', cfg: 'unet', slot: 'unet', label: 'Diffusion model (UNET)',
+    hint: 'Relative to a diffusion-model folder — e.g. klein/flux-2-klein-9b-fp8.safetensors under models/unet, or a bare filename for a file sitting at a folder root.' },
+  { key: 'klein-model-text_encoder', cfg: 'text_encoder', slot: 'text_encoder', label: 'Text encoder',
+    hint: 'Relative to models/text_encoders — e.g. qwen_3_8b_fp8mixed.safetensors.' },
+  { key: 'klein-model-vae', cfg: 'vae', slot: 'vae', label: 'VAE',
+    hint: 'Relative to models/vae — e.g. flux2-vae.safetensors.' },
+]
+
+function KleinModelFilesCard({ config, setField, caps }) {
+  const overrides = caps?.comfyui?.klein_overrides || {}
+  return (
+    <Card
+      id="klein-model-files"
+      title="Klein model files (optional)"
+      help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Values are ComfyUI-relative loader names, so they can point anywhere ComfyUI itself loads from — including folders registered in extra_model_paths.yaml. Leave a field empty to keep auto-detection for that slot. A pinned file that is not on disk falls back to auto-detection and shows a badge here rather than blocking generation. Contributed by socrasteeze (GitHub)."
+    >
+      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint }) => {
+        const st = overrides[slot]
+        return (
+          <div key={key}>
+            <div className="flex flex-wrap items-center justify-between gap-x-2">
+              <label htmlFor={key} className="block text-sm font-medium text-content">{label}</label>
+              {st && (
+                <span className={`text-xs ${st.found ? 'text-emerald-400' : 'text-amber-400'}`}>
+                  {st.found ? 'Found' : 'Not found — auto-detection is used'}
+                </span>
+              )}
+            </div>
+            <input
+              id={key}
+              type="text"
+              value={config.klein?.[cfg] || ''}
+              onChange={(e) => setField('klein', cfg, e.target.value)}
+              placeholder="Empty = auto-detect"
+              className={INPUT_CLASS}
+            />
+            <p className="mt-1 text-[0.6875rem] text-content-subtle">{hint}</p>
+          </div>
+        )
+      })}
+    </Card>
+  )
+}
+
 /* Klein GENERATION sampling. The shipped workflow hardcodes 5 steps at its
    sampler node and nothing on the generation paths ever passed a value, so the
    engine's own `sampler_steps` parameter was unreachable — "is the number of
@@ -1195,6 +1244,8 @@ export default function EnginesSection(props) {
             config={config} configDefaults={configDefaults} setField={setField} />
         </fieldset>
       </Card>
+
+      <KleinModelFilesCard config={config} setField={setField} caps={caps} />
 
       <KleinGenerationCard config={config} setField={setField} configDefaults={configDefaults} />
 

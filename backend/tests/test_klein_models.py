@@ -113,6 +113,101 @@ def test_resolve_vae_never_grabs_another_familys_vae(app, tmp_path):
         assert keh.resolve_klein_vae() is None                          # never wan/qwen
 
 
+# --- User-pinned model files (contributed by socrasteeze, GitHub #20) ------
+def test_pinned_model_files_win_over_autodetection(app, tmp_path):
+    """Pinned model files (klein.unet / text_encoder / vae) beat the canonical-name
+    scan — including a UNET that lives OUTSIDE a 'klein'-named subfolder, which the
+    folder-convention scan alone would never surface."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    with app.app_context():
+        base = _comfy(tmp_path, cfg)
+        _install(base, 'models', 'unet', 'my models', 'custom-klein-tune.safetensors')
+        _install(base, 'models', 'vae', 'my-flux2-vae.safetensors')
+        _install(base, 'models', 'text_encoders', 'my_qwen_3_8b.safetensors')
+        cfg.save_config({'klein': {'unet': 'my models/custom-klein-tune.safetensors',
+                                   'text_encoder': 'my_qwen_3_8b.safetensors',
+                                   'vae': 'my-flux2-vae.safetensors'}})
+        assert keh.resolve_klein_unet() == os.path.join('my models',
+                                                        'custom-klein-tune.safetensors')
+        assert keh.resolve_klein_vae() == 'my-flux2-vae.safetensors'
+        assert keh.resolve_klein_text_encoder() == 'my_qwen_3_8b.safetensors'
+        # An explicit per-run/per-dataset pick still wins over the pin.
+        assert keh.resolve_klein_unet('flux-2-klein-9b-fp8.safetensors') == \
+            os.path.join('klein', 'flux-2-klein-9b-fp8.safetensors')
+        status = keh.klein_override_status()
+        assert status['unet'] == {'configured': 'my models/custom-klein-tune.safetensors',
+                                  'found': True}
+        assert status['vae']['found'] and status['text_encoder']['found']
+
+
+def test_pinned_file_missing_falls_back_with_badge(app, tmp_path):
+    """A pinned file that is NOT on disk must degrade to auto-detection (never
+    brick generation) while klein_override_status reports found=False, so the
+    Settings field can say the pin is not in effect."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    with app.app_context():
+        _comfy(tmp_path, cfg)
+        cfg.save_config({'klein': {'unet': 'nope/missing.safetensors',
+                                   'vae': 'missing-vae.safetensors'}})
+        # Fall back to the canonical files that ARE on disk.
+        assert keh.resolve_klein_unet() == os.path.join('klein',
+                                                        'flux-2-klein-9b-fp8.safetensors')
+        assert keh.resolve_klein_vae() == 'flux2-vae.safetensors'
+        status = keh.klein_override_status()
+        assert status['unet'] == {'configured': 'nope/missing.safetensors', 'found': False}
+        assert status['vae']['found'] is False
+        assert 'text_encoder' not in status          # unset slots are omitted
+        assert keh.klein_missing_assets() == ['klein_lora', 'klein_enhancement_lora']
+
+
+def test_pin_turns_a_wrongly_missing_model_into_present_but_unreadable(app, tmp_path):
+    """THE reason this setting exists (socrasteeze, GitHub #20).
+
+    Auto-detection declines any file it cannot confidently name, so a UNET
+    outside a 'klein'-named folder is reported MISSING even though the user is
+    looking at it — and re-downloading never fixes that. Worse when the file is
+    also corrupt: klein_invalid_assets() knows how to say "on disk but unreadable"
+    and never gets the chance, because the scan declined the file first.
+
+    Pinning it removes the resolver's discretion: the file resolves, lands in
+    _klein_asset_paths(), and the integrity verdict finally reports the truth."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    with app.app_context():
+        base = _comfy(tmp_path, cfg, unet=False)
+        # A licence-gate HTML page saved as <name>.safetensors — the real-world
+        # corrupt download — in a folder the scan does not look at.
+        _install(base, 'models', 'unet', 'my models', 'klein-9b.safetensors',
+                 data=b'<!doctype html><html><body>Access denied</body></html>')
+        assert keh.resolve_klein_unet() is None
+        assert 'klein_model' in keh.klein_missing_assets()
+        # The corrupt file is never even offered to the integrity check: the
+        # resolver declined it, so it is not in _klein_asset_paths().
+        assert not [i for i in keh.klein_invalid_assets() if i['asset'] == 'klein_model']
+
+        cfg.save_config({'klein': {'unet': 'my models/klein-9b.safetensors'}})
+        assert keh.resolve_klein_unet() == os.path.join('my models', 'klein-9b.safetensors')
+        assert 'klein_model' not in keh.klein_missing_assets()
+        invalid = keh.klein_invalid_assets()
+        assert [(i['asset'], i['verdict'], i['blocking']) for i in invalid
+                if i['asset'] == 'klein_model'] == [('klein_model', 'html_or_text', True)]
+        assert keh.klein_blocking_invalid(invalid) is True
+
+
+def test_capabilities_expose_klein_overrides(app, tmp_path):
+    from unittest.mock import patch
+    from app import capabilities, config as cfg
+    with app.app_context():
+        _comfy(tmp_path, cfg)
+        cfg.save_config({'klein': {'vae': 'missing-vae.safetensors'}})
+        with patch('app.capabilities._http_ok', return_value=True):
+            caps = capabilities.probe(force=True)
+    assert caps['comfyui']['klein_overrides'] == {
+        'vae': {'configured': 'missing-vae.safetensors', 'found': False}}
+
+
 def test_missing_assets_reports_absent_subset(app, tmp_path):
     from app import config as cfg
     from app.services import klein_edit_helper as keh

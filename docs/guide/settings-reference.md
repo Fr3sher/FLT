@@ -223,6 +223,22 @@ Settings:
 
 **There is no batch-size setting, on purpose.** SeedVR2's `batch_size` is a *video* window whose frames share temporal attention to stay coherent — feeding it unrelated dataset photos would let them bleed into each other. Images are upscaled one per job; throughput comes from the normal generation queue and its fan-out cap.
 
+### Klein model files (optional)
+
+*Contributed by socrasteeze (GitHub).* Pin the exact files the Klein graph loads instead of relying on auto-detection. Empty fields keep the default behaviour: the canonical download filename is looked up first, then a narrow token scan of the ComfyUI model folders.
+
+- **Diffusion model (UNET)** → `klein.unet`. A loader name relative to a diffusion-model folder — e.g. `klein/flux-2-klein-9b-fp8.safetensors` under `models/unet`, or a bare filename for a file sitting at a folder root. This is also what lets you use a UNET that does **not** live in a `klein`-named subfolder, which the automatic scan would never find. Default **empty** (auto-detect).
+- **Text encoder** → `klein.text_encoder`. Relative to `models/text_encoders` — e.g. `qwen_3_8b_fp8mixed.safetensors`. Default **empty**.
+- **VAE** → `klein.vae`. Relative to `models/vae` — e.g. `flux2-vae.safetensors`. Default **empty**.
+
+Traps and good-to-knows:
+
+- The dataset's own **Klein model (per dataset)** choice still wins over `klein.unet` for that dataset's runs — the pin is what auto-detection falls back to, not an override of an explicit per-run pick.
+- Values are **ComfyUI-relative loader names**, not absolute paths. They can point anywhere ComfyUI itself loads from: for models stored outside the ComfyUI tree, register their folder in ComfyUI's `extra_model_paths.yaml` (the app parses it exactly like ComfyUI does) and the pin can then name them.
+- A pinned file that is **not found on disk** falls back to auto-detection instead of blocking generation, and the field shows a **Not found** badge so the miss is never silent.
+- **This is the fix for a model the app insists is "missing" while you are looking at it.** Auto-detection is deliberately narrow (a wrong model fails at sampling time with a cryptic shape error, which is worse than a missing one), so it *declines* any file it cannot confidently name — and a declined file is reported as missing. Pinning it by name removes that discretion: the file resolves, and the integrity check then tells you the truth about it, including **"present but unreadable"** for a corrupt or half-downloaded weight, with the delete-and-re-download action attached.
+- Pinning the wrong *kind* of file (e.g. another family's text encoder) is **not** validated — that generate will fail at sampling time with a shape error. The narrow auto-detection exists precisely to avoid that; only pin files you know are Klein-compatible.
+
 ### Klein generation LoRA presets (optional)
 
 *Idea from @waltm on Discord.* Named combinations of generation LoRAs that stack on top of the local Klein edit graph. Stored in `klein.generation_lora_presets` (default: empty — no presets).

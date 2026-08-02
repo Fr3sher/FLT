@@ -118,6 +118,51 @@ def _find_model_file(comfy_type, canonical, tokens):
     return None
 
 
+# Config key + ComfyUI folder type per user-pinnable Klein slot. The consistency
+# LoRA already has its own key (klein.consistency_lora) and stays as-is.
+# Ported from socrasteeze's branch (GitHub #20).
+KLEIN_OVERRIDE_KEYS = {
+    'unet': ('klein.unet', 'diffusion_models'),
+    'text_encoder': ('klein.text_encoder', 'text_encoders'),
+    'vae': ('klein.vae', 'vae'),
+}
+
+
+def _configured_model(comfy_type, cfg_key):
+    """User-pinned model file for a Klein slot (Settings ▸ Image engine ▸ Klein
+    model files): the value of `cfg_key` normalized to a ComfyUI-relative loader
+    name, IF the file actually exists under one of the <comfy_type> search roots
+    (base models/<type> plus extra_model_paths roots). '' / unset / not-found →
+    None, and the caller falls back to auto-detection — a stale pin must degrade
+    to the scan (and its auto-download path), never brick generation.
+    `klein_override_status()` is what surfaces a pinned-but-absent file to the UI,
+    so the fallback is visible rather than silent."""
+    name = (cfg.get(cfg_key) or '').strip().replace('/', os.sep)
+    if not name:
+        return None
+    if _abs_under_roots(comfy_type, name):
+        return name
+    logger.warning('%s: pinned file %r not found under any %s root — '
+                   'falling back to auto-detection', cfg_key, name, comfy_type)
+    return None
+
+
+def klein_override_status():
+    """{slot: {'configured': str, 'found': bool}} for each pinned Klein model file
+    that is SET (empty pins are omitted). Read by capabilities.probe() so the
+    Settings fields can show an honest found / not-found badge — without it a
+    typo'd pin silently falls back to auto-detection and the user has no way to
+    see their pin is not in effect."""
+    out = {}
+    for slot, (key, comfy_type) in KLEIN_OVERRIDE_KEYS.items():
+        raw = (cfg.get(key) or '').strip()
+        if not raw:
+            continue
+        rel = raw.replace('/', os.sep)
+        out[slot] = {'configured': raw, 'found': bool(_abs_under_roots(comfy_type, rel))}
+    return out
+
+
 def _klein_unet_folders():
     """(prefix, [model files]) candidates for the Klein UNET across each diffusion-
     model search root (base models/unet + models/diffusion_models, then any
@@ -197,16 +242,24 @@ def resolve_klein_unet(selected=None):
     a UNETLoader lists files relative to models/unet (or diffusion_models), so the
     bare filename the picker sends is not loadable on its own — the missing
     subfolder prefix was the original bug. Preference: the picker's choice
-    (searched across ALL klein folders), then the canonical download, then the
-    first file found."""
+    (searched across ALL klein folders), then the user-pinned klein.unet, then
+    the canonical download, then the first file found."""
+    bare_pick = os.path.basename(selected) if selected else None
+    if bare_pick:
+        for sub, names in _klein_unet_folders():
+            if bare_pick in names:
+                return os.path.join(sub, bare_pick)
+    # The pin is honoured even when the file lives OUTSIDE a 'klein'-named
+    # subfolder — the folder-name convention only ever drove the SCAN, and the
+    # scan is what a pin is there to bypass. Checked before the folder guard
+    # below for the same reason: a pinned model in models/unet/my-tunes/ must
+    # resolve on an install where _klein_unet_folders() finds nothing at all.
+    configured = _configured_model('diffusion_models', 'klein.unet')
+    if configured:
+        return configured
     folders = _klein_unet_folders()
     if not folders:
         return None
-    bare_pick = os.path.basename(selected) if selected else None
-    if bare_pick:
-        for sub, names in folders:
-            if bare_pick in names:
-                return os.path.join(sub, bare_pick)
     canonical = _canonical_name('klein_model')
     for sub, names in folders:
         if canonical in names:
@@ -249,20 +302,23 @@ def unet_for_job(klein_model=None):
 
 
 def resolve_klein_vae():
-    """`vae_name` for node 10 — canonical flux2-vae.safetensors, else a narrow
-    flux2-vae token match (covers the 'flux2_vae.safetensors.safetensors'
-    double-extension variant some installs carry). Never e.g. qwen_image_vae."""
-    return _find_model_file('vae', _canonical_name('klein_vae'),
-                            ('flux2-vae', 'flux2_vae', 'flux-2-vae', 'flux_2_vae'))
+    """`vae_name` for node 10 — the user-pinned klein.vae first, then the canonical
+    flux2-vae.safetensors, else a narrow flux2-vae token match (covers the
+    'flux2_vae.safetensors.safetensors' double-extension variant some installs
+    carry). Never e.g. qwen_image_vae."""
+    return (_configured_model('vae', 'klein.vae')
+            or _find_model_file('vae', _canonical_name('klein_vae'),
+                                ('flux2-vae', 'flux2_vae', 'flux-2-vae', 'flux_2_vae')))
 
 
 def resolve_klein_text_encoder():
-    """`clip_name` for node 90 — canonical qwen_3_8b_fp8mixed.safetensors, else a
-    narrow qwen_3_8b token match. NEVER a bare 'qwen' match: qwen3vl_* (Z-Image)
-    and qwen_2.5_vl_* (Qwen-Image) encoders live in the same folder and produce
-    incompatible embeddings."""
-    return _find_model_file('text_encoders', _canonical_name('klein_text_encoder'),
-                            ('qwen_3_8b', 'qwen3_8b', 'qwen-3-8b'))
+    """`clip_name` for node 90 — the user-pinned klein.text_encoder first, then the
+    canonical qwen_3_8b_fp8mixed.safetensors, else a narrow qwen_3_8b token match.
+    NEVER a bare 'qwen' match: qwen3vl_* (Z-Image) and qwen_2.5_vl_* (Qwen-Image)
+    encoders live in the same folder and produce incompatible embeddings."""
+    return (_configured_model('text_encoders', 'klein.text_encoder')
+            or _find_model_file('text_encoders', _canonical_name('klein_text_encoder'),
+                                ('qwen_3_8b', 'qwen3_8b', 'qwen-3-8b')))
 
 
 def _lora_abs(rel_name):

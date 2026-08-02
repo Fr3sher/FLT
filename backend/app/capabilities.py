@@ -1647,6 +1647,12 @@ def probe(force=False) -> dict:
             # "present but INVALID: <asset> (<reason>)" line and the diagnostic, and
             # a blocking-invalid required asset also keeps engines.klein dark above.
             'klein_invalid': klein_invalid,
+            # User-pinned Klein model files (Settings ▸ Image engine), only the
+            # slots that are SET: {slot: {configured, found}}. `found` False means
+            # the pin fell back to auto-detection — drives the honest "not found"
+            # badge next to the Settings field, so a typo is never silent.
+            # Ported from socrasteeze's branch (GitHub #20).
+            'klein_overrides': _keh.klein_override_status(),
         },
         'ollama': {
             'reachable': ollama['ok'],

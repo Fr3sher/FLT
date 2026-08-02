@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-02-klein-model-file-pins',
+    date: '2026-08-02',
+    title: 'Tell the app exactly which Klein model files to load',
+    blurb:
+      'Settings → Image engines has three new optional fields — diffusion model (UNET), text encoder, VAE — that name the exact files the Klein graph loads. Empty keeps today\'s automatic detection. This is the way out of "the app says the model is missing and I am looking right at it": detection is deliberately narrow, so it declines any file it cannot confidently name — a UNET outside a "klein" folder, a weight renamed on download — and a declined file was reported missing. A pinned file resolves, and you get the real verdict on it, including "present but unreadable" for a corrupt download, with the delete-and-re-download action attached. A pin that is not on disk falls back to detection with a badge instead of blocking generation. Contributed by socrasteeze (GitHub).',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-02-bank-passes-survive-a-deleted-image',
     date: '2026-08-02',
     title: 'Deleting a bank image while a long pass is running no longer throws the whole pass away',
