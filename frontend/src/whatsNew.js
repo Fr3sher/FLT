@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-02-klein-model-paths',
+    date: '2026-08-02',
+    title: 'Point the app at your models with a full path, from anywhere',
+    blurb:
+      'Every Klein model field — diffusion model, text encoder, VAE, and now the consistency LoRA, which was config-only until today — takes a full absolute path as well as a ComfyUI-relative name, and generation-LoRA preset rows do too. A path inside one of ComfyUI\'s model folders is converted to what the loader needs; a path from anywhere else (Downloads, a Hugging Face cache, another drive) is hardlinked into an lds-pinned/ folder for you, so a 10 GB weight stays where it is instead of being copied or moved. A native bf16 model also runs at full precision at last: both Klein graphs hardcoded an FP8 loader setting that quantized full-precision weights on load without telling anyone — the canonical download is FP8, so a stock install renders exactly as before. Contributed by socrasteeze (GitHub).',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-02-klein-model-file-pins',
     date: '2026-08-02',
     title: 'Tell the app exactly which Klein model files to load',

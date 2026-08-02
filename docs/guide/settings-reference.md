@@ -225,17 +225,25 @@ Settings:
 
 ### Klein model files (optional)
 
-*Contributed by socrasteeze (GitHub).* Pin the exact files the Klein graph loads instead of relying on auto-detection. Empty fields keep the default behaviour: the canonical download filename is looked up first, then a narrow token scan of the ComfyUI model folders.
+*Contributed by socrasteeze (GitHub).* Pin the exact files the Klein graph loads instead of relying on auto-detection. Every field accepts **a full absolute path or a ComfyUI-relative loader name**; empty fields keep the default behaviour (the canonical download filename first, then a narrow token scan of the ComfyUI model folders).
 
-- **Diffusion model (UNET)** → `klein.unet`. A loader name relative to a diffusion-model folder — e.g. `klein/flux-2-klein-9b-fp8.safetensors` under `models/unet`, or a bare filename for a file sitting at a folder root. This is also what lets you use a UNET that does **not** live in a `klein`-named subfolder, which the automatic scan would never find. Default **empty** (auto-detect).
-- **Text encoder** → `klein.text_encoder`. Relative to `models/text_encoders` — e.g. `qwen_3_8b_fp8mixed.safetensors`. Default **empty**.
-- **VAE** → `klein.vae`. Relative to `models/vae` — e.g. `flux2-vae.safetensors`. Default **empty**.
+- **Diffusion model (UNET)** → `klein.unet`. A full path, or a name relative to a diffusion-model folder — e.g. `klein/flux-2-klein-9b-fp8.safetensors` under `models/unet`, or a bare filename for a file sitting at a folder root. This is also what lets you use a UNET that does **not** live in a `klein`-named subfolder, which the automatic scan would never find. Default **empty** (auto-detect).
+- **Text encoder** → `klein.text_encoder`. Full path, or relative to `models/text_encoders` — e.g. `qwen_3_8b_fp8mixed.safetensors`. Default **empty**.
+- **VAE** → `klein.vae`. Full path, or relative to `models/vae` — e.g. `flux2-vae.safetensors`. Default **empty**.
+- **Consistency LoRA** → `klein.consistency_lora`. Full path, or relative to `models/loras`. The structure-anchoring LoRA chained onto the Klein edit graph — this is the same key that was previously config-only. Unlike the three above it has a shipped default, so **clearing it disables the LoRA** rather than turning on auto-detection. Default `klein/Flux2-Klein-9B-consistency-V2.safetensors` (the Setup download location).
+
+How references resolve:
+
+- A **full path under any of ComfyUI's model folders** — including folders registered in `extra_model_paths.yaml` (the app parses it exactly like ComfyUI does) — is converted automatically to the relative loader name ComfyUI's nodes need, and the field shows **Found**. Nothing is copied or moved.
+- A **full path anywhere else** — Downloads, a Hugging Face cache, another drive — is **hardlinked (or symlinked) into `<ComfyUI models>/<type>/lds-pinned/`** so stock loader nodes can open it, and shows the same **Found**. Your config keeps the original absolute path; the link is created when the reference resolves, costs no extra disk, and is reused on later runs. Staged files are deliberately *not* put in a `klein`-named folder, so they never show up as a second copy in the Klein model picker.
+- A reference that **cannot be resolved** — no such file, or the link could not be created (a read-only models folder, or another volume on an account without symlink rights) — falls back to auto-detection instead of blocking generation, with a badge so the miss is never silent.
+- Native / **bf16 UNETs** (a filename without `fp8`) now load with `weight_dtype: default`; FP8 builds keep `fp8_e4m3fn`. Both shipped Klein graphs hardcoded `fp8_e4m3fn`, which quantized a full-precision pin on load without saying so. The canonical download carries `fp8` in its name, so a stock install renders exactly as before.
+- Generation-LoRA **preset rows** accept full paths the same way.
+- **Not cleaned up automatically.** Changing or clearing a pin leaves its link behind in `lds-pinned/`; the folder is safe to delete by hand when nothing points there any more.
 
 Traps and good-to-knows:
 
 - The dataset's own **Klein model (per dataset)** choice still wins over `klein.unet` for that dataset's runs — the pin is what auto-detection falls back to, not an override of an explicit per-run pick.
-- Values are **ComfyUI-relative loader names**, not absolute paths. They can point anywhere ComfyUI itself loads from: for models stored outside the ComfyUI tree, register their folder in ComfyUI's `extra_model_paths.yaml` (the app parses it exactly like ComfyUI does) and the pin can then name them.
-- A pinned file that is **not found on disk** falls back to auto-detection instead of blocking generation, and the field shows a **Not found** badge so the miss is never silent.
 - **This is the fix for a model the app insists is "missing" while you are looking at it.** Auto-detection is deliberately narrow (a wrong model fails at sampling time with a cryptic shape error, which is worse than a missing one), so it *declines* any file it cannot confidently name — and a declined file is reported as missing. Pinning it by name removes that discretion: the file resolves, and the integrity check then tells you the truth about it, including **"present but unreadable"** for a corrupt or half-downloaded weight, with the delete-and-re-download action attached.
 - Pinning the wrong *kind* of file (e.g. another family's text encoder) is **not** validated — that generate will fail at sampling time with a shape error. The narrow auto-detection exists precisely to avoid that; only pin files you know are Klein-compatible.
 

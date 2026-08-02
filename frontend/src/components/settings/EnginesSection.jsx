@@ -184,18 +184,35 @@ function KleinLorasCard({ config, setField }) {
   )
 }
 
-/* The three pinnable Klein model slots. `key` is the DOM id the help registry
-   focuses (the contract test scans these literals); `cfg` is the klein.* config
-   key; `slot` matches caps.comfyui.klein_overrides.
+/* The pinnable Klein model slots. `key` is the DOM id the help registry focuses
+   (the contract test scans these literals); `cfg` is the klein.* config key;
+   `slot` matches caps.comfyui.klein_overrides.
    Ported from socrasteeze's branch (GitHub #20). */
 const KLEIN_MODEL_SLOTS = [
   { key: 'klein-model-unet', cfg: 'unet', slot: 'unet', label: 'Diffusion model (UNET)',
-    hint: 'Relative to a diffusion-model folder — e.g. klein/flux-2-klein-9b-fp8.safetensors under models/unet, or a bare filename for a file sitting at a folder root.' },
+    hint: 'Full path from anywhere, or relative to a diffusion-model folder — e.g. klein/flux-2-klein-9b-fp8.safetensors under models/unet (a bare filename for a file sitting at a folder root). A filename without "fp8" loads at full precision instead of being quantized.' },
   { key: 'klein-model-text_encoder', cfg: 'text_encoder', slot: 'text_encoder', label: 'Text encoder',
-    hint: 'Relative to models/text_encoders — e.g. qwen_3_8b_fp8mixed.safetensors.' },
+    hint: 'Full path, or relative to models/text_encoders — e.g. qwen_3_8b_fp8mixed.safetensors.' },
   { key: 'klein-model-vae', cfg: 'vae', slot: 'vae', label: 'VAE',
-    hint: 'Relative to models/vae — e.g. flux2-vae.safetensors.' },
+    hint: 'Full path, or relative to models/vae — e.g. flux2-vae.safetensors.' },
+  { key: 'klein-model-consistency_lora', cfg: 'consistency_lora', slot: 'consistency_lora',
+    label: 'Consistency LoRA',
+    placeholder: 'Empty = no consistency LoRA',
+    hint: 'Full path, or relative to models/loras — the structure-anchoring LoRA chained onto the Klein edit graph. Unlike the three above, this one has a shipped default and clearing it disables the LoRA rather than turning on auto-detection.' },
 ]
+
+/* One badge per resolve status from caps.comfyui.klein_overrides. 'outside_roots'
+   is deliberately NOT worded as "not found": the file is there, ComfyUI simply
+   cannot reach it, and only one action fixes that. */
+function overrideBadge(st) {
+  if (!st) return null
+  if (st.found) return { cls: 'text-emerald-400', text: 'Found' }
+  if (st.status === 'outside_roots') {
+    return { cls: 'text-amber-400',
+             text: "Could not be linked into ComfyUI's model folders — check permissions, or move the file" }
+  }
+  return { cls: 'text-amber-400', text: 'Not found — auto-detection is used' }
+}
 
 function KleinModelFilesCard({ config, setField, caps }) {
   const overrides = caps?.comfyui?.klein_overrides || {}
@@ -203,18 +220,16 @@ function KleinModelFilesCard({ config, setField, caps }) {
     <Card
       id="klein-model-files"
       title="Klein model files (optional)"
-      help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Values are ComfyUI-relative loader names, so they can point anywhere ComfyUI itself loads from — including folders registered in extra_model_paths.yaml. Leave a field empty to keep auto-detection for that slot. A pinned file that is not on disk falls back to auto-detection and shows a badge here rather than blocking generation. Contributed by socrasteeze (GitHub)."
+      help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Each field takes a full absolute path OR a ComfyUI-relative loader name. A path under one of ComfyUI's model folders (extra_model_paths.yaml roots included) is converted automatically to what the loader needs; a path from anywhere else is hardlinked into an lds-pinned/ folder so ComfyUI can load it without you moving a multi-GB file. Leave a field empty to keep auto-detection for that slot. A pinned file that cannot be resolved falls back to auto-detection and shows a badge here rather than blocking generation. Contributed by socrasteeze (GitHub)."
     >
-      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint }) => {
-        const st = overrides[slot]
+      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint, placeholder }) => {
+        const badge = overrideBadge(overrides[slot])
         return (
           <div key={key}>
             <div className="flex flex-wrap items-center justify-between gap-x-2">
               <label htmlFor={key} className="block text-sm font-medium text-content">{label}</label>
-              {st && (
-                <span className={`text-xs ${st.found ? 'text-emerald-400' : 'text-amber-400'}`}>
-                  {st.found ? 'Found' : 'Not found — auto-detection is used'}
-                </span>
+              {badge && (
+                <span className={`text-xs sm:text-right ${badge.cls}`}>{badge.text}</span>
               )}
             </div>
             <input
@@ -222,7 +237,7 @@ function KleinModelFilesCard({ config, setField, caps }) {
               type="text"
               value={config.klein?.[cfg] || ''}
               onChange={(e) => setField('klein', cfg, e.target.value)}
-              placeholder="Empty = auto-detect"
+              placeholder={placeholder || 'Empty = auto-detect'}
               className={INPUT_CLASS}
             />
             <p className="mt-1 text-[0.6875rem] text-content-subtle">{hint}</p>
