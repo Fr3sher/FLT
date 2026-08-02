@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-writes-refuse-an-unreadable-body',
+    date: '2026-08-02',
+    title: 'A save that cannot be read now says so instead of answering OK and storing nothing',
+    blurb:
+      'If you drive the API yourself — a script, a curl command, your own tooling — a request body the app could not parse used to be treated as an empty one: it answered 200 OK, rewrote your settings, and the value you sent was simply gone, with nothing in the log. The most common cause is a raw Windows path, since a lone backslash is not valid JSON. Those requests are now refused with the real parse error and the escaping to use, and nothing on disk is touched. The app\'s own screens were never affected.',
+  },
+  {
     id: '2026-08-02-ollama-fence-waits-and-offers-the-unload',
     date: '2026-08-02',
     title: 'When another tool is holding the Ollama model, LDS now waits for it — or takes it, if you say so',
