@@ -3117,6 +3117,27 @@ def _stopped_detail(noun, data, cache_path, total):
             'relaunch to finish and cluster')
 
 
+def _release_db_before_inference():
+    """End the session's transaction before an inference subprocess we may sit
+    in for an HOUR (bank scoring on CPU is measured near that on a big bank).
+
+    The pass reads its rows, hands a path list to a child process, waits, then
+    writes the results back. Reading first is fine; keeping the SAME session
+    transaction open across the wait is not. WAL (app/__init__.py) buys concurrent
+    READERS, never concurrent writers: one stray write joining the transaction
+    ahead of the child — a status stamp, a counter, a `flush()` inherited from the
+    caller — takes the single write lock and holds it for the whole inference, so
+    every other writer in the app dies on `database is locked` after the 5 s
+    busy_timeout. That is the exact failure that abandoned two paid cloud runs on
+    2026-07-26 (see cloud_training._COMMIT_RETRIES), for a five-second holder;
+    this one would hold it for an hour.
+
+    Committing here costs nothing on the nominal path (nothing is pending) and
+    removes the trap for good. Callers must not hold ORM objects across it:
+    `expire_on_commit` is on, so rows are re-fetched after the child returns."""
+    db.session.commit()
+
+
 def _drive_infer_subprocess(job, python, script, payload, cache_path,
                             progress_re, window):
     """Run an infer subprocess, streaming its stderr progress into ``job`` and
@@ -3273,6 +3294,7 @@ def _faces_job(bank_id):
         })
         python = cfg.get('face_scoring.python') or sys.executable
         window = gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu else nullcontext()
+        _release_db_before_inference()
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _EMBED_SCRIPT, payload, cache_path, _PROGRESS_RE, window)
         # Stopped by the user — say exactly what's kept, never a mute ✗ (the cached
@@ -3440,6 +3462,7 @@ def _score_job(bank_id):
         # unusable, the work slow anyway.
         window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
                   else nullcontext())
+        _release_db_before_inference()
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _SCORE_SCRIPT, payload, cache_path, _SCORE_PROGRESS_RE,
             window)
