@@ -230,8 +230,8 @@ def test_missing_row_is_dropped_and_the_rest_still_chains(app, tmp_path):
         {'file': 'krea/gone.safetensors', 'strength': 1.0},
         {'file': 'krea/detail.safetensors', 'strength': 0.6},
     ])
-    assert [r['file'] for r in rows] == ['krea/bypass.safetensors',
-                                        'krea/detail.safetensors']
+    assert [r['file'] for r in rows] == [os.path.join('krea', 'bypass.safetensors'),
+                                        os.path.join('krea', 'detail.safetensors')]
 
 
 def test_zero_strength_row_is_dropped(app, tmp_path):
@@ -255,7 +255,7 @@ def test_identity_lora_row_is_dropped_even_though_the_file_exists(app, tmp_path)
         [{'file': 'krea/identity.safetensors', 'strength': 0.8},
          {'file': 'krea/detail.safetensors', 'strength': 0.6}],
         identity_lora='krea/identity.safetensors')
-    assert [r['file'] for r in rows] == ['krea/detail.safetensors']
+    assert [r['file'] for r in rows] == [os.path.join('krea', 'detail.safetensors')]
 
 
 def test_identity_lora_guard_ignores_separator_and_case(app, tmp_path):
@@ -274,7 +274,7 @@ def test_no_identity_lora_leaves_rows_untouched(app, tmp_path):
     _comfy_with_loras(tmp_path, present=('detail',))
     rows = keh._existing_generation_lora_rows(
         [{'file': 'krea/detail.safetensors', 'strength': 0.6}])
-    assert [r['file'] for r in rows] == ['krea/detail.safetensors']
+    assert [r['file'] for r in rows] == [os.path.join('krea', 'detail.safetensors')]
 
 
 def test_rows_are_clamped_and_capped_at_enqueue_too(app, tmp_path):
@@ -383,8 +383,8 @@ def test_enqueue_actually_chains_the_resolved_rows_into_the_queued_workflow(
                 {'file': 'krea/detail.safetensors', 'strength': 0.6},
             ])
     wf = seen['workflow_data']
-    assert wf['gen_lora_1']['inputs']['lora_name'] == 'krea/bypass.safetensors'
-    assert wf['gen_lora_2']['inputs']['lora_name'] == 'krea/detail.safetensors'
+    assert wf['gen_lora_1']['inputs']['lora_name'] == os.path.join('krea', 'bypass.safetensors')
+    assert wf['gen_lora_2']['inputs']['lora_name'] == os.path.join('krea', 'detail.safetensors')
     assert wf['7']['inputs']['model'] == ['gen_lora_2', 0]
     assert 'gen_lora_3' not in wf   # the missing row never got a node
 
@@ -413,6 +413,6 @@ def test_regenerate_applies_the_krea_preset_by_name_not_by_rows(app, tmp_path, m
                             lambda **kw: (seen.update(kw), kw['job_id'])[1])
         svc.regenerate_image('local', img.id, generation_lora_preset='Bypass')
     wf = seen['workflow_data']
-    assert wf['gen_lora_1']['inputs']['lora_name'] == 'krea/krea2filterbypass3.safetensors'
-    assert wf['gen_lora_2']['inputs']['lora_name'] == 'krea/detail_slider.safetensors'
+    assert wf['gen_lora_1']['inputs']['lora_name'] == os.path.join('krea', 'krea2filterbypass3.safetensors')
+    assert wf['gen_lora_2']['inputs']['lora_name'] == os.path.join('krea', 'detail_slider.safetensors')
     assert wf['7']['inputs']['model'] == ['gen_lora_2', 0]
