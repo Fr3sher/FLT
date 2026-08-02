@@ -101,6 +101,13 @@ export const WHATS_NEW = [
       'Starting the server by hand (python backend/run.py) printed no address at all — the usual "Running on http://..." line was being swallowed into data/app.log — so you had to guess the port, which is exactly the case where it may have moved because 5050 was taken. The console now prints "[LDS] Ready on http://…" once the app really answers, whichever way you launched it.',
   },
   {
+    id: '2026-08-02-ref-edit-keep-error',
+    date: '2026-08-02',
+    title: 'Fixing a failed reference edit no longer errors twice',
+    blurb:
+      'When keeping an edited reference failed, the app hit a second error while reporting the first, so you got a blank failure instead of the reassurance that your previous reference was left untouched. It now says exactly that — thanks to socrasteeze (GitHub) for spotting it.',
+  },
+  {
     id: '2026-08-02-bank-text-search-push-down',
     date: '2026-08-02',
     title: 'Text search can finally get rid of what you do not want',

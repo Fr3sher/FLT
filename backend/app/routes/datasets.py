@@ -32,6 +32,8 @@ from ..utils.comfyui import KREA_ALLOWED_SAMPLERS, KREA_ALLOWED_SCHEDULERS, get_
 from ._common import (_map_error, _require_comfyui, _require_no_stalled_comfyui,
                       _studio_arch_mismatch_response, _studio_missing_response)
 
+logger = logging.getLogger(__name__)
+
 bp = Blueprint('datasets', __name__, url_prefix='/api')
 
 _PRESET_NAMES = ('balanced_25', 'zimage_12', 'balanced_multiformat',
