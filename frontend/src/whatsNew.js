@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-bank-coverage-sees-more',
+    date: '2026-08-03',
+    title: 'The bank’s Coverage advice can now see that your images all look the same',
+    blurb:
+      'Coverage advice used to read only labels — framing, person and style clusters, resolution — and labels have a blind spot: they cannot tell two hundred near-identical shots from two hundred different ones, and they say nothing about outfits, lighting or camera angle. It now also reads two things you may already have on disk. Visual spread uses the embeddings ✨ Score cached to report how alike the pool actually looks ("91% average similarity — a set this repetitive teaches one look"); the bands come from measuring real banks, where an ordinary one sits near 65% and an image plus its nearest neighbours lands at 79-90%. Caption variety uses the captions 🏷️ wrote to say which camera views, lightings, settings, outfits and expressions your set never mentions — the same reading the dataset Coverage panel does. Both are honest about their limits on the panel itself: without ✨ Score the spread says "Not measured" rather than "varied", and the caption read looks at words rather than pixels, so a profile nobody described is invisible and "not smiling" still counts as a smile. Still advice only — nothing is kept or rejected.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-canvas-blend',
     date: '2026-08-03',
     title: '🧬 Blend two LoRAs into one image, straight from the board',

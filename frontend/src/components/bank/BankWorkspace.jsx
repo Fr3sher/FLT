@@ -16,6 +16,11 @@ import BankWatermarkPanel from './BankWatermarkPanel'
 // 🎚 The twelve triage thresholds, edited here instead of in Settings.
 import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 // Source-folder re-walk messages (pure/testable).
+import { spreadReadout, spreadCoverageNote } from './coverageVisual.js'
+// Shared with the dataset coverage panel on purpose: both render the SAME
+// caption-lexicon payload, so the row/summary logic lives in one place rather
+// than being copied and left to drift.
+import { axisRows, axisSummary } from '../dataset/datasetCoverage.js'
 import { folderSyncToast } from './bankSync.js'
 import { UNDO_HINT, undoBannerText, undoOffer, undoResultMessage } from './bankUndo.js'
 // Four progress states, not two — including the honest "I don't know" (pure/testable).
@@ -337,6 +342,64 @@ function FramingBar({ framing }) {
   )
 }
 
+// 👁 What the labels cannot see: how alike the pool actually LOOKS, measured on
+// the CLIP embeddings ✨ Score already cached. An unscored bank shows "Not
+// measured" rather than a reassuring colour — the whole point is that silence
+// must never read as variety.
+function VisualSpread({ visual, total }) {
+  const r = spreadReadout(visual)
+  if (!r) return null
+  const tone = r.tone === 'warn' ? 'border-amber-400/50 bg-amber-400/10 text-amber-200'
+    : r.tone === 'ok' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+      : 'border-border bg-surface-raised text-content-subtle'
+  const note = spreadCoverageNote(visual, total)
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-[11px] uppercase tracking-wide text-content-muted">Visual spread</span>
+        <span className={`rounded-full border px-2 py-0.5 text-[11px] ${tone}`}>{r.label}</span>
+      </div>
+      <p className="m-0 text-[11px] text-content-subtle">{r.detail}</p>
+      {note && <p className="m-0 text-[11px] text-content-subtle">{note}</p>}
+    </div>
+  )
+}
+
+// The caption-derived axes, rendered from the SAME pure helpers the dataset panel
+// uses (imported, not copied) so the two surfaces cannot drift apart.
+function VarietyAxes({ variety }) {
+  if (!variety || !variety.captioned || !(variety.axes || []).length) return null
+  const chip = { ok: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300',
+    thin: 'border-amber-400/50 bg-amber-400/10 text-amber-300',
+    gap: 'border-rose-400/50 bg-rose-400/10 text-rose-300',
+    none: 'border-border bg-surface-raised text-content-subtle' }
+  return (
+    <div className="flex flex-col gap-2 border-t border-border pt-2">
+      {variety.axes.map((axis) => (
+        <div key={axis.id} className="flex flex-col gap-1">
+          <div className="flex flex-wrap items-baseline gap-x-2">
+            <span className="text-[11px] uppercase tracking-wide text-content-muted">{axis.label}</span>
+            {axis.hint && <span className="text-[11px] text-content-subtle">{axis.hint}</span>}
+          </div>
+          {/* The chips decorate a sentence a screen reader can read out; the
+              sentence is the carrier, never the colour. */}
+          <span className="sr-only">{axisSummary(axis)}</span>
+          <div aria-hidden className="flex flex-wrap gap-1">
+            {axisRows(axis).map((r) => (
+              <span key={r.id}
+                title={r.count ? `${r.count} caption${r.count === 1 ? '' : 's'} mention this`
+                  : (r.state === 'gap' ? 'No caption mentions this' : 'Not mentioned (optional)')}
+                className={`rounded-full border px-2 py-0.5 text-[11px] ${chip[r.state]}`}>
+                {r.label}<span className="opacity-60"> {r.count}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function CoveragePanel({ coverage, onClose, onBalance = null, balanceReason = '' }) {
   if (!coverage) {
     return <p className="text-sm text-content-subtle">Reading coverage…</p>
@@ -355,6 +418,7 @@ function CoveragePanel({ coverage, onClose, onBalance = null, balanceReason = ''
           className="rounded-md border border-border px-1.5 py-0.5 text-xs text-content-subtle hover:text-content">✕</button>
       </div>
       {coverage.framing_available && <FramingBar framing={coverage.framing} />}
+      <VisualSpread visual={coverage.visual} total={coverage.total} />
       <ul className="space-y-1 text-sm">
         {coverage.advice.map((a, i) => (
           <li key={i} className="flex items-start gap-2">
@@ -377,8 +441,12 @@ function CoveragePanel({ coverage, onClose, onBalance = null, balanceReason = ''
           <span className="text-[11px] text-content-subtle">{balanceReason}</span>
         )}
       </div>
+      <VarietyAxes variety={coverage.variety} />
       <p className="text-[11px] text-content-subtle">
-        Advice only — nothing is kept or rejected. Based on what the passes already computed.
+        Advice only — nothing is kept or rejected. Based on what the passes already computed:
+        the labels, your captions (words, not pixels — a shot the captioner never described is
+        invisible here, and “not smiling” still counts as a smile) and the ✨ Score embeddings.
+        Judged as a character source, like the framing target above.
       </p>
     </div>
   )
@@ -678,7 +746,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   useEffect(() => {
     if (coverageOpen) loadCoverage()
   }, [coverageOpen, loadCoverage, payload?.counts?.keep,
-      payload?.counts?.framing_classified])
+      payload?.counts?.framing_classified,
+      // The panel now also reads captions and embeddings, so it must refresh
+      // when those passes land — otherwise it keeps showing "no captions yet"
+      // after the 🏷️ pass finished.
+      payload?.counts?.captioned, payload?.counts?.scored])
 
   // Leaving the selection view: back to the facet grid.
   const exitSelectionView = () => { setShowSelected(false); setSelectedOrder(null) }

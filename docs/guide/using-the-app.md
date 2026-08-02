@@ -431,6 +431,28 @@ pure maths on data the passes already computed, so it costs no GPU. The
 framing-balance line needs the 📐 Framing pass to have run; without it the panel
 still covers person mix, style spread and resolution and hints to run framing.
 
+Those are all **labels**, and labels have a blind spot: they cannot tell two
+hundred near-identical shots from two hundred different ones, and they say
+nothing about outfits, lighting or camera angle. Two things you may already have
+on disk can, so the panel also reads them when they exist:
+
+- **Visual spread**, from the CLIP embeddings the ✨ Score pass caches. It reports
+  the average similarity across the pool — *"91% average similarity — a set this
+  repetitive teaches one look"*. The bands were calibrated by measuring real
+  banks: an ordinary one sits near 65%, an image plus its nearest neighbours
+  lands around 79-90%. Without ✨ Score it says **Not measured** — never
+  "varied", because nothing looked.
+- **Caption variety**, from the captions the 🏷️ pass wrote, read by the same
+  lexicon the dataset Coverage panel uses. It reports which camera views,
+  lightings, settings, outfits and expressions your captions mention and which
+  they never do.
+
+Both limits are on the panel, not just here. The caption read looks at **words,
+not pixels**: a profile shot the captioner never called a profile is invisible,
+and *"not smiling"* still counts as a smile. A bank has no character/concept/style
+kind the way a dataset does, so it is judged as a **character source** — the same
+assumption the framing target and the person-mix advice already make.
+
 The advice becomes a gesture with **⚖️ Pick a balanced set…** at the bottom of
 the panel — see [Pick a balanced set](#pick-a-balanced-set).
 

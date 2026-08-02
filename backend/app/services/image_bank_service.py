@@ -5210,15 +5210,122 @@ def _pct(n, total) -> int:
     return int(round(100 * n / total)) if total else 0
 
 
+# --- visual spread, from the embeddings the ✨ Score pass already cached -------
+# The framing/cluster numbers above are labels; they cannot see that two hundred
+# images labelled "body" are the same body in the same pose. The CLIP embeddings
+# can, and they are already on disk — so this costs one pass over vectors that
+# were computed for other reasons, and nothing new runs.
+#
+# The statistic is the MEAN PAIRWISE COSINE SIMILARITY of the pool. For L2-normed
+# vectors it has a closed form that avoids ever building the n×n matrix:
+#
+#     sum_{i,j} e_i . e_j  ==  || sum_i e_i ||^2
+#
+# so the mean over off-diagonal pairs is (||s||^2 - n) / (n^2 - n) — one pass,
+# O(n·d), exact, and it does not care how big the bank is. That matters: the
+# panel is read-only and opened casually, so it must not become the reason a
+# 47k-image bank stalls.
+#
+# THRESHOLDS ARE MEASURED, NOT GUESSED. Taken on the two real banks available
+# (117 and 46 775 usable embeddings — deliberately different in size and
+# content):
+#     whole pool                    0.645   and  0.650
+#     random subsets n=20…1000      0.643 … 0.692   (i.e. NOT a function of n)
+#     an image + its nearest nbrs   0.788   and  0.900   <- redundant extreme
+#     a farthest-point sample       0.538   and  0.220   <- varied extreme
+# So ~0.65 is what an ordinary bank looks like, a genuinely repetitive selection
+# lands around 0.79-0.90, and the statistic is stable across pool size — which is
+# why no n-correction is applied. The bands below sit clear of the ordinary
+# reading so a normal bank is never nagged.
+_SPREAD_REDUNDANT = 0.80     # at/above: measured territory of nearest-neighbour sets
+_SPREAD_LEANING = 0.72       # at/above: tighter than either real bank's whole pool
+_SPREAD_MIN_POOL = 10        # under this the mean is noise, so we decline to judge
+
+
+def _coverage_embeddings(bank, crit):
+    """The (m×d) L2-normed embedding matrix for the coverage pool.
+
+    A sibling of ``_pool_embeddings`` rather than a call into it: that one takes
+    the curation FILTER dict and goes through ``_pool_query``, which has no way to
+    express the coverage pool's "everything not rejected" fallback. Same path
+    resolution, same fast-path reasoning — see ``_pool_embeddings``.
+    """
+    import numpy as np
+    emb_by_path = _load_score_embeddings(bank)
+    if not emb_by_path:
+        return None
+    rows = (BankImage.query.filter(BankImage.bank_id == bank.id, crit)
+            .order_by(BankImage.id.asc()).all())
+    base = os.path.realpath(bank.source_path)
+    prefix = os.path.normcase(base + os.sep)
+    vecs = []
+    for r in rows:
+        p = os.path.normpath(os.path.join(base, r.relpath))
+        emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
+        if emb is None:
+            p = _abs_under(base, r.relpath)
+            emb = emb_by_path.get(p) if p else None
+        if emb is not None:
+            vecs.append(emb)
+    if not vecs:
+        return None
+    E = np.stack(vecs).astype('float32')
+    E /= (np.linalg.norm(E, axis=1, keepdims=True) + 1e-8)
+    return E
+
+
+def _visual_spread(bank, crit) -> dict:
+    """How alike the pool LOOKS, from the cached CLIP embeddings.
+
+    Returns ``{'scored': m, 'similarity': float|None, 'band': str}`` where band is
+    'redundant' | 'leaning' | 'varied' | 'unknown'. 'unknown' with scored 0 means
+    the ✨ Score pass has not run (or its cache went stale) — the panel says so
+    rather than drawing a bar it did not measure.
+    """
+    out = {'scored': 0, 'similarity': None, 'band': 'unknown'}
+    try:
+        E = _coverage_embeddings(bank, crit)
+    except Exception:
+        # A read-only advisory must never be the thing that breaks the panel:
+        # a corrupt or half-written cache degrades to "not measured".
+        return out
+    if E is None or len(E) < 2:
+        out['scored'] = 0 if E is None else len(E)
+        return out
+    n = len(E)
+    out['scored'] = n
+    if n < _SPREAD_MIN_POOL:
+        return out
+    s = E.sum(axis=0, dtype='float64')
+    sim = (float(s @ s) - n) / (n * n - n)
+    sim = max(-1.0, min(1.0, sim))
+    out['similarity'] = round(sim, 4)
+    out['band'] = ('redundant' if sim >= _SPREAD_REDUNDANT
+                   else 'leaning' if sim >= _SPREAD_LEANING else 'varied')
+    return out
+
+
+def _coverage_pool_crit(bank_id):
+    """The pool the panel describes: the KEPT images, or — before anything is
+    kept — every non-rejected one (so the panel is useful from the first look).
+
+    Extracted so the caption and embedding reads share ONE definition with the
+    label counts instead of each re-deriving it and drifting. It is returned by a
+    function rather than smuggled out inside the stats dict: that dict gets
+    jsonify()'d, and an SQLAlchemy criterion in it is a 500 waiting for whoever
+    forgets to strip it.
+    """
+    kept_n = BankImage.query.filter_by(bank_id=bank_id, status='keep').count()
+    return ((BankImage.status == 'keep') if kept_n > 0
+            else (BankImage.status != 'reject'))
+
+
 def _coverage_stats(bank_id) -> dict:
-    """Everything the coverage panel needs, from the pool the user would train on:
-    the KEPT images, or — before anything is kept — every non-rejected image (so
-    the panel is useful from the first look). Pure aggregate SQL, no GPU."""
+    """Everything the coverage panel needs, from the pool the user would train on.
+    Pure aggregate SQL, no GPU. Every value here is JSON-serialisable."""
     base = BankImage.query.filter_by(bank_id=bank_id)
-    kept_n = base.filter_by(status='keep').count()
-    pool_is_kept = kept_n > 0
-    crit = (BankImage.status == 'keep') if pool_is_kept \
-        else (BankImage.status != 'reject')
+    crit = _coverage_pool_crit(bank_id)
+    pool_is_kept = base.filter_by(status='keep').count() > 0
     pool = base.filter(crit)
     total = pool.count()
 
@@ -5339,15 +5446,86 @@ def _coverage_advice(stats: dict) -> list:
     return out
 
 
+def _spread_advice(spread, total) -> list:
+    """The visual-spread sentence, or nothing. Pure function of the measurement.
+
+    Deliberately quiet: a bank in the ordinary band says NOTHING, because a panel
+    that comments on every axis every time trains people to skim it.
+    """
+    if total < _SPREAD_MIN_POOL:
+        return []
+    if not spread['scored']:
+        return [{'tone': 'info',
+                 'text': 'Run ✨ Score to also see how varied the set LOOKS — the '
+                         'labels above cannot tell two hundred near-identical shots '
+                         'from two hundred different ones.'}]
+    if spread['similarity'] is None:
+        return []
+    pct = int(round(100 * spread['similarity']))
+    if spread['band'] == 'redundant':
+        return [{'tone': 'warn',
+                 'text': f'The images look very alike ({pct}% average similarity) — '
+                         f'a set this repetitive teaches one look. Use ⚖️ or the '
+                         f'diverse pick to spread it out.'}]
+    if spread['band'] == 'leaning':
+        return [{'tone': 'info',
+                 'text': f'The images lean alike ({pct}% average similarity) — '
+                         f'workable, but more variety would generalise better.'}]
+    return []
+
+
+# The bank has no `kind` (character/concept/style) — that lives on datasets only.
+# It is judged as a CHARACTER source rather than offered as a choice, because the
+# rest of this panel already is: the framing target it phrases against is the
+# character 12/6/6/1 mix, the person-cluster advice says "a character LoRA wants
+# one consistent subject", and the style-cluster advice treats a style mix as
+# dilution. Adding a selector here would make one axis kind-aware inside a panel
+# whose every other axis assumes a character, and would introduce a stored
+# preference (with the alias obligations that carry) to fix an inconsistency this
+# panel does not otherwise have. The UI says which lens it is using instead of
+# leaving the user to infer it.
+_COVERAGE_KIND = 'character'
+
+
 def coverage(user_id, bank_id) -> dict | None:
     """The read-only coverage advice for the bank (idea by @antonp). Returns the
     distributions the panel renders plus the generated advice, or None if the bank
-    is gone. Never mutates; pure DB, zero GPU."""
+    is gone. Never mutates.
+
+    Three sources, all already computed by earlier passes: the labels (framing,
+    person/style clusters, resolution), the CAPTIONS from the 🏷️ pass — scanned by
+    the shared `caption_coverage` lexicon, the same one the dataset panel uses, so
+    the two never drift — and the CLIP embeddings from ✨ Score, for whether the
+    pool actually LOOKS varied. No model runs.
+    """
+    from . import caption_coverage
+
     bank = get_bank(user_id, bank_id)
     if not bank:
         return None
     stats = _coverage_stats(bank_id)
-    stats['advice'] = _coverage_advice(stats)
+    crit = _coverage_pool_crit(bank_id)
+
+    captions = [c for (c,) in db.session.query(BankImage.caption)
+                .filter(BankImage.bank_id == bank_id, crit).all()]
+    variety = caption_coverage.analyse(captions, kind=_COVERAGE_KIND)
+    spread = _visual_spread(bank, crit)
+    # Nested, because `analyse` returns its own `total`/`axes` and the bank payload
+    # already owns `total` — flattening would silently overwrite the pool size.
+    stats['variety'] = variety
+    stats['visual'] = spread
+
+    advice = _coverage_advice(stats)
+    if stats['total']:
+        # On an empty pool _coverage_advice already says the one true thing
+        # ("nothing to advise on yet"); the other two sources would each add their
+        # own phrasing of the same emptiness.
+        advice += _spread_advice(spread, stats['total'])
+        advice += caption_coverage.advice(variety)
+    # One list, warnings first — the panel reads worst-to-mildest across all three
+    # sources rather than as three separate verdicts the user has to merge.
+    advice.sort(key=lambda a: 0 if a['tone'] == 'warn' else 1)
+    stats['advice'] = advice
     return stats
 
 

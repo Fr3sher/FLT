@@ -317,9 +317,12 @@ def advice(report: dict) -> list:
                  'text': 'No images yet — the variety read appears once the dataset has some.'}]
     if captioned == 0:
         return [{'tone': 'info',
+                 # Wording stays surface-neutral: this module now backs BOTH the
+                 # dataset panel (where the counts above are the composition bar)
+                 # and the bank one (where they are the framing chips).
                  'text': 'No captions yet, so variety cannot be read. Run the caption '
-                         'pass and this panel fills in — until then only the composition '
-                         'counts above are known.'}]
+                         'pass and this panel fills in — until then only the counts '
+                         'above are known.'}]
     if report['uncaptioned']:
         out.append({'tone': 'info',
                     'text': f'{report["uncaptioned"]} of {total} images have no caption yet — '
