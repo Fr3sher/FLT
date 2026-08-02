@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/cloud',
   },
   {
+    id: '2026-08-02-enhance-says-why-it-refused',
+    date: '2026-08-02',
+    title: '✨ Enhance now tells you what to fix when it cannot run',
+    blurb:
+      'When Enhance could not reach your local model it always said the same thing — that the model returned nothing, and that you should check the model configured in Settings — even when that setting was perfectly correct. The most common cause is different: another tool is already holding a model in Ollama, and the app will not evict it. Enhance now repeats the real reason and the action that clears it, so you stop hunting through Settings for a problem that was never there.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-02-studio-stack-results-view',
     date: '2026-08-02',
     title: 'Find the right weights for a 🧬 stack by comparing your runs side by side',

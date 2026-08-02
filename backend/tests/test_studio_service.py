@@ -1960,6 +1960,43 @@ def test_enhance_test_prompt_rejects_empty_and_oversized_prompts(app):
             lts.enhance_test_prompt('x' * (lts.STUDIO_ENHANCE_MAX_CHARS + 1))
 
 
+def test_enhance_test_prompt_carries_the_real_refusal_not_an_empty_answer(app, monkeypatch):
+    """A refusal from the local-Ollama fence must reach the user WORDED AS ITSELF.
+
+    The fence blocks when a model is loaded outside LDS; the cure is to unload it.
+    generate_text_ollama used to collapse every failure to "" best-effort, so the
+    Studio could only report "the model returned an empty prompt - check the
+    configured Ollama model in Settings" - pointing at a setting that was correct
+    and hiding the one action that fixes it.
+    """
+    from app.services import lora_test_studio as lts, vision_ollama, ollama_control
+    monkeypatch.setattr(ollama_control, 'ensure_captioning_ready',
+                        lambda *a, **k: {'ok': True})
+
+    def blocked(url, model):
+        raise vision_ollama.LocalOllamaFenceError(
+            'A local Ollama model is already in use outside LDS. LDS will not change '
+            'it; unload it first or configure a dedicated Ollama endpoint for LDS.')
+    monkeypatch.setattr(vision_ollama, '_admit_local_ollama', blocked)
+
+    with app.app_context():
+        with pytest.raises(RuntimeError, match='already in use outside LDS'):
+            lts.enhance_test_prompt('a girl')
+
+
+def test_generate_text_ollama_stays_best_effort_for_the_batch_captioner(app, monkeypatch):
+    """The strict path is opt-in: the caption shortener has a long caption to fall
+    back on, so a refusal there must stay a silent "" and never raise."""
+    from app.services import vision_ollama
+
+    def blocked(url, model):
+        raise vision_ollama.LocalOllamaFenceError('fence says no')
+    monkeypatch.setattr(vision_ollama, '_admit_local_ollama', blocked)
+
+    with app.app_context():
+        assert vision_ollama.generate_text_ollama('shorten this') == ''
+
+
 def test_enhance_test_prompt_raises_when_the_model_answers_nothing(app, monkeypatch):
     from app.services import lora_test_studio as lts, vision_ollama, ollama_control
     monkeypatch.setattr(ollama_control, 'ensure_captioning_ready',

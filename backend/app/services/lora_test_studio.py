@@ -804,7 +804,7 @@ def enhance_test_prompt(prompt: str) -> str:
             (ready.get('error') or 'Ollama is unavailable')
             + ' — Enhance needs the local Ollama model configured in Settings › Local tools.')
     text = generate_text_ollama(STUDIO_ENHANCE_PROMPT.format(prompt=p), num_predict=500,
-                                keep_alive=keep_alive_for_isolated_call())
+                                keep_alive=keep_alive_for_isolated_call(), strict=True)
     text = (text or '').strip().strip('"').strip()
     if not text:
         raise RuntimeError(
