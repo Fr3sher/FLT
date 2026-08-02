@@ -16,6 +16,12 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 $RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $NonInteractive = [bool] $UpdateRebuild
+# Test mode skips Open-Studio, so the browser that carries the Ollama choice
+# never opens and the interactive timeout can only expire in full. The wait
+# still runs -- a harness or a second window may answer -- but bounded to
+# seconds, so a headless relaunch cannot stall for a quarter of an hour.
+$OllamaWaitSeconds = if ($env:LDS_TEST_MODE) { 10 } else { 900 }
+$OllamaWaitLabel = if ($env:LDS_TEST_MODE) { "$OllamaWaitSeconds seconds" } else { '15 minutes' }
 $DockerReady = $false
 $BrowserOpened = $false
 $DockerExe = $null
@@ -297,7 +303,7 @@ function Get-OllamaMode {
         $arguments = @(
             '-Action', 'Wait',
             '-ConfigPath', $ConfigPath,
-            '-TimeoutSeconds', '900',
+            '-TimeoutSeconds', [string] $OllamaWaitSeconds,
             '-PollSeconds', '2')
     }
     return Invoke-PowerShellHelper -ScriptPath $OllamaModeHelper -Arguments $arguments
@@ -851,14 +857,21 @@ try {
     if ($ollamaMode -eq 'unset') {
         Write-Host ''
         Write-Host 'Choose the Ollama deployment mode in the Studio Setup page.'
-        Write-Host 'This window will wait up to 15 minutes; closing it is safe, and rerunning the BAT resumes.'
+        if ($env:LDS_TEST_MODE) {
+            Write-Host ('Test mode waits ' + $OllamaWaitLabel +
+                ' for that choice, not the interactive timeout.')
+        }
+        else {
+            Write-Host 'This window will wait up to 15 minutes; closing it is safe, and rerunning the BAT resumes.'
+        }
         $modeResult = Get-OllamaMode -Wait
         if ($modeResult['STATE'] -eq 'VALID') {
             $ollamaMode = $modeResult['MODE']
             Apply-OllamaMode -Mode $ollamaMode
         }
         elseif ($modeResult['STATE'] -eq 'TIMEOUT') {
-            Write-Warning 'Ollama setup was not completed within 15 minutes. Studio remains ready; rerun the BAT later.'
+            Write-Warning ('Ollama setup was not completed within ' + $OllamaWaitLabel +
+                '. Studio remains ready; rerun the BAT later.')
         }
         else {
             Write-Warning 'config.json became invalid while waiting. Studio remains ready; no sidecar was changed.'

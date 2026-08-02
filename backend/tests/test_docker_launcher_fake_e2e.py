@@ -12,6 +12,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -656,3 +657,39 @@ def test_launcher_recovers_when_docker_desktop_starts_late(tmp_path):
     assert result.returncode == 0, result.stderr + result.stdout
     assert "Starting Docker Desktop" in result.stdout
     assert state["info_failures_remaining"] == 0
+
+
+@pytest.mark.parametrize("stack", ("studio", "gpu"))
+def test_test_mode_bounds_the_wait_for_a_choice_no_browser_can_deliver(
+    tmp_path, stack
+):
+    """Nothing ever answers the Ollama prompt here, so the wait runs to its end.
+
+    LDS_TEST_MODE skips Open-Studio, so the browser carrying that choice never
+    opens: under the interactive 900 s timeout a headless relaunch stalls for a
+    quarter of an hour -- a real GPU run spent 713 s exactly here. The wait must
+    still happen (test_unconfigured_first_run... proves a mid-wait answer is
+    honoured), but bounded to seconds.
+
+    Killing the launcher on timeout does not rescue this: the wait lives in a
+    grandchild helper that survives and holds the pipe open, so the caller
+    blocks for the full 900 s anyway. That is why the bound has to be in the
+    launcher rather than in the harness.
+    """
+    started = time.monotonic()
+    try:
+        _, result, _, _ = _run_launcher(tmp_path, stack)
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "the launcher blocked on the Ollama wait under LDS_TEST_MODE: "
+            "test mode must bound that wait, not serve the interactive timeout"
+        )
+    elapsed = time.monotonic() - started
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    output = result.stdout + result.stderr
+    assert "Test mode waits 10 seconds for that choice" in output
+    assert "wait up to 15 minutes" not in output
+    assert "not completed within 10 seconds" in output
+    # The interactive timeout is 900 s; anything near it means the bound is gone.
+    assert elapsed < 60, f"the bounded wait took {elapsed:.1f}s"
