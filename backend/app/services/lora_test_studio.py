@@ -1760,16 +1760,114 @@ def _batch_lora_label(row):
 def _combined_lora_labels(row) -> list:
     """Noms lisibles des LoRA EMPILÉS avec celui de la cellule (entrées
     `combined:true` de son JSON extra_loras) — badge « + X » de la grille et de
-    la lightbox. Liste vide quand la cellule n'est pas une pile."""
+    la lightbox. Liste vide quand la cellule n'est pas une pile.
+
+    `filename`/`dataset_id`/`trigger` sont écrits par les runs lancés DEPUIS la vue
+    pile ; le JSON d'une cellule est figé à sa création, donc les runs plus anciens
+    n'ont que `label`/`weight` et ces clés valent None — la composition s'affiche
+    alors sans trigger au lieu de disparaître."""
     out = []
     try:
         for e in json.loads(row.extra_loras or '[]'):
             if isinstance(e, dict) and e.get('combined'):
                 name = _basename(e.get('filename', '')).rsplit('.', 1)[0]
                 out.append({'label': format_trained_lora_label(e.get('filename', '')) or name,
-                            'weight': e.get('strength')})
+                            'weight': e.get('strength'),
+                            'filename': e.get('filename') or None,
+                            'dataset_id': e.get('dataset_id'),
+                            'trigger': e.get('trigger') or None})
     except (ValueError, TypeError):
         pass
+    return out
+
+
+def stack_of_row(row) -> list | None:
+    """Composition ORDONNÉE de la pile d'une cellule, ou None si ce n'en est pas une.
+
+    Le LoRA de TÊTE est la cellule elle-même (son `checkpoint`, son poids = `strength` :
+    create_comparison_run réduit l'axe strengths au poids de tête en mode combine) ; les
+    suivants sont les entrées `combined:true`. Son trigger est relu du dataset — il n'est
+    pas figé dans le JSON, contrairement à ceux des LoRA empilés."""
+    combined = _combined_lora_labels(row)
+    if not combined:
+        return None
+    ds = FaceDataset.query.get(row.dataset_id)
+    head = {'label': (format_trained_lora_label(row.checkpoint)
+                      or _basename(row.checkpoint or '').rsplit('.', 1)[0]),
+            'weight': row.strength, 'filename': row.checkpoint,
+            'dataset_id': row.dataset_id,
+            'trigger': (getattr(ds, 'trigger_word', None) or None) if ds else None,
+            'head': True}
+    return [head] + [{**c, 'head': False} for c in combined]
+
+
+def _stack_signature(members) -> str:
+    """Identité d'une pile INDÉPENDANTE de ses poids : ses fichiers, triés. Deux runs
+    de même signature sont deux variantes de poids de la MÊME pile — c'est ce qui
+    permet de les afficher côte à côte."""
+    return '|'.join(sorted(str((m or {}).get('filename') or '') for m in (members or [])))
+
+
+# Fenêtre de scan des variantes : on ne remonte pas tout l'historique du dataset pour
+# retrouver les relances d'une pile. Un run de pile fait peu de cellules (1 × count ×
+# batch), donc quelques centaines de lignes couvrent largement une session de réglage.
+_STACK_SCAN_ROWS = 600
+
+
+def stack_variants(run_id, rows, limit=8) -> list:
+    """Les runs de la MÊME pile (mêmes LoRA, poids éventuellement différents), du plus
+    récent au plus ancien, run courant compris et marqué `active`.
+
+    Sert la comparaison « et si je mettais 0.6 au deuxième ? » : chaque variante porte
+    son vecteur de poids, ses cellules (votables telles quelles : le vote est par id de
+    cellule) et son bilan de votes. Limité à `limit` variantes et à `_STACK_SCAN_ROWS`
+    lignes scannées — une pile relancée des dizaines de fois ne montre que les plus
+    récentes, et une variante dont les cellules débordent la fenêtre s'affiche tronquée."""
+    members = stack_of_row(rows[0]) if rows else None
+    if not members:
+        return []
+    sig = _stack_signature(members)
+    head_ds = members[0].get('dataset_id')
+    scanned = (LoraTestImage.query
+               .filter(LoraTestImage.dataset_id == head_ds,
+                       LoraTestImage.extra_loras.isnot(None))
+               .order_by(LoraTestImage.id.desc()).limit(_STACK_SCAN_ROWS).all())
+    groups = {}
+    for r in scanned:
+        groups.setdefault(r.run_id, []).append(r)
+    groups.setdefault(run_id, list(rows))  # le run courant ne dépend pas de la fenêtre
+
+    out = []
+    for rid, grp in groups.items():
+        # `limit` ne doit JAMAIS évincer le run affiché : sa colonne est celle que
+        # l'utilisateur regarde. Les autres s'arrêtent au plafond.
+        if len(out) >= limit and rid != run_id:
+            continue
+        # Les cellules sans run_id (colonne ajoutée après coup sur des bases legacy)
+        # ne forment pas UN run : les agréger fabriquerait une variante fantôme dont
+        # les images viennent de générations sans rapport.
+        if not rid:
+            continue
+        cells = sorted(grp, key=lambda x: x.id)
+        comp = stack_of_row(cells[0])
+        if not comp or _stack_signature(comp) != sig:
+            continue
+        out.append({
+            'run_id': rid,
+            'active': rid == run_id,
+            'weights': [{'label': m['label'], 'weight': m['weight'],
+                         'filename': m['filename']} for m in comp],
+            'likes': sum(1 for c in cells if c.rating == 1),
+            'dislikes': sum(1 for c in cells if c.rating == -1),
+            'done': sum(1 for c in cells if c.status == 'done' and c.filename),
+            'cells': [{'id': c.id, 'dataset_id': c.dataset_id, 'checkpoint': c.checkpoint,
+                       'label': _basename(c.checkpoint or '').rsplit('.', 1)[0],
+                       'filename': c.filename, 'rating': c.rating, 'status': c.status,
+                       'seed': c.seed, 'aspect': c.aspect, 'strength': c.strength,
+                       'error': c.error if c.status == 'failed' else None} for c in cells],
+        })
+    # Le run courant d'abord, le reste dans l'ordre de scan (récent → ancien).
+    out.sort(key=lambda v: not v['active'])
     return out
 
 
@@ -2157,7 +2255,11 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                 raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
             entry = {'filename': fn, 'strength': _combine_weight(sel)}
             stack_extra.append(entry)
-            stack_row.append({**entry, 'combined': True})
+            # `stack_extra` (monté dans le graphe) reste au format des always-on ;
+            # seule la copie PERSISTÉE porte l'identité du membre, pour que la vue
+            # pile puisse redonner son dataset et son trigger sans re-deviner.
+            stack_row.append({**entry, 'combined': True, 'dataset_id': _ds_i.id,
+                              'trigger': getattr(_ds_i, 'trigger_word', None) or None})
             if getattr(_ds_i, 'trigger_word', None):
                 stack_triggers.append(_ds_i.trigger_word)
         # L'axe strengths perd son sens quand chaque LoRA porte son propre poids :
@@ -2857,11 +2959,19 @@ def best_settings_lora_filenames(ds) -> list[str]:
         fn = setting.get('lora_filename')
         if fn and fn not in out:
             out.append(str(fn))
+        # Une pile épinglée épingle TOUS ses LoRA : supprimer le second membre casse
+        # le réglage gagnant aussi sûrement que supprimer celui de tête, le garde-fou
+        # de suppression doit donc les voir tous.
+        for member in setting.get('stack') or []:
+            mfn = member.get('lora_filename') if isinstance(member, dict) else None
+            if mfn and mfn not in out:
+                out.append(str(mfn))
     return out
 
 
 def set_best_settings(user_id, dataset_id, checkpoint, strength,
-                      z_model=None, cfg=None, steps=None, steps2=None, aspect=None) -> dict:
+                      z_model=None, cfg=None, steps=None, steps2=None, aspect=None,
+                      stack=None) -> dict:
     """Persiste la config gagnante COMPLÈTE - checkpoint, strength, modèle/cfg/steps(1+2)/
     format. Mémorisé PAR FAMILLE (un même dataset a un meilleur réglage distinct en ZIT,
     SDXL, Krea) : la famille est déduite du dossier du checkpoint. Le checkpoint doit
@@ -2904,6 +3014,28 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
     except (TypeError, ValueError):
         steps2 = None
     aspect = aspect if aspect in TEST_ASPECTS else None
+    # PILE (🧬 combine) : le réglage gagnant d'une pile, ce sont SES poids — pas un
+    # checkpoint isolé. Le LoRA de tête reste dans `lora_filename`/`strength`, donc
+    # tous les lecteurs existants (pin ★ du Canvas, « ★ Appliquer », garde-fou de
+    # suppression, badge du workspace) continuent de fonctionner sans rien savoir des
+    # piles ; les membres empilés s'ajoutent à côté, dans `stack`. Chaque membre est
+    # revalidé contre les checkpoints déployés de SON dataset (anti path-injection :
+    # le corps de la requête est de la donnée, pas une source de chemins).
+    stack_out = []
+    for member in (stack or []):
+        if not isinstance(member, dict):
+            raise ValueError('invalid stack member')
+        member_ds = fds.get_dataset(user_id, member.get('dataset_id'))
+        if not member_ds:
+            raise ValueError('unknown dataset in stack')
+        member_fn = member.get('lora_filename') or member.get('filename')
+        member_family = (family_of_lora(member_fn)
+                         or getattr(member_ds, 'train_type', None) or 'zimage').lower()
+        if member_fn not in {c['filename'] for c in list_test_checkpoints(member_ds, member_family)}:
+            raise ValueError('unknown checkpoint in stack')
+        stack_out.append({'lora_filename': member_fn, 'dataset_id': member_ds.id,
+                          'weight': _combine_weight({'weight': member.get('weight')}),
+                          'trigger': getattr(member_ds, 'trigger_word', None) or None})
     best = {
         'lora_filename': checkpoint,
         'strength': strength,
@@ -2914,6 +3046,9 @@ def set_best_settings(user_id, dataset_id, checkpoint, strength,
         'aspect': aspect,
         'family': family,
         'decided_at': datetime.utcnow().isoformat(),
+        # Absent (et non `[]`) quand ce n'est pas une pile : un réglage mono-LoRA
+        # d'avant cette vue et un réglage mono-LoRA d'aujourd'hui restent identiques.
+        **({'stack': stack_out} if stack_out else {}),
     }
     best_map = _best_map(ds)
     best_map[family] = best
@@ -3224,6 +3359,12 @@ def studio_payload_run(user_id, run_id) -> dict | None:
                    'combined_loras': _combined_lora_labels(r),
                    'error': r.error if r.status == 'failed' else None} for r in rows],
         'lora_ranking': lora_net_scores(run_id),
+        # Run PILE (🧬 combine) : sa composition (chaque LoRA, son poids, son trigger)
+        # et les autres relances de la même pile. Le classement par-LoRA ci-dessus est
+        # alors trompeur (une pile n'a qu'un LoRA « testé ») : le front montre la
+        # composition à sa place. `stack` vaut None sur un run de comparaison.
+        'stack': (_stack := stack_of_row(rows[0])),
+        'stack_variants': stack_variants(run_id, rows) if _stack else [],
         'pending': activity['pending'],
         'queued': activity['queued'],
         'generating': activity['generating'],

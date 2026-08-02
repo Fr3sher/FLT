@@ -1796,6 +1796,131 @@ def test_combined_stack_reaches_the_real_zimage_graph_as_chained_loaders(app):
         assert any(t.startswith('aaa, bbb, on a rooftop') for t in texts)
 
 
+# --- Stack results view: composition, weight variants, best setting ----------
+
+def _stack_run(lts, svc, LOCAL_USER, tmp_path, monkeypatch, weights):
+    """Launch ONE combined run of a fixed two-LoRA stack at `weights`, returning
+    (run_id, ds_a, ds_b, checkpoints). Callers relaunch it at other weights to build
+    the variant history the stack view is supposed to line up."""
+    ds_a, cks_a = _studio_fixture(tmp_path, monkeypatch, 'Alpha', 'aaa')
+    ds_b = svc.create_dataset(LOCAL_USER, 'Beta', 'bbb')
+    name_b = 'lora_bbb_000002000.safetensors'
+    cp_b = 'z image' + chr(92) + name_b
+    (tmp_path / 'Comfy' / 'models' / 'loras' / 'z image' / name_b).write_bytes(_ST)
+    by_ds = {ds_a.id: [{'filename': cks_a[0]}], ds_b.id: [{'filename': cp_b}]}
+    monkeypatch.setattr(lts, 'list_test_checkpoints', lambda ds, _family=None: by_ds[ds.id])
+    monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
+    monkeypatch.setattr(lts, '_active_run_count', lambda *a: 0)
+    monkeypatch.setattr(lts, '_preflight_checkpoint_arch', lambda *a, **k: None)
+    monkeypatch.setattr(lts, '_preflight_run', lambda *a, **k: None)
+    monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
+    monkeypatch.setattr(lts, 'permanent_lora_candidates', lambda _f: [])
+    monkeypatch.setattr(lts, '_build_cell_workflow', lambda *a, **k: {'1': {}})
+    monkeypatch.setattr(lts, '_enqueue_cell', lambda *a, job_id=None, **k: job_id)
+
+    def launch(w_a, w_b):
+        return lts.create_comparison_run(
+            LOCAL_USER,
+            [{'dataset_id': ds_a.id, 'checkpoint': cks_a[0], 'weight': w_a},
+             {'dataset_id': ds_b.id, 'checkpoint': cp_b, 'weight': w_b}],
+            [1.0], prompt='on a rooftop', count=1, combine=True)['run_id']
+
+    return launch, ds_a, ds_b, cks_a[0], cp_b
+
+
+def test_stack_composition_names_every_lora_with_its_weight_and_trigger(
+        app, monkeypatch, tmp_path):
+    """The panel's whole point: a stacked run must say WHAT is in the stack. The head
+    LoRA carries the cell's own strength, the stacked one its weight, and both name
+    their trigger word - otherwise a stack is a single anonymous column."""
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.config import LOCAL_USER
+    from app.models import LoraTestImage
+    with app.app_context():
+        launch, ds_a, ds_b, cp_a, cp_b = _stack_run(
+            lts, svc, LOCAL_USER, tmp_path, monkeypatch, None)
+        run_id = launch(0.9, 0.55)
+        row = LoraTestImage.query.filter_by(run_id=run_id).one()
+        members = lts.stack_of_row(row)
+        assert [(m['filename'], m['weight'], m['trigger'], m['head']) for m in members] == [
+            (cp_a, 0.9, 'aaa', True), (cp_b, 0.55, 'bbb', False)]
+        assert [m['dataset_id'] for m in members] == [ds_a.id, ds_b.id]
+        # A comparison (non-combined) cell is NOT a stack and must stay one.
+        row.extra_loras = None
+        assert lts.stack_of_row(row) is None
+
+
+def test_stack_variants_line_up_the_relaunches_of_the_same_stack(
+        app, monkeypatch, tmp_path):
+    """Relaunching the same two LoRAs at other weights must produce COMPARABLE columns:
+    same members = same stack, so every relaunch shows up as a weight variant with its
+    own vector and its own votes, current run first. A run whose members differ is a
+    different stack and must not be mixed in."""
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.config import LOCAL_USER
+    from app.models import LoraTestImage
+    from app import db
+    with app.app_context():
+        launch, ds_a, _ds_b, cp_a, cp_b = _stack_run(
+            lts, svc, LOCAL_USER, tmp_path, monkeypatch, None)
+        first = launch(1.0, 1.0)
+        second = launch(1.0, 0.6)
+        # A vote on the first variant, so the summary is not all zeros.
+        row_first = LoraTestImage.query.filter_by(run_id=first).one()
+        row_first.rating = 1
+        row_first.status, row_first.filename = 'done', 'a.png'
+        db.session.commit()
+
+        payload = lts.studio_payload_run(LOCAL_USER, second)
+        assert [m['weight'] for m in payload['stack']] == [1.0, 0.6]
+        variants = payload['stack_variants']
+        assert [v['run_id'] for v in variants] == [second, first]
+        assert variants[0]['active'] is True and variants[1]['active'] is False
+        assert [w['weight'] for w in variants[1]['weights']] == [1.0, 1.0]
+        assert variants[1]['likes'] == 1 and variants[1]['dislikes'] == 0
+        assert variants[1]['done'] == 1
+        # Cells travel with their variant so each column is votable in place.
+        assert variants[0]['cells'][0]['id']
+
+        # A run of the SAME head LoRA alone is not a variant of this stack.
+        solo = lts.create_comparison_run(
+            LOCAL_USER, [{'dataset_id': ds_a.id, 'checkpoint': cp_a}],
+            [1.0], prompt='p', count=1)['run_id']
+        assert solo not in {v['run_id'] for v in
+                            lts.studio_payload_run(LOCAL_USER, second)['stack_variants']}
+        # And a comparison run has no stack block at all.
+        assert lts.studio_payload_run(LOCAL_USER, solo)['stack'] is None
+        assert lts.studio_payload_run(LOCAL_USER, solo)['stack_variants'] == []
+
+
+def test_best_setting_of_a_stack_stores_its_weights_and_pins_every_member(
+        app, monkeypatch, tmp_path):
+    """"Best setting" for a stack is its WEIGHTS, not one checkpoint. The head stays in
+    `lora_filename`/`strength` so every existing reader keeps working, the stacked LoRAs
+    ride along in `stack`, and the delete guard-rail sees them all."""
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.config import LOCAL_USER
+    with app.app_context():
+        launch, ds_a, ds_b, cp_a, cp_b = _stack_run(
+            lts, svc, LOCAL_USER, tmp_path, monkeypatch, None)
+        best = lts.set_best_settings(
+            LOCAL_USER, ds_a.id, cp_a, 0.9,
+            stack=[{'dataset_id': ds_b.id, 'lora_filename': cp_b, 'weight': 0.55}])
+        assert best['lora_filename'] == cp_a and best['strength'] == 0.9
+        assert best['stack'] == [{'lora_filename': cp_b, 'dataset_id': ds_b.id,
+                                  'weight': 0.55, 'trigger': 'bbb'}]
+        ds = svc.get_dataset(LOCAL_USER, ds_a.id)
+        assert lts.best_settings_lora_filenames(ds) == [cp_a, cp_b]
+
+        # No stack -> no `stack` key: a mono-LoRA setting is byte-for-byte what it was.
+        assert 'stack' not in lts.set_best_settings(LOCAL_USER, ds_a.id, cp_a, 0.9)
+        # A member checkpoint its dataset never deployed is refused (path injection).
+        evil = 'z image' + chr(92) + '..' + chr(92) + 'evil.safetensors'
+        with pytest.raises(ValueError, match='unknown checkpoint in stack'):
+            lts.set_best_settings(LOCAL_USER, ds_a.id, cp_a, 0.9,
+                                  stack=[{'dataset_id': ds_b.id, 'lora_filename': evil}])
+
+
 # --- Enhance: prompt enrichment through the existing Ollama client ------------
 
 def test_enhance_test_prompt_uses_the_captioning_ollama_client(app, monkeypatch):

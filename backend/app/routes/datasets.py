@@ -1799,7 +1799,9 @@ def lora_test_best(dataset_id):
                                      d.get('checkpoint'), d.get('strength'),
                                      z_model=d.get('z_model'), cfg=d.get('cfg'),
                                      steps=d.get('steps'), steps2=d.get('steps2'),
-                                     aspect=d.get('aspect'))
+                                     aspect=d.get('aspect'),
+                                     # 🧬 pile : les LoRA empilés AVEC celui de tête.
+                                     stack=d.get('stack'))
     except ValueError as e:
         return jsonify({'ok': False, 'error': str(e)}), 400
     return jsonify({'ok': True, 'best_settings': best})

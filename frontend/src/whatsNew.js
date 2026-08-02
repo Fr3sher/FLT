@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-studio-stack-results-view',
+    date: '2026-08-02',
+    title: 'Find the right weights for a 🧬 stack by comparing your runs side by side',
+    blurb:
+      'Testing two LoRAs together used to end in a single anonymous column: you could see the image, not what was in it. The Test Studio now shows a stacked run for what it is — every LoRA of the stack with its weight and its trigger word, and one column per run of that same stack, so the version at 1.00 / 0.55 sits next to the one at 1.00 / 0.80 with the changed weights highlighted and the votes counted per column. Reload any variant’s weights into the sliders in one click, and save the winning set with ★: the best setting of a stack is now its weights, not one lone checkpoint.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-02-quiet-polls-when-the-server-is-unhappy',
     date: '2026-08-02',
     title: 'A server that is still starting up no longer buries the app in error toasts',
