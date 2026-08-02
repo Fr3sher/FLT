@@ -52,7 +52,7 @@ export const WHATS_NEW = [
     date: '2026-08-02',
     title: 'SeedVR2 upscales now actually appear — and the ones you already ran are recovered',
     blurb:
-      'The first SeedVR2 build rendered correctly and then dropped the result on the floor: ComfyUI finished the image, the job was marked done, and the candidate stayed blank forever with nothing in the log, because nothing had failed. The finished image is now attached to its tile. Any upscale you already ran and never saw is picked up automatically the next time the app starts — the image is still there, it just never made it home. Reported by Jeremy from a real run.',
+      'The first SeedVR2 build rendered correctly and then dropped the result on the floor: ComfyUI finished the image, the job was marked done, and the candidate stayed blank forever with nothing in the log, because nothing had failed. The finished image is now attached to its tile. Any upscale you already ran and never saw is picked up automatically the next time the app starts — the image is still there, it just never made it home. Caught on a real run the day it shipped.',
     to: '/datasets',
   },
   {
