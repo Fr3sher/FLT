@@ -1002,7 +1002,12 @@ def set_dataset_klein_model(user_id, dataset_id, name):
     if not ds:
         raise ValueError('dataset not found')
     value = (name or '').strip()
-    if value and (os.path.basename(value) != value or value in ('.', '..')):
+    # BOTH separators, on every OS: os.path.basename alone reads a backslash as
+    # an ordinary character on Linux, so `sub\model.safetensors` walked straight
+    # through this guard there and only Windows was actually protected.
+    if value and (ntpath.basename(value) != value
+                  or posixpath.basename(value) != value
+                  or value in ('.', '..')):
         raise ValueError('a Klein model is named by its file name, without a folder')
     ds.klein_model = value or None
     db.session.commit()
