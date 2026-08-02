@@ -234,6 +234,38 @@ def test_the_word_filter_and_the_push_down_are_DIFFERENT_wires(client, tmp_path,
     assert both['image_ids'] == plain['image_ids']
 
 
+def test_the_hard_filter_WINS_over_the_push_down_on_the_same_word(
+        client, tmp_path, app, monkeypatch):
+    """The seam between the two features, with the same word typed in both.
+
+    🚫 Exclude promises an ABSENCE and Push down promises only an order, so when
+    they disagree the strong promise has to win: an image the word filter hides
+    must not come back merely because the ranking judged it a close match. That
+    holds because the push-down ranks the pool the filter already produced —
+    ``search_by_text`` builds its candidates from ``_pool_embeddings``, which
+    goes through ``_pool_query(**filters)``. This test asserts the ABSENCE of
+    the id, not its rank: 'last' would still be a broken promise."""
+    bank_id = _bank(client, tmp_path, app, monkeypatch)
+    with app.app_context():
+        from app.models import BankImage, db
+        row = next(r for r in BankImage.query.filter_by(bank_id=bank_id).all()
+                   if os.path.basename(r.relpath) == 'want_avoid.jpg')
+        row.caption = 'a woman wearing a hat'
+        db.session.commit()
+        tagged_id = row.id
+
+    # Ranked alone, it is a strong match and comes back.
+    ranked = _search(client, bank_id, query='a woman', push_down='a hat', n=60)
+    assert tagged_id in ranked['image_ids']
+
+    both = _search(client, bank_id, query='a woman', push_down='a hat',
+                   exclude='hat', n=60)
+    assert tagged_id not in both['image_ids'], \
+        'the hard filter promises absence; a re-ranking must not hand it back'
+    assert both['pool'] == ranked['pool'] - 1, \
+        'the filter must shrink the POOL, not just the returned page'
+
+
 def test_an_exclusion_alone_is_refused(client, tmp_path, app, monkeypatch):
     """Ranking by "least like a hat" returns whatever is least like anything —
     noise in the costume of an answer. 400, with words."""
