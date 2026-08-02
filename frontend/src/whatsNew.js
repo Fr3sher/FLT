@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-cloud-launch-is-observable',
+    date: '2026-08-02',
+    title: 'A cloud launch now tells you what it is doing, and for how long',
+    blurb:
+      'Renting a GPU takes minutes, and the button used to say "Launching…" for all of them — impossible to tell a normal wait from a dead one. The launch now shows its steps as it walks them (preparing the dataset, searching for an offer, renting and booting the pod, uploading, starting the job) with the time elapsed, on the dataset panel and on the Runs page. While a pod boots you also see how long it is allowed to take, so a machine that never starts ends with a plain explanation instead of a frozen screen — it is released, it stops billing, and launching again picks a different host. A launch can be cancelled from the Runs page like any run.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-02-studio-stack-results-view',
     date: '2026-08-02',
     title: 'Find the right weights for a 🧬 stack by comparing your runs side by side',

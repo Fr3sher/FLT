@@ -2206,6 +2206,10 @@ def _provision(run):
     tried_offers = set()
     offer = instance_id = None
     token = ''
+    # The offer search runs under the 'preparing' status and used to keep the
+    # staging sentence, so a search that found nothing looked like a dataset
+    # export that had hung. It is a distinct launch step and now says so.
+    _set(run, phase_detail=_OFFER_SEARCH_DETAIL)
     for attempt in range(1, _CREATE_INSTANCE_ATTEMPTS + 1):
         offers = vast_client.search_offers(
             min_vram_gb=min_vram, max_dph=c.get('max_price_per_hour', 0.80),
@@ -4372,6 +4376,69 @@ def _annotate_preview(row, crun, rec):
         row['preview_url'] = f"/api/dataset/train/runs/{row['share_key']}/preview"
 
 
+# --- What the launch is doing, phase by phase --------------------------------
+# Renting a pod takes minutes, and until now the only thing the user saw was a
+# button stuck on 'Launching…' followed by one phase sentence. The monitor has
+# always known where it was; this exposes THAT knowledge (status + the
+# phase_detail it already writes) as an ordered checklist with a clock. No new
+# state machine: every step below is decided from a row the monitor was already
+# keeping, so a phase this function cannot place degrades to the first step of
+# the current status rather than inventing one.
+_LAUNCH_STEPS = (
+    ('staging', 'Preparing the dataset'),
+    ('offer', 'Searching for a GPU offer'),
+    ('boot', 'Renting the machine and booting the pod'),
+    ('upload', 'Uploading the dataset'),
+    ('start', 'Starting the training job'),
+)
+_LAUNCH_STATES = ('preparing', 'provisioning', 'uploading')
+_OFFER_SEARCH_DETAIL = 'Searching for a GPU offer…'
+
+
+def _active_launch_step(status, phase_detail) -> str:
+    detail = str(phase_detail or '')
+    if status == 'provisioning':
+        return 'boot'
+    if status == 'uploading':
+        # The job is created/queued on the pod while the row still reads
+        # 'uploading' — only start_job earns 'training'.
+        return 'start' if detail.startswith('Job ') else 'upload'
+    return 'offer' if detail.startswith('Searching for a GPU offer') else 'staging'
+
+
+def launch_view(run, *, now=None, cloud_cfg=None):
+    """The pre-training part of a run, as an ordered checklist with elapsed
+    time — or None once the job is queued (the step counter takes over) or the
+    run is finished.
+
+    ``boot_idle_limit_seconds`` / ``boot_budget_seconds`` are the two real
+    deadlines the boot wait enforces, exposed so the card can say how long a
+    pod that never boots is allowed to keep the user waiting (run #134 died on
+    'no boot progress for 25 min' with nothing on screen announcing it)."""
+    if run.status not in _LAUNCH_STATES:
+        return None
+    c = cloud_cfg if cloud_cfg is not None else (cfg.get('cloud') or {})
+    active = _active_launch_step(run.status, run.phase_detail)
+    order = [k for k, _ in _LAUNCH_STEPS]
+    idx = order.index(active)
+    started = run.created_at or datetime.utcnow()
+    elapsed = ((now if now is not None else datetime.utcnow()) - started).total_seconds()
+    raw_budget = c.get('boot_budget_minutes')
+    return {
+        'active_step': active,
+        'detail': run.phase_detail or '',
+        'elapsed_seconds': max(0, int(elapsed)),
+        'steps': [{'key': key, 'label': label,
+                   'state': ('done' if i < idx else
+                             'active' if i == idx else 'pending')}
+                  for i, (key, label) in enumerate(_LAUNCH_STEPS)],
+        'boot_idle_limit_seconds': (int(c.get('ready_timeout_minutes') or 0) * 60
+                                    or READY_TIMEOUT_SECONDS),
+        'boot_budget_seconds': int(90 if raw_budget is None
+                                   else (raw_budget or 0)) * 60,
+    }
+
+
 def _run_payload(run) -> dict:
     family = _run_family(run)
     training_mode = _run_training_mode(run)
@@ -4470,6 +4537,9 @@ def _run_payload(run) -> dict:
             # showing phase_detail, exactly as before.
             'download': (_download_progress(run)
                          if run.status in ACTIVE_STATES else None),
+            # Ordered launch checklist + elapsed time, None once the job is
+            # queued: what the user watches instead of a mute 'Launching…'.
+            'launch': launch_view(run),
             'stop_requested': bool(run.stop_requested_at),
             'finished_at': run.finished_at.isoformat() if run.finished_at else None}
     if base_model is not None:
