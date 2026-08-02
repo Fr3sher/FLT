@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-bank-text-search-push-down',
+    date: '2026-08-02',
+    title: 'Text search can finally get rid of what you do not want',
+    blurb:
+      'Typing "a woman without a hat" in 🔤 Find by text never worked — the search engine ignores the word "without", so you got hats, with nothing to tell you it had misfired (measured on a real bank: "without a bikini" returned 60% bikinis against a 10% base rate). There is now a Push down field for the trait you are trying to avoid, plus a -hat shorthand in the query itself, and typing "without" offers to move it there for you. It re-ranks rather than filters: matching images sink instead of disappearing, and after each search the panel tells you what it actually achieved on your bank — including "this changed nothing", which is the one outcome you could never have spotted.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-02-upscale-candidate-visible',
     date: '2026-08-02',
     title: 'You can finally see that an upscale is waiting for you',

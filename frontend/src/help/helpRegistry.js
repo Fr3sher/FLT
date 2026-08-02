@@ -286,7 +286,13 @@ const TOPICS = [
      'search images', 'semantic search', 'clip search', 'natural language',
      'find images', 'look for', 'query', 'phrase', 'words', 'wide shot',
      'outdoors', 'ranked', 'ranking', 'relevance', 'closest', 'similarity',
-     'bank', 'curate', 'curation', 'triage'],
+     'bank', 'curate', 'curation', 'triage',
+     // The push-down. "without" is here on purpose: it is the word people type
+     // when the search silently returns the opposite of what they asked for, so
+     // it has to lead somewhere that explains why.
+     'push down', 'exclude', 'exclusion', 'without', 'not', 'no hat',
+     'negative prompt', 'negation', 'remove from results', 'get rid of',
+     'too many', 'minus', 'unwanted', 'avoid'],
     '/bank', 'using-the-app', 'find-bank-images-by-describing-them'),
   action('bank-balanced-pick', 'Pick a balanced set instead of the top of a ranking',
     ['balanced pick', 'balanced', 'balance', 'even split', 'evenly', 'spread',

@@ -2756,7 +2756,55 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
             'pool': len(ids), 'ref_id': int(ref_id)}
 
 
-def search_by_text(user_id, bank_id, query, n=60, *, filters=None):
+# ── 🔤 pushing an attribute DOWN a text ranking ──────────────────────────────
+# CLIP has no negation: "a woman without a bikini" ranks bikinis HIGHER, because
+# the word is ignored rather than applied (measured: 60% of the top 60 carried
+# a bikini against a 10.1% base rate — an inversion, not a miss). What the
+# embedding space DOES support is arithmetic, so the exclusion is subtracted
+# instead of spoken: score = sim(positive) − weight · sim(excluded).
+#
+# The weight below was calibrated on 2026-08-01 over 7,316 real bank images that
+# carry BOTH a cached CLIP embedding and a vision caption — the caption supplies
+# the ground truth (a different model from CLIP, so the labels are not circular).
+# 19 positive/excluded pairs, top-60 measured against the app's own default n:
+#
+#   weight   top-60 carrying the excluded trait   top-60 still on-topic
+#     0.00              23.0% (mean)                    89.7% (mean)
+#     0.30              11.9%                           89.5%
+#     0.50               8.9%                           88.5%
+#     0.60               7.6%                           87.7%   ← the knee
+#     0.75               6.3%                           85.8%
+#     1.00               3.8%                           79.8%
+#     1.50               1.4%                           64.4%
+#
+# Exclusion improves all the way up; RELEVANCE is what buys it, and it holds
+# essentially flat to 0.6 (−2.0 points) then falls off a cliff (−9.9 at 1.0,
+# −25.3 at 1.5). 0.6 is where two thirds of the unwanted trait is gone for a
+# cost the ranking does not feel. The extremes are offered as Gentle/Strong
+# because one measured case — excluding "a bikini" from "a woman at the beach"
+# — is INSEPARABLE (the trait is most of what the positive query means), and no
+# weight fixes that: at 0.6 it still returned 66.7% bikinis, and by the time the
+# weight bites the beach is gone too. That case is why the UI promises a
+# push-down and never an absence.
+PUSH_DOWN_WEIGHT_DEFAULT = 0.6
+PUSH_DOWN_WEIGHT_MAX = 2.0
+
+
+def _push_down_weight(value):
+    """The requested push-down strength, clamped. Anything unreadable falls back
+    to the calibrated default rather than to 0 — a silently ignored exclusion
+    would look exactly like an exclusion that found nothing."""
+    try:
+        w = float(value)
+    except (TypeError, ValueError):
+        return PUSH_DOWN_WEIGHT_DEFAULT
+    if w != w:                                   # NaN
+        return PUSH_DOWN_WEIGHT_DEFAULT
+    return max(0.0, min(w, PUSH_DOWN_WEIGHT_MAX))
+
+
+def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
+                   push_down_weight=None, filters=None):
     """Rank the (filtered) pool by CLIP similarity to a written QUERY — "brunette
     outdoors, wide shot" instead of a reference picture.
 
@@ -2780,8 +2828,16 @@ def search_by_text(user_id, bank_id, query, n=60, *, filters=None):
     true ones. A threshold control would therefore offer the illusion of a
     boundary that does not exist, so the ranking is the whole product.
 
+    ``push_down`` (or ``-term`` inside the query) names what to push DOWN. It is
+    NOT a filter and the UI must never call it one: the excluded phrase is
+    encoded like the positive one and SUBTRACTED, weighted, from the score, so
+    an image that matches it falls in the ranking instead of disappearing. See
+    PUSH_DOWN_WEIGHT_DEFAULT above for the calibration and for the measured case
+    where it cannot work at all.
+
     Returns {'results': [{id, score}], 'image_ids', 'pool', 'filtered', 'unscored',
-    'query', 'cached', 'score_range', 'pool_median'}.
+    'query', 'cached', 'score_range', 'pool_median', 'push_down', 'push_down_weight',
+    'push_down_moved', 'push_down_median'}.
       * ``unscored`` — an image with no ✨ Score embedding CANNOT be found by text;
         saying "0 results" without saying that would let the user conclude the
         image is gone.
@@ -2792,6 +2848,17 @@ def search_by_text(user_id, bank_id, query, n=60, *, filters=None):
         single-subject bank (image-to-image cosine 0.60–0.89) the discriminating
         gap compresses by 30–70%, and that is the app's MAIN use case, not an
         edge case — so the baseline has to be measured, never assumed.
+      * ``push_down_median`` — {pool, results}: how strongly a TYPICAL image of
+        this bank matches the excluded phrase, against how strongly the returned
+        set does. Same reasoning as ``pool_median``, applied to the push-down:
+        results well below pool means it worked here, results level with pool
+        means it did not, and neither claim needs a universal constant. This is
+        the only honest way to report an exclusion whose strength depends
+        entirely on how entangled the two phrases are in this corpus.
+      * ``push_down_moved`` — how many places in the returned ranking hold a
+        different image than they would have without the exclusion. 0 is the
+        signal that the push-down changed nothing at all, which the UI has to
+        say out loud.
 
     Raises ValueError (→400) for an empty query or an unscored bank, and
     clip_text_encoder.TextEncodeError (→503) when no interpreter can run CLIP."""
@@ -2800,9 +2867,20 @@ def search_by_text(user_id, bank_id, query, n=60, *, filters=None):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    text = clip_text_encoder.normalize_query(query)
+    # `-term` inside the query means the same thing as the panel's second field,
+    # so both are folded into one excluded phrase before anything is encoded.
+    positive, from_query = clip_text_encoder.split_query(query)
+    text = clip_text_encoder.normalize_query(positive)
+    excl = ', '.join(t for t in (clip_text_encoder.normalize_query(push_down),
+                                 clip_text_encoder.normalize_query(from_query)) if t)
     if not text:
-        raise ValueError('a search query is required')
+        # A bare "-hat" is not a search. Ranking by "least like a hat" would
+        # return whatever is least like ANYTHING, which is noise wearing the
+        # costume of an answer — so it is refused rather than served.
+        raise ValueError('a search query is required — an excluded term alone '
+                         'cannot rank anything')
+    weight = _push_down_weight(push_down_weight if push_down_weight is not None
+                               else PUSH_DOWN_WEIGHT_DEFAULT)
     emb_by_path = _load_score_embeddings(bank)
     if not emb_by_path:
         raise ValueError('run ✨ Score first — text search ranks the embeddings '
@@ -2815,28 +2893,86 @@ def search_by_text(user_id, bank_id, query, n=60, *, filters=None):
     # Encode AFTER the cheap refusals: never make someone wait on a CLIP load to
     # then be told their bank was never scored.
     qv, cached = clip_text_encoder.encode_query(text)
+    nv = None
+    if excl:
+        # A second encode, and a second phrase in the same persistent cache — so
+        # a repeated exclusion is as free as a repeated query. `cached` stays
+        # true only when BOTH halves were already known, because it is shown to
+        # promise instant, and half a cache hit is not instant.
+        nv, ncached = clip_text_encoder.encode_query(excl)
+        cached = bool(cached) and bool(ncached)
     base = {'query': text, 'cached': bool(cached), 'filtered': int(filtered),
-            'pool': len(ids), 'unscored': max(0, int(filtered) - len(ids))}
+            'pool': len(ids), 'unscored': max(0, int(filtered) - len(ids)),
+            'push_down': excl or None,
+            'push_down_weight': round(weight, 3) if excl else None}
     if not ids:
         return {**base, 'results': [], 'image_ids': [], 'score_range': None,
-                'pool_median': None}
+                'pool_median': None, 'push_down_moved': None,
+                'push_down_median': None}
     qv = np.asarray(qv, dtype='float32')
     qv /= (float(np.linalg.norm(qv)) + 1e-8)
     sims = E @ qv                                # cosine similarity, (m,)
-    order = np.argsort(-sims, kind='stable')     # desc; stable ⇒ id tie-break
     n = max(1, min(int(n), _CURATION_MAX_N))
+    excl_sims = None
+    scores = sims
+    if nv is not None:
+        nv = np.asarray(nv, dtype='float32')
+        nv /= (float(np.linalg.norm(nv)) + 1e-8)
+        excl_sims = E @ nv
+        scores = sims - weight * excl_sims
+    order = np.argsort(-scores, kind='stable')   # desc; stable ⇒ id tie-break
     keep = [int(k) for k in order[:n]]
-    results = [{'id': ids[k], 'score': round(float(sims[k]), 4)} for k in keep]
+    # The RANKING score is what ordered the list, so it is what the list reports:
+    # showing the raw positive cosine here would make the order look arbitrary
+    # (a lower-cosine image legitimately outranks a higher one once its excluded
+    # match is paid for). Both halves are kept alongside so nothing is hidden.
+    results = [{'id': ids[k], 'score': round(float(scores[k]), 4)} for k in keep]
+    if excl_sims is not None:
+        for r, k in zip(results, keep):
+            r['match'] = round(float(sims[k]), 4)
+            r['excluded_match'] = round(float(excl_sims[k]), 4)
     # The span of what came back, plus the pool's own median — together they let
     # the UI say whether this ranking discriminates, using only numbers measured
     # on THIS bank for THIS query. An absolute band would be wrong everywhere:
     # the same model's "good" ceiling barely moves between corpora while its
     # floor climbs sharply on real photographs of people.
-    score_range = ({'top': results[0]['score'], 'bottom': results[-1]['score']}
-                   if results else None)
+    # The range is always in POSITIVE-match units, never in composite ones: it is
+    # read against ``pool_median`` to decide whether the ranking discriminates,
+    # and a composite score (which can even go negative) is not on that scale.
+    # Without an exclusion this is exactly the old first/last pair; with one it
+    # is the best and worst MATCH among what came back, which is the thing the
+    # sentence above the grid actually claims.
+    match_of = [float(sims[k]) for k in keep]
+    score_range = ({'top': round(max(match_of), 4),
+                    'bottom': round(min(match_of), 4)} if results else None)
+    moved = excl_median = None
+    if excl_sims is not None:
+        # What the SAME query would have returned unexcluded — the only way to
+        # tell the user whether the push-down did anything, rather than leaving
+        # them to compare two screens from memory.
+        #
+        # POSITIONS changed, not membership. Membership alone is silently wrong
+        # whenever n reaches the whole pool: asking for 60 out of 22 images
+        # returns the same 22 however hard the push, so a membership count reads
+        # 0 and the UI announces "changed nothing" over a grid the user can SEE
+        # was reordered. Comparing the two orderings slot by slot is right in
+        # both regimes — it counts newcomers when the list is a cut of a larger
+        # pool, and re-ranking when it is not.
+        plain = [int(k) for k in np.argsort(-sims, kind='stable')[:n]]
+        moved = int(sum(1 for a, b in zip(keep, plain) if a != b))
+        if len(keep) < len(ids):
+            excl_median = {'pool': round(float(np.median(excl_sims)), 4),
+                           'results': round(float(np.median(excl_sims[keep])), 4)}
+        # else: the returned set IS the pool, so its median and the pool's are
+        # the same number BY CONSTRUCTION. Reporting them would let the UI read
+        # "level with a typical image — too tangled to separate" off an identity,
+        # which is how it once declared a visibly-reordered grid a failure. When
+        # a comparison cannot carry information, the honest output is none: the
+        # places-changed count already says what happened.
     return {**base, 'results': results,
             'image_ids': [ids[k] for k in keep], 'score_range': score_range,
-            'pool_median': round(float(np.median(sims)), 4)}
+            'pool_median': round(float(np.median(sims)), 4),
+            'push_down_moved': moved, 'push_down_median': excl_median}
 
 
 def _trash_or_remove(path: str) -> str:

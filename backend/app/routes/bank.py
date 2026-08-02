@@ -744,6 +744,11 @@ def bank_search_text(bank_id):
     knob here would be a control over a boundary that does not exist. See
     ``banks.search_by_text``.
 
+    {push_down} (and `-term` inside the query) names what to push DOWN the ranking,
+    with {push_down_weight} for how hard. That IS a defensible knob and the
+    threshold is not: a weight scales a subtraction inside one ranking, where a
+    threshold would claim a relevance boundary the measurements say is absent.
+
     400 = the request cannot be answered (no query, bank never scored).
     503 = the FEATURE is unavailable here (no torch/open_clip, encoder failed) —
     a different thing, and the UI says so differently: one is "do this first",
@@ -756,6 +761,8 @@ def bank_search_text(bank_id):
         n = 60
     try:
         out = banks.search_by_text(LOCAL_USER, bank_id, data.get('query'), n=n,
+                                   push_down=data.get('push_down'),
+                                   push_down_weight=data.get('push_down_weight'),
                                    filters=_curation_filters(data))
     except TextEncodeError as e:
         return jsonify({'error': str(e), 'reason': 'encoder_unavailable'}), 503

@@ -103,6 +103,34 @@ def normalize_query(text: str) -> str:
     return _WS.sub(' ', str(text or '').strip()).lower()
 
 
+# A `-` that OPENS a whitespace-delimited token, followed by something. Anchored
+# on the boundary on purpose: "close-up", "thigh-high", "2026-07" all carry an
+# inner hyphen and must survive untouched — only a leading dash is a grammar.
+_MINUS_TERM = re.compile(r'(?:^|\s)-(\S+)')
+
+
+def split_query(text: str):
+    """``("a woman in a car", "hat, sunglasses")`` from ``"a woman in a car -hat
+    -sunglasses"`` — the positive phrase and the terms to push DOWN.
+
+    The dash is a shorthand for the panel's second field, not a second search
+    grammar: both ends produce one positive phrase and one excluded phrase, and
+    the excluded terms are comma-joined into a single string because that is
+    what CLIP handles best. Measured on 7,316 captioned bank images, excluding
+    two attributes at once: a joined "blonde hair, a tattoo" left 8.3% of the
+    top 60 carrying either attribute, exactly matching the mean of the two
+    separate vectors (8.3%) and beating the per-term maximum (10.0%) — for one
+    encode and one cache entry instead of two.
+
+    Returns both halves un-normalised; the caller normalises what it encodes."""
+    raw = str(text or '')
+    # `--hat` is a typo, not a request to search for the string "-hat".
+    terms = [t.strip('-') for t in _MINUS_TERM.findall(raw) if t.strip('-')]
+    if not terms:
+        return raw.strip(), ''
+    return _MINUS_TERM.sub(' ', raw).strip(), ', '.join(terms)
+
+
 def idle_minutes() -> float:
     """Configured warm window, clamped to something sane. 0 = never stay warm."""
     try:

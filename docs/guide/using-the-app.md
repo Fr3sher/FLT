@@ -630,11 +630,54 @@ setting, materials and colour**, and unreliable for three things in particular:
 The negation case is the one to remember, because it fails *silently and
 backwards*: CLIP does not penalise "without", it simply ignores the word. Someone
 searching `woman without glasses` gets women **wearing** glasses and has no way
-to tell the search misfired.
+to tell the search misfired. The same measurement on a 7,316-image bank: `a
+photo of a woman without a bikini` returned **60% bikinis**, against a 10%
+base rate — the query did not miss, it inverted. See **Push down** below.
 
-These are properties of the model, not bugs to report. The workaround is to
-describe what *is* in the frame rather than what is absent — "bare face" works,
-"without glasses" does not — and to check counting and left/right by eye.
+These are properties of the model, not bugs to report. Describe what *is* in the
+frame rather than what is absent, check counting and left/right by eye — and for
+the negation case, use the **Push down** field described next, because typing
+"without" will never work.
+
+### Push down what you do not want
+
+The panel has a second field, **Push down**, for the trait you are trying to get
+away from: `hat`, `sunglasses`, `blonde hair`. You can also write it inline in
+the query with a leading dash — `a woman in a car -hat` means the same thing.
+Typing a query that starts negating something ("a woman without a hat") offers
+you the field instead, rather than letting the search fail quietly.
+
+It does **not** filter. The excluded phrase is encoded exactly like the positive
+one and *subtracted* from each image's score, so images carrying that trait sink
+in the ranking. They are still in the pool and one can still surface if it is
+otherwise the best answer. If you need a guaranteed absence, that is a tag
+filter's job, not this one.
+
+**How hard** offers Gentle / Normal / Strong. The default, Normal, was measured
+over 7,316 real bank images that carry both a CLIP embedding and a written
+description, across 19 query/exclusion pairs, counting the top 60:
+
+| How hard | Top 60 still carrying the unwanted trait | Top 60 still on-topic |
+|---|---|---|
+| off | 23.0% | 89.7% |
+| Gentle | 11.9% | 89.5% |
+| **Normal** | **7.6%** | **87.7%** |
+| Strong | 3.8% | 79.8% |
+
+Pushing harder always removes more of the trait — what you pay for it is
+relevance, and that stays essentially flat up to Normal (2 points) then drops
+off a cliff (10 points at Strong, 25 past it). That is why Normal is the default
+and why Strong is described as a trade rather than as "better".
+
+**Some pairs cannot be separated at all,** and the app says so instead of
+pretending. Excluding `a bikini` from `a woman at the beach` barely moved: at
+every usable strength two thirds of the results still had a bikini, because in
+this model's eyes a beach photo largely *is* a bikini photo — and by the strength
+that finally bit, the beach was gone too. After each search the summary reports
+what actually happened on *your* bank: how many results the push-down brought in
+that would not have been there, and how strongly the returned set still matches
+the unwanted phrase compared with a typical image of the bank. When it changed
+nothing, it says that too.
 
 One last caveat, seen in the same measurement: a result can be right on the broad
 trait and wrong on the detail. A generic indoor query returned a genuinely indoor

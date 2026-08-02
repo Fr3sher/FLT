@@ -36,7 +36,9 @@ import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort
 // 🔤 Text search wording — "closest", never "matching" — plus the cold-start and
 // CLIP-limitation copy. Pure/testable (node --test cannot parse this JSX).
 import {
-  limitsSentence, pendingLabel, readinessHint, summarize,
+  PUSH_DOWN_DEFAULT_STRENGTH, PUSH_DOWN_STRENGTHS, pushDownCaveat, pushDownNote,
+  limitsSentence, pendingLabel, readinessHint, suggestPushDown, summarize,
+  withoutNegation,
 } from './bankTextSearch.js'
 // ⚖️ Balanced pick — the distribution obtained, in words and numbers. Pure logic
 // on purpose: the repartition is what has to be provable (node --test, no JSX).
@@ -509,6 +511,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // keeps the ranking legible once the grid has switched to it.
   const [textQuery, setTextQuery] = useState('')
   const [textN, setTextN] = useState(60)
+  // 🔤 what to push DOWN the ranking. Not a filter — see bankTextSearch.js.
+  const [textExclude, setTextExclude] = useState('')
+  const [textExcludeW, setTextExcludeW] = useState(PUSH_DOWN_DEFAULT_STRENGTH)
   const [textStatus, setTextStatus] = useState(null)
   const [textPending, setTextPending] = useState(false)
   const [textResult, setTextResult] = useState(null)
@@ -979,7 +984,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     setTextPending(true)
     try {
       const d = await postJson(`/api/bank/${bankId}/search-text`,
-        { query: q, n: textN, ...filterParams(filter) })
+        { query: q, n: textN, push_down: textExclude.trim() || null,
+          push_down_weight: textExcludeW, ...filterParams(filter) })
       setTextResult(d)
       setCurateOpen(null)
       if (!d.image_ids?.length) {
@@ -1855,6 +1861,48 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   onChange={(e) => setTextQuery(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
                   className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
+                {/* The pedagogy that matters most, because the failure it
+                    prevents is INVISIBLE: "without a hat" comes back full of
+                    hats, confidently, with no signal. Offered, never applied on
+                    its own — a wrong guess acted on silently would be the same
+                    class of bug. */}
+                {suggestPushDown(textQuery) && !textExclude.trim() && (
+                  <p className="text-xs text-amber-300/90">
+                    “without” is ignored by the search.{' '}
+                    <button type="button"
+                      onClick={() => {
+                        setTextExclude(suggestPushDown(textQuery))
+                        setTextQuery(withoutNegation(textQuery))
+                      }}
+                      className="underline underline-offset-2 hover:text-amber-200">
+                      Push “{suggestPushDown(textQuery)}” down instead?
+                    </button>
+                  </p>
+                )}
+                <label htmlFor="bank-text-exclude" className="block text-sm text-content">
+                  Push down (optional)
+                </label>
+                <input id="bank-text-exclude" type="search" value={textExclude}
+                  placeholder="hat, sunglasses"
+                  onChange={(e) => setTextExclude(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !textPending) runTextSearch() }}
+                  className="w-full rounded-md border border-border bg-surface px-2 py-1 text-sm text-content" />
+                <p className="text-xs text-content-subtle">{pushDownCaveat()}</p>
+                {textExclude.trim() && (
+                  <label className="flex flex-wrap items-center gap-2 text-sm text-content">
+                    How hard
+                    <select value={textExcludeW}
+                      onChange={(e) => setTextExcludeW(Number(e.target.value))}
+                      className="rounded-md border border-border bg-surface px-2 py-0.5 text-sm text-content">
+                      {PUSH_DOWN_STRENGTHS.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
+                    <span className="w-full text-xs text-content-subtle">
+                      {PUSH_DOWN_STRENGTHS.find((s) => s.value === textExcludeW)?.hint}
+                    </span>
+                  </label>
+                )}
                 <label className="flex items-center gap-2 text-sm text-content">
                   How many
                   <input type="number" min={1} max={2000} value={textN}
@@ -1902,6 +1950,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 Clear search
               </button>
             </div>
+            {/* What the push-down did HERE, measured on this bank for this
+                pair of phrases — including "it changed nothing", which is the
+                outcome the user would otherwise never detect. */}
+            {pushDownNote(textResult) && (
+              <p className="text-content-muted">{pushDownNote(textResult)}</p>
+            )}
             {textResult.cached === false && (
               <p className="text-content-subtle">
                 This phrase is now cached — searching it again is instant, even after a restart.
