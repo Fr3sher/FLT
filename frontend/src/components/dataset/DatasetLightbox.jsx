@@ -329,20 +329,34 @@ export default function DatasetLightbox({
               className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
               {btn.label}
             </button>
-            {/* Klein's note sits between the two buttons, not after both: it
-                warns that Klein's INSTRUCTION ("detailed texture, sharp
-                details") pulls drawn skin towards realism, and rendering it
-                below the pair would read as covering SeedVR2 too — on a drawn
-                dataset that is precisely backwards, since SeedVR2 sends no
-                instruction and is the click that solves the complaint. */}
-            {btn.showKleinNote && !improvementActive && (
+            {/* Klein's note goes BETWEEN the two buttons in the rail, and only
+                there. The rail is a column, so sitting under Klein is what makes
+                it read as Klein's — which matters, because it warns that Klein's
+                INSTRUCTION ("detailed texture, sharp details") pulls drawn skin
+                towards realism, while SeedVR2 sends no instruction at all.
+                In the BOTTOM bar the buttons are a horizontal ROW, and a
+                full-width paragraph dropped mid-row pushes everything after it
+                onto its own line: a user reported the second improve button
+                stranded alone, centred, at the very bottom of the screen. There
+                the note therefore follows the whole group (see below) — its own
+                first words, "Improve asks Klein to:", carry the attribution that
+                position gave it in the rail. */}
+            {rail && btn.showKleinNote && !improvementActive && (
               <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
-                className={rail
-                  ? 'w-full border-t border-white/10 pt-2'
-                  : 'w-full sm:w-auto sm:max-w-md'} />
+                className="w-full border-t border-white/10 pt-2" />
             )}
           </Fragment>
         ))}
+        {/* Bottom bar only: the note takes its OWN line under the buttons.
+            `sm:w-auto` used to let it sit INLINE beside them, which was fine
+            with a single improve button and is not with two — the paragraph
+            took the width the second button needed and pushed it off alone.
+            Full-width in a wrap container is a line break, so the buttons wrap
+            among themselves and the note reads under the whole group. */}
+        {!rail && improveButtons.some((b) => b.showKleinNote) && !improvementActive && (
+          <KleinImproveNote subjectType={subjectType} datasetId={datasetId}
+            className="w-full" />
+        )}
         {/* Its strength, step count and instruction are all editable, and nothing
             here said so — the reported case for making settings discoverable from
             where the action happens. A link alone was not enough: it pointed at

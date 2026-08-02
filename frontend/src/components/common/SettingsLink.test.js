@@ -44,7 +44,12 @@ test('the improve link is offered where the improve action is', () => {
   // drawn dataset is exactly where SeedVR2 is the right click, so warning
   // under it would argue against the pass that fixes the complaint.
   // hidden while it runs — a settings trip mid-job is not the offer being made
-  assert.match(lightbox, /\{btn\.showKleinNote && !improvementActive && \(/);
+  // Two branches now, one per placement: between the buttons in the rail
+  // (a column, where that is what attaches it to Klein) and under the whole
+  // group in the bottom bar (a row, where a full-width paragraph dropped
+  // mid-row stranded the second button on its own line).
+  assert.match(lightbox, /\{rail && btn\.showKleinNote && !improvementActive && \(/);
+  assert.match(lightbox, /\{!rail && improveButtons\.some\(\(b\) => b\.showKleinNote\)/);
   // The BULK improve is the same action at scale, and it went targetless for a
   // long time: the instruction that spoils one tile spoils the whole selection.
   assert.match(read('../dataset/DatasetGrid.jsx'), /<KleinImproveNote\b/);

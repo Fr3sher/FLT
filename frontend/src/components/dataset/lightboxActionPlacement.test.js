@@ -246,3 +246,55 @@ test('the intrinsic size is measured wherever the image already loads', () => {
   // effect correcting a bar the user already saw somewhere else.
   assert.match(lightbox, /useState\(\(\) => decideActionPlacement\(\{/);
 });
+
+/* --- The opening decision, and the row that must stay a row ---------------
+   A user reported, with screenshots: whatever the window size, opening the
+   lightbox drew the actions as a bottom row with the SECOND improve button
+   stranded alone and centred at the very bottom; resizing the window produced
+   the correct right-hand rail. Two distinct defects behind one picture. */
+
+test('opening carries no hysteresis — there is nothing to stabilise yet', () => {
+  // The dead band exists so a bar cannot change side under the pointer while a
+  // window edge is dragged. Applied to the FIRST answer it is not stability, it
+  // is a bias towards the default ('bottom'). A geometry that qualifies for the
+  // rail must therefore open in the rail.
+  const geometry = { viewportWidth: 1200, viewportHeight: 1000,
+    imageWidth: 900, imageHeight: 1000 };            // aspect 0.90
+  const leftover = (1200 - 272) / 1000;              // 0.928
+  assert.ok(0.9 <= leftover, 'the bare inequality must hold for this case');
+  assert.ok(0.9 > leftover * (1 - PLACEMENT_HYSTERESIS),
+    'and it must FAIL the entering dead band — otherwise this proves nothing');
+  assert.equal(decideActionPlacement(geometry), 'rail',
+    'the opening decision must read the geometry, not the default');
+  // Once a placement is in force the dead band comes back, unchanged.
+  assert.equal(decideActionPlacement({ ...geometry, current: 'bottom' }), 'bottom');
+  assert.equal(decideActionPlacement({ ...geometry, current: 'rail' }), 'rail');
+});
+
+test('the viewport floor keeps its dead band only once a rail exists', () => {
+  const g = { viewportWidth: 1000, viewportHeight: 1000, imageWidth: 600, imageHeight: 1000 };
+  // 1000 px is below the entry floor: opening there is a bottom bar...
+  assert.equal(decideActionPlacement(g), 'bottom');
+  // ...but an EXISTING rail survives down to RAIL_EXIT_VIEWPORT_PX.
+  assert.equal(decideActionPlacement({ ...g, current: 'rail' }), 'rail');
+});
+
+test('a small window still opens at the bottom, and 400 px always does', () => {
+  const portrait = { imageWidth: 832, imageHeight: 1216 };
+  assert.equal(decideActionPlacement({
+    viewportWidth: 900, viewportHeight: 900, ...portrait }), 'bottom');
+  assert.equal(decideActionPlacement({
+    viewportWidth: 400, viewportHeight: 900, ...portrait }), 'bottom');
+});
+
+test('the bottom bar keeps the improve buttons on ONE row', () => {
+  // THE reported break: the Klein note is full-width, and dropped between the
+  // two buttons it pushes the second one onto its own line — "stranded alone,
+  // centred, at the very bottom". It may sit between them in the rail (a
+  // column, where that is what attaches it to Klein) and nowhere else.
+  assert.match(lightbox, /\{rail && btn\.showKleinNote && !improvementActive && \(/);
+  assert.match(lightbox, /\{!rail && improveButtons\.some\(\(b\) => b\.showKleinNote\)/);
+  // Exactly two renders of the note, one per placement — never both at once.
+  const notes = lightbox.match(/<KleinImproveNote\b/g) || [];
+  assert.equal(notes.length, 2, 'one note per placement branch, no more');
+});

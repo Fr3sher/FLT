@@ -25,7 +25,8 @@ test('lightbox exposes an accessible responsive image improvement action', () =>
   // Klein's amber note follows KLEIN's button, never SeedVR2's: it is about
   // Klein's instruction pulling drawn skin towards realism, and SeedVR2 sends
   // no instruction at all.
-  assert.match(lightbox, /\{btn\.showKleinNote &&/);
+  assert.match(lightbox, /\{rail && btn\.showKleinNote &&/);
+  assert.match(lightbox, /\{!rail && improveButtons\.some\(\(b\) => b\.showKleinNote\)/);
 });
 
 // The comparison is what makes an improvement judgeable: before this, the
