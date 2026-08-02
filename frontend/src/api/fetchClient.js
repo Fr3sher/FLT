@@ -140,6 +140,14 @@ export async function apiFetch(url, options = {}) {
       toastRef?.error('Server error. Please try again later.');
     }
 
+    // A stalled ComfyUI job blocks generation app-wide, and this refusal is the
+    // one moment we know the user is watching. Announce it so the shell's
+    // recovery banner appears immediately, wherever the call came from —
+    // otherwise the way out stays hidden until the next 20-second poll.
+    if (body?.code === 'comfyui_recovery_required') {
+      globalThis.dispatchEvent?.(new Event('lds:comfyui-recovery-required'));
+    }
+
     const err = new Error(msg);
     err.status = res.status;
     // Carry the parsed error body so callers can read structured fields (e.g. a

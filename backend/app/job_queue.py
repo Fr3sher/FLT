@@ -83,6 +83,105 @@ def require_comfyui_enqueue_ready() -> None:
         if queue_manager.has_comfyui_stalled_barrier():
             raise ComfyUIRecoveryRequired(COMFYUI_RECOVERY_REQUIRED_MESSAGE)
 
+
+# --- automatic recovery ------------------------------------------------------
+# One recovery case, and only one, is provable without a human: a *known prompt*
+# barrier whose id ComfyUI no longer knows. If ComfyUI answers and neither its
+# /queue nor its /history contains that prompt, the remote work is gone (the
+# ordinary "ComfyUI was restarted / the machine died" case) and keeping the
+# barrier only blocks every dataset in the app for a job nobody can act on.
+# The three refusals are deliberate, not conservatism for its own sake:
+#   * ComfyUI unreachable        -> no evidence at all, so no decision.
+#   * the prompt is still there  -> the job is ALIVE; clearing it would strand
+#                                   real GPU work whose outputs still arrive.
+#   * an unknown_submit barrier  -> no prompt id exists to ask about, and a
+#                                   timed-out POST can still land later; only a
+#                                   person who restarted ComfyUI can rule it out.
+COMFYUI_AUTO_RESOLVED_MESSAGE = (
+    'A stalled generation from a previous session was cleared automatically '
+    '(ComfyUI was restarted).'
+)
+AUTO_RECOVERY_NOTICE_TTL_SECONDS = 600
+_auto_recovery_notice = None
+_auto_recovery_notice_lock = threading.Lock()
+
+
+def _record_auto_recovery_notice(owner) -> dict:
+    """Remember one automatic clear so the UI can say it out loud.
+
+    In-process on purpose: this is a transient courtesy message, not recovery
+    state. The durable record of what happened is the queue row plus the log
+    line — this only decides whether a toast appears.
+    """
+    global _auto_recovery_notice
+    notice = {'id': uuid.uuid4().hex,
+              'message': COMFYUI_AUTO_RESOLVED_MESSAGE,
+              'job_id': owner.get('job_id'),
+              'dataset_id': owner.get('dataset_id'),
+              'run_id': owner.get('run_id')}
+    with _auto_recovery_notice_lock:
+        _auto_recovery_notice = (notice, time.monotonic() + AUTO_RECOVERY_NOTICE_TTL_SECONDS)
+    return notice
+
+
+def peek_auto_recovery_notice() -> dict | None:
+    """The pending automatic-clear notice, or None once it has aged out."""
+    global _auto_recovery_notice
+    with _auto_recovery_notice_lock:
+        entry = _auto_recovery_notice
+        if entry is None:
+            return None
+        notice, expires_at = entry
+        if time.monotonic() >= expires_at:
+            _auto_recovery_notice = None
+            return None
+        return dict(notice)
+
+
+def clear_auto_recovery_notice() -> None:
+    """Drop the pending notice (tests, and an explicit user dismissal)."""
+    global _auto_recovery_notice
+    with _auto_recovery_notice_lock:
+        _auto_recovery_notice = None
+
+
+def auto_resolve_comfyui_barrier() -> dict | None:
+    """Clear the recovery barrier when the remote prompt is PROVABLY gone.
+
+    Returns the resolved barrier owner, or None when nothing was resolved.
+    Never raises: a failed probe is simply an absence of proof.
+    """
+    owner = queue_manager.get_comfyui_stalled_barrier()
+    if owner is None:
+        # No barrier, or a corrupt one. A corrupt record is exactly the case
+        # where a machine must not guess: it still blocks, and it needs eyes.
+        return None
+    if owner.get('kind') != 'prompt' or not owner.get('prompt_id'):
+        return None
+    prompt_id = owner['prompt_id']
+    try:
+        from .utils.comfyui import comfyui_prompt_is_absent
+        # True *only* after a healthy /queue answer proved the id absent.
+        # False = still pending/running; None = unreachable or unparseable.
+        if comfyui_prompt_is_absent(prompt_id) is not True:
+            return None
+        # reconcile_stalled_comfy_job re-verifies queue absence on both sides of
+        # a /history read and refuses an unhealthy history. This is its only
+        # caller that runs without anyone asking, so it borrows those checks
+        # rather than repeating a weaker version of them.
+        if not queue_manager.reconcile_stalled_comfy_job(owner['job_id']):
+            return None
+    except Exception:
+        logger.exception('job_queue: automatic ComfyUI recovery probe failed')
+        return None
+    logger.warning(
+        'job_queue: automatically cleared the ComfyUI recovery barrier for job %s — '
+        'prompt %s is absent from both /queue and /history (ComfyUI was restarted)',
+        owner.get('job_id'), prompt_id)
+    _record_auto_recovery_notice(owner)
+    return owner
+
+
 # A DB status check is the source of truth, but this in-process event also wakes
 # the worker immediately when it is sleeping between two history requests.
 _poll_cancel_events: dict[str, threading.Event] = {}

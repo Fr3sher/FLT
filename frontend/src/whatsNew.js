@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-comfyui-recovery-anywhere',
+    date: '2026-08-02',
+    title: 'A ComfyUI job that died in a past session no longer blocks you forever',
+    blurb:
+      'When a generation stops without a known outcome — ComfyUI killed, the machine out of disk — LDS pauses everything on purpose, so it never abandons work that might still be running on the GPU. The catch: the way to resolve it lived only inside the dataset that owned the job, so if you were working anywhere else you kept being refused with no button in sight. Now LDS checks first: if ComfyUI is back and no longer knows that job, it clears it on its own and just tells you. When it cannot prove that — ComfyUI unreachable, the job still running there, or a submission it cannot identify — a banner appears wherever you are, names the dataset and the variation and how long it has been stuck, and clears it in one click once you confirm the restart. A job that is genuinely still running is never touched.',
+  },
+  {
     id: '2026-08-02-seedvr2-upscaling',
     date: '2026-08-02',
     title: 'A second way to upscale — one that does not repaint your images',
