@@ -13,6 +13,7 @@ import { BANK_SORTS } from '../src/utils/gridSort.js'
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 const BANK = read('../src/components/bank/BankWorkspace.jsx')
 const WORKSPACE = read('../src/components/dataset/DatasetWorkspace.jsx')
+const CSS = read('../src/index.css')
 
 test('the bank Sort menu is built from the registry, not hard-coded options', () => {
   assert.match(BANK, /import \{ bankSortGroups, loadBankSort, saveBankSort \} from '\.\.\/\.\.\/utils\/gridSort\.js'/)
@@ -87,6 +88,21 @@ test('both selects stay inside a 400 px toolbar', () => {
   // The dataset control wraps onto its own line rather than squeezing the chips.
   assert.match(WORKSPACE, /flex flex-wrap items-center gap-x-3 gap-y-1\.5/)
   assert.match(WORKSPACE, /flex shrink-0 items-center gap-1 text-xs/)
+})
+
+test('the grouped menu is readable in a dark-only app', () => {
+  // Reported from a real 13 299-image bank: the Sort menu's group headers came
+  // out as WHITE BANDS with near-invisible text. The page can re-colour an
+  // <option> from CSS but NOT an <optgroup> header — the browser owns the popup
+  // and, absent `color-scheme`, paints it with the OS light palette.
+  assert.match(CSS, /:root,\s*\n\[data-theme="dark"\] \{[\s\S]{0,600}?color-scheme: dark;/,
+    'a dark-only app must declare color-scheme: dark — that is what darkens the native popup')
+  // The belt-and-braces half, for engines that honour the declarations instead
+  // (Firefox). `option` alone was the gap that let this ship.
+  assert.match(CSS, /\n\s*optgroup \{[^}]*background-color: rgb\(var\(--surface-overlay\)\);/)
+  assert.match(CSS, /\n\s*optgroup \{[^}]*color: rgb\(var\(--content-muted\)\);/)
+  assert.match(CSS, /\n\s*option \{[^}]*background-color: rgb\(var\(--surface-overlay\)\);/,
+    'the pre-existing option rule must survive — it themes every other menu')
 })
 
 test('both selects are labelled for screen readers', () => {
