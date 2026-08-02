@@ -19,7 +19,9 @@ Each launcher remembers its own stack and data. Do not run two LDS containers ag
 4. On first launch, choose either the ComfyUI root containing `main.py` and `models/`, or the portable parent containing `ComfyUI\main.py`.
 5. Start ComfyUI with your usual launcher. LDS opens automatically on the first free Studio port.
 
-The selected folder is validated, mounted read/write at `/external-comfyui`, and remembered in a generated local override. If it moves, run **`configure-docker.bat`**. From Docker, LDS connects to the host API at `http://host.docker.internal:8188`. If that API listens only on `127.0.0.1`, start ComfyUI with `--listen 0.0.0.0` and restrict port 8188 to Docker or your private network in Windows Firewall.
+The selected folder is validated, mounted read/write at `/external-comfyui`, and remembered in a generated local override. If it moves, run **`configure-docker.bat`**. From Docker, LDS connects to the host API at `http://host.docker.internal:8188`.
+
+On **Docker Desktop for Windows** a ComfyUI listening only on `127.0.0.1` is reachable as-is — Docker Desktop proxies that name from the host side, so the default portable launcher needs no change and no firewall hole. This was measured, not assumed. On a **Linux host**, `host.docker.internal` resolves to the host gateway and a loopback-only ComfyUI is genuinely unreachable: start it with `--listen 0.0.0.0` and restrict port 8188 to Docker or your private network. If Studio reports it cannot reach ComfyUI, the launcher prints that same guidance.
 
 ## Beginner Windows GPU install
 
