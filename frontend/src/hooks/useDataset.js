@@ -531,14 +531,17 @@ export function useDataset() {
     return d;
   }, [refresh, toast]);
 
-  // Bulk ✨ Klein upscale & improve: ONE call that starts a SERVER job. The batch
+  // Bulk ✨ Upscale & improve: ONE call that starts a SERVER job. The batch
   // used to be a browser loop, so a selection bigger than the backend's fan-out cap
   // was mostly refused, ⏹ Stop could not reach it, and closing the tab killed it.
   // Progress now rides on `activity` (kind 'improve') and survives a reload.
-  const improveBatch = useCallback(async (imageIds) => {
+  const improveBatch = useCallback(async (imageIds, engine) => {
     const ids = (imageIds || []).map((v) => Number(v)).filter(Number.isInteger);
     if (!ids.length) return { ok: false, error: 'nothing selected' };
-    const d = await postJson(`/api/dataset/${currentId}/improve/batch`, { image_ids: ids });
+    // `engine` is the button that was pressed ('klein' | 'seedvr2'). Absent = the
+    // improve.engine setting, which is what the single-tile ✨ and re-improve use.
+    const d = await postJson(`/api/dataset/${currentId}/improve/batch`,
+      engine ? { image_ids: ids, engine } : { image_ids: ids });
     if (!d.ok) toast.error(d.error || 'Could not start the improvement batch');
     await refresh();
     return d;

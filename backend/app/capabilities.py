@@ -1533,6 +1533,20 @@ def probe(force=False) -> dict:
     krea_blocking_invalid = any(i['blocking'] for i in krea_invalid)
     krea_ready = (comfy['ok'] and not krea_missing and not krea_nodes_missing
                   and not krea_blocking_invalid)
+    # SeedVR2 — the fidelity upscaler (issue #32). Same three-part shape as Krea
+    # (weights on disk / node pack present / weights actually loadable), because
+    # it has the same three ways to be half-installed. It is NOT a generation
+    # engine: nothing in the dataset catalog can be produced by it, so it is
+    # published as an upscaler capability and the engine picker that offers it is
+    # the ✨ improve pass's, not the variation catalog's.
+    from .services import seedvr2_helper as _svr
+    seedvr2_missing = _svr.seedvr2_missing_assets()
+    seedvr2_nodes_missing = _svr.seedvr2_missing_nodes() if comfy['ok'] else []
+    seedvr2_nodes_installed = _svr.seedvr2_node_pack_installed()
+    seedvr2_invalid = _svr.seedvr2_invalid_assets()
+    seedvr2_ready = _svr.engine_ready(comfy['ok'], missing=seedvr2_missing,
+                                      invalid=seedvr2_invalid,
+                                      nodes_missing=seedvr2_nodes_missing)
     base_dir = cfg.get('comfyui.base_dir') or ''
     from .services import comfyui_control
     comfy_launcher = comfyui_control.launcher_status()
@@ -1615,6 +1629,18 @@ def probe(force=False) -> dict:
             # [{asset, filename, verdict, blocking, reason}] shape as
             # klein_invalid, so one banner covers both engines.
             'krea_invalid': krea_invalid,
+            # SeedVR2 gaps, kept apart from the generation engines' for the same
+            # reason theirs are kept apart from each other: "download the
+            # weights" and "install the node pack in ComfyUI" are different
+            # actions with different buttons.
+            'seedvr2_missing': seedvr2_missing,
+            'seedvr2_nodes_missing': seedvr2_nodes_missing,
+            'seedvr2_nodes_installed': seedvr2_nodes_installed,
+            'seedvr2_invalid': seedvr2_invalid,
+            # The single verdict every SeedVR2 surface reads (Settings card,
+            # Setup step, the improve engine picker) so none of them re-derives
+            # readiness from a different subset of the four gaps above.
+            'seedvr2_ready': seedvr2_ready,
             # Klein assets PRESENT on disk but not real, loadable weights:
             # [{asset, filename, verdict, blocking, reason}]. Distinct from
             # klein_missing (the file exists, it just can't load) — drives the Setup

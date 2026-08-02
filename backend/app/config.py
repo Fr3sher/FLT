@@ -399,6 +399,39 @@ DEFAULTS = {
         # How hard the source latent is pushed back into the model each step.
         'ref_boost': 0.25,
     },
+    # The ✨ Upscale & improve pass — which engine runs it. Its own namespace
+    # rather than a key under `klein`, because the whole point of the setting is
+    # that the pass is no longer Klein-only: 'klein' rewrites detail, 'seedvr2'
+    # restores it without reinterpreting. 'klein' is the default because it is
+    # what every improve did before this setting existed.
+    'improve': {'engine': 'klein'},
+    # SeedVR2 — the FIDELITY upscaler (services/seedvr2_helper.py, issue #32 by
+    # SurpassHR). Not a generation engine: it restores detail and leaves the
+    # content alone, which is the opposite trade from Klein's ✨ improve. Same
+    # discipline as every other engine block: blank means "find it yourself",
+    # never a machine path.
+    'seedvr2': {
+        # Blank = auto-resolve: the canonical 3B FP8 build when present, else the
+        # first build in the SEEDVR2 folder. Set it to a filename to pin one (a
+        # 7B build you dropped in yourself resolves exactly the same way).
+        'model': '',
+        # Target for the SHORT edge in pixels; the long edge follows the source
+        # aspect. 1080 is the node's own default and a sane dataset target — LoRA
+        # training buckets rarely exceed it, so going higher mostly costs VRAM.
+        'resolution': 1080,
+        # Hard cap on the LONG edge, 0 = none. The VRAM safety valve on a wide
+        # panorama, where a 1080 short edge can mean 4000+ px across.
+        'max_resolution': 0,
+        # How the result is graded back onto the source's colours. 'lab' is the
+        # node's default and the most conservative; 'wavelet' preserves broad
+        # tone better on heavily degraded sources. Colour fidelity is the whole
+        # reason this engine exists, so this is deliberately exposed.
+        'color_correction': 'lab',
+        # Transformer blocks offloaded to system RAM during inference. 0 = none
+        # (fastest). Raise it to fit a bigger build on a smaller card; it trades
+        # speed for VRAM headroom, it does not change the result.
+        'blocks_to_swap': 0,
+    },
     # Z-Image pipeline — the two loader refs the shipped Test Studio workflow used
     # to hardcode from the developer's own ComfyUI (reported by bobba84, GitHub #18).
     # BLANK = "find it yourself": services/zimage_model_resolver scans every

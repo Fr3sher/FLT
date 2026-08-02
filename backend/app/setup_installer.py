@@ -176,10 +176,42 @@ _KREA_DOWNLOADS = {
     },
 }
 
+# SeedVR2 — the fidelity upscaler (issue #32, SurpassHR). Two files only, and
+# the small one is the DEFAULT on purpose: the 3B FP8 build is 3.4 GB and the
+# pack's own guidance puts it at 8-12 GB of VRAM, which is the card most people
+# have. Someone with more drops a 7B build in the same folder and points
+# `seedvr2.model` at it — seedvr2_helper.resolve_seedvr2_dit picks up anything
+# present, so the bigger builds need no second install action.
+#
+# URL survey 2026-08-02 (anonymous HTTP HEAD, no token): `numz/SeedVR2_comfyUI`
+# answers 200 with the full content-length on every file, API `gated=false`,
+# licence apache-2.0 — the same licence as ByteDance's own SeedVR2 weights. The
+# 401/403 recovery path is kept anyway, exactly like Klein's: a measurement is a
+# photograph of one moment, and a future re-gating must degrade into actionable
+# steps rather than a bare error.
+#
+# `dest[0]` is 'SEEDVR2' — the folder the node pack itself registers under
+# ComfyUI's models dir (SEEDVR2_FOLDER_NAME in its constants.py), and the same
+# string seedvr2_helper.MODEL_FOLDER searches.
+_SEEDVR2_DOWNLOADS = {
+    'seedvr2_model': {
+        'url': 'https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main/seedvr2_ema_3b_fp8_e4m3fn.safetensors',
+        'dest': ('SEEDVR2', 'seedvr2_ema_3b_fp8_e4m3fn.safetensors'),
+        'min_free_gb': 5, 'gated': False, 'min_bytes': 512 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/numz/SeedVR2_comfyUI',
+    },
+    'seedvr2_vae': {
+        'url': 'https://huggingface.co/numz/SeedVR2_comfyUI/resolve/main/ema_vae_fp16.safetensors',
+        'dest': ('SEEDVR2', 'ema_vae_fp16.safetensors'),
+        'min_free_gb': 1, 'gated': False, 'min_bytes': 32 * 1024 ** 2,
+        'license_url': 'https://huggingface.co/numz/SeedVR2_comfyUI',
+    },
+}
+
 # Every streamed model download, whatever engine it belongs to. The worker,
 # destination resolution, disk precondition and extra_model_paths de-duplication
 # are engine-agnostic; only the catalog entries differ.
-_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS}
+_MODEL_DOWNLOADS = {**_KLEIN_DOWNLOADS, **_KREA_DOWNLOADS, **_SEEDVR2_DOWNLOADS}
 
 # Custom-node packs the app can install itself. THE ONLY ONE TODAY — and the
 # first git-cloned dependency this app installs at all, so the rules are written
@@ -812,26 +844,46 @@ def start_all(caps) -> dict:
 # "Install everything" plan. The Krea group is the node pack FIRST (it is a
 # ~1 MB clone; getting it out of the way means the only thing left to wait for is
 # bytes) then the four weights.
+#
+# SeedVR2 has NO pack action: its node pack declares thirteen pip dependencies
+# that belong in ComfyUI's interpreter, which this app does not own and must
+# never pip into (see seedvr2_helper's module docstring). Cloning it alone would
+# land a pack that fails to import, so the pack is explained and only the two
+# weights are installed here.
 _INSTALL_GROUPS = {
     'krea': ('krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
              'krea_identity_lora'),
+    'seedvr2': ('seedvr2_model', 'seedvr2_vae'),
+}
+
+# Which capabilities keys hold each group's gaps, and which member (if any) is
+# the node-pack install. Written down per group rather than branched on the
+# group name, so adding the next engine is one row.
+_GROUP_CAPS_KEYS = {
+    'krea': {'missing': 'krea_missing', 'invalid': 'krea_invalid',
+             'pack_action': 'krea_nodes', 'nodes_missing': 'krea_nodes_missing',
+             'nodes_installed': 'krea_nodes_installed'},
+    'seedvr2': {'missing': 'seedvr2_missing', 'invalid': 'seedvr2_invalid',
+                'pack_action': None, 'nodes_missing': 'seedvr2_nodes_missing',
+                'nodes_installed': 'seedvr2_nodes_installed'},
 }
 
 
 def install_group_plan(group, caps=None) -> list:
     """The actions a named group would queue: its members MINUS what is already
-    installed, in a fixed order. `caps` is the live capabilities payload (the
-    Krea gaps come from comfyui.krea_missing / krea_nodes_missing /
-    krea_nodes_installed); with none it plans the whole group. Pure."""
+    installed, in a fixed order. `caps` is the live capabilities payload (each
+    group's gaps come from the comfyui.* keys named in _GROUP_CAPS_KEYS); with
+    none it plans the whole group. Pure."""
     members = _INSTALL_GROUPS.get(group)
     if not members:
         return []
     if caps is None:
         return list(members)
+    keys = _GROUP_CAPS_KEYS[group]
     c = (caps or {}).get('comfyui') or {}
     if not c.get('dir_valid'):
         return []                      # nowhere to install into — never guess a path
-    missing_assets = _broken_or_missing(c.get('krea_missing'), c.get('krea_invalid'))
+    missing_assets = _broken_or_missing(c.get(keys['missing']), c.get(keys['invalid']))
     # Does the pack need INSTALLING? Three states, and the difference matters:
     #   on disk                -> no. Missing nodes then mean a ComfyUI RESTART, and
     #                             re-running the installer would only log "already
@@ -844,14 +896,17 @@ def install_group_plan(group, caps=None) -> list:
     #                             missing because it could not ask). Not on disk +
     #                             no answer = install it; a stopped ComfyUI must not
     #                             silently drop the pack from a one-click install.
-    if c.get('krea_nodes_installed'):
+    #   no pack action        -> the group installs weights only (SeedVR2).
+    if not keys['pack_action']:
         needs_pack = False
-    elif c.get('krea_nodes_missing'):
+    elif c.get(keys['nodes_installed']):
+        needs_pack = False
+    elif c.get(keys['nodes_missing']):
         needs_pack = True
     else:
         needs_pack = not c.get('reachable')
     return [a for a in members
-            if (a == 'krea_nodes' and needs_pack) or a in missing_assets]
+            if (a == keys['pack_action'] and needs_pack) or a in missing_assets]
 
 
 def start_group(group, caps=None) -> dict:
@@ -1778,9 +1833,23 @@ def _verify_downloaded_model(action, dest, spec, provider='hf') -> bool:
     return False
 
 
+def _resolver_backed_assets():
+    """{action: (missing_fn, invalid_fn)} for every engine whose OWN resolvers can
+    answer "is this installed?". Built lazily so importing this module never drags
+    in the engine helpers (and their ComfyUI probes)."""
+    from .services import krea_edit_helper, seedvr2_helper
+    out = {a: (krea_edit_helper.krea_missing_assets,
+               krea_edit_helper.krea_invalid_assets) for a in _KREA_DOWNLOADS}
+    out.update({a: (seedvr2_helper.seedvr2_missing_assets,
+                    seedvr2_helper.seedvr2_invalid_assets)
+                for a in _SEEDVR2_DOWNLOADS})
+    return out
+
+
 def _krea_asset_already_installed(action) -> bool:
-    """RETROFIT guard: someone who placed a Krea asset by hand, under their own
-    file name, anywhere ComfyUI registers, must not see it re-downloaded. The
+    """RETROFIT guard: someone who placed a Krea or SeedVR2 asset by hand, under
+    their own file name, anywhere ComfyUI registers, must not see it
+    re-downloaded. The
     engine's own resolvers already answer "is this installed?" for exactly the
     file a generate would load, so we ask them rather than test one hardcoded
     path. Klein keeps its filename-based checks above (its resolver accepts a
@@ -1792,13 +1861,14 @@ def _krea_asset_already_installed(action) -> bool:
     (krea_invalid_assets, blocking only — the same list capabilities greys the
     engine on) vetoes the skip. Nothing is deleted: the file sits under a name and
     a folder the user chose, and the download goes to the canonical dest anyway."""
-    if action not in _KREA_DOWNLOADS:
-        return False
     try:
-        from .services import krea_edit_helper
-        if action in krea_edit_helper.krea_missing_assets():
+        entry = _resolver_backed_assets().get(action)
+        if not entry:
             return False
-        broken = next((i for i in krea_edit_helper.krea_invalid_assets()
+        missing_fn, invalid_fn = entry
+        if action in missing_fn():
+            return False
+        broken = next((i for i in invalid_fn()
                        if i['asset'] == action and i['blocking']), None)
         if broken:
             _note(action, f"the file already resolving for this asset cannot be loaded: "
@@ -1806,7 +1876,7 @@ def _krea_asset_already_installed(action) -> bool:
             return False
         return True
     except Exception:
-        logger.debug('krea presence check failed for %s', action, exc_info=True)
+        logger.debug('resolver presence check failed for %s', action, exc_info=True)
         return False
 
 

@@ -7815,7 +7815,7 @@ def _improve_enqueue_profile(ds=None) -> dict:
     }
 
 
-def _improve_extra_metadata(source, label) -> dict:
+def _improve_extra_metadata(source, label, engine='klein') -> dict:
     return {
         'is_dataset': True,
         'dataset_id': source.dataset_id,
@@ -7824,19 +7824,95 @@ def _improve_extra_metadata(source, label) -> dict:
         'parent_image_id': source.id,
         'source_image_id': source.id,
         'action': 'upscale_improve',
+        # WHICH engine produced this candidate. Additive: `derivation_kind` and
+        # `action` keep the values every existing row and every reader already
+        # carries (they are stored, and stored ids are never renamed here), so a
+        # SeedVR2 result curates, undoes and re-improves exactly like a Klein one.
+        'improve_engine': engine,
     }
 
 
-def improve_existing_image(user_id, image_id):
+# --- Which engine runs the ✨ improve pass ------------------------------------
+# Two passes, one lane. Klein REWRITES (a diffusion edit that re-renders skin
+# and micro-detail from a prompt: it fixes a soft photo and it changes it);
+# SeedVR2 RESTORES (one-step diffusion super-resolution that leaves the content
+# where it was). Which one you want depends on whether the frame's exact look is
+# the thing you are training on — so it is a choice, not a default we can pick
+# for everyone. Requested in issue #32 by SurpassHR, whose complaint was exactly
+# that Klein "tends to change the detail and color of the original image".
+IMPROVE_ENGINES = ('klein', 'seedvr2')
+
+
+def resolve_improve_engine(requested=None):
+    """The engine an improve request will run on: the explicit pick when it names
+    a known engine, else the `improve.engine` setting, else Klein.
+
+    Fail-SAFE rather than fail-closed: an unknown name falls back instead of
+    raising, because a stale tab must degrade to the historical behaviour rather
+    than refuse a batch. Klein is the fallback because it is what every improve
+    did before this setting existed."""
+    for candidate in (requested, cfg.get('improve.engine')):
+        name = str(candidate or '').strip().lower()
+        if name in IMPROVE_ENGINES:
+            return name
+        if name:
+            logger.warning('unknown improve engine %r — falling back to klein', candidate)
+    return 'klein'
+
+
+def _improve_preflight(engine):
+    """Raise the engine's structured missing-assets exception when it cannot run.
+
+    Called BEFORE any candidate row is created, so a missing model surfaces once
+    per batch instead of once per image. Each engine keeps its own exception type
+    (KleinModelsMissing / KleinNodesMissing / SeedVR2ModelsMissing) — the routes
+    already turn each into its own actionable 409 body, and collapsing them into
+    one would lose the "install the node pack" vs "place the weights" distinction
+    that makes those bodies useful."""
+    if engine == 'seedvr2':
+        from . import seedvr2_helper
+        seedvr2_helper.preflight()
+        return
+    from . import klein_edit_helper as keh
+    missing = keh.klein_missing_assets()
+    missing_nodes = keh.klein_missing_nodes()
+    if missing_nodes:
+        raise KleinNodesMissing(missing, missing_nodes)
+    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
+        raise keh.KleinModelsMissing(missing)
+
+
+def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
+                     dataset):
+    """Hand ONE improve off to the chosen engine and return its job id.
+
+    The two engines take deliberately different arguments — Klein needs a prompt,
+    a consistency-LoRA strength and a step count; SeedVR2 needs none of them
+    (there is no prompt in a restoration) — so this is where that difference
+    stops, and every caller above it stays engine-agnostic."""
+    meta = _improve_extra_metadata(source, label, engine=engine)
+    if engine == 'seedvr2':
+        from . import seedvr2_helper
+        return seedvr2_helper.enqueue_seedvr2_upscale(
+            user_id=str(user_id), source_filename=source.filename,
+            source_path=source_path, extra_metadata=meta)
+    from . import klein_edit_helper as keh
+    return keh.enqueue_klein_edit(
+        user_id=str(user_id), source_filename=source.filename,
+        source_path=source_path, edit_prompt=prompt,
+        **_improve_enqueue_profile(dataset), extra_metadata=meta)
+
+
+def improve_existing_image(user_id, image_id, engine=None):
     """Serialize one source's improve request, including the queue hand-off."""
     lock = _IMAGE_IMPROVE_LOCKS[hash((str(user_id), image_id))
                                 % len(_IMAGE_IMPROVE_LOCKS)]
     with lock:
-        return _improve_existing_image_locked(user_id, image_id)
+        return _improve_existing_image_locked(user_id, image_id, engine=engine)
 
 
-def _improve_existing_image_locked(user_id, image_id):
-    """Queue one non-destructive Klein upscale/improvement of an existing image.
+def _improve_existing_image_locked(user_id, image_id, engine=None):
+    """Queue one non-destructive upscale/improvement of an existing image.
 
     The source row and file are deliberately never modified.  The result is a
     regular generated dataset image linked back to the source only for
@@ -7876,13 +7952,8 @@ def _improve_existing_image_locked(user_id, image_id):
         # Refuse a concurrent click rather than creating a second candidate.
         raise RuntimeError('this image improvement is already being queued')
 
-    from . import klein_edit_helper as keh
-    missing = keh.klein_missing_assets()
-    missing_nodes = keh.klein_missing_nodes()
-    if missing_nodes:
-        raise KleinNodesMissing(missing, missing_nodes)
-    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
-        raise keh.KleinModelsMissing(missing)
+    engine = resolve_improve_engine(engine)
+    _improve_preflight(engine)
 
     in_flight = (FaceDatasetImage.query
                  .filter_by(dataset_id=img.dataset_id, status='pending')
@@ -7892,7 +7963,12 @@ def _improve_existing_image_locked(user_id, image_id):
             f'too many generations in flight ({in_flight}), wait or cancel')
 
     prompt = _improve_prompt()
-    stored_prompt = prompt[:500]
+    # What the tile SHOWS as the prompt behind this candidate. A SeedVR2 run has
+    # no prompt at all — it is a restoration — so storing the Klein improve
+    # prompt on one would put a sentence on screen that had no effect on the
+    # image. The honest value is the pass that ran.
+    stored_prompt = (prompt[:500] if engine == 'klein'
+                     else 'SeedVR2 upscale (no prompt — restoration pass)')
     label = _improve_candidate_label(img)
     candidate = FaceDatasetImage(
         dataset_id=img.dataset_id, source='generated', status='pending',
@@ -7907,12 +7983,10 @@ def _improve_existing_image_locked(user_id, image_id):
     db.session.commit()
 
     try:
-        job_id = keh.enqueue_klein_edit(
-            user_id=str(user_id), source_filename=img.filename,
-            source_path=source_path, edit_prompt=prompt,
-            **_improve_enqueue_profile(get_dataset(user_id, img.dataset_id)),
-            extra_metadata=_improve_extra_metadata(img, label),
-        )
+        job_id = _enqueue_improve(
+            engine, user_id=user_id, source=img, source_path=source_path,
+            prompt=prompt, label=label,
+            dataset=get_dataset(user_id, img.dataset_id))
     except Exception:
         # No broken tile: the original is still untouched and the user can retry
         # as soon as the queue/ComfyUI issue is fixed.
@@ -7992,13 +8066,12 @@ def _reimprove_image_locked(user_id, image_id):
     if not os.path.isfile(source_path):
         raise ValueError(REIMPROVE_SOURCE_FILE_GONE)
 
-    from . import klein_edit_helper as keh
-    missing = keh.klein_missing_assets()
-    missing_nodes = keh.klein_missing_nodes()
-    if missing_nodes:
-        raise KleinNodesMissing(missing, missing_nodes)
-    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
-        raise keh.KleinModelsMissing(missing)
+    # A re-run uses the CURRENTLY selected engine, not the one that produced the
+    # row: "re-improve" means "try again with what I have set now", and someone
+    # who switched to SeedVR2 precisely because the Klein result changed too much
+    # would otherwise get the same Klein result back.
+    engine = resolve_improve_engine()
+    _improve_preflight(engine)
 
     in_flight = (FaceDatasetImage.query
                  .filter_by(dataset_id=img.dataset_id, status='pending')
@@ -8020,12 +8093,10 @@ def _reimprove_image_locked(user_id, image_id):
     expected_transition_caption = (old_state['caption']
                                    if old_state['caption'] else parent.caption)
     old_path = _img_path(img) if img.filename else None
-    job_id = keh.enqueue_klein_edit(
-        user_id=str(user_id), source_filename=parent.filename,
-        source_path=source_path, edit_prompt=prompt,
-        **_improve_enqueue_profile(get_dataset(user_id, img.dataset_id)),
-        extra_metadata=_improve_extra_metadata(parent, label),
-    )
+    job_id = _enqueue_improve(
+        engine, user_id=user_id, source=parent, source_path=source_path,
+        prompt=prompt, label=label,
+        dataset=get_dataset(user_id, img.dataset_id))
 
     try:
         # Do this while the candidate is still Keep.  The CAS observes both
@@ -8160,26 +8231,22 @@ def bulk_improve_eligible_ids(user_id, dataset_id, image_ids):
     return eligible
 
 
-def start_bulk_improve(app, user_id, dataset_id, image_ids):
-    """Start the server-side ✨ Klein upscale & improve batch over ``image_ids``.
+def start_bulk_improve(app, user_id, dataset_id, image_ids, engine=None):
+    """Start the server-side ✨ Upscale & improve batch over ``image_ids``.
 
-    Returns ``{'queued', 'skipped'}`` — how many images the job will process and
-    how many of the selection were not eligible. Raises ValueError (-> 400) on an
-    unknown dataset / an empty eligible set, RuntimeError (-> 409) when a batch is
-    already running, and the Klein missing-assets exceptions (-> structured 409)
-    so a missing model surfaces ONCE instead of once per image."""
+    Returns ``{'queued', 'skipped', 'engine'}`` — how many images the job will
+    process, how many of the selection were not eligible, and which engine ran
+    (the caller echoes it so the toast can name it). Raises ValueError (-> 400) on
+    an unknown dataset / an empty eligible set, RuntimeError (-> 409) when a batch
+    is already running, and the engine's missing-assets exceptions (-> structured
+    409) so a missing model surfaces ONCE instead of once per image."""
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
     if dataset_activity.running(dataset_id, dataset_activity.IMPROVE_KINDS):
         raise RuntimeError('an improvement batch is already running on this dataset')
-    from . import klein_edit_helper as keh
-    missing = keh.klein_missing_assets()
-    missing_nodes = keh.klein_missing_nodes()
-    if missing_nodes:
-        raise KleinNodesMissing(missing, missing_nodes)
-    if any(asset in missing for asset in keh.KLEIN_REQUIRED):
-        raise keh.KleinModelsMissing(missing)
+    engine = resolve_improve_engine(engine)
+    _improve_preflight(engine)
     eligible = bulk_improve_eligible_ids(user_id, dataset_id, image_ids)
     if not eligible:
         raise ValueError('no selected image is eligible for improvement')
@@ -8187,12 +8254,13 @@ def start_bulk_improve(app, user_id, dataset_id, image_ids):
     total = len(eligible)
     token = dataset_activity.begin(dataset_id, 'improve', total=total,
                                    detail=f'Queuing improvements… 0/{total}',
-                                   engine='klein')
+                                   engine=engine)
 
     def _run():
         try:
             with app.app_context():
-                _drain_improve_queue(user_id, dataset_id, eligible, token)
+                _drain_improve_queue(user_id, dataset_id, eligible, token,
+                                     engine=engine)
         except Exception:   # noqa: BLE001 — a background crash must not strand the indicator
             logger.exception('bulk improve batch failed on dataset %s', dataset_id)
         finally:
@@ -8207,10 +8275,11 @@ def start_bulk_improve(app, user_id, dataset_id, image_ids):
     else:
         threading.Thread(target=_run, daemon=True,
                          name=f'ds-{dataset_id}-improve').start()
-    return {'queued': total, 'skipped': skipped}
+    return {'queued': total, 'skipped': skipped, 'engine': engine}
 
 
-def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep):
+def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep,
+                         engine=None):
     """Queue one improvement per id, in WAVES that respect the MAX_FANOUT
     concurrency cap: when the dataset already has that many generations in flight
     the worker WAITS for a slot (the count drops as ComfyUI writes the files) rather
@@ -8245,7 +8314,7 @@ def _drain_improve_queue(user_id, dataset_id, image_ids, token, sleep=time.sleep
             break
         waited = 0.0
         try:
-            improve_existing_image(user_id, image_id)
+            improve_existing_image(user_id, image_id, engine=engine)
             queued += 1
         except Exception as exc:   # noqa: BLE001 — one refusal never sinks the batch
             failed += 1

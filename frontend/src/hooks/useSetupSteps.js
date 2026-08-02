@@ -527,6 +527,8 @@ export const INSTALL_ALL_ACTION_LABELS = {
   krea_text_encoder: 'Krea 2 text encoder',
   krea_vae: 'Krea 2 VAE',
   krea_identity_lora: 'Krea 2 Identity Edit LoRA',
+  seedvr2_model: 'SeedVR2 model (3B FP8)',
+  seedvr2_vae: 'SeedVR2 VAE',
 }
 
 // The Krea 2 Edit engine, installable in ONE click but deliberately NOT part of
@@ -571,6 +573,34 @@ export function kreaNeedsComfyuiRestart(caps) {
   const cu = (caps || {}).comfyui || {}
   return !!(cu.krea_nodes_installed
     && Array.isArray(cu.krea_nodes_missing) && cu.krea_nodes_missing.length)
+}
+
+/** What the "Install SeedVR2" button would queue — the missing weights only.
+ *  Mirror of setup_installer.install_group_plan('seedvr2', caps), which stays the
+ *  authority.
+ *
+ *  There is NO node-pack action here, and that is the difference from Krea: this
+ *  pack declares thirteen pip dependencies that belong in ComfyUI's own
+ *  interpreter, which the app does not own and must never pip into. Cloning it
+ *  alone would land a pack that fails to import — so the pack is explained, and
+ *  only the weights are installed. */
+export const SEEDVR2_INSTALL_ORDER = ['seedvr2_model', 'seedvr2_vae']
+
+export function seedvr2InstallPlan(caps) {
+  const cu = (caps || {}).comfyui || {}
+  if (!cu.dir_valid) return []
+  const missing = brokenOrMissing(cu.seedvr2_missing, cu.seedvr2_invalid)
+  return SEEDVR2_INSTALL_ORDER.filter((a) => missing.includes(a))
+}
+
+/** The one thing an install cannot do: ComfyUI registers custom nodes at STARTUP
+ *  only, so a pack on disk but absent from /object_info means "restart ComfyUI".
+ *  Same rule as Krea's — here it also covers the case where the pack's Python
+ *  dependencies failed to install, which looks identical from outside. */
+export function seedvr2NeedsComfyuiRestart(caps) {
+  const cu = (caps || {}).comfyui || {}
+  return !!(cu.seedvr2_nodes_installed
+    && Array.isArray(cu.seedvr2_nodes_missing) && cu.seedvr2_nodes_missing.length)
 }
 
 // Grouped by capability area (ML extras → Klein weights). The backend

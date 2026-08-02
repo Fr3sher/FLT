@@ -276,6 +276,16 @@ const KREA_GROUNDING_MIN = 512      // mirrors krea_edit_helper.GROUNDING_PX_MIN
 const KREA_GROUNDING_MAX = 1536     // mirrors krea_edit_helper.GROUNDING_PX_MAX
 const KREA_STEPS_MAX = 50
 
+// Mirror seedvr2_helper's clamps. The SERVER stays the authority (it re-clamps
+// every value), these only stop the input offering a number that would be
+// silently corrected.
+const SEEDVR2_RESOLUTION_MIN = 256
+const SEEDVR2_RESOLUTION_MAX = 4096
+const SEEDVR2_MAX_RESOLUTION_MAX = 8192
+const SEEDVR2_BLOCKS_MAX = 36
+// seedvr2_helper.COLOR_CORRECTIONS — the node's own enum, in its own order.
+const SEEDVR2_COLOR_MODES = ['lab', 'wavelet', 'wavelet_adaptive', 'hsv', 'adain', 'none']
+
 function KreaCard({ config, setField, configDefaults }) {
   const krea = config.krea || {}
   const reset = { config, configDefaults, setField }
@@ -378,6 +388,198 @@ function KreaCard({ config, setField, configDefaults }) {
         </p>
         <ResetToDefault label="Identity edit LoRA" section="krea" field="identity_lora" {...reset} />
       </div>
+    </Card>
+  )
+}
+
+/* SeedVR2 — the FIDELITY upscaler (issue #32, requested by SurpassHR).
+
+   It is not a generation engine and deliberately does not appear in the enabled-
+   engines list above: nothing in the variation catalog can be produced by it. It
+   is the OTHER way to run ✨ Upscale & improve — the one that resolves detail
+   without reinterpreting it — so its settings live next to the engines that feed
+   the same pass, not in a section of their own. */
+function SeedVr2Card({ config, setField, configDefaults, caps }) {
+  const svr = config.seedvr2 || {}
+  const improve = config.improve || {}
+  const reset = { config, configDefaults, setField }
+  const dflt = (key) => defaultValueAt(configDefaults, 'seedvr2', key)
+  const comfy = (caps && caps.comfyui) || {}
+  const ready = comfy.seedvr2_ready === true
+  const [models, setModels] = useState(null)
+  // Which builds are ON DISK — asked once per readiness change, never polled:
+  // it is a directory listing, and the card is not a monitor.
+  useEffect(() => {
+    let live = true
+    fetch('/api/seedvr2/models')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (live) setModels(d) })
+      .catch(() => { if (live) setModels(null) })
+    return () => { live = false }
+  }, [ready])
+  const installed = (models && models.installed) || []
+  const catalog = (models && models.catalog) || []
+  return (
+    <Card
+      id="seedvr2-engine"
+      title="SeedVR2 upscaling (local)"
+      help="The fidelity half of ✨ Upscale & improve. Klein re-renders detail from a prompt — sharper, but skin and colour can shift; SeedVR2 resolves detail at a higher resolution and leaves the original look alone. Pick it per batch from the bulk actions in the dataset workspace, or make it the default for the single-image pass below. It needs the ComfyUI-SeedVR2_VideoUpscaler node pack in ComfyUI plus two model files — Setup ▸ ComfyUI downloads the models and says what is missing."
+    >
+      <p className={ready ? 'text-[0.6875rem] text-emerald-300' : 'text-[0.6875rem] text-amber-300'}>
+        {ready
+          ? 'Ready — SeedVR2 appears in the workspace bulk actions.'
+          : 'Not ready yet. Setup ▸ ComfyUI lists what is missing and can download the weights; the node pack itself is installed from ComfyUI (search “SeedVR2” in ComfyUI-Manager), then restart ComfyUI.'}
+      </p>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="improve-engine" className="block text-xs font-medium text-content">
+          Default engine for ✨ Upscale &amp; improve
+        </label>
+        <select
+          id="improve-engine"
+          value={improve.engine ?? defaultValueAt(configDefaults, 'improve', 'engine')}
+          onChange={(e) => setField('improve', 'engine', e.target.value)}
+          className={INPUT_CLASS}
+        >
+          <option value="klein">Klein — re-renders detail (can shift skin and colour)</option>
+          <option value="seedvr2">SeedVR2 — resolves detail, keeps the original look</option>
+        </select>
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          Used by the ✨ button on a single tile and by ↻ Re-improve. Bulk runs always
+          state their engine on the button you press, so this never decides a batch
+          behind your back.
+        </p>
+        <ResetToDefault label="Default improve engine" section="improve" field="engine"
+          config={config} configDefaults={configDefaults} setField={setField} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-model" className="block text-xs font-medium text-content">
+          Model build (optional)
+        </label>
+        <select
+          id="seedvr2-model"
+          value={svr.model ?? ''}
+          onChange={(e) => setField('seedvr2', 'model', e.target.value)}
+          className={INPUT_CLASS}
+        >
+          <option value="">auto — the 3B FP8 build, or whatever is installed</option>
+          {installed.map((name) => <option key={name} value={name}>{name}</option>)}
+        </select>
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          Only builds already in your ComfyUI&rsquo;s <code>models/SEEDVR2</code> folder are
+          listed: the pack&rsquo;s loader downloads an unknown name on first use, and a
+          dropdown must not start a multi-gigabyte download. To use another build, put the
+          file in that folder — it then appears here.
+        </p>
+        {catalog.length > 0 && (
+          <ul className="mt-1 space-y-0.5 text-[0.6875rem] text-content-subtle">
+            {catalog.map((v) => (
+              <li key={v.file}>
+                {v.installed ? '✓' : '·'} <b>{v.label}</b> — {v.size_gb} GB, ~{v.vram_gb} GB
+                {' '}VRAM{v.recommended ? ' (recommended)' : ''}
+              </li>
+            ))}
+          </ul>
+        )}
+        <ResetToDefault label="Model build" section="seedvr2" field="model" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-resolution" className="block text-xs font-medium text-content">
+          Target resolution (short edge, px)
+        </label>
+        <input
+          id="seedvr2-resolution"
+          type="number"
+          min={SEEDVR2_RESOLUTION_MIN}
+          max={SEEDVR2_RESOLUTION_MAX}
+          step={2}
+          value={svr.resolution ?? dflt('resolution')}
+          onChange={(e) => setField('seedvr2', 'resolution',
+            e.target.value === '' ? dflt('resolution') : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          The SHORT edge is scaled to this and the aspect ratio is kept, so 1080 on a 3:2
+          photo gives 1620&times;1080. LoRA training buckets rarely go above 1024&ndash;1280,
+          so higher mostly costs VRAM and time.
+        </p>
+        <ResetToDefault label="Target resolution" section="seedvr2" field="resolution" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-max-resolution" className="block text-xs font-medium text-content">
+          Maximum long edge (px, 0 = no limit)
+        </label>
+        <input
+          id="seedvr2-max-resolution"
+          type="number"
+          min={0}
+          max={SEEDVR2_MAX_RESOLUTION_MAX}
+          step={2}
+          value={svr.max_resolution ?? dflt('max_resolution')}
+          onChange={(e) => setField('seedvr2', 'max_resolution',
+            e.target.value === '' ? dflt('max_resolution') : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          The safety valve on a wide crop: at a 1080 short edge a 4:1 panorama becomes
+          4320 px across, which is where a run runs out of VRAM.
+        </p>
+        <ResetToDefault label="Maximum long edge" section="seedvr2" field="max_resolution" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-color" className="block text-xs font-medium text-content">
+          Colour correction
+        </label>
+        <select
+          id="seedvr2-color"
+          value={svr.color_correction ?? dflt('color_correction')}
+          onChange={(e) => setField('seedvr2', 'color_correction', e.target.value)}
+          className={INPUT_CLASS}
+        >
+          {SEEDVR2_COLOR_MODES.map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          How the result is graded back onto the source&rsquo;s colours. <b>lab</b> is the
+          model&rsquo;s own default and the most conservative; <b>wavelet</b> holds broad tone
+          better on heavily degraded sources; <b>none</b> shows the raw output. Colour
+          fidelity is the reason this engine exists, so it is worth trying both ways on one
+          image before a big batch.
+        </p>
+        <ResetToDefault label="Colour correction" section="seedvr2" field="color_correction" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-swap" className="block text-xs font-medium text-content">
+          Blocks offloaded to system RAM
+        </label>
+        <input
+          id="seedvr2-swap"
+          type="number"
+          min={0}
+          max={SEEDVR2_BLOCKS_MAX}
+          step={1}
+          value={svr.blocks_to_swap ?? dflt('blocks_to_swap')}
+          onChange={(e) => setField('seedvr2', 'blocks_to_swap',
+            e.target.value === '' ? dflt('blocks_to_swap') : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          0 = none, and fastest. Raise it to fit a bigger build on a smaller card: it trades
+          speed for VRAM headroom and does not change the result.
+        </p>
+        <ResetToDefault label="Blocks offloaded" section="seedvr2" field="blocks_to_swap" {...reset} />
+      </div>
+
+      <p className="mt-3 text-[0.6875rem] text-content-subtle">
+        <b>No batch size here, on purpose.</b> SeedVR2&rsquo;s batch size is a <i>video</i> window
+        whose frames share attention to stay coherent — feeding it unrelated photos would let
+        them bleed into each other. Dataset images are upscaled one per job; the throughput
+        comes from the normal generation queue.
+      </p>
     </Card>
   )
 }
@@ -989,6 +1191,9 @@ export default function EnginesSection(props) {
       <KreaCard config={config} setField={setField} configDefaults={configDefaults} />
 
       <KreaLorasCard config={config} setField={setField} />
+
+      <SeedVr2Card config={config} setField={setField} configDefaults={configDefaults}
+        caps={caps} />
 
       <IdentityPromptsCard config={config} setField={setField} promptDefaults={props.promptDefaults}
         promptDefaultsBySubject={props.promptDefaultsBySubject}

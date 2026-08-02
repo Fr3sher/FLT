@@ -58,7 +58,7 @@ API generation follows each provider's billing and content policy. Read the dire
 
 | Capability | What it provides |
 |---|---|
-| **Curation grid** | Keep/reject, crop, mirror, rotate, zoom, resize, multi-select and non-destructive Klein improvement candidates |
+| **Curation grid** | Keep/reject, crop, mirror, rotate, zoom, resize, multi-select and non-destructive upscale candidates from either engine — Klein re-renders detail (sharper, but skin and colour can shift), SeedVR2 resolves detail and leaves the original look alone |
 | **Identity and composition checks** | InsightFace similarity, score-based auto-triage, framing badges and a live Character composition meter |
 | **Model-matched captions** | Prose or booru form selected by target family, with kind-aware Concept leak checks and content-only Style rules |
 | **Caption Lab and recovery** | Find/replace, tag frequencies, expanded editing, targeted re-captioning, stoppable batches and reload-proof recovery |
@@ -160,6 +160,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | ChatGPT / `gpt-image-2` generation | `OPENAI_API_KEY`, or the separate experimental ChatGPT-subscription connection |
 | OpenRouter generation | `OPENROUTER_API_KEY` plus an image-capable model slug; OpenRouter billing and the upstream provider's policy still apply |
 | Klein generation / improvement | ComfyUI reachable + Klein model stack |
+| SeedVR2 upscaling | ComfyUI reachable + the `ComfyUI-SeedVR2_VideoUpscaler` node pack (installed from ComfyUI, not by this app — it has its own Python dependencies) + two model files the Setup step downloads (~3.9 GB); [exact files](docs/guide/settings-reference.md#seedvr2-upscaling-local) |
 | Krea 2 Edit generation | ComfyUI reachable + `comfyui-krea2edit`, a Krea 2 base, Identity Edit LoRA, Qwen3-VL encoder and Qwen Image VAE; [exact files](docs/guide/settings-reference.md#krea-2-edit-local) |
 | Captioning | Ollama **or** ai-toolkit (JoyCaption) |
 | Dual long + short captions | ai-toolkit + local vision caption derivation; local training only, and unavailable for Krea 2 / Anima |

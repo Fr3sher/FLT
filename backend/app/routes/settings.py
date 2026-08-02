@@ -320,6 +320,34 @@ def loras_list():
     return jsonify({'loras': loras})
 
 
+@bp.get('/seedvr2/models')
+def seedvr2_models_list():
+    """The SeedVR2 DiT builds actually PRESENT in this install's SEEDVR2 folder(s),
+    plus the catalog of builds the app can talk about.
+
+    ``{installed: [name], catalog: [{file, label, size_gb, vram_gb, recommended,
+    installed}], resolved: name|null, vae: name|null}``.
+
+    Only installed builds are offered as a pin: the pack's loader nodes download
+    an unknown name on first use, so a picker listing everything would turn a
+    dropdown into a silent multi-gigabyte download. The catalog is still returned
+    so the card can SHOW what else exists (with its size and VRAM guidance) and
+    say it has to be placed in the folder — informing is not fetching.
+
+    Degrades to empty lists rather than an error when ComfyUI is unconfigured."""
+    from ..services import seedvr2_helper as svr
+    try:
+        installed = svr.installed_dit_models()
+        resolved = svr.resolve_seedvr2_dit()
+        vae = svr.resolve_seedvr2_vae()
+    except Exception:
+        current_app.logger.exception('seedvr2 model scan failed')
+        installed, resolved, vae = [], None, None
+    catalog = [{**v, 'installed': v['file'] in installed} for v in svr.DIT_VARIANTS]
+    return jsonify({'installed': installed, 'catalog': catalog,
+                    'resolved': resolved, 'vae': vae})
+
+
 @bp.get('/scoring-python')
 def scoring_python_list():
     """Pythons on this machine that could run the ✨ Score pass, each with a

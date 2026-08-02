@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-seedvr2-upscaling',
+    date: '2026-08-02',
+    title: 'A second way to upscale — one that does not repaint your images',
+    blurb:
+      'Klein’s ✨ Upscale & improve re-renders detail from a prompt: it rescues a soft photo, and it can move skin tone and colour along the way — which is the wrong trade when the exact look is what you are training on. SeedVR2 is now the other option: it resolves detail at a higher resolution and leaves the content alone. Pick either one straight from the bulk actions on a selection (each button says what it does to the original), or set your default for the single-image pass in Settings ▸ Image engines. Setup ▸ ComfyUI downloads the two models (~3.9 GB) on a click and tells you how to add the node pack. Requested by SurpassHR (GitHub #32).',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-02-docker-first-boot-opens-setup',
     date: '2026-08-02',
     title: 'A brand-new Docker install now opens Setup instead of hiding it',

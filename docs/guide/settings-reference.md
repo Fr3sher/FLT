@@ -194,6 +194,35 @@ Two behaviours worth knowing before you build a dataset with it:
 
 Outfits and expressions are steered differently here than on the other engines: this model preserves anything it is not *positively* told to change, so the catalog's "a different outfit (not the one in the reference)" phrasing is rewritten at generation time into a concrete garment ("wearing a red knit sweater"), picked from the shot's own name — so outfits genuinely differ across the dataset while regenerating one shot reproduces its own.
 
+### SeedVR2 upscaling (local)
+
+*Requested by SurpassHR ([GitHub #32](https://github.com/perfectgf/lora-dataset-studio/issues/32)).*
+
+The **fidelity** half of ✨ Upscale & improve. The two passes are a choice, not two qualities of the same thing:
+
+| | what it does | when you want it |
+| --- | --- | --- |
+| **Klein** | re-renders detail and texture from a prompt | a genuinely soft or low-detail photo you are willing to see changed |
+| **SeedVR2** | resolves detail at a higher resolution, content untouched | the frame is right and you only want it sharper — the exact skin tone, grain and colour are part of what you are training |
+
+Both are **non-destructive**: they create a separate candidate and never touch the source file.
+
+**What it needs** (Setup ▸ ComfyUI ▸ *SeedVR2 — optional fidelity upscaler* handles the models):
+
+- the **[ComfyUI-SeedVR2_VideoUpscaler](https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler)** node pack (Apache-2.0) in ComfyUI, then a ComfyUI restart. **The app does not install this one for you**, unlike the Krea pack: it pulls thirteen Python packages that have to land in ComfyUI's own environment, and a bare copy of the folder would fail to import. Install it from ComfyUI-Manager (search "SeedVR2"), which does the dependencies properly.
+- two model files in `<ComfyUI>/models/SEEDVR2` — from [numz/SeedVR2_comfyUI](https://huggingface.co/numz/SeedVR2_comfyUI) (Apache-2.0, public, no account): `seedvr2_ema_3b_fp8_e4m3fn.safetensors` (3.4 GB) and `ema_vae_fp16.safetensors` (0.5 GB). The Setup card downloads both on a click; an `extra_model_paths.yaml` root for `SEEDVR2` works too.
+
+Settings:
+
+- **Default engine for ✨ Upscale & improve** → `improve.engine`. One of `klein`, `seedvr2`. Default **`klein`** — what every improve did before this setting existed. It governs the ✨ button on a single tile and ↻ Re-improve. **Bulk runs are never decided by it**: the selection toolbar shows one button per available engine and each states its trade-off, so a batch always says which pass it is about to run.
+- **Model build** → `seedvr2.model`. Blank (default) = the app resolves it: the 3B FP8 build when present, else whatever is in the folder. Only builds **already on disk** are offered in the dropdown — the pack's loader node downloads an unknown name on first use, and a dropdown must never start a multi-gigabyte download. To use a 7B or a GGUF build, drop the file in `models/SEEDVR2` and it appears in the list. Guidance from the pack: 3B FP8 ≈ 8–12 GB VRAM, 3B FP16 ≈ 12–16, 7B FP8 ≈ 16–20, 7B FP16 ≈ 24+.
+- **Target resolution (short edge)** → `seedvr2.resolution`. Range `256`–`4096`, default **`1080`**. The **short** edge is scaled to this and the aspect ratio is kept, so 1080 on a 3:2 photo gives 1620×1080. LoRA training buckets rarely exceed 1024–1280, so higher mostly costs VRAM and time.
+- **Maximum long edge** → `seedvr2.max_resolution`. `0` (default) = no limit. The VRAM safety valve on a wide crop: at a 1080 short edge a 4:1 panorama becomes 4320 px across.
+- **Colour correction** → `seedvr2.color_correction`. One of `lab`, `wavelet`, `wavelet_adaptive`, `hsv`, `adain`, `none`. Default **`lab`** — the model's own default and the most conservative. `wavelet` holds broad tone better on heavily degraded sources; `none` shows the raw output. Colour fidelity is the reason this engine exists, so it is worth trying two modes on one image before a long batch.
+- **Blocks offloaded to system RAM** → `seedvr2.blocks_to_swap`. Range `0`–`36`, default **`0`** (none, and fastest). Raise it to fit a bigger build on a smaller card: it trades speed for VRAM headroom and does not change the result.
+
+**There is no batch-size setting, on purpose.** SeedVR2's `batch_size` is a *video* window whose frames share temporal attention to stay coherent — feeding it unrelated dataset photos would let them bleed into each other. Images are upscaled one per job; throughput comes from the normal generation queue and its fan-out cap.
+
 ### Klein generation LoRA presets (optional)
 
 *Idea from @waltm on Discord.* Named combinations of generation LoRAs that stack on top of the local Klein edit graph. Stored in `klein.generation_lora_presets` (default: empty — no presets).
