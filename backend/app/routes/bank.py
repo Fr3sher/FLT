@@ -228,6 +228,10 @@ def bank_images(bank_id):
         subfolder=subfolder if subfolder is not None else None,
         search=args.get('search') or None,
         exclude=args.get('exclude') or None,
+        # 🏷️ chips ticked off one image's caption. Its OWN key, never folded into
+        # `search` or `exclude`: two features sharing one payload key is how a
+        # filter silently ate a sibling's field once already.
+        tags=args.get('tags') or None,
         sort=args.get('sort') or None,
         res_bucket=args.get('res_bucket') or None,
         framing=args.get('framing') or None,
@@ -651,6 +655,9 @@ def _curation_filters(data):
         # otherwise "select 60 diverse" would hand back the very images the user
         # just declared done.
         'exclude': data.get('exclude') or None,
+        # Same reason as exclude: a curation pick must not hand back images the
+        # grid is currently hiding.
+        'tags': data.get('tags') or None,
     }
 
 

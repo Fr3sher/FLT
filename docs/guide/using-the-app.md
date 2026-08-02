@@ -803,6 +803,39 @@ half-working one would be worse than none:
 
 The 🔄 rotate button needs no undo entry: turn the other way and the image is
 byte-for-byte the original again.
+## Find more images like this one — by attribute, not by look
+
+Every captioned tile in a bank carries a 🏷️ badge. **Click it** and that image's
+caption opens as a row of chips in the filter bar: `woman`, `red`, `dress`,
+`balcony`. Tick the ones you care about and the grid narrows to the images whose
+captions mention them.
+
+This is the readable cousin of **🎯 Similar to selected**, and the difference is
+worth knowing because they fail differently:
+
+| | 🎯 Similar to selected | 🏷️ Tags of this image |
+|---|---|---|
+| Matches on | the whole look (CLIP embeddings) | words *you* ticked |
+| Works without captions | yes | no |
+| Tells you *why* it matched | no | yes — the chips you ticked |
+
+Details that decide what you get:
+
+- **Several chips mean AND.** Ticking `red` and `dress` shows images mentioning
+  both, so every extra chip narrows further. The line under the chips says so
+  while the filter is active.
+- **Chips are matched as whole words**, in captions *and* file names. `car` will
+  not bring back `scarf`. (The 🚫 exclude box below is looser — it matches
+  anywhere — because a word you type by hand is often a fragment on purpose.)
+- **Booru captions keep their tags whole** (`red dress` stays one chip); prose
+  captions are cut into words, so `golden hour` becomes two chips and ticking
+  both means "captions with both words", not "captions about golden hour".
+- **It only sees what a captioner wrote.** An attribute nobody put in words is
+  invisible here, however plain it is in the picture. Caption more of the bank
+  (🏷️ Caption all) and the chips get better.
+- It composes with every other filter, and it travels with them — **Select all
+  in filter**, **▶ Review** and the curation picks all work on what you can see.
+
 ## Hide images you have already handled
 
 The bank's 🔍 search box narrows the grid *to* a word. Next to it, the 🚫

@@ -81,6 +81,24 @@ test('the exclude filter is wired like every other facet', () => {
   assert.match(BANK, /aria-label="Clear the exclude filter"/)
 })
 
+test('the 🏷️ tag chips are wired, and live where filters live', () => {
+  // The chips come from the pure module (node --test cannot parse JSX, so the
+  // extraction logic is unit-tested there and only the WIRING is greppable).
+  assert.match(BANK, /import \{ captionChips, tagsParam, tagFilterSummary \} from '\.\/bankTags\.js'/)
+  // Its OWN payload key — never folded into search/exclude/push_down.
+  assert.match(BANK, /if \(f\.tags\) params\.tags = f\.tags/)
+  assert.match(BANK, /setF\(\{ tags: tagsParam\(next\) \}\)/)
+  // The badge is a real button, so the gesture is reachable without a mouse.
+  assert.match(BANK, /aria-label=\{`Use the tags of \$\{img\.name\} as a filter`\}/)
+  // AND is written out for the user, not left to be inferred from the chips.
+  assert.match(BANK, /\{tagFilterSummary\(tagPicked\)\}/)
+  // The row renders in the filter zone, NOT inside the review lightbox: that
+  // one walks a frozen snapshot a filter change could not honestly alter.
+  const LIGHTBOX = read('../src/components/bank/BankReviewLightbox.jsx')
+  assert.doesNotMatch(LIGHTBOX, /captionChips|tagsParam/,
+    'filtering is a grid gesture; the review lightbox is a frozen decision run')
+})
+
 test('the dataset grid renders the sorted+filtered list, and sorts last', () => {
   assert.match(WORKSPACE, /sortDatasetImages, \}? ?from '\.\.\/\.\.\/utils\/gridSort'|from '\.\.\/\.\.\/utils\/gridSort'/)
   // Sort wraps the filters — membership stays the filters' business.

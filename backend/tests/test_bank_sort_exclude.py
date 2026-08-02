@@ -218,3 +218,87 @@ def test_ids_only_answers_the_whole_filter_in_the_grid_order(client, tmp_path, a
     ordered = lean(sort='aesthetic_desc')
     assert len(ordered) == 3
     assert ordered[-1] == paged(sort='aesthetic_desc')[-1]
+
+
+# --- 🏷️ tag chips (attributes picked off one image's caption) ----------------
+
+def test_tags_are_ANDed_and_matched_as_whole_words(client, tmp_path, app):
+    """The 🏷️ chips narrow: each one ticked must SHRINK the result, never grow
+    it. And a chip comes from a caption's own tokens, so it matches as a WORD —
+    'car' must not find 'scarf', which is exactly the confusion that would make
+    the feature lie about what it found."""
+    bank_id, _src = _mkbank(client, tmp_path, {
+        'a.png': flat(), 'b.png': flat(), 'c.png': flat(), 'd.png': flat()})
+    _set(app, bank_id, {
+        'a.png': {'caption': 'a woman in a red dress on a balcony'},
+        'b.png': {'caption': 'a woman in a blue dress'},
+        'c.png': {'caption': 'a red car in a scarf shop'},
+        'd.png': {'caption': None}})
+
+    def names(**params):
+        r = client.get(f'/api/bank/{bank_id}/images', query_string=params)
+        assert r.status_code == 200, r.get_json()
+        return [i['name'] for i in r.get_json()['images']], r.get_json()['total']
+
+    assert names(tags='dress')[0] == ['a.png', 'b.png']
+    assert names(tags='red')[0] == ['a.png', 'c.png']
+    # AND, not OR: 'red' + 'dress' is the intersection, and it is SMALLER than
+    # either chip alone. An OR here would grow the set with every click.
+    assert names(tags='red,dress')[0] == ['a.png']
+    assert names(tags='red,dress,balcony')[0] == ['a.png']
+    # Whole words: 'car' does not match 'scarf'; 'scarf' does not match 'car'.
+    assert names(tags='car')[0] == ['c.png']
+    assert names(tags='scarf')[0] == ['c.png']
+    assert names(tags='ca')[0] == []
+    # The count follows the filter, like every other facet.
+    assert names(tags='red,dress')[1] == 1
+
+
+def test_tags_compose_with_the_other_text_filters_without_sharing_their_key(
+        client, tmp_path, app):
+    """Three text filters, three parameters, no overlap: search narrows, tags
+    narrow as words, exclude hides. A shared key is how one feature silently ate
+    another's field once already."""
+    bank_id, _src = _mkbank(client, tmp_path, {
+        'a.png': flat(), 'b.png': flat(), 'c.png': flat()})
+    _set(app, bank_id, {'a.png': {'caption': 'a red dress on a balcony'},
+                        'b.png': {'caption': 'a red dress in a studio'},
+                        'c.png': {'caption': 'a blue dress on a balcony'}})
+
+    def names(**params):
+        r = client.get(f'/api/bank/{bank_id}/images', query_string=params)
+        return [i['name'] for i in r.get_json()['images']]
+
+    assert names(tags='dress', exclude='studio') == ['a.png', 'c.png']
+    assert names(tags='dress,balcony', exclude='blue') == ['a.png']
+    assert names(search='balcony', tags='red') == ['a.png']
+    # Each parameter keeps its own meaning when they all travel together.
+    assert names(search='dress', tags='balcony', exclude='blue') == ['a.png']
+
+
+def test_a_tag_filter_reaches_the_curation_pool_too(client, tmp_path, app):
+    """Hiding images in the grid must keep them out of a curation pick."""
+    bank_id, _src = _mkbank(client, tmp_path, {'a.png': flat(), 'b.png': flat()})
+    _set(app, bank_id, {'a.png': {'caption': 'a red dress'},
+                        'b.png': {'caption': 'a blue hat'}})
+    with app.app_context():
+        pool = banks._pool_query(bank_id, banks.thresholds(), tags='dress')
+        assert [r.relpath for r in pool.all()] == ['a.png']
+
+
+def test_tag_matching_survives_punctuation_and_case(client, tmp_path, app):
+    """Captioners end sentences, use semicolons and capitalise. A word next to a
+    full stop is still that word."""
+    bank_id, _src = _mkbank(client, tmp_path, {'a.png': flat(), 'b.png': flat()})
+    _set(app, bank_id, {'a.png': {'caption': 'A woman on a Balcony.'},
+                        'b.png': {'caption': 'indoors; no balcony visible'}})
+
+    def names(**params):
+        r = client.get(f'/api/bank/{bank_id}/images', query_string=params)
+        return [i['name'] for i in r.get_json()['images']]
+
+    assert names(tags='balcony') == ['a.png', 'b.png']
+    assert names(tags='woman') == ['a.png']
+    assert names(tags='BALCONY') == ['a.png', 'b.png']
+    # The file name is part of the haystack, like it is for the search box.
+    assert names(tags='a') == ['a.png']

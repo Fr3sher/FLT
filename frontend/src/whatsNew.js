@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-08-03-bank-tag-chips',
+    date: '2026-08-03',
+    title: 'Click an image’s 🏷️ tags to find the other images that share them',
+    blurb:
+      'Every captioned tile now has a clickable 🏷️ badge. It opens that image’s caption as chips — woman, red, dress, balcony — and ticking them narrows the grid to the images whose captions mention them. It is the readable cousin of 🎯 Similar to selected: that one matches the overall look and cannot say why, this one matches attributes you picked and shows you exactly which. Several chips mean AND, so each tick narrows further, and chips match as whole words — “car” will not drag back “scarf”.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-review-opens-instantly',
     date: '2026-08-03',
     title: '▶ Review opens instantly, even on a 20 000-image bank',

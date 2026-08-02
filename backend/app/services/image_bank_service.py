@@ -1241,6 +1241,37 @@ def _text_match(term):
                BankImage.relpath.ilike(like, escape='\\'))
 
 
+# Separators a caption puts around a word. The word-boundary match below turns
+# each of them into a space, then looks for ' <tag> ' in the padded result — the
+# closest a plain LIKE gets to \b without a REGEXP function, and it needs no
+# extension, no engine hook and no index.
+_WORD_SEPARATORS = (',', '.', ';', ':', '!', '?', '(', ')', '[', ']', '"', "'",
+                    '/', '\\', '-', '_', '\n', '\r', '\t')
+
+
+def _spaced_text():
+    """`' ' || lower(caption) || ' ' || lower(relpath) || ' '` with every
+    separator replaced by a space — the haystack a whole-word match looks in."""
+    haystack = func.lower(
+        func.coalesce(BankImage.caption, '') + ' ' + BankImage.relpath)
+    for sep in _WORD_SEPARATORS:
+        haystack = func.replace(haystack, sep, ' ')
+    return ' ' + haystack + ' '
+
+
+def _tag_match(tag):
+    """Rows whose caption or path mentions `tag` AS A WORD.
+
+    Deliberately stricter than the 🚫 exclude field's substring match, and the
+    difference is not an inconsistency: an exclude term is typed by hand, where
+    a partial match is often what someone means, while a tag chip comes FROM a
+    caption's own tokens — matching 'car' inside 'scarf' would make the feature
+    lie about what it found. The substring/word-boundary split between the two
+    is the known parity debt; this is the side that pays it first."""
+    esc = tag.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+    return _spaced_text().ilike(f'% {esc} %', escape='\\')
+
+
 def _text_terms(value) -> list:
     """Split an exclude field into terms on commas, trimmed, de-duplicated
     case-insensitively and capped. One field, several tags ('nsfw, logo') — a
@@ -1254,14 +1285,24 @@ def _text_terms(value) -> list:
     return out[:_MAX_TEXT_TERMS]
 
 
-def _apply_text_filters(q, search=None, exclude=None):
-    """search ∩ NOT(exclude₁) ∩ NOT(exclude₂)… — the positive term narrows to what
-    mentions it, each exclude term hides what mentions it. They compose: searching
-    'dress' while excluding 'red' is a legitimate (and useful) question. An
-    exclude term that is ALSO the search term simply yields nothing, honestly."""
+def _apply_text_filters(q, search=None, exclude=None, tags=None):
+    """search ∩ ALL(tags) ∩ NOT(exclude₁) ∩ NOT(exclude₂)… — the positive term
+    narrows to what mentions it, each exclude term hides what mentions it. They
+    compose: searching 'dress' while excluding 'red' is a legitimate (and useful)
+    question. An exclude term that is ALSO the search term simply yields nothing,
+    honestly.
+
+    ``tags`` is the 🏷️ chip filter, and it is an AND on purpose: the gesture is
+    "images that have THIS and THIS", i.e. narrowing from one image's attributes.
+    An OR would grow the result set with every chip ticked, which reads as the
+    filter going backwards. Each tag matches as a WORD (see _tag_match) — a
+    dedicated parameter with its own criterion, never folded into `search` or
+    `exclude`, so two features can never fight over one key."""
     term = (search or '').strip()
     if term:
         q = q.filter(_text_match(term))
+    for tag in _text_terms(tags):
+        q = q.filter(_tag_match(tag))
     for bad in _text_terms(exclude):
         q = q.filter(~_text_match(bad))
     return q
@@ -1270,7 +1311,7 @@ def _apply_text_filters(q, search=None, exclude=None):
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
-                origin=None, ids=None, exclude=None, ids_only=False,
+                origin=None, ids=None, exclude=None, tags=None, ids_only=False,
                 offset=0, limit=200) -> dict | None:
     """One PAGE of the bank grid (a 9 000-image bank must never ship whole).
     Filters compose: status ∩ flag ∩ cluster ∩ dup-group ∩ style ∩ subfolder ∩ search.
@@ -1398,7 +1439,7 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         else:
             q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
     # Full-text over caption + relpath, positive (search) and negative (exclude).
-    q = _apply_text_filters(q, search, exclude)
+    q = _apply_text_filters(q, search, exclude, tags)
     if res_bucket in _RES_BOUNDS:
         # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
         # guards drop unscanned rows (a NULL product would satisfy neither bound
@@ -2231,7 +2272,7 @@ _CURATION_MAX_N = 2000       # a curated LoRA set is 20–200 images; this is ge
 
 
 def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
-                style=None, subfolder=None, search=None, exclude=None):
+                style=None, subfolder=None, search=None, exclude=None, tags=None):
     """The candidate-pool query for the curation selectors — the SAME filter
     composition as list_images (status ∩ flag ∩ cluster ∩ style ∩ subfolder ∩
     search ∩ NOT exclude), minus the ordering/pagination, so "give me 60 diverse
@@ -2279,7 +2320,7 @@ def _pool_query(bank_id, th, *, status=None, flag=None, cluster=None,
             q = q.filter(~BankImage.relpath.contains(os.sep))
         else:
             q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
-    return _apply_text_filters(q, search, exclude)
+    return _apply_text_filters(q, search, exclude, tags)
 
 
 def _pool_embeddings(bank, emb_by_path, filters):

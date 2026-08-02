@@ -33,6 +33,8 @@ import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
 // Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
 import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort.js'
+// 🏷️ One image's caption → the chips you can filter by (pure/testable).
+import { captionChips, tagsParam, tagFilterSummary } from './bankTags.js'
 // 🔤 Text search wording — "closest", never "matching" — plus the cold-start and
 // CLIP-limitation copy. Pure/testable (node --test cannot parse this JSX).
 import {
@@ -382,7 +384,7 @@ function CoveragePanel({ coverage, onClose, onBalance = null, balanceReason = ''
   )
 }
 
-function Tile({ img, bankId, selected, onToggle, onReview, size }) {
+function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
   // `key` matters only for the flags list below (the one mapped array) — it was
   // missing and logged a React warning on every bank grid render.
   const badge = (txt, cls, key) => (
@@ -431,7 +433,18 @@ function Tile({ img, bankId, selected, onToggle, onReview, size }) {
         {img.style_cluster != null && badge(`🎨${img.style_cluster}`, 'bg-black/60 text-fuchsia-200')}
         {img.dup_group != null && badge(`≈${img.dup_group}`, 'bg-black/60 text-fuchsia-200')}
         {img.semantic_dup_group != null && badge(`✂${img.semantic_dup_group}`, 'bg-black/60 text-orange-200')}
-        {img.caption && badge('🏷️', 'bg-black/60 text-emerald-200')}
+        {/* 🏷️ is the only badge that DOES something: it lifts this image's own
+            caption words into the filter bar as tickable chips. A button, not a
+            span, so it is reachable by keyboard and announces what it opens. */}
+        {img.caption && (
+          <button type="button"
+            onClick={(e) => { e.stopPropagation(); onTags?.() }}
+            title={`Filter the bank by this image's tags — ${img.caption}`}
+            aria-label={`Use the tags of ${img.name} as a filter`}
+            className="rounded bg-black/60 px-1 text-[10px] text-emerald-200 hover:bg-black/80">
+            🏷️
+          </button>
+        )}
       </span>
       {/* ▶ starts the fast-triage lightbox AT this image. It's a separate hit
           target on purpose: the tile's own click still (de)selects for the bulk
@@ -455,7 +468,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // global — see gridSort.bankSortStorageKey). Every other facet starts empty on
   // purpose: an order is a habit, a filter is a question you asked once.
   const [filter, setFilter] = useState(() => ({ status: null, flag: null, cluster: null,
-    style: null, subfolder: null, search: null, exclude: null,
+    style: null, subfolder: null, search: null, exclude: null, tags: null,
     sort: loadBankSort(bankId), resBucket: null,
     origin: null,
     framing: null }))
@@ -465,6 +478,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // menu is a habit, images missing from a grid for a reason you set last week
   // reads as data loss.
   const [excludeText, setExcludeText] = useState('')
+  // 🏷️ Tag chips lifted off ONE image's caption. `tagSource` is the image the
+  // chips were read from (kept so the row can say WHOSE tags these are — chips
+  // with no provenance are just mystery words), `tagPicked` the ticked subset.
+  // Both are session state: this is a question you ask about one image now, not
+  // a standing preference like the sort order.
+  const [tagSource, setTagSource] = useState(null)
+  const [tagPicked, setTagPicked] = useState(() => new Set())
   const [subfolders, setSubfolders] = useState([])
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState({ images: [], total: 0 })
@@ -585,6 +605,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     // The exclude terms travel with the search on every surface that reads a
     // filter — the grid, "Select all in filter", ▶ Review and the curation picks.
     if (f.exclude) params.exclude = f.exclude
+    // 🏷️ ticked chips — its own key, matched as WORDS and ANDed server-side.
+    if (f.tags) params.tags = f.tags
     // Grid sort (any measured quantity, each way) — sent to the grid
     // AND to fetchAllIds so "Select all in filter" and > Review walk the SAME
     // order the user is looking at. 'default' keeps the server's flag order.
@@ -687,6 +709,30 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     saveBankSort(bankId, sort)
     setFilter(f); setOffset(0); exitSelectionView()
     refreshImages(f, 0, { on: false })
+  }
+
+  // 🏷️ Open the chip row on an image, with nothing ticked yet: reading the tags
+  // is not the same act as filtering by them, and auto-applying all of them would
+  // usually return that one image alone.
+  const openTagPicker = (img) => {
+    setTagSource(img)
+    setTagPicked(new Set())
+    if (filter.tags) setF({ tags: null })
+  }
+
+  // Tick / untick one chip and re-filter immediately — the grid IS the feedback,
+  // so an Apply button would only add a click between the question and its answer.
+  const toggleTag = (tag) => {
+    const next = new Set(tagPicked)
+    if (next.has(tag)) next.delete(tag); else next.add(tag)
+    setTagPicked(next)
+    setF({ tags: tagsParam(next) })
+  }
+
+  const clearTags = () => {
+    setTagSource(null)
+    setTagPicked(new Set())
+    if (filter.tags) setF({ tags: null })
   }
 
   // Debounce the search box, then apply it as a filter (page 1, selection cleared).
@@ -1374,6 +1420,51 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           )}
         </div>
 
+        {/* 🏷️ Tags of ONE image, as chips you tick. Opened from a tile's 🏷️
+            badge, and rendered HERE — with the other filters — rather than in a
+            popover on the tile or inside ▶ Review: filtering is a grid gesture,
+            it has to stay visible while it is active, and the review lightbox
+            walks a FROZEN snapshot that a filter change could not honestly
+            alter. Ticking re-filters immediately; the sentence spells out that
+            several chips mean AND, because a set that shrinks with every click
+            is only obvious once you already know the rule. */}
+        {tagSource && (
+          <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <GroupLabel>🏷️ Tags of {tagSource.name}</GroupLabel>
+              <span className="text-[11px] text-content-subtle">
+                attributes you pick — unlike 🎯 Similar, which matches the look
+              </span>
+              <button type="button" onClick={clearTags}
+                className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-content-muted hover:text-content">
+                ✕ Close
+              </button>
+            </div>
+            {captionChips(tagSource.caption).length === 0 ? (
+              <p className="m-0 text-xs text-content-muted">
+                This caption has no word worth filtering on.
+              </p>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {captionChips(tagSource.caption).map((tag) => (
+                  <Chip key={tag} active={tagPicked.has(tag)} onClick={() => toggleTag(tag)}
+                    title={tagPicked.has(tag)
+                      ? `Stop requiring “${tag}”`
+                      : `Show only images whose caption mentions “${tag}”`}>
+                    {tag}
+                  </Chip>
+                ))}
+              </div>
+            )}
+            {tagPicked.size > 0 && (
+              <p className="m-0 text-[11px] text-content-muted">
+                {tagFilterSummary(tagPicked)} Matched as whole words, in captions
+                and file names.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Filters — grouped by facet so the chips read as a system, not a wall */}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <FilterGroup label="Status">
@@ -2046,6 +2137,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               <Tile key={img.id} img={img} bankId={bankId} size={tileSize}
                 selected={selected.has(img.id)}
                 onReview={() => openReview(img.id)}
+                onTags={() => openTagPicker(img)}
                 onToggle={() => setSelected((prev) => {
                   const next = new Set(prev)
                   if (next.has(img.id)) next.delete(img.id); else next.add(img.id)
