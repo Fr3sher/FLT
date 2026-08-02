@@ -8,6 +8,10 @@ No account, paid tier or telemetry. API engines and rented GPUs are optional; lo
 
 > New here? Start with [Setup & install](#setup--install), then follow the [end-to-end workflow](docs/guide/workflow.md). The [documentation index](docs/README.md) links every guide. Project news and current development live on [Discord](https://discord.gg/j6hnJBFtXE).
 
+### 📖 [The complete guide — every feature, screen by screen →](docs/guide/using-the-app.md)
+
+Everything the app can do, in one long read: [getting started](docs/guide/getting-started.md) · [the full workflow](docs/guide/workflow.md) · [every setting explained](docs/guide/settings-reference.md) · [Docker](docs/guide/docker.md) · [troubleshooting](docs/guide/troubleshooting.md).
+
 ### ▶️ Watch the whole thing, start to finish
 
 A real Character LoRA built end to end in seven minutes, unedited and without narration:
