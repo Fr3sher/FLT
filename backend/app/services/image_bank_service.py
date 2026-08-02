@@ -3574,7 +3574,7 @@ def _watermark_job(bank_id, rescan):
         bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
         if not rows:
             return
-        detected = clean = errors = checked = unanswered = 0
+        detected = clean = errors = unanswered = 0
 
         def prepared():
             """Yielded on the JOB's thread, one image per free slot in the pool.
@@ -3636,10 +3636,23 @@ def _watermark_job(bank_id, rescan):
                             row.watermark_state = 'none'
                             row.watermark_bbox = None
                             clean += 1
-                        checked += 1
-                        if checked % 25 == 0:
-                            db.session.commit()
                     bank_jobs.bump(job)
+                    # Never sit in an Ollama call with a transaction open. This
+                    # loop WRITES — the 'error' stamp above, the states, and the
+                    # destructive discard in prepared() — and the next iteration
+                    # waits on a call measured at ~1.7 s, tens of thousands of
+                    # times over a big bank. The rhythm used to be "commit every
+                    # 25 PARSED answers", which is not a rhythm at all: a pass
+                    # whose files erroured, or whose model answered nothing,
+                    # never incremented that counter, so the single write lock
+                    # was held across an UNBOUNDED number of calls and every
+                    # other writer in the app died on `database is locked` past
+                    # the 5 s busy_timeout (the failure that abandoned two paid
+                    # cloud runs on 2026-07-26 — see
+                    # _release_db_before_inference). Committing once per image
+                    # bounds the hold by the work traversed whatever the answers
+                    # look like, and costs a millisecond against a 1.7 s call.
+                    db.session.commit()
             finally:
                 db.session.commit()
                 unload_vision_model()  # hand the VRAM back to ComfyUI

@@ -1,5 +1,9 @@
 """🗃️ Image bank — an inference pass holds NO database transaction while it waits.
 
+Two shapes of wait live here: a child process (face, score) and a long series of
+Ollama calls (watermark). The invariant is the same for both, and so is the
+failure it prevents.
+
 The face and score passes read their rows, hand a path list to a child process,
 and only write results back when the child returns. That wait is not short: the
 scoring extra ships CPU-only torch on purpose and a big bank measures near an
@@ -133,3 +137,70 @@ def test_the_release_helper_really_ends_the_transaction(file_db):
         assert _concurrent_write(db_path), 'a pending write must lock the file'
         banks._release_db_before_inference()
         assert _concurrent_write(db_path) is None
+
+
+# --- the watermark pass: the same wait, spread over thousands of Ollama calls -
+def _watermark_writer_verdict(file_db, answer, probe_at, images=6):
+    """Run the watermark pass over a file-backed bank, asking a concurrent writer
+    what it sees at the ``probe_at``-th Ollama call, and return its verdict.
+
+    ``answer(i)`` produces (or raises) what the model replies for image ``i`` —
+    that is the whole point: the pass must bound its write lock by the images it
+    walked through, not by the ones whose answer happened to parse.
+    """
+    from app.extensions import db
+    from app.services import image_bank_service as banks
+    from app.services import vision_ollama, vision_pool
+
+    app, db_path, workdir = file_db
+    seen = {}
+    with app.app_context():
+        bank_id = _bank_with_images(workdir, n=images)
+        db.session.commit()
+        calls = {'n': 0}
+
+        def fake_describe(image_bytes, *a, **k):
+            i = calls['n']
+            calls['n'] += 1
+            if i == probe_at:
+                seen['error'] = _concurrent_write(db_path)
+            return answer(i)
+
+        job = {'done': 0, 'total': 0, '_touched': 0.0}
+        # One call at a time, so "the probe fires while the rows before it are
+        # written" is an ordering the test owns rather than a race it hopes for.
+        with patch.object(vision_pool, 'vision_concurrency', lambda *a, **k: 1), \
+             patch.object(vision_ollama, 'describe_image_ollama', fake_describe), \
+             patch.object(vision_ollama, 'unload_vision_model', lambda *a, **k: True), \
+             patch.object(banks.bank_jobs, 'cancelled', lambda j: False), \
+             patch.object(banks.bank_jobs, 'progress', lambda j, **kw: None):
+            banks._watermark_job(bank_id, False)(job)
+    assert 'error' in seen, 'the pass never reached the probed image'
+    return seen['error']
+
+
+def test_the_watermark_pass_lets_other_writers_through_when_files_error(file_db):
+    """Every image fails to be read: the pass stamps 'error' on each row and asks
+    Ollama about the next one. Those stamps are writes — they must not accumulate
+    into one lock held across the whole pass."""
+    def always_raises(_i):
+        raise RuntimeError('unreadable image')
+
+    error = _watermark_writer_verdict(file_db, always_raises, probe_at=2)
+    assert error is None, (
+        'the watermark pass held a write lock across its Ollama calls — a pass '
+        f'over unreadable files would block every other writer for hours ({error})'
+    )
+
+
+def test_the_watermark_pass_lets_other_writers_through_when_ollama_answers_nothing(file_db):
+    """One image answers, then Ollama goes silent. The first answer is a write;
+    the silent ones are not, so a commit rhythm counted in PARSED answers never
+    ticks again and that write outlives the whole pass."""
+    def one_answer_then_silence(i):
+        return '{"present": false}' if i == 0 else ''
+
+    error = _watermark_writer_verdict(file_db, one_answer_then_silence, probe_at=3)
+    assert error is None, (
+        'a single parsed answer followed by an unreachable Ollama left the write '
+        f'lock held for the rest of the pass ({error})')
