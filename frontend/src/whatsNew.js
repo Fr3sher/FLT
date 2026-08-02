@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-folder-picker-paste-a-path',
+    date: '2026-08-03',
+    title: 'You can finally paste a path when choosing a folder',
+    blurb:
+      'Browse… opened the Windows folder tree from the XP era: no address bar, no Quick Access, and no way to paste — so a path someone sent you, or one you had just copied out of Explorer, had to be clicked down to one folder at a time. It now opens the modern Windows folder picker, with an address bar you can paste into and your usual shortcuts down the side. The in-app browser — the one you get over the LAN, on a tablet, or on Linux, where no Windows dialog exists — gained the same thing: a path box at the top, Enter to jump. If the modern dialog cannot be used on your machine, the old one still opens rather than nothing at all.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-03-review-opens-instantly',
     date: '2026-08-03',
     title: '▶ Review opens instantly, even on a 20 000-image bank',
