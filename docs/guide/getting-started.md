@@ -141,9 +141,17 @@ walks through five steps — each one unlocks a set of features:
 2. **ComfyUI** — unlocks local (Klein) generation and the Test Studio.
 3. **Ollama** — the local vision model behind auto-captioning, framing
    auto-classify and head-crop.
-4. **Quality tools** — face-similarity scoring and person masks (a one-click
-   `pip install`).
+4. **Quality tools** — face-similarity scoring, person masks, watermark
+   inpainting and bank scoring (a one-click `pip install`).
 5. **ai-toolkit** — the training engine.
+
+Each optional helper says what it unlocks and what still works without it, and
+installs on its own — or all at once, which is usually what you want on a fresh
+machine.
+
+<p align="center">
+  <img src="../screenshots/setup/install-everything.png" alt="Setup step 4 listing each ML helper with its own Install button and an Install all option" width="760">
+</p>
 
 Nothing is mandatory: **Skip setup** is always available, and every step can be
 revisited later from **Settings**, where each tool has a Test button that tells
