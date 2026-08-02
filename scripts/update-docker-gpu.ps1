@@ -99,27 +99,27 @@ function Assert-TestModeConfiguration {
         $TestMaxEntryBytes -or $TestMaxExpandedBytes -or
         $TestRequiredFreeBytes -or $Repository -cne $script:OfficialRepository)
     if ($hasInjection -and -not $TestMode) {
-        throw 'Parametres d injection refuses sans -TestMode explicite.'
+        throw 'Injection parameters refused without explicit -TestMode.'
     }
     if ($TestFault -notin @(
             '', 'overlay-after-first-switch', 'git-dirty-before-switch',
             'hold-lock')) {
-        throw "TestFault inconnu : $TestFault"
+        throw "Unknown TestFault: $TestFault"
     }
     if ($TestHoldMilliseconds -lt 0 -or $TestHoldMilliseconds -gt 10000) {
-        throw 'TestHoldMilliseconds doit etre compris entre 0 et 10000.'
+        throw 'TestHoldMilliseconds must be between 0 and 10000.'
     }
     foreach ($limit in @(
             $TestMaxArchiveBytes, $TestMaxEntryBytes,
             $TestMaxExpandedBytes, $TestRequiredFreeBytes)) {
-        if ($limit -lt 0) { throw 'Les limites de test ne peuvent pas etre negatives.' }
+        if ($limit -lt 0) { throw 'Test limits cannot be negative.' }
     }
     if ($TestCommit -and $TestCommit -cnotmatch '^[0-9a-fA-F]{40}$') {
-        throw 'TestCommit doit etre un SHA-1 Git complet de 40 caracteres.'
+        throw 'TestCommit must be a full 40-character Git SHA-1.'
     }
     if ($TestFault -eq 'hold-lock' -and
             (-not $TestSignalPath -or $TestHoldMilliseconds -le 0)) {
-        throw 'Le test hold-lock exige TestSignalPath et TestHoldMilliseconds positif.'
+        throw 'The hold-lock test requires TestSignalPath and a positive TestHoldMilliseconds.'
     }
     if ($TestMode) {
         if ($TestMaxArchiveBytes) { $script:MaxArchiveBytes = $TestMaxArchiveBytes }
@@ -155,7 +155,7 @@ function Assert-ChildPath([string]$Root, [string]$Candidate, [switch]$AllowRoot)
     }
     $prefix = $rootFull + [IO.Path]::DirectorySeparatorChar
     if (-not $candidateFull.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Chemin hors du dossier autorise : $candidateFull"
+        throw "Path outside the allowed folder: $candidateFull"
     }
     return $candidateFull
 }
@@ -164,7 +164,7 @@ function Assert-NoReparseTree([string]$Root) {
     $rootFull = Get-FullPath $Root
     $rootItem = Get-Item -LiteralPath $rootFull -Force
     if (($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Point de reanalyse refuse : $rootFull"
+        throw "Reparse point refused: $rootFull"
     }
     if (-not $rootItem.PSIsContainer) {
         return
@@ -177,7 +177,7 @@ function Assert-NoReparseTree([string]$Root) {
         foreach ($item in @(Get-ChildItem -LiteralPath $current -Force)) {
             [void](Assert-ChildPath -Root $rootFull -Candidate $item.FullName -AllowRoot)
             if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "Point de reanalyse refuse : $($item.FullName)"
+                throw "Reparse point refused: $($item.FullName)"
             }
             if ($item.PSIsContainer) {
                 $pending.Push($item.FullName)
@@ -188,7 +188,7 @@ function Assert-NoReparseTree([string]$Root) {
 
 function Assert-RepositoryName([string]$Value) {
     if ($Value -cnotmatch '^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$') {
-        throw "Nom de depot GitHub invalide : $Value"
+        throw "Invalid GitHub repository name: $Value"
     }
 }
 
@@ -196,11 +196,11 @@ function Assert-GitHubArchiveUri([string]$Value) {
     try {
         $uri = [Uri]$Value
     } catch {
-        throw "URI d'archive invalide."
+        throw "Invalid archive URI."
     }
     if ($uri.Scheme -cne 'https' -or $uri.Host -cne 'codeload.github.com' -or
             -not $uri.IsDefaultPort -or $uri.UserInfo) {
-        throw 'Le telechargement est limite a HTTPS sur codeload.github.com.'
+        throw 'Downloads are restricted to HTTPS on codeload.github.com.'
     }
     return $uri.AbsoluteUri
 }
@@ -224,9 +224,9 @@ function Get-ReleaseMetadata([string]$Repo, [string]$MetadataPath) {
             try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
         }
         if ($status -eq 404) {
-            throw "Aucune GitHub Release stable n'est publiee pour $Repo. Aucun fallback vers main n'a ete effectue."
+            throw "No stable GitHub Release is published for $Repo. No fallback to main was performed."
         }
-        throw "Impossible de lire la derniere GitHub Release stable ($($_.Exception.Message)). Aucun fallback vers main n'a ete effectue."
+        throw "Unable to read the latest stable GitHub Release ($($_.Exception.Message)). No fallback to main was performed."
     }
 }
 
@@ -243,7 +243,7 @@ function Get-ImmutableCommit([string]$Repo, [string]$Reference) {
                 'Accept' = 'application/vnd.github+json'
             }
     } catch {
-        throw "Impossible de resoudre le commit immuable '$Reference' : $($_.Exception.Message)"
+        throw "Unable to resolve the immutable commit '$Reference': $($_.Exception.Message)"
     }
     $shaProperty = if ($null -ne $metadata) {
         $metadata.PSObject.Properties['sha']
@@ -252,7 +252,7 @@ function Get-ImmutableCommit([string]$Repo, [string]$Reference) {
     }
     $sha = if ($null -ne $shaProperty) { [string]$shaProperty.Value } else { '' }
     if ($sha -cnotmatch '^[0-9a-fA-F]{40}$') {
-        throw "GitHub n'a pas retourne de commit immuable valide pour '$Reference'."
+        throw "GitHub did not return a valid immutable commit for '$Reference'."
     }
     return $sha.ToLowerInvariant()
 }
@@ -276,20 +276,20 @@ function Resolve-ArchiveSource(
         }
         $tag = if ($null -ne $tagProperty) { [string]$tagProperty.Value } else { '' }
         if (-not $tag -or $tag -cnotmatch '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$') {
-            throw "Aucune GitHub Release stable exploitable n'est publiee pour $Repo. Aucun fallback vers main n'a ete effectue."
+            throw "No usable stable GitHub Release is published for $Repo. No fallback to main was performed."
         }
         $reference = $tag
     }
     if ($TestMode -and ($LocalArchive -or $OverrideUri -or $GitRemote) -and
             -not $TestCommit) {
-        throw 'TestCommit est obligatoire pour lier toute injection a un commit immuable.'
+        throw 'TestCommit is required to bind any injection to an immutable commit.'
     }
     $commit = Get-ImmutableCommit -Repo $Repo -Reference $reference
 
     if ($LocalArchive) {
         $resolved = (Resolve-Path -LiteralPath $LocalArchive).Path
         if (-not [IO.File]::Exists($resolved)) {
-            throw "Archive locale introuvable : $resolved"
+            throw "Local archive not found: $resolved"
         }
         return [pscustomobject]@{
             Kind = 'file'; Value = $resolved; Tag = $tag
@@ -321,7 +321,7 @@ function New-DownloadTempDirectory {
             return (Get-FullPath $candidate)
         }
     }
-    throw 'Impossible de creer un dossier temporaire unique.'
+    throw 'Unable to create a unique temporary folder.'
 }
 
 function Remove-SafeDownloadTemp([string]$Path) {
@@ -332,11 +332,11 @@ function Remove-SafeDownloadTemp([string]$Path) {
     $leaf = Split-Path -Leaf $full
     if (-not [string]::Equals($base, $parent, [StringComparison]::OrdinalIgnoreCase) -or
             $leaf -cnotmatch '^lora-dataset-studio-update-[0-9a-f]{32}$') {
-        throw "Nettoyage temporaire refuse pour un chemin inattendu : $full"
+        throw "Temporary cleanup refused for an unexpected path: $full"
     }
     $item = Get-Item -LiteralPath $full -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Nettoyage temporaire refuse pour un point de reanalyse : $full"
+        throw "Temporary cleanup refused for a reparse point: $full"
     }
     Remove-Item -LiteralPath $full -Recurse -Force
 }
@@ -352,10 +352,10 @@ function Assert-AvailableSpace([string]$Path, [long]$RequiredBytes) {
         $drive = New-Object IO.DriveInfo($root)
         [long]$available = $drive.AvailableFreeSpace
     } catch {
-        throw "Impossible de verifier l espace disque disponible pour '$Path'."
+        throw "Unable to check available disk space for '$Path'."
     }
     if ($available -lt $required) {
-        throw "Espace disque insuffisant : $available octets disponibles, $required requis."
+        throw "Insufficient disk space: $available bytes available, $required required."
     }
 }
 
@@ -367,7 +367,7 @@ function Copy-StreamLimited(
     while (($read = $InputStream.Read($buffer, 0, $buffer.Length)) -gt 0) {
         $total += [long]$read
         if ($total -gt $MaximumBytes) {
-            throw "$Label depasse la limite de $MaximumBytes octets."
+            throw "$Label exceeds the limit of $MaximumBytes bytes."
         }
         $OutputStream.Write($buffer, 0, $read)
     }
@@ -388,17 +388,17 @@ function Copy-OrDownloadArchive($Source, [string]$Destination) {
             $sourceItem = Get-Item -LiteralPath $Source.Value -Force
             if ($sourceItem.PSIsContainer -or
                     ($sourceItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "Archive locale refusee (dossier ou reparse) : $($Source.Value)"
+                throw "Local archive refused (folder or reparse point): $($Source.Value)"
             }
             if ([long]$sourceItem.Length -gt $script:MaxArchiveBytes) {
-                throw "Archive locale superieure a la limite de $($script:MaxArchiveBytes) octets."
+                throw "Local archive exceeds the limit of $($script:MaxArchiveBytes) bytes."
             }
             $input = [IO.File]::Open(
                 $sourceItem.FullName, [IO.FileMode]::Open,
                 [IO.FileAccess]::Read, [IO.FileShare]::Read)
         } else {
             $safeUri = Assert-GitHubArchiveUri ([string]$Source.Value)
-            Write-Step "Telechargement GitHub ($($Source.Channel): $($Source.Commit))"
+            Write-Step "Downloading from GitHub ($($Source.Channel): $($Source.Commit))"
             $request = [Net.HttpWebRequest][Net.WebRequest]::Create($safeUri)
             $request.Method = 'GET'
             $request.AllowAutoRedirect = $false
@@ -406,15 +406,15 @@ function Copy-OrDownloadArchive($Source, [string]$Destination) {
             $request.Accept = 'application/zip'
             $response = [Net.HttpWebResponse]$request.GetResponse()
             if ([int]$response.StatusCode -ne 200) {
-                throw "Telechargement refuse : HTTP $([int]$response.StatusCode)."
+                throw "Download refused: HTTP $([int]$response.StatusCode)."
             }
             if ($response.ContentLength -gt $script:MaxArchiveBytes) {
-                throw "Archive distante annoncee au-dessus de la limite de $($script:MaxArchiveBytes) octets."
+                throw "Remote archive reports a size above the limit of $($script:MaxArchiveBytes) bytes."
             }
             $input = $response.GetResponseStream()
         }
         [void](Copy-StreamLimited -InputStream $input -OutputStream $output `
-            -MaximumBytes $script:MaxArchiveBytes -Label 'Archive telechargee')
+            -MaximumBytes $script:MaxArchiveBytes -Label 'Downloaded archive')
         $output.Flush($true)
     } catch {
         if ($output) { $output.Dispose(); $output = $null }
@@ -444,10 +444,10 @@ function Copy-ZipEntryStreaming(
             $entryBytes += [long]$read
             $GlobalBytes.Value += [long]$read
             if ($entryBytes -gt $script:MaxEntryBytes) {
-                throw "Entree ZIP '$($Entry.FullName)' superieure a la limite reelle par entree."
+                throw "ZIP entry '$($Entry.FullName)' exceeds the actual per-entry limit."
             }
             if ($GlobalBytes.Value -gt $script:MaxExpandedBytes) {
-                throw 'Archive ZIP superieure a la limite reelle globale de decompressee.'
+                throw 'ZIP archive exceeds the actual global expanded-size limit.'
             }
             $output.Write($buffer, 0, $read)
         }
@@ -464,7 +464,7 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
         $script:DiskReserveBytes)
     $zipItem = Get-Item -LiteralPath $ZipPath -Force
     if ([long]$zipItem.Length -gt $script:MaxArchiveBytes) {
-        throw 'Archive ZIP au-dessus de la limite de telechargement.'
+        throw 'ZIP archive above the download limit.'
     }
     $extract = Join-Path $TempRoot 'extracted'
     [void][IO.Directory]::CreateDirectory($extract)
@@ -476,9 +476,9 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
         $zip = New-Object IO.Compression.ZipArchive(
             $stream, [IO.Compression.ZipArchiveMode]::Read, $false)
         try {
-            if ($zip.Entries.Count -eq 0) { throw 'Archive ZIP vide.' }
+            if ($zip.Entries.Count -eq 0) { throw 'Empty ZIP archive.' }
             if ($zip.Entries.Count -gt $script:MaxArchiveEntries) {
-                throw "Archive ZIP trop volumineuse ($($zip.Entries.Count) entrees)."
+                throw "ZIP archive too large ($($zip.Entries.Count) entries)."
             }
             $roots = New-Object 'System.Collections.Generic.HashSet[string]' (
                 [StringComparer]::OrdinalIgnoreCase)
@@ -489,10 +489,10 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
                 $name = ([string]$entry.FullName).Replace('\', '/')
                 if (-not $name -or $name.StartsWith('/') -or
                         $name -match '^[A-Za-z]:' -or $name.IndexOf([char]0) -ge 0) {
-                    throw "Chemin ZIP absolu ou vide refuse : $name"
+                    throw "Absolute or empty ZIP path refused: $name"
                 }
                 $trimmed = $name.TrimEnd('/')
-                if (-not $trimmed) { throw 'Entree ZIP racine invalide.' }
+                if (-not $trimmed) { throw 'Invalid root ZIP entry.' }
                 $segments = @($trimmed.Split('/'))
                 foreach ($segment in $segments) {
                     $reservedDevice = $segment -match (
@@ -501,15 +501,15 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
                             $segment -match '[<>:"|?*\x00-\x1F]' -or
                             $segment.EndsWith('.') -or $segment.EndsWith(' ') -or
                             $segment.Length -gt 255 -or $reservedDevice) {
-                        throw "Traversal/segment ZIP refuse : $name"
+                        throw "ZIP traversal/segment refused: $name"
                     }
                 }
                 if ($segments.Count -eq 1 -and -not $name.EndsWith('/')) {
-                    throw "L'archive doit avoir une racine dossier unique : $name"
+                    throw "The archive must have a single folder root: $name"
                 }
                 [void]$roots.Add($segments[0])
                 if (-not $seen.Add($trimmed)) {
-                    throw "Entree ZIP dupliquee (casse incluse) : $name"
+                    throw "Duplicate ZIP entry (case included): $name"
                 }
                 [long]$attrs = $entry.ExternalAttributes
                 if ($attrs -lt 0) { $attrs += 4294967296 }
@@ -517,7 +517,7 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
                 $dosAttrs = ($attrs -band 65535)
                 if (($unixType -ne 0 -and $unixType -ne 16384 -and
                         $unixType -ne 32768) -or ($dosAttrs -band 1024) -ne 0) {
-                    throw "Lien ou type special ZIP refuse : $name"
+                    throw "ZIP link or special type refused: $name"
                 }
                 $relative = [string]::Join(
                     [IO.Path]::DirectorySeparatorChar, $segments)
@@ -530,9 +530,9 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
                 }
             }
             if ($roots.Count -ne 1) {
-                throw "L'archive doit contenir exactement une racine dossier (trouve : $($roots.Count))."
+                throw "The archive must contain exactly one folder root (found: $($roots.Count))."
             }
-            Write-Step 'Validation et extraction streaming de l archive'
+            Write-Step 'Streaming validation and extraction of the archive'
             [long]$expandedBytes = 0
             foreach ($descriptor in $descriptors) {
                 if ($descriptor.IsDirectory) {
@@ -554,23 +554,23 @@ function Expand-AndValidateArchive([string]$ZipPath, [string]$TempRoot) {
 
     $top = @(Get-ChildItem -LiteralPath $extract -Force)
     if ($top.Count -ne 1 -or -not $top[0].PSIsContainer) {
-        throw "L'archive extraite n'a pas une racine dossier unique."
+        throw "The extracted archive does not have a single folder root."
     }
     $stagedRoot = $top[0].FullName
     foreach ($relative in $script:RequiredSentinels) {
         $path = Join-Path $stagedRoot ($relative.Replace('/', [IO.Path]::DirectorySeparatorChar))
         if (-not [IO.File]::Exists($path)) {
-            throw "Archive invalide : sentinelle manquante '$relative'."
+            throw "Invalid archive: missing sentinel '$relative'."
         }
         $item = Get-Item -LiteralPath $path -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Archive invalide : sentinelle liee/reparse '$relative'."
+            throw "Invalid archive: linked/reparse sentinel '$relative'."
         }
     }
     $hasUnifiedLauncher = [IO.File]::Exists((Join-Path $stagedRoot 'start-docker.bat'))
     $hasLegacyLauncher = [IO.File]::Exists((Join-Path $stagedRoot 'start-docker-gpu.bat'))
     if (-not $hasUnifiedLauncher -and -not $hasLegacyLauncher) {
-        throw "Archive invalide : lanceur manquant ('start-docker.bat' ou 'start-docker-gpu.bat')."
+        throw "Invalid archive: missing launcher ('start-docker.bat' or 'start-docker-gpu.bat')."
     }
     return $stagedRoot
 }
@@ -579,15 +579,15 @@ function Get-CodeItems([string]$StagedRoot) {
     $items = @()
     foreach ($item in @(Get-ChildItem -LiteralPath $StagedRoot -Force)) {
         if (Test-ProtectedTopLevel $item.Name) {
-            Write-Host "    Etat local ignore/protege : $($item.Name)"
+            Write-Host "    Local state ignored/protected: $($item.Name)"
             continue
         }
         if ($item.Name -like '.lds-update-*') {
-            throw "Nom reserve refuse dans l'archive : $($item.Name)"
+            throw "Reserved name refused in the archive: $($item.Name)"
         }
         $items += $item
     }
-    if ($items.Count -eq 0) { throw "Archive invalide : aucun fichier de code a installer." }
+    if ($items.Count -eq 0) { throw "Invalid archive: no code files to install." }
     return @($items | Sort-Object Name)
 }
 
@@ -603,7 +603,7 @@ function Get-ActualItemBytes($Items) {
         foreach ($file in $files) {
             [long]$length = $file.Length
             if ($length -lt 0 -or $total -gt ([long]::MaxValue - $length)) {
-                throw 'Taille du code extrait invalide ou hors limites.'
+                throw 'Invalid or out-of-bounds size for extracted code.'
             }
             $total += $length
         }
@@ -615,7 +615,7 @@ function Assert-LiveDestinationsSafe([string]$Root, $Items) {
     $rootItem = Get-Item -LiteralPath $Root -Force
     if (-not $rootItem.PSIsContainer -or
             ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Le dossier d'installation est absent ou est un point de reanalyse : $Root"
+        throw "The installation folder is missing or is a reparse point: $Root"
     }
     foreach ($item in $Items) {
         $destination = Assert-ChildPath -Root $Root -Candidate (Join-Path $Root $item.Name)
@@ -631,27 +631,27 @@ function Assert-ExistingInstallation([string]$Root) {
     if ([string]::Equals(
             $rootFull.TrimEnd('\', '/'), $volumeRoot,
             [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Une racine de volume ne peut pas etre mise a jour : $rootFull"
+        throw "A volume root cannot be updated: $rootFull"
     }
     $rootItem = Get-Item -LiteralPath $rootFull -Force
     if (-not $rootItem.PSIsContainer -or
             ($rootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Dossier d installation refuse (absent ou reparse) : $rootFull"
+        throw "Installation folder refused (missing or reparse point): $rootFull"
     }
     foreach ($relative in @('docker-compose.gpu.yml', 'backend/run.py')) {
         if (-not [IO.File]::Exists((Join-Path $rootFull $relative))) {
-            throw "Ce dossier ne ressemble pas a une installation Docker LDS : '$relative' manque."
+            throw "This folder does not look like an LDS Docker installation: '$relative' is missing."
         }
     }
     if (-not [IO.File]::Exists((Join-Path $rootFull 'start-docker.bat')) -and
             -not [IO.File]::Exists((Join-Path $rootFull 'start-docker-gpu.bat'))) {
-        throw 'Ce dossier ne ressemble pas a une installation Docker LDS : lanceur absent.'
+        throw 'This folder does not look like an LDS Docker installation: launcher missing.'
     }
     $gitMarker = Join-Path $rootFull '.git'
     if (Test-Path -LiteralPath $gitMarker) {
         $gitItem = Get-Item -LiteralPath $gitMarker -Force
         if (($gitItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw 'Le marqueur .git ne peut pas etre un point de reanalyse.'
+            throw 'The .git marker cannot be a reparse point.'
         }
     }
 }
@@ -671,7 +671,7 @@ function Enter-UpdateLock([string]$Root) {
         $existing = Get-Item -LiteralPath $path -Force
         if ($existing.PSIsContainer -or
                 ($existing.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "Verrou updater refuse (dossier ou reparse) : $path"
+            throw "Updater lock refused (folder or reparse point): $path"
         }
     }
     try {
@@ -679,7 +679,7 @@ function Enter-UpdateLock([string]$Root) {
             $path, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite,
             [IO.FileShare]::None, 4096, [IO.FileOptions]::WriteThrough)
     } catch {
-        throw "Une autre mise a jour utilise deja cette installation (verrou exclusif indisponible)."
+        throw "Another update is already using this installation (exclusive lock unavailable)."
     }
     try {
         $content = "pid=$PID utc=$([DateTime]::UtcNow.ToString('o'))"
@@ -712,7 +712,7 @@ function Exit-UpdateLock($Lock) {
                 }
             }
         } catch {
-            Write-Warning "Nettoyage du verrou differe : $($_.Exception.Message)"
+            Write-Warning "Deferred lock cleanup: $($_.Exception.Message)"
         }
     }
 }
@@ -725,7 +725,7 @@ function Assert-ExactTransactionPath(
     if (-not [string]::Equals($rootFull, $parent, [StringComparison]::OrdinalIgnoreCase) -or
             -not [string]::Equals((Split-Path -Leaf $full), $ExpectedLeaf,
                 [StringComparison]::Ordinal)) {
-        throw "Chemin transactionnel inattendu refuse : $full"
+        throw "Unexpected transaction path refused: $full"
     }
     return $full
 }
@@ -736,7 +736,7 @@ function Remove-ExactTransactionPath(
     $full = Assert-ExactTransactionPath -Path $Path -Root $Root -ExpectedLeaf $ExpectedLeaf
     $item = Get-Item -LiteralPath $full -Force
     if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Nettoyage refuse pour un point de reanalyse : $full"
+        throw "Cleanup refused for a reparse point: $full"
     }
     Remove-Item -LiteralPath $full -Recurse -Force
 }
@@ -822,7 +822,7 @@ function Remove-TransactionArtifactsBestEffort($Transaction) {
             Remove-ExactTransactionPath -Path $artifact.Path `
                 -Root $Transaction.Root -ExpectedLeaf $artifact.Leaf
         } catch {
-            Write-Warning "Nettoyage differe pour '$($artifact.Path)' : $($_.Exception.Message)"
+            Write-Warning "Deferred cleanup for '$($artifact.Path)': $($_.Exception.Message)"
         }
     }
 }
@@ -841,7 +841,7 @@ function Assert-CodeTransactionArtifactsSafe($Transaction) {
         $item = Get-Item -LiteralPath $artifact.Path -Force
         if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
                 [bool]$item.PSIsContainer -ne [bool]$artifact.Directory) {
-            throw "Artefact transactionnel refuse (type ou reparse) : $($artifact.Path)"
+            throw "Transaction artifact refused (type or reparse point): $($artifact.Path)"
         }
         if ($artifact.Directory) { Assert-NoReparseTree $artifact.Path }
     }
@@ -850,7 +850,7 @@ function Assert-CodeTransactionArtifactsSafe($Transaction) {
 function Undo-CodeOverlay($Transaction) {
     if (-not $Transaction -or -not $Transaction.Active) { return }
     Assert-CodeTransactionArtifactsSafe $Transaction
-    Write-Step 'Rollback du code precedent'
+    Write-Step 'Rolling back previous code'
     Write-CodeTransactionJournal -Transaction $Transaction -Phase 'rolling-back'
     $errors = @()
     if (-not (Test-Path -LiteralPath $Transaction.FailedRoot)) {
@@ -871,7 +871,7 @@ function Undo-CodeOverlay($Transaction) {
                 Move-Item -LiteralPath $backup -Destination $destination
             } elseif ($record.HadOriginal) {
                 if (-not (Test-Path -LiteralPath $destination)) {
-                    throw "Original et sauvegarde manquants pour $($record.Name)"
+                    throw "Missing original and backup for $($record.Name)"
                 }
             } elseif ($record.HasNew -and
                     -not (Test-Path -LiteralPath $stage) -and
@@ -885,7 +885,7 @@ function Undo-CodeOverlay($Transaction) {
         }
     }
     if ($errors.Count -gt 0) {
-        throw "Rollback incomplet. Journal '$($Transaction.JournalPath)'. $($errors -join ' | ')"
+        throw "Incomplete rollback. Journal '$($Transaction.JournalPath)'. $($errors -join ' | ')"
     }
     Write-CodeTransactionJournal -Transaction $Transaction -Phase 'rolled-back'
     $Transaction.Active = $false
@@ -927,7 +927,7 @@ function New-CodeTransaction([string]$Root, $Records) {
 
 function Install-CodeOverlay([string]$StagedRoot, [string]$Root, $ValidatedItems) {
     $newItems = @($ValidatedItems)
-    if ($newItems.Count -eq 0) { throw 'Aucun code valide a installer.' }
+    if ($newItems.Count -eq 0) { throw 'No valid code to install.' }
     Assert-LiveDestinationsSafe -Root $Root -Items $newItems
     $oldItems = @(Get-ExistingCodeItems $Root)
     $newMap = @{}
@@ -950,7 +950,7 @@ function Install-CodeOverlay([string]$StagedRoot, [string]$Root, $ValidatedItems
             HasNew = [bool]$newMap.ContainsKey($name)
         }
     }
-    if ($records.Count -eq 0) { throw 'Aucun code ancien ou nouveau a transactionner.' }
+    if ($records.Count -eq 0) { throw 'No old or new code to transact.' }
     $transaction = New-CodeTransaction -Root $Root -Records $records
     # Persist intent before creating any other transaction artifact so every
     # interruption window has a discoverable recovery record.
@@ -958,14 +958,14 @@ function Install-CodeOverlay([string]$StagedRoot, [string]$Root, $ValidatedItems
     try {
         [void][IO.Directory]::CreateDirectory($transaction.StageRoot)
         [void][IO.Directory]::CreateDirectory($transaction.BackupRoot)
-        Write-Step 'Preparation locale du nouveau code'
+        Write-Step 'Preparing new code locally'
         foreach ($item in $newItems) {
             Copy-Item -LiteralPath $item.FullName `
                 -Destination (Join-Path $transaction.StageRoot $item.Name) `
                 -Recurse -Force
         }
         Write-CodeTransactionJournal -Transaction $transaction -Phase 'prepared'
-        Write-Step 'Installation transactionnelle du code'
+        Write-Step 'Transactionally installing code'
         Write-CodeTransactionJournal -Transaction $transaction -Phase 'switching'
         $switched = 0
         foreach ($record in $records) {
@@ -988,7 +988,7 @@ function Install-CodeOverlay([string]$StagedRoot, [string]$Root, $ValidatedItems
         return $transaction
     } catch {
         try { Undo-CodeOverlay $transaction } catch {
-            throw "Echec d'installation et $($_.Exception.Message)"
+            throw "Install failure, and $($_.Exception.Message)"
         }
         throw
     }
@@ -1005,13 +1005,13 @@ function ConvertFrom-CodeTransactionJournal([string]$Root, [string]$Path) {
     $item = Get-Item -LiteralPath $Path -Force
     if ($item.PSIsContainer -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Journal transactionnel refuse : $Path"
+        throw "Transaction journal refused: $Path"
     }
     try {
         $data = [IO.File]::ReadAllText($item.FullName, [Text.Encoding]::UTF8) |
             ConvertFrom-Json
     } catch {
-        throw "Journal transactionnel illisible : $Path"
+        throw "Unreadable transaction journal: $Path"
     }
     if ($data.schema -cne 'lds-docker-code-update/v2' -or
             [string]$data.id -cnotmatch '^[0-9a-f]{32}$' -or
@@ -1022,7 +1022,7 @@ function ConvertFrom-CodeTransactionJournal([string]$Root, [string]$Path) {
                 'preparing', 'prepared', 'switching', 'switched',
                 'launching', 'rebuild-launched', 'rolling-back',
                 'rolled-back', 'committed')) {
-        throw "Journal transactionnel invalide : $Path"
+        throw "Invalid transaction journal: $Path"
     }
     $id = [string]$data.id
     $expected = @{
@@ -1033,7 +1033,7 @@ function ConvertFrom-CodeTransactionJournal([string]$Root, [string]$Path) {
     }
     foreach ($property in $expected.Keys) {
         if ([string]$data.$property -cne $expected[$property]) {
-            throw "Journal transactionnel incoherent ($property) : $Path"
+            throw "Inconsistent transaction journal ($property): $Path"
         }
     }
     $records = @()
@@ -1043,7 +1043,7 @@ function ConvertFrom-CodeTransactionJournal([string]$Root, [string]$Path) {
                 $name.IndexOfAny([char[]]@('/', '\', ':', [char]0)) -ge 0 -or
                 (Test-ProtectedTopLevel $name) -or
                 (Test-UpdaterInternalRelative $name)) {
-            throw "Nom transactionnel refuse dans le journal : '$name'"
+            throw "Transaction name refused in the journal: '$name'"
         }
         $records += [pscustomobject]@{
             Name = $name
@@ -1051,7 +1051,7 @@ function ConvertFrom-CodeTransactionJournal([string]$Root, [string]$Path) {
             HasNew = [bool]$entry.has_new
         }
     }
-    if ($records.Count -eq 0) { throw "Journal transactionnel sans elements : $Path" }
+    if ($records.Count -eq 0) { throw "Transaction journal has no items: $Path" }
     $transaction = New-CodeTransaction -Root $Root -Records $records
     $transaction.Id = $id
     $transaction.StageLeaf = $expected.stage_leaf
@@ -1075,12 +1075,12 @@ function Recover-PendingCodeTransaction([string]$Root) {
     $journals = @(Get-ChildItem -LiteralPath $Root -Force -File |
         Where-Object { $_.Name -match '^\.lds-update-journal-[0-9a-f]{32}\.json$' })
     if ($journals.Count -gt 1) {
-        throw 'Plusieurs journaux updater sont presents; recuperation automatique refusee.'
+        throw 'Multiple updater journals are present; automatic recovery refused.'
     }
     if ($journals.Count -eq 0) { return }
     $transaction = ConvertFrom-CodeTransactionJournal `
         -Root $Root -Path $journals[0].FullName
-    Write-Step "Recuperation de la transaction interrompue ($($transaction.Phase))"
+    Write-Step "Recovering interrupted transaction ($($transaction.Phase))"
     if ($transaction.Phase -in @('committed', 'rolled-back')) {
         $transaction.Active = $false
         Remove-TransactionArtifactsBestEffort $transaction
@@ -1095,24 +1095,24 @@ function Read-LauncherModeMarker([string]$Path) {
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) {
         $bytes = [IO.File]::ReadAllBytes($item.FullName)
     } else {
-        throw "Settings launcher refuses (dossier ou reparse) : $Path"
+        throw "Settings launcher refused (folder or reparse point): $Path"
     }
     foreach ($byte in $bytes) {
         if ($byte -gt 127) {
-            throw 'Settings launcher invalides : ASCII strict requis.'
+            throw 'Invalid settings launcher: strict ASCII required.'
         }
     }
     $text = [Text.Encoding]::ASCII.GetString($bytes)
     $normalized = $text.Replace("`r`n", "`n")
     if ($normalized.Contains("`r")) {
-        throw 'Settings launcher invalides : fin de ligne CR isolee.'
+        throw 'Invalid settings launcher: isolated CR line ending.'
     }
     if ($normalized.EndsWith("`n")) {
         $normalized = $normalized.Substring(0, $normalized.Length - 1)
     }
     if ($normalized.Contains("`n") -or
             $normalized -cnotmatch '^LAST_LAUNCHER=(studio|gpu)$') {
-        throw 'Settings launcher invalides : une seule ligne LAST_LAUNCHER=studio|gpu est requise.'
+        throw 'Invalid settings launcher: exactly one LAST_LAUNCHER=studio|gpu line is required.'
     }
     return $matches[1]
 }
@@ -1144,12 +1144,12 @@ function Assert-SafeLauncherFile(
         [string]$Path, [string]$Root, [switch]$AllowExternal) {
     $full = Get-FullPath $Path
     if (-not [IO.File]::Exists($full)) {
-        throw "Lanceur requis introuvable : $full"
+        throw "Required launcher not found: $full"
     }
     $item = Get-Item -LiteralPath $full -Force
     if ($item.PSIsContainer -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Lanceur refuse (dossier ou reparse) : $full"
+        throw "Launcher refused (folder or reparse point): $full"
     }
     if (-not $AllowExternal) {
         $parent = (Split-Path -Parent $full).TrimEnd('\', '/')
@@ -1157,10 +1157,10 @@ function Assert-SafeLauncherFile(
         if (-not [string]::Equals(
                 $parent, $rootFull, [StringComparison]::OrdinalIgnoreCase) -or
                 [IO.Path]::GetExtension($full) -cne '.bat') {
-            throw "Lanceur interne hors racine ou extension refusee : $full"
+            throw "Internal launcher outside root or refused extension: $full"
         }
     } elseif (-not $TestMode) {
-        throw 'Un launcher externe est strictement reserve au mode test.'
+        throw 'An external launcher is strictly reserved for test mode.'
     }
     return $full
 }
@@ -1188,27 +1188,30 @@ function Assert-StagedLauncherCompatibility([string]$StagedRoot, $Preference) {
         'start-docker-gpu.bat'
     }
     if (-not [IO.File]::Exists((Join-Path $StagedRoot $required))) {
-        throw "Archive incompatible avec l installation $($Preference.Kind) : '$required' manque."
+        throw "Archive incompatible with the $($Preference.Kind) installation: '$required' is missing."
     }
     $item = Get-Item -LiteralPath (Join-Path $StagedRoot $required) -Force
     if ($item.PSIsContainer -or
             ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw "Archive incompatible : lanceur '$required' lie ou reparse."
+        throw "Incompatible archive: launcher '$required' is linked or a reparse point."
     }
 }
 
 function Invoke-RebuildLauncher([string]$Path) {
     if (-not [IO.File]::Exists($Path)) {
-        Write-Host "[ERREUR] Lanceur introuvable : $Path" -ForegroundColor Red
+        Write-Host "[ERROR] Launcher not found: $Path" -ForegroundColor Red
         return 127
     }
-    Write-Step 'Build/recreation sans arret prealable (--update-rebuild)'
+    Write-Step 'Build/recreate without prior stop (--update-rebuild)'
     try {
-        & $Path '--update-rebuild'
+        # Out-Host keeps the launcher's own stdout out of this function's return
+        # value; without it the caller received an array and printed the whole
+        # banner inside "(code ... )" instead of the exit code.
+        & $Path '--update-rebuild' | Out-Host
         if ($null -eq $LASTEXITCODE) { return 0 }
         return [int]$LASTEXITCODE
     } catch {
-        Write-Host "[ERREUR] Le lanceur a echoue : $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[ERROR] The launcher failed: $($_.Exception.Message)" -ForegroundColor Red
         return 126
     }
 }
@@ -1272,7 +1275,7 @@ function Invoke-Git([string]$Git, [string]$Root, [string[]]$Arguments) {
     $process = New-Object Diagnostics.Process
     $process.StartInfo = $start
     try {
-        if (-not $process.Start()) { throw 'git.exe na pas pu demarrer.' }
+        if (-not $process.Start()) { throw 'git.exe failed to start.' }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
@@ -1301,7 +1304,7 @@ function Get-GitDirtyRecords([string]$Git, [string]$Root) {
         '-c', 'core.quotePath=false', 'status', '--porcelain=v1', '-z',
         '--untracked-files=all')
     if ($status.Code -ne 0) {
-        throw "Impossible de verifier l etat Git : $($status.Text)"
+        throw "Unable to check Git status: $($status.Text)"
     }
     $dirty = @()
     foreach ($record in @(Get-GitNullRecords $status)) {
@@ -1318,10 +1321,10 @@ function Assert-GitWorktreeClean(
         [string]$Git, [string]$Root, [string]$Moment) {
     $dirty = @(Get-GitDirtyRecords -Git $Git -Root $Root)
     if ($dirty.Count -gt 0) {
-        throw ('Checkout Git modifie (' + $Moment +
-            ') : mise a jour refusee sans ecrasement.' +
-            ' Committez ou remisez vos changements, executez git pull --ff-only,' +
-            ' puis lancez votre launcher Docker avec --update-rebuild.' +
+        throw ('Modified Git checkout (' + $Moment +
+            '): update refused without overwriting.' +
+            ' Commit or stash your changes, run git pull --ff-only,' +
+            ' then run your Docker launcher with --update-rebuild.' +
             [Environment]::NewLine + ($dirty -join [Environment]::NewLine))
     }
 }
@@ -1332,14 +1335,14 @@ function Assert-GitIgnoredStateSafe([string]$Git, [string]$Root) {
             '-c', 'core.quotePath=false', 'ls-files', '-z',
             '--others', '--ignored', '--exclude-standard')
     if ($ignored.Code -ne 0) {
-        throw "Impossible d inspecter les fichiers Git ignores : $($ignored.Text)"
+        throw "Unable to inspect ignored Git files: $($ignored.Text)"
     }
     foreach ($relative in @(Get-GitNullRecords $ignored)) {
         if (-not $relative) { continue }
         $normalized = $relative.Replace('\', '/')
         $top = ($normalized -split '/', 2)[0]
         if (-not (Test-ProtectedTopLevel $top)) {
-            throw "Checkout Git refuse : fichier ignore hors etat protege '$relative'."
+            throw "Git checkout refused: ignored file outside protected state '$relative'."
         }
     }
 }
@@ -1350,18 +1353,18 @@ function Assert-GitTargetTreeSafe(
     $tree = Invoke-Git -Git $Git -Root $Root -Arguments @(
         '-c', 'core.quotePath=false', 'ls-tree', '-r', '-z', '--full-tree', $Commit)
     if ($tree.Code -ne 0) {
-        throw "Impossible d inspecter l arbre Git cible : $($tree.Text)"
+        throw "Unable to inspect the target Git tree: $($tree.Text)"
     }
     foreach ($line in @(Get-GitNullRecords $tree)) {
         if (-not $line) { continue }
         if ($line -cnotmatch '^(100644|100755) blob [0-9a-f]+\t(.+)$') {
-            throw "Arbre Git $Label refuse (lien, sous-module ou mode special) : $line"
+            throw "Git tree $Label refused (link, submodule or special mode): $line"
         }
         $relative = $matches[2].Replace('\', '/')
         $top = ($relative -split '/', 2)[0]
         if ((Test-ProtectedTopLevel $top) -or
                 (Test-UpdaterInternalRelative $top)) {
-            throw "Arbre Git $Label refuse : etat local protege suivi par Git '$relative'."
+            throw "Git tree $Label refused: protected local state tracked by Git '$relative'."
         }
     }
 }
@@ -1372,23 +1375,23 @@ function Invoke-GitCheckoutFailClosed(
     $launcher = Resolve-PreferredLauncher -Root $Root -Preference $launcherPreference
     $git = Get-GitExecutable
     if (-not $git) {
-        throw "Ce dossier contient .git mais git.exe est indisponible. Aucun fichier n'a ete ecrase."
+        throw "This folder contains .git but git.exe is unavailable. No file was overwritten."
     }
-    Assert-GitWorktreeClean -Git $git -Root $Root -Moment 'etat initial'
+    Assert-GitWorktreeClean -Git $git -Root $Root -Moment 'initial state'
     Assert-GitIgnoredStateSafe -Git $git -Root $Root
     $commitResult = Invoke-Git -Git $git -Root $Root `
         -Arguments @('rev-parse', 'HEAD^{commit}')
     if ($commitResult.Code -ne 0 -or
             $commitResult.Text -cnotmatch '^[0-9a-fA-F]{40}$') {
-        throw "Impossible d'identifier le commit Git actuel."
+        throw "Unable to identify the current Git commit."
     }
     $commit = $commitResult.Text.Trim()
     Assert-GitTargetTreeSafe -Git $git -Root $Root -Commit $commit `
         -Label 'actuel'
-    throw ('Checkout Git detecte : aucun fichier Git na ete modifie. ' +
-        'Par securite, cet updater automatique est reserve aux installations ZIP. ' +
-        'Conservez vos changements, executez git pull --ff-only dans ce dossier, ' +
-        "puis executez '$launcher' --update-rebuild pour reconstruire la stack.")
+    throw ('Git checkout detected: no Git file was modified. ' +
+        'For safety, this automatic updater is reserved for ZIP installations. ' +
+        'Keep your changes, run git pull --ff-only in this folder, ' +
+        "then run '$launcher' --update-rebuild to rebuild the stack.")
 }
 
 function Invoke-ZipInstallUpdate(
@@ -1418,20 +1421,20 @@ function Invoke-ZipInstallUpdate(
         Write-CodeTransactionJournal -Transaction $transaction `
             -Phase 'rebuild-launched'
         Complete-CodeOverlay $transaction
-        Write-Host '[OK] Nouvelle version installee et confirmee healthy par le lanceur.' `
+        Write-Host '[OK] New version installed and confirmed healthy by the launcher.' `
             -ForegroundColor Green
         return
     }
 
-    Write-Host "[ERREUR] Build/start de la nouvelle version (code $code). Rollback..." -ForegroundColor Red
+    Write-Host "[ERROR] Build/start of the new version (code $code). Rolling back..." -ForegroundColor Red
     Undo-CodeOverlay $transaction
     $oldLauncher = Resolve-PreferredLauncher -Root $Root `
         -Preference $launcherPreference -Rollback
     $oldCode = Invoke-RebuildLauncher $oldLauncher
     if ($oldCode -ne 0) {
-        throw "Nouvelle version rejetee; ancien code restaure, mais la relance de l'ancienne version a echoue (code $oldCode)."
+        throw "New version rejected; old code restored, but relaunching the old version failed (code $oldCode)."
     }
-    throw "Nouvelle version rejetee (code $code). Ancien code restaure et ancienne stack relancee."
+    throw "New version rejected (code $code). Old code restored and old stack relaunched."
 }
 
 function Invoke-DockerGpuUpdate {
@@ -1441,7 +1444,7 @@ function Invoke-DockerGpuUpdate {
     }
     $root = Get-FullPath $InstallRoot
     if (-not [IO.Directory]::Exists($root)) {
-        throw "Dossier d'installation introuvable : $root"
+        throw "Installation folder not found: $root"
     }
     Assert-ExistingInstallation $root
     Assert-RepositoryName $Repository
@@ -1457,10 +1460,10 @@ function Invoke-DockerGpuUpdate {
                 (Get-FullPath $TestSignalPath), 'locked',
                 (New-Object Text.UTF8Encoding($false)))
             Start-Sleep -Milliseconds $TestHoldMilliseconds
-            throw 'TestFault hold-lock termine apres maintien du verrou.'
+            throw 'TestFault hold-lock finished after holding the lock.'
         }
 
-        Write-Host "Canal : $Channel" -ForegroundColor Yellow
+        Write-Host "Channel: $Channel" -ForegroundColor Yellow
         if (Test-Path -LiteralPath (Join-Path $root '.git')) {
             Invoke-GitCheckoutFailClosed -Root $root `
                 -SelectedLauncher $LauncherPath
@@ -1473,9 +1476,9 @@ function Invoke-DockerGpuUpdate {
         $source = Resolve-ArchiveSource -SelectedChannel $Channel `
             -Repo $Repository -LocalArchive $ArchivePath `
             -OverrideUri $ArchiveUri -MetadataPath $ReleaseMetadataPath
-        Write-Host "Commit immuable selectionne : $($source.Commit)" -ForegroundColor Yellow
-        Write-Warning ('L archive GitHub est liee a ce commit via HTTPS, mais ' +
-            'aucune signature cryptographique du projet nest verifiee par cet updater.')
+        Write-Host "Selected immutable commit: $($source.Commit)" -ForegroundColor Yellow
+        Write-Warning ('The GitHub archive is bound to this commit via HTTPS, but ' +
+            'this updater does not verify any cryptographic signature of the project.')
 
         $downloadTemp = New-DownloadTempDirectory
         $zipPath = Join-Path $downloadTemp 'source.zip'
@@ -1503,11 +1506,11 @@ function Assert-RunningFromSafeTemp {
     if (-not [string]::Equals(
             $tempBase, $runnerParent, [StringComparison]::OrdinalIgnoreCase) -or
             $runnerLeaf -cnotmatch '^lora-dataset-studio-update-[0-9a-f]{32}$') {
-        throw 'Le mode interne RunningFromTemp est refuse hors du temp unique de l updater.'
+        throw 'The internal RunningFromTemp mode is refused outside the updater unique temp folder.'
     }
     $runnerItem = Get-Item -LiteralPath $runnerDirectory -Force
     if (($runnerItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-        throw 'Le runner temporaire ne peut pas etre un point de reanalyse.'
+        throw 'The temporary runner cannot be a reparse point.'
     }
 }
 
@@ -1528,7 +1531,7 @@ function Invoke-SelfBootstrap {
             $command = Get-Command powershell.exe -CommandType Application -ErrorAction SilentlyContinue |
                 Select-Object -First 1
             if (-not $command) {
-                throw 'Windows PowerShell 5.1 est introuvable.'
+                throw 'Windows PowerShell 5.1 was not found.'
             }
             $windowsPowerShell = $command.Source
         }
@@ -1591,7 +1594,7 @@ try {
     Assert-TestModeConfiguration
 } catch {
     Write-Host ''
-    Write-Host "[ERREUR] Configuration updater refusee : $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[ERROR] Updater configuration refused: $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }
 
@@ -1600,7 +1603,7 @@ if (-not $RunningFromTemp) {
         exit (Invoke-SelfBootstrap)
     } catch {
         Write-Host ''
-        Write-Host "[ERREUR] Bootstrap updater impossible : $($_.Exception.Message)" -ForegroundColor Red
+        Write-Host "[ERROR] Unable to bootstrap updater: $($_.Exception.Message)" -ForegroundColor Red
         exit 1
     }
 }
@@ -1611,6 +1614,6 @@ try {
     exit 0
 } catch {
     Write-Host ''
-    Write-Host "[ERREUR] $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[ERROR] $($_.Exception.Message)" -ForegroundColor Red
     exit 1
 }

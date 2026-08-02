@@ -375,7 +375,7 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
     assert 'pushd "%~dp0"' in bat
     assert '-InstallRoot "%~dp0."' in bat
     assert "EnableExtensions DisableDelayedExpansion" in bat
-    assert "Canal inconnu : %~1" not in bat
+    assert "Unknown channel: %~1" not in bat
     assert "setlocal DisableDelayedExpansion" in alias
     assert (
         alias.strip().splitlines()[-1]
@@ -394,7 +394,7 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
     assert 'Value = "https://codeload.github.com/$Repo/zip/$commit"' in script
     assert "codeload.github.com/$Repo/zip/refs/heads/main" not in script
     assert "'User-Agent' = $script:UserAgent" in script
-    assert "Aucun fallback vers main" in script
+    assert "No fallback to main" in script
     assert "'--update-rebuild'" in script
     assert "RunningFromTemp" in script and "Invoke-SelfBootstrap" in script
     assert "deployment_mode" not in script
@@ -402,9 +402,9 @@ def test_static_contract_is_portable_stable_by_default_and_single_logic():
     assert "'ls-files', '-z'" in script
     assert "'ls-tree', '-r', '-z'" in script
     assert "git pull --ff-only" in script
-    assert "aucune signature cryptographique" in script
+    assert "cryptographic signature" in script
     assert "stack Docker healthy" not in script
-    assert "Reconstruction lancee. Verifiez" in bat
+    assert "Rebuild started. Check that" in bat
     for mutation in (
         "@('reset'",
         "@('checkout'",
@@ -487,7 +487,7 @@ def test_bat_alias_handles_special_path_and_rejects_hostile_argument(tmp_path):
         check=False,
     )
     assert extra.returncode == 2
-    assert "Trop d'arguments" in extra.stdout
+    assert "Too many arguments" in extra.stdout
     assert not (install / "bat-result.txt").exists()
 
 
@@ -547,7 +547,7 @@ def test_injection_parameters_require_explicit_test_mode(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "injection refuses sans -TestMode" in (result.stdout + result.stderr)
+    assert "refused without explicit -TestMode" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -625,7 +625,7 @@ def test_malformed_launcher_settings_abort_before_overlay(tmp_path, marker_bytes
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "Settings launcher invalides" in (result.stdout + result.stderr)
+    assert "Invalid settings launcher" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     assert _snapshot_named_state(install) == before_state
@@ -643,7 +643,7 @@ def test_launcher_settings_directory_is_not_treated_as_legacy_mode(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "dossier ou reparse" in (result.stdout + result.stderr)
+    assert "folder or reparse point" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     assert _snapshot_named_state(install) == before_state
@@ -740,7 +740,7 @@ def test_failed_build_rolls_back_old_code_and_removes_new_files(tmp_path):
     assert (install / "obsolete-root-code" / "old.txt").read_bytes() == (
         b"# OBSOLETE ROOT CODE\n"
     )
-    assert "Ancien code restaure" in (result.stdout + result.stderr)
+    assert "Old code restored" in (result.stdout + result.stderr)
     _assert_clean_transaction_dirs(install, runtime_temp)
 
 
@@ -757,7 +757,7 @@ def test_invalid_previous_launcher_aborts_before_code_switch(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "Lanceur requis introuvable" in (result.stdout + result.stderr)
+    assert "Required launcher not found" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     assert _snapshot_named_state(install) == before_state
@@ -795,8 +795,8 @@ def test_interrupted_overlay_is_recovered_before_next_archive_validation(tmp_pat
 
     output = retried.stdout + retried.stderr
     assert retried.returncode == 1
-    assert "Recuperation de la transaction interrompue" in output
-    assert "sentinelle manquante 'backend/run.py'" in output
+    assert "Recovering interrupted transaction" in output
+    assert "missing sentinel 'backend/run.py'" in output
     assert retry_launches == []
     assert _snapshot_code(install) == before_code
     assert _snapshot_named_state(install) == before_state
@@ -840,7 +840,7 @@ def test_second_update_does_not_recover_and_undo_the_first(tmp_path):
 
     output = second.stdout + second.stderr
     assert second.returncode == 0, output
-    assert "Recuperation de la transaction interrompue" not in output
+    assert "Recovering interrupted transaction" not in output
     assert second_launches == ["LEGACY-NEW --update-rebuild"]
     assert (install / "backend" / "run.py").read_bytes() == b"# NEWER RUN\n"
     _assert_confirmed_rebuild_commits_transaction(install, second_temp)
@@ -911,7 +911,7 @@ def test_exclusive_lock_rejects_a_concurrent_update(tmp_path):
             archive=archive,
         )
         assert second.returncode == 1
-        assert "Une autre mise a jour" in (second.stdout + second.stderr)
+        assert "Another update" in (second.stdout + second.stderr)
         assert launches == []
         assert not list(second_temp.iterdir())
     finally:
@@ -936,7 +936,7 @@ def test_local_archive_size_limit_uses_actual_downloaded_bytes(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "Archive locale superieure a la limite" in (result.stdout + result.stderr)
+    assert "Local archive exceeds the limit" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -956,7 +956,7 @@ def test_disk_space_preflight_fails_before_archive_copy(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "Espace disque insuffisant" in (result.stdout + result.stderr)
+    assert "Insufficient disk space" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -1004,7 +1004,7 @@ def test_streaming_entry_limit_ignores_forged_central_length(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "limite reelle par entree" in (result.stdout + result.stderr)
+    assert "actual per-entry limit" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -1024,7 +1024,7 @@ def test_streaming_global_expansion_limit_counts_all_entries(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "limite reelle globale" in (result.stdout + result.stderr)
+    assert "actual global expanded-size limit" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -1041,7 +1041,7 @@ def test_missing_sentinel_fails_before_install_or_launcher(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "sentinelle manquante" in (result.stdout + result.stderr)
+    assert "missing sentinel" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -1059,7 +1059,7 @@ def test_path_traversal_zip_is_rejected_before_extraction_or_install(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "Traversal/segment ZIP refuse" in (result.stdout + result.stderr)
+    assert "ZIP traversal/segment refused" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     assert not list(tmp_path.rglob("escaped.txt"))
@@ -1077,7 +1077,7 @@ def test_symlink_zip_entry_is_rejected(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install, archive=archive)
 
     assert result.returncode == 1
-    assert "Lien ou type special ZIP refuse" in (result.stdout + result.stderr)
+    assert "ZIP link or special type refused" in (result.stdout + result.stderr)
     assert launches == []
     _assert_clean_transaction_dirs(install, runtime_temp)
 
@@ -1094,8 +1094,8 @@ def test_stable_without_release_fails_clearly_without_main_fallback(tmp_path):
 
     output = result.stdout + result.stderr
     assert result.returncode == 1
-    assert "Aucune GitHub Release stable exploitable" in output
-    assert "Aucun fallback vers main" in output
+    assert "No usable stable GitHub Release" in output
+    assert "No fallback to main" in output
     assert launches == []
     _assert_clean_transaction_dirs(install, runtime_temp)
 
@@ -1114,7 +1114,7 @@ def test_local_archive_injection_requires_an_immutable_test_commit(tmp_path):
     )
 
     assert result.returncode == 1
-    assert "TestCommit est obligatoire" in (result.stdout + result.stderr)
+    assert "TestCommit is required" in (result.stdout + result.stderr)
     assert launches == []
     assert _snapshot_code(install) == before_code
     _assert_clean_transaction_dirs(install, runtime_temp)
@@ -1138,7 +1138,7 @@ def test_stable_local_fixture_is_tied_to_one_exact_commit(tmp_path):
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert f"Commit immuable selectionne : {exact_commit}" in result.stdout
+    assert f"Selected immutable commit: {exact_commit}" in result.stdout
     assert launches == ["LEGACY-NEW --update-rebuild"]
     _assert_confirmed_rebuild_commits_transaction(install, runtime_temp)
 
@@ -1192,7 +1192,7 @@ def test_clean_git_checkout_fails_closed_without_mutating_head(tmp_path):
     assert launches == []
     assert "git pull --ff-only" in output
     assert "start-docker-gpu.bat' --update-rebuild" in output
-    assert "aucun fichier Git na ete modifie" in output
+    assert "no Git file was modified" in output
     assert _git_run(install, "symbolic-ref", "--short", "HEAD") == "main"
     assert _git_run(install, "rev-parse", "HEAD") == old
     assert _git_run(install, "status", "--porcelain") == ""
@@ -1209,7 +1209,7 @@ def test_dirty_git_checkout_aborts_and_preserves_user_change(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install)
 
     assert result.returncode == 1
-    assert "Checkout Git modifie (etat initial)" in (result.stdout + result.stderr)
+    assert "Modified Git checkout (initial state)" in (result.stdout + result.stderr)
     assert "git pull --ff-only" in (result.stdout + result.stderr)
     assert launches == []
     assert _git_run(install, "rev-parse", "HEAD") == old
@@ -1227,7 +1227,7 @@ def test_git_head_tracking_protected_state_is_rejected(tmp_path):
     result, launches, runtime_temp = _run_updater(tmp_path, install)
 
     assert result.returncode == 1
-    assert "etat local protege suivi par Git" in (result.stdout + result.stderr)
+    assert "protected local state tracked by Git" in (result.stdout + result.stderr)
     assert launches == []
     assert _git_run(install, "symbolic-ref", "--short", "HEAD") == "main"
     assert _git_run(install, "rev-parse", "HEAD") == old
@@ -1246,7 +1246,7 @@ def test_git_ignored_protected_unicode_path_is_preserved(tmp_path):
     output = result.stdout + result.stderr
     assert result.returncode == 1
     assert "git pull --ff-only" in output
-    assert "fichier ignore hors etat protege" not in output
+    assert "ignored file outside protected state" not in output
     assert launches == []
     assert _git_run(install, "rev-parse", "HEAD") == old
     assert ignored.read_bytes() == b"LOCAL IGNORED STATE"
@@ -1266,7 +1266,7 @@ def test_git_ignored_nonprotected_unicode_path_is_rejected(tmp_path):
 
     output = result.stdout + result.stderr
     assert result.returncode == 1
-    assert "fichier ignore hors etat protege" in output
+    assert "ignored file outside protected state" in output
     assert launches == []
     assert _git_run(install, "rev-parse", "HEAD") == old
     assert ignored.read_bytes() == b"UNEXPECTED IGNORED CODE"

@@ -56,6 +56,13 @@ export const WHATS_NEW = [
     to: '/cloud',
   },
   {
+    id: '2026-08-02-docker-install-and-update-actually-work',
+    date: '2026-08-02',
+    title: 'The Windows Docker install now starts, restarts and updates',
+    blurb:
+      'A real end-to-end run of the one-click Docker install found four faults that made it unusable, and all four are fixed. The launcher now finds a host port that is genuinely free instead of trusting Docker to skip a busy one, so an existing ComfyUI on 8188 (or anything else in the way) no longer stops the install dead — and because it publishes one fixed port, the address stays the same across restarts instead of quietly moving. Launching a second time works: rewriting the small settings marker used to fail on every run after the first, which also meant one-click update could never finish. On Windows the bundled ComfyUI no longer restart-loops on its own folders. When Docker does refuse something you now get the actual reason instead of a PowerShell error about a missing property, and the updater speaks English like the rest of the app.',
+  },
+  {
     id: '2026-08-02-cloud-launch-is-observable',
     date: '2026-08-02',
     title: 'A cloud launch now tells you what it is doing, and for how long',

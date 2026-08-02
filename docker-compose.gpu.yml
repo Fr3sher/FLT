@@ -32,8 +32,11 @@ services:
     ports:
       # Host side only. LDS_PORT further down is the port the app BINDS INSIDE the
       # container — do not reuse that name here, or you publish a port nothing serves.
-      # `published` also accepts a range. The Windows launcher uses one so Docker
-      # chooses a free port atomically; a manual Compose launch keeps 5050 / 8188.
+      # `published` also accepts a range, but do NOT rely on one to dodge a busy
+      # port: Docker's allocator only tracks the ports it handed out itself, so a
+      # range still picks a port a non-Docker process holds and then fails to
+      # bind. The Windows launcher probes the host and publishes ONE resolved
+      # port; a manual Compose launch keeps 5050 / 8188.
       - target: 5050
         published: "${LDS_HOST_PORT:-5050}"
         host_ip: "${LDS_BIND_ADDRESS:-127.0.0.1}"
@@ -102,7 +105,10 @@ services:
       - LDS_FORCE_CHOWN=${LDS_FORCE_CHOWN:-false}
       # --- upstream's ComfyUI image ---
       # Must match the owner of the folders mounted above (`id -u` / `id -g`).
-      # On Unraid that is usually 99 / 100.
+      # On Unraid that is usually 99 / 100. On Windows every bind mount shows up
+      # as root:root and cannot be chowned, so start-docker-gpu.bat sets both to
+      # 0 -- leaving 1000 there makes upstream's init abort on /comfy/mnt and the
+      # container restart-loops. Only override these on a Linux host.
       - WANTED_UID=${LDS_UID:-1000}
       - WANTED_GID=${LDS_GID:-1000}
       - BASE_DIRECTORY=/basedir

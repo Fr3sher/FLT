@@ -30,15 +30,29 @@ def test_public_batch_files_are_small_space_safe_wrappers_without_ollama_menu():
     assert '--configure' not in gpu
 
 
-def test_engine_keeps_stacks_isolated_and_uses_atomic_dynamic_ports():
+def test_engine_keeps_stacks_isolated_and_publishes_probed_single_ports():
     engine = read('scripts/docker-launch.ps1')
+    compose = read('docker-compose.gpu.yml')
 
     assert "$Project = 'lora-dataset-studio'" in engine
     assert "$Project = 'lora-dataset-studio-gpu'" in engine
     assert "'data-docker'" in engine
     assert "'data-docker-gpu'" in engine
-    assert "LDS_HOST_PORT = '5050-5149'" in engine
-    assert "LDS_COMFY_HOST_PORT = '8188-8287'" in engine
+    # A published RANGE cannot dodge a port a non-Docker process holds: Docker
+    # only tracks its own allocations, picks that port anyway and fails to bind.
+    assert "'5050-5149'" not in engine
+    assert "'8188-8287'" not in engine
+    assert 'Test-HostPortFree' in engine
+    assert 'ExclusiveAddressUse' in engine
+    assert 'Get-FreeHostPort -First 5050 -Last 5149' in engine
+    assert 'Get-FreeHostPort -First 8188 -Last 8287' in engine
+    assert 'chooses a free port atomically' not in compose
+
+    # Windows bind mounts are root:root and cannot be chowned, so the Windows
+    # launcher declares 0:0 while Compose keeps 1000:1000 for a Linux host.
+    assert "$env:LDS_UID = '0'" in engine
+    assert "$env:LDS_GID = '0'" in engine
+    assert 'WANTED_UID=${LDS_UID:-1000}' in compose
     assert "'--force-recreate'" in engine
     assert "Inspect-Container" in engine
     assert "APP_PORT" in engine
@@ -56,9 +70,43 @@ def test_marker_is_one_constant_line_and_contains_no_ollama_choice():
 
     assert "'LAST_LAUNCHER=' + $Stack" in engine
     assert '.docker-launch-settings' in engine
-    assert 'File]::Replace' in engine
+    # [File]::Replace took a third argument; PowerShell binds $null there as the
+    # empty string, so rewriting an existing marker threw "The path is empty"
+    # and broke every launch after the first one.
+    assert '[System.IO.File]::Replace(' not in engine
+    assert 'Move-Item -LiteralPath $tempPath -Destination $markerPath -Force' in engine
     assert 'STUDIO_OLLAMA_MODE' not in engine
     assert 'GPU_OLLAMA_MODE' not in engine
+
+
+def test_native_docker_output_never_leaks_into_the_status_object():
+    engine = read('scripts/docker-launch.ps1')
+    updater = read('scripts/update-docker-gpu.ps1')
+
+    # Letting a native call write to the function's own output stream turns the
+    # return value into an array, and Set-StrictMode 2.0 then throws on
+    # .ExitCode -- hiding the real Docker error behind a property-not-found one.
+    assert '& $script:DockerExe @Arguments | Out-Host' in engine
+    assert "& $Path '--update-rebuild' | Out-Host" in updater
+
+
+def test_updater_speaks_english_like_the_rest_of_the_product():
+    # Both entry points a user actually sees: the BAT they double-click and the
+    # engine it calls. The product is English everywhere else.
+    for name in ('scripts/update-docker-gpu.ps1', 'update-docker-gpu.bat'):
+        updater = read(name)
+        assert '[ERREUR]' not in updater
+        assert '[ERROR]' in updater
+        assert updater.isascii()
+
+    engine = read('scripts/update-docker-gpu.ps1')
+    for french in ('Telechargement', 'Archive invalide', 'introuvable',
+                   'Rollback du', 'Le lanceur a echoue', 'etat initial'):
+        assert french not in engine
+    bat = read('update-docker-gpu.bat')
+    for french in ('Trop d', 'Canal inconnu', 'Reconstruction lancee',
+                   "n'a pas abouti"):
+        assert french not in bat
 
 
 def test_ollama_mode_comes_only_from_persistent_config_and_wait_is_bounded():

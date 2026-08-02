@@ -4,10 +4,12 @@ The real Docker daemon is never contacted.  The common PowerShell launcher and
 its child helpers are exercised from a throw-away checkout instead.
 """
 
+import contextlib
 import itertools
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -57,6 +59,8 @@ with log_path.open("a", encoding="utf-8") as stream:
         "comfy_run": os.environ.get("LDS_COMFY_RUN"),
         "comfy_basedir": os.environ.get("LDS_COMFY_BASEDIR"),
         "bank_sources": os.environ.get("LDS_BANK_SOURCES"),
+        "uid": os.environ.get("LDS_UID"),
+        "gid": os.environ.get("LDS_GID"),
     }) + "\n")
 
 if args == ["compose", "version"]:
@@ -265,10 +269,12 @@ def _run_launcher(
     launcher_env=None,
     switches=(),
     state_changes=None,
+    checkout=None,
 ):
     if POWERSHELL is None:
         pytest.skip("Windows PowerShell 5.1 is unavailable")
-    checkout = _copy_launcher_checkout(tmp_path)
+    if checkout is None:
+        checkout = _copy_launcher_checkout(tmp_path)
     if mode is not None:
         _write_mode(checkout, stack, mode)
 
@@ -343,6 +349,10 @@ def _run_launcher(
     return checkout, result, final_state, calls
 
 
+def _is_port_in(value, first, last):
+    return bool(value) and value.isdigit() and first <= int(value) <= last
+
+
 def _compose_calls(calls, action, service):
     return [
         call for call in calls
@@ -370,13 +380,17 @@ def test_fresh_install_matrix_uses_dynamic_ranges_and_selected_mode(
     ) == f"LAST_LAUNCHER={stack}\n"
     studio_up = _compose_calls(calls, "up", "studio")
     assert len(studio_up) == 1
-    assert studio_up[0]["host_port"] == "5050-5149"
+    # One resolved port, never a range: Docker's range allocator cannot see a
+    # port held by a non-Docker process and would fail to bind on it.
+    assert _is_port_in(studio_up[0]["host_port"], 5050, 5149)
     assert studio_up[0]["bind_address"] == "127.0.0.1"
     assert studio_up[0]["data"] == (
         "./data-docker-gpu" if stack == "gpu" else "./data-docker"
     )
     if stack == "gpu":
-        assert studio_up[0]["comfy_port"] == "8188-8287"
+        assert _is_port_in(studio_up[0]["comfy_port"], 8188, 8287)
+        assert studio_up[0]["uid"] == "0"
+        assert studio_up[0]["gid"] == "0"
         assert studio_up[0]["comfy_run"] == "./run"
         assert studio_up[0]["comfy_basedir"] == "./basedir"
         assert studio_up[0]["bank_sources"] == "./bank-images"
@@ -536,6 +550,99 @@ def test_foreign_container_collision_fails_without_compose_mutation(tmp_path):
     assert not _compose_calls(calls, "up", "studio")
     assert not _compose_calls(calls, "stop", "ollama")
     assert [call for call in calls if "logs" in call["args"]]
+
+
+@pytest.mark.parametrize("stack", ["studio", "gpu"])
+def test_second_launch_on_an_existing_checkout_still_succeeds(tmp_path, stack):
+    """Every launch after the first rewrites .docker-launch-settings.
+
+    That overwrite used [File]::Replace with $null as the backup name, which
+    PowerShell binds as the empty string; .NET then threw "The path is empty"
+    before Docker was contacted, so relaunching -- and therefore every update,
+    which commits on a successful launcher call -- failed on a working install.
+    Reusing one checkout is what makes the marker pre-exist on the second run.
+    """
+    checkout = _copy_launcher_checkout(tmp_path)
+    marker = checkout / ".docker-launch-settings"
+
+    _, first, _, _ = _run_launcher(tmp_path, stack, "none", checkout=checkout)
+    assert first.returncode == 0, first.stderr + first.stdout
+    assert marker.read_text(encoding="utf-8") == f"LAST_LAUNCHER={stack}\n"
+
+    _, second, _, calls = _run_launcher(
+        tmp_path,
+        stack,
+        "none",
+        checkout=checkout,
+        state_changes={"studio_running": True},
+    )
+
+    assert second.returncode == 0, second.stderr + second.stdout
+    assert "Replace" not in second.stderr
+    assert "path is empty" not in second.stderr.lower()
+    assert marker.read_text(encoding="utf-8") == f"LAST_LAUNCHER={stack}\n"
+    assert not list(checkout.glob(".docker-launch-settings.tmp"))
+    assert calls
+
+
+@contextlib.contextmanager
+def _hold_port(port: int):
+    holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        holder.bind(("127.0.0.1", port))
+        holder.listen(1)
+    except OSError:
+        holder.close()
+        pytest.skip(f"port {port} is not available to hold in this environment")
+    try:
+        yield
+    finally:
+        holder.close()
+
+
+def test_a_busy_host_port_is_skipped_instead_of_published(tmp_path):
+    """A published RANGE does not dodge a busy port.
+
+    Docker's allocator only tracks what it handed out itself, so it selects a
+    port a non-Docker process owns and dies with "ports are not available".
+    The launcher has to probe the host and publish a port that is really free.
+    """
+    with _hold_port(5050), _hold_port(8188):
+        _, result, _, calls = _run_launcher(tmp_path, "gpu", "none")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    studio_up = _compose_calls(calls, "up", "studio")
+    assert len(studio_up) == 1
+    assert studio_up[0]["host_port"] != "5050"
+    assert studio_up[0]["comfy_port"] != "8188"
+    assert _is_port_in(studio_up[0]["host_port"], 5051, 5149)
+    assert _is_port_in(studio_up[0]["comfy_port"], 8189, 8287)
+
+
+def test_windows_mounts_are_declared_root_owned(tmp_path):
+    """Docker Desktop shows every Windows bind mount as root:root, unchownable.
+
+    Upstream's init aborted on /comfy/mnt ("expected 1000:1000, actual 0:0") and
+    the container restart-looped, so this Windows-only launcher declares 0:0.
+    """
+    _, result, _, calls = _run_launcher(tmp_path, "gpu", "none")
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    studio_up = _compose_calls(calls, "up", "studio")
+    assert studio_up[0]["uid"] == "0"
+    assert studio_up[0]["gid"] == "0"
+
+
+def test_an_explicit_uid_still_wins_over_the_windows_default(tmp_path):
+    """A Linux host owns its mounts, so a caller-supplied uid must survive."""
+    _, result, _, calls = _run_launcher(
+        tmp_path, "gpu", "none", launcher_env={"LDS_UID": "1000", "LDS_GID": "1000"}
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    studio_up = _compose_calls(calls, "up", "studio")
+    assert studio_up[0]["uid"] == "1000"
+    assert studio_up[0]["gid"] == "1000"
 
 
 def test_launcher_recovers_when_docker_desktop_starts_late(tmp_path):

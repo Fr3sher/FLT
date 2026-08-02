@@ -9,7 +9,7 @@ set "LDS_UPDATE_EXTRA=%~2"
 setlocal EnableDelayedExpansion
 if not "!LDS_UPDATE_EXTRA!"=="" (
     endlocal
-    echo [ERREUR] Trop d'arguments.
+    echo [ERROR] Too many arguments.
     echo Usage : update-docker-gpu.bat [stable^|main]
     pause
     exit /b 2
@@ -27,7 +27,7 @@ if /I "!LDS_UPDATE_REQUEST!"=="main" (
     goto :channel_main
 )
 endlocal
-echo [ERREUR] Canal inconnu.
+echo [ERROR] Unknown channel.
 echo Usage : update-docker-gpu.bat [stable^|main]
 pause
 exit /b 2
@@ -43,7 +43,7 @@ set "LDS_UPDATE_CHANNEL=stable"
 
 pushd "%~dp0" >nul 2>&1
 if errorlevel 1 (
-    echo [ERREUR] Impossible d'acceder au dossier d'installation.
+    echo [ERROR] Cannot open the installation folder.
     pause
     exit /b 1
 )
@@ -55,13 +55,13 @@ rem this BAT while it is running without making cmd.exe read half of a new file.
     if errorlevel 1 (
         popd
         echo.
-        echo La mise a jour n'a pas abouti. Les donnees locales ont ete conservees.
+        echo The update did not complete. Your local data was preserved.
         pause
         exit /b 1
     )
     popd
     echo.
-    echo Reconstruction lancee. Verifiez que l'application devient accessible.
+    echo Rebuild started. Check that the application becomes reachable.
     pause
     exit /b 0
 )

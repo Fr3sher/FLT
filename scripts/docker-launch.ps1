@@ -89,7 +89,11 @@ function Invoke-Docker {
     if ($Quiet) {
         return Invoke-NativeCapture -FilePath $script:DockerExe -Arguments $Arguments
     }
-    & $script:DockerExe @Arguments
+    # Out-Host, not a bare call: anything Docker prints on stdout would otherwise
+    # join this function's OUTPUT, making the caller receive an array instead of
+    # the status object. Under Set-StrictMode 2.0 the .ExitCode read below then
+    # throws "property not found" and hides the real Docker error.
+    & $script:DockerExe @Arguments | Out-Host
     return [pscustomobject]@{
         ExitCode = $LASTEXITCODE
         Output = @()
@@ -269,12 +273,11 @@ function Write-LauncherMarker {
     $contents = 'LAST_LAUNCHER=' + $Stack + [Environment]::NewLine
     try {
         [System.IO.File]::WriteAllText($tempPath, $contents, $utf8NoBom)
-        if (Test-Path -LiteralPath $markerPath -PathType Leaf) {
-            [System.IO.File]::Replace($tempPath, $markerPath, $null)
-        }
-        else {
-            [System.IO.File]::Move($tempPath, $markerPath)
-        }
+        # One call for both the fresh and the overwrite case. [File]::Replace was
+        # used here with $null as the backup name: PowerShell binds that to the
+        # empty string, so .NET threw "The path is empty" on EVERY launch after
+        # the first one -- before Docker was ever contacted.
+        Move-Item -LiteralPath $tempPath -Destination $markerPath -Force
     }
     finally {
         if (Test-Path -LiteralPath $tempPath -PathType Leaf) {
@@ -392,6 +395,63 @@ function Show-StudioLogs {
     $arguments = Get-ComposeArguments -Files (Get-StudioComposeFiles)
     $arguments += @('logs', '--tail', '120', 'studio')
     [void] (Invoke-Docker -Arguments $arguments)
+}
+
+function Test-HostPortFree {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Address,
+        [Parameter(Mandatory = $true)]
+        [int] $Port
+    )
+
+    # Both the wildcard and the address we are about to publish on. Windows lets
+    # 127.0.0.1:P coexist with another program's 0.0.0.0:P, and then routes
+    # localhost to the MORE SPECIFIC socket -- so binding a port that looks free
+    # would quietly steal an already-running app's own address. Refusing the port
+    # whenever anything at all holds it keeps this launcher from shadowing it.
+    foreach ($candidate in @([System.Net.IPAddress]::Any,
+                             [System.Net.IPAddress]::Parse($Address))) {
+        $listener = $null
+        try {
+            $listener = New-Object System.Net.Sockets.TcpListener($candidate, $Port)
+            $listener.ExclusiveAddressUse = $true
+            $listener.Start()
+        }
+        catch {
+            return $false
+        }
+        finally {
+            if ($null -ne $listener) {
+                try { $listener.Stop() } catch { }
+            }
+        }
+    }
+    return $true
+}
+
+function Get-FreeHostPort {
+    param(
+        [Parameter(Mandatory = $true)]
+        [int] $First,
+        [Parameter(Mandatory = $true)]
+        [int] $Last,
+        [Parameter(Mandatory = $true)]
+        [string] $Purpose
+    )
+
+    # Docker's own allocator only knows the ports IT handed out, so a published
+    # RANGE does not skip a port held by a non-Docker process: it picks the first
+    # one its table calls free and then dies at bind time. Anything already bound
+    # to this exact address -- a ComfyUI on 8188, another app on 5055 -- has to be
+    # found here instead, and a single resolved port is published.
+    for ($port = $First; $port -le $Last; $port++) {
+        if (Test-HostPortFree -Address $BindAddress -Port $port) {
+            return $port
+        }
+    }
+    throw ('No free ' + $Purpose + ' port between ' + $First + ' and ' + $Last +
+        ' on ' + $BindAddress + '. Close an application using that range, then try again.')
 }
 
 function Test-HttpEndpoint {
@@ -666,6 +726,14 @@ try {
         $env:LDS_COMFY_RUN = './run'
         $env:LDS_COMFY_BASEDIR = './basedir'
         $env:LDS_BANK_SOURCES = './bank-images'
+        # Docker Desktop exposes every Windows bind mount as root:root and no
+        # chown inside the container can change that, so upstream's init script
+        # aborted on /comfy/mnt ("expected 1000:1000, actual 0:0") and the
+        # container restart-looped. This launcher only ever runs on Windows, so
+        # the owner it must declare is 0:0. The Compose default stays 1000:1000
+        # for a Linux host, where the mounts really are owned by the user.
+        if (-not ([string] $env:LDS_UID).Trim()) { $env:LDS_UID = '0' }
+        if (-not ([string] $env:LDS_GID).Trim()) { $env:LDS_GID = '0' }
     }
     else {
         $env:LDS_DATA = './data-docker'
@@ -684,9 +752,13 @@ try {
         Stop-OwnedSidecar
     }
 
-    $env:LDS_HOST_PORT = '5050-5149'
+    # Resolved now, and published as ONE port rather than a range: a fixed
+    # publish also survives a plain `docker start`, which re-picks a port out of
+    # a range and silently moves the URL the user bookmarked.
+    $env:LDS_HOST_PORT = [string] (Get-FreeHostPort -First 5050 -Last 5149 -Purpose 'Studio')
     if ($Stack -eq 'gpu') {
-        $env:LDS_COMFY_HOST_PORT = '8188-8287'
+        $env:LDS_COMFY_HOST_PORT = [string] (
+            Get-FreeHostPort -First 8188 -Last 8287 -Purpose 'private ComfyUI')
     }
 
     $inspectionParameters = @{
