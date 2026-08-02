@@ -62,10 +62,17 @@ STOP_DEADLINE_SECONDS = 15 * 60
 # The supervisor defers to a live monitor on the runtime cap (the monitor
 # rescues the checkpoint first); it only acts if the monitor did not.
 _SUPERVISOR_MARGIN_SECONDS = 120
-# Floor for phases that are legitimately silent (staging, boot, upload, final
+# Floor for phases that are legitimately silent (staging, boot, final
 # download). The runtime cap stays their real backstop.
 _SILENT_PHASE_FREEZE_SECONDS = 120 * 60
 _FREEZE_WATCHDOG_MINUTES = 45   # default when config carries no value
+# ... except the dataset upload, which stopped being one of those silent phases
+# the moment it started reporting bytes (_write_upload_progress). Judged on
+# BYTES and not on wall time, so this is not a budget for the transfer — a
+# 24 GB dataset may legitimately take hours — but the answer to "how long may
+# nothing at all reach the pod before we stop paying for it?". Config key
+# `cloud.upload_stall_minutes`; 0 (like freeze_watchdog_minutes) turns it off.
+_UPLOAD_STALL_MINUTES = 25
 # Flask serves requests from multiple threads in the portable app.  SQLite
 # cannot express the two launch invariants (global active-run cap and
 # per-dataset/family uniqueness) as a simple UNIQUE constraint because both
@@ -2342,6 +2349,51 @@ def _log_tail(run, max_bytes=64 * 1024) -> str:
         return ''
 
 
+# The dataset upload's own durable evidence, written next to the mirrored pod
+# log and for the same reason: the supervisor judges a run from files and
+# database rows, never from the state of a thread it does not own. Until this
+# existed, `uploading` produced NO observable evidence at all — run #138 pushed
+# a 24 GB / 12 422-file dataset through 1 553 sequential POSTs while every
+# watchdog input stayed frozen (see _freeze_limit_seconds).
+_UPLOAD_PROGRESS_FILE = 'upload_progress.json'
+
+
+def _upload_progress_path(run) -> str:
+    return os.path.join(run.staging_dir or '', _UPLOAD_PROGRESS_FILE)
+
+
+def _read_upload_bytes(run):
+    """Bytes the dataset upload has pushed to the pod, or None when no upload
+    has reported any. Never raises: the supervisor reads this every tick."""
+    if not run.staging_dir:
+        return None
+    try:
+        with open(_upload_progress_path(run), encoding='utf-8') as fh:
+            return int(json.load(fh).get('bytes') or 0)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _write_upload_progress(run, files, files_total, sent, total) -> None:
+    """Record one upload observation. Never raises, for the same reason
+    _set_soft exists: a progress write must not be able to sink the transfer
+    it is only describing.
+
+    A run with no staging_dir writes NOTHING rather than dropping the file in
+    the process's working directory — a stray upload_progress.json there would
+    be read back for every such run and make one run's bytes look like
+    another's progress."""
+    if not run.staging_dir:
+        return
+    try:
+        with open(_upload_progress_path(run), 'w', encoding='utf-8') as fh:
+            json.dump({'files': int(files), 'files_total': int(files_total),
+                       'bytes': int(sent), 'bytes_total': int(total)}, fh)
+    except (OSError, TypeError, ValueError):
+        logger.debug('could not record upload progress for run %s',
+                     getattr(run, 'id', '?'), exc_info=True)
+
+
 def _download_progress(run):
     """Byte-counter progress of whatever the pod is currently downloading, or
     None. Never raises: a card must never fail because a third-party bar
@@ -2364,6 +2416,14 @@ def _progress_fingerprint(run) -> str:
     watchdog would then never fire on the one case it exists for. Summing per
     label means only a file that genuinely advanced can move the total.
 
+    The upload part is the byte counter the dataset transfer writes as it goes.
+    It belongs here for exactly the reason the download bytes do: it is the
+    only reading that separates a 24 GB upload that is merely slow from one
+    that has stopped moving. A restart restarts the upload from zero, which
+    reads as a CHANGE (progress) — the same direction of error the paragraph
+    above chooses, and the reason a re-adopted run is never killed on its
+    predecessor's byte count.
+
     Changing this string re-anchors the clock once per open run on upgrade (an
     unseen fingerprint reads as progress). That costs one watchdog period on
     runs alive at that moment, and it errs toward NOT killing — the right side
@@ -2378,9 +2438,11 @@ def _progress_fingerprint(run) -> str:
         downloaded = lt.download_bytes_seen(tail)
     except Exception:
         downloaded = None
+    uploaded = _read_upload_bytes(run)
     return '|'.join(str(x) for x in (
         run.status or '', _staging_save_count(run), parsed.get('step'),
-        '' if downloaded is None else downloaded))
+        '' if downloaded is None else downloaded,
+        '' if uploaded is None else uploaded))
 
 
 def _read_progress_watch(run):
@@ -2614,6 +2676,21 @@ def supervise_active_runs() -> list:
                             stop_remote=True)
                         acted.append({'run_id': run.id, 'reason': 'freeze',
                                       'ok': True, 'pod_kept': True})
+                    elif run.status == 'uploading':
+                        # Nothing has been trained and nothing is on the pod
+                        # worth keeping, so this is a plain teardown — but it
+                        # gets its OWN error string: 'the dataset never
+                        # reached the machine' and 'the run froze' send the
+                        # user to completely different places, and only the
+                        # first one is about their upload.
+                        res = _force_stop(
+                            run,
+                            detail=('Dataset upload stalled — nothing reached '
+                                    f'the pod for {limit // 60} min; pod '
+                                    'terminated by the supervisor'),
+                            error='upload stall watchdog')
+                        acted.append({'run_id': run.id, 'reason': 'upload_stall',
+                                      'ok': res['ok']})
                     else:
                         res = _force_stop(
                             run,
@@ -2652,17 +2729,34 @@ def _freeze_limit_seconds(run, c=None) -> int:
     Only 'training' is judged on the configured value: there the monitor writes
     phase_detail on every poll (~10 s), so silence is unambiguous. Every other
     phase is silent by design for long stretches — staging a big dataset,
-    renting and booting a pod, uploading images, pulling the final checkpoint —
-    and killing a run that is merely starting up would be worse than the leak
-    we are closing. They get a fixed, very generous floor; the runtime cap
-    remains their real backstop."""
+    renting and booting a pod, pulling the final checkpoint — and killing a run
+    that is merely starting up would be worse than the leak we are closing.
+    They get a fixed, very generous floor; the runtime cap remains their real
+    backstop.
+
+    'uploading' left that group on 2026-08-02. It was the worst of both: a
+    phase that can run for hours AND the one with no evidence of its own, so
+    the two-hour floor was the only thing standing between a wedged transfer
+    and a pod billing until the runtime cap. Run #138 spent 2 h 07 there — 93
+    min of it in total database silence — pushing a 24 GB dataset that never
+    reached the pod, and was still under the floor when its owner cancelled by
+    hand. Now that the transfer reports bytes, silence in this phase means
+    'nothing arrived', which deserves a far shorter answer than 'nobody has
+    written a row'."""
     c = c if c is not None else (cfg.get('cloud') or {})
     raw = c.get('freeze_watchdog_minutes')
     minutes = _FREEZE_WATCHDOG_MINUTES if raw is None else int(raw or 0)
     if minutes <= 0:
+        # The watchdog is off by explicit configuration; the upload's shorter
+        # limit is a tightening of it, never a way around it.
         return 0
     if run.status == 'training':
         return minutes * 60
+    if run.status == 'uploading':
+        raw_upload = c.get('upload_stall_minutes')
+        upload_minutes = (_UPLOAD_STALL_MINUTES if raw_upload is None
+                          else int(raw_upload or 0))
+        return max(0, upload_minutes * 60)
     return max(minutes * 60, _SILENT_PHASE_FREEZE_SECONDS)
 
 
@@ -3501,10 +3595,14 @@ def _monitor(app, run_id):
                 # -- upload dataset (+ masks folder if present) --------------
                 _set(run, status='uploading', phase_detail='Uploading dataset')
                 staging_dataset = os.path.join(run.staging_dir, 'dataset')
-                remote.upload_dataset(run.job_name, staging_dataset)
+                remote.upload_dataset(
+                    run.job_name, staging_dataset,
+                    on_progress=_upload_heartbeat(run, 'Uploading the dataset'))
                 masks_dir = staging_dataset + '_masks'
                 if os.path.isdir(masks_dir) and os.listdir(masks_dir):
-                    remote.upload_dataset(run.job_name + '_masks', masks_dir)
+                    remote.upload_dataset(
+                        run.job_name + '_masks', masks_dir,
+                        on_progress=_upload_heartbeat(run, 'Uploading the masks'))
 
                 # -- build + submit the job -----------------------------------
                 # Build from the run's STAMPED family/variant, NEVER the dataset's
@@ -4121,6 +4219,57 @@ def _download_heartbeat(run, name):
     return beat
 
 
+_UPLOAD_HEARTBEAT_SECONDS = 10
+
+
+def _upload_size(sent, total) -> str:
+    """Upload volume as a user-facing string. Datasets here span three orders
+    of magnitude (12 files to 12 422), so the unit follows the TOTAL — a
+    fixed unit would print either '0.0 GB' for a small set or '24000 MB' for a
+    big one, and both read as a bug."""
+    total = float(total or 0)
+    sent = float(sent or 0)
+    if total >= 1e9:
+        return f'{sent / 1e9:.1f} of {total / 1e9:.1f} GB'
+    return f'{sent / 1e6:.0f} of {total / 1e6:.0f} MB'
+
+
+def _upload_heartbeat(run, label):
+    """Progress callback for the dataset upload.
+
+    Two jobs in one callback, and they are not the same job. The DURABLE write
+    happens on every batch: it is the byte clock the supervisor judges the
+    phase on (_progress_fingerprint), and throttling it would blunt the very
+    watchdog it feeds. The phase_detail refresh is throttled and purely
+    cosmetic, so it goes through _set_soft — a local write lock is allowed to
+    skip a sentence, never to fail a run that is uploading normally (the
+    lesson run #137 paid for on 2026-08-01).
+
+    The driver disables a callback that raises, which is the right policy for
+    the transfer but the wrong outcome for THIS callback: losing it would also
+    stop the byte clock, and a healthy upload would then look stalled and be
+    killed by the very watchdog these bytes feed. So the sentence half is made
+    total here — any failure to describe the transfer is logged and dropped,
+    and the recording half carries on."""
+    state = {'ts': 0.0}
+
+    def beat(files, files_total, sent, total):
+        _write_upload_progress(run, files, files_total, sent, total)
+        now = _now()
+        last = files_total and files >= files_total
+        if not last and now - state['ts'] < _UPLOAD_HEARTBEAT_SECONDS:
+            return
+        state['ts'] = now
+        try:
+            _set_soft(run, phase_detail=(
+                f'{label} — {files}/{files_total} files, '
+                f'{_upload_size(sent, total)}')[:500])
+        except Exception:                       # noqa: BLE001 - deliberate
+            logger.debug('upload heartbeat could not write', exc_info=True)
+
+    return beat
+
+
 def _try_download_checkpoint(run, remote, allow_stale=False) -> bool:
     """Download the newest .safetensors into staging. False on failure.
     allow_stale (rescue paths — stop/stall/cap): when the pod can't serve the
@@ -4436,6 +4585,11 @@ def launch_view(run, *, now=None, cloud_cfg=None):
                                     or READY_TIMEOUT_SECONDS),
         'boot_budget_seconds': int(90 if raw_budget is None
                                    else (raw_budget or 0)) * 60,
+        # The upload's deadline is on IDLE BYTES, not on the transfer's total
+        # duration, so announcing it is what stops a legitimately long upload
+        # from reading like a countdown to being killed.
+        'upload_stall_limit_seconds': _freeze_limit_seconds(run, c)
+        if run.status == 'uploading' else 0,
     }
 
 

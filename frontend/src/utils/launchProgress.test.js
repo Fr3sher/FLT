@@ -6,6 +6,7 @@ import {
   launchProgressView,
   podBootFailureView,
   stopButtonLabel,
+  uploadStallFailureView,
 } from './launchProgress.js';
 
 // Verbatim shape of what the backend forwards while a pod boots, taken from
@@ -39,16 +40,41 @@ test('the boot step announces its deadline — the answer run #134 never gave', 
   assert.match(v.note, /released automatically/);
 });
 
-test('only the boot step has a deadline to announce', () => {
-  const uploading = {
+// Same payload once the pod is up and the dataset is going across — the phase
+// run #138 spent 2 h 07 in with nothing on screen but its label.
+const UPLOADING = {
+  ...BOOTING,
+  active_step: 'upload',
+  detail: 'Uploading the dataset — 912/12422 files, 2.1 of 24.0 GB',
+  steps: BOOTING.steps.map((s) => ({
+    ...s,
+    state: s.key === 'upload' ? 'active' : s.key === 'boot' ? 'done' : s.state,
+  })),
+  upload_stall_limit_seconds: 25 * 60,
+};
+
+test('the upload step announces a deadline on IDLE BYTES, not on its duration', () => {
+  const v = launchProgressView(UPLOADING);
+  assert.equal(v.activeKey, 'upload');
+  // The distinction is the whole point: a 24 GB upload is allowed to run for
+  // hours, and a note that reads like a countdown would be a lie that makes
+  // people cancel healthy runs.
+  assert.match(v.note, /no time limit/i);
+  assert.match(v.note, /NO data reaches the machine for 25 min/);
+  assert.match(v.note, /released automatically/);
+  // ... and the progress the backend now sends is what the step shows.
+  assert.match(v.detail, /912\/12422 files/);
+});
+
+test('a step with no deadline in the payload does not get an invented one', () => {
+  assert.equal(launchProgressView({ ...UPLOADING, upload_stall_limit_seconds: 0 }).note, null);
+  const staging = {
     ...BOOTING,
     steps: BOOTING.steps.map((s) => ({
-      ...s,
-      state: s.key === 'upload' ? 'active' : s.key === 'boot' ? 'done' : s.state,
+      ...s, state: s.key === 'staging' ? 'active' : 'pending',
     })),
   };
-  assert.equal(launchProgressView(uploading).note, null);
-  assert.equal(launchProgressView(uploading).activeKey, 'upload');
+  assert.equal(launchProgressView(staging).note, null);
 });
 
 test('a boot deadline the install disabled is not invented', () => {
@@ -100,6 +126,38 @@ test('only a boot timeout gets the boot-timeout explanation', () => {
   assert.equal(podBootFailureView({ ...RUN_134, status: 'error_pod_kept' }), null);
   assert.equal(podBootFailureView({ status: 'training' }), null);
   assert.equal(podBootFailureView(null), null);
+});
+
+// Run #138 as the supervisor now closes it.
+const RUN_138 = {
+  status: 'error',
+  error: 'upload stall watchdog',
+  phase_detail: 'Dataset upload stalled — nothing reached the pod for 25 min; '
+    + 'pod terminated by the supervisor',
+};
+
+test('a stalled upload is explained as a transfer, not as a crash', () => {
+  const v = uploadStallFailureView(RUN_138);
+  assert.equal(v.title, 'The dataset never reached the rented machine');
+  assert.match(v.message, /no longer billing/);
+  assert.match(v.message, /before any training happened/);
+  assert.match(v.message, /connection/);
+  // The one thing users would otherwise conclude on their own and act on: it
+  // is not "my dataset is too big".
+  assert.match(v.message, /not the problem on its own/);
+});
+
+test('only a stalled upload gets the stalled-upload explanation', () => {
+  assert.equal(uploadStallFailureView({ status: 'error', error: 'CUDA out of memory' }), null);
+  // A kept pod is still billing — the "released" sentence would be false.
+  assert.equal(uploadStallFailureView({ ...RUN_138, status: 'error_pod_kept' }), null);
+  assert.equal(uploadStallFailureView({ ...RUN_138, status: 'uploading' }), null);
+  assert.equal(uploadStallFailureView(null), null);
+});
+
+test('the two launch teardowns never both answer for the same run', () => {
+  assert.equal(podBootFailureView(RUN_138), null);
+  assert.equal(uploadStallFailureView(RUN_134), null);
 });
 
 test('ending a launch is not worded like abandoning a trained run', () => {

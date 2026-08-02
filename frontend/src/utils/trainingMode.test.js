@@ -63,6 +63,59 @@ test('cloud launch and preflight carry the mode while LoRA stays the default reg
   });
 });
 
+test('the pending panel does not claim a model upload that has not started', () => {
+  // Run #138: 'artifact_status' is stamped 'pending' at LAUNCH, so for the two
+  // hours the run spent pushing its DATASET to the pod this panel announced
+  // 'Uploading full model…' — a transfer that had not begun and could not,
+  // next to a repository holding nothing but licence files. The run's phase is
+  // what tells the two apart.
+  const base = {
+    training_mode: 'full_transformer', artifact_status: 'pending',
+    hf_url: 'https://huggingface.co/me/private',
+  };
+  for (const status of ['preparing', 'provisioning', 'uploading']) {
+    const view = fullTransformerArtifactView({ ...base, status });
+    assert.equal(view.label, 'Full model not created yet', `status=${status}`);
+    assert.match(view.detail, /Nothing is uploading to Hugging Face yet/);
+    assert.equal(view.href, null);
+    assert.equal(view.available, false);
+  }
+
+  const training = fullTransformerArtifactView({ ...base, status: 'training' });
+  assert.equal(training.label, 'Full model not delivered yet');
+  assert.match(training.detail, /delivered to Hugging Face at the end of the run/);
+
+  // Once training is over, 'pending' does mean the weights are on their way.
+  const delivering = fullTransformerArtifactView({ ...base, status: 'downloading' });
+  assert.equal(delivering.label, 'Uploading full model…');
+
+  // The worst version of the same lie, caught on the proof screenshot: a run
+  // the supervisor had already terminated still announced an upload in flight
+  // AND told the user to keep a pod alive that no longer existed.
+  for (const status of ['error', 'stopped', 'error_pod_kept', 'done']) {
+    const over = fullTransformerArtifactView({ ...base, status });
+    assert.equal(over.label, 'Full model was never delivered', `status=${status}`);
+    assert.match(over.detail, /ended before any weights reached Hugging Face/);
+    assert.doesNotMatch(over.detail, /[Kk]eep the run and pod active/);
+    assert.equal(over.tone, 'warning');
+  }
+
+  // No status at all (an older payload) is not evidence of anything: it keeps
+  // the neutral wording rather than announcing a failed delivery.
+  const unknown = fullTransformerArtifactView(base);
+  assert.equal(unknown.label, 'Uploading full model…');
+  assert.equal(unknown.tone, 'info');
+
+  // Repository creation keeps its own label whatever the phase says, and a
+  // detail the backend did send always wins over any of these fallbacks.
+  assert.equal(fullTransformerArtifactView({
+    ...base, artifact_status: 'creating_repository', status: 'preparing',
+  }).label, 'Creating Hugging Face repository…');
+  assert.equal(fullTransformerArtifactView({
+    ...base, status: 'uploading', artifact_status_detail: 'from the backend',
+  }).detail, 'from the backend');
+});
+
 test('a full artifact link exists only after verified availability', () => {
   const pending = fullTransformerArtifactView({
     training_mode: 'full_transformer', artifact_status: 'verification_pending',

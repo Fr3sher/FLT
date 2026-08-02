@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-02-dataset-upload-is-visible',
+    date: '2026-08-02',
+    title: 'You can now watch the dataset go up to the rented machine — and it stops billing if it does not',
+    blurb:
+      'Sending a dataset to a cloud pod was the one step that reported nothing at all: a big set could be uploading perfectly, or wedged and going nowhere, and both looked exactly the same for hours while the machine billed. The launch card now shows the files and gigabytes as they land, so a slow upload is visibly a slow upload. A large dataset is still allowed to take as long as it needs — nothing was made stricter — but if NO data at all reaches the machine for 25 minutes the run is given up and the pod released, with a message that says the dataset never arrived rather than leaving you to guess the training crashed. The delay is yours to set in Settings → Training, and full-model runs no longer claim to be "uploading the model" while they are still uploading the dataset.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-02-cloud-launch-is-observable',
     date: '2026-08-02',
     title: 'A cloud launch now tells you what it is doing, and for how long',

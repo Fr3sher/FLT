@@ -172,7 +172,8 @@ const COVERED = [
     'semantic_dup_threshold'].map((k) => ['CaptioningSection.jsx', 'bank', k]),
   ...['max_concurrent_runs', 'max_price_per_hour', 'monthly_budget_usd', 'stall_timeout_minutes',
     'first_step_timeout_minutes', 'first_step_download_budget_minutes', 'max_runtime_minutes',
-    'freeze_watchdog_minutes', 'unreachable_grace_minutes', 'min_reliability']
+    'freeze_watchdog_minutes', 'upload_stall_minutes', 'unreachable_grace_minutes',
+    'min_reliability']
     .map((k) => ['TrainingSection.jsx', 'cloud', k]),
   // Concept face masking (issue #15) — both knobs are user-tunable, so both must
   // have a way back to the shipped value.

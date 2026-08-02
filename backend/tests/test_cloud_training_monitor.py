@@ -42,8 +42,13 @@ class FakeRemote:
     def ensure_settings(self, hf_token=None):
         return self.get_settings()
 
-    def upload_dataset(self, name, folder):
+    def upload_dataset(self, name, folder, on_progress=None):
+        # The real driver reports its progress as it goes (a 24 GB dataset is
+        # 1 553 POSTs and used to report nothing — run #138). The double calls
+        # the callback once so the monitor's wiring is exercised here too.
         self.uploaded[name] = len(os.listdir(folder))
+        if on_progress:
+            on_progress(self.uploaded[name], self.uploaded[name], 1, 1)
         return self.uploaded[name]
 
     def create_job(self, name, job_config, gpu_ids='0'):

@@ -956,7 +956,7 @@ def test_dense_start_timeout_after_remote_side_effect_keeps_pod(
                 'TRAINING_FOLDER': '/output',
             }
 
-        def upload_dataset(self, *args):
+        def upload_dataset(self, *args, **kwargs):
             return None
 
         def create_job(self, name, config):

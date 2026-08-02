@@ -27,7 +27,7 @@ import {
   RETRY_CONFIRMABLE_REFUSALS,
 } from '../utils/trainingRefusals';
 import { continueAttemptOutcome } from '../utils/continueOutcome';
-import { podBootFailureView, stopButtonLabel } from '../utils/launchProgress';
+import { podBootFailureView, stopButtonLabel, uploadStallFailureView } from '../utils/launchProgress';
 import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
@@ -858,11 +858,14 @@ export default function CloudRunsPage() {
               never what became of the machine that was rented, which is the one
               thing worth knowing before relaunching. */}
           {(() => {
-            const boot = podBootFailureView(run);
-            return boot && (
+            // Same shape for both launch teardowns: what the machine did, and
+            // what became of it. They are mutually exclusive (each matches its
+            // own error string), so the first one that answers is rendered.
+            const failure = podBootFailureView(run) || uploadStallFailureView(run);
+            return failure && (
               <div className="rounded border border-amber-400/40 bg-amber-500/10 px-2 py-1.5 text-amber-100 text-[0.6875rem] leading-snug">
-                <div className="font-semibold">{boot.title}</div>
-                <p className="m-0 mt-0.5 break-words text-amber-200/90">{boot.message}</p>
+                <div className="font-semibold">{failure.title}</div>
+                <p className="m-0 mt-0.5 break-words text-amber-200/90">{failure.message}</p>
               </div>
             );
           })()}

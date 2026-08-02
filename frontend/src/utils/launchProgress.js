@@ -22,9 +22,12 @@ export function formatElapsed(seconds) {
 }
 
 /* Backend `launch` payload -> what the card renders, or null.
-   `note` exists only while the pod boots: that is the one step with a real
-   deadline, and announcing it is what turns a 25-minute wait from "it hung"
-   into "it has 25 minutes, then the machine is released". */
+   `note` exists on the two steps with a real deadline, and announcing it is
+   what turns a long wait from "it hung" into "it has N minutes, then the
+   machine is released". The two deadlines are not the same shape and the
+   sentences must not pretend they are: the pod boot is a clock on WALL TIME,
+   the dataset upload a clock on IDLE BYTES — a 24 GB upload may run for hours
+   and is in no danger as long as data keeps arriving. */
 export function launchProgressView(launch) {
   if (!launch || typeof launch !== 'object') return null;
   const steps = Array.isArray(launch.steps) ? launch.steps : [];
@@ -32,6 +35,7 @@ export function launchProgressView(launch) {
   if (!active) return null;
   const elapsed = formatElapsed(launch.elapsed_seconds);
   const limit = Number(launch.boot_idle_limit_seconds) || 0;
+  const uploadLimit = Number(launch.upload_stall_limit_seconds) || 0;
   return {
     steps,
     activeKey: active.key,
@@ -41,12 +45,22 @@ export function launchProgressView(launch) {
     // phase_detail says WHERE inside the step ('pod up — waiting for the UI to
     // answer'). Dropped when it merely repeats the step label.
     detail: String(launch.detail || '').trim() || null,
-    note: active.key === 'boot' && limit > 0
-      ? `A pod that shows no boot progress for ${Math.round(limit / 60)} min is given up: `
-        + 'the machine is released automatically and you can launch again.'
-      : null,
+    note: launchNote(active.key, limit, uploadLimit),
     elapsed,
   };
+}
+
+function launchNote(activeKey, bootLimit, uploadLimit) {
+  if (activeKey === 'boot' && bootLimit > 0) {
+    return `A pod that shows no boot progress for ${Math.round(bootLimit / 60)} min is given up: `
+      + 'the machine is released automatically and you can launch again.';
+  }
+  if (activeKey === 'upload' && uploadLimit > 0) {
+    return 'A large dataset can take a long time to upload — that is fine, this step '
+      + `has no time limit. It is given up only if NO data reaches the machine for ${
+        Math.round(uploadLimit / 60)} min, and then the machine is released automatically.`;
+  }
+  return null;
 }
 
 const NEVER_BOOTED = /pod did not become ready/i;
@@ -66,6 +80,30 @@ export function podBootFailureView(run) {
       + 'was given up before any training happened. The machine was released — it '
       + 'is no longer billing — and that host is skipped for a while. Launching '
       + 'again picks a different one.',
+  };
+}
+
+const UPLOAD_STALLED = /upload stall watchdog|dataset upload stalled/i;
+
+/* The upload stall, said in full. This failure is the one users are most
+   likely to misread as "the training crashed": nothing was trained, nothing
+   was lost, and the thing to look at is the link between this machine and the
+   pod — not the dataset, not the recipe. Like podBootFailureView, the released
+   machine is stated as a fact and not a hope: the supervisor only reaches
+   'error' when the vast.ai destroy was confirmed, otherwise the run is parked
+   in 'error_pod_kept' with its own warning. */
+export function uploadStallFailureView(run) {
+  if (!run || run.status !== 'error') return null;
+  const text = `${run.error || ''} ${run.phase_detail || ''}`;
+  if (!UPLOAD_STALLED.test(text)) return null;
+  return {
+    title: 'The dataset never reached the rented machine',
+    message: 'The upload stopped making progress — no data at all was arriving — so the '
+      + 'run was given up before any training happened. The machine was released and is no '
+      + 'longer billing. This is almost always the connection between this computer and the '
+      + 'pod rather than the dataset itself: check your upload connection and launch again. '
+      + 'A very large dataset is not the problem on its own — a slow upload is allowed to '
+      + 'take as long as it needs, as long as it keeps moving.',
   };
 }
 

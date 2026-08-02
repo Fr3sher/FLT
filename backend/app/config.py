@@ -208,9 +208,13 @@ DEFAULTS = {
         'first_step_download_budget_minutes': 180,  # hard ceiling on the pre-step-1 phase
         # Out-of-monitor freeze watchdog: a training run whose own monitor stopped
         # reporting for this long is terminated by the supervisor (0 = only warn
-        # in the UI, never cut). Slow-by-design phases (boot/upload/download) are
+        # in the UI, never cut). Slow-by-design phases (boot/download) are
         # never judged on this value -- they get a fixed 2 h floor.
         'freeze_watchdog_minutes': 45,
+        # ... and the dataset upload's own version of it. Not a budget for the
+        # transfer (a 24 GB dataset may legitimately take hours) but the time
+        # allowed with NO byte at all reaching the pod. 0 = never cut.
+        'upload_stall_minutes': 25,
         'unreachable_grace_minutes': 6,  # tolerated mid-run network blackout before giving up on the pod
         'monthly_budget_usd': 0,       # 0 = unlimited; launches blocked past this
         'disk_gb': 60,                 # instance disk (base model + dataset + checkpoints)
