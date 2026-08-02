@@ -56,6 +56,13 @@ export const WHATS_NEW = [
     to: '/studio',
   },
   {
+    id: '2026-08-02-cloud-only-installs-see-their-checkpoints',
+    date: '2026-08-02',
+    title: 'Trained in the cloud without ai-toolkit? Your checkpoints show up now',
+    blurb:
+      'The checkpoint list refused to answer at all unless local training was set up, so an install that only ever trains in the cloud saw an empty panel — its own paid-for cloud saves were there on disk, just never displayed. The list now always answers: cloud saves appear whether or not ai-toolkit is configured, and the local half simply stays empty when there is no local trainer. Deleting a cloud-trained LoRA you had deployed to ComfyUI works from the same install too, instead of being listed but undeletable.',
+  },
+  {
     id: '2026-08-02-quiet-polls-when-the-server-is-unhappy',
     date: '2026-08-02',
     title: 'A server that is still starting up no longer buries the app in error toasts',
