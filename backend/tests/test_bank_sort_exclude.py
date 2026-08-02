@@ -182,3 +182,39 @@ def test_the_curation_pool_hides_what_the_grid_hides(client, tmp_path, app):
         pool = banks._pool_query(bank_id, banks.thresholds(), exclude='red')
         assert sorted(r.relpath.replace('\\', '/').rsplit('/', 1)[-1]
                       for r in pool.all()) == ['b.png', 'c.png']
+
+
+# --- the lean id snapshot (▶ Review / Select all in filter) ------------------
+
+def test_ids_only_answers_the_whole_filter_in_the_grid_order(client, tmp_path, app):
+    """▶ Review needs a SNAPSHOT of ids, and used to get it by walking the grid
+    500 rows at a time — 46 requests and 16 MB of image payloads on a 22 940-image
+    bank, to keep 23 000 integers. The lean answer must be the SAME list, in the
+    SAME order, or the two paths would disagree about what the filter contains."""
+    bank_id = _mk3(client, tmp_path)
+    _set(app, bank_id, {'a.png': {'aesthetic_score': 2, 'caption': 'a red logo'},
+                        'b.png': {'aesthetic_score': 9, 'caption': 'a blue sky'},
+                        'c.png': {'aesthetic_score': None, 'caption': None}})
+
+    def lean(**params):
+        r = client.get(f'/api/bank/{bank_id}/images',
+                       query_string={**params, 'ids_only': '1'})
+        assert r.status_code == 200, r.get_json()
+        body = r.get_json()
+        # The lean answer carries ids and NOTHING else — no image payload sneaking
+        # back in, which is the whole point of the path.
+        assert set(body) == {'ids'}, body
+        return body['ids']
+
+    def paged(**params):
+        r = client.get(f'/api/bank/{bank_id}/images', query_string=params)
+        return [i['id'] for i in r.get_json()['images']]
+
+    for params in ({}, {'sort': 'aesthetic_desc'}, {'sort': 'aesthetic_asc'},
+                   {'exclude': 'logo'}, {'sort': 'res_desc', 'status': 'pending'}):
+        assert lean(**params) == paged(**params), params
+    # It really is the WHOLE filter, not one page: the unscored row is in there,
+    # last, exactly as the sort promises.
+    ordered = lean(sort='aesthetic_desc')
+    assert len(ordered) == 3
+    assert ordered[-1] == paged(sort='aesthetic_desc')[-1]

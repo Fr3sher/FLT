@@ -103,16 +103,15 @@ const STATUS_RING = {
 /** Fetch EVERY image id matching a filter, page by page (used by the
  * cluster/flag "select all" actions — a cluster can exceed one grid page). */
 async function fetchAllIds(bankId, params) {
-  const ids = []
-  let offset = 0
-  for (;;) {
-    const qs = new URLSearchParams({ ...params, offset: String(offset), limit: '500' })
-    const d = await apiFetch(`/api/bank/${bankId}/images?${qs}`)
-    ids.push(...d.images.map((i) => i.id))
-    offset += d.images.length
-    if (offset >= d.total || d.images.length === 0) break
-  }
-  return ids
+  // ONE request for the ids of the whole filter (`ids_only=1`), in the order the
+  // grid is showing. This used to walk the grid 500 rows at a time and keep only
+  // `i.id` — 46 sequential round trips and 16 MB of image payloads to end up with
+  // 23 000 integers, measured on a 22 940-image bank; with a measure sort active
+  // each of those pages also re-ran the COUNT and the ORDER BY over the whole
+  // table, which is what put seconds in front of ▶ Review.
+  const qs = new URLSearchParams({ ...params, ids_only: '1' })
+  const d = await apiFetch(`/api/bank/${bankId}/images?${qs}`)
+  return d.ids || []
 }
 
 const STEP_SHORT = {

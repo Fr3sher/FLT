@@ -1270,7 +1270,8 @@ def _apply_text_filters(q, search=None, exclude=None):
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
-                origin=None, ids=None, exclude=None, offset=0, limit=200) -> dict | None:
+                origin=None, ids=None, exclude=None, ids_only=False,
+                offset=0, limit=200) -> dict | None:
     """One PAGE of the bank grid (a 9 000-image bank must never ship whole).
     Filters compose: status ∩ flag ∩ cluster ∩ dup-group ∩ style ∩ subfolder ∩ search.
     ``search`` is a plain full-text term matched (case-insensitive LIKE) against the
@@ -1317,6 +1318,10 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                               BankImage.id.in_(chunk)).all()):
                 by_id[r.id] = r
         ordered_rows = [by_id[i] for i in ordered if i in by_id]
+        if ids_only:
+            # Same scope, same order, ids only — the caller passed a selection and
+            # wants it back minus the ids that no longer exist.
+            return {'ids': [r.id for r in ordered_rows]}
         total = len(ordered_rows)
         off = max(0, int(offset))
         page = ordered_rows[off:off + max(1, min(500, int(limit)))]
@@ -1410,8 +1415,22 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         # An explicit sort (resolution / aesthetic / sharpness) wins over the flag
         # worst-first order; see _sort_order for the NULL-sinks-last contract.
         order = explicit
-    total = q.count()
     order_by = order if isinstance(order, tuple) else (order,)
+    if ids_only:
+        # The LEAN answer: the ids of the WHOLE filter, in the order above, in one
+        # query and one response. ▶ Review and "Select all in filter" want a
+        # snapshot of ids and nothing else; walking the paginated grid for it made
+        # the browser ask 46 times for 16 MB of image payloads — thumbnails, flags,
+        # captions, promotion state — and throw all but the integer away. Measured
+        # on a 22 940-image bank: 3.8 s with an active measure sort, because every
+        # one of those 46 pages re-ran the COUNT and re-applied the ORDER BY over
+        # the full table with a growing OFFSET.
+        # No pagination here on purpose: 23 000 ids are ~180 kB of JSON, where the
+        # same 23 000 rows are 16 MB. The cap that matters is the bank's size, and
+        # a bank that cannot fit its own ids in a response cannot fit its grid either.
+        return {'ids': [r[0] for r in
+                        q.with_entities(BankImage.id).order_by(*order_by).all()]}
+    total = q.count()
     rows = q.order_by(*order_by).offset(max(0, int(offset))) \
             .limit(max(1, min(500, int(limit)))).all()
     return {'images': _page_images(rows, th), 'total': total,

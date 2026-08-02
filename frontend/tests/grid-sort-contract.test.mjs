@@ -32,6 +32,22 @@ test('the bank Sort menu is built from the registry, not hard-coded options', ()
   }
 })
 
+test('the id snapshot is fetched lean — one request, ids only', () => {
+  // Reported on a 22 940-image bank: ▶ Review took seconds to open. fetchAllIds
+  // walked the grid 500 rows at a time and kept only `i.id` — 46 sequential
+  // round trips for 16 MB of image payloads, each page re-running the COUNT and
+  // the ORDER BY. Measured after: 3771 ms → 44 ms with a measure sort active.
+  assert.match(BANK, /ids_only: '1'/,
+    'the id snapshot must ask for the lean answer')
+  assert.match(BANK, /return d\.ids \|\| \[\]/,
+    'and read the ids straight off it')
+  // The pagination loop must NOT come back: it is the bug.
+  assert.doesNotMatch(BANK, /ids\.push\(\.\.\.d\.images\.map/,
+    'walking the paginated grid to collect ids is what made Review slow')
+  assert.doesNotMatch(BANK, /limit: '500'/,
+    'no 500-row page walk for an id snapshot')
+})
+
 test('the bank sort rides to the server (whole filter) and to fetchAllIds', () => {
   // The sort is a query parameter, so SQL orders the WHOLE selection; the same
   // params object feeds fetchAllIds, so "Select all" / Review walk that order.

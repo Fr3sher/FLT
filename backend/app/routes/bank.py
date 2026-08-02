@@ -233,6 +233,11 @@ def bank_images(bank_id):
         framing=args.get('framing') or None,
         origin=args.get('origin') or None,
         ids=ids,
+        # ids_only=1 answers {'ids': [...]} for the WHOLE filter in one request —
+        # what ▶ Review and "Select all in filter" actually need. Same filters,
+        # same sort, same route, so the two answers can never disagree about what
+        # the current filter contains.
+        ids_only=args.get('ids_only') == '1',
         offset=_int('offset') or 0, limit=_int('limit') or 200)
     if payload is None:
         return jsonify({'error': 'not found'}), 404
