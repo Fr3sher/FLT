@@ -3,6 +3,7 @@ setlocal EnableExtensions DisableDelayedExpansion
 
 set "LAUNCH_ARGUMENT="
 if "%~1"=="" goto :arguments_ready
+if /i "%~1"=="--configure" set "LAUNCH_ARGUMENT=-Configure"
 if /i "%~1"=="--rebuild" set "LAUNCH_ARGUMENT=-Rebuild"
 if /i "%~1"=="--update-rebuild" set "LAUNCH_ARGUMENT=-UpdateRebuild"
 if not defined LAUNCH_ARGUMENT goto :invalid_arguments
@@ -15,19 +16,14 @@ where.exe powershell.exe >nul 2>&1
 if errorlevel 1 goto :powershell_missing
 if not exist "%~dp0scripts\docker-launch.ps1" goto :launcher_missing
 
-title LoRA Dataset Studio + isolated ComfyUI - Docker GPU
-echo.
-echo This builds Studio with a fresh, isolated ComfyUI for NVIDIA GPUs.
-echo The first build is large and may take 20 minutes or more.
-echo.
-powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0scripts\docker-launch.ps1" -Stack gpu %LAUNCH_ARGUMENT%
+powershell.exe -NoLogo -NoProfile -STA -ExecutionPolicy Bypass -File "%~dp0scripts\docker-launch.ps1" -Stack studio %LAUNCH_ARGUMENT%
 set "EXIT_CODE=%ERRORLEVEL%"
 popd
 endlocal & exit /b %EXIT_CODE%
 
 :invalid_arguments
 echo ERROR: Unknown launcher argument.
-echo Supported options: --rebuild or --update-rebuild
+echo Supported options: --configure, --rebuild or --update-rebuild
 exit /b 1
 
 :powershell_missing

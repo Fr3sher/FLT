@@ -86,6 +86,36 @@ API generation follows each provider's billing and content policy. Read the dire
 | **ComfyUI deployment** | Deploy individual checkpoints or downloaded cloud results into the configured LoRA tree |
 | **Recoverable deletion** | Deleted app data goes to Trash; destructive Image Bank actions state their destination before confirmation |
 
+### A quick visual tour
+
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/bank/bank-overview.png"><img src="docs/screenshots/bank/bank-overview.png" alt="Image Bank overview with scoring, filters and review controls" width="380"></a><br>
+      <sub><strong>Image Bank</strong> — score, search and shortlist large collections.</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset curation grid with image decisions and composition tools" width="380"></a><br>
+      <sub><strong>Curate</strong> — review, repair and balance the training set.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/training/runs-hub.png"><img src="docs/screenshots/training/runs-hub.png" alt="Training Runs hub showing local and cloud experiment progress" width="380"></a><br>
+      <sub><strong>Runs hub</strong> — follow local and cloud experiments together.</sub>
+    </td>
+    <td align="center" width="50%">
+      <a href="docs/screenshots/studio/studio-grid.png"><img src="docs/screenshots/studio/studio-grid.png" alt="Test Studio grid comparing checkpoints and LoRA strengths" width="380"></a><br>
+      <sub><strong>Test Studio</strong> — compare checkpoints at fixed seeds and strengths.</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <a href="docs/screenshots/07-lineage-graph.png"><img src="docs/screenshots/07-lineage-graph.png" alt="Experiment lineage graph connecting training runs and continuation checkpoints" width="780"></a><br>
+  <sub><strong>Experiment lineage</strong> — see exactly where every continuation came from.</sub>
+</p>
+
 The detailed journey, screenshots and operational notes now live in the [workflow guide](docs/guide/workflow.md).
 
 ### Roadmap
@@ -148,8 +178,8 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 
 | Mode | Good for | What is optional or unavailable |
 |---|---|---|
-| **API-only** | Import, API generation, scraping, manual curation/captions, cloud training, publishing, backup/export | No local ComfyUI generation, Studio or deployment; no local ai-toolkit training |
-| **Docker GPU** | The app and an isolated ComfyUI together on an NVIDIA GPU | Local training still uses host ai-toolkit or the cloud; Ollama is external |
+| **Docker + existing ComfyUI** | Run LDS in Docker while keeping the ComfyUI already installed on the host | The launcher asks for the ComfyUI folder once; local training still uses host ai-toolkit or the cloud |
+| **Docker GPU + fresh ComfyUI** | Run LDS and a new isolated ComfyUI together on an NVIDIA GPU | Existing ComfyUI/models stay untouched; local training still uses host ai-toolkit or the cloud |
 | **Full local** | Local engines, ML helpers, ai-toolkit training, Canvas generation and Test Studio | Install/connect only the tools you need; each capability degrades independently |
 
 ## Setup & install
@@ -195,15 +225,11 @@ npm install
 npm run build
 ```
 
-### Option 3 — Docker (API-only)
+### Option 3 — Docker + your existing ComfyUI
 
-```bash
-cp .env.example .env
-mkdir -p data-docker
-docker compose up --build
-```
+**Beginner Windows flow:** download/extract the GitHub ZIP, start Docker Desktop, then double-click **`start-docker.bat`**. On the first run, select either the ComfyUI folder containing `main.py` and `models`, or its portable parent containing `ComfyUI\main.py`. LDS validates the folder and remembers it for this checkout.
 
-This image runs the core/API-only app. Data persists in `./data-docker`; keys come from `.env`. ComfyUI and ai-toolkit are outside this container. See [Option 4](#option-4--docker-gpu--comfyui) for bundled ComfyUI.
+Start your usual ComfyUI on the host. LDS uses `http://host.docker.internal:8188` from its container and mounts the selected folder at `/external-comfyui`. If the folder later moves, double-click **`configure-docker.bat`**. The launcher chooses a free Studio port and opens the browser automatically.
 
 ### Option 4 — Docker (GPU + ComfyUI)
 
@@ -212,11 +238,13 @@ This image runs the core/API-only app. Data persists in `./data-docker`; keys co
 1. On GitHub, choose **Code → Download ZIP**, then extract the complete folder.
 2. Start **Docker Desktop** and wait until it reports that Docker is running.
 3. Double-click **`start-docker-gpu.bat`** in the extracted folder.
-4. Leave the first build/start running; it downloads the image and ComfyUI environment. Wait for the browser to open LoRA Dataset Studio.
+4. Leave the first build/start running; it downloads the image and ComfyUI environment. The launcher prints both actual addresses and opens Studio as soon as Studio responds, while its batch window stays open until ComfyUI finishes its first boot. You do not need to open a second ComfyUI window.
 
 This creates a **fresh, isolated, repo-local** Docker setup: its own ComfyUI, models, application data and Image Bank folder live beside this checkout. **It never touches an existing ComfyUI by default.**
 
-An existing ComfyUI is never mounted or modified, but stop it first if it uses port `8188` (and stop another LDS on `5050`): two processes cannot share those ports.
+For either Docker launcher, choose Ollama only inside **LDS Setup**: **No Ollama**, **Existing host Ollama**, or **Docker Ollama**. The Docker companion is started only after that explicit choice, and no vision model is downloaded automatically. Pull the selected model from the LDS Ollama card to see progress and cancel it if needed.
+
+The double-click launcher allocates free host ports atomically: Studio uses the first available port in `5050-5149`, and ComfyUI the first available port in `8188-8287`. If `5050` or `8188` is already occupied, the existing service is left running and another port is chosen automatically. Re-running the launcher from the same checkout reopens its current mapped ports without recreating the running container; a conflicting container owned by another checkout is reported and left untouched. The launcher does not edit `.env`.
 
 Advanced CLI:
 
@@ -226,7 +254,7 @@ mkdir -p run basedir data-docker-gpu bank-images
 docker compose -f docker-compose.gpu.yml up --build
 ```
 
-The app is served at `http://127.0.0.1:5050/` and ComfyUI at `http://127.0.0.1:8188/`. This lane requires an NVIDIA GPU, a compatible driver and NVIDIA Container Toolkit support. Storage relocation, existing-ComfyUI adoption, UID/GID, DNS, update commands, resource caps and operational limits are documented in the dedicated [Docker guide](docs/guide/docker.md).
+For the advanced CLI, the default addresses remain `http://127.0.0.1:5050/` for Studio and `http://127.0.0.1:8188/` for ComfyUI; `.env` can override them. This lane requires an NVIDIA GPU, a compatible driver and NVIDIA Container Toolkit support. Storage relocation, ports, existing-ComfyUI adoption, UID/GID, DNS, update commands, resource caps and operational limits are documented in the dedicated [Docker guide](docs/guide/docker.md).
 
 ### External tools (install once, connect in Settings)
 
@@ -234,9 +262,9 @@ The app is served at `http://127.0.0.1:5050/` and ComfyUI at `http://127.0.0.1:8
 |---|---|---|
 | [ai-toolkit](https://github.com/ostris/ai-toolkit) | Local LoRA training and JoyCaption | Set its directory and Python interpreter in **Settings → Local tools**; conda, uv, venv and portable Python installs are supported |
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | Klein/Krea local generation, Studio, Canvas generation and deployment; SDXL base discovery | Keep its API reachable and set the install/models paths in **Settings → Local tools** |
-| [Ollama](https://ollama.com) | Auto-captioning, framing, head-crop and watermark detection | Install a vision model, then select/test it in **Settings → Local tools** |
+| [Ollama](https://ollama.com) | Auto-captioning, framing, head-crop and watermark detection | In Docker, choose none/host/companion in **Setup**, then pull the model explicitly from LDS; native installs can use their configured URL |
 
-The full path rules, model layouts and three-state Ollama detection are in the [settings reference](docs/guide/settings-reference.md#local-tools). If a tool remains unavailable, use the [troubleshooting guide](docs/guide/troubleshooting.md).
+The full path rules, model layouts and Ollama deployment/model states are in the [settings reference](docs/guide/settings-reference.md#local-tools). If a tool remains unavailable, use the [troubleshooting guide](docs/guide/troubleshooting.md).
 
 ### Getting API keys
 

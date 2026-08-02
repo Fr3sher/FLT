@@ -128,6 +128,28 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-08-01-choose-how-docker-uses-ollama',
+    date: '2026-08-01',
+    title: 'Choose how your Docker install uses Ollama — and never get a surprise download',
+    blurb:
+      'The Docker Setup page now asks one question instead of making you edit files: no Ollama, the one already running on your computer, or an isolated companion container. Nothing large is downloaded to make that choice — the vision model stays absent until you press Pull, which now streams its real progress and can be cancelled mid-download and resumed later. Switching modes keeps your models: only the container LDS itself created is removed, and its data volume survives.',
+    to: '/setup?step=ollama',
+  },
+  {
+    id: '2026-08-01-docker-with-your-existing-comfyui',
+    date: '2026-08-01',
+    title: 'Run the Docker build against the ComfyUI you already installed',
+    blurb:
+      'start-docker.bat now reuses your existing Windows ComfyUI instead of building a second one: the first launch opens a folder picker, accepts either the ComfyUI folder or the portable folder above it, and reuses your models and outputs in place. start-docker-gpu.bat still builds the fresh isolated ComfyUI for people who want one. Both pick free ports on their own and open the browser while the stack is still warming up.',
+  },
+  {
+    id: '2026-08-01-one-click-docker-update',
+    date: '2026-08-01',
+    title: 'Update the Docker install by double-clicking one file',
+    blurb:
+      'update-docker.bat follows the latest published release (pass "main" for the preview channel), downloads that exact commit, and swaps the code in one transaction. Your .env, config, datasets, run and basedir folders, bank images and Ollama data are never touched. If the new version fails to come up healthy, the previous code is restored and restarted automatically — and a git checkout is never reset or merged behind your back, it just tells you to run git pull --ff-only.',
+  },
+  {
     id: '2026-07-31-community-tested-krea-zimage-presets',
     date: '2026-07-31',
     title: 'Start Krea 2 Raw and Z-Image Turbo from five community-tested recipes',

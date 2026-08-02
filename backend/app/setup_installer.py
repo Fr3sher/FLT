@@ -48,6 +48,7 @@ one venv fail 6/6 with WinError 2 / Errno 13). Each pip run also retries once on
 transient file-lock error (an antivirus holding a fresh file). Model downloads and the
 ollama pull don't touch a venv, so they stay parallel.
 """
+import json
 import logging
 import os
 import re
@@ -314,6 +315,10 @@ _PIP_RETRIES = 3          # total attempts on a retryable error
 _PIP_RETRY_BACKOFF = 3    # seconds * attempt number between tries
 
 _LOG_MAX = 400  # ring-buffer the log so a chatty pip can't grow unbounded
+_OLLAMA_CONNECT_TIMEOUT = 5
+_OLLAMA_READ_TIMEOUT = 45
+_OLLAMA_STREAM_CHUNK = 8192
+_OLLAMA_MAX_LINE = 64 * 1024
 
 _lock = threading.Lock()
 _runs = {}  # action -> {'state', 'returncode', 'log', 'progress', 'waiting_for'}
@@ -331,9 +336,13 @@ class Precondition(Exception):
     pass
 
 
+class Cancelled(Exception):
+    pass
+
+
 def _new_run():
     return {'state': 'running', 'returncode': None, 'log': [], 'progress': None,
-            'waiting_for': None}
+            'waiting_for': None, 'cancel_event': threading.Event(), 'response': None}
 
 
 def _append(action, line):
@@ -532,8 +541,8 @@ def manual_command(action) -> str:
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
     if action == 'ollama_model':
-        model = (cfg.get('ollama.vision_model') or '').strip() or '<vision-model>'
-        return f'ollama pull {model}'
+        # The Studio container need not have an Ollama CLI; this action is HTTP-only.
+        return ''
     if action in _MODEL_DOWNLOADS:
         spec = _MODEL_DOWNLOADS[action]
         try:
@@ -556,12 +565,15 @@ def status(action) -> dict:
     cmd = manual_command(action)
     if run is None:
         return {'state': 'idle', 'returncode': None, 'log': [], 'progress': None,
-                'waiting_for': None, 'manual_command': cmd}
+                'waiting_for': None, 'cancel_requested': False,
+                'manual_command': cmd}
     return {'state': run['state'], 'returncode': run['returncode'],
             'log': list(run['log']), 'progress': run.get('progress'),
             # 'queued' -> which action it's waiting behind (the UI shows an honest
             # "waiting for another install" instead of a dead-looking button).
             'waiting_for': run.get('waiting_for'),
+            'cancel_requested': bool(run.get('cancel_event')
+                                     and run['cancel_event'].is_set()),
             # Kept for the diagnostic/debug log only — no longer shown as a user
             # "run this by hand" path (installs auto-recover or repair on re-click).
             'manual_command': cmd}
@@ -596,6 +608,34 @@ def start(action) -> dict:
     return status(action)
 
 
+def cancel(action) -> dict:
+    """Request cancellation of the only streamed remote install.
+
+    Pip/model-file workers are not process-safe to interrupt. Ollama's pull is:
+    closing its response releases a blocked reader while the event handles the
+    race before/after the response is registered.
+    """
+    if action != 'ollama_model':
+        raise Precondition('only the Ollama model pull can be cancelled')
+    response = None
+    with _lock:
+        run = _runs.get(action)
+        if run is None or run.get('state') != 'running':
+            return status(action)
+        event = run.get('cancel_event')
+        if event is None:
+            event = threading.Event()
+            run['cancel_event'] = event
+        event.set()
+        response = run.get('response')
+    if response is not None:
+        try:
+            response.close()
+        except Exception:
+            pass
+    return status(action)
+
+
 def _release_pip_slot(finished):
     """A pip action finished: free the worker and launch the next queued pip action
     (FIFO). Model downloads / ollama pulls never touch these globals."""
@@ -615,9 +655,16 @@ def _release_pip_slot(finished):
         threading.Thread(target=_execute, args=(nxt,), daemon=True).start()
 
 
+def _ollama_pull_base_url() -> str:
+    raw = cfg.get('ollama.url') or ''
+    url = capabilities._validated_setup_http_base(raw)
+    if not url:
+        raise Precondition('ollama.url must be an HTTP(S) origin without credentials or a path')
+    return url
+
+
 def _check_ollama_precondition():
-    if not (cfg.get('ollama.url') or '').strip():
-        raise Precondition('ollama.url not configured')
+    _ollama_pull_base_url()
     if not (cfg.get('ollama.vision_model') or '').strip():
         raise Precondition('ollama.vision_model not configured')
 
@@ -667,7 +714,6 @@ def _check_download_precondition(action):
 # a coherent "X / N" progress display; the real scheduling still comes from start()
 # (pip serialized FIFO, model downloads parallel), so the order here is cosmetic.
 _INSTALL_ALL_ORDER = ('scrape_extras', 'face_scoring', 'masks', 'watermark_inpaint',
-                      'ollama_model',
                       'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
                       'klein_enhancement_lora')
 
@@ -872,6 +918,10 @@ def _execute(action):
                 krea_edit_helper.clear_nodes_cache()
             except Exception:
                 logger.debug('krea node-cache clear failed after %s', action, exc_info=True)
+    except Cancelled:
+        _append(action, 'cancelled by user')
+        _runs[action]['returncode'] = None
+        _runs[action]['state'] = 'cancelled'
     except Exception as e:  # never let a worker thread die silently
         _append(action, f'error: {e}')
         _runs[action]['returncode'] = -1
@@ -2035,18 +2085,137 @@ def _run_node_pack(action) -> int:
     return 0
 
 
+def _ollama_cancelled(action) -> bool:
+    run = _runs.get(action) or {}
+    event = run.get('cancel_event')
+    return bool(event and event.is_set())
+
+
+def _iter_bounded_ollama_lines(response):
+    """Split Ollama NDJSON without allowing one unterminated line to grow forever."""
+    pending = bytearray()
+    for chunk in response.iter_content(chunk_size=_OLLAMA_STREAM_CHUNK):
+        if not chunk:
+            continue
+        if isinstance(chunk, str):
+            chunk = chunk.encode('utf-8')
+        pending.extend(chunk)
+        while True:
+            separator = pending.find(b'\n')
+            if separator < 0:
+                if len(pending) > _OLLAMA_MAX_LINE:
+                    raise ValueError('Ollama response line is too large')
+                break
+            if separator > _OLLAMA_MAX_LINE:
+                raise ValueError('Ollama response line is too large')
+            line = bytes(pending[:separator]).rstrip(b'\r')
+            del pending[:separator + 1]
+            if line:
+                yield line
+    if len(pending) > _OLLAMA_MAX_LINE:
+        raise ValueError('Ollama response line is too large')
+    if pending:
+        yield bytes(pending).rstrip(b'\r')
+
+
+def _safe_ollama_text(value) -> str:
+    if not isinstance(value, str):
+        return ''
+    return re.sub(r'[\x00-\x1f\x7f]+', ' ', value).strip()[:300]
+
+
 def _run_ollama_model(action) -> int:
-    url = (cfg.get('ollama.url') or '').rstrip('/')
-    model = cfg.get('ollama.vision_model') or ''
-    resp = requests.post(f'{url}/api/pull', json={'name': model, 'stream': True},
-                         stream=True, timeout=None)
-    if resp.status_code >= 400:
-        _append(action, f'HTTP {resp.status_code}')
+    url = _ollama_pull_base_url()
+    model = (cfg.get('ollama.vision_model') or '').strip()
+    response = None
+    last_status = ''
+    last_total = 0
+    saw_success = False
+    if _ollama_cancelled(action):
+        raise Cancelled()
+    try:
+        response = requests.post(
+            f'{url}/api/pull',
+            json={'model': model, 'stream': True},
+            stream=True,
+            allow_redirects=False,
+            timeout=(_OLLAMA_CONNECT_TIMEOUT, _OLLAMA_READ_TIMEOUT),
+        )
+        run = _runs.get(action)
+        if run is not None:
+            run['response'] = response
+        if _ollama_cancelled(action):
+            raise Cancelled()
+        if 300 <= response.status_code < 400:
+            _append(action, 'Ollama refused an unexpected HTTP redirect.')
+            return 1
+        if not 200 <= response.status_code < 300:
+            _append(action, f'Ollama returned HTTP {response.status_code}.')
+            return 1
+
+        for raw_line in _iter_bounded_ollama_lines(response):
+            if _ollama_cancelled(action):
+                raise Cancelled()
+            try:
+                payload = json.loads(raw_line.decode('utf-8'))
+            except (UnicodeDecodeError, ValueError):
+                _append(action, 'Ollama returned invalid streaming JSON.')
+                return 1
+            if not isinstance(payload, dict):
+                _append(action, 'Ollama returned an invalid streaming event.')
+                return 1
+            error = _safe_ollama_text(payload.get('error'))
+            if error:
+                _append(action, f'Ollama error: {error}')
+                return 1
+            completed = payload.get('completed')
+            total = payload.get('total')
+            if (type(completed) is int and type(total) is int
+                    and completed >= 0 and total >= 0
+                    and (not total or completed <= total)):
+                _set_progress(action, completed, total)
+                last_total = total or last_total
+            status_text = _safe_ollama_text(payload.get('status'))
+            if status_text and status_text != last_status:
+                _append(action, status_text)
+                last_status = status_text
+            if status_text.lower() == 'success':
+                saw_success = True
+
+        if _ollama_cancelled(action):
+            raise Cancelled()
+        if not saw_success:
+            _append(action, 'Ollama closed the pull stream before reporting success.')
+            return 1
+        if last_total:
+            _set_progress(action, last_total, last_total)
+        return 0
+    except Cancelled:
+        raise
+    except requests.exceptions.Timeout:
+        if _ollama_cancelled(action):
+            raise Cancelled()
+        _append(action, 'Ollama stopped sending progress before the 45-second read timeout.')
         return 1
-    for line in resp.iter_lines():
-        if line:
-            _append(action, line.decode('utf-8', 'replace') if isinstance(line, bytes) else str(line))
-    return 0
+    except requests.exceptions.RequestException:
+        if _ollama_cancelled(action):
+            raise Cancelled()
+        _append(action, 'Could not reach Ollama for the model pull.')
+        return 1
+    except Exception:
+        if _ollama_cancelled(action):
+            raise Cancelled()
+        _append(action, 'Ollama returned an invalid or interrupted pull stream.')
+        return 1
+    finally:
+        if response is not None:
+            try:
+                response.close()
+            except Exception:
+                pass
+        run = _runs.get(action)
+        if run is not None and run.get('response') is response:
+            run['response'] = None
 
 
 _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + scrape_extras
