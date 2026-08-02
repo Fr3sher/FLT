@@ -230,7 +230,7 @@ export const WHATS_NEW = [
     id: '2026-07-31-generation-lora-double-stack-guard',
     date: '2026-07-31',
     title: 'A generation-LoRA preset can no longer double-apply your identity LoRA',
-    blurb: 'A preset row pointing at the same file already loaded as the identity/consistency LoRA used to chain it a second time — summing both strengths into one delta well past what the file was trained for, which showed up as blocky, posterized dataset images. Krea 2 Edit and Klein now skip that row (the rest of the chain still applies), with a log line saying why.',
+    blurb: 'A preset row pointing at the same file already loaded as the identity/consistency LoRA used to chain it a second time — summing both strengths into one delta well past what the file was trained for, which showed up as blocky, posterized dataset images. Krea 2 Edit and Klein now skip that row (the rest of the chain still applies), with a log line saying why. Fixed by Cyberschorsch (GitHub), reported by waltm (Discord).',
     to: '/settings/engines',
   },
   {
@@ -245,7 +245,7 @@ export const WHATS_NEW = [
     id: '2026-07-30-krea-generation-lora-presets',
     date: '2026-07-30',
     title: 'Your own LoRAs now apply when Krea builds a dataset',
-    blurb: 'Krea 2 Edit can chain your own LoRA files while it generates dataset images — not just in the Test Studio. Build named combinations in Settings › Image engines, then pick one per run in the workspace\'s 🧬 Krea 2 Edit tuning panel; "None" stays the default. The LoRA has to be trained for Krea 2, only the model side is patched, and a row whose file you have moved is skipped with the rest of the chain still applied. Preset mechanism by @waltm.',
+    blurb: 'Krea 2 Edit can chain your own LoRA files while it generates dataset images — not just in the Test Studio. Build named combinations in Settings › Image engines, then pick one per run in the workspace\'s 🧬 Krea 2 Edit tuning panel; "None" stays the default. The LoRA has to be trained for Krea 2, only the model side is patched, and a row whose file you have moved is skipped with the rest of the chain still applied. Built by Cyberschorsch (GitHub), idea by waltm (Discord).',
     to: '/settings/engines',
   },
   {
