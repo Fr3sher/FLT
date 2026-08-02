@@ -11,7 +11,7 @@
  * behaviour, redirect included — nothing about a genuine first launch changes.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { setupHealthPhase, shouldRedirectToSetup, regressionNotice, statusMessage,

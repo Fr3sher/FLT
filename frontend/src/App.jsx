@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router-dom'
+import { HashRouter, Routes, Route, Navigate, Outlet, NavLink, useLocation } from 'react-router'
 import { apiFetch, postJson } from './api/fetchClient'
 import { JobsProvider } from './context/JobsContext'
 import { ToastProvider, useToast } from './components/common/Toast'
