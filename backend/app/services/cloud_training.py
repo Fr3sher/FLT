@@ -6073,6 +6073,11 @@ def canvas_dataset_index(user_id) -> dict:
             # decides that instead of guessing from a filename.
             'ref_filename': ds.ref_filename,
             'kind': (ds.kind or '').lower() or 'character',
+            # 🧬 The word this dataset's LoRA answers to. Read off the same row —
+            # still no extra query, no disk. A blend launched from the board
+            # injects the trigger of EVERY dataset it stacks, and a panel that
+            # cannot name them can only promise it silently.
+            'trigger_word': (ds.trigger_word or None),
         })
     out.sort(key=lambda d: (d['last_run_at'] or '', d['id']), reverse=True)
     return {'datasets': out}

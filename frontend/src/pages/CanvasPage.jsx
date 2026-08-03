@@ -350,6 +350,9 @@ export default function CanvasPage() {
       // is one to show at all — a concept or a style dataset has no reference.
       refFilename: row?.ref_filename || null,
       kind: row?.kind || 'character',
+      // 🧬 The dataset's trigger word, carried on the lane so a pick taken from
+      // it knows what a blend will prepend to the prompt.
+      triggerWord: row?.trigger_word || null,
       status: state?.status || 'loading',
       error: state?.error || null,
       // The RAW tree, not a laid-out graph: the canvas has to be able to lay it

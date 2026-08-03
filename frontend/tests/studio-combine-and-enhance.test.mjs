@@ -1,6 +1,8 @@
 /**
  * Contract of the two Test Studio additions:
- *   - 🧬 Combine — several LoRAs loaded in the SAME image, each at its own weight;
+ *   - 🧬 Blend — several LoRAs loaded in the SAME image, each at its own weight
+ *     (displayed as « Combine » until 2026-08-03; the VALUE, the API key and the
+ *     exported names still say `combine` on purpose — they are stored/public);
  *   - ✨ Enhance — prompt enrichment through the LOCAL Ollama model.
  *
  * The pure logic (loraStack.js, enhanceGate.js) is unit-tested directly. The JSX
@@ -58,7 +60,7 @@ test('combining is blocked below two LoRAs and across families, with a named rea
 test('a combined stack costs one configuration, not one per LoRA and strength', () => {
   // Comparison: 2 LoRAs × 3 strengths × 2 images = 12 cells.
   assert.equal(cellCount({ selectionCount: 2, strengthCount: 3, count: 2 }), 12)
-  // Combine: the strength axis is gone — 1 stack × 2 images.
+  // Blend: the strength axis is gone — 1 stack × 2 images.
   assert.equal(cellCount({ selectionCount: 2, strengthCount: 3, count: 2, combine: true }), 2)
   // The ⚖ batch axis still multiplies both modes.
   assert.equal(
@@ -108,7 +110,30 @@ test('the Enhance button posts to the studio route and stays disabled while bloc
 test('a combined tile says so, so a stack is never mistaken for a solo render', () => {
   const tile = readStudio('ResultTile.jsx')
   assert.match(tile, /cell\.combined_loras/)
-  assert.match(tile, /Combined with:/)
+  assert.match(tile, /Blended with:/)
+})
+
+test('renaming Combine to Blend renamed the LABEL and nothing that is stored', () => {
+  // 2026-08-03: the Test Studio and the ◉ LoRA Canvas stopped having two words for
+  // one mode. A label is free to change; the VALUE in everyone's localStorage, the
+  // key in the POST body and the help-topic id are not — this is what keeps a user
+  // who had the toggle on Combine yesterday still on Blend today.
+  const panel = readStudio('LoraStackPanel.jsx')
+  assert.match(panel, /\['combine', '🧬 Blend'\]/)
+  assert.doesNotMatch(panel, /🧬 Combine'\]/)
+  const studio = readStudio('ComparisonStudio.jsx')
+  assert.match(studio, /localStorage\.getItem\('studioComp_mode'\) === 'combine'/)
+  assert.match(studio, /localStorage\.setItem\('studioComp_mode', mode\)/)
+  assert.match(studio, /\{ combine: true \}/)
+  // The blocker speaks the new word; the exported API keeps the old one.
+  assert.match(combineBlocker([SEL[0], { ...SEL[1], family: 'krea' }]), /^Blending needs one family/)
+  // The topic id is part of the app→guide wiring and stays; `combine` stays a
+  // keyword so anyone who read the older announcement still lands here.
+  const topic = getHelpTopic('studio-combine-loras')
+  assert.match(topic.title, /Blend/)
+  assert.ok(topic.keywords.includes('combine'))
+  assert.ok(topic.keywords.includes('blend'))
+  assert.ok(getHelpTopic('canvas-blend').keywords.includes('combine from the board'))
 })
 
 test('both features are documented and announced', () => {

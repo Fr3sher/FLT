@@ -77,9 +77,14 @@ export function useStudioForm(d, datasetId, family = null, { pinnedCheckpoints =
   // Pass 2 (detail daemon) : SDXL uniquement. Z-Image → default_steps2 null → axe vide
   // (×1 dans le compteur, pas envoyé au backend).
   const effectiveSteps2 = selSteps2 ?? (d?.default_steps2 != null ? [d.default_steps2] : []);
-  const total = chosenCps.length * selSts.length * effectiveAspects.length
-    * effectiveCfgs.length * effectiveSteps.length * Math.max(1, effectiveSteps2.length)
-    * Math.max(1, effectiveModels.length);
+  // Everything the axes multiply EXCEPT the checkpoints and the strength sweep.
+  // 🧬 Blend collapses those two into one configuration (each LoRA carries its own
+  // weight, they all load in the same image), so its cell count is exactly this —
+  // exposed rather than divided back out of `total`, which would be a lie the
+  // moment one of the two factors is zero.
+  const axisTotal = effectiveAspects.length * effectiveCfgs.length * effectiveSteps.length
+    * Math.max(1, effectiveSteps2.length) * Math.max(1, effectiveModels.length);
+  const total = chosenCps.length * selSts.length * axisTotal;
 
   const toggleCp = (fn) =>
     setSelCps((cur) => {
@@ -121,7 +126,7 @@ export function useStudioForm(d, datasetId, family = null, { pinnedCheckpoints =
 
   return {
     selSts, seed, seedLocked, genCount, promptText, selModels,
-    chosenCps, effectivePrompt, effectiveModels, effectiveAspects, effectiveCfgs, effectiveSteps, effectiveSteps2, total,
+    chosenCps, effectivePrompt, effectiveModels, effectiveAspects, effectiveCfgs, effectiveSteps, effectiveSteps2, total, axisTotal,
     // Défauts DU MODÈLE sélectionné (pour l'étiquette « default … » des pickers).
     modelDefaultCfg, modelDefaultSteps,
     mixedModelDefaults: mixedModelDefaults(d, effectiveModels),

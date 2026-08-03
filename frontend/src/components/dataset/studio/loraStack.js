@@ -1,14 +1,22 @@
 // react-frontend/src/components/dataset/studio/loraStack.js
 /**
- * Logique PURE du mode « pile » (combine) du Test Studio — extraite du JSX pour
- * être testable sous `node --test` (le runner ne parse pas le JSX).
+ * Logique PURE du mode « pile » (🧬 Blend) du Test Studio — extraite du JSX pour
+ * être testable sous `node --test` (le runner ne parse pas le JSX). Le ◉ LoRA
+ * Canvas monte ce MÊME module (cf. utils/canvasGeneration) : un seul clamp, une
+ * seule règle « ≥2 LoRA d'une seule famille », donc les deux écrans ne peuvent
+ * pas répondre deux choses.
+ *
+ * ⚠️ Le mode s'affiche « 🧬 Blend » depuis le 03/08/2026 et s'affichait
+ * « 🧬 Combine » avant. La valeur du mode, la clé d'API et les noms exportés
+ * ici gardent le mot `combine` EXPRÈS : ils sont stockés (localStorage) ou
+ * publics (POST), et un libellé ne renomme pas une donnée.
  *
  * Deux modes, une seule sélection de LoRA :
  *   - 'compare' : chaque LoRA coché est testé SEUL, une colonne par LoRA
  *                 (comportement historique) ; l'axe strengths balaye chacun.
- *   - 'combine' : les LoRA cochés sont chargés ENSEMBLE dans la même génération,
- *                 chacun à SON poids ; l'axe strengths n'a plus de sens et
- *                 disparaît de l'UI comme du payload.
+ *   - 'combine' : (affiché « 🧬 Blend ») les LoRA cochés sont chargés ENSEMBLE
+ *                 dans la même génération, chacun à SON poids ; l'axe strengths
+ *                 n'a plus de sens et disparaît de l'UI comme du payload.
  *
  * Les poids vivent hors de la sélection (le LoraPicker n'en connaît pas) : une map
  * `{ "<dataset_id>:<checkpoint>": poids }`, pour qu'un poids réglé survive au
@@ -36,10 +44,10 @@ export function stackWeight(weights, sel) {
  */
 export function combineBlocker(selection) {
   const sel = selection || [];
-  if (sel.length < 2) return 'Check at least two LoRAs to combine them.';
+  if (sel.length < 2) return 'Check at least two LoRAs to blend them.';
   const families = [...new Set(sel.map((s) => s.family || s.train_type || 'zimage'))];
   if (families.length > 1) {
-    return `Combining needs one family: ${families.join(' + ')} use different base `
+    return `Blending needs one family: ${families.join(' + ')} use different base `
       + 'models and workflows. Uncheck one of them.';
   }
   return null;

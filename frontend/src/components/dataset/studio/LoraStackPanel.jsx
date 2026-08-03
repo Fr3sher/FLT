@@ -1,10 +1,17 @@
 // react-frontend/src/components/dataset/studio/LoraStackPanel.jsx
 /**
- * Bascule Compare / Combine + poids par LoRA de la pile (≥2 LoRA cochés).
+ * Bascule Compare / Blend + poids par LoRA de la pile (≥2 LoRA cochés).
  *
  * « Compare » = comportement historique : chaque LoRA est testé SEUL, une colonne
- * par LoRA. « Combine » = les LoRA cochés sont chargés ENSEMBLE dans la même image,
+ * par LoRA. « Blend » = les LoRA cochés sont chargés ENSEMBLE dans la même image,
  * chacun à son poids, et tous leurs triggers sont injectés dans le prompt.
+ *
+ * ⚠️ Ce mode s'est appelé « 🧬 Combine » jusqu'au 03/08/2026. SEUL LE LIBELLÉ a
+ * changé, pour que le Test Studio et le ◉ LoRA Canvas cessent d'avoir deux mots
+ * pour un seul mode : la valeur persistée (`studioComp_mode === 'combine'`), la
+ * clé de l'API (`combine: true`) et l'id du sujet d'aide (`studio-combine-loras`)
+ * restent CE QU'ILS ÉTAIENT — les renommer casserait le localStorage de tout le
+ * monde pour un mot.
  *
  * La logique (clé de poids, clamp, blocage inter-familles, coût) vit dans
  * ./loraStack.js — testée sous `node --test`, que le JSX rend inaccessible ici.
@@ -27,7 +34,9 @@ export default function LoraStackPanel({ selection, mode, onMode, weights, onWei
         <HelpBadge topic="studio-combine-loras" />
         <div role="group" aria-label="LoRA run mode"
           className="ml-auto flex rounded-lg border border-border bg-app/60 p-0.5">
-          {[['compare', '⚖ Compare'], ['combine', '🧬 Combine']].map(([value, label]) => (
+          {/* La VALEUR reste 'combine' (elle est dans le localStorage de tous les
+              utilisateurs et dans le corps du POST) ; seul le libellé dit Blend. */}
+          {[['compare', '⚖ Compare'], ['combine', '🧬 Blend']].map(([value, label]) => (
             <button key={value} type="button" onClick={() => onMode(value)}
               aria-pressed={mode === value}
               className={`px-2.5 py-1 rounded text-[0.6875rem] font-semibold ${

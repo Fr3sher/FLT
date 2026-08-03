@@ -236,25 +236,34 @@ best one**. Later checkpoints know the identity better but obey prompts worse.
    expression/angle regardless of prompt, outfits from the dataset bleeding in.
 4. Save the winning settings (★) — they're reused as the dataset's defaults.
 
-### Compare LoRAs — or combine them
+### Compare LoRAs — or blend them
 
 Check two or more LoRAs and Studio asks what you want to do with them:
 
 - **⚖ Compare** (the default) tests each LoRA **on its own**, one column per LoRA,
   swept across the strengths you picked. This is what you want to answer "which of
   these is better".
-- **🧬 Combine** loads them **together in the same image**, each at its own weight,
+- **🧬 Blend** loads them **together in the same image**, each at its own weight,
   and injects **every trigger word** into the prompt for you. This is what you want
-  to answer "do these two work together" — a character plus a style, or two of your
-  own characters in one shot.
+  to answer "do these two work together" — a character plus a style, or a character
+  plus a concept.
 
-In Combine mode the strength sweep disappears: each LoRA already carries its own
+> This mode was called **🧬 Combine** until August 2026. Only the name changed;
+> the ◉ LoRA Canvas offers the very same thing from the board, and calling it two
+> different things was a needless thing to learn twice.
+
+**What blending two characters actually gives you** is a *hybrid* — one person who
+is neither of the two, not both of them side by side in one shot. That is a real
+and deliberate use, but if you expected "my two characters together", this is not
+it. The reliable pairings are **character + style** and **character + concept**.
+
+In Blend mode the strength sweep disappears: each LoRA already carries its own
 weight, so the run is one configuration instead of a grid. Start both around
 0.7-0.9 — two LoRAs at 1.0 usually fight each other, and the one you care about
 most should be the heavier of the two. Result tiles from a stack carry a **🧬 +N**
 badge naming what was loaded alongside.
 
-**One family per run, always.** A Krea LoRA and an SDXL LoRA cannot be combined:
+**One family per run, always.** A Krea LoRA and an SDXL LoRA cannot be blended:
 they need different base models and different workflows. The picker greys out the
 other families as soon as you check one, and a run that somehow mixes them is
 refused with both family names in the message.

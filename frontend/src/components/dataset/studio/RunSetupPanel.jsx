@@ -33,9 +33,13 @@ import StudioPreflightBanner from './StudioPreflightBanner';
 //                           pas (familles mélangées). Jamais un bouton mort muet.
 // Tout le reste — modèle, format, cfg, steps, steps2, seed, ×N, LoRA always-on,
 // rebalance, négatif… — est le MÊME code, donc les deux écrans ne divergent pas.
+//   `showStrengths`/`cellTotal` : le mode 🧬 Blend du board charge tous les
+//                           checkpoints dans UNE image, chacun à son poids —
+//                           l'axe strengths n'a plus rien à balayer, et le
+//                           compteur ne doit plus le multiplier.
 export default function RunSetupPanel({ d, studio, form, datasetId,
   checkpointSlot = null, launchBlocked = false, launchLabel = null, launchHint = null, actionBar = true,
-  genStoragePrefix = null }) {
+  showStrengths = true, cellTotal = null, genStoragePrefix = null }) {
   const navigate = useNavigate();
   // Réglages de génération GLOBAUX (parité Generate, hors prompt builder) remontés par
   // StudioGenerationSettings : objet snake_case déjà prêt à fusionner dans le POST /run
@@ -49,7 +53,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   // contredit la famille du Studio (déploiement mal classé) → bandeau distinct.
   const [archMismatch, setArchMismatch] = useState(null);
 
-  const canLaunch = form.total > 0 && !d.pending && !d.gpu_busy && !studio.launching
+  // Le nombre de cellules RÉELLEMENT lancées. `cellTotal` n'est fourni que par un
+  // mode qui change la formule (🧬 Blend : une pile = une configuration) — sinon
+  // c'est le total du formulaire, inchangé.
+  const total = cellTotal != null ? cellTotal : form.total;
+  const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
     && !launchBlocked;
   // Axe ⚖ batch (Always-on LoRA cochés batch) : chaque config tourne SANS puis
   // AVEC chaque LoRA coché → le compteur d'images/temps doit en tenir compte
@@ -147,7 +155,9 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             <CheckpointPicker checkpoints={d.checkpoints} chosen={form.chosenCps} onToggle={form.toggleCp} />
           )}
 
-          <StrengthPicker choices={STRENGTH_CHOICES} selected={form.selSts} onToggle={form.toggleSt} fmt={fmt} />
+          {showStrengths && (
+            <StrengthPicker choices={STRENGTH_CHOICES} selected={form.selSts} onToggle={form.toggleSt} fmt={fmt} />
+          )}
 
           <PromptField
             value={form.effectivePrompt}
@@ -206,7 +216,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
               onToggleLock={() => form.setSeedLocked((v) => !v)}
               genCount={form.genCount}
               onGenCount={form.setGenCount}
-              total={form.total * batchMult}
+              total={total * batchMult}
               batchMult={batchMult}
               fmt={fmt}
             />

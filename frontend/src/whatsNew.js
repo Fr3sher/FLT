@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-blend',
+    date: '2026-08-03',
+    title: '🧬 Blend two LoRAs into one image, straight from the board',
+    blurb:
+      'Ticking several checkpoints on the LoRA Canvas used to mean one pass each. A new ⚖ Compare / 🧬 Blend toggle lets you load them all into the SAME generation instead, each on its own weight slider, with every dataset\'s trigger word listed before you launch rather than injected behind your back. Identity + style and identity + concept are where it pays off — two identities blend into a hybrid person, which the panel now tells you up front. The mode is called Blend everywhere now: the Test Studio\'s 🧬 Combine toggle is the same thing and now says Blend too. Nothing you saved changes — only the word.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-caption-mismatch-names-your-family',
     date: '2026-08-03',
     title: 'The caption-mismatch warning names YOUR model family, not Z-Image',

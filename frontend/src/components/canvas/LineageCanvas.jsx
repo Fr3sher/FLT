@@ -927,6 +927,9 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     setPicks((cur) => toggleCanvasCheckpoint(cur, {
       datasetId: lane.datasetId,
       datasetName: lane.name,
+      // 🧬 What a blend of this pick adds to the prompt — named in the panel
+      // rather than injected silently.
+      triggerWord: lane.triggerWord || null,
       recordId: node.record_id,
       step: pill.step,
       family: node.train_type,

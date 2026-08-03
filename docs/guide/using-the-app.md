@@ -1373,6 +1373,34 @@ Two things it will tell you rather than fail at:
   not share a base model or a workflow, so there is no single run that can render
   both. Unpick one family and the button comes back.
 
+**⚖ Compare or 🧬 Blend.** From the second pick onwards the panel offers a
+choice, and it defaults to what it always did:
+
+- **⚖ Compare** — one pass per checkpoint, swept across the strengths. This is
+  how you find out which LoRA, or which step, is better.
+- **🧬 Blend** — *one* generation loads them **all**, each at its own weight, and
+  every dataset's trigger word is added to the front of your prompt. The panel
+  lists those words before you launch; nothing is injected silently. It is the
+  Test Studio's Blend mode, driven from the board — the same toggle, the same
+  engine. (The Test Studio called it **🧬 Combine** until August 2026; only the
+  name changed.)
+
+A blend is one configuration, not one per pick, so the strength sweep disappears
+(each LoRA carries its own weight instead) and the image counter drops to one
+picture per seed.
+
+What blending actually does is worth saying plainly: **two identity LoRAs give
+you a hybrid person** — someone who is neither of the two. That is a real use, on
+purpose, but it is not "both people in one shot". The combination that usually
+pays off is **identity + style**, or **identity + concept**. Weights are the dial:
+below 1 the LoRA contributes less, above 1 it dominates (0 to 2, 1 by default),
+and a weight you set survives un-ticking another pick or reloading the page.
+
+Blend needs **at least two checkpoints of one family**; with a mixed selection
+the toggle is greyed out with the reason, because the run underneath it could not
+exist either. Picks that are not deployed yet are deployed first, all of them,
+before anything is generated — a blend never loads a subset of what it announced.
+
 **▶ Continue training from a checkpoint.** Clicking a pill's body opens its
 actions — Download, Deploy, Details, Delete — and **▶ Continue from here**. It
 opens the *same* launch dialog the Checkpoints panel and the Runs page open, on

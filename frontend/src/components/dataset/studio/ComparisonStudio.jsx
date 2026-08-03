@@ -143,7 +143,7 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
   const combineBlocked = combine ? combineBlocker(selection) : null;
 
   // --- Vue PILE ---------------------------------------------------------------
-  // Décidée par le RUN AFFICHÉ, pas par la bascule Compare/Combine : on peut ouvrir
+  // Décidée par le RUN AFFICHÉ, pas par la bascule Compare/Blend : on peut ouvrir
   // une pile lancée hier alors que la bascule est repassée sur Compare, et l'inverse.
   const shownStack = useMemo(() => stackMembers(data), [data]);
   const showStackView = isStackRun(data);

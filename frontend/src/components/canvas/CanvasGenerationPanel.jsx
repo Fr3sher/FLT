@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import RunSetupPanel from '../dataset/studio/RunSetupPanel';
+import CanvasBlendPanel from './CanvasBlendPanel';
 import { useCanvasStudio } from '../../hooks/useCanvasStudio';
 import { useStudioForm } from '../../hooks/useStudioForm';
 import {
-  canvasFamily, canvasSelectionSummary, describeCanvasLaunch,
+  canvasBlendBlocker, canvasFamily, canvasSelectionSummary, describeCanvasLaunch,
 } from '../../utils/canvasGeneration';
 import { famLabel } from '../../utils/familyLabels';
 import { DEPLOY_BAR_CLASS } from '../../utils/checkpointDeployState';
@@ -98,10 +99,51 @@ function CanvasCheckpointRecap({ selection, onToggle, onClear }) {
   );
 }
 
+/* ⚖/🧬 The run mode and its weights survive the panel being closed and the page
+   being reloaded, like every other setting on this screen. New keys — nothing
+   stored under an existing name changes meaning. */
+const MODE_KEY = 'canvasStack_mode';
+const WEIGHTS_KEY = 'canvasStack_weights';
+const readMode = () => {
+  try { return localStorage.getItem(MODE_KEY) === 'blend' ? 'blend' : 'compare'; }
+  catch { return 'compare'; }
+};
+const readWeights = () => {
+  try { return JSON.parse(localStorage.getItem(WEIGHTS_KEY) || '{}') || {}; }
+  catch { return {}; }
+};
+
 export default function CanvasGenerationPanel({ selection, onToggle, onClear, onDeploy, onClose, tracker }) {
   const family = canvasFamily(selection);
   const verdict = describeCanvasLaunch(selection);
-  const studio = useCanvasStudio(selection, family, { onDeploy, tracker });
+  const [mode, setMode] = useState(readMode);
+  // Keyed on the PILL (see canvasGeneration), so a weight survives un-ticking
+  // another pick, deploying, and reloading the page.
+  const [weights, setWeights] = useState(readWeights);
+  useEffect(() => {
+    try {
+      localStorage.setItem(MODE_KEY, mode);
+      localStorage.setItem(WEIGHTS_KEY, JSON.stringify(weights));
+    } catch { /* private mode — persistence is best effort */ }
+  }, [mode, weights]);
+
+  // Mixed families kill the whole launch, blend or not, and `verdict` already
+  // says so in the better words. Only when the launch is otherwise possible does
+  // the blend rule get to speak (it is the one that catches "a stack of one").
+  const familyReason = verdict.families.length > 1 ? verdict.reason : null;
+  // Below two picks there is nothing to blend, and the toggle is not on screen.
+  // The mode is REMEMBERED rather than reset — un-ticking down to one pick and
+  // back must not silently drop the user out of Blend — but it does not get to
+  // block a launch with a message whose panel is hidden.
+  const blendAvailable = selection.length > 1;
+  const blendBlocker = (mode === 'blend' && blendAvailable)
+    ? canvasBlendBlocker(selection) : null;
+  const blend = mode === 'blend' && blendAvailable && !blendBlocker;
+  const launchVerdict = (!verdict.blocked && blendBlocker)
+    ? { ...verdict, blocked: true, reason: blendBlocker }
+    : verdict;
+
+  const studio = useCanvasStudio(selection, family, { onDeploy, tracker, blend, weights });
   const pinned = useMemo(
     () => (studio.data?.checkpoints || []).map((c) => c.filename), [studio.data]);
   // Namespaced per FAMILY, never per dataset: a canvas run is cross-dataset by
@@ -109,7 +151,15 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
   const form = useStudioForm(studio.data, 'canvas', family, { pinnedCheckpoints: pinned });
 
   const recap = (
-    <CanvasCheckpointRecap selection={selection} onToggle={onToggle} onClear={onClear} />
+    <>
+      <CanvasCheckpointRecap selection={selection} onToggle={onToggle} onClear={onClear} />
+      {selection.length > 1 && (
+        <CanvasBlendPanel selection={selection} mode={mode} onMode={setMode}
+          weights={weights}
+          onWeight={(k, v) => setWeights((cur) => ({ ...cur, [k]: v }))}
+          blocker={blendBlocker} familyReason={familyReason} />
+      )}
+    </>
   );
 
   return (
@@ -147,9 +197,15 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
               form={form}
               datasetId={selection[0]?.datasetId ?? null}
               checkpointSlot={recap}
-              launchBlocked={verdict.blocked}
-              launchLabel={verdict.label}
-              launchHint={verdict.reason}
+              launchBlocked={launchVerdict.blocked}
+              launchLabel={launchVerdict.label}
+              launchHint={launchVerdict.reason}
+              // 🧬 A blend is ONE configuration: each LoRA carries its own weight,
+              // so the strength sweep has nothing left to sweep and the image
+              // count must stop multiplying by it — or the panel would announce
+              // six images and queue one.
+              showStrengths={!blend}
+              cellTotal={blend ? form.axisTotal : null}
               genStoragePrefix={`studioGen_canvas_${family || 'default'}`}
               // The Studio's fixed bottom bar would sit ON this sheet at 400 px.
               actionBar={false}

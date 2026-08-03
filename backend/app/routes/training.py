@@ -2142,7 +2142,13 @@ def train_canvas_generate():
     canvas); they may NOT span several families — the engine refuses, and the
     reason travels back so the button can say it. Same gates as the other launch
     routes: ComfyUI not set up → 409/503, missing models/nodes → the actionable
-    409 the Studio already returns."""
+    409 the Studio already returns.
+
+    🧬 `combine: true` (the board's Blend toggle) switches from one pass per
+    ticked checkpoint to ONE generation loading them all, each at the `weight`
+    its selection carries, with every dataset's trigger word injected. It is the
+    Test Studio's own Blend mode — the same engine argument, so the two screens
+    cannot drift into two answers for one word."""
     from ._common import (_require_comfyui, _studio_arch_mismatch_response,
                           _studio_missing_response)
     gate = _require_comfyui()
@@ -2165,7 +2171,8 @@ def train_canvas_generate():
             detail_amount=d.get('detail_amount'),
             resolution_tier=d.get('resolution_tier'),
             resolution_multiplier=d.get('resolution_multiplier'),
-            init_image=d.get('init_image'), denoise=d.get('denoise'))
+            init_image=d.get('init_image'), denoise=d.get('denoise'),
+            combine=d.get('combine'))
     except Exception as e:
         from ..services.lora_test_studio import StudioArchMismatch, StudioAssetsMissing
         if isinstance(e, StudioArchMismatch):

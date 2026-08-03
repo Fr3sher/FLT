@@ -65,7 +65,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
         <h1 className="text-content font-bold flex items-center gap-2">🧪 Test Studio<HelpBadge topic="page-studio" /></h1>
         {comparison && (
           <span className="px-2 py-0.5 rounded-lg border border-amber-400/40 bg-amber-400/10 text-amber-200 text-[0.6875rem] font-semibold">
-            {/* Neutre : le mode réel (⚖ Compare / 🧬 Combine) est choisi et affiché
+            {/* Neutre : le mode réel (⚖ Compare / 🧬 Blend) est choisi et affiché
                 juste en dessous par LoraStackPanel — annoncer « Comparing » ici
                 mentirait dès que la pile est active. */}
             {selection.length} LoRAs checked
