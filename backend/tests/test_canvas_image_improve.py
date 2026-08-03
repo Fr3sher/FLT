@@ -326,8 +326,8 @@ def test_the_improvement_is_invisible_to_the_test_studio(app, engine_stub):
 
 def test_the_improvement_IS_in_the_checkpoint_gallery_and_can_be_pinned(
         app, engine_stub):
-    """Direction 2, and the reason the row lives in this table at all: Jeremy
-    asked to see the improved picture NEXT TO the original, on the board.
+    """Direction 2, and the reason the row lives in this table at all: the
+    improved picture was asked for NEXT TO the original, on the board.
 
     If someone ever "harmonises" cloud_training.py onto lora_test_studio._cells(),
     this test is what says the feature just disappeared."""
