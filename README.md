@@ -77,7 +77,7 @@ API generation follows each provider's billing and content policy. Read the dire
 | **Custom bases and continuation** | Train compatible custom weights, continue from any saved epoch, or use verified full-state resume where available |
 | **Runs hub** | Local and cloud runs together with progress, logs, stop/retry/continue/download actions and paste-safe config sharing |
 | **Experiment lineage** | Inspect, annotate and diff the exact tree of runs and the checkpoint each continuation resumed from |
-| **LoRA Canvas** | Put every dataset's lineage on one pan/zoom board, rearrange cards, compare runs across datasets, generate from same-family checkpoints, pin/fuse outputs and continue training from a pill — each generation run keeps its own strip in training-step order, with the character dataset's reference face on its lane |
+| **LoRA Canvas** | Put every dataset's lineage on one pan/zoom board, rearrange cards, compare runs across datasets, generate from same-family checkpoints — including 🧬 blending several checkpoints into one image, with purple provenance edges joining a blended picture to every pill it came from (blends made before this feature show a badge instead) — pin/fuse outputs and continue training from a pill; each generation run keeps its own strip in training-step order, with the character dataset's reference face on its lane |
 | **Test Studio** | Fixed-seed checkpoint × strength grids, multi-LoRA comparisons or 🧬 combined stacks (several of your LoRAs in one image, each at its own weight, weight variants compared side by side), a ✨ Enhance button that enriches your prompt through your local Ollama, votes, Wilson ranking, face ranking and shareable exports |
 | **Studio shortcuts and recovery** | Open Studio directly from a run, draw prompts from kept dataset captions, and pause safely when ComfyUI drops instead of launching later cells against changed state |
 
@@ -129,7 +129,7 @@ Directions, not dates. These are discussed openly on the project's Discord, and 
 
 - **🧬 Merge Lab** *(next big one)* — bake your trained LoRAs into a standalone, shareable checkpoint and merge models with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids). Full model fine-tuning on large curated datasets comes later on the same path.
 - **🎬 WAN 2.1 / 2.2 video LoRAs** — ai-toolkit already trains WAN and the scraper can already pull video, so the whole pipeline (scrape, curate, caption, train, test) extends naturally to motion. Community-driven.
-- **🧠 Smarter watermark detection** — a dedicated NSFW-trained detector, and cleaning that happens **during import** instead of as a separate errand. *(Detection and manual two-pass cleaning already ship, in datasets and in the Image Bank; what's missing is a detector that doesn't need a vision model, and automation you can trust unattended.)*
+- **🧠 Watermark cleaning during import** — cleaning that happens **during import** instead of as a separate errand, and automation you can trust unattended. *(Detection has caught up: a dedicated detector that needs no vision model now ships alongside the Ollama path, and manual two-pass cleaning already works in datasets and in the Image Bank.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
 
 ## Why this instead of ai-toolkit?
@@ -161,7 +161,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | ChatGPT / `gpt-image-2` generation | `OPENAI_API_KEY`, or the separate experimental ChatGPT-subscription connection |
 | OpenRouter generation | `OPENROUTER_API_KEY` plus an image-capable model slug; OpenRouter billing and the upstream provider's policy still apply |
 | Klein generation / improvement | ComfyUI reachable + Klein model stack |
-| SeedVR2 upscaling | ComfyUI reachable + the `ComfyUI-SeedVR2_VideoUpscaler` node pack (installed from ComfyUI, not by this app — it has its own Python dependencies) + two model files the Setup step downloads (~3.9 GB); [exact files](docs/guide/settings-reference.md#seedvr2-upscaling-local) |
+| SeedVR2 upscaling | ComfyUI reachable + the `ComfyUI-SeedVR2_VideoUpscaler` node pack (installed from ComfyUI, not by this app — it has its own Python dependencies) + two model files the Setup step downloads (~3.9 GB); big frames are upscaled in overlapping tiles by default when the optional `Comfyui_TTP_Toolset` pack is present (a `tiling` setting keeps `always`/`never` available); [exact files](docs/guide/settings-reference.md#seedvr2-upscaling-local) |
 | Krea 2 Edit generation | ComfyUI reachable + `comfyui-krea2edit`, a Krea 2 base, Identity Edit LoRA, Qwen3-VL encoder and Qwen Image VAE; [exact files](docs/guide/settings-reference.md#krea-2-edit-local) |
 | Captioning | Ollama **or** ai-toolkit (JoyCaption) |
 | Dual long + short captions | ai-toolkit + local vision caption derivation; local training only, and unavailable for Krea 2 / Anima |
@@ -169,7 +169,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | Face similarity / auto-triage | `backend/requirements-ml.txt` (InsightFace + ONNX Runtime) |
 | Character person masks | `backend/requirements-ml.txt` (rembg); Concept/Style intentionally disable them |
 | Image Bank scoring, crops and semantic tools | Bank scoring extra from `backend/requirements-ml.txt`; semantic search/diversity reuse an existing Score pass, and balanced picks also need Framing |
-| Watermark detection | Ollama with a vision model |
+| Watermark detection | Ollama with a vision model, **or** the dedicated detector (torch + transformers — the bank-scoring extra's environment is reused when present — plus ~0.9 GB of model downloads at first use) |
 | Watermark inpainting | LaMa extra from `backend/requirements-ml.txt`, or ComfyUI + Klein for the refine lane; crop remains model-free |
 | Scraping | `backend/requirements-scrape.txt`; Pexels also needs `PEXELS_API_KEY` and explicit authorization |
 | Local LoRA training: Z-Image / Krea 2 / FLUX.1 / FLUX.2 Klein / Anima | ai-toolkit; no ComfyUI is needed for official Hugging Face bases |
