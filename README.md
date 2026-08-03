@@ -48,6 +48,7 @@ API generation follows each provider's billing and content policy. Read the dire
 | **Quality and similarity passes** | Flag blur, noise, flat frames, small/soft-detail images and black bars; group duplicates, crops and recompressions |
 | **Aesthetic, NSFW and style scoring** | One scoring pass produces rankings, groups and reusable embeddings |
 | **People, framing and captions** | Cluster faces without a reference, classify face/bust/body/back, and caption the bank for full-text search |
+| **Medium and head angle** | Split a mixed dump into photographs, anime, 3D renders and illustrations (reusing the scoring embeddings, no new inference), and filter by frontal / three-quarter / profile / back view. Both answer "unsure" or "not measured" instead of guessing, and both say so on screen: non-photo verdicts are rare by design, and profiles are under-counted because a hard-turned head often defeats face detection |
 | **Find and shortlist** | Find by text, pick diverse, make framing-balanced picks, find similar images, or promote a shortlist into a new bank |
 | **Fast review tools** | Filter, sort, review one by one, rotate without rewriting the source, compare an improved candidate with its original, and re-run only eligible passes |
 | **Editable watermark masks** | Detect marks, redraw several mask zones, then crop or repaint into a separate clean derivative; undo returns to the untouched source |
