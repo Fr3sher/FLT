@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-filter-opens-folded',
+    date: '2026-08-03',
+    title: 'The LoRA Canvas opens on the board, not on its filter',
+    blurb:
+      'The Datasets filter opened expanded every time you loaded the canvas, and on a library of any size its checkbox list pushed the board itself below the fold — so the first thing you did on the page you came to look at was scroll past a filter. It now opens folded at every width, with the same summary on the button (“3 of 7 · 12 runs shown”), so nothing is hidden. If you unfold it, it stays unfolded next time.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-blend-weight-sweep',
     date: '2026-08-03',
     title: '🧬 Tick several weights and blend every combination in one run',

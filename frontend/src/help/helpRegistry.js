@@ -510,6 +510,8 @@ const TOPICS = [
   action('canvas-arrange', 'Move run cards & ✦ Tidy up',
     ['move a run', 'drag a card', 'arrange the canvas', 'rearrange', 'layout',
      'tidy up', 'reset the layout', 'positions', 'long press', 'pick up a card',
+     'datasets filter', 'filter is collapsed', 'filter is folded',
+     'where is the dataset list', 'show fewer datasets',
      'my board keeps moving', 'new run moved everything', 'organise runs'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-generate', 'Generate from the board',

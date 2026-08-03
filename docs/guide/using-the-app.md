@@ -1410,8 +1410,11 @@ thing you reconstruct.
 
 **Choosing what is on the board.** Everything is on it by default. The
 **Datasets** control above the board unticks what you do not want to see; the
-choice is remembered. On a phone it opens folded, with the current state written
-on the button ("3 of 7") so you always know what you are looking at.
+choice is remembered. It opens **folded**, at every screen width: its checkbox
+list is as tall as your library, and expanded on arrival it pushed the board —
+the thing you came to look at — below the fold on every load. Nothing is hidden
+by that, because the current state is written on the button ("3 of 7") so you
+always know what you are looking at. Unfold it and it stays unfolded next time.
 
 **Moving around.** Drag the background to pan, use the wheel (or two fingers) to
 zoom, and **Fit** puts the whole board back in view. The board only fits itself
