@@ -122,6 +122,11 @@ def test_each_local_engine_reads_only_its_own_pool():
     # And the refusal path turns on this list, not on "is it local".
     assert svc.local_engines_taking_modal_refs(['klein', 'krea']) == ['krea']
     assert svc.local_engines_taking_modal_refs(['klein']) == []
+    # Its mirror gates DISK WRITES: a Krea-only edit must not copy the dataset's
+    # extras to temporary files for a consumer that no longer exists.
+    assert svc.local_engines_taking_dataset_refs(['klein', 'krea']) == ['klein']
+    assert svc.local_engines_taking_dataset_refs(['krea']) == []
+    assert svc.local_engines_taking_dataset_refs(['chatgpt']) == []
 
 
 def test_the_engine_labels_are_worded_identically_on_both_sides():
