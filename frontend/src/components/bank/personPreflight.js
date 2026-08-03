@@ -122,7 +122,7 @@ export function defaultPicked(rows) {
   return (rows || []).filter((r) => r.preselect).map((r) => r.subfolder);
 }
 
-/** The headline over the list, in Jeremy's terms: what was found and what
+/** The headline over the list, in plain terms: what was found and what
  *  accepting it does. Null when the sampling found no single-person folder —
  *  then the list is only reporting, and there is nothing to pre-tick. */
 export function preflightHeadline(rows) {
