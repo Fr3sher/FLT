@@ -38,6 +38,10 @@
 
 import { clampImageBox } from './canvasImageNodes.js';
 
+// Explicit extension: imported by `node --test`, which does not resolve
+// extensionless specifiers, as well as by Vite.
+import { groupBarMaxHeight } from './canvasNodeChrome.js';
+
 /** Sort key inside a strip: the stored position, then the image id so a tie
  *  (two rows written by different gestures in the same millisecond, or a hand-
  *  edited database) still draws the same order on every load. */
@@ -158,7 +162,28 @@ export function layoutImageNodes(nodes) {
 /** Flatten a layout back to plain boxes, for the lane extent (✦ Fit must not
  *  crop a strip off the board) and for anything that only needs geometry. */
 export function layoutBoxes(layout) {
-  return (layout || []).map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h }));
+  return (layout || []).map(occupiedBox);
+}
+
+/**
+ * The board space a layout row really OCCUPIES — which, for a group, is taller
+ * than the strip: its drag bar is drawn ABOVE the box, and that bar carries the
+ * group's only grip plus its ✕ and its Export grid.
+ *
+ * A placer that ignored this would drop a picture squarely on top of a group's
+ * bar and leave it unmovable and undeletable — measured, not feared: with a
+ * picture pinned flush above a two-image strip, 5 of 11 points sampled along
+ * the bar hand the pointer to the picture instead. `groupBarMaxHeight` reserves
+ * the bar at its zoom-out maximum, because a gap that is enough at 100 % is not
+ * enough at 40 %.
+ *
+ * Only about PLACEMENT: what is drawn, and where, is unchanged.
+ */
+export function occupiedBox(row) {
+  if (!row) return { x: 0, y: 0, w: 0, h: 0 };
+  if (row.kind !== 'group') return { x: row.x, y: row.y, w: row.w, h: row.h };
+  const bar = groupBarMaxHeight(row.h);
+  return { x: row.x, y: row.y - bar, w: row.w, h: row.h + bar };
 }
 
 /** Every picture with the box it is actually DRAWN in — a member's slot in its

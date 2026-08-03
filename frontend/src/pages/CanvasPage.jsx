@@ -12,7 +12,7 @@ import {
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
-import { layoutImageNodes } from '../utils/canvasImageGroups';
+import { layoutImageNodes, occupiedBox } from '../utils/canvasImageGroups';
 import { placeImageBatch } from '../utils/canvasPinBatch';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
@@ -237,10 +237,13 @@ export default function CanvasPage() {
         if (!nodes.length) continue;
         const res = placeImageBatch({
           graph,
-          // …and nothing may land ON one of those strips either.
+          // …and nothing may land ON one of those strips either — nor on the
+          // BAR above one, which is the group's only grip and carries its ✕.
+          // `occupiedBox` is the shared answer to "how much board does this
+          // really take", so Tidy up and 📌 Pin all cannot disagree about it.
           existing: layoutImageNodes(visibleImageNodes(map))
             .filter((r) => r.kind === 'group')
-            .map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h })),
+            .map(occupiedBox),
           images: nodes.map((n) => ({ id: n.imageId, dataset_id: id,
             record_id: n.image?.record_id, step: n.image?.step })),
           max: nodes.length,

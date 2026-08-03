@@ -94,11 +94,26 @@ const MAX_BAR_FRACTION = 0.35; // …and the share of the strip it may never exc
  */
 export function groupBarHeight(boardScale, groupH) {
   const s = Number(boardScale);
-  const h = Number(groupH);
   if (!Number.isFinite(s) || s <= 0) return BAR_BASE;
-  const wanted = Math.max(BAR_BASE, BAR_BASE / s);
-  const cap = Number.isFinite(h) && h > 0 ? Math.max(BAR_BASE, h * MAX_BAR_FRACTION) : Infinity;
-  return Math.min(wanted, cap);
+  return Math.min(Math.max(BAR_BASE, BAR_BASE / s), groupBarMaxHeight(groupH));
+}
+
+/**
+ * The TALLEST that bar can ever get on this strip, in board units — its height
+ * at maximum zoom-out, where the counter-scale saturates against the cap.
+ *
+ * Why this exists as its own number: the bar is drawn ABOVE the strip's box, so
+ * it occupies board space that belongs to no node. Anything the board places
+ * there lands on top of the group's only grip. The placers therefore have to
+ * treat a group as taller than it looks, and they cannot ask "how tall at the
+ * current zoom?" — a picture placed at 100 % must still not be under the bar
+ * once the user zooms out to 40 %, where the bar is TWICE as tall (26 board
+ * units becomes 52.5 on a 150-unit strip). So they reserve the worst case,
+ * which is exactly the cap and does not depend on the scale at all.
+ */
+export function groupBarMaxHeight(groupH) {
+  const h = Number(groupH);
+  return Number.isFinite(h) && h > 0 ? Math.max(BAR_BASE, h * MAX_BAR_FRACTION) : BAR_BASE;
 }
 
 /**

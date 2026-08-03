@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-group-bar-reachable',
+    date: '2026-08-03',
+    title: 'Groups of pinned images can be moved and closed again',
+    blurb:
+      'A side-by-side group on the LoRA Canvas could end up impossible to move AND impossible to close, with no way to tell why. Its title bar — which holds the ⠿ grip, Export grid and ✕ — is drawn just above the strip, and any picture pinned over that space silently took the clicks meant for it. The bars are now drawn above every picture, so they always answer; and ✦ Tidy up and 📌 Pin all know that space is taken, so they stop dropping a picture there. It showed up most on a zoomed-out board, where the bar is twice as tall.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-watermark-detector-extra',
     date: '2026-08-03',
     title: 'Finding watermarks in a big bank now takes minutes instead of hours',

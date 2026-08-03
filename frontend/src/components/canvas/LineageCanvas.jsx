@@ -53,6 +53,7 @@ import CanvasGenerationPanel from './CanvasGenerationPanel';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
+import CanvasGroupBar from './CanvasGroupBar';
 import ExportGridModal from '../dataset/studio/ExportGridModal';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
@@ -239,14 +240,24 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, o
       </svg>
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
-          laneName={lane.name} onClose={onClose} onOpen={onOpen}
-          onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} boardScale={boardScale}
+          laneName={lane.name} onClose={onClose} onOpen={onOpen} boardScale={boardScale}
           dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
       ) : (
         <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
           laneName={lane.name} onGeometry={onGeometry} onClose={onClose}
           onOpen={onOpen} boardScale={boardScale} />
       )))}
+      {/* 🖼🖼 The groups' title bars, drawn AFTER every picture and every strip.
+          A bar sits on board space above its own strip, so as an ordinary
+          sibling it was painted over by whatever the board placed there — and
+          with it went the group's only grip, its ✕ and its Export grid at once.
+          Chrome belongs above content; the pictures keep their order among
+          themselves. Same idiom as the merge hint just below. */}
+      {layout.map((r) => (r.kind === 'group' ? (
+        <CanvasGroupBar key={`bar:${r.key}`} group={r} datasetId={lane.datasetId}
+          boardScale={boardScale}
+          onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} />
+      ) : null))}
       {/* ⊕ "Let go here and these become one node." Without it the very first
           merge can only be discovered by accident, which is worse than not
           having the feature: two pictures would fuse and the board would look
