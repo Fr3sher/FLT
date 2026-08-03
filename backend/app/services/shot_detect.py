@@ -74,7 +74,18 @@ class ShotDetectUnavailable(RuntimeError):
     """The child could not start, or never got as far as loading TransNetV2 at
     all — an environment problem (missing extra, corrupt weights), not a bad
     file. The caller should surface an install hint, not mark one source as
-    broken."""
+    broken.
+
+    DO NOT RENAME WITHOUT WARNING THE VIDEO-BANK BRANCH. Its shot-detect pass
+    (branch feat/video-bank-service, commit ad83f255 at the time of writing)
+    catches this by `type(exc).__name__` rather than `isinstance` — importing
+    this module there to catch it properly would be circular, since that pass
+    is the one calling `detect_shots()` here. A silent rename would not raise
+    on that branch; it would just stop being recognised and start marking
+    every source as an individual per-file failure again, which is the exact
+    regression this exception exists to prevent (see the class docstring: a
+    missing pip package must fail the PASS, not stamp `detect_state='error'`
+    on hundreds of files that would have worked fine once it was installed)."""
 
 
 class ShotDetectFileError(RuntimeError):
