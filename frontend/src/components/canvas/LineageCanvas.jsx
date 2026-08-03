@@ -11,8 +11,8 @@ import {
   openGeometry, visibleImageNodes,
 } from '../../utils/canvasImageNodes';
 import {
-  drawnNodes, extractFromGroup, groupBoxOf, layoutBoxes, layoutImageNodes,
-  mergeIntoGroup, mergeTargetAt, shouldExtract,
+  drawnNodes, edgeAnchors, extractFromGroup, groupBoxOf, layoutBoxes,
+  layoutImageNodes, mergeIntoGroup, mergeTargetAt, shouldExtract,
 } from '../../utils/canvasImageGroups';
 import { DEPLOY_BAR_CLASS, DEPLOY_LEGEND } from '../../utils/checkpointDeployState';
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
@@ -252,9 +252,16 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
 function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, onExportGrid,
   boardScale, hint, blendNotes }) {
   if (!layout.length) return null;
-  // Edges are drawn from where each picture actually IS — a member's slot in
-  // its strip, not the box it remembers while it waits to leave one.
-  const edges = imageNodeEdges(drawnNodes(layout), lane.graph);
+  /* Edges are drawn from where each picture actually IS — a member's slot in
+     its strip, not the box it remembers while it waits to leave one.
+
+     And a STRIP answers as ONE object: every line leaves it at the same point
+     rather than fanning out of eight tiles, and repeats of the same source
+     collapse (utils/canvasImageGroups.edgeAnchors). This matters more now that a
+     picture can be parked anywhere on the board: the line to the checkpoint that
+     made it is what keeps free placement honest, so it has to stay legible when
+     it is long. */
+  const edges = imageNodeEdges(edgeAnchors(layout), lane.graph);
   return (
     <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
       <svg width="1" height="1" className="block overflow-visible" aria-hidden>

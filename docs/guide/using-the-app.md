@@ -1832,6 +1832,14 @@ them. There is **no limit**: drop a third, a tenth, they all join the strip.
 - **Every picture in a strip is the same height**, each scaled to keep its own
   shape — that is what makes the band continuous instead of a row of letterboxed
   tiles. Resize the group from its corner and the whole strip scales.
+- **A strip gets ONE link back to each checkpoint it came from**, not one per
+  picture, and they all leave the band at the same point. A strip is one object
+  to the eye and to every gesture, so eight connectors fanning out of it was
+  eight times the ink for one fact — and now that a picture can be parked far
+  from its run, those links are long. A strip whose pictures all come from the
+  same checkpoint therefore draws a single line; one built from three epochs
+  draws three, because collapsing them would quietly credit one epoch with the
+  other two.
 - **A strip has no width limit, and that is the honest consequence of "no
   limit".** Ten pictures side by side is ten times as wide as one; the board
   zooms and pans, so **✦ Fit** is the answer. It deliberately does *not* wrap
