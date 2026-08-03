@@ -227,7 +227,10 @@ DEFAULT_STEPS = 8
 # disappears would strand a persisted selection. 3.5/4.0/5.0 and 30/50 exist so the
 # NON-distilled Z-Image Base defaults below are reachable from the picker at all.
 CFG_CHOICES = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 5.0]
-STEPS_CHOICES = [6, 8, 10, 12, 16, 20, 24, 30, 32, 40, 50]
+# 25 is the sample-step count a dense Krea 2 run previews with — see
+# KREA_RAW_DEFAULTS below; without it in the picker the recommended setting for a
+# full-model artifact would not be selectable at all.
+STEPS_CHOICES = [6, 8, 10, 12, 16, 20, 24, 25, 30, 32, 40, 50]
 
 # --- Per-BASE-MODEL sampler defaults (bobba84, GitHub #18) --------------------
 # Z-Image ships in two flavours that need opposite sampler settings, and the app
@@ -274,19 +277,64 @@ def zimage_model_defaults(model_name) -> dict:
                 else ZIMAGE_TURBO_DEFAULTS)
 
 
+# --- Krea 2: the same trap, one family over ------------------------------------
+# The full-model (dense) lane delivers a RAW Krea 2 checkpoint — undistilled, and
+# it needs a real CFG and a real step count. The Studio's family defaults are
+# Turbo's (cfg 1 / 8 steps), and applied to a Raw model they render a blurry
+# sketch that reads as "the fine-tune failed". Reported after the first dense run
+# was tested that way.
+#
+# The numbers are not invented here: they are the sample settings the run's OWN
+# preview sheet was rendered with, imported from the training recipe so a change
+# there moves the test lane with it.
+_KREA_DISTILLED_PHRASES = ('turbo', 'distill', 'distilled', 'lightning',
+                           'lightx2v', 'step', 'schnell')
+# 'full' and 'fp8' cover this app's own dense deliveries (Krea_full_<trigger>…
+# and its _fp8 twin); 'raw'/'base'/'undistilled' cover Krea-2-Raw derivatives.
+_KREA_RAW_PHRASES = ('raw', 'base', 'full', 'undistilled', 'fp8')
+
+
+def krea_build_of(model_name) -> str:
+    """'turbo' | 'raw' | 'unknown' for a Krea 2 checkpoint, read from its NAME.
+
+    Same contract as ``zimage_build_of``: distilled markers win, and 'unknown'
+    keeps today's Turbo defaults — most Krea checkpoints in the wild are Turbo
+    finetunes and changing their defaults would be a regression.
+    """
+    from .zimage_model_resolver import _phrase
+    key = _phrase(_basename(model_name))
+    if any(f' {p} ' in key for p in _KREA_DISTILLED_PHRASES):
+        return 'turbo'
+    if any(f' {p} ' in key for p in _KREA_RAW_PHRASES):
+        return 'raw'
+    return 'unknown'
+
+
+def krea_model_defaults(model_name) -> dict:
+    """{'cfg', 'steps'} for ONE Krea 2 checkpoint. Turbo/unknown -> today's values."""
+    if krea_build_of(model_name) != 'raw':
+        return {'cfg': DEFAULT_CFG, 'steps': DEFAULT_STEPS}
+    from . import lora_training as lt
+    return {'cfg': float(lt.FULL_TRANSFORMER_SAMPLE_GUIDANCE),
+            'steps': int(lt.FULL_TRANSFORMER_SAMPLE_STEPS)}
+
+
 def studio_model_defaults(family, models) -> dict:
     """{model_value: {'cfg', 'steps'}} for the bases the Studio offers, so the front
     can seed its axes from the SELECTED base instead of one family-wide constant.
-    Only Z-Image differentiates today (SDXL/Krea return nothing and keep
-    `default_cfg`/`default_steps`); the shape is per-family on purpose so the next
+    Z-Image and Krea 2 both ship a distilled and an undistilled build that need
+    opposite sampler settings; SDXL returns nothing and keeps
+    `default_cfg`/`default_steps`. The shape is per-family on purpose so the next
     family that needs it has nowhere else to put it."""
-    if (family or '').lower() != 'zimage':
+    fam = (family or '').lower()
+    resolver = {'zimage': zimage_model_defaults, 'krea': krea_model_defaults}.get(fam)
+    if resolver is None:
         return {}
     out = {}
     for m in models or []:
         value = m.get('value') if isinstance(m, dict) else m
         if value:
-            out[value] = zimage_model_defaults(value)
+            out[value] = resolver(value)
     return out
 
 

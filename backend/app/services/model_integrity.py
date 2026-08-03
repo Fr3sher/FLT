@@ -186,6 +186,100 @@ def _structural(path: str, size: int):
         return TRUNCATED_OR_GARBAGE, _reason_garbage(name)
 
 
+# --- pre-quantized inference exports ------------------------------------------
+# A second question the same header answers: is this file an INFERENCE-ONLY
+# quantized export? Community fp8/int8 repacks of a base model (~10 GB instead of
+# ~26 GB) are what people download to generate with — and they are unusable as a
+# TRAINING base: the gradients have nowhere to go, and ai-toolkit fails deep
+# inside the run, after the dataset upload and the GPU rental. The signals below
+# are all header-level, so the check costs the same few KB as the integrity one.
+
+# Decisive marker keys. `_quantization_metadata` (ComfyUI's modern per-layer JSON)
+# and `.comfy_quant` (its tensor form) exist for no other reason; `scaled_fp8` is
+# the legacy marker; a `.scale_weight` / `.weight_scale` sibling is the per-tensor
+# dequantization scale. Any ONE of them is proof.
+_QUANT_METADATA_KEY = '_quantization_metadata'
+_QUANT_MARKER_KEYS = ('scaled_fp8',)
+_QUANT_KEY_SUFFIXES = ('.comfy_quant', '.scale_weight', '.weight_scale',
+                       '.input_scale', '.scale_input')
+
+# Quantized payload dtypes vs the dtypes a trainable checkpoint is stored in.
+_QUANT_DTYPES = ('F8_E4M3', 'F8_E5M2', 'F8_E4M3FN', 'I8', 'U8', 'F4', 'I4')
+_TRAINABLE_DTYPES = ('BF16', 'F16', 'F32', 'F64')
+
+QUANT_REFUSAL = ('This is an inference-only quantized export — training needs '
+                 'the bf16/fp16 version of this model.')
+
+
+def _header_index(path: str):
+    """(``__metadata__`` dict, {tensor name: dtype}) — header ONLY, or None when
+    the file is not a parsable safetensors container (a .gguf, an HTML gate page,
+    a header past the parse budget). None means "cannot tell", never "clean"."""
+    try:
+        with _open(path, 'rb') as fh:
+            head = fh.read(_INITIAL_READ)
+            if len(head) < 8 or head[:4] == _MAGIC_GGUF:
+                return None
+            n = struct.unpack('<Q', head[:8])[0]
+            if n <= 0 or n > _HEADER_PARSE_BUDGET:
+                return None
+            body = head[8:8 + n]
+            if len(body) < n:
+                body += fh.read(n - len(body))
+            if len(body) < n:
+                return None
+            obj = json.loads(body[:n].decode('utf-8'))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    meta = obj.get('__metadata__')
+    index = {k: str((v or {}).get('dtype') or '').upper()
+             for k, v in obj.items()
+             if k != '__metadata__' and isinstance(v, dict)}
+    return (meta if isinstance(meta, dict) else {}), index
+
+
+def quantization_report(path) -> dict:
+    """``{quantized, signals, dtype_counts, checked}`` for one weights file.
+
+    ``checked=False`` means the header could not be read as a tensor index — the
+    caller must treat that as "unknown" and let the file through: refusing a base
+    nobody could inspect would be worse than the failure it prevents.
+    """
+    out = {'quantized': False, 'signals': [], 'dtype_counts': {},
+           'checked': False, 'filename': os.path.basename(str(path))}
+    parsed = _header_index(str(path))
+    if parsed is None:
+        return out
+    meta, index = parsed
+    out['checked'] = True
+    signals = out['signals']
+    if _QUANT_METADATA_KEY in meta:
+        signals.append(_QUANT_METADATA_KEY)
+    for name in index:
+        if name in _QUANT_MARKER_KEYS:
+            signals.append(name)
+        elif name.endswith(_QUANT_KEY_SUFFIXES):
+            suffix = '.' + name.rsplit('.', 1)[-1]
+            if suffix not in signals:
+                signals.append(suffix)
+    counts = {}
+    for dtype in index.values():
+        counts[dtype] = counts.get(dtype, 0) + 1
+    out['dtype_counts'] = counts
+    quant_tensors = sum(counts.get(d, 0) for d in _QUANT_DTYPES)
+    trainable_tensors = sum(counts.get(d, 0) for d in _TRAINABLE_DTYPES)
+    # "Majority" is deliberately a strict comparison against the trainable
+    # dtypes, not a fraction of ALL tensors: a scaled export is roughly half
+    # fp8 payload and half F32 scales, so a ratio over the total would sit just
+    # under any threshold worth setting.
+    if quant_tensors and quant_tensors > trainable_tensors:
+        signals.append('majority_quantized_dtypes')
+    out['quantized'] = bool(signals)
+    return out
+
+
 def _cached_structural(path: str, st: os.stat_result):
     key = (os.path.abspath(path), st.st_mtime_ns, st.st_size)
     with _lock:

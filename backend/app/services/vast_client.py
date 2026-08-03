@@ -119,6 +119,46 @@ def create_instance(offer_id, disk_gb: int, label: str, template_hash: str | Non
     return str(data.get('new_contract'))
 
 
+def execute_command(instance_id, command: str) -> str:
+    """Run ONE shell command inside a running instance; return its result URL.
+
+    vast's ``PUT /instances/command/{id}/`` is asynchronous by design: it queues
+    the command on the host daemon and answers with a URL where the combined
+    output will appear once the command finishes. Nothing about the response
+    says the command succeeded — only ``fetch_command_result`` can.
+
+    This is a deliberately small, single-purpose surface: the ONLY caller is the
+    post-training fp8 export, whose whole failure mode is "no fp8 twin", never
+    "the run is lost". Do not grow it into a general remote shell.
+    """
+    if not str(command or '').strip():
+        raise VastError('execute_command needs a command')
+    r = _request('PUT', f'/instances/command/{instance_id}/',
+                 json={'command': command})
+    data = r.json() if r.status_code == 200 else {}
+    url = str(data.get('result_url') or '')
+    if r.status_code != 200 or not data.get('success') or not url:
+        raise VastError(f'execute_command failed: HTTP {r.status_code} {data}')
+    return url
+
+
+def fetch_command_result(result_url: str):
+    """The command's output, or None while it has not landed yet.
+
+    The result object is written by the host when the command ends, so a 404 is
+    the normal "still running" answer and must not read as a failure.
+    """
+    try:
+        r = requests.get(result_url, timeout=_TIMEOUT)
+    except requests.RequestException as e:
+        raise VastError(f'vast.ai result fetch failed: {e}') from e
+    if r.status_code == 404:
+        return None
+    if r.status_code != 200:
+        raise VastError(f'result fetch failed: HTTP {r.status_code}')
+    return r.text
+
+
 def _normalize(i: dict) -> dict:
     return {
         'instance_id': str(i.get('id')),

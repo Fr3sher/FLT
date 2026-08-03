@@ -253,22 +253,45 @@ test('MVP copy and artifact actions distinguish a full model from a LoRA', () =>
     /Modèle complet|Fine-tuning complet|Recette dense verrouillée|Lancer le fine-tuning complet|Choisir un GPU 80 Go|Livraison Hugging Face bloquée|estimation dense indisponible/);
 });
 
-test('dense Advanced renders only the locked server recipe and its honored steps input', () => {
+test('dense Advanced exposes exactly the five unlocked values and states why the rest is locked', () => {
   const recipe = panel.slice(
     panel.indexOf('// FULL_TRANSFORMER_ADVANCED_RECIPE_START'),
     panel.indexOf('// FULL_TRANSFORMER_ADVANCED_RECIPE_END'),
   );
-  assert.match(panel, /Locked full-model recipe · steps/);
+  assert.match(panel, /Full-model recipe · steps · prompts · LR · resolution · checkpoints/);
   assert.match(recipe, /Official Krea 2 Raw · full transformer · unquantized/);
-  assert.match(recipe, /1024 px · batch 1 · bf16/);
-  assert.match(recipe, /Adafactor · learning rate 1e-6/);
-  assert.match(recipe, /Gradient checkpointing · cached latents \+ text embeddings/);
-  assert.match(recipe, /Checkpoint \+ preview every 250 steps · keep 1 checkpoint/);
   assert.match(recipe, /80 GB VRAM GPU · at least 200 GB disk/);
-  assert.match(recipe, /The only editable setting in this full-model recipe/);
-  assert.equal([...recipe.matchAll(/<input\b/g)].length, 1);
+
+  // The four values the 80 GB geometry depends on stay locked, and each says
+  // WHY — a greyed-out control with no reason reads as an arbitrary limit.
+  assert.match(recipe, /Locked · batch &amp; precision[\s\S]{0,200}Batch 1 · bf16/);
+  assert.match(recipe, /Locked · optimizer[\s\S]{0,200}Adafactor/);
+  assert.match(recipe, /Locked · memory[\s\S]{0,200}Gradient checkpointing/);
+  assert.match(recipe, /would not fit in memory|has no room for more/);
+
+  // The five unlocked ones, each wired to a real persistence call.
   assert.match(recipe, /setStepsOverride\(event\.target\.value\)/);
-  assert.doesNotMatch(recipe, /<select\b|<button\b|saveAdv\(|setBase\(|setVariant\(|setMasked\(/,
+  assert.match(recipe, /patch\(\{ dense_lr: value \}\)/);
+  assert.match(recipe, /patch\(\{ dense_resolution: Number\(event\.target\.value\) \}\)/);
+  assert.match(recipe, /patch\(\{ dense_save_every: value \}\)/);
+  assert.match(recipe, /patch\(\{ dense_max_step_saves: Number\(event\.target\.value\) \}\)/);
+  assert.match(recipe, /saveSamplePrompts\?\.\(\)/);
+  // Bounds come from the server payload, never from a second copy of the rules.
+  assert.match(recipe, /adv\?\.dense_lr_min/);
+  assert.match(recipe, /adv\?\.dense_save_every_max/);
+  assert.match(recipe, /adv\?\.dense_max_step_saves_max/);
+
+  // Keep x ~26 GB is stated BEFORE the launch, next to the control that sets it.
+  assert.match(recipe, /dense_storage_plan/);
+  assert.match(recipe, /fp8_typical_bytes/);
+  assert.match(recipe, /PRIVATE Hugging Face storage/);
+
+  // The dense artifact is a RAW checkpoint: how to test it must be visible here.
+  assert.match(recipe, /dense_inference_hint/);
+
+
+  // Still no LoRA CONTROL may leak in (naming them in prose is the point).
+  assert.doesNotMatch(recipe, /CUSTOM_BASE_SENTINEL|advNetworkType|advEffRank|applyPreset|setBase\(|setVariant\(|setMasked\(/,
     'the dense recipe card must not grow an ignored LoRA control');
 });
 

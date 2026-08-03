@@ -281,21 +281,30 @@ def private_limit_bytes(who=None) -> tuple:
 
 
 def dense_storage_forecast(namespace, token, keeps=1, who=None, _api=None,
-                           _usage=None) -> dict:
+                           _usage=None, fp8_export=False) -> dict:
     """Everything the launch guard and the Settings card need, in one shape.
 
     ``fits`` is deliberately tri-state: ``None`` = could not be measured, and
     that NEVER blocks a launch.
+
+    ``fp8_export`` adds the ~10 GB ComfyUI twin the run also uploads. It is
+    counted even when the bf16 master is going to be DROPPED afterwards: the
+    master is pushed by the trainer first and the twin is uploaded before the
+    master is deleted, so the peak — the only number a storage ceiling reacts
+    to — always contains both.
     """
     keeps = max(1, int(keeps or 1))
     checkpoint, size_source = dense_checkpoint_bytes()
+    from .fp8_export import estimate_fp8_bytes
+    fp8 = estimate_fp8_bytes(checkpoint) if fp8_export else 0
     margin = margin_bytes()
-    needed = checkpoint * keeps + margin
+    needed = checkpoint * keeps + fp8 + margin
     usage = _usage if _usage is not None else private_storage_usage(
         namespace, token, _api=_api)
     limit, limit_source = private_limit_bytes(who)
     out = {'needed_bytes': needed, 'checkpoint_bytes': checkpoint,
            'checkpoint_source': size_source, 'keeps': keeps,
+           'fp8_bytes': fp8, 'fp8_export': bool(fp8_export),
            'margin_bytes': margin, 'limit_bytes': limit,
            'limit_source': limit_source, 'limit_is_estimate': limit_source != 'configured',
            'used_bytes': usage.get('used_bytes'), 'usage': usage,
@@ -329,7 +338,10 @@ def storage_refusal_message(forecast) -> str:
         f"{STORAGE_REFUSAL_MARKER}This full-model run needs about "
         f"{fmt_bytes(forecast['needed_bytes'])} of PRIVATE Hugging Face storage "
         f"(one {fmt_bytes(forecast['checkpoint_bytes'])} checkpoint "
-        f"× {forecast['keeps']} kept + {fmt_bytes(forecast['margin_bytes'])} margin), "
+        f"× {forecast['keeps']} kept"
+        + (f" + a {fmt_bytes(forecast.get('fp8_bytes'))} fp8 export"
+           if forecast.get('fp8_bytes') else '')
+        + f" + {fmt_bytes(forecast['margin_bytes'])} margin), "
         f"but {usage.get('namespace') or 'your account'} already uses "
         f"{fmt_bytes(forecast.get('used_bytes'))} of an estimated "
         f"{fmt_bytes(forecast['limit_bytes'])} private allowance — about "
@@ -356,11 +368,12 @@ def storage_refusal_message(forecast) -> str:
 
 
 def assert_dense_storage_headroom(namespace, token, keeps=1, who=None,
-                                  allow_override=False, _api=None) -> dict:
+                                  allow_override=False, _api=None,
+                                  fp8_export=False) -> dict:
     """Pre-rent guard. Raises ValueError (confirmable) when it plainly will not
     fit; returns the forecast otherwise. An unmeasurable account passes."""
     forecast = dense_storage_forecast(namespace, token, keeps=keeps, who=who,
-                                      _api=_api)
+                                      _api=_api, fp8_export=fp8_export)
     if forecast.get('fits') is False and not allow_override:
         raise ValueError(storage_refusal_message(forecast))
     return forecast

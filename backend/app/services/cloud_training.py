@@ -577,7 +577,8 @@ def _hf_storage_full(text) -> bool:
     return any(sign in low for sign in _HF_STORAGE_FULL_SIGNS)
 
 
-def _assert_dense_storage_headroom(namespace, dense_api, allow_override):
+def _assert_dense_storage_headroom(namespace, dense_api, allow_override,
+                                   keeps=None, fp8_export=True):
     """Refuse a dense launch whose delivery plainly will not fit in the
     namespace's PRIVATE Hugging Face storage — before anything is rented.
 
@@ -594,8 +595,9 @@ def _assert_dense_storage_headroom(namespace, dense_api, allow_override):
     """
     from . import hf_storage
     forecast = hf_storage.dense_storage_forecast(
-        namespace, None, keeps=lt.FULL_TRANSFORMER_MAX_STEP_SAVES,
-        who=_dense_whoami(dense_api), _api=dense_api)
+        namespace, None,
+        keeps=(lt.FULL_TRANSFORMER_MAX_STEP_SAVES if keeps is None else keeps),
+        who=_dense_whoami(dense_api), _api=dense_api, fp8_export=fp8_export)
     if forecast.get('fits') is False and not allow_override:
         raise ValueError(hf_storage.storage_refusal_message(forecast))
     return forecast
@@ -802,6 +804,68 @@ def _updated_artifact_params(run, status, **extra) -> dict:
 def _persist_artifact_state(run, status, **extra) -> dict:
     """Persist non-secret delivery metadata and return the updated params."""
     params = _updated_artifact_params(run, status, **extra)
+    _set(run, train_params=json.dumps(params))
+    return params
+
+
+def _export_full_transformer_fp8(run, remote) -> dict:
+    """Post-training fp8 export, stamped on the run. NEVER raises.
+
+    Disabled by the dataset's own setting, or by config
+    (``cloud.full_transformer.fp8_export``) for an install that would rather not
+    spend the extra pod minutes. A disabled export leaves NO status, so the UI
+    shows nothing rather than an unexplained absence.
+    """
+    from . import dense_fp8_delivery
+    dense = ((cfg.get('cloud') or {}).get('full_transformer') or {})
+    if dense.get('fp8_export') is False:
+        return {'state': 'skipped', 'detail': 'disabled in configuration'}
+    ds = None
+    try:
+        from . import face_dataset_service as fds
+        ds = fds.get_dataset(cfg.LOCAL_USER, run.dataset_id)
+    except Exception:
+        ds = None
+    enabled = (lt.dense_fp8_export_enabled(ds) if ds is not None
+               else bool(_run_param(run, 'fp8_export') is not False))
+    if not enabled:
+        return {'state': 'skipped', 'detail': 'fp8 export is off for this dataset'}
+    keep_bf16 = (lt.dense_keep_bf16_master(ds) if ds is not None
+                 else _run_param(run, 'keep_bf16_master') is not False)
+    outcome = dense_fp8_delivery.run_pod_fp8_export(
+        run, remote,
+        instance_id=run.vast_instance_id,
+        repo_id=_run_param(run, 'hf_repo_id'),
+        hf_token=cfg.secret('HF_CLOUD_TOKEN'),
+        keep_bf16=keep_bf16,
+        budget_seconds=int(dense.get('fp8_export_budget_seconds')
+                           or dense_fp8_delivery.DEFAULT_BUDGET_SECONDS),
+        on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]))
+    result = outcome.get('result') or {}
+    try:
+        _persist_run_params(
+            run,
+            fp8_export_status=outcome['state'],
+            fp8_export_detail=outcome['detail'],
+            fp8_keep_bf16=bool(keep_bf16),
+            fp8_weight_filename=(os.path.basename(str(result.get('path')))
+                                 if result.get('path') else None),
+            fp8_size_bytes=result.get('bytes_after'))
+    except Exception:
+        logger.debug('could not stamp the fp8 export state of run %s', run.id)
+    return outcome
+
+
+def _persist_run_params(run, **extra) -> dict:
+    """Merge non-secret keys into train_params and commit. Same shape as
+    _persist_artifact_state, without claiming an artifact status."""
+    try:
+        params = json.loads(run.train_params or '{}')
+    except (TypeError, ValueError):
+        params = {}
+    if not isinstance(params, dict):
+        params = {}
+    params.update(extra)
     _set(run, train_params=json.dumps(params))
     return params
 
@@ -1774,8 +1838,14 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         # 403 nobody sees coming. Measure it here, before a pod is rented.
         # Deliberately confirmable and fail-open — the exact plan ceiling is not
         # knowable through the API (see hf_storage's module note).
-        _assert_dense_storage_headroom(delivery_namespace, dense_api,
-                                       bool(allow_hf_storage))
+        # Both halves of the arithmetic come from THIS dataset's recipe, never
+        # from the shipped constants: "keep 3 checkpoints" is a user choice now,
+        # and 3 x 26 GB is exactly the kind of number that must be said before
+        # the pod, not discovered at the last push.
+        _assert_dense_storage_headroom(
+            delivery_namespace, dense_api, bool(allow_hf_storage),
+            keeps=lt.dense_max_step_saves_for(ds),
+            fp8_export=lt.dense_fp8_export_enabled(ds))
     confirmations = {
         'allow_caption_mismatch': bool(allow_caption_mismatch),
         'allow_uncaptioned': bool(allow_uncaptioned),
@@ -4057,6 +4127,12 @@ def _monitor(app, run_id):
 
                 if status == 'completed':
                     if _is_full_transformer_run(run):
+                        # LAST use of the pod, and the only moment the ~26 GB
+                        # master and a GPU are in the same place: turn it into
+                        # the ~10 GB file people actually load in ComfyUI.
+                        # Fail-open by construction — the master is already on
+                        # Hugging Face, pushed by the trainer itself.
+                        _export_full_transformer_fp8(run, remote)
                         _set(run, phase_detail='Verifying Hugging Face delivery…')
                         _complete_full_transformer_delivery(run)
                         return
@@ -4962,6 +5038,20 @@ def _run_payload(run) -> dict:
             'hf_url': _run_param(run, 'hf_url'),
             'hf_weight_filename': _run_param(run, 'hf_weight_filename'),
             'hf_artifact_proof': _run_param(run, 'hf_artifact_proof'),
+            # Post-training fp8 twin: the file to actually download for ComfyUI.
+            # Absent keys = an older run, or an install with the export off —
+            # the panel then says nothing rather than implying a failure.
+            'fp8_export_status': _run_param(run, 'fp8_export_status'),
+            'fp8_export_detail': _run_param(run, 'fp8_export_detail'),
+            'fp8_weight_filename': _run_param(run, 'fp8_weight_filename'),
+            'fp8_size_bytes': _run_param(run, 'fp8_size_bytes'),
+            'fp8_keep_bf16': _run_param(run, 'fp8_keep_bf16'),
+            # How to TEST the delivered model. A dense Krea 2 artifact is a RAW
+            # (undistilled) checkpoint: the family's Turbo-style few-step
+            # defaults render mush on it. These are the sample settings the run
+            # itself previewed with, carried to whatever generates from it.
+            **({'inference_hint': lt.dense_inference_hint()}
+               if full_transformer else {}),
             'artifact_cleanup_status': _run_param(
                 run, 'artifact_cleanup_status'),
             'artifact_cleanup_detail': _run_param(
