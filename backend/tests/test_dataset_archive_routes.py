@@ -198,6 +198,70 @@ def test_archive_services_accept_streams_without_closing_callers(app):
         assert not training_stream.closed
 
 
+def _make_max_content_length_read_only(monkeypatch):
+    """Reproduce a Flask whose per-request upload ceiling cannot be assigned.
+
+    ``Request.max_content_length`` only became settable per request in Flask
+    3.1; before that it was a plain read-only property, and any environment
+    that resolves an older Flask (a stale user site-packages, a distro build)
+    turned every archive upload into a 500. Stripping the setter off the
+    property reproduces exactly that class on the pinned Flask.
+    """
+    import flask
+
+    getter = flask.Request.__dict__['max_content_length'].fget
+    monkeypatch.setattr(flask.Request, 'max_content_length', property(getter))
+
+
+def test_archive_ceiling_holds_when_the_request_property_is_read_only(
+        app, client, monkeypatch):
+    from app.config import LOCAL_USER
+    from app.services import face_dataset_service as service
+
+    with app.app_context():
+        dataset = service.create_dataset(LOCAL_USER, 'Read only', 'read_only')
+        backup = service.build_backup_zip(LOCAL_USER, dataset.id)
+
+    assert len(backup) > 128
+    app.config.update(
+        MAX_CONTENT_LENGTH=128,
+        DATASET_ARCHIVE_MAX_UPLOAD_BYTES=64 * 1024,
+        DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES=16 * 1024,
+    )
+    _make_max_content_length_read_only(monkeypatch)
+
+    response = client.post(
+        '/api/dataset/backup/import',
+        data={'file': (io.BytesIO(backup), 'backup.zip')},
+        content_type='multipart/form-data',
+    )
+
+    assert response.status_code == 200
+    assert response.get_json()['ok'] is True
+
+
+def test_ordinary_endpoints_keep_the_plain_ceiling(app, client, monkeypatch):
+    """The raised ceiling stays the archive endpoints' privilege, not a global."""
+    from flask import request
+
+    @app.post('/api/ordinary-upload')
+    def ordinary_upload():
+        request.get_data()
+        return {'ok': True}
+
+    app.config.update(
+        MAX_CONTENT_LENGTH=128,
+        DATASET_ARCHIVE_MAX_UPLOAD_BYTES=64 * 1024,
+        DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES=16 * 1024,
+    )
+    _make_max_content_length_read_only(monkeypatch)
+
+    response = client.post('/api/ordinary-upload', data=b'x' * 1024)
+
+    assert response.status_code == 413
+    assert response.get_json()['error'] == 'upload too large'
+
+
 def test_backup_metadata_cap_is_checked_before_inflation(app, monkeypatch):
     from app.config import LOCAL_USER
     from app.services import face_dataset_service as service

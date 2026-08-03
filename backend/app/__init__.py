@@ -4,7 +4,8 @@ import mimetypes
 import sqlite3
 import json
 from pathlib import Path
-from flask import Flask, send_from_directory, jsonify, request
+from flask import (
+    Flask, Request, current_app, jsonify, request, send_from_directory)
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from .extensions import db, csrf
@@ -85,6 +86,45 @@ _DATASET_ARCHIVE_UPLOAD_ENDPOINTS = frozenset({
     # as the whole library — it needs the same raised request ceiling.
     'backup.full_restore',
 })
+
+
+class ArchiveAwareRequest(Request):
+    """Give the archive-upload endpoints — and only them — a raised ceiling.
+
+    The limit has to be in place before anything reads the body, and
+    Flask-WTF reads ``request.form`` in its own ``before_request`` hook, so a
+    hook of ours would have to win a registration race to be of any use.
+    Assigning ``request.max_content_length`` from that hook also depends on the
+    property being settable, which it only became in Flask 3.1: on any older
+    Flask the assignment raises ``AttributeError`` and every archive upload
+    answers 500.
+
+    Declaring the ceiling on the request class instead removes both problems.
+    It is read lazily, whenever the body is first touched and however early
+    that is, and it never writes to a framework property. The geometry is
+    unchanged: the ordinary ``MAX_CONTENT_LENGTH`` still governs every other
+    endpoint.
+    """
+
+    #: Honours an explicit per-request assignment first, so this class stays a
+    #: drop-in for the Flask >= 3.1 behaviour it replaces.
+    _forced_max_content_length = None
+
+    @property
+    def max_content_length(self):
+        if self._forced_max_content_length is not None:
+            return self._forced_max_content_length
+        if self.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS and current_app:
+            archive_max = int(
+                current_app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
+            overhead = max(0, int(
+                current_app.config['DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES']))
+            return archive_max + overhead
+        return super().max_content_length
+
+    @max_content_length.setter
+    def max_content_length(self, value):
+        self._forced_max_content_length = value
 
 
 def _positive_env_int(name, default):
@@ -354,6 +394,7 @@ def create_app(config_object=None):
     # `mimetypes.init()` run by any library imported since this module loaded.
     pin_static_mime_types()
     app = Flask(__name__, static_folder=None)
+    app.request_class = ArchiveAwareRequest
     data_dir = Path(os.environ.get('LDS_DATA_DIR', str(cfg.REPO_ROOT / 'data')))
     data_dir.mkdir(parents=True, exist_ok=True)
     app.config.update(
@@ -393,18 +434,6 @@ def create_app(config_object=None):
             root.addHandler(fh)
             if root.level > logging.INFO or root.level == logging.NOTSET:
                 root.setLevel(logging.INFO)
-
-    # Flask-WTF looks in request.form before it checks the CSRF header.  For a
-    # multipart upload that parses the body in its before_request hook, before the
-    # view itself can raise the limit.  Register this override first so ONLY the
-    # two archive endpoints may exceed the ordinary 64 MiB request ceiling.
-    @app.before_request
-    def _set_dataset_archive_request_limit():
-        if request.endpoint in _DATASET_ARCHIVE_UPLOAD_ENDPOINTS:
-            archive_max = int(app.config['DATASET_ARCHIVE_MAX_UPLOAD_BYTES'])
-            overhead = max(0, int(
-                app.config['DATASET_ARCHIVE_MULTIPART_OVERHEAD_BYTES']))
-            request.max_content_length = archive_max + overhead
 
     db.init_app(app)
     csrf.init_app(app)
