@@ -9,10 +9,16 @@ and testable on an install that has none of the video extras.
 WHY A CATALOGUE AND NOT CONSTANTS. The obvious shortcut is to hard-code Wan 2.2's
 16 fps and its 4n+1 frame rule, because Wan is the target we understand best. That
 is wrong for three targets out of four: the rule is a property of each model's
-VAE, not a property of video. LTX compresses time by 8, so 33 frames is legal for
+VAE, not a property of video. LTX compresses time by 8, so 29 frames is legal for
 Wan and illegal for LTX. MiniMax H3 wants frames congruent to 5 modulo 17. A clip
 cut to the wrong rule does not fail loudly — the trainer floors it in latent space,
 or samples across the whole duration and speeds the motion up.
+
+That counter-example is worth choosing carefully, and 29 is not an arbitrary pick:
+EVERY length Wan actually offers (17, 25, 33 … 121) happens to satisfy 8n+1 as
+well. A rule shared between the two therefore looks correct on every value in the
+menu and only breaks on a snapped or hand-entered one — which is exactly the shape
+of a bug that survives review.
 
 WHERE THESE NUMBERS COME FROM. The models' own config files and the trainers' own
 source, never the model cards — several cards are wrong in ways that matter:
