@@ -43,6 +43,8 @@ export const JOB_LABELS = {
   watermark_crop: '🚩 Watermark crop',
   watermark_inpaint: '🚩 Watermark repaint',
   framing: '📐 Framing pass',
+  medium: '🎨 Medium pass',
+  angles: '⤢ Angle measurement',
   caption: '🏷️ Captioning',
   promote: '⬆ Promotion',
   bank_promote: '⬆ Copy into a new bank',

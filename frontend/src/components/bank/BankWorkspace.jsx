@@ -53,6 +53,13 @@ import {
   BALANCE_AXES, BALANCE_DEFAULT_AXIS, balanceNotes, balanceReadiness,
   balanceRows, summarizeBalance,
 } from './bankBalance.js'
+// 🎨 Medium + ⤢ Angle — buckets, tooltips and, above all, the LIMITS each row
+// has to print. Pure/testable: what matters is that we never claim more than we
+// measured (see bankMedium.js for the numbers behind the wording).
+import {
+  ANGLE_BUCKETS, MEDIUM_BUCKETS, angleBadge, angleReadiness, angleTitle,
+  mediumLimits, mediumTitle, shownBuckets,
+} from './bankMedium.js'
 
 const PAGE_SIZE = 120
 
@@ -124,7 +131,8 @@ async function fetchAllIds(bankId, params) {
 const STEP_SHORT = {
   scan: '🔎 Scan', auto_reject: '🧹 Auto-reject', score: '✨ Score',
   semantic_dedup: '✂ Crops', watermark: '🚩 Watermarks', faces: '👥 Person',
-  framing: '📐 Framing', caption: '🏷️ Caption',
+  framing: '📐 Framing', caption: '🏷️ Caption', medium: '🎨 Medium',
+  angles: '⤢ Angles',
 }
 
 /* No contact with the server, so no fresh job snapshot. Saying NOTHING here is
@@ -201,6 +209,7 @@ function ProgressBar({ activity, onCancel, offline = false }) {
             : ({ scan: 'Quality scan', faces: 'Face pass', score: 'Scoring pass',
               semantic_dedup: 'Crops & variants', watermark: 'Watermark scan',
               framing: 'Framing pass', caption: 'Captioning', promote: 'Promotion',
+              medium: 'Medium pass', angles: 'Measuring head angles',
               bank_promote: 'Copying into the new bank',
               // The one destructive pass: it must NAME itself in the bar, not
               // ride under the anonymous "Job running" fallback.
@@ -467,6 +476,8 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
           + (img.nsfw_score != null ? ` · NSFW ${Math.round(img.nsfw_score * 100)}%` : '')
           + (img.face_cluster ? ` · person #${img.face_cluster}` : '')
           + (img.framing ? ` · ${img.framing}` : '')
+          + (img.medium ? ` · ${img.medium}` : '')
+          + (img.face_yaw != null ? ` · head turned ${Math.round(Math.abs(img.face_yaw))}°` : '')
           + (detailSummary(img)?.soft ? ` · only ~${detailSummary(img).real} px of real detail` : '')
           + (img.origin && img.origin !== 'unknown' ? ` · ${img.origin}` : '')
           + (img.style_cluster ? ` · style #${img.style_cluster}` : '')
@@ -494,6 +505,12 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
         {img.flags.map((f) => badge(FLAG_LABEL[f]?.slice(0, 2) || f, 'bg-black/60 text-amber-200', f))}
         {img.face_cluster != null && badge(`👤${img.face_cluster}`, 'bg-black/60 text-sky-200')}
         {img.framing && badge(`📐${img.framing}`, 'bg-black/60 text-teal-200')}
+        {/* A medium badge is stamped only when the classifier actually COMMITTED
+            to one — 'unsure' is a real verdict but it is not a label to write on
+            a thumbnail, and NULL means the pass never reached this image. */}
+        {img.medium && img.medium !== 'unsure'
+          && badge(`🎨${img.medium}`, 'bg-black/60 text-lime-200')}
+        {angleBadge(img) && badge(angleBadge(img).text, 'bg-black/60 text-cyan-200')}
         {/* Only the PROVEN states get a badge. Stamping ❔ on the 80% of files
             whose metadata was stripped would be noise, not information. */}
         {img.origin === 'ai' && badge('🤖', 'bg-black/60 text-violet-200')}
@@ -539,7 +556,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     style: null, subfolder: null, search: null, exclude: null, tags: null,
     sort: loadBankSort(bankId), resBucket: null,
     origin: null,
-    framing: null }))
+    framing: null,
+    // Dedicated keys, never folded into `flag` or the text lane.
+    medium: null,
+    angle: null }))
   const [searchText, setSearchText] = useState('')
   // 🚫 The inverse of the search box: hide what already carries a word. Session
   // state, deliberately NOT remembered like the sort — an order you can see in a
@@ -689,6 +709,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     if (f.framing) params.framing = f.framing
     // Origin state (ai/camera/unknown) — a facet like the flags.
     if (f.origin) params.origin = f.origin
+    // 🎨 what the picture is made of, and ⤢ where the head points. Their OWN
+    // query keys, so they compose with search/exclude/sort instead of fighting
+    // them for one.
+    if (f.medium) params.medium = f.medium
+    if (f.angle) params.angle = f.angle
     return params
   }, [])
 
@@ -869,6 +894,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const startSemanticDedup = () => act(
     () => postJson(`/api/bank/${bankId}/semantic-dedup`, {}), null)
   const startFraming = () => act(() => postJson(`/api/bank/${bankId}/framing`, {}), null)
+  // 🎨 Medium reuses the ✨ Score embeddings — no image is looked at twice and
+  // no GPU is taken, which is why it has no capability gate of its own.
+  const startMedium = () => act(() => postJson(`/api/bank/${bankId}/medium`, {}), null)
+  // ⤢ the opt-in angle backfill. Its own endpoint, never folded into 🎭 Faces:
+  // it is hours of work on a big bank and nobody must pay it by accident.
+  const startAngles = () => act(() => postJson(`/api/bank/${bankId}/angles`, {}), null)
   const startCaption = () => act(
     () => postJson(`/api/bank/${bankId}/caption`, {
       ...(selected.size ? { image_ids: [...selected] } : {}),
@@ -1155,6 +1186,14 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // "no AI images here", when what it means is "none that still carry metadata".
   const originCounts = payload?.origins || {}
   const originMeasured = ORIGIN_BUCKETS.reduce((n, b) => n + (originCounts[b.id] || 0), 0)
+  // 🎨 Medium / ⤢ Angle — same "only show what holds something, plus the active
+  // one" rule as the framing and resolution rows.
+  const mediumCounts = payload?.mediums || {}
+  const shownMediums = shownBuckets(MEDIUM_BUCKETS, mediumCounts, filter.medium)
+  const mediumNote = mediumLimits(mediumCounts, counts?.medium_classified)
+  const angleCounts = payload?.angles || {}
+  const shownAngles = shownBuckets(ANGLE_BUCKETS, angleCounts, filter.angle)
+  const angleState = angleReadiness(payload)
   const visionReady = !!caps.ollama?.vision_model_ready
   // The explicit lane only spells acts out with an uncensored (abliterated) vision
   // model. We can't prove abliteration, but the common builds name themselves — a soft
@@ -1185,7 +1224,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // Is any facet narrowing the grid? Drives the "N shown of TOTAL" readout.
   const isFiltered = !!(filter.status || filter.flag || filter.cluster != null
     || filter.style != null || filter.subfolder != null || filter.search
-    || filter.resBucket || filter.framing)
+    || filter.resBucket || filter.framing || filter.medium || filter.angle)
 
   // The ONE recommended next step, from the counters the header strip already
   // reads. Advisory only — draws an amber "Next step" accent on that zone.
@@ -1311,6 +1350,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 holdsTheGpu(scoreDevice) ? ', and holds the GPU (ComfyUI is unloaded and training cannot start) for its duration' : ' on the CPU, leaving the GPU free'}.`
               : 'Install the Bank scoring extra (Setup ▸ Quality tools) to score aesthetics / NSFW / style'}>
             ✨ Score{!caps.bank_scoring && ' (needs setup)'}
+          </PassButton>
+          <PassButton onClick={startMedium} disabled={live || !caps.bank_scoring}
+            title={caps.bank_scoring
+              ? 'Sort every scored image into photograph / anime / 3D render / illustration — read off the CLIP embeddings ✨ Score already computed, so no image is looked at again and the GPU stays free. It answers “unsure” rather than guessing: measured on a real 23 500-image bank, it named 2 anime drawings and no wrong verdict.'
+              : 'Install the Bank scoring extra (Setup ▸ Quality tools) — 🎨 Medium reads the embeddings ✨ Score produces'}>
+            🎨 Classify medium{!caps.bank_scoring && ' (needs setup)'}
           </PassButton>
           <PassButton onClick={startFraming} disabled={live || !visionReady}
             title={visionReady
@@ -1651,6 +1696,60 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 </Chip>
               ))}
             </FilterGroup>
+          )}
+
+          {/* 🎨 Medium — what the picture is MADE of, from the ✨ Score
+              embeddings. A DIFFERENT question from 🔎 Origin above, which reads
+              the file's metadata: a photorealistic AI render is 🤖 AI and 📷
+              Photo at once. The limits sentence is part of the row, not a
+              tooltip, because "unsure" being the second-biggest pile is the
+              single most important thing to know about this measurement. */}
+          {shownMediums.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <FilterGroup label="🎨 Medium">
+                {shownMediums.map((b) => (
+                  <Chip key={b.id} active={filter.medium === b.id}
+                    onClick={() => setF({ medium: filter.medium === b.id ? null : b.id })}
+                    title={mediumTitle(b.id)}>
+                    {b.label} {mediumCounts[b.id] ?? 0}
+                  </Chip>
+                ))}
+              </FilterGroup>
+              {mediumNote && (
+                <p className="m-0 pl-1 text-[11px] leading-snug text-content-subtle">{mediumNote}</p>
+              )}
+            </div>
+          )}
+
+          {/* ⤢ Angle — measured in the pixels by the 🎭 Faces pass. The backfill
+              offer lives HERE rather than with the other passes: it only makes
+              sense next to the counts that explain why it exists, and it must be
+              priced before it is clicked. */}
+          {(shownAngles.length > 0 || angleState.offer) && (
+            <div className="flex flex-col gap-1">
+              <FilterGroup label="⤢ Angle">
+                {shownAngles.map((b) => (
+                  <Chip key={b.id} active={filter.angle === b.id}
+                    onClick={() => setF({ angle: filter.angle === b.id ? null : b.id })}
+                    title={angleTitle(b.id)}>
+                    {b.label} {angleCounts[b.id] ?? 0}
+                  </Chip>
+                ))}
+              </FilterGroup>
+              {angleState.note && (
+                <p className="m-0 pl-1 text-[11px] leading-snug text-content-subtle">{angleState.note}</p>
+              )}
+              {angleState.offer && (
+                <p className="m-0 flex flex-wrap items-center gap-2 pl-1 text-[11px] leading-snug text-content-subtle">
+                  <span>{angleState.offer.why}</span>
+                  <button type="button" onClick={startAngles} disabled={!!live}
+                    title={angleState.offer.why}
+                    className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-content transition-colors hover:bg-surface disabled:opacity-50">
+                    ⤢ {angleState.offer.label}
+                  </button>
+                </p>
+              )}
+            </div>
           )}
         </div>
 

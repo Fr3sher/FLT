@@ -1077,6 +1077,27 @@ const TOPICS = [
     ['watermark', 'bank', 'clean', 'crop', 'auto-crop', 'inpaint', 'lama', 'klein',
      'remove watermark', 'logo', 'url', 'undo cleaning', 'before after', 'original'],
     '/bank', 'using-the-app', 'clean-the-watermarks-a-bank-found'),
+  // 🎨 Medium and ⤢ Angle share one guide section but get a topic EACH: they are
+  // two separate chip rows, asked about in two very different words ("is this
+  // anime?" vs "where are my profile shots?"), and one topic would only ever be
+  // found by half the people looking for it.
+  action('action-bank-medium', 'Tell photos, anime, 3D renders and illustrations apart',
+    ['medium', 'mediums', 'photo', 'photograph', 'photographic', 'anime', 'manga',
+     'cartoon', 'drawing', 'drawn', 'illustration', 'painting', 'painted', 'art',
+     'artwork', '3d', '3d render', 'render', 'rendered', 'cgi', 'game', 'unsure',
+     'classify medium', 'what is this made of', 'is this anime', 'is this a photo',
+     'is this drawn', 'real photo', 'style', 'not a photo', 'mixed dump',
+     'cosplay', 'zero-shot', 'clip', 'medium confidence', 'separate anime',
+     'anime dataset', 'photo dataset', 'bank'],
+    '/bank', 'using-the-app', 'sort-a-bank-by-medium-and-by-head-angle'),
+  action('action-bank-angle', 'Find frontal, three-quarter and profile shots',
+    ['angle', 'angles', 'head angle', 'yaw', 'pose', 'head pose', 'frontal',
+     'front', 'facing camera', 'three quarter', 'three-quarter', '3/4', 'profile',
+     'side view', 'sideways', 'turned', 'turned away', 'looking away',
+     'from behind', 'back view', 'behind', 'no face', 'camera angle',
+     'measure angles', 'missing angles', 'backfill', 'variety of angles',
+     'angle coverage', 'too many frontal', 'need profiles', 'bank'],
+    '/bank', 'using-the-app', 'sort-a-bank-by-medium-and-by-head-angle'),
   action('action-bank-relocate', 'Move a bank\'s folder to another disk',
     ['bank', 'move', 'moved', 'relocate', 'repoint', 'folder', 'new location', 'another disk',
      'other drive', 'external drive', 'unplugged', 'disconnected', 'renamed', 'drive letter',

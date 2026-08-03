@@ -104,6 +104,22 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-03-bank-medium-chips',
+    date: '2026-08-03',
+    title: '🎨 Split a mixed dump into photos, anime, 3D renders and illustrations',
+    blurb:
+      'A new chip row on the Bank sorts your images by what they are MADE of — a photograph, an anime drawing, a 3D render, a painting — and it costs nothing to run: it reads the embeddings ✨ Score already computed, so no image is looked at twice and the GPU stays free. It is not the same question as 🔎 Origin: a photorealistic AI portrait is 🤖 AI and 📷 Photo at once. Where it cannot tell, it says “Unsure” instead of guessing, and the row prints how big that pile is — measured on a real 23 500-image bank, its photograph verdicts were right 90 out of 90 times, and it refused to call every 3D render it saw rather than invent one. A photo of somebody cosplaying an anime character is the confusion that forced that caution.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-03-bank-angle-chips',
+    date: '2026-08-03',
+    title: '⤢ Filter a bank by head angle — frontal, three-quarter, profile, from behind',
+    blurb:
+      'The 🎭 Person groups pass has always estimated where a head is pointing, used the number once and thrown it away. It now keeps it, and a new chip row lets you pull out the frontal shots, the three-quarters, the profiles and the back views — the fastest way to see that a set is fifty selfies facing the camera. You can sort by it too. Two limits are printed rather than hidden: profiles are under-counted (a head turned that far often defeats the face detector), and “from behind” needs the 📐 Framing pass as well, because “no face” on its own is also what an empty landscape looks like. Banks scanned before this can measure their missing angles from the row itself — it tells you how many and roughly how long, and does nothing until you click.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-caption-length-preset',
     date: '2026-08-03',
     title: 'Ask for shorter — or longer — captions in one click',

@@ -386,6 +386,39 @@ class BankImage(db.Model):
     jpeg_quality = db.Column(Float, nullable=True)
     origin = db.Column(String(8), nullable=True, index=True)
     origin_evidence = db.Column(String(24), nullable=True)
+    # Medium pass — WHAT THE PICTURE IS MADE OF, as opposed to `origin`, which
+    # reads the file's metadata. The two answer different questions and must
+    # never be conflated: an AI-generated photorealistic portrait is origin='ai'
+    # AND medium='photo'; a scanned manga page is origin='unknown' AND
+    # medium='anime'. Computed with zero-shot CLIP over the embedding the ✨ Score
+    # pass ALREADY cached, so it costs no new image inference.
+    #   medium         : 'photo' | 'anime' | 'render3d' | 'illustration'
+    #                    | 'unsure' | NULL (never classified — the ✨ Score pass
+    #                    has not reached this image, so there is no embedding to
+    #                    read and the honest answer is "not scored yet").
+    #                    'unsure' is a REAL, measured verdict, not a placeholder:
+    #                    see MEDIUM_MARGIN_* in image_bank_service for the numbers
+    #                    that make it the majority answer on ambiguous rows.
+    #   medium_margin  : the cosine gap between the winning prototype and the
+    #                    runner-up. Persisted because it is the only number that
+    #                    says HOW MUCH the verdict was worth, it is what the
+    #                    'unsure' cut is applied to, and it makes the pass
+    #                    re-tunable with no recompute (same read-time-verdict
+    #                    philosophy as the quality thresholds).
+    # Synergy note: this column is what a future "is this dataset anime or
+    # photographic?" check (the Anima lane) should read — it is the only
+    # per-image medium signal the app persists.
+    medium = db.Column(String(16), nullable=True, index=True)
+    medium_margin = db.Column(Float, nullable=True)
+    # Face pass — the head's YAW in degrees, signed, as InsightFace reports it
+    # (negative = turned one way, positive = the other; the app only ever reads
+    # |yaw|, because "turned left" and "turned right" are the same shot type for
+    # a training set). It was ALREADY computed by every face pass — used once to
+    # gate 'extreme_pose' and then thrown away — so persisting it costs one float
+    # and no extra inference. NULL = the pass never ran on this row, ran before
+    # this column existed, or found no face; the ⤢ Angle chips call all three
+    # "not measured", never "frontal".
+    face_yaw = db.Column(Float, nullable=True)
     # Manual turn, in degrees CLOCKWISE: NULL/0 = untouched | 90 | 180 | 270.
     # (Idea by 1Tomber, GitHub #17.) A bank is a READ-ONLY view over the user's
     # own folder, so a rotation cannot rewrite their file — it is stored here and

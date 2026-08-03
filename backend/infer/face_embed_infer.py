@@ -7,16 +7,26 @@ inside its GPU-exclusive window). CUDA requested but unavailable → CPU fallbac
 Protocol (same family as face_score_infer.py):
   stdin  : {"images": [abs paths], "models_root": path|null,
             "cache": abs path to a .npz|null, "threshold": 0.45,
-            "device": "cpu"|"cuda"}
-  stdout : ONE JSON line {"ok": bool, "results": {path: {state, det, bbox_frac}},
+            "device": "cpu"|"cuda", "require_yaw": bool}
+  stdout : ONE JSON line {"ok": bool,
+            "results": {path: {state, det, bbox_frac, yaw|null}},
             "clusters": {path: int}, "used_gpu": bool, "error"?: str}
   stderr : "[embed] i/N <state>" progress lines (the parent streams these to
             drive the UI progress bar).
 
 Embeddings are CACHED in the .npz (parallel arrays paths/embs/states/dets/
-bfracs) and written incrementally every CACHE_EVERY images — killing the pass
-mid-way loses at most that slice, and re-clustering at another threshold is
-then near-instant. Clustering = union-find over cosine ≥ threshold on the
+bfracs/yaws) and written incrementally every CACHE_EVERY images — killing the
+pass mid-way loses at most that slice, and re-clustering at another threshold is
+then near-instant.
+
+``yaws`` is the newest array and every cache written before it exists lacks it.
+Those entries load with yaw = NaN and are reported as ``yaw: null`` — "not
+measured", never 0.0, which would read as a perfectly frontal face. ``require_yaw``
+asks for those entries to be RE-DETECTED (the angle is not recoverable from the
+stored embedding); it is what the app's opt-in ⤢ backfill sets, and it is off by
+default so an ordinary resume never turns into hours of re-detection.
+
+Clustering = union-find over cosine ≥ threshold on the
 L2-normed embeddings of the SCORABLE faces (biggest face per image — a group
 photo clusters by its dominant face); cluster ids are 1-based, ordered by
 cluster size descending, singletons included (a person seen once is still a
@@ -60,6 +70,9 @@ def _write_count(cache_path, n):
 
 
 def _load_cache(path):
+    """{path: (state, det, bbox_frac, emb, yaw)}. A cache written before the yaw
+    array existed loads with yaw = NaN — additive, so no user ever has to
+    re-embed a bank just because a new number was added to the tuple."""
     import numpy as np
     out = {}
     if not path or not os.path.isfile(path):
@@ -68,8 +81,10 @@ def _load_cache(path):
         with np.load(path, allow_pickle=False) as z:
             paths, states = z['paths'], z['states']
             embs, dets, bfracs = z['embs'], z['dets'], z['bfracs']
+            yaws = z['yaws'] if 'yaws' in z.files else None
         for i, p in enumerate(paths):
-            out[str(p)] = (states[i], float(dets[i]), float(bfracs[i]), embs[i])
+            out[str(p)] = (states[i], float(dets[i]), float(bfracs[i]), embs[i],
+                           float(yaws[i]) if yaws is not None else float('nan'))
     except Exception as e:  # noqa: BLE001 — a corrupt cache = recompute, never fatal
         _log(f'[embed] cache unreadable, recomputing: {e}')
         return {}
@@ -88,6 +103,7 @@ def _save_cache(path, cache):
         states=np.array([cache[p][0] for p in paths]),
         dets=np.array([cache[p][1] for p in paths], dtype='float32'),
         bfracs=np.array([cache[p][2] for p in paths], dtype='float32'),
+        yaws=np.array([cache[p][4] for p in paths], dtype='float32'),
         embs=np.stack([cache[p][3] for p in paths]).astype('float32'))
     os.replace(tmp, path)
 
@@ -151,10 +167,19 @@ def main() -> int:
     cancel_file = req.get('cancel_file') or None
     threshold = float(req.get('threshold') or 0.45)
     device = str(req.get('device') or 'cpu').lower()   # 'cpu' | 'cuda'
+    # Opt-in only: re-detect the entries a pre-yaw build cached, because the
+    # angle cannot be recovered from a stored embedding. See the module docstring.
+    require_yaw = bool(req.get('require_yaw'))
 
     used_gpu = False   # set when the model actually loads on CUDA below
     cache = _load_cache(cache_path)
-    todo = [p for p in images if p not in cache]
+
+    def _needs_work(p):
+        if p not in cache:
+            return True
+        return require_yaw and not (cache[p][4] == cache[p][4])   # NaN test
+
+    todo = [p for p in images if _needs_work(p)]
     _write_count(cache_path, len(images) - len(todo))
     _log(f'[embed] {len(images)} image(s), {len(images) - len(todo)} cached')
 
@@ -209,7 +234,7 @@ def main() -> int:
                 payload = read_validated_bank_image(p)
                 img = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if img is None:
-                    cache[p] = ('unreadable', 0.0, 0.0, zero)
+                    cache[p] = ('unreadable', 0.0, 0.0, zero, float('nan'))
                 else:
                     h, w = img.shape[:2]
                     f = biggest(app.get(img))
@@ -221,23 +246,31 @@ def main() -> int:
                     else:
                         scale = 1.0
                     if f is None:
-                        cache[p] = ('no_face', 0.0, 0.0, zero)
+                        cache[p] = ('no_face', 0.0, 0.0, zero, float('nan'))
                     else:
                         area = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
                         bbox_frac = float(area / (w * h) / scale)
                         det = float(f.det_score)
-                        yaw = float(f.pose[1]) if getattr(f, 'pose', None) is not None else 0.0
+                        # The pose estimate: kept BOTH as the 'extreme_pose'
+                        # gate (its original and only use) and, now, as a stored
+                        # measurement — it is what the app's head-angle facet is
+                        # made of. No pose at all stays NaN rather than becoming
+                        # 0.0, which would claim a perfectly frontal face.
+                        pose = getattr(f, 'pose', None)
+                        yaw = float(pose[1]) if pose is not None else float('nan')
+                        gate = 0.0 if yaw != yaw else yaw
                         state = 'scorable'
                         if det < DET_MIN:
                             state = 'low_det'
                         elif bbox_frac < BBOX_MIN:
                             state = 'too_small'
-                        elif abs(yaw) > YAW_MAX:
+                        elif abs(gate) > YAW_MAX:
                             state = 'extreme_pose'
                         cache[p] = (state, round(det, 3), round(bbox_frac, 4),
-                                    f.normed_embedding.astype('float32'))
+                                    f.normed_embedding.astype('float32'),
+                                    yaw if yaw != yaw else round(yaw, 2))
             except Exception as e:  # noqa: BLE001 — one broken file must not sink the pass
-                cache[p] = ('error', 0.0, 0.0, zero)
+                cache[p] = ('error', 0.0, 0.0, zero, float('nan'))
                 _log(f'[embed] {i}/{len(todo)} ERROR {e}')
                 continue
             finally:
@@ -261,8 +294,11 @@ def main() -> int:
 
     results = {}
     for p in images:
-        state, det, bfrac, _emb = cache.get(p) or ('error', 0.0, 0.0, None)
-        results[p] = {'state': str(state), 'det': float(det), 'bbox_frac': float(bfrac)}
+        state, det, bfrac, _emb, yaw = (cache.get(p)
+                                        or ('error', 0.0, 0.0, None, float('nan')))
+        results[p] = {'state': str(state), 'det': float(det), 'bbox_frac': float(bfrac),
+                      # null, never 0.0 — "not measured" is its own answer.
+                      'yaw': None if yaw != yaw else float(yaw)}
     clusters = _cluster(images, cache, threshold)
     print(json.dumps({'ok': True, 'results': results, 'clusters': clusters,
                       'used_gpu': used_gpu}))

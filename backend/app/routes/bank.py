@@ -236,6 +236,11 @@ def bank_images(bank_id):
         res_bucket=args.get('res_bucket') or None,
         framing=args.get('framing') or None,
         origin=args.get('origin') or None,
+        # DEDICATED keys. Neither reuses `q`/`exclude`/`push_down` (the text
+        # lane) nor `flag` (the quality lane): a facet that shares a query key
+        # with another facet silently narrows the other one.
+        medium=args.get('medium') or None,
+        angle=args.get('angle') or None,
         ids=ids,
         # ids_only=1 answers {'ids': [...]} for the WHOLE filter in one request —
         # what ▶ Review and "Select all in filter" actually need. Same filters,
@@ -398,6 +403,30 @@ def bank_framing(bank_id):
     data = request.get_json(silent=True) or {}
     return _start(banks.start_framing, _app(), LOCAL_USER, bank_id,
                   rescan=bool(data.get('rescan')))
+
+
+@bp.post('/bank/<int:bank_id>/medium')
+def bank_medium(bank_id):
+    """Classify every scored image by MEDIUM (photo / anime / 3D render /
+    illustration, or an honest 'unsure') from the CLIP embeddings the ✨ Score
+    pass already cached. {rescan:true} re-classifies rows that already have a
+    verdict. 202 on launch · 409 when the bank is busy · 503 when ✨ Score has
+    not run here or CLIP cannot be reached. No GPU is taken and no image is
+    re-inferred."""
+    data = request.get_json(silent=True) or {}
+    return _start(banks.start_medium, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
+@bp.post('/bank/<int:bank_id>/angles')
+def bank_angles(bank_id):
+    """Measure the head ANGLE of the images that were face-scanned before the
+    pass persisted it — an opt-in backfill, never automatic. Re-runs the face
+    detector on those rows ONLY, writes nothing but the yaw, and leaves the
+    person clusters untouched. 202/409/503; 400 when there is nothing to
+    backfill."""
+    return _start(banks.start_faces, _app(), LOCAL_USER, bank_id,
+                  angles_only=True)
 
 
 @bp.get('/bank/<int:bank_id>/coverage')
@@ -660,6 +689,10 @@ def _curation_filters(data):
         # Same reason as exclude: a curation pick must not hand back images the
         # grid is currently hiding.
         'tags': data.get('tags') or None,
+        # 🎨 medium and ⤢ angle scope a curation pick exactly as they scope the
+        # grid, under their OWN keys.
+        'medium': data.get('medium') or None,
+        'angle': data.get('angle') or None,
     }
 
 

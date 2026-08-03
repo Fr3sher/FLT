@@ -44,6 +44,14 @@ const SCAN = { needs: 'scanned', missing: 'run 🔎 Scan quality', group: '🔎 
 const SCORE = { needs: 'scored', missing: 'run ✨ Score', group: '✨ Score' };
 const FACE = { needs: 'faces', missing: 'run 🎭 Faces', group: '🎭 Faces' };
 const FILE = { needs: 'scanned', missing: 'run 🔎 Scan quality', group: '📁 File' };
+// The head angle comes from the 🎭 Faces pass but has its OWN readiness count:
+// a bank scanned before the pass kept the yaw has thousands of faces and zero
+// measured angles, so gating this entry on `faces` would offer a sort that
+// reorders nothing. `angle_measured` is the only honest gate.
+const ANGLE = { needs: 'angle_measured', missing: 'measure head angles',
+  group: '🎭 Faces' };
+const MEDIUM = { needs: 'medium_classified', missing: 'run 🎨 Medium',
+  group: '🎨 Medium' };
 
 /** One measure = two entries (↓ then ↑). `hi`/`lo` are what each direction puts
  *  in front of you — written as the REASON to pick it, not as a restatement of
@@ -90,6 +98,19 @@ export const BANK_SORTS = [
   ...measure('face', 'Face confidence', FACE,
     'Clearest faces first — from the 🎭 Faces pass',
     'Weakest faces first — tiny, turned or half-hidden faces'),
+  // The head angle is ordered on its ABSOLUTE value: "turned left" and "turned
+  // right" are one shot type, and splitting them would halve every answer for a
+  // distinction no training set makes.
+  ...measure('yaw', 'Head angle', ANGLE,
+    'Most turned away first — the profiles and three-quarters, from the 🎭 Faces pass',
+    'Most face-on first'),
+  // The one sort whose USEFUL direction is ↑: it opens on the images the medium
+  // classifier nearly could not call, which is exactly the pile worth a human
+  // glance. A chip can only show you what crossed the bar; this shows you what
+  // sat on it.
+  ...measure('medium_conf', 'Medium confidence', MEDIUM,
+    'Surest medium verdicts first — from the 🎨 Medium pass',
+    'Least sure first — the images the classifier nearly could not call'),
 ];
 
 export const DEFAULT_BANK_SORT = 'default';

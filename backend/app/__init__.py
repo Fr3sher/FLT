@@ -220,6 +220,12 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'jpeg_quality', 'REAL'),
     ('bank_image', 'origin', 'VARCHAR(8)'),
     ('bank_image', 'origin_evidence', 'VARCHAR(24)'),
+    # 🎨 Medium (what the picture is MADE of) and the confidence gap behind it,
+    # plus the face pass's yaw. Additive: a database that never gains them keeps
+    # every row and simply reports "not classified" / "not measured".
+    ('bank_image', 'medium', 'VARCHAR(16)'),
+    ('bank_image', 'medium_margin', 'REAL'),
+    ('bank_image', 'face_yaw', 'REAL'),
     # ⬆ Promote's second destination: the bank a selection was copied into.
     # Additive and independent of promoted_dataset_id — a database that never
     # gains it simply never shows the "promoted to a bank" badge.
@@ -252,6 +258,7 @@ _INDEX_ADDITIONS = (
     ('bank_image', 'style_cluster'),
     ('bank_image', 'framing'),
     ('bank_image', 'origin'),
+    ('bank_image', 'medium'),
     ('lora_test_image', 'record_id'),
 )
 

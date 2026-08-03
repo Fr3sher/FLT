@@ -581,6 +581,66 @@ A bank you already scanned picks all of this up on its next **🔎 Scan** — th
 pass re-visits the images that predate these measurements on its own. You do not
 need a full rescan.
 
+## Sort a bank by medium and by head angle
+
+Two more ways to slice a big dump, both built on passes you have already paid
+for.
+
+### 🎨 Medium — what the picture is *made of*
+
+**🎨 Classify medium** sorts every scored image into **📷 Photo**, **🅰 Anime**,
+**🧊 3D render**, **🖌 Illustration** — or **❔ Unsure**. It reads the CLIP
+embedding the **✨ Score** pass already computed, so it looks at no image twice,
+downloads nothing, and never touches the GPU. On a 23 000-image bank it finishes
+in seconds. An image ✨ Score has not reached has no embedding and stays
+unclassified; the row says how many.
+
+This is **not** the same question as **🔎 Origin** above. Origin reads the
+*file's metadata* and answers "who made this file". Medium reads *the picture*
+and answers "what does it look like". A photorealistic AI portrait is 🤖 AI and
+📷 Photo at the same time; a scanned manga page is ❔ Unknown and 🅰 Anime.
+Neither is evidence for the other.
+
+**What it is worth, measured.** On a real 23 532-image bank, against 167 images
+labelled by hand:
+
+- photograph verdicts were right **90 out of 90** times;
+- both real anime drawings in the sample were found;
+- every 3D render and illustration in the sample came back **Unsure**.
+
+That last line is the honest shape of this feature. The bar for a non-photo
+verdict is deliberately six times higher than for a photograph, because the
+model reads a picture's *subject* as much as its medium: a photo of somebody
+**cosplaying** an anime character scores as anime. At a lower bar the "anime"
+pile filled with cosplay photographs and the "3D render" pile with advertising
+banners. So the pass answers **Unsure** rather than guessing, and the row prints
+how big that pile is instead of hiding it. Sort by **🎨 Medium confidence ↑** to
+put the images it nearly could not call in front of you.
+
+### ⤢ Angle — where the head is pointing
+
+The **🎭 Person groups** pass estimates a head pose while it works. The **⤢**
+chips turn that into **😐 Frontal** (turned less than 20°), **◑ Three-quarter**
+(20–60°), **👤 Profile** (more than 60°) and **🔙 From behind**.
+
+Two limits worth knowing before you trust a count:
+
+- **Profile is under-counted.** A head turned far enough that one eye disappears
+  often defeats the face detector outright, and an image with no detected face
+  has no angle at all. The profiles you see are the ones that were still
+  detectable.
+- **From behind needs two passes.** It is the crossing of "no face found" with
+  "the **📐 Framing** pass called it a back view" — because *no face* on its own
+  is also what a landscape with nobody in it looks like. Without the framing
+  pass this bucket stays empty rather than claiming a person is there.
+
+**If your bank was scanned before this shipped**, its faces have no angle: older
+builds measured the pose, used it once and threw it away, and the number is not
+recoverable from what was stored. The ⤢ row then offers to measure them, tells
+you how many there are and roughly how long it will take on your machine, and
+does nothing until you click. It re-runs the face detector on those images only,
+writes nothing but the angle, and leaves your person groups exactly as they are.
+
 ## Find bank images by describing them
 
 Under **Curate**, **🔤 Find by text…** ranks images by how close they are to a
