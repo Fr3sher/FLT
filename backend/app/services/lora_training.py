@@ -8474,6 +8474,23 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
         actual = 'booru' if booru_n * 2 >= len(sample) else 'prose'   # vote majoritaire
         if actual != expected:
             if expected == 'booru':
+                # A CONCEPT dataset cannot follow the usual advice. Its captions
+                # come from _caption_concept, which has no booru variant and does
+                # not even take a `mode`, and the prose/booru selector is hidden
+                # on conceptual datasets — so "re-caption in 'Booru tags' mode"
+                # names a mode the user cannot reach from anywhere. Sending
+                # someone hunting for it is worse than the refusal itself.
+                # (Style datasets are fine: caption_prompt_for_style IS
+                # mode-aware, and an SDXL style dataset already defaults to
+                # booru, so it never lands here.)
+                if fds.is_concept(ds_):
+                    raise ValueError(
+                        "MISMATCH_CAPTION: this SDXL dataset has PROSE captions, but a booru "
+                        "model (bigLove type) is prompted with tags. Concept captions are only "
+                        "produced as prose today — there is no 'Booru tags' mode to switch to "
+                        "on a concept dataset. Either train this concept on a prose family "
+                        "(Z-Image, Krea 2, FLUX.1, FLUX.2 Klein, Anima), or force the training "
+                        "and expect the quality loss a booru-native base takes from prose.")
                 raise ValueError(
                     "MISMATCH_CAPTION: this SDXL dataset has PROSE captions, but a booru "
                     "model (bigLove type) is prompted with tags. Re-caption in 'Booru tags' mode "

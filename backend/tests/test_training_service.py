@@ -399,6 +399,69 @@ def test_style_captioned_still_checks_prose_booru_mismatch(app):
         lt.assert_trainable(ds.id, train_type='sdxl', allow_caption_mismatch=True)
 
 
+def test_concept_sdxl_mismatch_does_not_name_an_unreachable_mode(app):
+    """A CONCEPT dataset on SDXL is a real dead end, and the refusal must say so.
+
+    Reproduced before it was touched: _caption_concept has no booru variant and
+    does not even accept a `mode`, and the prose/booru selector is hidden on
+    conceptual datasets — so concept captions are ALWAYS prose, and an SDXL
+    concept dataset trips MISMATCH_CAPTION on every launch. The generic advice
+    ("Re-caption in 'Booru tags' mode") therefore sends the user hunting for a
+    control that exists nowhere for them.
+
+    Until a booru concept captioner exists, the honest refusal names the two
+    paths that DO exist: a prose family, or forcing with the cost stated.
+    """
+    import pytest
+    from app.services import lora_training as lt
+    from app.services import face_dataset_service as svc
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'C1', 'zcpt1', kind='concept',
+                                concept_desc='taking a selfie', train_type='sdxl')
+        # What _caption_concept really emits: scene-exhaustive prose describing
+        # everything EXCEPT the shared concept.
+        prose = ('a woman in a red dress stands on a balcony at dusk, city lights '
+                 'behind her, warm rim lighting, shot from the waist up')
+        for i in range(20):
+            svc.db.session.add(FaceDatasetImage(dataset_id=ds.id, status='keep',
+                                                filename='x.webp',
+                                                caption=f'{prose}, scene {i}'))
+        svc.db.session.commit()
+        with pytest.raises(ValueError, match='MISMATCH_CAPTION') as err:
+            lt.assert_trainable(ds.id, train_type='sdxl')
+        msg = str(err.value)
+        # It must NOT promise a mode a concept dataset cannot reach...
+        assert "Re-caption in 'Booru tags' mode" not in msg, msg
+        # ...and it must offer the two escapes that actually exist.
+        assert 'concept dataset' in msg, msg
+        assert 'Z-Image' in msg and 'force' in msg, msg
+        # Forcing still works — this is a confirmable refusal, not a wall.
+        lt.assert_trainable(ds.id, train_type='sdxl', allow_caption_mismatch=True)
+
+
+def test_character_sdxl_mismatch_keeps_the_actionable_recaption_advice(app):
+    """The concept wording must not leak onto CHARACTER datasets, where the
+    'Booru tags' selector is right there and re-captioning is the best answer."""
+    import pytest
+    from app.services import lora_training as lt
+    from app.services import face_dataset_service as svc
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'C2', 'zcpt2', train_type='sdxl')
+        prose = 'A woman reading a book in a sunlit cafe, sitting by the window.'
+        for i in range(20):
+            svc.db.session.add(FaceDatasetImage(dataset_id=ds.id, status='keep',
+                                                filename='x.webp',
+                                                caption=f'{prose} Scene {i}.'))
+        svc.db.session.commit()
+        with pytest.raises(ValueError, match='MISMATCH_CAPTION') as err:
+            lt.assert_trainable(ds.id, train_type='sdxl')
+        assert "Re-caption in 'Booru tags' mode" in str(err.value)
+
+
 def test_style_default_trigger_salted_no_collision(app):
     """Audit fix: two styles created WITHOUT a trigger must not both land on the
     'zchar' default (the anti-collision guard would block the 2nd training run)."""

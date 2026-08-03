@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-concept-sdxl-refusal-tells-the-truth',
+    date: '2026-08-03',
+    title: 'A Concept dataset on SDXL is told the truth instead of sent hunting',
+    blurb:
+      'Concept captions are only ever written as prose, and the prose/booru selector is hidden on concept datasets — so a Concept dataset trained on a booru-native SDXL checkpoint was always stopped, and then told to “re-caption in Booru tags mode”: a control that does not exist for it. You could look for it forever. The refusal now says what is actually true — no booru concept captioner exists yet — and names the two paths that work: train the concept on a prose family (Z-Image, Krea 2, FLUX.1, FLUX.2 Klein, Anima), or force the launch knowing what a booru-native base loses on prose. Character and Style datasets are untouched; both reach booru captions normally.',
+    to: '/datasets?section=training&panel=launch',
+  },
+  {
     id: '2026-08-03-pinokio-update-hands-back',
     date: '2026-08-03',
     title: 'Installed from Pinokio? Updates now tell you the right three clicks',

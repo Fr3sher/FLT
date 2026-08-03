@@ -111,6 +111,11 @@ Concretely:
    exception:** it reads both forms natively, so neither is ever blocked there
    (see the Anima note above).
 
+   ⚠️ **Concept datasets cannot be captioned in booru tags at all** (the concept
+   captioner only writes prose). A Concept dataset on a booru-native SDXL
+   checkpoint will therefore always be stopped by the caption-style check: train
+   the concept on a prose family instead, or force the launch knowing the cost.
+
 **Caption length.** ⚙️ *Options* on the Captions panel carries a **Caption length**
 preset — *Standard* (the prompt untouched), *Concise* (aims for one short sentence,
 ~20–30 words) or *Detailed* (several sentences). It is a **target the vision model
