@@ -64,7 +64,8 @@ DEFAULTS = {
     #                      emptying the trash after it destroyed weights.
     'paths': {'dataset_images_root': '',                       # '' -> DATA_DIR/datasets
               'cloud_runs_dir': '',                            # '' -> DATA_DIR/cloud_runs
-              'checkpoints_dir': ''},                          # '' -> DATA_DIR/checkpoints
+              'checkpoints_dir': '',                           # '' -> DATA_DIR/checkpoints
+              'video_datasets_dir': ''},                       # '' -> DATA_DIR/video_datasets
     'comfyui': {'api_url': 'http://127.0.0.1:8188', 'base_dir': '',
                 'output_dir': '', 'input_dir': '', 'models_dir': '', 'loras_dir': '',
                 # setup_skipped (default False): the user consciously chose "continue
@@ -1107,6 +1108,35 @@ def banks_root() -> Path:
     one subfolder per bank — never the source images, which stay in the user's
     folder untouched."""
     root = _data_dir() / 'banks'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def video_banks_root() -> Path:
+    """Working data of the 🎬 video banks — THUMBNAILS AND NOTHING ELSE.
+
+    The video bank stores bounds, not media: a clip is a pair of timestamps until
+    the moment it is promoted. So unlike banks_root(), which also holds embedding
+    caches, this tree only ever grows by one small .jpg per detected shot, and
+    deleting it costs a thumbnail pass rather than a triage.
+
+    Separate from banks_root() so the two lanes can be sized, moved and cleaned
+    independently in Settings › Storage — a user with four hundred hours of rushes
+    and a user with fifty thousand photos have very different problems."""
+    root = _data_dir() / 'video_banks'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def video_datasets_root() -> Path:
+    """Built video training sets: one flat ``<dataset id>/`` per set, holding the
+    encoded ``clip_0001.mp4`` files and their homonym ``.txt`` captions.
+
+    Relocatable, and it is the video lane's equivalent of dataset_images_root() —
+    this is the directory that grows to tens of GB, because unlike the bank it
+    holds real encoded media. NEVER the same tree as dataset_images_root(): the
+    image lane's storage layout is one folder per dataset id too, and sharing the
+    root would make two different tables claim the same folder name."""
+    p = get('paths.video_datasets_dir') or ''
+    root = Path(p) if p else _data_dir() / 'video_datasets'
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -73,6 +73,16 @@ _DEFS = (
      'section': None, 'field': None,
      'resolve': cfg.bank_sources_root,
      'holds': 'Images copied into a bank by “Import to bank”.'},
+    {'key': 'video_banks', 'label': 'Video banks (working data)',
+     'section': None, 'field': None,
+     'resolve': cfg.video_banks_root,
+     'holds': 'Thumbnails of the shots detected in your video banks — never the '
+              'source videos, and never the clips themselves.'},
+    {'key': 'video_datasets', 'label': 'Video datasets',
+     'section': 'paths', 'field': 'video_datasets_dir',
+     'resolve': cfg.video_datasets_root,
+     'holds': 'The encoded training clips and their captions. This is where the '
+              'video lane actually uses disk — a bank stores only timestamps.'},
     {'key': 'cloud_runs', 'label': 'Cloud run staging',
      'section': 'paths', 'field': 'cloud_runs_dir',
      'resolve': cfg.cloud_runs_root,
