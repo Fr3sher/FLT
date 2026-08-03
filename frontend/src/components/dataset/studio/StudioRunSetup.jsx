@@ -25,6 +25,10 @@ export default function StudioRunSetup({
   prompt, onPrompt, seed, onReroll, count, onCount,
   onLaunch, launching, gpuBusy, batchMult = 1, combine = false, combineBlocked = null,
   configCount = 1,
+  // 🎛 Axes de rendu (CFG / steps / 2e passe) rendus par l'appelant. `axisTotal`
+  // est le facteur qu'ils ajoutent à la grille : le compteur de coût DOIT le
+  // porter, sinon le panneau annonce 6 cellules et la file en reçoit 18.
+  axisSlot = null, axisTotal = 1,
 }) {
   // batchMult = 1 + nb de LoRA cochés « ⚖ batch » (axe sans/avec) — le backend
   // multiplie les cellules d'autant, le compteur de coût doit suivre.
@@ -33,6 +37,7 @@ export default function StudioRunSetup({
   // cases de poids sont cochées et que le lancement balaye leurs combinaisons.
   const cells = cellCount({
     selectionCount, strengthCount: strengths.length, count, batchMult, combine, configCount,
+    axisTotal,
   });
   const canLaunch = cells > 0 && !launching && !gpuBusy && !combineBlocked;
 
@@ -74,6 +79,11 @@ export default function StudioRunSetup({
       {!combine && (
         <StrengthPicker choices={STRENGTH_CHOICES} selected={strengths} onToggle={onToggleStrength} fmt={fmt} />
       )}
+
+      {/* 🎛 CFG / steps / 2e passe. En 🧬 Blend l'axe des strengths disparaît (chaque
+          LoRA porte son poids) mais celui-ci reste : les steps sont un réglage de
+          RENDU, pas de LoRA — les cacher là était le bug signalé. */}
+      {axisSlot}
 
       <div className="flex flex-col gap-1">
         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -125,7 +135,7 @@ export default function StudioRunSetup({
         <span className="text-content-subtle text-[0.6875rem]"
           title={combine
             ? `GPU cost: ${configCount} weight combination(s) of ${selectionCount} LoRAs × images per config`
-            : `GPU cost: checked LoRAs × strengths × images per config${batchMult > 1 ? ` × ${batchMult} (⚖ batch axis: without + with each checked LoRA)` : ''}`}>
+            : `GPU cost: checked LoRAs × strengths × images per config${batchMult > 1 ? ` × ${batchMult} (⚖ batch axis: without + with each checked LoRA)` : ''}${axisTotal > 1 ? ` × ${axisTotal} (🎛 CFG / steps axes)` : ''}`}>
           {combine
             ? (
               <>
@@ -135,7 +145,8 @@ export default function StudioRunSetup({
               </>
             )
             : <>{selectionCount} LoRA × {strengths.length} strength × {count}</>}
-          {batchMult > 1 && <span className="text-amber-300"> × {batchMult} ⚖</span>} ={' '}
+          {batchMult > 1 && <span className="text-amber-300"> × {batchMult} ⚖</span>}
+          {axisTotal > 1 && <span className="text-purple-300"> × {axisTotal} 🎛</span>} ={' '}
           <span className={`tabular-nums font-semibold ${cells > 0 ? 'text-content' : 'text-content-subtle'}`}>{cells}</span>{' '}
           cell(s) to generate
         </span>

@@ -2159,7 +2159,9 @@ def train_canvas_generate():
         res = ct.canvas_generate(
             LOCAL_USER, d.get('selections') or [],
             strengths=d.get('strengths') or [1.0],
-            seed=d.get('seed'), prompt=d.get('prompt'), z_model=d.get('z_model'),
+            seed=d.get('seed'), prompt=d.get('prompt'),
+            # 📝 Lot : une passe par prompt coché dans l'historique du panneau.
+            prompts=d.get('prompts'), z_model=d.get('z_model'),
             aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
             steps2_list=d.get('steps2'), count=d.get('count'),
             permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),

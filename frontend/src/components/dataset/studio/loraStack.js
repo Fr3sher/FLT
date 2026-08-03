@@ -186,10 +186,17 @@ export function blendSweepCost({ configCount, count = 1, batchMult = 1 }) {
  * cartésien), d'où `configCount × count × batchMult`. `configCount` absent =
  * 1 configuration, c'est-à-dire exactement le comportement d'avant les cases.
  */
+/* `axisTotal` = le produit des axes de rendu (CFG × steps × 2e passe) que le
+   panneau propose désormais aussi en comparaison/blend. 1 par défaut : un appelant
+   qui ne balaye aucun de ces axes obtient le compte d'avant, à l'identique. */
 export function cellCount({ selectionCount, strengthCount, count, batchMult = 1,
-  combine = false, configCount = 1 }) {
+  combine = false, configCount = 1, axisTotal = 1 }) {
   const n = Math.max(0, Number(count) || 0);
   const mult = Math.max(1, Number(batchMult) || 1);
-  if (combine) return selectionCount >= 2 ? Math.max(0, Number(configCount) || 0) * n * mult : 0;
-  return Math.max(0, selectionCount) * Math.max(0, strengthCount) * n * mult;
+  const axes = Math.max(1, Number(axisTotal) || 1);
+  if (combine) {
+    return selectionCount >= 2
+      ? Math.max(0, Number(configCount) || 0) * n * mult * axes : 0;
+  }
+  return Math.max(0, selectionCount) * Math.max(0, strengthCount) * n * mult * axes;
 }

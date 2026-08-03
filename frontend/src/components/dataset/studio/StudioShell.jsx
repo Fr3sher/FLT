@@ -41,13 +41,17 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   // Liste des bases correspondant au train_type courant.
   // Fetch à chaque changement de runType via /api/studio/base-models?type=…
   const [baseModels, setBaseModels] = useState([]);
+  // Échelles CFG/steps de la famille, servies par le MÊME appel (clé `axes`).
+  // Sans elles, la branche comparaison/blend n'avait aucun axe de rendu à
+  // proposer — c'est ce qui la privait du réglage des steps (bug signalé).
+  const [axes, setAxes] = useState(null);
   useEffect(() => {
-    if (!runType) { setBaseModels([]); return; }
+    if (!runType) { setBaseModels([]); setAxes(null); return; }
     let cancelled = false;
     fetch(`/api/studio/base-models?type=${encodeURIComponent(runType)}`, { credentials: 'include' })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((d) => { if (!cancelled) setBaseModels(d.models || []); })
-      .catch(() => { if (!cancelled) setBaseModels([]); });
+      .then((d) => { if (!cancelled) { setBaseModels(d.models || []); setAxes(d.axes || null); } })
+      .catch(() => { if (!cancelled) { setBaseModels([]); setAxes(null); } });
     return () => { cancelled = true; };
   }, [runType]);
 
@@ -80,7 +84,8 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
       </div>
 
       {comparison ? (
-        <ComparisonStudio selection={selection} baseModels={baseModels} runType={runType} />
+        <ComparisonStudio selection={selection} baseModels={baseModels} axes={axes}
+          runType={runType} />
       ) : soloDatasetId ? (
         // `key` force un remontage propre quand on change de LoRA solo OU de famille
         // (reset des hooks/état du studio riche — sinon on garderait la grille du précédent).

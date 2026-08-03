@@ -64,6 +64,22 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-08-03-multilora-steps-and-cfg',
+    date: '2026-08-03',
+    title: 'Set the steps and CFG with several LoRAs selected — compare or blend',
+    blurb:
+      'With two or more LoRAs checked, the Test Studio gave you no way to choose the number of steps or the CFG: the setting was not greyed out, it simply was not there, and every image ran on the family default no matter what you wanted. It is there now, in the same panel as the strengths, with the same ladders the single-LoRA studio and the canvas already used — including the SDXL second pass. It stays available in 🧬 Blend, where the strength sweep disappears but the render settings do not, and the cell counter includes them so you can see what a sweep will cost before you launch it.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-03-studio-prompt-batch',
+    date: '2026-08-03',
+    title: 'Run several saved prompts in one go, on both generation screens',
+    blurb:
+      'The list of saved prompts could only be replayed one at a time: pick a prompt, launch, wait, pick the next one. Every card now has a tick box. Tick three and the launch renders all three with the same checkpoints, the same settings and the same seed — which is what makes them comparable — in a single run the GPU works through by itself. The counter and the button say how many images that is before you click, and ticking nothing leaves the screen exactly as it was. It works the same way in the dataset Test Studio and in "Generate from the board" on the canvas, because both screens show the same list.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-03-restart-no-longer-kills-a-live-cloud-run',
     date: '2026-08-03',
     title: 'Restarting the app no longer kills a cloud run that is training fine',

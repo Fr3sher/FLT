@@ -1822,6 +1822,9 @@ def lora_test_run(dataset_id):
         res = lts.create_run(LOCAL_USER, dataset_id,
                              d.get('checkpoints') or [], d.get('strengths') or [],
                              seed=d.get('seed'), prompt=d.get('prompt'),
+                             # 📝 Lot : une passe par prompt coché dans
+                             # l'historique. Absent → le prompt du champ, seul.
+                             prompts=d.get('prompts'),
                              z_model=d.get('z_model'), z_models=d.get('z_models'),
                              aspects=d.get('aspects'),
                              cfgs=d.get('cfgs'), steps_list=d.get('steps'),

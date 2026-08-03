@@ -21,6 +21,8 @@ import { fmt } from '../../../utils/studioFormat';
 import { flipOrder } from './flipOrder';
 import { DEFAULT_STRENGTHS, FAMILY_LABELS } from './constants';
 import { blendConfigCount, buildSelectionsPayload, combineBlocker } from './loraStack';
+import { axisPayload, axisTotal, effectiveAxis, toggleAxisValue } from './studioAxes';
+import AxisPickers from './AxisPickers';
 import { isStackRun, stackMembers } from './stackResults';
 import StudioRunSetup from './StudioRunSetup';
 import LoraStackPanel from './LoraStackPanel';
@@ -37,7 +39,8 @@ import ResultLightbox from './ResultLightbox';
 
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
-export default function ComparisonStudio({ selection, baseModels = [], runType = 'zimage' }) {
+export default function ComparisonStudio({ selection, baseModels = [], axes = null,
+  runType = 'zimage' }) {
   const toast = useToast();
 
   // --- Réglages du run (persistés : recharger la page ne les perd plus) --------
@@ -78,6 +81,35 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
   const [count, setCount] = useState(() => {
     try { return Math.max(1, parseInt(localStorage.getItem('studioComp_count'), 10) || 1); } catch { return 1; }
   });
+  // 🎛 Axes de rendu — CFG, steps, et la 2e passe SDXL. Ils MANQUAIENT ici : cette
+  // branche ne pouvait pas régler les steps alors que le studio mono-LoRA et le
+  // panneau du canvas le pouvaient. Clés localStorage NEUVES : rien de ce qui est
+  // déjà stocké ne change de sens, et une install qui n'en a pas lit null =
+  // « le défaut de la famille », c'est-à-dire ce qu'elle lançait hier.
+  const readAxis = (key) => {
+    try {
+      const v = JSON.parse(localStorage.getItem(key) || 'null');
+      return Array.isArray(v) && v.length ? v : null;
+    } catch { return null; }
+  };
+  const [selCfgs, setSelCfgs] = useState(() => readAxis('studioComp_cfgs'));
+  const [selSteps, setSelSteps] = useState(() => readAxis('studioComp_steps'));
+  const [selSteps2, setSelSteps2] = useState(() => readAxis('studioComp_steps2'));
+  const effectiveCfgs = effectiveAxis(selCfgs, axes?.default_cfg);
+  const effectiveSteps = effectiveAxis(selSteps, axes?.default_steps);
+  // ⚠ La 2e passe appartient au workflow SDXL. Sans cette garde, une sélection
+  // laissée par un run SDXL suivrait l'utilisateur dans un run Z-Image (les
+  // réglages sont persistés, la famille change avec les cases cochées) et
+  // enverrait un axe que cette famille n'a pas. Famille sans 2e passe = axe vide.
+  const effectiveSteps2 = axes?.steps2_choices
+    ? effectiveAxis(selSteps2, axes.default_steps2) : [];
+  useEffect(() => {
+    try {
+      localStorage.setItem('studioComp_cfgs', JSON.stringify(selCfgs));
+      localStorage.setItem('studioComp_steps', JSON.stringify(selSteps));
+      localStorage.setItem('studioComp_steps2', JSON.stringify(selSteps2));
+    } catch { /* private mode */ }
+  }, [selCfgs, selSteps, selSteps2]);
   useEffect(() => {
     try {
       localStorage.setItem('studioComp_strengths', JSON.stringify(strengths));
@@ -209,6 +241,11 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
         // Réglages globaux (resolution_tier, negative/sampler/detail/rebalance/…),
         // déjà gatés PAR FAMILLE côté backend — champs vides absents = défauts gardés.
         ...genSettings,
+        // 🎛 CFG / steps / 2e passe, EN DERNIER : ce que l'utilisateur vient de
+        // régler dans le panneau gagne sur tout réglage global homonyme. La route
+        // les acceptait déjà et l'engine les balayait déjà — ce qui manquait était
+        // ce corps, qui ne les portait pas, et le panneau, qui ne les offrait pas.
+        ...axisPayload({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 }),
       };
       if (prompt.trim()) body.prompt = prompt.trim();
       const dResp = await postJson('/api/studio/run', body);
@@ -288,6 +325,27 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
             combine={combine}
             combineBlocked={combineBlocked}
             configCount={blendConfigCount(selection, { weights: stackWeights, sets: stackSets })}
+            axisTotal={axisTotal({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 })}
+            /* 🎛 Les axes de rendu, dans le panneau de réglage du run et pas dans
+               un bloc à part : c'est le même geste que choisir une strength. Le
+               MÊME composant que le studio mono-LoRA et le canvas — base et format
+               sont déjà réglés au-dessus ici, donc ces deux blocs restent muets. */
+            axisSlot={axes ? (
+              <AxisPickers
+                zModels={null} effectiveModels={[]} onToggleModel={() => {}}
+                aspects={null} effectiveAspects={[]} onToggleAspect={() => {}}
+                cfgChoices={axes.cfg_choices} effectiveCfgs={effectiveCfgs}
+                onToggleCfg={(v) => setSelCfgs((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_cfg), v))}
+                defaultCfg={axes.default_cfg}
+                stepsChoices={axes.steps_choices} effectiveSteps={effectiveSteps}
+                onToggleStep={(v) => setSelSteps((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_steps), v))}
+                defaultSteps={axes.default_steps}
+                steps2Choices={axes.steps2_choices} effectiveSteps2={effectiveSteps2}
+                onToggleStep2={(v) => setSelSteps2((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_steps2), v))}
+                defaultSteps2={axes.default_steps2}
+                fmt={fmt}
+              />
+            ) : null}
           />
         </div>
         {/* Réglages de génération globaux (parité Generate, hors prompt builder).

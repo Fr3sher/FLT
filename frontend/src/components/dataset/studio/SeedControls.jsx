@@ -2,7 +2,10 @@
 // Extrait behavior-preserving de LoraTestStudio.jsx (barre seed/lock/×N/compteur).
 // IMPORTANT a11y : le compteur d'images N'A PAS d'aria-live (correctif déjà acté) —
 // il se recalcule à chaque clic de config, une région live le ré-annoncerait sans cesse.
-export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock, genCount, onGenCount, total, batchMult = 1, fmt }) {
+// `promptMult` : nombre de prompts cochés dans l'historique (axe 📝 lot). Déjà
+// compté dans `total` — il n'est ici que pour NOMMER d'où vient le multiplicateur,
+// sinon le compteur triple sans que rien à l'écran dise pourquoi.
+export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock, genCount, onGenCount, total, batchMult = 1, promptMult = 1, fmt }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <span className="text-content-subtle text-[0.6875rem] tabular-nums">
@@ -34,6 +37,7 @@ export default function SeedControls({ seed, seedLocked, onReroll, onToggleLock,
         title={batchMult > 1 ? `Includes the ⚖ batch axis: each config runs once without and once with each batch-checked LoRA (×${batchMult})` : undefined}>
         {total * genCount} image(s) (~{Math.ceil(total * genCount * 12 / 60)} min)
         {batchMult > 1 && <span className="text-amber-300"> · ⚖ ×{batchMult}</span>}
+        {promptMult > 1 && <span className="text-purple-300"> · 📝 ×{promptMult}</span>}
       </span>
     </div>
   );

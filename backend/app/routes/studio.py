@@ -47,23 +47,44 @@ def _read_uploaded_image():
     raise ValueError('no image provided')
 
 
+def _family_axes(kind):
+    """The CFG / steps ladders of a family, published WITHOUT a dataset.
+
+    They are the very constants `studio_payload` already sends per dataset — the
+    multi-LoRA comparison has no dataset to read them from, which is exactly why
+    its panel could not offer a steps axis while every other generation surface
+    could (user report: "I cannot set the number of steps when two LoRAs are
+    selected, in blend or in comparison"). Same source, so the screens cannot
+    drift into two ladders. `steps2` stays SDXL-only: the second pass is a
+    property of that workflow, not a setting the others hide."""
+    return {
+        'cfg_choices': lts.CFG_CHOICES, 'default_cfg': lts.DEFAULT_CFG,
+        'steps_choices': lts.STEPS_CHOICES, 'default_steps': lts.DEFAULT_STEPS,
+        'steps2_choices': lts.STEPS_CHOICES if kind == 'sdxl' else None,
+        'default_steps2': lts.DEFAULT_STEPS if kind == 'sdxl' else None,
+    }
+
+
 @bp.get('/base-models')
 def studio_base_models():
+    """Bases of a family + (additive) its `axes` ladders. `models` keeps its exact
+    shape — an older frontend reads it unchanged and simply ignores `axes`."""
     kind = (request.args.get('type') or 'zimage').lower()
+    axes = _family_axes(kind)
     if kind == 'sdxl':
-        return jsonify({'models': lts.list_sdxl_base_models()})
+        return jsonify({'models': lts.list_sdxl_base_models(), 'axes': axes})
     if kind == 'krea':
         # Bases Krea locales ALTERNATIVES au UNET câblé de krea2_turbo.json (node 20).
         # « Official » (filename vide → z_model absent → node intact) en tête = défaut.
         # Aucune alternative sur disque → liste vide, le front masque le sélecteur.
         alts = lts.krea_alt_base_models()
         if not alts:
-            return jsonify({'models': []})
+            return jsonify({'models': [], 'axes': axes})
         out = [{'filename': '', 'label': 'Official – Krea 2 Turbo'}]
         out += [{'filename': m, 'label': m.split('\\')[-1].rsplit('.', 1)[0]} for m in alts]
-        return jsonify({'models': out})
+        return jsonify({'models': out, 'axes': axes})
     out = [{'filename': m, 'label': m.split('\\')[-1]} for m in get_zimage_models()]
-    return jsonify({'models': out})
+    return jsonify({'models': out, 'axes': axes})
 
 
 @bp.get('/checkpoints')

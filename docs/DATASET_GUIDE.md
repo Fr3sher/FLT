@@ -277,6 +277,23 @@ best one**. Later checkpoints know the identity better but obey prompts worse.
    expression/angle regardless of prompt, outfits from the dataset bleeding in.
 4. Save the winning settings (★) — they're reused as the dataset's defaults.
 
+### Test several prompts in one launch
+
+Under the prompt box is the history of the prompts you have saved, with a
+thumbnail of the image you liked best for each. Clicking a card loads it into the
+field, as before. **Ticking its box adds it to a batch**: the panel counts what is
+selected, the button says how many prompts it is about to run, and one launch
+renders them all — same checkpoints, same settings, **same seed**, which is what
+makes two prompts comparable rather than two unrelated pictures.
+
+It is one run, not several: the images queue up and the GPU works through them by
+itself. Tick nothing and the screen behaves exactly as it always has, running the
+prompt in the field. The cap is 24 prompts per launch — past that the launch is
+refused with the count rather than quietly rendering half of them.
+
+The same tick boxes are in **🎨 Generate from the board** on the ◉ LoRA Canvas,
+because both screens show the same prompt history.
+
 ### Compare LoRAs — or blend them
 
 Check two or more LoRAs and Studio asks what you want to do with them:
@@ -303,6 +320,12 @@ weight, so the run is one configuration instead of a grid. Start both around
 0.7-0.9 — two LoRAs at 1.0 usually fight each other, and the one you care about
 most should be the heavier of the two. Result tiles from a stack carry a **🧬**
 badge naming the exact weights that made them.
+
+**Steps and CFG are set in the same panel, in both modes.** They are render
+settings, not LoRA settings, so they stay available when the strength sweep
+disappears in Blend — and like every other axis, ticking two values renders both
+(the cell counter shows what that costs before you launch). SDXL also exposes its
+second pass there.
 
 **Trying several weights at once.** Under each LoRA's slider is a row of weight
 boxes. Tick two on one LoRA and two on the other, and the launch renders **all

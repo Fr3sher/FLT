@@ -1716,6 +1716,39 @@ def _batch_lora_axis(batch_loras, run_family) -> list:
     return [None] + entries[:4] if entries else [None]
 
 
+# 📝 Un lot de prompts reste UN run. Deux lancements de suite sont refusés par le
+# garde « a test run is already in progress » (et le GPU est sérialisé de toute
+# façon) : le lot est donc un AXE, comme les formats ou les cfg — une cellule par
+# prompt, mêmes checkpoints, mêmes réglages, même seed.
+_MAX_PROMPTS_PER_RUN = 24
+
+
+def _prompt_axis(prompts, fallback) -> list:
+    """L'axe 📝 prompt d'un run : la liste cochée, nettoyée et dédupliquée dans
+    l'ordre d'arrivée ; vide → `[fallback]`, c'est-à-dire EXACTEMENT le
+    comportement d'avant (un seul prompt, celui du champ). `fallback` peut être
+    None quand l'appelant laisse chaque cellule retomber sur le prompt d'identité
+    de son dataset (comparaison multi-datasets).
+
+    Borné : au-delà de 24 prompts le lot est refusé avec son compte plutôt que
+    tronqué en silence — une grille qui rend la moitié de ce qui a été coché est
+    pire qu'un refus qui dit lequel."""
+    seen, out = set(), []
+    for p in (prompts or []):
+        if not isinstance(p, str):
+            continue
+        s = p.strip()
+        if s and s not in seen:
+            seen.add(s)
+            out.append(s)
+    if not out:
+        return [fallback]
+    if len(out) > _MAX_PROMPTS_PER_RUN:
+        raise ValueError(f'at most {_MAX_PROMPTS_PER_RUN} prompts per run — '
+                         f'{len(out)} were selected; untick some')
+    return out
+
+
 def checkpoint_origins(checkpoints, explicit=None) -> dict:
     """{deployed filename: (record_id, step)} — WHICH training checkpoint each
     selected LoRA came from, so every cell can record it on its row instead of
@@ -1911,8 +1944,12 @@ def stack_variants(run_id, rows, limit=8) -> list:
     return out
 
 
-def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None) -> dict:
+def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None, prompts=None) -> dict:
     """Validate + materialize the grid and enqueue every cell.
+
+    `prompts` (📝 lot) est un AXE : chaque configuration est rendue une fois par
+    prompt coché dans l'historique. Absent/vide → un seul prompt, `prompt`, comme
+    avant.
 
     Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
     an enqueue failure marks that row 'failed' and re-raises - already-enqueued cells
@@ -2030,6 +2067,10 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
 
     # Prompt custom optionnel ; sinon prompt d'identité par défaut (trigger).
     prompt = (prompt or '').strip() or identity_prompt(ds)
+    # 📝 Lot de prompts : l'axe vaut [prompt] quand rien n'est coché → chemin
+    # strictement identique à avant. Le preflight et les journaux parlent du 1er.
+    prompt_axis = _prompt_axis(prompts, prompt)
+    prompt = prompt_axis[0]
 
     # Arch guard : la famille est dérivée du DOSSIER (family_of_lora) — un LoRA
     # mal classé (ex. un Z-Image déployé dans loras/krea) passerait ce filtre et
@@ -2074,12 +2115,13 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
           row_extra = extra_loras + ([{**batch_lora, 'batch': True}] if batch_lora else [])
           wf_extra = extra_loras + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
-          for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
+          for cell_prompt in prompt_axis:  # AXE 📝 lot : une passe par prompt coché
+           for cell_seed in seeds:  # N images par config (seeds différents), bande dans la cellule
             img = LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
                                 strength=strength, seed=cell_seed, run_seed=seed,
                                 run_id=run_id,
                                 status='pending', z_model=zm, aspect=cell_aspect,
-                                prompt=prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
+                                prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                 extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
                                 negative=knobs['negative'], sampler=knobs['sampler'],
                                 scheduler=knobs['scheduler'], weight_dtype=knobs['weight_dtype'],
@@ -2091,9 +2133,9 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
                                 record_id=origin_of.get(checkpoint, (None, None))[0],
                                 step=origin_of.get(checkpoint, (None, None))[1])
             _persist_and_enqueue_cell(
-                img, user_id, dataset_id, prompt,
+                img, user_id, dataset_id, cell_prompt,
                 lambda: _build_cell_workflow(user_id, checkpoint, strength,
-                                             prompt, cell_seed, zm, allowed,
+                                             cell_prompt, cell_seed, zm, allowed,
                                              width=width, height=height,
                                              cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                              dataset_id=dataset_id,
@@ -2107,7 +2149,8 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
                                              available_classes=available_classes))
             ids.append(img.id)
     logger.info(f"lora-test: run {run_id} dataset {dataset_id} -> {len(ids)} cellule(s) "
-                f"({len(valid_models)} modèle(s)), base seed {seed} ×{count}")
+                f"({len(valid_models)} modèle(s), {len(prompt_axis)} prompt(s)), "
+                f"base seed {seed} ×{count}")
     return {'created': len(ids), 'seed': seed, 'count': count,
             'run_id': run_id, 'ids': ids}
 
@@ -2149,7 +2192,8 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                           negative=None, sampler=None, scheduler=None, weight_dtype=None,
                           enhancer=None, enhancer_strength=None, detail_amount=None,
                           resolution_tier=None, resolution_multiplier=None,
-                          init_image=None, denoise=None, combine=None) -> dict:
+                          init_image=None, denoise=None, combine=None,
+                          prompts=None) -> dict:
     """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
     [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
     (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
@@ -2214,6 +2258,10 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     _MAX = 2**31 - 1
     seeds = [1 + ((seed + i - 1) % _MAX) for i in range(count)]
     common_prompt = (prompt or '').strip() or None
+    # 📝 Lot de prompts (une passe par prompt coché). Rien de coché → [common_prompt],
+    # donc [None] quand aucun prompt commun n'est fourni : chaque cellule retombe
+    # sur le prompt d'identité de SON dataset, exactement comme avant.
+    prompt_axis = _prompt_axis(prompts, common_prompt)
     # LoRA « always-on » (style/utilitaire) validés contre la famille (anti path-injection),
     # appliqués à CHAQUE cellule - même mécanique que create_run.
     perm_allowed = {c['filename'] for c in permanent_lora_candidates(run_type)}
@@ -2279,7 +2327,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         _pf_cp = _sel.get('checkpoint')
         if _pf_cp in _pf_allowed:
             _preflight_run(user_id, run_type, _pf_cp, [z_model], _pf_allowed,
-                           common_prompt or identity_prompt(_pf_ds), seeds[0],
+                           prompt_axis[0] or identity_prompt(_pf_ds), seeds[0],
                            _sel.get('dataset_id'), getattr(_pf_ds, 'trigger_word', None))
             break
 
@@ -2387,7 +2435,6 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         checkpoint = sel.get('checkpoint')
         if checkpoint not in allowed:
             raise ValueError(f'unknown checkpoint for {ds.name}: {checkpoint}')
-        cell_prompt = common_prompt or identity_prompt(ds)
         cp, strength, cell_aspect, cell_cfg, cell_steps, cell_steps2 = cell
         width, height = _aspect_dims(cell_aspect, run_type, knobs['resolution_tier'],
                                      knobs['resolution_multiplier'])
@@ -2395,7 +2442,9 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
           row_extra = extra_loras + stack_row + ([{**batch_lora, 'batch': True}] if batch_lora else [])
           wf_extra = extra_loras + stack_extra + ([batch_lora] if batch_lora else [])
           cell_extra_json = json.dumps(row_extra) if row_extra else None
-          for cell_seed in seeds:
+          for axis_prompt in prompt_axis:  # AXE 📝 lot : une passe par prompt coché
+           cell_prompt = axis_prompt or identity_prompt(ds)
+           for cell_seed in seeds:
             img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
                                 seed=cell_seed, run_seed=seed, run_id=run_id,
                                 status='pending', z_model=z_model, aspect=cell_aspect,
@@ -2434,7 +2483,8 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # qu'on cherche quand un balayage rend plus d'images que prévu.
     logger.info(f"lora-test: {'combined' if combine else 'comparison'} run {run_id} -> "
                 f"{len(ids)} cellule(s), {len(selections) + len(members)} LoRA, "
-                f"{len(combos) if combine else 1} combinaison(s), seed {seed}")
+                f"{len(combos) if combine else 1} combinaison(s), "
+                f"{len(prompt_axis)} prompt(s), seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
 
 

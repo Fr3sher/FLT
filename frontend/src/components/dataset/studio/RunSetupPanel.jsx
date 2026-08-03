@@ -11,6 +11,7 @@ import LaunchBar from './LaunchBar';
 import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
+import { launchSettings, launchText as batchLaunchText, visibleBatch } from './promptBatch';
 
 // Rail gauche « Setup du run » : pickers + seed/launch + bandeaux d'état.
 // Extraction behavior-preserving de LoraTestStudio.jsx :
@@ -53,12 +54,32 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   // contredit la famille du Studio (déploiement mal classé) → bandeau distinct.
   const [archMismatch, setArchMismatch] = useState(null);
 
+  // 📝 LOT DE PROMPTS — les prompts cochés dans l'historique. Le lancement les
+  // rejoue TOUS en un seul run (le backend en fait un axe : le GPU est sérialisé
+  // et un second POST serait refusé par le garde « a test run is already in
+  // progress »). Rien de coché = zéro changement : le prompt du champ, seul.
+  //
+  // Délibérément NON persisté (contrairement au mode 🧬 du board) : une sélection
+  // de lot est l'intention d'UN lancement. Retrouver trois cases cochées après un
+  // rechargement multiplierait par trois un run qu'on croyait simple.
+  const [batchPrompts, setBatchPrompts] = useState([]);
+  // La règle du lot vit dans promptBatch.js — pure, donc réellement testée, et
+  // partagée par les deux surfaces plutôt que réécrite dans chacune.
+  const pickedPrompts = visibleBatch(batchPrompts, d.recent_prompts);
+  const toggleBatchPrompt = (p) => setBatchPrompts((cur) => (
+    cur.includes(p) ? cur.filter((v) => v !== p) : [...cur, p]));
+
   // Le nombre de cellules RÉELLEMENT lancées. `cellTotal` n'est fourni que par un
   // mode qui change la formule (🧬 Blend : une pile = une configuration) — sinon
   // c'est le total du formulaire, inchangé.
-  const total = cellTotal != null ? cellTotal : form.total;
+  // 📝 Chaque prompt coché est une passe de plus sur la MÊME grille : le compteur
+  // et le bouton doivent le dire avant le clic, pas la file d'attente après.
+  const promptMult = Math.max(1, pickedPrompts.length);
+  const cells = cellTotal != null ? cellTotal : form.total;
+  const total = cells * promptMult;
   const canLaunch = total > 0 && !d.pending && !d.gpu_busy && !studio.launching
     && !launchBlocked;
+  const launchText = batchLaunchText(launchLabel, pickedPrompts);
   // Axe ⚖ batch (Always-on LoRA cochés batch) : chaque config tourne SANS puis
   // AVEC chaque LoRA coché → le compteur d'images/temps doit en tenir compte
   // (le backend multiplie déjà les cellules par 1 + nb cochés).
@@ -68,10 +89,15 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   // screens. Overriding the handler here instead would have quietly dropped the
   // global generation settings from a canvas run.
   const onLaunch = async () => {
+    // 📝 `prompts` voyage dans le MÊME canal que les réglages globaux (les deux
+    // hooks étalent cet objet dans le corps du POST) — donc aucune signature à
+    // changer, et le lot arrive identiquement sur les deux routes. Absent quand
+    // rien n'est coché : le corps envoyé est alors octet pour octet celui d'avant.
+    const settings = launchSettings(genSettings, pickedPrompts);
     const res = await studio.launch(
       form.chosenCps, form.selSts, form.nextSeed(), form.effectivePrompt,
       form.effectiveModels, form.effectiveAspects, form.effectiveCfgs, form.effectiveSteps,
-      form.effectiveSteps2, form.genCount, genSettings,
+      form.effectiveSteps2, form.genCount, settings,
     );
     // Persist the itemized manques (toast is transient) — cleared on the next
     // launch that isn't blocked on missing assets.
@@ -168,6 +194,9 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             recentPrompts={d.recent_prompts}
             datasetId={datasetId}
             onDeletePrompt={studio.deletePrompt}
+            batchPrompts={pickedPrompts}
+            onToggleBatchPrompt={toggleBatchPrompt}
+            onClearBatchPrompts={() => setBatchPrompts([])}
           />
 
           <AxisPickers
@@ -218,10 +247,11 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
               onGenCount={form.setGenCount}
               total={total * batchMult}
               batchMult={batchMult}
+              promptMult={promptMult}
               fmt={fmt}
             />
             <LaunchBar canLaunch={canLaunch} launching={studio.launching} onLaunch={onLaunch}
-              label={launchLabel} title={launchHint} />
+              label={launchText} title={launchHint} />
           </div>
           {/* A dead button that does not say why is what this replaces: the
               canvas passes the real reason (mixed families, nothing picked) and
@@ -257,7 +287,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
         canRun={canLaunch}
         running={studio.launching}
         onRun={onLaunch}
-        runLabel={launchLabel ? `🚀 ${launchLabel}` : undefined}
+        runLabel={launchText ? `🚀 ${launchText}` : undefined}
       />
       )}
     </>

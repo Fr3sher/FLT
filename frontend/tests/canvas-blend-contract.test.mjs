@@ -82,7 +82,10 @@ test('a blend announces ONE configuration, not one per pick and strength', () =>
   // …et depuis le balayage, `configCount` combinaisons plutôt qu'une.
   assert.match(PANEL, /cellTotal=\{blend \? form\.axisTotal \* configCount : null\}/)
   assert.match(PANEL, /const configCount = blend \? canvasBlendConfigCount/)
-  assert.match(SETUP, /const total = cellTotal != null \? cellTotal : form\.total/)
+  // `cells` = ce que la grille rend pour UN prompt ; le lot 📝 le multiplie
+  // ensuite (cf. prompt-batch-contract), il ne le remplace pas.
+  assert.match(SETUP, /const cells = cellTotal != null \? cellTotal : form\.total/)
+  assert.match(SETUP, /const total = cells \* promptMult/)
   assert.match(SETUP, /total=\{total \* batchMult\}/)
 })
 
