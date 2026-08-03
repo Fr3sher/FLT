@@ -1774,7 +1774,14 @@ def _combined_lora_labels(row) -> list:
     `filename`/`dataset_id`/`trigger` sont écrits par les runs lancés DEPUIS la vue
     pile ; le JSON d'une cellule est figé à sa création, donc les runs plus anciens
     n'ont que `label`/`weight` et ces clés valent None — la composition s'affiche
-    alors sans trigger au lieu de disparaître."""
+    alors sans trigger au lieu de disparaître.
+
+    `record_id`/`step` — la PROVENANCE de génération du membre, c'est-à-dire la
+    pastille du board dont il sort — suivent la même règle et la même raison :
+    écrits depuis le run qui les connaissait, absents (None) sur tout ce qui a été
+    lancé avant. Un membre sans origine n'est pas une erreur, c'est une pile plus
+    ancienne, et le lecteur DOIT pouvoir faire la différence entre « pas de
+    parent » et « parent inconnu » plutôt que d'en inventer un."""
     out = []
     try:
         for e in json.loads(row.extra_loras or '[]'):
@@ -1784,6 +1791,8 @@ def _combined_lora_labels(row) -> list:
                             'weight': e.get('strength'),
                             'filename': e.get('filename') or None,
                             'dataset_id': e.get('dataset_id'),
+                            'record_id': e.get('record_id'),
+                            'step': e.get('step'),
                             'trigger': e.get('trigger') or None})
     except (ValueError, TypeError):
         pass
@@ -1805,6 +1814,10 @@ def stack_of_row(row) -> list | None:
                       or _basename(row.checkpoint or '').rsplit('.', 1)[0]),
             'weight': row.strength, 'filename': row.checkpoint,
             'dataset_id': row.dataset_id,
+            # La tête porte SON origine depuis toujours, en colonnes : la cellule
+            # est déjà rattachée à une pastille. Reprise ici pour que les membres
+            # d'une pile se lisent tous de la même façon, tête comprise.
+            'record_id': row.record_id, 'step': row.step,
             'trigger': (getattr(ds, 'trigger_word', None) or None) if ds else None,
             'head': True}
     return [head] + [{**c, 'head': False} for c in combined]
@@ -2314,8 +2327,17 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
             fn = sel.get('checkpoint')
             if fn not in _allowed_i:
                 raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
+            # 🧬 PROVENANCE DE GÉNÉRATION : d'où vient CE membre sur le board.
+            # `origin_of` a déjà résolu l'origine de tous les checkpoints
+            # sélectionnés, membres compris, juste au-dessus — c'est le moment
+            # où l'information est la plus sûre (l'appelant vient de cliquer la
+            # pastille, ou le tag de déploiement est encore celui d'aujourd'hui).
+            # Sans elle, une pile ne sait dire de quelle pastille elle descend
+            # que pour son LoRA de TÊTE, et un blend est par nature multi-parents.
+            _origin_i = origin_of.get(fn, (None, None))
             members.append({'filename': fn, 'weights': _combine_weights(sel),
                             'dataset_id': _ds_i.id,
+                            'record_id': _origin_i[0], 'step': _origin_i[1],
                             'trigger': getattr(_ds_i, 'trigger_word', None) or None})
             if getattr(_ds_i, 'trigger_word', None):
                 stack_triggers.append(_ds_i.trigger_word)
@@ -2354,8 +2376,11 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         for i, m in enumerate(members):
             entry = {'filename': m['filename'], 'strength': combo[i + 1]}
             stack_extra.append(entry)
+            # Seule la copie PERSISTÉE porte l'origine : `stack_extra` garde le
+            # format des always-on, que le constructeur de workflow attend.
             stack_row.append({**entry, 'combined': True,
-                              'dataset_id': m['dataset_id'], 'trigger': m['trigger']})
+                              'dataset_id': m['dataset_id'], 'trigger': m['trigger'],
+                              'record_id': m['record_id'], 'step': m['step']})
         ds, allowed = _dataset_and_checkpoints(sel.get('dataset_id'))
         if not ds:
             raise ValueError(f"dataset {sel.get('dataset_id')} not found")
