@@ -8265,23 +8265,38 @@ def _improve_existing_image_locked(user_id, image_id, engine=None):
     )
     db.session.add(candidate)
     db.session.commit()
+    # Captured while both rows certainly exist: the commit above expires them,
+    # and ⏹ Stop deletes exactly this candidate's shape (pending, no filename)
+    # — the enqueue below is the window, same as the variation paths.
+    candidate_id = candidate.id
+    dataset_id_of_source = img.dataset_id
 
     try:
         job_id = _enqueue_improve(
             engine, user_id=user_id, source=img, source_path=source_path,
             prompt=prompt, label=label,
-            dataset=get_dataset(user_id, img.dataset_id))
+            dataset=get_dataset(user_id, dataset_id_of_source))
     except Exception:
         # No broken tile: the original is still untouched and the user can retry
-        # as soon as the queue/ComfyUI issue is fixed.
-        db.session.delete(candidate)
-        db.session.commit()
+        # as soon as the queue/ComfyUI issue is fixed. Nothing to remove if Stop
+        # already removed it — and trying would raise from inside this `except`,
+        # replacing the real enqueue error with a database one.
+        row = _live_image_row(candidate_id)
+        if row is not None:
+            db.session.delete(row)
+            db.session.commit()
         raise
 
-    candidate.job_id = job_id
+    row = _live_image_row(candidate_id)
+    if row is None:
+        # Stop removed the candidate mid-enqueue. Reporting its id would have the
+        # tile poll for a generation that can never arrive.
+        _sync_generate_activity(dataset_id_of_source)
+        return None
+    row.job_id = job_id
     db.session.commit()
-    _sync_generate_activity(img.dataset_id)
-    return {'candidate_id': candidate.id, 'job_id': job_id}
+    _sync_generate_activity(dataset_id_of_source)
+    return {'candidate_id': candidate_id, 'job_id': job_id}
 
 
 # The three ways a re-run can be impossible, worded as the user reads them. The

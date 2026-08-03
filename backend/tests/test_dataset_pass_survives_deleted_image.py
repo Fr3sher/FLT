@@ -354,3 +354,33 @@ def test_stop_does_not_report_cancellations_its_own_rollback_discarded(ctx, monk
         f"Stop reported {out['cancelled']} cancelled but {left} row(s) are still "
         f'there — an internal rollback discarded deletes the counter had already '
         f'counted')
+
+
+def test_improve_survives_stop_deleting_its_candidate(ctx, monkeypatch):
+    """✨ Improve creates a pending candidate, commits, then enqueues — and ⏹ Stop
+    deletes exactly that shape (pending, no filename), same as the variation
+    paths."""
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc
+
+    ds = _dataset_with_files(svc, 1)
+    image_id = _ids(ds.id)[0]
+
+    def fake_enqueue(engine, **kw):
+        # Stop removes the freshly created candidate while we are enqueuing.
+        cand = (FaceDatasetImage.query
+                .filter_by(dataset_id=ds.id, parent_image_id=image_id).first())
+        if cand is not None:
+            FaceDatasetImage.query.filter(FaceDatasetImage.id == cand.id).delete(
+                synchronize_session=False)
+            db.session.commit()
+        return 'job-improve-1'
+
+    monkeypatch.setattr(svc, '_enqueue_improve', fake_enqueue)
+    monkeypatch.setattr(svc, 'resolve_improve_engine', lambda requested=None: 'klein')
+    monkeypatch.setattr(svc, '_improve_preflight', lambda engine: None)
+    out = svc.improve_existing_image(LOCAL_USER, image_id)
+    assert out is None or out.get('candidate_id') is None, (
+        f'improve reported a candidate Stop had already deleted: {out}')
