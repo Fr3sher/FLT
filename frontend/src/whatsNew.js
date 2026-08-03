@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-image-controls-see-through',
+    date: '2026-08-03',
+    title: 'Pinned pictures are no longer hidden by their own buttons',
+    blurb:
+      'Hovering a picture pinned on the LoRA Canvas dropped an opaque black band across its top and a black block over its corner — the controls covered the very thing you were pointing at. 🔍, ✕ and ⬇ are now separate rounded pills over a blur, and the step label is a small tag instead of a full-width band, so the image shows through between them. The glyphs went white too: they were mid-grey, which reads on the app’s dark chrome but vanishes on a bright render.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-canvas-filter-opens-folded',
     date: '2026-08-03',
     title: 'The LoRA Canvas opens on the board, not on its filter',

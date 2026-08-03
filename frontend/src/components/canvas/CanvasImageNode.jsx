@@ -130,11 +130,17 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           then shorter than its tile, and `object-contain` answered with a dark
           band down each side — which is a border between two images, drawn by
           the very code that exists to remove it. */}
+      {/* Le libelle d'un membre flotte SUR l'image : une pastille, pas un
+          bandeau. Pleine largeur et quasi opaque (bg-app/80), il masquait le
+          haut de la photo des qu'on la survolait — un controle qui cache ce
+          qu'il decrit. Meme recette que les badges de la bibliotheque et de
+          la banque : bg-black/50 + backdrop-blur, texte blanc. */}
       <header className={(member
-        ? 'absolute inset-x-0 top-0 z-10 flex items-center gap-1 bg-app/80 px-1.5 py-0.5 backdrop-blur-sm'
+        ? 'pointer-events-none absolute left-1 top-1 z-10 flex max-w-[calc(100%-0.5rem)] items-center gap-1 rounded border border-white/15 bg-black/50 px-1.5 py-px backdrop-blur-sm'
         : 'flex shrink-0 items-center gap-1 border-b border-border bg-app/70 px-1.5 py-0.5')
         + reveal}>
-        <span className="min-w-0 flex-1 truncate text-content-muted text-[0.5625rem] font-semibold tabular-nums">
+        <span className={'min-w-0 flex-1 truncate text-[0.5625rem] font-semibold tabular-nums '
+          + (member ? 'text-white' : 'text-content-muted')}>
           {stepLabel}
         </span>
       </header>
@@ -145,22 +151,26 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           glyphs a pixel apart is how a miss on ✕ opened 🔍 instead. */}
       <div style={chrome}
         data-testid="canvas-image-controls"
+        // p-0.5 et pas p-1 : le cluster est borné par CLUSTER_UNITS, et 2 px de
+        // marge en plus de chaque côté suffisaient à faire passer le rang de
+        // deux boutons à un — trois lignes de pastilles couvrent plus d'image
+        // que le bandeau qu'on vient d'enlever.
         className={'absolute right-0 top-0 z-10 flex flex-wrap items-start justify-end'
-          + ' gap-1 rounded-bl-lg bg-app/85 p-0.5 backdrop-blur-sm' + reveal}>
+          + ' gap-1 p-0.5' + reveal}>
         {/* Opens the full record — every setting, the prompt, the copy buttons.
             The node is the picture; the facts stay one click away rather than
             being crammed onto a thumbnail. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); onOpen?.(node); }}
           title="Open this image full-screen with all its settings"
           aria-label={`Open ${stepLabel} full-screen`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle text-[0.75rem] leading-none hover:bg-app hover:text-content">🔍</button>
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70">🔍</button>
         {/* ✕ closes the node and REMEMBERS where it was. Re-pinning the same
             image from its gallery brings it back here, this size. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); onClose?.(node); }}
           data-testid="canvas-image-close"
           title="Close this image — re-opening it from its gallery puts it back here, at this size"
           aria-label={`Close the pinned image at ${stepLabel}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle text-[0.875rem] leading-none hover:bg-red-500/25 hover:text-content">✕</button>
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.875rem] leading-none hover:border-red-400/60 hover:bg-red-500/70">✕</button>
         {/* ⬇ Keep this picture. LAST in the cluster, so it wraps onto its own
             line and 🔍 and ✕ stay at the pixel a hand already knows.
             The file lands under a name that still says where it came from —
@@ -173,7 +183,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           data-testid="canvas-image-download"
           title="Download this image — the file name keeps its dataset, run, step and seed"
           aria-label={`Download the image at ${stepLabel}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-content-subtle text-[0.75rem] leading-none hover:bg-app hover:text-content disabled:opacity-50">
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
           {dl.busy ? '…' : '⬇'}
         </button>
       </div>
