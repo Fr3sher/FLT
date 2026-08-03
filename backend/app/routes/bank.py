@@ -914,3 +914,81 @@ def bank_file(bank_id, image_id):
     if not path or not os.path.isfile(path):
         return jsonify({'error': 'file missing'}), 404
     return send_file(path, max_age=0)
+
+
+# --- "Single person here" — folder-level person assertions -------------------
+# The user knows their sources. A scraped folder is very often ONE person, and
+# making the embeddings pass rediscover that costs thousands of inferences for an
+# answer the folder name already gave. These endpoints let them say it, undo it,
+# and — separately — pay ~15 inferences to have the claim sampled.
+@bp.get('/bank/<int:bank_id>/folder-persons')
+def bank_folder_persons(bank_id):
+    from ..services import folder_person
+    data = folder_person.payload(LOCAL_USER, bank_id)
+    if data is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(data)
+
+
+def _asserted_subfolder_arg():
+    """The one place the request's subfolder is read. '' is a MEANINGFUL value
+    (the bank root), so absence is tested against None, never falsiness."""
+    data = request.get_json(silent=True) or {}
+    sub = data.get('subfolder')
+    if sub is None:
+        sub = request.args.get('subfolder')
+    return None if sub is None else str(sub)
+
+
+def _folder_person_error(e):
+    return jsonify({'error': str(e)}), 404 if 'bank not found' in str(e) else 400
+
+
+@bp.post('/bank/<int:bank_id>/folder-person')
+def bank_assert_folder_person(bank_id):
+    """Declare a subfolder to hold a single person. Synchronous and instant —
+    there is nothing to infer, which is the entire point."""
+    from ..services import folder_person
+    sub = _asserted_subfolder_arg()
+    if sub is None:
+        return jsonify({'error': 'subfolder is required'}), 400
+    try:
+        out = folder_person.assert_single_person(LOCAL_USER, bank_id, sub)
+    except ValueError as e:
+        return _folder_person_error(e)
+    return jsonify({'ok': True, **out})
+
+
+@bp.delete('/bank/<int:bank_id>/folder-person')
+def bank_revoke_folder_person(bank_id):
+    """Undo the assertion — the group dissolves and the folder goes back to
+    normal clustering. Only the ids the assertion wrote are cleared."""
+    from ..services import folder_person
+    sub = _asserted_subfolder_arg()
+    if sub is None:
+        return jsonify({'error': 'subfolder is required'}), 400
+    try:
+        out = folder_person.revoke(LOCAL_USER, bank_id, sub)
+    except ValueError as e:
+        return _folder_person_error(e)
+    return jsonify({'ok': True, **out})
+
+
+@bp.post('/bank/<int:bank_id>/folder-person/check')
+def bank_check_folder_person(bank_id):
+    """Sample check: ~15 images spread across the folder, embedded on their own
+    and compared at the clustering threshold. Informative only — whatever it
+    finds, the assertion stands until the user revokes it."""
+    from ..services import folder_person
+    sub = _asserted_subfolder_arg()
+    if sub is None:
+        return jsonify({'error': 'subfolder is required'}), 400
+    try:
+        folder_person.start_sample_check(_app(), LOCAL_USER, bank_id, sub)
+    except ValueError as e:
+        return _folder_person_error(e)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    return jsonify({'ok': True, 'sample_size': folder_person.SAMPLE_SIZE}), 202

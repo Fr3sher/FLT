@@ -233,6 +233,11 @@ _SCHEMA_ADDITIONS = (
     # Manual quarter-turn of a bank image (degrees clockwise, NULL = untouched).
     # Additive: a database that never gains it simply has no rotated images.
     ('bank_image', 'rotation', 'INTEGER'),
+    # Where a face_cluster id came from: NULL = the embeddings pass computed it
+    # (what every existing row means), 'asserted' = a "this subfolder is one
+    # person" declaration wrote it with no inference. Additive: a database that
+    # never gains it simply has no assertions and clusters exactly as before.
+    ('bank_image', 'face_cluster_origin', 'VARCHAR(10)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiFetch, postJson } from '../../api/fetchClient'
+import { apiFetch, del, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
@@ -13,6 +13,9 @@ import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
 import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
+// 👤 "Single person here" — a folder the user declares to hold one person.
+import SubfolderPersonPanel from './SubfolderPersonPanel'
+import { assertionFor } from './folderPerson.js'
 // 🎚 The twelve triage thresholds, edited here instead of in Settings.
 import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 // Source-folder re-walk messages (pure/testable).
@@ -474,7 +477,9 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
           + (img.blur_score != null ? ` · sharpness ${Math.round(img.blur_score)}` : '')
           + (img.aesthetic_score != null ? ` · aesthetic ${img.aesthetic_score.toFixed(1)}` : '')
           + (img.nsfw_score != null ? ` · NSFW ${Math.round(img.nsfw_score * 100)}%` : '')
-          + (img.face_cluster ? ` · person #${img.face_cluster}` : '')
+          + (img.face_cluster ? ` · person #${img.face_cluster}`
+            // A declaration is not a measurement — the tooltip says which it is.
+            + (img.face_cluster_origin === 'asserted' ? ' (your folder assertion)' : '') : '')
           + (img.framing ? ` · ${img.framing}` : '')
           + (img.medium ? ` · ${img.medium}` : '')
           + (img.face_yaw != null ? ` · head turned ${Math.round(Math.abs(img.face_yaw))}°` : '')
@@ -574,6 +579,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [tagSource, setTagSource] = useState(null)
   const [tagPicked, setTagPicked] = useState(() => new Set())
   const [subfolders, setSubfolders] = useState([])
+  // 👤 Folder-level person assertions ("this subfolder is one person").
+  const [folderPersons, setFolderPersons] = useState([])
+  const [folderPersonBusy, setFolderPersonBusy] = useState(false)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState({ images: [], total: 0 })
   const [selected, setSelected] = useState(() => new Set())
@@ -779,6 +787,48 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       // when those passes land — otherwise it keeps showing "no captions yet"
       // after the 🏷️ pass finished.
       payload?.counts?.captioned, payload?.counts?.scored])
+
+  // 👤 "Single person here" — the folder-level person assertions. Reloaded when
+  // a job LANDS too: the sample check writes its verdict from the background.
+  const loadFolderPersons = useCallback(() => {
+    apiFetch(`/api/bank/${bankId}/folder-persons`)
+      .then((d) => setFolderPersons(d.assertions || []))
+      .catch(() => setFolderPersons([]))
+  }, [bankId])
+
+  useEffect(() => { loadFolderPersons() }, [loadFolderPersons, live])
+
+  const runFolderPerson = async (call, success) => {
+    setFolderPersonBusy(true)
+    try {
+      const d = await call()
+      if (success) toast.success(success(d))
+      // The payload too, not only the grid: an assertion creates (or dissolves)
+      // a person cluster, and the PEOPLE row above would otherwise keep showing
+      // a group that no longer exists until the next poll.
+      loadFolderPersons(); refreshImages(); refreshPayload({ force: true })
+    } catch (e) {
+      toast.error(e?.message || 'That did not work')
+    } finally { setFolderPersonBusy(false) }
+  }
+
+  const assertFolderPerson = () => runFolderPerson(
+    () => postJson(`/api/bank/${bankId}/folder-person`, { subfolder: filter.subfolder }),
+    (d) => `${d.images} image(s) grouped as person #${d.cluster_id} — the face pass `
+      + 'will skip them',
+  )
+
+  const revokeFolderPerson = () => runFolderPerson(
+    () => del(`/api/bank/${bankId}/folder-person`
+      + `?subfolder=${encodeURIComponent(filter.subfolder ?? '')}`),
+    (d) => `${d.cleared} image(s) back to normal clustering`,
+  )
+
+  const checkFolderPerson = () => runFolderPerson(
+    () => postJson(`/api/bank/${bankId}/folder-person/check`,
+      { subfolder: filter.subfolder }),
+    (d) => `Checking ${d.sample_size} images of this folder…`,
+  )
 
   // Leaving the selection view: back to the facet grid.
   const exitSelectionView = () => { setShowSelected(false); setSelectedOrder(null) }
@@ -1532,20 +1582,33 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-content-subtle hover:text-content">✕</button>
             )}
           </div>
-          {/* Subfolder scoping (a Telegram export nests one folder per chat/date) */}
+          {/* Subfolder scoping (a Telegram export nests one folder per chat/date).
+              Scoping to ONE folder is also the moment the user knows whose it is,
+              so the 👤 "Single person here" assertion lives right under it — and
+              only then, which is why the group takes the full row only when a
+              folder is actually scoped (otherwise it stays inline as before). */}
           {subfolders.length > 1 && (
-            <div className="flex items-center gap-1.5">
-              <GroupLabel>Subfolder</GroupLabel>
-              <select value={filter.subfolder ?? '__all__'}
-                onChange={(e) => setF({ subfolder: e.target.value === '__all__' ? null : e.target.value })}
-                className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-content">
-                <option value="__all__">All subfolders</option>
-                {subfolders.map((s) => (
-                  <option key={s.name || '__root__'} value={s.name}>
-                    {s.name === '' ? '(bank root)' : s.name} · {s.count}
-                  </option>
-                ))}
-              </select>
+            <div className={`flex flex-col gap-1.5 ${filter.subfolder != null ? 'w-full' : ''}`}>
+              <div className="flex items-center gap-1.5">
+                <GroupLabel>Subfolder</GroupLabel>
+                <select value={filter.subfolder ?? '__all__'}
+                  onChange={(e) => setF({ subfolder: e.target.value === '__all__' ? null : e.target.value })}
+                  className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-content">
+                  <option value="__all__">All subfolders</option>
+                  {subfolders.map((s) => (
+                    <option key={s.name || '__root__'} value={s.name}>
+                      {s.name === '' ? '(bank root)' : s.name} · {s.count}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <SubfolderPersonPanel
+                subfolder={filter.subfolder}
+                entry={assertionFor(folderPersons, filter.subfolder)}
+                busy={folderPersonBusy}
+                onAssert={assertFolderPerson}
+                onRevoke={revokeFolderPerson}
+                onCheck={checkFolderPerson} />
             </div>
           )}
         </div>

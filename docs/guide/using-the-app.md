@@ -492,6 +492,38 @@ rarely needs a description on every shot). Stop it any time — and when you com
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
 
+## When a folder is already one person
+
+Scraped material usually arrives sorted: one folder per person. **👤 Group by
+person** does not know that, so it pays one face embedding per image to
+rediscover what the folder name already said — thousands of inferences for an
+answer you had before you started.
+
+Scope the grid to a folder with the **Subfolder** picker and the panel under it
+offers **👤 Single person here**. One click groups every image of that folder as
+one person, instantly, with no pass at all — and the next 👤 Group by person run
+**skips those images entirely**. That skip is the saving: on a bank of 9 000
+images where 8 000 sit in asserted folders, the pass embeds 1 000.
+
+It is a rule, not a stamp. It survives re-scans, and an image you drop into the
+folder tomorrow joins the group the moment the bank sees it. It is also
+reversible at any time — **↩ Not one person after all** dissolves the group and
+puts the folder back in the way of normal clustering. Nothing is deleted either
+way.
+
+**Check a sample (15 images)** is the honest counterweight. It picks about
+fifteen images spread across the whole folder (not the first fifteen — those are
+usually one shoot), embeds *only those*, and compares them at the same
+similarity threshold the clustering uses. You get either *sample consistent
+(14/15 same person)* or *2 different faces in the sample — check this folder*.
+Two limits, stated plainly: fifteen images cannot prove a folder is clean, only
+that the sample looked one way; and whatever it finds, **your assertion stands**
+until you revoke it. It informs, it never overrules you.
+
+Images in the folder that the face machinery could not read — no face in frame,
+a face too small or too turned — are listed as *worth a look*. They stay in the
+group: "I could not see a face here" is not "this is someone else".
+
 ## Pick a balanced set
 
 Advice is only half the gesture, so **📊 Coverage advice** ends with **⚖️ Pick a

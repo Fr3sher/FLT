@@ -381,6 +381,11 @@ def _insert_bank_images(bank_id, folder, rels) -> int:
         except OSError:
             size = None
         rows.append({'bank_id': bank_id, 'relpath': rel, 'file_size': size})
+    # A "this subfolder is one person" assertion is a RULE, not a stamp: a file
+    # that lands in an asserted folder joins its person group here, on insert,
+    # with no pass and no click (see services/folder_person.py).
+    from . import folder_person
+    folder_person.stamp_new_rows(bank_id, rows)
     for i0 in range(0, len(rows), _INSERT_CHUNK):
         db.session.execute(BankImage.__table__.insert(),
                            rows[i0:i0 + _INSERT_CHUNK])
@@ -662,6 +667,8 @@ def delete_bank(user_id, bank_id) -> bool:
     if bank_jobs.running(bank_id):
         bank_jobs.cancel(bank_id)
     imported_source = bank.source_path if _is_imported_source(bank.source_path) else None
+    from . import folder_person
+    folder_person.drop_for_bank(bank_id)   # children first — no relationship()
     BankImage.query.filter_by(bank_id=bank_id).delete(synchronize_session=False)
     db.session.delete(bank)
     db.session.commit()
@@ -781,6 +788,10 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'dup_group': row.dup_group,
         'semantic_dup_group': row.semantic_dup_group,
         'face_state': row.face_state, 'face_cluster': row.face_cluster,
+        # 'asserted' = the person id came from the user's "this subfolder is one
+        # person", not from an embedding. The grid says so rather than passing a
+        # declaration off as a measurement.
+        'face_cluster_origin': row.face_cluster_origin,
         'framing': row.framing,
         # 🎨 what the picture is made of, and how sure the classifier was. The
         # margin travels with the verdict on purpose: a tile badge that cannot
@@ -3812,8 +3823,21 @@ def start_faces(app, user_id, bank_id, angles_only=False):
     if not is_available():
         raise RuntimeError(
             'face scoring is not installed (Quality tools step in Setup)')
+    # Images the user has DECLARED to be one person (their subfolder is asserted)
+    # are not embedded at all — that skip is the whole point of the assertion, and
+    # counting them in the total would promise work this pass will not do. The ⤢
+    # angle lane is NOT affected: measuring where a head points is not identifying
+    # who it is, and its pool is already restricted to rows a face pass measured.
+    total = q.count() if angles_only \
+        else max(q.count() - _asserted_image_count(bank_id), 0)
     return bank_jobs.start(app, bank_id, 'angles' if angles_only else 'faces',
-                           _faces_job(bank_id, angles_only), total=q.count())
+                           _faces_job(bank_id, angles_only), total=total)
+
+
+def _asserted_image_count(bank_id) -> int:
+    return (BankImage.query.filter_by(bank_id=bank_id)
+            .filter(BankImage.status != 'reject',
+                    BankImage.face_cluster_origin == 'asserted').count())
 
 
 def _faces_job(bank_id, angles_only=False):
@@ -3824,8 +3848,17 @@ def _faces_job(bank_id, angles_only=False):
         if not bank:
             return
         q = BankImage.query.filter_by(bank_id=bank_id)
-        q = (q.filter(BankImage.face_state.isnot(None), BankImage.face_yaw.is_(None))
-             if angles_only else q.filter(BankImage.status != 'reject'))
+        if angles_only:
+            q = q.filter(BankImage.face_state.isnot(None),
+                         BankImage.face_yaw.is_(None))
+        else:
+            # Asserted rows are EXCLUDED from the identity lane, not merely
+            # preserved: the user already told us who is in them, so paying an
+            # embedding to re-derive it is exactly the cost "Single person here"
+            # exists to avoid (services/folder_person.py).
+            q = q.filter(BankImage.status != 'reject',
+                         or_(BankImage.face_cluster_origin.is_(None),
+                             BankImage.face_cluster_origin != 'asserted'))
         rows = q.order_by(BankImage.id.asc()).all()
         by_path = {}
         for r in rows:
@@ -3833,6 +3866,7 @@ def _faces_job(bank_id, angles_only=False):
             if _is_safe_bank_source(p, label='bank face pass'):
                 by_path[p] = r.id
         paths = list(by_path)
+        skipped_asserted = 0 if angles_only else _asserted_image_count(bank_id)
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail='measuring angles' if angles_only else 'face pass')
         if not paths:
@@ -3879,6 +3913,13 @@ def _faces_job(bank_id, angles_only=False):
                                        f'(rc={returncode})')
         results = data.get('results') or {}
         clusters = data.get('clusters') or {}
+        # The child numbers its clusters 1..n, unaware of the asserted groups that
+        # already own ids in this bank. Push them above the highest asserted id so
+        # a computed cluster can never land ON a folder the user declared — the two
+        # kinds share one id space (that is what lets them be merged later), and
+        # sharing it means allocating in it.
+        from . import folder_person
+        offset = folder_person.asserted_offset(bank_id)
         done = vanished = 0
         for p, image_id in by_path.items():
             row = _live_image(image_id)
@@ -3897,7 +3938,8 @@ def _faces_job(bank_id, angles_only=False):
             if not angles_only:
                 row.face_state = res.get('state')
                 row.face_det = res.get('det')
-                row.face_cluster = clusters.get(p)
+                cid = clusters.get(p)
+                row.face_cluster = None if cid is None else int(cid) + offset
             done += 1
             if done % 200 == 0:
                 db.session.commit()
@@ -3911,6 +3953,11 @@ def _faces_job(bank_id, angles_only=False):
         detail = (f'done — {sum(1 for r in results.values() if r.get("yaw") is not None)}'
                   ' angle(s) measured' if angles_only
                   else f'done — {multi} person cluster(s) of 2+ images')
+        if skipped_asserted:
+            # Never mute: an image the pass did not look at must be reported as
+            # such, or "0 clusters" would read as "no one in this bank".
+            detail += (f', {skipped_asserted} image(s) skipped '
+                       f'(subfolder asserted as one person)')
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         bank_jobs.progress(job, detail=detail)

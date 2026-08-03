@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-08-03-bank-single-person-folder',
+    date: '2026-08-03',
+    title: '👤 Tell the bank a folder is already one person — and skip the pass',
+    blurb:
+      'Scraped folders are usually one person each, and 👤 Group by person did not know it: one face embedding per image to rediscover what the folder name already said. Scope the grid to a subfolder and click "Single person here" — every image is grouped instantly, with no pass at all, and the next Group by person run skips them entirely. It survives re-scans, adopts images that land in the folder later, and one click undoes it. Not sure? "Check a sample" embeds about fifteen images spread across the folder and tells you whether they look like the same person, at the same threshold the clustering uses — fifteen inferences instead of thousands, and whatever it finds, your call stands.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-caption-mismatch-names-your-family',
     date: '2026-08-03',
     title: 'The caption-mismatch warning names YOUR model family, not Z-Image',

@@ -303,6 +303,16 @@ class BankImage(db.Model):
     face_state = db.Column(String(16), nullable=True)
     face_det = db.Column(Float, nullable=True)
     face_cluster = db.Column(Integer, nullable=True, index=True)
+    # WHERE the face_cluster id came from. NULL = the embeddings pass computed it
+    # (the default, and what every row that predates this column carries).
+    # 'asserted' = the user declared the image's SUBFOLDER to hold a single person
+    # (services/folder_person.py), so the id was written with no inference at all.
+    # The two live in the SAME id space on purpose: every reader (filters, coverage,
+    # the person chips) keeps working unchanged, and a later cross-folder merge can
+    # still join an asserted group to a computed one. The column exists so the
+    # embeddings pass can tell them apart — it SKIPS asserted rows (that skip is the
+    # compute the assertion saves) and never silently overwrites the user's word.
+    face_cluster_origin = db.Column(String(10), nullable=True)
     # Scoring pass (V2, the "bank scoring" ML extra: CLIP ViT-L/14 + a tiny
     # aesthetic head + an NSFW classifier, one subprocess like the face pass).
     # RAW scores persist, VERDICTS are recomputed at read time against the 'bank'
@@ -450,6 +460,49 @@ class BankImage(db.Model):
 
     def __repr__(self):
         return f'<BankImage {self.id} bank={self.bank_id} {self.status}>'
+
+
+class BankFolderPerson(db.Model):
+    """"This subfolder is one person" — the user's assertion about a bank folder.
+
+    Scraped sources are very often one folder per person, and making the face pass
+    re-discover by inference what the folder name already said is the single most
+    expensive way to learn nothing. One row here says it instead: every image of
+    that subfolder gets a person id immediately, at zero GPU cost, and the
+    embeddings pass then SKIPS those images entirely.
+
+    Keyed on (bank_id, subfolder) — the TOP-LEVEL subfolder, exactly the string the
+    Subfolder filter uses ('' = the bank root), so the assertion and the scoping
+    facet always talk about the same set of files. It is a rule, not a stamp: it
+    survives re-scans, and an image that lands in the folder later joins the group
+    on insert. Revoking deletes the row and clears the ids it wrote, putting those
+    images back in the way of normal clustering.
+
+    NO relationship() to ImageBank on purpose (see the delete-500 lesson): the
+    services delete these rows explicitly, children first."""
+    __tablename__ = 'bank_folder_person'
+    __table_args__ = (db.UniqueConstraint('bank_id', 'subfolder',
+                                          name='uq_bank_folder_person'),)
+    id = db.Column(Integer, primary_key=True)
+    bank_id = db.Column(
+        Integer, db.ForeignKey('image_bank.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    # Top-level subfolder name, '' for the bank root. Stored verbatim — it is a
+    # user path fragment and is never shown outside this install.
+    subfolder = db.Column(Text, nullable=False, default='')
+    # The bank-local person id this folder owns. Allocated once, above every id in
+    # use at that moment, and NEVER reallocated while the assertion stands — the
+    # embeddings pass offsets its own ids past it so the two never collide.
+    cluster_id = db.Column(Integer, nullable=False)
+    # Last sample check, JSON: {checked_at, sample, scorable, largest, faces,
+    # verdict, note}. NULL = never verified (the assertion is still in force —
+    # verification informs, it never gates).
+    sample_report = db.Column(Text, nullable=True)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+
+    def __repr__(self):
+        return (f'<BankFolderPerson bank={self.bank_id} '
+                f'{self.subfolder!r} #{self.cluster_id}>')
 
 
 class LoraTestImage(db.Model):
