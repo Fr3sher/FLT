@@ -107,8 +107,13 @@ test('the placers are handed the reserved boxes, so Tidy up cannot create the ov
   const reserved = boxes.find((b) => b.y === group.y - groupBarMaxHeight(group.h))
   assert.ok(reserved, 'layoutBoxes must report the group with its bar');
   // Both placement call sites go through the same helper — two answers to "how
-  // much board does this take" is how they would drift apart again.
+  // much board does this take" is how they would drift apart again. ✦ Tidy up
+  // now asks it through `tidyGroupRows` (which brings a strayed strip home and
+  // hands back the footprints it landed on, bar included — see
+  // utils/canvasPinBatch.test.js), and feeds exactly those to the placer that
+  // puts the lone pictures down.
   const page = read('pages/CanvasPage.jsx')
-  assert.match(page, /occupiedBox/)
+  assert.match(page, /tidyGroupRows/)
+  assert.match(page, /existing:\s*strips\.boxes/)
   assert.match(CANVAS, /layoutBoxes\(layoutImageNodes\(visibleImageNodes\(laneMap\)\)\)/)
 })

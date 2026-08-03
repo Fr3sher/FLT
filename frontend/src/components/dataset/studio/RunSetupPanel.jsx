@@ -12,6 +12,7 @@ import StudioGenerationSettings from './StudioGenerationSettings';
 import StudioActionBar from './StudioActionBar';
 import StudioPreflightBanner from './StudioPreflightBanner';
 import { launchSettings, launchText as batchLaunchText, visibleBatch } from './promptBatch';
+import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
 
 // Rail gauche « Setup du run » : pickers + seed/launch + bandeaux d'état.
 // Extraction behavior-preserving de LoraTestStudio.jsx :
@@ -88,7 +89,13 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
   // setting — genSettings included — travels through this one call site on both
   // screens. Overriding the handler here instead would have quietly dropped the
   // global generation settings from a canvas run.
+  // ⏱ Ce que ce lancement va vraiment coûter : toutes les passes, au rythme
+  // MESURÉ de la machine. Rien n'est refusé — au-delà du seuil on chiffre, et on
+  // pose UNE question.
+  const cost = runCost(total * batchMult * form.genCount, d.seconds_per_image);
+
   const onLaunch = async () => {
+    if (cost.heavy && !window.confirm(heavyRunConfirm(cost))) return;
     // 📝 `prompts` voyage dans le MÊME canal que les réglages globaux (les deux
     // hooks étalent cet objet dans le corps du POST) — donc aucune signature à
     // changer, et le lot arrive identiquement sur les deux routes. Absent quand
@@ -248,6 +255,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
               total={total * batchMult}
               batchMult={batchMult}
               promptMult={promptMult}
+              secondsPerImage={d.seconds_per_image}
               fmt={fmt}
             />
             <LaunchBar canLaunch={canLaunch} launching={studio.launching} onLaunch={onLaunch}
@@ -260,6 +268,15 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             <p className={'m-0 text-[0.6875rem] ' + (launchBlocked ? 'text-amber-200' : 'text-content-muted')}
               role={launchBlocked ? 'status' : undefined}>
               {launchHint}
+            </p>
+          )}
+          {/* ⏱ Un long lancement est annoncé, pas interdit : le compte, la durée
+              au rythme mesuré, et le rappel qu'un Stop garde ce qui est fait. */}
+          {cost.heavy && (
+            <p data-testid="heavy-run-notice"
+              className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 text-[0.6875rem] text-amber-200"
+              role="status">
+              <span aria-hidden>⏱</span> {heavyRunNotice(cost)}
             </p>
           )}
         </div>

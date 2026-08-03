@@ -58,14 +58,18 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
         </div>
       </div>
 
-      {/* Références additionnelles — identité multi-angles, consommées par TOUS
-          les moteurs : Nano Banana & ChatGPT (jointes à l'appel API) et Klein
-          (chaînées en ReferenceLatent natifs). Recadrables une par une (✂ sur la
-          vignette) ; le scoring reste sur la principale. */}
+      {/* Références additionnelles — identité multi-angles : Nano Banana &
+          ChatGPT (jointes à l'appel API) et Klein (chaînées en ReferenceLatent
+          natifs). PAS Krea 2 Edit : son unique slot secondaire a été entraîné
+          pour un sujet DIFFÉRENT, donc il lit une image ajoutée dans la modale
+          ✦ Edit reference, jamais ce vivier-ci (cf. LOCAL_EDIT_REF_SUPPORT).
+          Ne pas réécrire « tous les moteurs » ici sans vérifier cette table.
+          Recadrables une par une (✂ sur la vignette) ; le scoring reste sur la
+          principale. */}
       {refFilename && (
         <div className="flex items-center gap-2 flex-wrap border-t border-border pt-2">
           <span className="text-content-subtle text-[0.6875rem]">
-            Extra refs <span className="opacity-70">(all engines — stronger identity lock)</span>
+            Extra refs <span className="opacity-70">(more angles of this face — identity lock)</span>
           </span>
           {extraRefs.map((fn) => (
             <div key={fn} className="relative w-12 h-12 rounded-lg overflow-hidden bg-black shrink-0">
@@ -89,7 +93,7 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
           {extraRefs.length < MAX_EXTRA_REFS && (
             <button type="button" onClick={() => inpExtra.current?.click()} disabled={importBusy}
               aria-label="Add an extra reference photo (other angles of the same face)"
-              title="Add an extra reference photo — every engine (Nano Banana, ChatGPT, Klein) uses them together to lock the identity"
+              title="Add an extra reference photo — Klein and the API engines use these together to lock the identity, on every generation. Krea 2 Edit does not read them: its second image is added inside the ✦ Edit reference dialog, and is meant to be a different subject."
               className="w-12 h-12 rounded-lg border border-dashed border-border-strong text-content-muted text-lg leading-none disabled:opacity-40">
               +
             </button>

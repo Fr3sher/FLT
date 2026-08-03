@@ -288,8 +288,14 @@ makes two prompts comparable rather than two unrelated pictures.
 
 It is one run, not several: the images queue up and the GPU works through them by
 itself. Tick nothing and the screen behaves exactly as it always has, running the
-prompt in the field. The cap is 24 prompts per launch — past that the launch is
-refused with the count rather than quietly rendering half of them.
+prompt in the field.
+
+**There is no limit on how many you tick.** What there is instead is the price,
+shown before you click: the panel counts every generation the run will queue and
+estimates how long it takes **at the pace your machine has actually been running
+at** — measured from your own recent test generations, not assumed. Past about an
+hour it asks once whether you meant it. The queue is serial, so you can stop it at
+any point and everything already generated is kept.
 
 The same tick boxes are in **🎨 Generate from the board** on the ◉ LoRA Canvas,
 because both screens show the same prompt history.

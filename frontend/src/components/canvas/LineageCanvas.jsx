@@ -11,8 +11,8 @@ import {
   openGeometry, visibleImageNodes,
 } from '../../utils/canvasImageNodes';
 import {
-  drawnNodes, extractFromGroup, groupBoxOf, layoutBoxes, layoutImageNodes,
-  mergeIntoGroup, mergeTargetAt, shouldExtract,
+  drawnNodes, edgeAnchors, extractFromGroup, groupBoxOf, layoutBoxes,
+  layoutImageNodes, mergeIntoGroup, mergeTargetAt, shouldExtract,
 } from '../../utils/canvasImageGroups';
 import { DEPLOY_BAR_CLASS, DEPLOY_LEGEND } from '../../utils/checkpointDeployState';
 import { GraphCard, CheckpointPill } from '../dataset/lineageNodes';
@@ -47,6 +47,8 @@ import {
   groupPinnedBatchBySource, groupPinnedBatchTogether,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
+import { canImproveCanvasImage, canvasImproveLaunchMessage } from '../../utils/canvasImprove';
+import { improveEngine } from '../../utils/improveEngines';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
@@ -252,9 +254,16 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
 function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, onExportGrid,
   boardScale, hint, blendNotes }) {
   if (!layout.length) return null;
-  // Edges are drawn from where each picture actually IS — a member's slot in
-  // its strip, not the box it remembers while it waits to leave one.
-  const edges = imageNodeEdges(drawnNodes(layout), lane.graph);
+  /* Edges are drawn from where each picture actually IS — a member's slot in
+     its strip, not the box it remembers while it waits to leave one.
+
+     And a STRIP answers as ONE object: every line leaves it at the same point
+     rather than fanning out of eight tiles, and repeats of the same source
+     collapse (utils/canvasImageGroups.edgeAnchors). This matters more now that a
+     picture can be parked anywhere on the board: the line to the checkpoint that
+     made it is what keeps free placement honest, so it has to stay legible when
+     it is long. */
+  const edges = imageNodeEdges(edgeAnchors(layout), lane.graph);
   return (
     <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
       <svg width="1" height="1" className="block overflow-visible" aria-hidden>
@@ -427,6 +436,15 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       ...e,
       width: Math.max(e.graph?.width || 0, ext.width),
       height: Math.max(e.graph?.height || 0, ext.height),
+      // …and as far ABOVE and LEFT of the lane as anything reaches. A picture is
+      // no longer penned into the quadrant below its lane's corner, so the board
+      // is a BOX whose top-left may be negative rather than a size measured from
+      // the origin. Without these two the one gesture free placement exists for
+      // — drag a render up, above its lane — would produce something ✦ Fit
+      // frames off the top of the screen with no way back to it. The lanes
+      // themselves do not move: stackLanes only grows the box around them.
+      minX: ext.minX,
+      minY: ext.minY,
     };
   })), [placed, layoutByLane]);
 
@@ -480,12 +498,21 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const touched = useRef(false);
   const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
   const lastFit = useRef('');
+  // …and NEVER mid-gesture. The board's size is recomputed from the thing being
+  // dragged, so on a board whose view the user has not taken over yet, every
+  // frame of a drag that grows the board used to re-fit it: the picture followed
+  // the finger while the whole board zoomed and slid underneath it. Free
+  // placement made that reachable in one short drag — dragging UP past a lane's
+  // corner grows the board immediately — where before it needed a long haul to
+  // the bottom right. A drop still fits, so nothing is left off-screen; it just
+  // happens once, when the hand has let go.
+  const gesturing = Boolean(drag || imgDrag);
   useEffect(() => {
-    if (touched.current || lastFit.current === fitSignature) return;
+    if (touched.current || gesturing || lastFit.current === fitSignature) return;
     if (!viewport.width || !viewport.height) return;
     lastFit.current = fitSignature;
     setView(initialView(world, viewport));
-  }, [fitSignature, world, viewport]);
+  }, [fitSignature, world, viewport, gesturing]);
 
   const applyView = useCallback((next) => {
     touched.current = true;
@@ -1253,6 +1280,26 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     })));
   }, [allImageNodes, onSaveImageNodes]);
 
+  /* ✨ Upscale & improve THIS picture. Its own route on purpose: a board image is
+     a `lora_test_image` row and the dataset improve endpoint resolves a
+     `face_dataset_image` — two tables, two id spaces, so reusing it would have
+     improved an unrelated picture without failing. The result is a row of the
+     same checkpoint's gallery, so the toast says where to find it: nothing on
+     the board moves, and a bare "started" would read as a dead click. */
+  const handleImproveCanvasImage = useCallback(async (imageId, engineId) => {
+    try {
+      const d = await postJson(`/api/canvas/image/${imageId}/improve`,
+        engineId ? { engine: engineId } : {});
+      if (!d?.ok) {
+        toast.error(d?.error || 'Could not start the improvement');
+        return;
+      }
+      toast.success(canvasImproveLaunchMessage(improveEngine(d.engine).label));
+    } catch (err) {
+      toast.error(err?.message || 'Could not start the improvement');
+    }
+  }, [toast]);
+
   /* 📌 Pin ALL of a finished run's images, in one click.
      A lot spanning four checkpoints used to mean opening four galleries and
      pinning five pictures one by one — the board's own generation, and the
@@ -1406,9 +1453,19 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
 
   const pct = Math.round(clampScale(view.scale) * 100);
   const empty = !world.lanes.length;
-  // Has anything on the visible board been moved? Drives ✦ Tidy up: a button
-  // that clears nothing should say so by being disabled, not by doing nothing.
-  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0);
+  /* Has anything on the visible board been PLACED by hand? Drives ✦ Tidy up: a
+     button that clears nothing should say so by being disabled, not by doing
+     nothing.
+
+     Pinned pictures count, and that is not a detail. This asked about moved
+     CARDS only — so a board where the user had only ever moved pictures offered
+     a greyed-out "Nothing has been moved yet", which was false and, now that a
+     picture can be parked anywhere on the board, was the way home being locked
+     at exactly the moment it is needed. A picture on the board is itself a
+     placement; the worst this costs is a click that tidies a board already
+     tidy, against a picture nobody can get back. */
+  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0
+    || (imagesByLane[e.datasetId] || []).length > 0);
 
   return (
     <>
@@ -1442,11 +1499,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         </button>
         {/* The way out of an arrangement that got away from you. Twenty runs
             later a hand-tidied board can be a knot, and "move them all back by
-            hand" is not an answer — this drops every remembered position and
-            hands the board to the automatic tree again. */}
+            hand" is not an answer — this drops every remembered position, hands
+            the board to the automatic tree again, and brings every picture back
+            beside the run that made it, however far it was dragged. */}
         <button type="button" onClick={onTidyUp} disabled={!arranged}
           title={arranged
-            ? 'Forget every moved card and rebuild the automatic tree'
+            ? 'Forget every moved card, rebuild the automatic tree, and bring '
+              + 'every pinned image back beside its run'
             : 'Nothing has been moved yet'}
           className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
           <span aria-hidden>✦</span> Tidy up
@@ -1720,7 +1779,11 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           prompt, and the copy buttons. The node on the board is the picture;
           the facts stay one click away rather than crammed onto a thumbnail. */}
       <GeneratedImageLightbox img={pinnedZoom} alt="Pinned generated image"
-        onClose={() => setPinnedZoom(null)} />
+        onClose={() => setPinnedZoom(null)}
+        /* ✨ only where it means something: a picture with a library row that is
+           not itself an improvement (canvasImprove.js states both reasons). */
+        onImprove={canImproveCanvasImage(pinnedZoom) ? handleImproveCanvasImage : undefined}
+        datasetId={pinnedZoom?.dataset_id ?? null} />
 
       {/* 🪪 The lane's reference face, full size — and only that. A reference
           has no seed, no sampler and no prompt, so it gets no facts column. */}

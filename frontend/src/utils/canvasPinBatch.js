@@ -52,8 +52,10 @@
    them. Nothing is ever stacked quietly. */
 
 import { CARD_W } from './lineageGraph.js';
-import { nextGroupId } from './canvasImageGroups.js';
-import { IMG_DEFAULT, IMG_MAX, IMG_MIN } from './canvasImageNodes.js';
+import { nextGroupId, occupiedBox } from './canvasImageGroups.js';
+import {
+  IMG_DEFAULT, IMG_MAX, IMG_MIN, slideBelow, spotBesideCard,
+} from './canvasImageNodes.js';
 
 /* How many pictures one click may put down. Not a technical limit — the band
    would happily hold ten times that — but an editorial one: past a few dozen
@@ -470,6 +472,81 @@ export function placeImageBatch({ graph, existing, images, remembered, max } = {
 
   placed.sort(byTrainingOrder);
   return { size, placed, skipped };
+}
+
+/**
+ * ✦ Tidy up, for the side-by-side STRIPS of one lane: bring each one back
+ * beside the run that made it, WITHOUT taking it apart.
+ *
+ * ── Why strips move at all now ───────────────────────────────────────────────
+ * They used to be left exactly where they were, and the argument was sound
+ * while a picture could not leave its lane: a strip is something the user
+ * assembled on purpose, and re-flowing its members one by one would not tidy it,
+ * it would dismantle it. Free placement changes the stakes, not the argument.
+ * A strip can now be parked thousands of units above or left of everything, and
+ * "the button that rebuilds the board" leaving it out there would mean a whole
+ * assembled comparison with no way back short of finding it by hand at 10 %
+ * zoom. So the strip comes back — as ONE object, which is the thing the old
+ * argument was actually protecting.
+ *
+ * ── How ──────────────────────────────────────────────────────────────────────
+ * Only the ANCHOR's row is written. The strip is DERIVED from the anchor's spot
+ * (utils/canvasImageGroups.layoutImageNodes), so moving the anchor moves the
+ * band, and every member keeps the geometry it gets back the day it is dragged
+ * out. The group fields are deliberately NOT in the returned rows either: a
+ * write that only mentions geometry can never dissolve a group, so a half-failed
+ * tidy leaves a strip moved, never broken.
+ *
+ * Placed through the SAME rule a hand-dropped pin uses — beside its own card,
+ * sliding down past whatever is already there (canvasImageNodes.spotBesideCard
+ * / slideBelow) — measured on `occupiedBox`, so the strip's drag BAR is
+ * reserved too and the contact-sheet band placed afterwards cannot land on it.
+ *
+ * `taken` are extra boxes already spoken for; the lane's own run cards are added
+ * here rather than asked for, so a caller cannot forget them and drop a strip on
+ * a card. Returns { rows, boxes }: the rows to persist, and the footprints the
+ * STRIPS now occupy — exactly the shape `placeImageBatch` wants as `existing`,
+ * so the contact-sheet band placed next cannot disagree about what is free.
+ * (The cards are not in `boxes`: `placeImageBatch` reads those off the graph
+ * itself, and publishing them twice would only make its tests lie.)
+ */
+export function tidyGroupRows({ graph, layout, taken } = {}) {
+  const strips = (layout || []).filter((r) => r?.kind === 'group' && r.members?.length);
+  const boxes = [];
+  if (!strips.length) return { rows: [], boxes };
+  const cards = graph?.nodes || [];
+  const busy = [...(taken || [])];
+  for (const n of cards) busy.push({ x: n.x, y: n.y, w: CARD_W, h: n.cellH });
+
+  // Deterministic order: where the source card sits on the tree, top to bottom
+  // then left to right, tie-broken by the anchor's image id. Two strips must
+  // never swap places just because the API listed their rows the other way
+  // round — the same reason applyPlacement sorts its arrivals.
+  const cardOf = (row) => cards.find(
+    (c) => c.node?.record_id === row.members[0].node.image?.record_id);
+  const ordered = [...strips].sort((a, b) => {
+    const ca = cardOf(a);
+    const cb = cardOf(b);
+    return ((ca?.y ?? Infinity) - (cb?.y ?? Infinity))
+      || ((ca?.x ?? Infinity) - (cb?.x ?? Infinity))
+      || (a.members[0].node.imageId - b.members[0].node.imageId);
+  });
+
+  const rows = [];
+  for (const strip of ordered) {
+    const anchor = strip.members[0].node;
+    const footprint = occupiedBox(strip);
+    // What occupiedBox reserved ABOVE the pictures for the group's drag bar.
+    const bar = footprint.h - strip.h;
+    const at = spotBesideCard(graph, anchor.image?.record_id);
+    const spot = slideBelow({ ...at, w: footprint.w, h: footprint.h }, busy);
+    const landed = { x: spot.x, y: spot.y, w: footprint.w, h: footprint.h };
+    busy.push(landed);
+    boxes.push(landed);
+    rows.push({ imageId: anchor.imageId, x: spot.x, y: spot.y + bar,
+      w: anchor.w, h: anchor.h });
+  }
+  return { rows, boxes };
 }
 
 /** The button's own words. It must say HOW MANY it is about to put down —

@@ -32,6 +32,8 @@ const SEED = read('components/dataset/studio/SeedControls.jsx')
 const STUDIO_HOOK = read('hooks/useLoraTestStudio.js')
 const CANVAS_HOOK = read('hooks/useCanvasStudio.js')
 const CANVAS_PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
+const COMPARISON_SETUP = read('components/dataset/studio/StudioRunSetup.jsx')
+const STACK = read('components/dataset/studio/loraStack.js')
 
 test('one history component, mounted by both surfaces — parity by construction', () => {
   // The board's panel mounts the Test Studio's own RunSetupPanel, which mounts
@@ -94,6 +96,29 @@ test('what the batch costs is announced before the click, not by the queue', () 
   assert.match(SETUP, /runLabel=\{launchText \? `🚀 \$\{launchText\}` : undefined\}/)
 })
 
+test('nothing about the batch size is refused — it is priced instead', () => {
+  // The first version capped the prompt axis at 24 and the first real use ticked
+  // 33. The cost is time, so time is what the panel governs: a warning line and
+  // ONE confirmation above a duration threshold, never a refusal, and never on a
+  // single axis of the six the run multiplies.
+  assert.doesNotMatch(SETUP, /at most|too many|untick some/i)
+  assert.match(SETUP, /const cost = runCost\(total \* batchMult \* form\.genCount, d\.seconds_per_image\)/)
+  assert.match(SETUP, /cost\.heavy && !window\.confirm\(heavyRunConfirm\(cost\)\)/)
+  assert.match(SETUP, /data-testid="heavy-run-notice"/)
+  // The comparison branch gets the identical guard, not a second policy.
+  assert.match(COMPARISON_SETUP, /cost\.heavy && !window\.confirm\(heavyRunConfirm\(cost\)\)/)
+  assert.match(COMPARISON_SETUP, /data-testid="heavy-run-notice"/)
+})
+
+test('one screen never announces two different durations', () => {
+  // The estimate used to be a hardcoded 12 s/image in two places. Every counter
+  // now goes through runCost, so the measured pace reaches all of them.
+  assert.match(SEED, /const cost = runCost\(total \* genCount, secondsPerImage\)/)
+  assert.doesNotMatch(SEED, /\* 12 \/ 60/)
+  assert.match(STACK, /const cost = runCost\(cells, secondsPerImage\)/)
+  assert.doesNotMatch(STACK, /cells \* 12/)
+})
+
 test('the batch is deliberately not persisted', () => {
   // The board persists its 🧬 mode and weights on purpose. A batch is the intent
   // of ONE launch: three boxes still ticked after a reload would triple a run
@@ -106,7 +131,11 @@ test('the batch has a help topic and a What\'s-new entry', () => {
   const topic = getHelpTopic('studio-prompt-batch')
   assert.ok(topic, 'studio-prompt-batch must be a registered help topic')
   assert.ok(topic.keywords.includes('batch'))
+  // The words someone types after being turned away by the cap that used to exist.
+  assert.ok(topic.keywords.includes('at most 24 prompts'))
 
   const entry = WHATS_NEW.find((e) => e.id === '2026-08-03-studio-prompt-batch')
   assert.ok(entry, 'the prompt batch needs a What\'s-new entry')
+  const lifted = WHATS_NEW.find((e) => e.id === '2026-08-03-prompt-batch-no-cap')
+  assert.ok(lifted, 'lifting the cap needs its own What\'s-new entry')
 })

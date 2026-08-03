@@ -12,8 +12,8 @@ import {
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
 import { toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
-import { layoutImageNodes, occupiedBox } from '../utils/canvasImageGroups';
-import { placeImageBatch } from '../utils/canvasPinBatch';
+import { layoutImageNodes } from '../utils/canvasImageGroups';
+import { placeImageBatch, tidyGroupRows } from '../utils/canvasPinBatch';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
 import { HelpBadge } from '../help/HelpMode';
@@ -226,34 +226,47 @@ export default function CanvasPage() {
         if (!map) continue;
         const tree = trees[id]?.tree;
         const graph = tree ? buildLineageGraph(tree) : null;
-        /* 🖼🖼 A picture that is part of a side-by-side GROUP is left exactly
-           where it is. Same argument as the closed pins just below: a strip is
-           a deliberate arrangement the user built by hand, and re-flowing its
-           members one by one would not tidy it — it would take it apart.
-           ✦ Tidy up rebuilds the automatic tree; it has never been the button
-           that undoes what you assembled on purpose. (The way out of a group is
-           the group's own ✕, or dragging its pictures back off it.) */
-        const nodes = visibleImageNodes(map).filter((n) => !n.groupId);
-        if (!nodes.length) continue;
-        const res = placeImageBatch({
-          graph,
-          // …and nothing may land ON one of those strips either — nor on the
-          // BAR above one, which is the group's only grip and carries its ✕.
-          // `occupiedBox` is the shared answer to "how much board does this
-          // really take", so Tidy up and 📌 Pin all cannot disagree about it.
-          existing: layoutImageNodes(visibleImageNodes(map))
-            .filter((r) => r.kind === 'group')
-            .map(occupiedBox),
-          images: nodes.map((n) => ({ id: n.imageId, dataset_id: id,
-            record_id: n.image?.record_id, step: n.image?.step })),
-          max: nodes.length,
-        });
         const lane = { ...map };
         const rows = [];
-        for (const p of res.placed) {
-          lane[p.imageId] = { ...lane[p.imageId], x: p.x, y: p.y, w: p.w, h: p.h };
-          rows.push({ image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h, visible: true });
+
+        /* 🖼🖼 STRIPS FIRST, and each as ONE object.
+           A picture can now be parked anywhere on the board, its own lane's
+           corner included — so "leave the groups alone", which was right while a
+           strip could only ever be inside its lane, would now mean ✦ Tidy up
+           walking past a whole assembled comparison stranded thousands of units
+           off the board, with no way back short of hunting for it at 10 % zoom.
+           A strip therefore comes home too. What the old rule was really
+           protecting is untouched: only the ANCHOR's row is written, the strip
+           is derived from it, and no membership is sent — so a tidy can move a
+           group but can never take one apart. */
+        const strips = tidyGroupRows({
+          graph, layout: layoutImageNodes(visibleImageNodes(map)),
+        });
+        for (const r of strips.rows) {
+          lane[r.imageId] = { ...lane[r.imageId], x: r.x, y: r.y, w: r.w, h: r.h };
+          rows.push({ image_id: r.imageId, x: r.x, y: r.y, w: r.w, h: r.h, visible: true });
         }
+
+        const nodes = visibleImageNodes(map).filter((n) => !n.groupId);
+        if (nodes.length) {
+          const res = placeImageBatch({
+            graph,
+            // …and nothing may land ON one of those strips either — nor on the
+            // BAR above one, which is the group's only grip and carries its ✕.
+            // These are the footprints the strips ended up on, handed straight
+            // back by tidyGroupRows, so the two passes cannot disagree about
+            // what is free.
+            existing: strips.boxes,
+            images: nodes.map((n) => ({ id: n.imageId, dataset_id: id,
+              record_id: n.image?.record_id, step: n.image?.step })),
+            max: nodes.length,
+          });
+          for (const p of res.placed) {
+            lane[p.imageId] = { ...lane[p.imageId], x: p.x, y: p.y, w: p.w, h: p.h };
+            rows.push({ image_id: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h, visible: true });
+          }
+        }
+
         next[id] = lane;
         // One write for the lane, not one per picture: a board carrying twenty
         // pins used to fire twenty requests at the server that is probably also

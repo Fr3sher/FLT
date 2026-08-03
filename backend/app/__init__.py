@@ -230,6 +230,14 @@ _SCHEMA_ADDITIONS = (
     # services.checkpoint_link_backfill attributes the ones it can prove.
     ('lora_test_image', 'record_id', 'INTEGER'),
     ('lora_test_image', 'step', 'INTEGER'),
+    # ✨ Upscale & improve run from the ◉ Canvas lightbox: the result is a row of
+    # this table (so the board can pin it) that is NOT a Test Studio cell.
+    # `derivation_kind` is what every studio query excludes on — see
+    # models.LoraTestImage and lora_test_studio._cells(). Existing rows read NULL,
+    # which means "an ordinary cell", so a database that predates this keeps
+    # behaving exactly as it did.
+    ('lora_test_image', 'parent_image_id', 'INTEGER'),
+    ('lora_test_image', 'derivation_kind', 'VARCHAR(32)'),
     # Bank V2 scoring pass — the image_bank/bank_image tables shipped in the Beta,
     # so these columns need the additive path (db.create_all never ALTERs an
     # existing table).
@@ -311,6 +319,7 @@ _INDEX_ADDITIONS = (
     ('bank_image', 'origin'),
     ('bank_image', 'medium'),
     ('lora_test_image', 'record_id'),
+    ('lora_test_image', 'parent_image_id'),
 )
 
 

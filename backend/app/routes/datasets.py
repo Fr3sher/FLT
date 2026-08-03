@@ -1457,6 +1457,37 @@ def dataset_image_reimprove(image_id):
     return jsonify({'ok': True, **result})
 
 
+@bp.post('/canvas/image/<int:image_id>/improve')
+def canvas_image_improve(image_id):
+    """✨ Upscale & improve ONE image of the ◉ Canvas board / a checkpoint gallery.
+
+    Deliberately its own route rather than a reuse of
+    `/dataset/image/<id>/improve`: `image_id` here is a `lora_test_image.id`
+    (that is what `canvas_image_node.image_id` stores) while the dataset route
+    resolves a `FaceDatasetImage`. The two tables have INDEPENDENT id spaces, so
+    sending a board id to the other route would not 404 — it would find a real,
+    unrelated dataset image and improve THAT one, silently.
+
+    Same body and same answers as its dataset sibling: `engine` ('klein' |
+    'seedvr2', absent = the improve.engine setting), and the same 409 that offers
+    to install a missing engine, because both go through the one preflight."""
+    gate = _require_no_stalled_comfyui()
+    if gate:
+        return gate
+    data = request.get_json(silent=True) or {}
+    engine = (data.get('engine') or '').strip() or None
+    try:
+        result = lts.improve_canvas_image(LOCAL_USER, image_id, engine=engine)
+    except Exception as e:
+        engine_error = _improve_engine_error(e)
+        if engine_error:
+            return engine_error
+        return _map_error(e)
+    if result is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **result})
+
+
 @bp.post('/dataset/<int:dataset_id>/improve/batch')
 def dataset_improve_batch(dataset_id):
     """Start the SERVER-side ✨ Upscale & improve batch over a selection.

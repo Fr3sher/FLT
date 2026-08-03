@@ -541,7 +541,12 @@ const TOPICS = [
      'select several prompts', 'tick prompts', 'checkbox', 'checkboxes',
      'replay prompts', 'rerun prompts', 'run all my prompts', 'queue several prompts',
      'one image per prompt', 'n selected', 'clear selection', 'untick',
-     'how many images will this make', 'too many prompts', 'at most 24 prompts'],
+     'how many images will this make', 'too many prompts', 'at most 24 prompts',
+     // Ce que quelqu'un tape après avoir été refusé par le plafond qui a existé
+     // une journée — et ce qu'il cherche maintenant : le coût, pas la limite.
+     'prompt limit', 'maximum prompts', 'why was my batch refused', 'no limit',
+     'how long will this take', 'estimated time', 'duration', 'at your current pace',
+     'this run will queue', 'confirmation before a long run', 'seconds per image'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   action('studio-enhance-prompt', '✨ Enhance: enrich the test prompt with the local model',
     ['studio', 'test studio', 'enhance', 'enhance prompt', 'improve prompt', 'better prompt',
@@ -639,6 +644,13 @@ const TOPICS = [
      'close a pinned image', 'reopen a pinned image', 'my image came back',
      'image position remembered', 'unpin', 'image node', 'image linked to checkpoint',
      'my pinned image disappeared', 'pinned image after tidy up',
+     // Free placement: the wall at the lane's corner is gone, and both halves
+     // of that are things people look up — "why can I not drag it up there"
+     // before, "how do I get it back" after.
+     'move an image anywhere', 'image stuck in its lane', 'cannot drag an image up',
+     'cannot move an image left', 'image outside its lane', 'image above its lane',
+     'move an image to another lane', 'image next to another dataset',
+     'lost a pinned image', 'bring a pinned image back', 'image far away on the board',
      // The feature existed for a while with no way to FIND it (viewer-only), so
      // "where is it" is a real search, not a hypothetical one.
      'where is pin to canvas', 'cannot find pin', 'pin from the thumbnail',
@@ -1249,6 +1261,17 @@ const TOPICS = [
      'original pending', 'original undecided', 'automatic unkeep', 'keep both',
      'bulk keep', 'batch keep', 'nothing deleted', 'do not delete'],
     '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
+  // ✨ in the CANVAS lightbox. Its own topic, not a variant of the dataset one:
+  // the result lands somewhere else (the checkpoint's gallery, not the curation
+  // grid), and "where did my upscale go" is the question this button actually
+  // raises on a screen where nothing moves when you press it.
+  action('action-canvas-improve', 'Upscale a picture straight from the LoRA Canvas',
+    ['canvas', 'board', 'improve', 'upscale', 'upscale & improve', 'enhance', 'klein',
+     'seedvr2', 'sharpen', 'detail', 'resolution', 'megapixels', 'lightbox',
+     'pinned image', 'generated image', 'where did it go', 'result', 'gallery',
+     'checkpoint gallery', 'improve from canvas', 'no improve button',
+     'improve an improvement', 'reference face', 'retry', 'failed upscale'],
+    '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',

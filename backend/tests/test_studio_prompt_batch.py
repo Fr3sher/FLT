@@ -10,8 +10,8 @@ ticked prompt, same checkpoints, same settings, same seed.
 What is pinned here:
 
   · the axis helper: nothing ticked behaves EXACTLY like before (one prompt), a
-    ticked list is stripped/deduplicated in order, and an unreasonable list is
-    refused with its count rather than silently truncated;
+    ticked list is stripped/deduplicated in order, and NO size is ever refused
+    (see test_a_large_batch_is_never_refused for why that line is here);
   · N ticked prompts produce N DISTINCT submitted workflows, one per prompt —
     asserted on the graphs captured at the queue's door, not on call arguments,
     and on both engines (`create_run` for the Test Studio, `create_comparison_run`
@@ -19,9 +19,7 @@ What is pinned here:
   · both routes forward `prompts` to their engine — a dropped key would degrade a
     batch into a single generation in silence.
 """
-import pytest
-
-_ST = (b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
+_ST =(b'\x08\x00\x00\x00\x00\x00\x00\x00{"__metadata__":{}}'
        .ljust(32, b'\x00'))
 
 
@@ -75,14 +73,29 @@ def test_prompt_axis_strips_dedupes_and_keeps_the_ticking_order():
     assert _prompt_axis([' b ', 'a', 'b', 42, None, 'a'], 'fallback') == ['b', 'a']
 
 
-def test_prompt_axis_refuses_an_unreasonable_batch_with_its_count():
-    """Truncating would render half of what was ticked and look like a success."""
-    from app.services.lora_test_studio import _prompt_axis, _MAX_PROMPTS_PER_RUN
-    too_many = [f'prompt {i}' for i in range(_MAX_PROMPTS_PER_RUN + 3)]
-    with pytest.raises(ValueError) as excinfo:
-        _prompt_axis(too_many, 'fallback')
-    assert str(_MAX_PROMPTS_PER_RUN) in str(excinfo.value)
-    assert str(len(too_many)) in str(excinfo.value)
+def test_a_large_batch_is_never_refused():
+    """No cap on the prompt axis, on purpose — and this test exists BECAUSE one
+    was shipped and rejected on first contact.
+
+    A first version refused past 24 prompts. The first real use ticked 33 and was
+    turned away. That 24 was a judgment, not a measurement: nothing breaks at 33
+    (the body is kilobytes against a 64 MB ceiling, `prompt` is a TEXT column, the
+    queue has no maximum depth, no results view truncates), and it capped ONE axis
+    out of six — 24 prompts across 8 checkpoints sailed through while 25 prompts on
+    a single one did not, though the second run is thirty times shorter.
+
+    The module's own rule, written above `build_matrix`, is the one that applies:
+    no ceiling on the number of cells; the queue is serial and the user sees the
+    count and the duration before launching."""
+    from app.services.lora_test_studio import _prompt_axis
+    many = [f'prompt {i}' for i in range(200)]
+    assert _prompt_axis(many, 'fallback') == many
+
+
+def test_no_prompt_cap_constant_survives_anywhere():
+    """A constant left behind is a cap waiting to be re-applied by the next edit."""
+    from app.services import lora_test_studio as lts
+    assert not hasattr(lts, '_MAX_PROMPTS_PER_RUN')
 
 
 # --- THE proof, Test Studio side: N prompts -> N distinct workflows -----------
@@ -271,6 +284,97 @@ def test_canvas_route_forwards_the_prompt_batch(client, monkeypatch):
         'prompts': ['one', 'two', 'three']})
     assert resp.status_code == 200
     assert seen['prompts'] == ['one', 'two', 'three']
+
+
+# --- the pace the warning quotes is MEASURED, not assumed ---------------------
+
+def _pace_dataset(name):
+    """A real dataset row — the cells carry a foreign key to one."""
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    return svc.create_dataset(LOCAL_USER, name, name.lower())
+
+
+def _finished_cell(dataset_id, checkpoint, seconds, job_id):
+    """One completed test cell + its queue job, `seconds` apart."""
+    from datetime import datetime, timedelta
+    from app.extensions import db
+    from app.models import ImageGenerationQueue, LoraTestImage
+    started = datetime(2026, 8, 3, 12, 0, 0)
+    db.session.add(LoraTestImage(dataset_id=dataset_id, checkpoint=checkpoint,
+                                 strength=1.0, status='done', job_id=job_id))
+    db.session.add(ImageGenerationQueue(
+        job_id=job_id, user_id='local', status='completed',
+        started_at=started, completed_at=started + timedelta(seconds=seconds)))
+
+
+def test_pace_is_the_median_of_what_this_machine_really_did(app):
+    """The UI said "~12 s/image" on every card in the world. The queue has
+    recorded started_at/completed_at since forever — this reads it."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds = _pace_dataset('PaceA')
+        ck = 'z image' + chr(92) + 'lora_p_000002000.safetensors'
+        for i, secs in enumerate([30, 32, 31, 29, 33]):
+            _finished_cell(ds.id, ck, secs, f'job-{i}')
+        db.session.commit()
+        assert lts.measured_seconds_per_image('zimage') == 31.0
+
+
+def test_pace_ignores_a_machine_that_went_to_sleep_mid_job(app):
+    """A median, and a sane window: one job spanning a suspend would otherwise
+    make the panel announce eight hours an image for the next hundred runs."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds = _pace_dataset('PaceB')
+        ck = 'z image' + chr(92) + 'lora_q_000002000.safetensors'
+        for i, secs in enumerate([30, 31, 29, 30, 8 * 3600]):
+            _finished_cell(ds.id, ck, secs, f'sleepy-{i}')
+        db.session.commit()
+        pace = lts.measured_seconds_per_image('zimage')
+        assert pace is not None and 29 <= pace <= 31
+
+
+def test_pace_says_nothing_rather_than_guessing_from_two_samples(app):
+    """Below the sample floor it returns None and the UI keeps its "~" default —
+    a precise-looking number drawn from two measurements is worse than none."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds = _pace_dataset('PaceC')
+        ck = 'z image' + chr(92) + 'lora_r_000002000.safetensors'
+        _finished_cell(ds.id, ck, 30, 'lonely-0')
+        db.session.commit()
+        assert lts.measured_seconds_per_image('zimage') is None
+
+
+def test_pace_is_scoped_to_the_family_being_launched(app):
+    """A Krea image and a Z-Image Turbo one do not cost the same; quoting one
+    machine-wide average would mislead on whichever family is slower."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds_z, ds_k = _pace_dataset('PaceZ'), _pace_dataset('PaceK')
+        z = 'z image' + chr(92) + 'lora_s_000002000.safetensors'
+        k = 'krea' + chr(92) + 'lora_t_000002000.safetensors'
+        for i, secs in enumerate([10, 11, 10, 11]):
+            _finished_cell(ds_z.id, z, secs, f'zz-{i}')
+        for i, secs in enumerate([120, 118, 122, 120]):
+            _finished_cell(ds_k.id, k, secs, f'kk-{i}')
+        db.session.commit()
+        assert lts.measured_seconds_per_image('zimage') < 20
+        assert lts.measured_seconds_per_image('krea') > 100
+
+
+def test_both_panels_are_served_the_same_pace_key(client, monkeypatch):
+    """Two branches of one screen must never announce two different durations."""
+    from app.services import lora_test_studio as lts
+    _comfy(monkeypatch)
+    monkeypatch.setattr(lts, 'measured_seconds_per_image', lambda _f=None: 42.0)
+    axes = client.get('/api/studio/base-models?type=zimage').get_json()['axes']
+    assert axes['seconds_per_image'] == 42.0
 
 
 def test_test_studio_route_forwards_the_prompt_batch(client, monkeypatch):

@@ -5606,6 +5606,15 @@ def _gallery_image(r) -> dict:
         'aspect': r.aspect,
         'extra_loras': r.extra_loras,
         'face_score': r.face_score,
+        # ✨ Whether this row IS an Upscale & improve result, and of what. The
+        # galleries and canvas_image_nodes read this table WITHOUT the studio's
+        # `_cells()` filter — deliberately, because showing the improvement next
+        # to its source and letting it be pinned is the point of the button. The
+        # front needs the two keys for the same reason the dataset grid does:
+        # to say so on the tile, and to refuse to improve an improvement before
+        # the click rather than through a 400 after it.
+        'derivation_kind': r.derivation_kind,
+        'parent_image_id': r.parent_image_id,
     }
 
 
@@ -6487,11 +6496,29 @@ def clear_canvas_positions(user_id, dataset_id) -> dict:
 CANVAS_IMAGE_MIN = 96.0
 CANVAS_IMAGE_MAX = 1400.0
 
+# 🖼 How far from its lane's origin a pinned image may be parked, on either axis
+# and in EITHER DIRECTION. Negative coordinates are legal: a picture is not a
+# step of the lineage, and the wall at zero was what stopped a render from being
+# dragged above its own lane or into the free margin beside the board. Mirrors
+# IMG_REACH in frontend/src/utils/canvasImageNodes.js.
+#
+# A safety rail, not a design limit. The position axes had no ceiling at all
+# until now — only the SIZE was bounded — so one corrupt row (1e9, a hand-edited
+# database) could already blow a lane's extent up and collapse ✦ Fit to a scale
+# where nothing on the board is readable. This bounds both directions at once.
+CANVAS_IMAGE_REACH = 100000.0
+
 
 def _clamp_image_box(x, y, w, h):
     """Lane-local geometry, clamped. Returns None for anything unusable —
     a NaN stored here would make a node unreachable on every future load and
-    there is no UI to fix that."""
+    there is no UI to fix that.
+
+    The position is bounded on both sides of zero rather than floored at it, so
+    a picture the user parked above or left of its lane survives the round trip.
+    Every row written before this read back and still reads back unchanged: the
+    coordinates mean exactly what they always meant (lane-local world units) and
+    every one of them is inside the rail."""
     try:
         x, y, w, h = float(x), float(y), float(w), float(h)
     except (TypeError, ValueError):
@@ -6499,7 +6526,10 @@ def _clamp_image_box(x, y, w, h):
     for v in (x, y, w, h):
         if v != v or abs(v) == float('inf'):
             return None
-    return (max(0.0, x), max(0.0, y),
+    def reach(v):
+        return min(CANVAS_IMAGE_REACH, max(-CANVAS_IMAGE_REACH, v))
+
+    return (reach(x), reach(y),
             min(CANVAS_IMAGE_MAX, max(CANVAS_IMAGE_MIN, w)),
             min(CANVAS_IMAGE_MAX, max(CANVAS_IMAGE_MIN, h)))
 

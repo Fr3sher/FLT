@@ -50,9 +50,17 @@ export const WHATS_NEW = [
   {
     id: '2026-08-03-krea-edit-takes-an-extra-angle',
     date: '2026-08-03',
-    title: 'Krea 2 Edit now looks at a second angle — and both local engines say where to add one',
+    title: 'Krea 2 Edit takes a second image — add it in the edit dialog, and use it to compose',
     blurb:
-      'Editing your reference with Krea 2 Edit used the main photo and nothing else. It now also reads the first extra photo on the reference card — and the dialog finally says what that second slot is for. It was trained on two-input edits where the second image is a different subject: another person, or a scene to place yours in. So use it to compose (“put her in this room”, “next to him”), not to reinforce a face — another angle of the same person is off-label there and can duplicate them. One, not three: the graph has exactly one spare slot, and the dialog names that ceiling instead of quietly dropping the rest. The other half of this is what you can see. Because local engines never accepted the “+ Add reference images” of the edit dialog, that row simply disappeared when you picked Klein or Krea, which read as “this engine takes no extra references at all”. Wrong for both: Klein chains every extra photo on the dataset, and it is the engine to use when your goal is extra angles of the same person. Both now tell you what they use, what it is good for, and where to add it.',
+      'Editing your reference with Krea 2 Edit used the main photo and nothing else. You can now add a second image, with the “+” inside the ✦ Edit reference dialog. What it is for matters more than the fact it exists: that slot was trained on two-input edits where the second image is a *different* subject — another person, or a scene to place yours in. So it composes (“put her in this room”, “next to him”). Another angle of the same face is off-label there and can come back duplicated, which is why it deliberately does NOT read the dataset’s extra reference photos: those are angles of one person by definition. Extra angles keep doing what they always did, on the engines built for them — Klein chains every one of them from the reference card and locks identity across every generation, and the API engines use them too. Two different jobs, two different places, and the dialog now says which is which before you press Generate.',
+  },
+  {
+    id: '2026-08-03-canvas-images-go-anywhere',
+    date: '2026-08-03',
+    title: 'Pinned images go anywhere on the canvas, not just below and right of their run',
+    blurb:
+      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. Three things came with it. ✦ Tidy up is the way home — it brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart — and it is no longer greyed out on a board where only pictures have been moved, which is exactly when you need it. The board no longer re-zooms under your finger while you drag something past its edge; it settles once, when you let go. And a strip of grouped pictures now draws ONE line back to each checkpoint it came from instead of one per picture, so a long link stays readable.',
+    to: '/canvas',
   },
   {
     id: '2026-08-03-canvas-group-drag-out-crash',
@@ -60,6 +68,13 @@ export const WHATS_NEW = [
     title: 'Pulling a picture out of a group on the canvas no longer blanks the board',
     blurb:
       'Dragging one image off a strip of grouped images showed the error screen instead of the picture coming loose — the board went blank and the only way back was a reload. The hint that appears while you pull ("Drag it off the group to take it out") was reading a size that had moved to another file when the group\'s title bar was split out earlier today, so the very gesture it exists to explain was the one that crashed. It is back, at the same size as the bar\'s own label at every zoom. Nothing you had pinned was lost — the board reloads exactly as you left it.',
+  },
+  {
+    id: '2026-08-03-canvas-lightbox-upscale-improve',
+    date: '2026-08-03',
+    title: 'Upscale a picture without leaving the canvas',
+    blurb:
+      'Open a picture on the ◉ LoRA Canvas and it now carries ✨ Upscale & improve next to ⬇ Download — the same pass, and the same choice between Klein (re-renders detail and texture) and SeedVR2 (resolves detail and keeps the look) you already had in the dataset lightbox, with the same live quote of the instruction Klein is about to send. Until now the only way to improve a render you liked on the board was to go and find it somewhere else. The picture on the board is never touched: the result arrives as its own image in that checkpoint’s gallery, right next to the original, so you can compare the two and pin the better one. SeedVR2 offers to install itself if it is not there yet, an improvement cannot be improved again, and these upscales stay out of the Test Studio — they never count as a run in progress and never enter a checkpoint’s 👍/👎 ranking.',
     to: '/canvas',
   },
   {
@@ -77,6 +92,14 @@ export const WHATS_NEW = [
     blurb:
       'When C: fills up, the answer used to be a config.json edit and a manual copy. Settings › Storage now shows every folder the app writes to — datasets, banks, cloud run staging, the checkpoint store, the trash, the archive, the Hugging Face cache — with its real path, what it holds and the free space on its drive. Press 📏 Measure everything to see the sizes (never on open: walking a hundred gigabytes while you read is not a thing a page should do). Three of those roots can be pointed anywhere: type a path, the app proves it can really write there, then you choose out loud — move what is already there, with a progress bar and the old folder removed only once the last byte has landed, or start using the new folder empty and leave the old files exactly where they are. Nothing is ever moved silently. The trash, the run image archive and the Hugging Face allowance moved here too, so the disk questions are answered together instead of one card per screen.',
     to: '/settings/storage',
+  },
+  {
+    id: '2026-08-03-prompt-batch-no-cap',
+    date: '2026-08-03',
+    title: 'The prompt batch no longer caps at 24 — and the time estimate is now yours',
+    blurb:
+      'Ticking more than 24 saved prompts was refused. That number was a guess, not a limit: nothing breaks past it, and it governed the wrong thing — 24 prompts across eight checkpoints went through, while 25 on a single one did not, even though the second run is far shorter. Tick as many as you like. What you get instead is the real cost, before the click: the panel counts every generation the run will queue and tells you how long that takes at the pace your own machine has actually been running at, measured from your recent tests rather than assumed. Past about an hour it asks once whether you meant it, and reminds you that the queue is serial — you can stop it whenever you like and keep what is already done. Every duration in the Studio and on the canvas now comes from that same measured pace, so a slower card stops being told it will take twenty minutes when it will take two hours.',
+    to: '/studio',
   },
   {
     id: '2026-08-03-person-pass-checks-folders-first',

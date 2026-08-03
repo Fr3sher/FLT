@@ -31,12 +31,12 @@ captioning rules and a few guards change with the dataset kind.
    per edit, on the model set in *Settings › Image engines*. The engines differ in
    what else they look at: the API ones take the dataset's extra references *and*
    images you drop into the dialog, Klein takes the dataset's extra references,
-   and Krea takes the first of them — its edit graph has room for one, and that
-   slot was trained for a *different* subject (another person, or a scene to
-   place yours in) rather than a second angle of the same face. Neither local
-   engine reads the images you drop into the dialog itself: add references with
-   the **+** on the reference card. The dialog says all of this before you press
-   Generate.
+   and Krea takes none of them — it reads **one image you add in the dialog
+   itself**, because its spare slot was trained for a *different* subject
+   (another person, or a scene to place yours in) rather than another angle of
+   the same face. So: extra angles go on the reference card and strengthen
+   identity everywhere; Krea's second image goes in the dialog and composes that
+   one edit. The dialog says all of this before you press Generate.
 3. **Generate variations** — pick an engine (Nano Banana Pro, ChatGPT,
    OpenRouter, or local Klein) and fire the **variation catalog**: 53 shots
    across expression, angle, lighting, framing, outfit and background, each
@@ -1590,9 +1590,11 @@ re-flows the lane around it. Lanes you have never touched keep following the
 automatic tree, because there is no arrangement to protect there.
 
 **✦ Tidy up** is the way back: it forgets every card you have moved on the lanes
-currently shown and rebuilds the automatic tree. Positions are only ever a
-display preference — moving a card never changes which run continued which, and
-Tidy up never deletes a run, a checkpoint or a note.
+currently shown, rebuilds the automatic tree, and brings every pinned picture
+back beside the run that made it — including one you dragged clean off its lane.
+Positions are only ever a display preference — moving a card or a picture never
+changes which run continued which or which checkpoint made which image, and Tidy
+up never deletes a run, a checkpoint, a note or a picture.
 
 **Generating from the board.** Every checkpoint pill carries a small **✓** box.
 Tick one and the run settings open beside the board: the prompt, the seed, the
@@ -1757,6 +1759,22 @@ picture and decide it belongs on the board.
 
 - **Move it** by dragging (on a phone: a long press picks it up, exactly like a
   run card). **Resize it** from the corner handle. **Close it** with **✕**.
+- **It goes wherever you want on the board — its lane is not a box.** Drag it
+  above its own lane, into the margin to the left of everything, or across to sit
+  beside another dataset's runs: nothing stops at the lane's corner any more, and
+  the arrow keys reach the same places. **✦ Fit** grows to include it, so a
+  picture parked well outside its lane is always one click from being back on
+  screen. Two things stay true wherever you put it: the line to the checkpoint
+  that made it follows it (that link is read off the image, never off its
+  position, so a picture can never end up claiming a run it did not come from),
+  and the picture still belongs to its own dataset — moving it over another
+  lane's runs changes nothing but where it is drawn.
+- The one thing to know before parking one far away: a lane's own position on the
+  board depends on which datasets are ticked and how tall the lanes above it are.
+  A picture is measured from **its own lane**, so it travels with the run it is
+  evidence about — put it next to *another* dataset's lane and it will keep that
+  spot relative to its own lane, not relative to its neighbour. **✦ Tidy up**
+  brings everything home if a board gets away from you.
 - Closing forgets nothing. Pin the same image again and it comes back **exactly
   where you left it, at exactly the size you left it** — that is the point of the
   feature, not a side effect. The geometry lives with your card positions, on
@@ -1770,9 +1788,13 @@ picture and decide it belongs on the board.
   its connecting line.
 - Unticking a dataset takes its lane off the board, pinned images included; they
   come back with the lane, untouched.
-- **✦ Tidy up** does not throw pinned images away — it re-flows them into the
-  same tidy band **📌 Pin all** uses, so a rebuild of the automatic tree can no
-  longer park a picture on top of a run card.
+- **✦ Tidy up** does not throw pinned images away — it brings them **home**. Every
+  picture on the visible board comes back beside the run that made it, into the
+  same tidy band **📌 Pin all** uses, wherever you had dragged it to. That is the
+  guaranteed way back from a picture parked far outside its lane, and it is why
+  free placement is safe to play with. Pictures you have **closed** are not
+  touched: their remembered spot is a promise, and Tidy up is not the place to
+  break it.
 - The **✕**, the **🔍** and the resize corner keep a finger-sized target **at
   every zoom level**: they are drawn at a constant size on screen rather than at
   the board's, so a board fitted to twenty runs is still one you can tap.
@@ -1810,15 +1832,27 @@ them. There is **no limit**: drop a third, a tenth, they all join the strip.
 - **Every picture in a strip is the same height**, each scaled to keep its own
   shape — that is what makes the band continuous instead of a row of letterboxed
   tiles. Resize the group from its corner and the whole strip scales.
+- **A strip gets ONE link back to each checkpoint it came from**, not one per
+  picture, and they all leave the band at the same point. A strip is one object
+  to the eye and to every gesture, so eight connectors fanning out of it was
+  eight times the ink for one fact — and now that a picture can be parked far
+  from its run, those links are long. A strip whose pictures all come from the
+  same checkpoint therefore draws a single line; one built from three epochs
+  draws three, because collapsing them would quietly credit one epoch with the
+  other two.
 - **A strip has no width limit, and that is the honest consequence of "no
   limit".** Ten pictures side by side is ten times as wide as one; the board
   zooms and pans, so **✦ Fit** is the answer. It deliberately does *not* wrap
   onto a second row — a strip that quietly stopped being a strip at some
   invisible threshold would be worse than a wide one. On a phone, expect to zoom.
-- **✦ Tidy up leaves groups alone.** It rebuilds the automatic tree and re-flows
-  the pictures you have *not* grouped; a strip is something you assembled on
-  purpose, and taking it apart is not tidying. The way out is the group's ✕, or
-  dragging its pictures back off it.
+- **✦ Tidy up moves a strip, and never takes one apart.** It brings the whole
+  band back beside the run that made its first picture, in one piece and in the
+  same order — a strip is something you assembled on purpose, so tidying it means
+  putting it away, not dismantling it. (It used to leave strips exactly where
+  they were, which was fine while a strip could not leave its lane; now that one
+  can be parked anywhere on the board, "leave it alone" would have meant leaving
+  it lost.) The way *out* of a group is still the group's ✕, or dragging its
+  pictures back off it.
 
 **📌 Pin all — the whole lot in one gesture.** When a generation launched from
 the board finishes, the green bar says how many images are ready and names the
@@ -1866,6 +1900,38 @@ sits above the board, and hovering a pill spells it out in words.
 The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.
+
+## Upscale a picture straight from the board
+
+Click a pinned picture (🔍, or the picture itself) and the full-screen view now
+carries **✨ Upscale & improve** next to **⬇ Download** — the same pass, and the
+same choice of engine, as the one in the dataset lightbox:
+
+- **✨ Improve via Klein** re-renders detail and texture. Sharper, but skin and
+  colour can shift. The note under the button quotes the exact instruction it is
+  about to send and links to where you can edit it or switch it off.
+- **🔍 Upscale via SeedVR2** resolves detail at a higher resolution and keeps the
+  original look. It appears once SeedVR2 is installed; until then Setup ▸ ComfyUI
+  can download it for you, and pressing ✨ before that answers with the same
+  offer to install it rather than a plain error.
+
+**Where the result goes.** The picture on the board is never touched. The
+improvement arrives as its **own image in that checkpoint's gallery**, right next
+to the original — open the gallery from the checkpoint pill (🖼) and you can
+compare the two, download either, or pin the improved one onto the board beside
+its source. Nothing on the board moves on its own, which is why the confirmation
+says where to look.
+
+Two things it deliberately will not do. An **improvement cannot be improved
+again** — running two passes over the same pixels is how a face turns to
+plastic — and the **lane's reference face** has no ✨ at all, because it is a
+photo you supplied, not something the app generated. If a pass fails, press ✨
+again: that is the retry.
+
+**It stays out of the Test Studio.** These upscales are not sweep cells, so they
+never appear in the Test Studio grid, never count as a run in progress, and never
+enter the 👍/👎 ranking of a checkpoint — a rating you give an *upscale* would
+otherwise be read as a vote for the checkpoint that did not produce it.
 
 ## Tips that save runs
 

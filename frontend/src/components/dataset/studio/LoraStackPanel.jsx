@@ -24,7 +24,7 @@ import {
 } from './loraStack';
 
 export default function LoraStackPanel({ selection, mode, onMode, weights, onWeight,
-  sets = {}, onToggleChip = null, count = 1, batchMult = 1 }) {
+  sets = {}, onToggleChip = null, count = 1, batchMult = 1, secondsPerImage = null }) {
   const combine = mode === 'combine';
   const blocker = combine ? combineBlocker(selection) : null;
   const configCount = blendConfigCount(selection, { weights, sets });
@@ -88,7 +88,8 @@ export default function LoraStackPanel({ selection, mode, onMode, weights, onWei
               />
             ))}
           </ul>
-          <BlendSweepSummary configCount={configCount} count={count} batchMult={batchMult} />
+          <BlendSweepSummary configCount={configCount} count={count} batchMult={batchMult}
+            secondsPerImage={secondsPerImage} />
         </>
       )}
     </div>

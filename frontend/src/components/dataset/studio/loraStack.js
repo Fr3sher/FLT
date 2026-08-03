@@ -23,6 +23,10 @@
  * décochage/recochage d'un autre LoRA et à un changement de checkpoint.
  */
 
+/* Extension spelled out: this module is imported directly by `node --test`,
+   whose ESM resolver does not add it the way Vite does. */
+import { runCost } from './runCost.js';
+
 export const COMBINE_MIN_WEIGHT = 0;
 export const COMBINE_MAX_WEIGHT = 2;
 export const COMBINE_DEFAULT_WEIGHT = 1;
@@ -167,16 +171,23 @@ export function blendComboLabel(selection, combo) {
 
 /** Ce que le bouton doit dire du COÛT avant de lancer, et quand s'en inquiéter.
  *  `warn` ne bloque JAMAIS : il colore et il chiffre. */
-export function blendSweepCost({ configCount, count = 1, batchMult = 1 }) {
+export function blendSweepCost({ configCount, count = 1, batchMult = 1,
+  secondsPerImage = null }) {
   const cells = Math.max(0, Number(configCount) || 0)
     * Math.max(1, Number(count) || 0) * Math.max(1, Number(batchMult) || 1);
+  // Même estimation que SeedControls : deux compteurs qui annonceraient deux
+  // durées pour un seul lancement seraient pires que zéro. Les deux passent
+  // désormais par `runCost`, donc par le rythme MESURÉ de la machine quand il
+  // existe — le « 12 s » d'avant était le chiffre d'une 4090 servi à tout le
+  // monde, et il mentait d'un facteur cinq sur une carte lente.
+  const cost = runCost(cells, secondsPerImage);
   return {
     configs: Math.max(0, Number(configCount) || 0),
     cells,
     warn: cells > BLEND_WARN_CELLS,
-    // Même estimation que SeedControls (~12 s/image) : deux compteurs qui
-    // annonceraient deux durées pour un seul lancement seraient pires que zéro.
-    minutes: Math.ceil((cells * 12) / 60),
+    measured: cost.measured,
+    label: cost.label,
+    minutes: Math.ceil(cost.seconds / 60),
   };
 }
 

@@ -62,6 +62,11 @@ def _family_axes(kind):
         'steps_choices': lts.STEPS_CHOICES, 'default_steps': lts.DEFAULT_STEPS,
         'steps2_choices': lts.STEPS_CHOICES if kind == 'sdxl' else None,
         'default_steps2': lts.DEFAULT_STEPS if kind == 'sdxl' else None,
+        # Rythme mesuré de la machine (médiane observée) — même clé et même
+        # source que le payload par dataset, pour que les deux branches du Studio
+        # n'annoncent jamais deux durées pour un seul lancement. null = pas assez
+        # d'historique, l'UI garde son « ~ » et son défaut.
+        'seconds_per_image': lts.measured_seconds_per_image(kind),
     }
 
 

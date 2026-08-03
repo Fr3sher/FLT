@@ -19,6 +19,7 @@ import DescribeImageModal from './DescribeImageModal';
 import DatasetCaptionControl from './DatasetCaptionControl';
 import EnhancePromptButton from './EnhancePromptButton';
 import { cellCount } from './loraStack';
+import { heavyRunConfirm, heavyRunNotice, runCost } from './runCost';
 
 export default function StudioRunSetup({
   selectionCount, strengths, onToggleStrength,
@@ -29,6 +30,9 @@ export default function StudioRunSetup({
   // est le facteur qu'ils ajoutent à la grille : le compteur de coût DOIT le
   // porter, sinon le panneau annonce 6 cellules et la file en reçoit 18.
   axisSlot = null, axisTotal = 1,
+  // ⏱ Rythme MESURÉ de la machine (médiane du backend). null → repli affiché
+  // avec un « ~ », jamais un chiffre précis inventé.
+  secondsPerImage = null,
 }) {
   // batchMult = 1 + nb de LoRA cochés « ⚖ batch » (axe sans/avec) — le backend
   // multiplie les cellules d'autant, le compteur de coût doit suivre.
@@ -40,6 +44,13 @@ export default function StudioRunSetup({
     axisTotal,
   });
   const canLaunch = cells > 0 && !launching && !gpuBusy && !combineBlocked;
+  // ⏱ Même règle que l'autre panneau : on chiffre, on demande UNE fois, on
+  // n'interdit jamais.
+  const cost = runCost(cells, secondsPerImage);
+  const launchGuarded = () => {
+    if (cost.heavy && !window.confirm(heavyRunConfirm(cost))) return;
+    onLaunch();
+  };
 
   // Prompts de test récents GLOBAUX (tous datasets — la comparaison n'en avait
   // aucun avant). Rechargé après un lancement (nouveau prompt mémorisé) et après
@@ -149,13 +160,25 @@ export default function StudioRunSetup({
           {axisTotal > 1 && <span className="text-purple-300"> × {axisTotal} 🎛</span>} ={' '}
           <span className={`tabular-nums font-semibold ${cells > 0 ? 'text-content' : 'text-content-subtle'}`}>{cells}</span>{' '}
           cell(s) to generate
+          {cells > 0 && (
+            <span className="text-content-subtle">
+              {' '}· {cost.measured ? '' : '~'}{cost.label}
+            </span>
+          )}
         </span>
-        <button type="button" onClick={onLaunch} disabled={!canLaunch}
+        <button type="button" onClick={launchGuarded} disabled={!canLaunch}
           aria-label="Run the test"
           className="ml-auto px-4 py-1.5 rounded-lg bg-gradient-primary text-white text-sm font-semibold disabled:opacity-40">
           {launching ? '…' : '🚀 Run the test'}
         </button>
       </div>
+      {cost.heavy && (
+        <p data-testid="heavy-run-notice"
+          className="m-0 rounded-lg border border-amber-400/40 bg-amber-500/10 px-2.5 py-1.5 text-[0.6875rem] text-amber-200"
+          role="status">
+          <span aria-hidden>⏱</span> {heavyRunNotice(cost)}
+        </p>
+      )}
       {selectionCount === 0 && (
         <p className="m-0 text-amber-300 text-[0.6875rem]">Check at least one LoRA above.</p>
       )}
