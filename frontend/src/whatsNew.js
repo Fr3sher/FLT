@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-restart-no-longer-kills-a-live-cloud-run',
+    date: '2026-08-03',
+    title: 'Restarting the app no longer kills a cloud run that is training fine',
+    blurb:
+      'When the app restarted, it picked the run back up and asked vast.ai whether the pod still existed. If that one answer came back without the pod in it — which happens, and means nothing — the run was declared dead about ten seconds later, and the "stop" that followed reached the pod that was still training and ended it. A run at step 825 of 3000 was lost that way, with the hour already paid. Now the pod itself is asked: a pod that answers is a pod that exists, whatever the marketplace says, and silence has to last minutes before the run is given up. If it truly cannot be reached, no stop is sent to a machine we could not talk to, and the pod is kept so the result stays recoverable.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-03-canvas-opens-again-hotfix',
     date: '2026-08-03',
     title: 'The LoRA Canvas opens again — v2026.08.03 broke it for a few minutes',

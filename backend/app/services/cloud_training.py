@@ -1758,6 +1758,10 @@ _AUTO_RETRY_LIMIT = 1
 _AUTO_RETRY_MARKERS = (
     'pod did not become ready',
     'pod unreachable',
+    # A pod that vanished across an app restart used to say 'did not become
+    # ready' and earn the same single retry; it now has its own wording, and
+    # dropping it from this list would have silently retired that retry.
+    'could not be reached again after the app restarted',
     'connection aborted',
     'connection reset',
     'connectionreseterror',
@@ -3136,6 +3140,19 @@ class _RunClosedExternally(Exception):
     resurrecting the row (or renting a pod for a run nobody waits for)."""
 
 
+class _ReattachFailed(RuntimeError):
+    """A pod whose job was ALREADY running could not be reached again after an
+    app restart, for the whole reconnect window.
+
+    Carried as its own type for one reason: there is nothing to stop. A job we
+    could not contact for minutes cannot receive a stop request, and a job we
+    DID contact never produces this failure — so the recovery path must not
+    send one. Run #146 (2026-08-03) died the other way round: the run was
+    condemned on a vast listing gap while the pod was perfectly reachable, and
+    the 'best effort' stop that followed reached the live trainer and killed
+    825 healthy steps."""
+
+
 def _assert_run_open(run):
     db.session.refresh(run)     # another thread may have committed a close
     if run.status not in ACTIVE_STATES:
@@ -3453,7 +3470,18 @@ def _monitor(app, run_id):
             # created_at (cap_anchor), so readiness measures the TOTAL time since
             # launch across every restart — the intended behaviour even for a pod
             # that was honestly still booting.
-            boot_started = cap_anchor if resuming_existing_pod else _now()
+            #
+            # ... unless the pod is not booting at all. A run we ENTER with a
+            # started remote job is REATTACHING: the pod booted long ago, its
+            # trainer is running, and the durable anchor has therefore already
+            # eaten the whole boot budget. Run #146 (2026-08-03) is what that
+            # costs: adopted at 16:01:58 at step 825/3000, one poll where the
+            # vast API simply did not list the instance, and 10 s later the
+            # budget check condemned it — pod alive, job training, money spent.
+            # A reattach gets its own short window instead (see below).
+            reattaching = resuming_existing_pod and job_started
+            boot_started = (cap_anchor if resuming_existing_pod and not reattaching
+                            else _now())
 
             # -- wait until the pod's UI answers ----------------------------
             # Readiness is checked BEFORE the elapsed-time read: an
@@ -3481,6 +3509,18 @@ def _monitor(app, run_id):
                               else (raw_boot_budget or 0)) * 60
             slow_ban_seconds = float(
                 cfg.get('cloud.slow_boot_blacklist_hours') or 6) * 3600
+            if reattaching:
+                # Not a boot: a reconnection. Both clocks become the SAME
+                # tolerance the poll loop already grants a pod that stops
+                # answering mid-run (cloud.unreachable_grace_minutes, 6 min by
+                # default) — measured from this attempt, not from launch. That
+                # is minutes of consecutive negative evidence instead of the
+                # single unlucky poll that killed #146, and it stays bounded:
+                # a pod that is really gone is still given up in 6 minutes.
+                reconnect_seconds = (
+                    int(c.get('unreachable_grace_minutes') or 0) * 60
+                    or UNREACHABLE_GRACE_SECONDS)
+                ready_timeout = boot_budget = reconnect_seconds
             # None until the first observation: the state a monitor INHERITS
             # (every fact a resumed pod already shows) is a baseline, not
             # progress — otherwise every app restart would hand a dead pod a
@@ -3516,11 +3556,19 @@ def _monitor(app, run_id):
                 # host identity that a machine_id re-registration cannot shed.
                 if inst and inst.get('public_ipaddr'):
                     _stamp_host_ip(run, inst['public_ipaddr'])
-                base = vast_client.derive_base_url(inst, port) if inst else None
+                derived = vast_client.derive_base_url(inst, port) if inst else None
+                # The vast API is not the authority on whether the pod exists —
+                # the pod is. Its listing has gaps (an answer without our
+                # instance in it, indistinguishable from a destroyed pod), and
+                # #146 was condemned inside one. When the row already carries an
+                # address, that gap costs exactly one HTTP probe to settle: a
+                # pod that answers its own URL is a pod that exists, whatever
+                # the marketplace API is currently saying about it.
+                base = derived or (run.base_url or None)
                 ready = False
                 if base:
-                    if run.base_url != base:
-                        _set(run, base_url=base)
+                    if derived and run.base_url != derived:
+                        _set(run, base_url=derived)
                     ready = _make_remote(run).is_ready()
                     if ready:
                         break
@@ -3555,6 +3603,15 @@ def _monitor(app, run_id):
                 facts = _boot_facts(inst, port, base)
                 if boot_facts is None:
                     boot_facts = set(facts)      # baseline, not progress
+                elif (reattaching and boot_budget
+                        and _now() - boot_started > boot_budget):
+                    # A reattach that never got an answer. The host is not at
+                    # fault (it was training minutes ago), so it is not banned,
+                    # and the job is not stoppable, so no stop is sent.
+                    raise _ReattachFailed(
+                        'the pod could not be reached again after the app '
+                        f'restarted — no answer for {boot_budget // 60} min: '
+                        f'{_boot_stage_label(inst, port, base)}')
                 elif boot_budget and _now() - boot_started > boot_budget:
                     # Ceiling first, so advancing evidence can never buy an
                     # unbounded boot. This host was still visibly working —
@@ -3575,6 +3632,11 @@ def _monitor(app, run_id):
                     boot_progress_ts = _now()
                     boot_rearms += 1
                 elif _now() - boot_progress_ts > ready_timeout:
+                    if reattaching:
+                        raise _ReattachFailed(
+                            'the pod could not be reached again after the app '
+                            f'restarted — no answer for {ready_timeout // 60} '
+                            f'min: {_boot_stage_label(inst, port, base)}')
                     # Nothing about this pod changed for the whole idle budget:
                     # a dead or frozen host. Full ban, as before.
                     _blacklist_run_host(run, 'pod stopped making boot progress')
@@ -3902,12 +3964,19 @@ def _monitor(app, run_id):
                 logger.error('dense cloud run %s failed (%s job start)', run_id,
                              'after' if job_started else 'before')
                 if job_started:
+                    # A pod we could not reach at all cannot be stopped — and
+                    # asking anyway is how #146 lost its training: the stop was
+                    # sent on a wrong verdict and the still-live trainer obeyed.
+                    unreachable = isinstance(e, _ReattachFailed)
                     _keep_full_transformer_pod(
                         run,
-                        detail='Dense run failed after job start; remote job '
-                               'stopped if possible and pod kept for recovery',
+                        detail=('Could not reach the pod again after restarting; '
+                                'training left running and pod kept for recovery'
+                                if unreachable else
+                                'Dense run failed after job start; remote job '
+                                'stopped if possible and pod kept for recovery'),
                         error=error_text or 'unexpected dense training failure',
-                        stop_remote=True)
+                        stop_remote=not unreachable)
                 else:
                     _finish(run, 'error', detail='Dense run failed before step 1',
                             error=error_text)
