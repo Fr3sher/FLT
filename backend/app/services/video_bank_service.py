@@ -102,17 +102,61 @@ def dataset_dir(dataset_id) -> Path:
     return cfg.video_datasets_root() / str(int(dataset_id))
 
 
+def _contained_path(base_dir: str, relpath: str) -> str | None:
+    """`base_dir/relpath` resolved, or None when it escapes `base_dir`.
+
+    Both sides are realpath'd (so a symlink cannot step out) and the prefix test
+    carries the SEPARATOR: without it `/srv/rushes-secret` passes the check for a
+    bank rooted at `/srv/rushes`."""
+    base = os.path.realpath(base_dir)
+    full = os.path.realpath(os.path.join(base, relpath))
+    if os.path.normcase(full).startswith(os.path.normcase(base + os.sep)):
+        return full
+    return None
+
+
 def _abs_source_path(bank: VideoBank, relpath: str) -> str | None:
     """The containment-checked absolute path of one source file.
 
     A relpath is data from a database that a user can edit; resolving it without
     checking it still lands under the bank's folder is how `..` reads a file the
     bank was never pointed at."""
-    base = os.path.realpath(bank.source_path)
-    full = os.path.realpath(os.path.join(base, relpath))
-    if os.path.normcase(full).startswith(os.path.normcase(base + os.sep)):
-        return full
-    return None
+    return _contained_path(bank.source_path, relpath)
+
+
+def source_media_path(user_id, bank_id, source_id) -> str | None:
+    """The readable bytes of ONE source file, for the player. None on anything
+    that is not a file this bank legitimately holds.
+
+    One return value for four different refusals (unknown bank, unknown source,
+    a relpath that escapes the bank's folder, a file that has since vanished) on
+    purpose: the caller answers 404 to all of them. Distinguishing "escaped the
+    folder" from "not found" tells whoever tried which paths exist."""
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        return None
+    row = VideoSource.query.filter_by(id=source_id, bank_id=bank_id).first()
+    if row is None:
+        return None
+    path = _abs_source_path(bank, row.relpath)
+    return path if path and os.path.isfile(path) else None
+
+
+def dataset_clip_media_path(user_id, dataset_id, clip_id) -> str | None:
+    """The bytes of one PROMOTED clip. Same contract as source_media_path.
+
+    The filename was written by the export job rather than typed by anyone, and
+    it is still checked for containment: it is a column in a database the user
+    can reach, and "we wrote it ourselves" is the assumption every path-traversal
+    write-up starts with."""
+    ds = get_video_dataset(user_id, dataset_id)
+    if ds is None or not ds.output_dir:
+        return None
+    row = VideoDatasetClip.query.filter_by(dataset_id=ds.id, id=clip_id).first()
+    if row is None:
+        return None
+    path = _contained_path(ds.output_dir, row.filename or '')
+    return path if path and os.path.isfile(path) else None
 
 
 # --- the four media seams ------------------------------------------------------

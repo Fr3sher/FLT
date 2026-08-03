@@ -15,7 +15,7 @@ OUTPUTS — a user must not discover that in a forum thread after building a set
 """
 import logging
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, send_file
 
 from ..config import LOCAL_USER
 from ..services import video_bank_service as svc
@@ -77,6 +77,25 @@ def video_dataset_get(dataset_id):
     if payload is None:
         return _missing(dataset_id)
     return jsonify(payload)
+
+
+@bp.get('/video-dataset/<int:dataset_id>/clip/<int:clip_id>/media')
+def video_dataset_clip_media(dataset_id, clip_id):
+    """One promoted clip's bytes. A dataset you cannot re-watch is a list of
+    filenames, and watching a cut IS how you find out the length was wrong before
+    paying for a training run.
+
+    ``conditional=True`` for the same reason as the bank's source route (Range),
+    though these files are a few megabytes rather than a rush.
+
+    Cached for a DAY, not a year, and the difference is not caution: SQLite reuses
+    rowids after a delete unless the column is AUTOINCREMENT, so
+    /video-dataset/7/clip/12/media can legitimately become a different clip. A day
+    covers a working session without pinning a stale clip to that URL forever."""
+    path = svc.dataset_clip_media_path(LOCAL_USER, dataset_id, clip_id)
+    if path is None:
+        return jsonify({'error': 'clip file not available'}), 404
+    return send_file(path, mimetype='video/mp4', conditional=True, max_age=86400)
 
 
 @bp.post('/video-dataset/<int:dataset_id>/clip/<int:clip_id>/caption')

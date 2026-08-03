@@ -171,6 +171,44 @@ def video_bank_triage(bank_id):
     return jsonify({'ok': True, **out})
 
 
+#: Container → MIME. `mimetypes.guess_type` is registry-driven on Windows and
+#: answers None for .mkv/.webm on plenty of installs; send_file RAISES on an
+#: unguessable name, which would turn "this player cannot decode Matroska" into
+#: a 500. Guessing wrong is recoverable, refusing to answer is not.
+_VIDEO_MIMETYPES = {
+    '.mp4': 'video/mp4', '.mov': 'video/quicktime', '.mkv': 'video/x-matroska',
+    '.webm': 'video/webm', '.avi': 'video/x-msvideo',
+}
+
+
+def _video_mimetype(path):
+    return _VIDEO_MIMETYPES.get(os.path.splitext(path)[1].lower(), 'video/mp4')
+
+
+@bp.get('/video-bank/<int:bank_id>/source/<int:source_id>/media')
+def video_bank_source_media(bank_id, source_id):
+    """The SOURCE file's bytes — what the lightbox plays.
+
+    RANGE REQUESTS ARE THE POINT, hence ``conditional=True``. The player asks for
+    one shot with a media fragment (`#t=41,46`); the browser turns that into a
+    Range request and pulls only those bytes ONLY IF the response is 206-capable.
+    On a 200 it downloads the whole rush to show five seconds — on a two-hour
+    file that is worse than having no preview at all.
+
+    ``max_age=0`` mirrors the image lane (routes/bank.py): a bank points at a
+    LIVE folder and the file under a relpath can be replaced on disk.
+
+    404 covers every refusal — unknown bank, unknown source, a relpath that
+    escapes the bank's folder, a file that has since moved. See
+    ``video_bank_service.source_media_path`` for why they are not distinguished.
+    """
+    path = svc.source_media_path(LOCAL_USER, bank_id, source_id)
+    if path is None:
+        return jsonify({'error': 'source file not available'}), 404
+    return send_file(path, mimetype=_video_mimetype(path),
+                     conditional=True, max_age=0)
+
+
 @bp.get('/video-bank/<int:bank_id>/clip/<int:clip_id>/thumb')
 def video_bank_clip_thumb(bank_id, clip_id):
     """The one image a bank serves. 404 when the thumbnail pass has not run — the
