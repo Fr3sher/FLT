@@ -55,6 +55,39 @@ API generation follows each provider's billing and content policy. Read the dire
 | **Dataset ↔ bank round trip** | Promote bank keepers into a dataset or copy dataset keepers into a bank while retaining compatible metadata and provenance |
 | **Safe bulk work** | Undo the last bulk decision, tune thresholds where you work, move a bank without losing analysis, or run the full chain overnight |
 
+### Video Bank *(first release — read the limits)*
+
+Turns long source videos into a **video training set**: a flat folder of `.mp4`
+clips with matching `.txt` captions, cut to the exact frame count and frame rate
+the target model accepts.
+
+| Capability | What it provides |
+|---|---|
+| **Folder → video bank** | Point a bank at a folder of videos. It is referenced **in place** and never written to, like the image bank |
+| **Automatic shot detection** | Finds the cuts with TransNetV2, so a long file becomes individually reviewable shots instead of one blob |
+| **Review without waiting** | The grid shows thumbnails; a click plays that shot from the source, so nothing is encoded before you have decided |
+| **Target-aware cutting** | Pick the model you are building for and the clip length offers **only counts that model can actually ingest** — Wan wants 4n+1 frames, LTX 8n+1, MiniMax H3 five modulo seventeen, and none of them will tell you if you get it wrong |
+| **Encode only what you keep** | Cutting a clip means re-encoding it, so that is paid once, at promotion, for the clips you kept. A bank of 400 shots you triage down to 120 encodes 120 files, not 400 |
+
+**What it does NOT do yet**, plainly:
+
+- **No quality filtering.** None of the image bank's passes has a video equivalent
+  here — no blur, motion, exposure, aesthetic or duplicate detection. You review
+  by eye.
+- **No captioning.** Every promoted clip gets an **empty** `.txt`. The file is
+  always written, because a missing one crashes one trainer and makes another drop
+  the clip silently — but a dataset shipped as-is trains uncaptioned.
+- **It does not train.** This builds the dataset; the training itself happens in
+  your trainer of choice.
+- **One target out of four is verified trainable.** Wan 2.1/2.2 14B has working
+  support in maintained trainers. Wan 2.2 TI2V-5B, LTX 2.3 and MiniMax H3 are
+  offered because their cutting constraints are known and sourced, **not** because
+  anyone has demonstrated a LoRA trained on them at 24 GB — the app says which is
+  which where you pick the target.
+- **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
+  the EU, the UK, South Korea or the USA, and the restriction covers the model's
+  outputs, not only the model. Check your own territory before using that profile.
+
 ### Curate, caption and clean
 
 | Capability | What it provides |
@@ -129,7 +162,7 @@ The detailed journey, screenshots and operational notes now live in the [workflo
 Directions, not dates. These are discussed openly on the project's Discord, and the most-requested ideas move up the list.
 
 - **🧬 Merge Lab** *(next big one)* — bake your trained LoRAs into a standalone, shareable checkpoint and merge models with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids). Full model fine-tuning on large curated datasets comes later on the same path.
-- **🎬 WAN 2.1 / 2.2 video LoRAs** — ai-toolkit already trains WAN and the scraper can already pull video, so the whole pipeline (scrape, curate, caption, train, test) extends naturally to motion. Community-driven.
+- **🎬 Video LoRAs** — *the dataset half now exists* (see **Video Bank** above): shot detection, review and target-aware cutting into a trainable folder. What remains is the part that makes a video dataset **good** rather than merely valid — motion and exposure filtering, video captioning, and duplicate detection across clips — and then training and testing in-app. Community-driven.
 - **🧠 Watermark cleaning during import** — cleaning that happens **during import** instead of as a separate errand, and automation you can trust unattended. *(Detection has caught up: a dedicated detector that needs no vision model now ships alongside the Ollama path, and manual two-pass cleaning already works in datasets and in the Image Bank.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
 
