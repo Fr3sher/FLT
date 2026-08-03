@@ -289,18 +289,22 @@ export default function CheckpointGalleryPanel({ target, onClose, onDeleted, onD
 
   return (
     <>
+      {/* Bottom sheet up to `lg`, side drawer from there. The switch used to be
+          at `sm` (640 px), which handed a 768-px tablet a 352-px drawer over a
+          416-px sliver of board — the exact shape the sheet exists to avoid. */}
       <aside
         data-testid={isRun ? 'run-gallery-panel' : 'checkpoint-gallery-panel'}
         aria-label={heading.aria}
         className="fixed inset-x-0 bottom-0 z-50 flex max-h-[70vh] flex-col overflow-hidden border-t border-border bg-surface-overlay shadow-xl
-                   sm:inset-x-auto sm:left-0 sm:top-0 sm:h-full sm:max-h-none sm:w-[22rem] sm:border-r sm:border-t-0">
+                   lg:inset-x-auto lg:left-0 lg:top-0 lg:h-full lg:max-h-none lg:w-[22rem] lg:border-r lg:border-t-0">
         <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
           <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-content">
             <span aria-hidden>🖼</span> {heading.title}
             <span className="font-normal text-content-muted"> · {heading.subtitle}</span>
           </h3>
+          {/* The way back to the board — 44 px of thumb below `lg`. */}
           <button type="button" onClick={onClose} aria-label="Close"
-            className="shrink-0 px-1 py-1 text-content-subtle hover:text-content">✕</button>
+            className="-my-1 -mr-1 flex h-11 w-11 shrink-0 items-center justify-center text-content-subtle hover:text-content lg:h-8 lg:w-8">✕</button>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3">

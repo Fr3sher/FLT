@@ -23,10 +23,14 @@ import { HelpBadge } from '../../help/HelpMode';
    Because it is the same code, a setting added to the Test Studio appears here
    without anyone touching this file, and the two screens cannot drift.
 
-   Layout: a bottom sheet under `sm`, a side drawer above it. A full settings
+   Layout: a bottom sheet under `lg`, a side drawer above it. A full settings
    panel on a 400-px canvas is the hard case of this screen — a side drawer
    there would leave a sliver of board, and the board is what you are picking
-   from. */
+   from. The switch used to be at `sm` (640 px) and that reasoning stopped one
+   breakpoint too early: this drawer is a FIXED 26 rem, so at 768 px it took 54 %
+   of the window and left a 352-px sliver — the very thing the paragraph above
+   rules out, on the width a phone in landscape actually reports. A side drawer
+   only earns its keep once the board keeps ~600 px, which is `lg`. */
 
 /** The picks, as the panel shows them back: one removable chip per checkpoint,
  *  grouped so a cross-dataset run reads as one. Replaces the CheckpointPicker. */
@@ -184,14 +188,18 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
       data-testid="canvas-generation-panel"
       aria-label="Generate from the canvas"
       className="fixed inset-x-0 bottom-0 z-50 flex max-h-[78vh] flex-col overflow-hidden border-t border-border bg-surface-overlay shadow-xl
-                 sm:inset-x-auto sm:right-0 sm:top-0 sm:h-full sm:max-h-none sm:w-[26rem] sm:border-l sm:border-t-0">
+                 lg:inset-x-auto lg:right-0 lg:top-0 lg:h-full lg:max-h-none lg:w-[26rem] lg:border-l lg:border-t-0">
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
         <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-content">
           <span aria-hidden>🎨</span> Generate from the board
           {family && <span className="font-normal text-content-muted"> · {famLabel(family)}</span>}
         </h3>
+        {/* The way back to the board, and the control most often reached for on a
+            phone: 44 px of thumb below `lg`. Closing keeps every pick — the board's
+            🎨 button carries the count — so this is a cheap, reversible gesture and
+            it must not be a 14-px glyph. */}
         <button type="button" onClick={onClose} aria-label="Close"
-          className="shrink-0 text-content-subtle hover:text-content">✕</button>
+          className="-my-1 -mr-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-base text-content-subtle hover:text-content lg:h-8 lg:w-8">✕</button>
       </header>
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">

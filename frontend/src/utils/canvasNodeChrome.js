@@ -77,6 +77,49 @@ export function chromeScreenSize(boardScale, nodeW) {
   return CHROME_BASE * chromeScale(s, nodeW) * s;
 }
 
+// ✓ The PICK box on a checkpoint pill — same disease as the ✕ above, on the
+// control the board's whole generate flow depends on.
+//
+// It is 12 board units. The board opens on Fit, and Fit on a 400-px phone with a
+// few lanes lands around 45 %, where 12 × 0.45 ≈ 5 screen pixels. The toolbar
+// tells you to "tick a checkpoint's ✓ to generate from it" and on a phone that
+// tick is a five-pixel square. So it is counter-scaled to a CONSTANT size on
+// screen, exactly like a pinned image's buttons.
+//
+// ⚠️ Two bounds, and the second one is why this is not simply 1/scale:
+//   • never below 1 — at 100 % and above, the box keeps the size it has always
+//     had, so the in-card lineage graph (which passes no scale at all) and every
+//     desktop board are untouched;
+//   • never wider than a share of the PILL, because the box sits on that pill's
+//     top-left corner and a box that outgrows it hides the step number — the
+//     exact regression the `left: -6, top: -6` comment in lineageNodes records.
+//
+// Being honest about what this does NOT achieve: a 40-px finger target inside a
+// board zoomed to 45 % is geometrically impossible — 40 screen px is two thirds
+// of a whole pill. This makes the box a constant ~12 px instead of a shrinking
+// ~5, which is the difference between "fiddly" and "not there". Zooming in
+// remains the answer for reliable ticking, and the zoom buttons are now 40 px.
+const SELECT_BASE = 12;          // the compact box's own size, in board units
+const MAX_SELECT_FRACTION = 0.55;
+
+export function pillSelectScale(boardScale, pillW) {
+  const s = Number(boardScale);
+  if (!Number.isFinite(s) || s <= 0) return 1;
+  const w = Number(pillW);
+  const cap = Number.isFinite(w) && w > 0
+    ? Math.max(1, (w * MAX_SELECT_FRACTION) / SELECT_BASE)
+    : Infinity;
+  return Math.min(Math.max(1, 1 / s), cap);
+}
+
+/** What that box measures on screen once counter-scaled — the number any proof
+ *  about "can a finger hit it?" is actually about. */
+export function pillSelectScreenSize(boardScale, pillW) {
+  const s = Number(boardScale);
+  if (!Number.isFinite(s) || s <= 0) return SELECT_BASE;
+  return SELECT_BASE * pillSelectScale(s, pillW) * s;
+}
+
 // 🖼🖼 The GRIP of a group of pinned images: the title bar you drag to move the
 // whole strip. Same problem as the buttons above and the same answer, with one
 // difference — a bar spans the strip's whole width, so it cannot be `scale()`d

@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
+    id: '2026-08-03-canvas-usable-on-a-phone',
+    date: '2026-08-03',
+    title: 'The LoRA Canvas is finally usable on a phone',
+    blurb:
+      'The board had never had a small-screen pass, and it showed. Opening 🎨 Generate on a tablet-width window turned it into a fixed side drawer that took more than half the screen and left a sliver of the very board you were picking checkpoints from — so that panel, the run details, the compare view and the image gallery now stay full-width sheets right up to a real desktop, and each one closes with a thumb-sized ✕ instead of a 14-pixel glyph. The zoom, Fit and Tidy up buttons are 40 px on touch, where a miss used to land on the board and pan it. The ✓ box that adds a checkpoint to a run no longer shrinks with the zoom — at the level the board opens on it had become a five-pixel square, on the one control the whole generate flow goes through. And the list of what the board can be told to do, which was simply hidden below laptop width, is now one tap away with the touch gestures spelled out.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-restart-no-longer-kills-a-live-cloud-run',
     date: '2026-08-03',
     title: 'Restarting the app no longer kills a cloud run that is training fine',
