@@ -23,7 +23,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import KleinModelSetting from '../shared/KleinModelSetting';
 import {
-  EDIT_ENGINES, API_ENGINES, LOCAL_ENGINES, batchLiveNote, editPhase,
+  EDIT_ENGINES, LOCAL_ENGINES, batchLiveNote, editPhase,
   editEngineOptions, editCostNote, editKeepNote, editRefNote,
   acceptsExtraEditRefs, acceptsExtraEditRefsForBatch, editBatchBlockedReason,
   referenceEditCandidates,
@@ -101,7 +101,6 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
   const selectedBlocked = options.filter(
     (option) => engines.includes(option.engine) && option.blocked);
   const liveNote = batchLiveNote(liveActivity);
-  const selectedApiEngines = engines.filter((engine) => API_ENGINES.includes(engine));
   const selectedLocalEngines = engines.filter((engine) => LOCAL_ENGINES.includes(engine));
   const localRefNotes = selectedLocalEngines
     .map((engine) => editRefNote(engine, { datasetExtraCount }))
@@ -352,8 +351,11 @@ export default function ReferenceEditModal({ datasetId, refFilename, nonce = 0,
             )}
 
             {/* Optional extra reference images — transient inputs to THIS edit only,
-                never saved as the dataset's extra refs. Hidden for an all-local
-                batch; in a mixed batch they go only to selected API engines. */}
+                never saved as the dataset's extra refs. Shown whenever a SELECTED
+                engine reads them: every API engine, and Krea for its one `_b`
+                slot (a different subject to compose with). Klein does not — it
+                reads the dataset's angles from the reference card instead. The
+                count is capped by the most generous consumer in the selection. */}
             {canAddRefs && (
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-content-subtle text-xs">Add reference images (optional)</span>

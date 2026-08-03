@@ -213,6 +213,45 @@ def test_krea_takes_the_modals_upload_as_its_second_subject(client, monkeypatch)
     assert 'modalref' in os.path.basename(paths[0])       # from the dialog, not the card
 
 
+def test_a_rejected_upload_leaves_the_batch_already_on_screen_alone(client, monkeypatch):
+    """Input validation must happen BEFORE start_batch, because start_batch is
+    destructive: it supersedes what is on screen, unlinking the previous
+    candidate and cancelling a render still in flight.
+
+    Wiring Krea onto the dialog's uploads briefly moved that validation after the
+    supersede — the API lane always sanitized first, and a local batch carrying
+    uploads used to be refused outright, so no such ordering had ever existed.
+    The consequence was silent and expensive: dropping a HEIC or an animated GIF
+    by mistake (both pass the browser's image/* filter and the byte cap) killed a
+    candidate the user had not kept yet, and answered 400 as if nothing had
+    happened."""
+    did = _create_with_ref(client, monkeypatch, 'Nel', 'zchar_nel')
+    calls = []
+    _stub_krea(monkeypatch, calls)
+
+    first = client.post(f'/api/dataset/{did}/ref/edit',
+                        data={'prompt': 'warmer lighting', 'engine': 'krea'},
+                        content_type='multipart/form-data')
+    assert first.status_code == 202
+    running = client.get(f'/api/dataset/{did}').get_json()['reference_edit']
+    assert running['status'] == 'running'
+
+    # Undecodable bytes behind an image content type — the exact shape a phone
+    # photo in an unsupported container arrives in.
+    bad = client.post(f'/api/dataset/{did}/ref/edit',
+                      data={'prompt': 'put her in this room', 'engine': 'krea',
+                            'ref': (io.BytesIO(b'GIF89a this is not a decodable image'),
+                                    'holiday.gif')},
+                      content_type='multipart/form-data')
+
+    assert bad.status_code == 400
+    assert len(calls) == 1, 'the rejected request queued nothing'
+    survivor = client.get(f'/api/dataset/{did}').get_json()['reference_edit']
+    assert survivor is not None, 'the running edit was destroyed by a request that failed'
+    assert survivor['status'] == 'running'
+    assert survivor.get('batch_id') == running.get('batch_id')
+
+
 def test_an_unavailable_local_engine_is_explained_and_leaves_no_phantom_job(
         client, monkeypatch):
     """ComfyUI is there but Krea's weights/nodes are not: the click comes back with

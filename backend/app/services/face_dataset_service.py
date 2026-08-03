@@ -3573,14 +3573,20 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
     # Which selected local engines can actually receive the dialog's uploads —
     # computed BEFORE the refusal below, because it is what the refusal turns on.
     modal_local = local_engines_taking_modal_refs(local_engines)
+    # Sanitize the dialog's uploads HERE — once, and before anything
+    # destructive. start_batch below SUPERSEDES the batch on screen: it unlinks
+    # the previous candidate and cancels a render still in flight. A rejected
+    # image (HEIC, animated GIF, truncated PNG — all of which pass the browser's
+    # image/* filter) must therefore fail before it, or dropping the wrong file
+    # destroys a candidate the user had not kept yet. The API lane always did
+    # this; the local lane used to be refused outright, so no ordering existed.
+    # Both lanes now read the SAME validated bytes.
+    modal_bytes = tuple(
+        sanitize_external_reference(raw, label=f'extra edit reference {index}')
+        for index, raw in enumerate(transient_refs, 1) if raw)
     refs = None
     if api_engines:
-        snapshotted = list(dataset_ref_bytes)
-        for index, raw in enumerate(transient_refs, 1):
-            if raw:
-                snapshotted.append(sanitize_external_reference(
-                    raw, label=f'extra edit reference {index}'))
-        refs = tuple(snapshotted)
+        refs = tuple(list(dataset_ref_bytes) + list(modal_bytes))
     elif transient_refs and not modal_local:
         # Refuse ONLY when nothing selected can read these bytes. Krea now can,
         # so this is no longer "local engines cannot take uploads" — it is the
@@ -3616,7 +3622,14 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
     try:
         if local_engines:
             snapshot_tag = uuid.uuid4().hex[:8]
+            # The primary is always needed. The dataset's EXTRAS only when a
+            # selected engine reads them — Krea reads the dialog instead, so a
+            # Krea-only edit used to write files nobody would ever open. Derived
+            # from the support table, never from engine names.
+            wants_dataset_extras = bool(local_engines_taking_dataset_refs(local_engines))
             for index, raw in enumerate(dataset_ref_bytes):
+                if index and not wants_dataset_extras:
+                    break
                 filename = (
                     f'{user_id}{reference_edit_jobs.CANDIDATE_MARKER}'
                     f'snapshot_{snapshot_tag}_{index}.webp')
@@ -3624,19 +3637,16 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
                 local_snapshot_paths.append(path)
                 write_image_atomic(path, raw)
             # The dialog's own uploads, given the SAME treatment as the primary:
-            # sanitized once, written once, handed over as paths. Only staged
-            # when an engine will read them — an upload for an API-only batch has
-            # no business touching the dataset folder.
-            for index, raw in enumerate(transient_refs if modal_local else ()):
-                if not raw:
-                    continue
+            # already-validated bytes, written once, handed over as paths. Only
+            # staged when an engine will read them — an upload for an API-only
+            # batch has no business touching the dataset folder.
+            for index, raw in enumerate(modal_bytes if modal_local else ()):
                 filename = (
                     f'{user_id}{reference_edit_jobs.CANDIDATE_MARKER}'
                     f'modalref_{snapshot_tag}_{index}.webp')
                 path = os.path.join(dsdir, filename)
                 local_modal_paths.append(path)
-                write_image_atomic(path, sanitize_external_reference(
-                    raw, label=f'extra edit reference {index + 1}'))
+                write_image_atomic(path, raw)
         for local in local_engines:
             _enqueue_local_reference_edit(
                 user_id, dataset_id, ds, local, prompt, tokens[local],
@@ -3722,6 +3732,14 @@ def local_edit_modal_refs(engine, modal_ref_paths):
     """The MODAL's uploads THIS engine consumes, in order (Krea's second subject)."""
     limit = MODAL_EDIT_REF_LIMITS.get(LOCAL_EDIT_REF_SUPPORT.get(engine), 0)
     return list(modal_ref_paths or [])[:limit]
+
+
+def local_engines_taking_dataset_refs(engines):
+    """The selected local engines that read the dataset's extra angles. Empty
+    means nothing will open them, which is what lets the caller skip writing
+    temporary copies no consumer exists for."""
+    return [e for e in (engines or [])
+            if LOCAL_EDIT_REF_LIMITS.get(LOCAL_EDIT_REF_SUPPORT.get(e), 0) != 0]
 
 
 def local_engines_taking_modal_refs(engines):

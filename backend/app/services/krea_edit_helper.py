@@ -24,9 +24,11 @@ THE GRAPH (validated against /object_info on a live install)
                                                               negative: Krea2EditGroundedEncode('',     image)
     CLIPLoader(qwen3-vl 4B, type='krea2') · VAELoader(qwen image vae) · EmptySD3LatentImage
 
-An OPTIONAL second reference (one extra angle, the pack's only `_b` slot) joins
-the patch as `source_image_b` and both encodes as `image_b`. See build_workflow
-for the two traps it carries (no second VAEEncode; ref_boost changes hands).
+An OPTIONAL second reference joins the patch as `source_image_b` and both
+encodes as `image_b` — the pack's only `_b` slot, and it wants a DIFFERENT
+subject (a person or a scene), never another angle of the same face. See
+build_workflow for the two traps it carries (no second VAEEncode; ref_boost
+changes hands).
 
 BOTH custom nodes are mandatory:
   * `Krea2EditGroundedEncode` is what makes the text encoder actually SEE the
@@ -853,13 +855,13 @@ def build_workflow(source_image, prompt, *, unet, clip, vae, lora_name,
     #     FIRST. With one reference the primary IS the last one, so it gets the
     #     configured krea.ref_boost. Adding a second reference silently demotes
     #     the primary to "first" — without this line the user's tuned value would
-    #     jump onto the extra angle and the primary would fall back to the
+    #     jump onto the second reference and the primary would fall back to the
     #     hardcoded 1.0. Keeping both equal means adding an angle changes what the
     #     model sees, never how hard it pulls on the reference already there.
     if extra_source_image:
         g['14'] = {'class_type': 'LoadImage',
                    'inputs': {'image': extra_source_image},
-                   '_meta': {'title': 'Second reference (extra angle)'}}
+                   '_meta': {'title': 'Second reference (a different subject / scene)'}}
         g['7']['inputs']['source_image_b'] = ['14', 0]
         g['7']['inputs']['ref_boost_a'] = ref_boost
         g['8']['inputs']['image_b'] = ['14', 0]
@@ -945,7 +947,7 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
         source_path, f'krea_source_{uid}_{source_stem}.png', comfy_input_dir)
     comfy_input = os.path.basename(staged_source)
 
-    # The single extra angle, staged the same way. Only the basename is logged:
+    # The single second subject, staged the same way. Only the basename is logged:
     # a dataset path names a machine and the log is what users paste into a bug
     # report.
     extra_input = None
@@ -985,8 +987,8 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     meta = {'model_name': 'krea_identity_edit_dataset'}
     if extra_metadata:
         meta.update(extra_metadata)
-    # Dropped again when the job ends — the extra angle is staged too, so it has
-    # to be listed or it would linger in ComfyUI's input folder for good.
+    # Dropped again when the job ends — the second reference is staged too, so it
+    # has to be listed or it would linger in ComfyUI's input folder for good.
     meta['staged_inputs'] = [comfy_input] + ([extra_input] if extra_input else [])
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=workflow, prompt=edit_prompt,

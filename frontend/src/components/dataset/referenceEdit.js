@@ -71,9 +71,9 @@ export const MAX_EDIT_REFS = 3;
  *   - 'all'          : primary + the dataset's extra refs + the transient images
  *                      added in this modal (every API engine).
  *   - 'dataset_only' : primary + the dataset's extra refs, chained as native
- *                      ReferenceLatent nodes (Klein). The transient uploads are
- *                      request-scoped bytes and both local graphs want file
- *                      paths, so they are refused, not dropped.
+ *                      ReferenceLatent nodes (Klein). It has no slot for an
+ *                      image added in this dialog, so those are refused with
+ *                      Klein named, never silently dropped.
  *   - 'modal_one'    : primary + ONE image added in THIS dialog, and none of the
  *                      dataset's (Krea). Its `_b` slot was trained for a
  *                      different subject, so the dataset's pool — which holds
@@ -110,19 +110,22 @@ export function maxEditRefsForBatch(engines) {
     .reduce((best, engine) => Math.max(best, modalRefLimit(engine)), 0);
 }
 
-/** A mixed batch may keep the transient picker because at least one API engine
- * consumes those bytes. Local engines still use only the references their graph
- * supports; the modal says that explicitly instead of silently dropping input. */
+/** The picker stays as soon as ONE selected engine reads these bytes — every API
+ * engine does, and so does Krea (its single `_b` slot). Engines that don't (Klein)
+ * still use only what their graph supports, and the note says so explicitly
+ * instead of the input being silently dropped. */
 export function acceptsExtraEditRefsForBatch(engines) {
   return Array.from(engines || []).some((engine) => acceptsExtraEditRefs(engine));
 }
 
-/** One sentence about what this engine does with the extra references, or null
+/** One sentence about where THIS engine's second reference comes from, or null
  *  when it takes everything (nothing to warn about). Shown at PICK time.
  *
- *  The "not sent" half matters because the picker DISAPPEARS when you switch to a
- *  local engine: anything you had staged vanishes from the dialog, and an
- *  unexplained disappearance reads as a bug. */
+ *  Naming the source is the whole point: the two local engines read opposite
+ *  pools, and a user who reaches for the wrong one gets a worse render with no
+ *  error to explain it. The "goes to the other engines" half also covers the
+ *  case where switching engines shrinks or empties the picker — an unexplained
+ *  disappearance reads as a bug. */
 export function editRefNote(engine, { datasetExtraCount = 0 } = {}) {
   const support = editRefSupport(engine);
   const label = ENGINE_LABELS[engine] || engine;
