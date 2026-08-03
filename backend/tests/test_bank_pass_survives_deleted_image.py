@@ -207,6 +207,12 @@ def test_the_scoring_pass_skips_an_image_deleted_under_it(bank_ctx, monkeypatch,
     _assert_survived(job)
     assert all(db.session.get(BankImage, i).aesthetic_score for i in (ids[0], ids[2])), (
         'the scoring pass continued but stopped writing its scores')
+    # The count must come from the rows this loop WROTE, not from the child's
+    # report. The child is handed three paths and scores three; only this loop
+    # knows one of the images stopped existing. Reporting the child's number
+    # produced "scored 3 image(s), 1 skipped" over a bank of three — two claims
+    # that cannot both be true.
+    assert 'scored 2 image(s)' in job['detail'], job['detail']
 
 
 def test_the_face_pass_skips_an_image_deleted_under_it(bank_ctx, monkeypatch,

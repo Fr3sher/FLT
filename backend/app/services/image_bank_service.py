@@ -3793,7 +3793,7 @@ def _score_job(bank_id):
                                        f'(rc={returncode})')
         results = data.get('results') or {}
         clusters = data.get('clusters') or {}
-        done = vanished = 0
+        done = vanished = scored = 0
         for p, image_id in by_path.items():
             row = _live_image(image_id)
             if row is None:      # deleted while the pass ran — see _live_image
@@ -3803,6 +3803,13 @@ def _score_job(bank_id):
             row.aesthetic_score = res.get('aesthetic')
             row.nsfw_score = res.get('nsfw')
             row.style_cluster = clusters.get(p)
+            # Counted HERE, on the row we actually wrote — not from the child's
+            # report. The child scores a PATH; this loop is the only place that
+            # knows whether the image behind it still exists. Counting the report
+            # made the pass announce "scored 3 image(s), 1 skipped" over a bank of
+            # three, which is two claims that cannot both be true.
+            if res.get('state') == 'ok':
+                scored += 1
             done += 1
             if done % 200 == 0:
                 db.session.commit()
@@ -3814,6 +3821,9 @@ def _score_job(bank_id):
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
         multi = sum(1 for n in sizes.values() if n >= 2)
+        # The child's own report — used ONLY to name a head that produced nothing
+        # (below). It counts PATHS it was handed, so it is the wrong thing to
+        # report as "scored": see the counter in the write-back loop.
         ok = [r for r in results.values() if r.get('state') == 'ok']
         # Name any head that produced nothing, so a degraded pass says so out loud
         # (graceful degradation must be visible, never a silent gap).
@@ -3822,7 +3832,7 @@ def _score_job(bank_id):
             missing.append('aesthetic')
         if ok and not any('nsfw' in r for r in ok):
             missing.append('NSFW')
-        detail = (f'done — scored {len(ok)} image(s), '
+        detail = (f'done — scored {scored} image(s), '
                   f'{multi} style group(s) of 2+')
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
