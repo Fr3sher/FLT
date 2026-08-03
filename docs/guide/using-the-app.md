@@ -1525,6 +1525,70 @@ reversible at any time, and the note under the passes always says which
 interpreter is in use. If you never open this dialog, nothing changes: an install
 that works today keeps working, untouched.
 
+## The video bank (turn a folder of rushes into shots)
+
+Videos are a different kind of material and they get their own bank. On the
+**🗃️ Bank** page the switch at the top right says which kind you are making —
+**🖼 Images** or **🎬 Video**. This matters more than it looks: an image bank
+skips every `.mp4` you drop into its folder **without a word**, so a folder of
+video used to look like an empty bank.
+
+A video bank triages **shots**, not files. One two-hour rush is not something you
+can judge; the three hundred shots inside it are.
+
+1. **Create it** — name it, point it at the folder. Every `.mp4`, `.mov`, `.mkv`,
+   `.webm` and `.avi` under it (subfolders included) is inventoried in place.
+   Nothing is copied and the folder is never modified.
+2. **▶ Run everything** chains the three passes in the only order that works:
+   **scan** reads what each file is (length, size, frame rate), **find shots**
+   cuts it at its shot boundaries, and **make thumbnails** grabs one frame from
+   the middle of each shot. Each pass is also available on its own, and the box
+   above the buttons always names the one step to take next — run them out of
+   order and each simply finds nothing to do and reports success.
+3. **Triage** — the grid is thumbnails, and only thumbnails. Click one to watch
+   exactly that shot, `←`/`→` to move, `K` to keep, `R` to reject. Filter by
+   status, or click a file in the **Files** list to see only its shots.
+4. **🎬 Build the dataset** encodes what you kept. This is the only step that
+   writes video.
+
+**Nothing is encoded while you triage.** A bank stores where each shot starts and
+ends — no clip file exists until you promote — which is why a bank of hundreds of
+shots costs no disk space, and why the player streams the original file rather
+than a preview.
+
+**A missing piece never disables the whole lane.** The video extra is three
+independent things: reading files, finding shots, and encoding clips. The app
+says which one is missing and what still works — with no ffmpeg, for example, you
+can scan, cut, watch and triage an entire bank, and only the final build waits.
+
+## Video training sets (and the two things to check before you cut one)
+
+Promoting a video bank builds a flat folder of clips with a `.txt` caption next
+to each one, and lists it in your library under **🎬 Video training sets**.
+
+**The clip length is chosen in FRAMES, from a menu.** That is not pedantry: the
+legal frame counts are a property of each model's VAE, not of video. 29 frames is
+legal for Wan and illegal for LTX; MiniMax H3 wants counts of the form 17n+5. No
+trainer refuses an illegal count — they round it down in latent space and say
+nothing. So the menu offers only counts the target can actually ingest, with the
+duration shown next to each at that model's own frame rate.
+
+Two labels sit next to every target, and both are there to save a wasted week:
+
+- **Not trainable yet** — the app knows the model's geometry perfectly and no
+  LoRA trainer for it is known to exist. Exactly one target of the four currently
+  clears that bar (Wan 2.1 / 2.2 14B). You can still cut a dataset for the
+  others; just know that today nothing is known to train on it.
+- **Licence limits** — MiniMax H3's Community Licence grants rights **only**
+  inside an "Applicable Territory" that excludes the EU, the UK, South Korea and
+  the USA. The restriction covers the **outputs**, not just the model, so keeping
+  your training private is not a way around it. Check your territory before you
+  build the set, not after.
+
+Deleting a video dataset deletes the encoded clips and nothing else: the bank
+keeps every shot and every decision, so you can re-cut at another length or for
+another target without triaging again.
+
 ## The LoRA Canvas (every run on one board)
 
 **Canvas** in the top bar opens a single board holding the training history of
