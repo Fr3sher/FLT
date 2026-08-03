@@ -583,3 +583,167 @@ def test_a_stratified_sample_spans_the_whole_folder():
     assert picked[0] == 0 and picked[-1] >= 80      # reaches the far end
     assert len(set(picked)) == 10                   # no image sampled twice
     assert folder_person._stratified([1, 2, 3], k=10) == [1, 2, 3]
+
+
+# --- the preflight: the same probe, moved IN FRONT of the pass ---------------
+# The critique that produced it: "the first thing a user does is Launch all, so
+# they never go through the folder scan". Everything below is about the DEFAULT
+# path — a saving reachable only from a side panel is not a saving.
+def _preflight_ready(monkeypatch):
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    return banks
+
+
+def test_the_preflight_states_its_cost_against_the_pass_it_replaces(
+        client, tmp_path, monkeypatch):
+    """The number that makes the offer worth reading is the COMPARISON, so the
+    plan carries both: what the sample costs and what the pass would."""
+    _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=3, per=20))
+    plan = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    assert plan['available'] is True
+    assert plan['candidates'] == 3 and plan['covered'] == 3 and plan['left'] == 0
+    assert plan['sample_cost'] == 3 * folder_person.SAMPLE_SIZE   # 45
+    assert plan['full_cost'] == 60                                # the whole bank
+    assert plan['known'] == []                                    # nothing probed yet
+
+
+def test_a_bank_with_nothing_to_check_asks_no_question(client, tmp_path, monkeypatch):
+    """No subfolder big enough to sample = no dialog. The pass must not gain a
+    detour on the banks the feature cannot help."""
+    _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, {'a.jpg': _flat(1), 'b.jpg': _flat(2)})
+    plan = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    assert plan['candidates'] == 0 and plan['known'] == []
+
+
+def test_the_preflight_offers_and_still_groups_nothing_by_itself(
+        client, tmp_path, app, monkeypatch):
+    """The module's safety rule, re-proved on the new path: running the preflight
+    produces OFFERS. Not one image moves until the user answers."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=3, per=20))
+
+    def clusters_of(name, imgs):
+        if name == 'model2':          # two people in this one
+            return {p: (1 if i % 2 else 2) for i, p in enumerate(imgs)}
+        return {p: 1 for p in imgs}
+
+    monkeypatch.setattr(banks, '_drive_infer_subprocess', _probe_driver({}, clusters_of))
+    r = client.post(f'/api/bank/{bank_id}/person-preflight')
+    assert r.status_code == 202, r.get_json()
+
+    plan = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    got = {k['subfolder']: k['verdict'] for k in plan['known']}
+    assert got == {'model0': 'consistent', 'model1': 'consistent', 'model2': 'mixed'}
+    # Each offer carries what accepting it would spare the pass.
+    assert all(k['images'] == 20 for k in plan['known'])
+    # Nothing left to sample, and NOTHING grouped.
+    assert plan['candidates'] == 0
+    assert all(v == (None, None) for v in _rows(app, bank_id).values())
+
+
+def test_accepting_writes_ordinary_assertions_and_the_pass_skips_them(
+        client, tmp_path, app, monkeypatch):
+    """The end-to-end of the default path: preflight → accept the pre-ticked
+    folders → the pass only embeds what is left. And what 'accept' wrote is an
+    ORDINARY assertion — same origin, same revoke — not a second state."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=3, per=20))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    r = client.post(f'/api/bank/{bank_id}/folder-persons/accept',
+                    json={'subfolders': ['model0', 'model1']})
+    assert r.status_code == 200, r.get_json()
+    out = r.get_json()
+    assert out['accepted'] == ['model0', 'model1'] and out['images'] == 40
+    assert out['failed'] == []
+
+    rows = _rows(app, bank_id)
+    assert all(rows[f'model0/{i:03d}.jpg'][1] == 'asserted' for i in range(20))
+    # Two folders, two DISTINCT people — not one merged blob.
+    assert rows['model0/000.jpg'][0] != rows['model1/000.jpg'][0]
+    # …and revoking works on them exactly as on a hand-made assertion.
+    assert client.delete(f'/api/bank/{bank_id}/folder-person',
+                         json={'subfolder': 'model0'}).status_code == 200
+
+    # Re-accept, then run the pass: it embeds model2 only.
+    client.post(f'/api/bank/{bank_id}/folder-persons/accept',
+                json={'subfolders': ['model0']})
+    seen['calls'] = []
+    with app.app_context():
+        job = _fresh_job('faces')
+        banks._faces_job(bank_id)(job)
+    assert len(seen['calls'][0]['images']) == 20        # 60 images, 40 asserted away
+    assert '40 image(s) skipped' in job['detail']
+
+
+def test_analyze_everything_anyway_leaves_every_folder_to_the_pass(
+        client, tmp_path, app, monkeypatch):
+    """The escape hatch has to be real: answering the preflight with nothing
+    ticked must leave the bank exactly as the pass would have found it."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=3, per=20))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+    r = client.post(f'/api/bank/{bank_id}/folder-persons/accept',
+                    json={'subfolders': []})
+    assert r.status_code == 200 and r.get_json()['accepted'] == []
+    seen['calls'] = []
+    with app.app_context():
+        banks._faces_job(bank_id)(_fresh_job('faces'))
+    assert len(seen['calls'][0]['images']) == 60       # every image, nothing skipped
+    with app.app_context():
+        assert folder_person.asserted_subfolders(bank_id) == set()
+
+
+def test_the_preflight_says_what_its_ceiling_did_not_reach(
+        client, tmp_path, monkeypatch):
+    """A ceiling that stayed quiet would read as 'the rest are not one person'."""
+    from app.services import folder_person as fp
+    monkeypatch.setattr(fp, 'MAX_PREFLIGHT_FOLDERS', 2)
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=5, per=20))
+    plan = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    assert plan['candidates'] == 5 and plan['covered'] == 2 and plan['left'] == 3
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver({}, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+    after = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    assert len(after['known']) == 2 and after['candidates'] == 3
+
+
+def test_accept_reports_the_folders_it_could_not_group(client, tmp_path, monkeypatch):
+    """'11 of the 12 you ticked' has to be sayable — a swallowed failure would
+    leave the user believing in a skip that will not happen."""
+    _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1, per=20))
+    r = client.post(f'/api/bank/{bank_id}/folder-persons/accept',
+                    json={'subfolders': ['model0', 'ghost']})
+    out = r.get_json()
+    assert out['accepted'] == ['model0']
+    assert [f['subfolder'] for f in out['failed']] == ['ghost']
+
+
+def test_the_manual_scan_keeps_its_own_smaller_ceiling(client, tmp_path, monkeypatch):
+    """The preflight is generous because it stands in front of a full pass; the
+    standalone button is not, because there it is the whole cost. One code path,
+    two ceilings — and neither may inherit the other's."""
+    assert folder_person.MAX_PREFLIGHT_FOLDERS > folder_person.MAX_SCAN_FOLDERS
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=25, per=6))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/folder-scan')
+    assert len(seen['calls'][0]['groups']) == folder_person.MAX_SCAN_FOLDERS
+    seen['calls'] = []
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+    assert len(seen['calls'][0]['groups']) == 5        # the five the scan left

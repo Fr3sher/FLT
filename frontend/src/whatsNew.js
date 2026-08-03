@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-person-pass-checks-folders-first',
+    date: '2026-08-03',
+    title: 'The person pass now checks your folders first — and asks once',
+    blurb:
+      'Scraped material arrives one folder per person, and 👥 Group by person used to pay a face embedding per image to rediscover that. The bank could already sample folders and offer the obvious ones, but only from a button in the Subfolder panel — and the first thing anyone does with a new bank is press 🚀 Launch all, so nobody ever saw it. Now the sampling runs by itself the moment you launch the person pass, standalone or inside Launch all: about fifteen images per folder, then one dialog saying “12 folders look like a single person — treat each as one person and skip their full analysis”, with those folders already ticked. One click accepts them all; untick what you disagree with; “👥 Analyze everything anyway” is right there and says what it costs. Folders where the sample showed several faces say so and go to the full analysis, and a ceiling that was not reached is named rather than assumed away. Nothing is ever grouped without your click — and whatever you accept is a normal folder assertion you can undo any time.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-seedvr2-tile-and-vae-settings',
     date: '2026-08-03',
     title: 'SeedVR2 upscaling now fits smaller cards — tile size is a setting',

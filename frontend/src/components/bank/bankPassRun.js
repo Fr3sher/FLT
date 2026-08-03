@@ -50,6 +50,12 @@ export const JOB_LABELS = {
   bank_promote: '⬆ Copy into a new bank',
   import: '📥 Import',
   pipeline: '🚀 Launch all',
+  // The folder sampling, under its three names: the preamble of the person pass,
+  // the manual scan, and the one-folder check. Without them a busy-bank refusal
+  // during the preflight would say "Another pass" about the pass it IS.
+  'folder-preflight': '👤 Folder check',
+  'folder-scan': '🔎 Folder scan',
+  'folder-check': '🔍 Folder sample check',
   delete_rejected: '🗑 Delete rejected',
 };
 

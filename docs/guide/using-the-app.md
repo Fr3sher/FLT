@@ -537,21 +537,67 @@ always was. This is deliberate: a wrong assertion made silently would corrupt
 your person grouping with something you never said, and you would have no reason
 to go looking for it.
 
-It runs in two places, and the difference is cost:
+It runs in three places, and the difference is when you are asked:
 
+- **as the preflight of 👤 Group by person** — the default path, described in the
+  next section. You are asked at launch time, before the expensive pass runs.
 - **automatically at the end of 👤 Group by person** — free. That pass has just
   cached an embedding for every image, so sampling every folder adds no
   inference at all and no GPU time. The pass's line then ends with *N folder(s)
   look like a single person*.
-- **on demand, with 🔎 Scan folders** — for asking *before* ever running the
-  heavy pass. This one pays about fifteen embeddings per folder, so it says how
-  many folders it will cover before you click, and covers the twenty biggest
-  first when there are more. It tells you what it did not reach rather than
-  leaving you to assume the rest are not one person.
+- **on demand, with 🔎 Scan folders** — a secondary path now, for asking well
+  before you launch anything. This one pays about fifteen embeddings per folder,
+  so it says how many folders it will cover before you click, and covers the
+  twenty biggest first when there are more. It tells you what it did not reach
+  rather than leaving you to assume the rest are not one person.
 
 A suggestion expires when the folder changes. If images arrive or leave, the
 verdict no longer describes what is in front of you, so it is dropped and the
 folder goes back into the queue instead of advising you from stale evidence.
+
+## Checking your folders before the person pass
+
+Everything above used to be reachable only from the Subfolder panel — and the
+first thing anyone does with a fresh bank is press **🚀 Launch all**, so they
+never opened it and paid the full face pass over forty folders that each held
+one person. A saving the default path walks past is not a saving.
+
+So the sampling now runs **as the preamble of the pass itself**. Press **👥 Group
+by person**, or **🚀 Launch all** with the person pass ticked, and before
+anything expensive starts the bank samples about fifteen images in each
+subfolder it has not been told about, then asks you once:
+
+> **12 folders look like a single person** — treat each as one person and skip
+> their full analysis.
+
+Those twelve are **already ticked**. One click on **👤 Group 12 folders & analyze
+the rest** confirms them and starts the pass you asked for; untick any you
+disagree with; **👥 Analyze everything anyway** is right there and states its own
+cost. It is still an offer, never a decision — a wrong grouping made silently is
+one you would have no reason to go looking for.
+
+Four things the dialog always tells you:
+
+- **what the check costs, against what it saves** — *Checking 12 folders (~15
+  images each — 180 in all), against the 7 316 this pass would embed.*
+- **what ticking the boxes spares** — *3 412 images are grouped instantly and
+  skipped by the pass.*
+- **why a folder is not offered** — *3 different faces in the sample — analyzed
+  in full*, or *only 1 of 15 sampled images had a usable face — analyzed in
+  full*. A doubtful folder is never quietly ticked.
+- **what it did not reach.** The preflight covers up to 200 folders in one go.
+  Beyond that it says *N folders were not checked (biggest first) — they get the
+  full analysis*, because silence there would read as "the rest are not one
+  person".
+
+If there is nothing to ask — a bank with no subfolders, or one whose folders you
+have already declared — no dialog appears at all and the pass starts straight
+away. And whatever you accept here is an **ordinary assertion**: it survives
+re-scans, adopts images that land in the folder later, and **↩ Not one person
+after all** undoes it exactly as if you had clicked it by hand.
+
+While the check is running you can stop it with **👥 Analyze everything anyway**;
+it lets the sampling go and launches the full pass.
 
 ## Pick a balanced set
 

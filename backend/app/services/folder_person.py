@@ -51,7 +51,7 @@ import os
 import re
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 
 from ..extensions import db
 from ..models import BankFolderPerson, BankFolderProbe, BankImage
@@ -74,6 +74,16 @@ MIN_PROBE_IMAGES = 5
 # by person has NO ceiling: it reuses embeddings that pass already cached, so it
 # costs nothing to cover every folder.
 MAX_SCAN_FOLDERS = 20
+# Ceiling for the PREFLIGHT — the same probe, run as the PREAMBLE of 👤 Group by
+# person instead of hiding behind a button nobody presses. It is generous where
+# the manual scan is cautious, because the comparison is the opposite one: the
+# user is about to pay one embedding per image over the whole bank, so fifteen
+# per folder is a rounding error next to it (200 folders = 3 000 embeddings,
+# against 200 × 300 = 60 000 for the pass they just asked for). It stays a
+# ceiling and not "no limit" — a bank of ten thousand folders would turn a
+# preamble into a pass of its own — and whatever it does not reach is stated out
+# loud, never assumed away.
+MAX_PREFLIGHT_FOLDERS = 200
 
 
 def _svc():
@@ -437,25 +447,42 @@ def probe_for(bank_id, subfolder):
             .filter_by(bank_id=bank_id, subfolder=subfolder or '').first())
 
 
-def _probe_dict(row, fresh: bool) -> dict:
+def _probe_dict(row, fresh: bool, images: int = 0) -> dict:
     return {'subfolder': row.subfolder, 'verdict': row.verdict,
             'sample': row.sample, 'scorable': row.scorable,
             'largest': row.largest, 'faces': row.faces, 'note': row.note,
+            # How many images accepting THIS folder would spare the pass. The
+            # preflight totals them, so its offer can be answered against the
+            # only number that matters: what it saves.
+            'images': int(images),
             'checked_at': row.checked_at.isoformat() if row.checked_at else None,
             'stale': not fresh}
+
+
+def _folder_counts(bank_id) -> dict:
+    """{subfolder: non-rejected image count} — one query, the same pool the probe
+    and the face pass work on."""
+    from collections import Counter
+    counts: Counter = Counter()
+    for (rel,) in (db.session.query(BankImage.relpath)
+                   .filter(BankImage.bank_id == bank_id,
+                           BankImage.status != 'reject').all()):
+        counts[_svc()._subfolder_of(rel)] += 1
+    return dict(counts)
 
 
 def suggestions(bank_id) -> list:
     """Every folder the app has probed and NOT been told about, with the stale
     ones marked rather than dropped silently."""
     asserted = asserted_subfolders(bank_id)
+    counts = _folder_counts(bank_id)
     out = []
     for row in (BankFolderProbe.query.filter_by(bank_id=bank_id)
                 .order_by(BankFolderProbe.subfolder.asc()).all()):
         if row.subfolder in asserted:
             continue          # already declared — a suggestion would be noise
         fresh = row.content_sig == _folder_signature(bank_id, row.subfolder)
-        out.append(_probe_dict(row, fresh))
+        out.append(_probe_dict(row, fresh, counts.get(row.subfolder, 0)))
     return out
 
 
@@ -465,12 +492,7 @@ def scan_candidates(bank_id, limit=None) -> list:
     Skipped: folders the user already declared (nothing to suggest), folders
     below MIN_PROBE_IMAGES (too small for a sample to mean anything), and
     folders whose probe still matches their content (already answered)."""
-    from collections import Counter
-    counts: Counter = Counter()
-    for (rel,) in (db.session.query(BankImage.relpath)
-                   .filter(BankImage.bank_id == bank_id,
-                           BankImage.status != 'reject').all()):
-        counts[_svc()._subfolder_of(rel)] += 1
+    counts = _folder_counts(bank_id)
     asserted = asserted_subfolders(bank_id)
     out = []
     for name, n in counts.items():
@@ -622,9 +644,14 @@ def _run_probe(job, bank_id, candidates, *, allow_inference: bool):
     return _apply_probe_results(bank_id, by_folder, data)
 
 
-def start_folder_scan(app, user_id, bank_id):
+def start_folder_scan(app, user_id, bank_id, limit=None, kind='folder-scan'):
     """Sample every unprobed folder and suggest the ones that look like a single
-    person. Costs ~15 embeddings per folder, capped at MAX_SCAN_FOLDERS."""
+    person. Costs ~15 embeddings per folder, capped at ``limit``.
+
+    ``limit``/``kind`` exist for the PREFLIGHT, which is the same work with a
+    different ceiling and a different name in the progress bar — not a second
+    implementation. Both write ordinary probes, and a probe is an offer whoever
+    produced it."""
     from .face_similarity import is_available
     from . import bank_jobs
     banks = _svc()
@@ -633,20 +660,25 @@ def start_folder_scan(app, user_id, bank_id):
     if not is_available():
         raise RuntimeError(
             'face scoring is not installed (Quality tools step in Setup)')
+    cap = limit or MAX_SCAN_FOLDERS
     pending = scan_candidates(bank_id)
     if not pending:
         raise ValueError('every folder here has already been looked at '
                          '(or is asserted, or too small to sample)')
-    return bank_jobs.start(app, bank_id, 'folder-scan',
-                           _folder_scan_job(bank_id),
-                           total=min(len(pending), MAX_SCAN_FOLDERS))
+    return bank_jobs.start(app, bank_id, kind,
+                           _folder_scan_job(bank_id, limit=cap),
+                           total=min(len(pending), cap))
 
 
-def _folder_scan_job(bank_id):
+def _folder_scan_job(bank_id, limit=None):
     def run(job):
         from . import bank_jobs
+        # Read at CALL time, never captured at import: the ceiling is a module
+        # constant tests move around, and a default frozen into the signature
+        # would quietly ignore them.
+        cap = limit or MAX_SCAN_FOLDERS
         pending = scan_candidates(bank_id)
-        picked = pending[:MAX_SCAN_FOLDERS]
+        picked = pending[:cap]
         left = len(pending) - len(picked)
         bank_jobs.progress(job, done=0, total=len(picked),
                            detail=f'sampling {len(picked)} folder(s)')
@@ -683,3 +715,99 @@ def probe_after_faces(job, bank_id) -> str:
         logger.warning('bank %s: folder probe after the face pass failed: %s',
                        bank_id, e, exc_info=True)
         return ''
+
+
+# --- the preflight (the probe, moved IN FRONT of the pass) ------------------
+# WHY THIS EXISTS. Everything above was reachable only from the Subfolder panel
+# or a 🔎 Scan folders button. The first thing a new user does is press 🚀 Launch
+# all — so they never saw any of it, and paid the full pass on forty folders that
+# each held one person. A saving nobody walks past is not a saving.
+#
+# So the sampling now runs where the decision is made: as the preamble of 👤
+# Group by person, standalone or inside Launch all. Same probe, same verdicts,
+# same ASSERTION at the end of it (nothing here invents a second kind of "this
+# folder is one person" — the acceptance goes through assert_single_person, which
+# is why ↩ Not one person after all still works on it).
+#
+# The safety rule of the module is unchanged and non-negotiable: it still never
+# asserts by itself. What changed is that the confirmation is now ON THE ROAD the
+# user is already travelling, pre-ticked, one click for all of it — instead of
+# down a side street they had no reason to take.
+def face_pass_cost(bank_id) -> int:
+    """How many images 👤 Group by person would embed if it started right now:
+    every non-rejected image no assertion already covers. This is the number the
+    preflight is measured against, and it is computed exactly the way the pass
+    computes its own total — so the comparison the UI prints is not a rhetorical
+    one."""
+    return (BankImage.query.filter_by(bank_id=bank_id)
+            .filter(BankImage.status != 'reject',
+                    or_(BankImage.face_cluster_origin.is_(None),
+                        BankImage.face_cluster_origin != ASSERTED)).count())
+
+
+def preflight_payload(user_id, bank_id) -> dict | None:
+    """What the preflight would cost and what it already knows, BEFORE anything
+    runs. The caller uses it to decide whether there is a question worth asking
+    at all: on a bank with no subfolder (or one already fully declared) there is
+    nothing to show, and showing a dialog anyway would be the detour this feature
+    exists to remove."""
+    banks = _svc()
+    if not banks.get_bank(user_id, bank_id):
+        return None
+    from .face_similarity import is_available
+    pending = scan_candidates(bank_id)
+    covered = min(len(pending), MAX_PREFLIGHT_FOLDERS)
+    return {
+        # Without the extra there is no probe and no pass either; the caller
+        # skips straight through and lets the pass report the missing install.
+        'available': bool(is_available()),
+        'sample_size': SAMPLE_SIZE,
+        'min_images': MIN_PROBE_IMAGES,
+        'candidates': len(pending),
+        'covered': covered,
+        # Folders the ceiling will NOT reach. Reported as a number the UI has to
+        # print, not as silence that would read as "the rest are not one person".
+        'left': len(pending) - covered,
+        'sample_cost': covered * SAMPLE_SIZE,
+        'full_cost': face_pass_cost(bank_id),
+        # Fresh verdicts already on file (from an earlier preflight, a 🔎 Scan,
+        # or the free probe at the end of a previous pass). They cost nothing to
+        # show and they are the whole answer when no folder is left to sample.
+        'known': [s for s in suggestions(bank_id) if not s['stale']],
+        'asserted': sorted(asserted_subfolders(bank_id)),
+    }
+
+
+def start_preflight(app, user_id, bank_id):
+    """Sample every unprobed folder as the preamble of the person pass."""
+    return start_folder_scan(app, user_id, bank_id,
+                             limit=MAX_PREFLIGHT_FOLDERS, kind='folder-preflight')
+
+
+def accept_suggestions(user_id, bank_id, subfolders) -> dict:
+    """Confirm the preflight's offers in ONE gesture.
+
+    Each folder goes through ``assert_single_person`` — the same persisted,
+    revocable, origin='asserted' rule a manual click writes. There is deliberately
+    no second state: afterwards nothing distinguishes a folder accepted here from
+    one declared by hand, which is what keeps revoke, re-scan adoption and the
+    pass's skip working on both.
+
+    A folder that cannot be asserted (emptied since the probe, say) is REPORTED,
+    not swallowed: the caller has to be able to say "11 of the 12 you ticked"."""
+    banks = _svc()
+    if not banks.get_bank(user_id, bank_id):
+        raise ValueError('bank not found')
+    if not isinstance(subfolders, (list, tuple)):
+        raise ValueError('subfolders must be a list')
+    accepted, images, failed = [], 0, []
+    for sub in subfolders:
+        name = '' if sub is None else str(sub)
+        try:
+            out = assert_single_person(user_id, bank_id, name)
+        except ValueError as e:
+            failed.append({'subfolder': name, 'error': str(e)})
+            continue
+        accepted.append(out['subfolder'])
+        images += out['images']
+    return {'accepted': accepted, 'images': images, 'failed': failed}

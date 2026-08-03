@@ -124,7 +124,12 @@ export function folderMarker(suggestions, subfolder) {
 
 /** What the "scan folders" button should say, and whether it should be there.
  *  It always states the cost BEFORE it is paid, and never promises to cover
- *  more folders than the server will. */
+ *  more folders than the server will.
+ *
+ *  It is now a SECONDARY path: 👤 Group by person (and 🚀 Launch all) run this
+ *  same check by themselves at launch time and ask there, which is where the
+ *  user actually is. The note says so, so this button reads as "ask me now"
+ *  rather than as a step you were supposed to know about. */
 export function scanOffer(payload) {
   const pending = (payload && payload.scannable) || 0
   if (!pending) return null
@@ -136,6 +141,7 @@ export function scanOffer(payload) {
   if (pending > limit) {
     note += ` ${pending} are waiting — the biggest go first, run it again for the rest.`
   }
-  note += ' It only suggests; you confirm.'
+  note += ' It only suggests; you confirm. 👤 Group by person runs this check by '
+    + 'itself when you launch it — this is for asking beforehand.'
   return { label: `🔎 Scan ${covered} folder${covered === 1 ? '' : 's'}`, note, pending }
 }

@@ -1014,3 +1014,54 @@ def bank_scan_folder_persons(bank_id):
         return _busy(e)
     return jsonify({'ok': True, 'sample_size': folder_person.SAMPLE_SIZE,
                     'limit': folder_person.MAX_SCAN_FOLDERS}), 202
+
+
+# --- the preflight of 👤 Group by person -------------------------------------
+# The sampling above used to be reachable only from the Subfolder panel, which
+# the user who presses 🚀 Launch all never opens. These three endpoints put it in
+# front of the pass instead: what it would cost (GET), run it (POST), and confirm
+# the folders it found in one gesture (accept).
+@bp.get('/bank/<int:bank_id>/person-preflight')
+def bank_person_preflight_plan(bank_id):
+    """What the preflight would sample, what it would cost, and the verdicts it
+    already holds. Read-only — nothing is probed and nothing is grouped."""
+    from ..services import folder_person
+    data = folder_person.preflight_payload(LOCAL_USER, bank_id)
+    if data is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(data)
+
+
+@bp.post('/bank/<int:bank_id>/person-preflight')
+def bank_person_preflight(bank_id):
+    """Run the sampling as the preamble of the person pass. Same probe as
+    🔎 Scan folders with a far higher ceiling, because the alternative the user
+    just chose is one embedding per image over the whole bank."""
+    from ..services import folder_person
+    try:
+        folder_person.start_preflight(_app(), LOCAL_USER, bank_id)
+    except ValueError as e:
+        return _folder_person_error(e)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    return jsonify({'ok': True, 'sample_size': folder_person.SAMPLE_SIZE,
+                    'limit': folder_person.MAX_PREFLIGHT_FOLDERS}), 202
+
+
+@bp.post('/bank/<int:bank_id>/folder-persons/accept')
+def bank_accept_folder_persons(bank_id):
+    """Confirm several folders at once — the preflight's "yes to all". Every one
+    of them becomes an ordinary assertion; folders that could not be asserted come
+    back in `failed` rather than being dropped."""
+    from ..services import folder_person
+    data = request.get_json(silent=True) or {}
+    subs = data.get('subfolders')
+    if not isinstance(subs, list):
+        return jsonify({'error': 'subfolders must be a list'}), 400
+    try:
+        out = folder_person.accept_suggestions(LOCAL_USER, bank_id, subs)
+    except ValueError as e:
+        return _folder_person_error(e)
+    return jsonify({'ok': True, **out})
