@@ -686,6 +686,133 @@ Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token
 | **Verified hosts only** | `cloud.verified_only` | **on** | toggle | Restrict to vast.ai's verified hosts (the historical, safer behaviour). |
 | **Secure Cloud only** | `cloud.secure_cloud_only` | **off** | toggle | Restrict to vast.ai's *datacenter* (Secure Cloud) tier — usually narrows the market and raises the price, so it's opt-in. |
 
+### Advanced options (per run)
+
+These live under **⚙️ Advanced options** in a dataset's training panel — rank, resolution, save/sample cadence, optimizer, scheduler, EMA, LoKr and more. Each carries its own inline **Why/How** note, so they aren't repeated here. Two are worth calling out because of a caveat.
+
+#### Krea 2 Raw · LoKr likeness — a reported community starting point
+
+The built-in **Krea 2 Raw · LoKr likeness** preset is deliberately narrow: it is
+shown only for a **Character** dataset on a compatible Krea 2 Base/Raw variant.
+It turns a [reported Krea 2 Raw LoKr recipe from the Stable Diffusion
+community](https://www.reddit.com/r/StableDiffusion/comments/1v2vsqm/almost_perfect_likeness_in_750_steps_krea_2_lokr/)
+into a named, inspectable starting point — **not** into a promise that a different
+person, image set, captioning style or checkpoint will match at the same step.
+
+The post linked a full Pastebin configuration, but that Pastebin has since been
+deleted. LDS therefore records only the values the post actually reports:
+**LoKr factor 16**, **768 px**, **Automagic2** with initial learning rate
+**`1e-4`**, **Sigmoid** timestep weighting, **Balanced** content/style mode,
+**Differential Guidance** at scale **3**, and a checkpoint/preview cadence of
+**250** steps. The Krea-only Expert controls show those values plainly, and the
+run snapshot carries the factor, content/style mode and Differential Guidance so
+you can compare an experiment later instead of trusting a remembered recipe.
+
+The post does **not** publish the LoKr linear rank or alpha. LDS keeps its
+existing Krea Character **32/32** choice rather than inventing a rank/alpha pair
+and presenting it as sourced. Likewise, the reported **3000 total steps** are
+not forced by the preset: LDS keeps its adaptive step policy so a small dataset
+is not silently overcooked. To reproduce that target intentionally, type
+**3000** into the **Steps** box for that run; leave it empty to use the adaptive
+policy. Treat the intermediate saves — including the early ones — as candidates
+to compare in Test Studio, not as proof that a specific step will be best.
+
+**One rule applies to all of them: they are stored per DATASET, not per family.** Switching **LORA TYPE** keeps every advanced setting you had — which is what you want for rank, optimizer or resolution, and what you do **not** want for the two settings below, whose right value is different on every family. Those two are handled explicitly:
+
+- **Memory saving carries over, and is now said out loud.** `quantize` / `quantize_te` / `low_vram` are a statement about *your card*, and your card doesn't change when the family does — so the values follow you. What changes is whether the card still suffices: switching them off on Anima or SDXL (2B, where **off** is the calibrated default) and then moving to Krea 2, FLUX.1, FLUX.2 Klein or Z-Image used to build an unquantised 12B run in complete silence. Both the panel and the **pre-launch check** now name which saver is off, what that family needs without it (see the estimates below) and what your card reports. It stays a **warning, never a blocker** — a big card legitimately runs unquantised — and it is deliberately **not** dropped on the cloud lane, where the mistake bills rented GPU-hours. The warning is also *provenance-blind*: unticking a box directly on Krea 2 with a 24 GB card gets the same sentence as inheriting it from Anima, because it is the same danger.
+- **Timestep weighting is remembered per family instead.** `sigmoid` is Z-Image's and FLUX.1's canonical flow-matching schedule, `linear` is Krea 2's, `weighted` is FLUX.2 Klein's and Anima's — the value has no meaning outside a family, and carrying it over changed the LoRA that came out with nothing at all to observe afterwards. Each family now keeps its own choice: switching hands the incoming family its own value (or **Auto**, its canonical default, if you never set one there), and coming back finds yours exactly where you left it. Nothing is destroyed and nothing is asked. **Existing datasets are untouched** — a dataset that never changes family keeps every setting it has, byte for byte.
+- **Resolution stays global on purpose.** 768 and 1024 mean the same thing on every family, so remembering it per family would mean silently raising your 768 back to 768+1024 on a switch — a new silent change to fix an old one. The one combination that costs you (1024 on a 12B with a small card) is a pre-launch row instead, and that row no longer tells you to "drop the resolution to 768" when you are already at 768.
+
+
+- **Memory saving** — three switches (`quantize`, `quantize_te`, `low_vram`) that used to be hard-coded. **The defaults have not changed:** Z-Image, Krea 2, FLUX.1 and FLUX.2 Klein quantise the base model and the text encoder to `qfloat8` and stream blocks between CPU and GPU, which is what makes a 12B model train on a 24 GB card; Anima and SDXL are small enough to run without any of it. Turning them **off** trades VRAM for precision and speed — worth it only if your card is bigger than the target. As a rough order of magnitude with the savers off: **Z-Image ≈ 18 GB**, **FLUX.2 Klein 4B ≈ 14 GB**, **FLUX.2 Klein 9B ≈ 24 GB**, **Krea 2 / FLUX.1 ≈ 30 GB** (estimates: bf16 weights plus headroom, not a measurement on your exact card). The panel detects your GPU and says which side of that line you are on; if it can't (no NVIDIA card, `nvidia-smi` missing), it falls back to a generic note and blocks nothing. ⚠️ **The failure mode is slowness, not a crash.** On Windows there is no clean out-of-memory error: the driver silently pages to system RAM and the run creeps along for hours. If a run that used to take 40 minutes is still going after three, put the switches back. The setting also works the other way — a small card can turn quantisation **on** for Anima or SDXL. It's recorded in each run's snapshot and in the ⎘ Share config, so two runs can be compared honestly.
+
+- **Masked training (background at 10%)** — **on by default**, and since the 28/07 wave it is stored **on the dataset** instead of in the browser you set it in. A person mask is generated for every image (rembg, CPU) and the background only weighs 10% of the loss, so the LoRA binds the identity to the subject rather than to the room. What changed and why it matters: the toggle used to be a `localStorage` preference (`trainMasked_v1`) that reached the server only as a launch parameter, so **the readiness badge could not warn about it**, opening the app **from a phone or another machine** silently reverted to the default, and the value appeared in **no run snapshot** — two runs differing only by masking looked identical when compared. All three are fixed: it is patched like any other advanced option, stamped into every run's snapshot (local **and** cloud), and the pre-flight badge now carries a **Masked training ready** row that says *rembg is not installed — this dataset is set to masked but the run trains unmasked* **before** you open the launch dialog. It is a **warning, never a blocker** (a run without masks is a valid run), and it is **not** filtered out on the cloud lane: the masks are generated locally and uploaded with the images, so rembg missing here means the **paid** run trains unmasked. **Concept and Style datasets force it off** (a person mask erases the recurring concept, and a style must be learned across the whole frame), and **slider mode** ignores masks entirely — the panel says so instead of hiding the control. **Existing datasets do not change behaviour:** an untouched dataset resolves to the historical default (on). A browser that had explicitly turned masking **off** is asked once, in the training panel, whether to carry that choice onto the dataset or keep masking on — nothing is written until you answer, in either direction.
+
+- **Dual captions (long + short)** — off by default. When on, the run uses ai-toolkit's native `short_and_long_captions`: every image trains with **both** its full caption and a short one (text-side augmentation, so the LoRA leans less on any single wording). The short variant is **derived from the long caption** the next time you (re-)caption — text-only, via the local vision model, honouring the same kind rules (no trigger; the identity/concept/aesthetic stays omitted) — and you can edit it per image in the **⛶** caption editor. **Local training only for now:** the cloud pod's dataset upload doesn't carry the JSON caption file the short is read from, so cloud runs train on the long caption alone. **Not available on Krea 2 or Anima:** those families pre-cache their text embeddings and unload the text encoder, so no second caption can be encoded — the toggle is reported as ignored on the training panel and in the pre-launch check, and the run trains on the long caption alone (issue #22, reported by 1Tomber).
+
+## Storage
+
+Everything about the disk in one place: which folder holds what, how big it is,
+and how to put any of it on another drive. Before this tab those answers were
+scattered across three screens, and the two directories that actually fill a
+drive — the cloud run staging and the trained checkpoints — were hard-coded and
+invisible.
+
+**Sizes are measured only when you ask.** Walking a hundred gigabytes of datasets
+takes seconds, so **📏 Measure everything** is a button, never something the tab
+does while you read it. Until you press it a folder reads *not measured*, which
+is deliberately not the same as *empty*.
+
+- **What lives where** — one row per category: dataset images, image banks, bank
+  source images, cloud run staging, the checkpoint store, the trash, the run image
+  archive, backups, the ai-toolkit install, the Hugging Face cache and the app's
+  own build. Each row shows the **effective path**, what it holds, the free space
+  on that drive, and a **movable** tag when it can be relocated from here.
+
+### Moving a folder to another drive
+
+Three roots can be pointed anywhere: **Dataset images root**
+(`paths.dataset_images_root`), **Cloud run staging** (`paths.cloud_runs_dir`) and
+the **Checkpoint store** (`paths.checkpoints_dir`). All three default to **empty →
+a folder inside the app's data directory**; the field's *Reset to default* gives
+that implicit state back rather than writing today's path in.
+
+Type a path, press **Check folder**, and the app proves it can write there — by
+actually writing a probe file, because permission bits lie on Windows. A relative
+path, an uncreatable folder, or a target *inside* the folder it would replace is
+refused with the reason. Then **you choose**, and nothing happens until you do:
+
+- **Move what is already there** — every file is copied to the new folder first,
+  and the old one is only removed once the last byte has landed. A progress bar
+  shows files and percentage. If the destination drive has less free space than
+  the folder needs, the button is disabled and says both numbers.
+- **Start using it empty** — the new folder is used from now on. **Nothing is
+  copied and nothing is deleted**: the old folder keeps its files and the app
+  simply stops looking at them. On a full C: this is often the only choice that
+  fits.
+
+The setting is saved **after** the files have moved, so an interrupted move never
+leaves the app pointing at a half-filled folder.
+
+- **Dataset images root** → `paths.dataset_images_root`. Where dataset images are stored. Default **empty → `<data dir>/datasets`**. This folder (and every dataset folder under it) is refused as an **image bank** source: a bank points at a live folder and can delete from it, so the two must never share files — see *Using the app → A bank and a dataset never share files*. Moving this root onto a folder an existing bank already uses is not blocked here, but that bank will say so the next time you open it, and its 🗑 Delete rejected will be refused.
+- **Cloud run staging** → `paths.cloud_runs_dir`. The working area of cloud training runs: the exported dataset copy, the sample images and the mirrored log, one `run_<id>` folder per run. Default **empty → `<data dir>/cloud_runs`**. This is the folder that grows to tens of gigabytes, and the one a cleanup empties.
+- **Checkpoint store** → `paths.checkpoints_dir`. Where the `.safetensors` your cloud runs produce are kept, one `run_<id>` folder per run. Default **empty → `<data dir>/checkpoints`**. **No cleanup in the app ever removes a file from here** — only you can, from the Checkpoints panel or by emptying the trash.
+
+### Why checkpoints have their own folder
+
+They did not, and it cost weights. "Clean finished runs" trashed the whole staging
+directory while advertising *checkpoint duplicates already imported* — but a
+checkpoint that had never been deployed to ComfyUI had no duplicate: staging was
+its **only** copy. Emptying the trash afterwards destroyed it.
+
+Trained files now land in the checkpoint store from the moment they are
+downloaded, and no cleanup path can reach them. An install that trained before
+this change is swept once at startup; **Move stray checkpoints into the store**
+re-runs that sweep on demand and is safe to press at any time.
+
+### Cloud run housekeeping
+
+- **What a cleanup actually does.** Cleaning a finished run — from this tab or with
+  the 🧹 button on the Runs hub — moves its **dataset copy, its sample images and
+  its logs** to the trash. It never moves a `.safetensors`. Files go to the trash
+  **on the same disk**, so the space only comes back when you **empty the trash**.
+- **Which runs are spared.** A run that is still active, and a run whose pod was
+  kept for manual recovery **while that recovery window is still open**
+  (`cloud.max_runtime_minutes` after the run ended). Once the window has closed the
+  pod is gone, so its staging is cleanable like any other — it used to stay frozen
+  forever, holding tens of gigabytes for a pod that no longer existed.
+- **Find unclaimed run folders** — `run_<id>` folders on disk that **no run in the
+  database points at**, left behind by a restored backup, a deleted database or an
+  interrupted cleanup. The cleanup used to answer *already clean* while 25 GB sat
+  right there. They are now listed with their size, and any checkpoint still inside
+  one is **rescued into the store** before the folder goes to the trash.
+
+### Trash and archives
+
+- **Trash** — **Open folder** and **Empty trash**. Everything the app deletes goes here first; emptying is the one destructive action, and it asks for confirmation. It lives on the same disk as your data, so a cleanup gives space back only once you empty it.
+- **Run image archive** — its size, its ceiling, and **Clear archive**. When a training run is launched, a **deduplicated** copy of the images it trains on is kept so that comparing two runs can still *show* an image you have since deleted from its dataset. Copies are **content-addressed**: relaunching an unchanged dataset stores nothing the second time, and only images that were added or re-edited cost anything. Clearing it keeps your runs, their settings and their caption text — you only lose the ability to look at images that are no longer in their dataset. The ceiling is `provenance.archive_max_gb` (see *Config-file-only settings*); past it, nothing more is stored and the compare panel says the picture is unavailable instead of showing a wrong one.
+- **Back up everything** — not on this page but on the **Datasets library**: one button archives every dataset, its **training history** and your settings into a single file (⬇ download or 📂 open folder), and the library's **Import backup** restores it — datasets come back under **Trained**, not "Not trained yet". Tick **Include trained LoRAs** to bundle the (large) trained `.safetensors` too. **API keys and tokens are never included** — re-enter them on the new install. See *Using the app → Back up everything*.
+
 ### Hugging Face storage
 
 Full-model (dense) cloud training does not download its result: each ~26 GB
@@ -739,50 +866,6 @@ after the failure). Free space here, then recover the checkpoint from the pod
 it lands. Nothing is auto-resumed: a dense checkpoint is never downloaded to your
 machine, so the pod is the only place it exists.
 
-### Advanced options (per run)
-
-These live under **⚙️ Advanced options** in a dataset's training panel — rank, resolution, save/sample cadence, optimizer, scheduler, EMA, LoKr and more. Each carries its own inline **Why/How** note, so they aren't repeated here. Two are worth calling out because of a caveat.
-
-#### Krea 2 Raw · LoKr likeness — a reported community starting point
-
-The built-in **Krea 2 Raw · LoKr likeness** preset is deliberately narrow: it is
-shown only for a **Character** dataset on a compatible Krea 2 Base/Raw variant.
-It turns a [reported Krea 2 Raw LoKr recipe from the Stable Diffusion
-community](https://www.reddit.com/r/StableDiffusion/comments/1v2vsqm/almost_perfect_likeness_in_750_steps_krea_2_lokr/)
-into a named, inspectable starting point — **not** into a promise that a different
-person, image set, captioning style or checkpoint will match at the same step.
-
-The post linked a full Pastebin configuration, but that Pastebin has since been
-deleted. LDS therefore records only the values the post actually reports:
-**LoKr factor 16**, **768 px**, **Automagic2** with initial learning rate
-**`1e-4`**, **Sigmoid** timestep weighting, **Balanced** content/style mode,
-**Differential Guidance** at scale **3**, and a checkpoint/preview cadence of
-**250** steps. The Krea-only Expert controls show those values plainly, and the
-run snapshot carries the factor, content/style mode and Differential Guidance so
-you can compare an experiment later instead of trusting a remembered recipe.
-
-The post does **not** publish the LoKr linear rank or alpha. LDS keeps its
-existing Krea Character **32/32** choice rather than inventing a rank/alpha pair
-and presenting it as sourced. Likewise, the reported **3000 total steps** are
-not forced by the preset: LDS keeps its adaptive step policy so a small dataset
-is not silently overcooked. To reproduce that target intentionally, type
-**3000** into the **Steps** box for that run; leave it empty to use the adaptive
-policy. Treat the intermediate saves — including the early ones — as candidates
-to compare in Test Studio, not as proof that a specific step will be best.
-
-**One rule applies to all of them: they are stored per DATASET, not per family.** Switching **LORA TYPE** keeps every advanced setting you had — which is what you want for rank, optimizer or resolution, and what you do **not** want for the two settings below, whose right value is different on every family. Those two are handled explicitly:
-
-- **Memory saving carries over, and is now said out loud.** `quantize` / `quantize_te` / `low_vram` are a statement about *your card*, and your card doesn't change when the family does — so the values follow you. What changes is whether the card still suffices: switching them off on Anima or SDXL (2B, where **off** is the calibrated default) and then moving to Krea 2, FLUX.1, FLUX.2 Klein or Z-Image used to build an unquantised 12B run in complete silence. Both the panel and the **pre-launch check** now name which saver is off, what that family needs without it (see the estimates below) and what your card reports. It stays a **warning, never a blocker** — a big card legitimately runs unquantised — and it is deliberately **not** dropped on the cloud lane, where the mistake bills rented GPU-hours. The warning is also *provenance-blind*: unticking a box directly on Krea 2 with a 24 GB card gets the same sentence as inheriting it from Anima, because it is the same danger.
-- **Timestep weighting is remembered per family instead.** `sigmoid` is Z-Image's and FLUX.1's canonical flow-matching schedule, `linear` is Krea 2's, `weighted` is FLUX.2 Klein's and Anima's — the value has no meaning outside a family, and carrying it over changed the LoRA that came out with nothing at all to observe afterwards. Each family now keeps its own choice: switching hands the incoming family its own value (or **Auto**, its canonical default, if you never set one there), and coming back finds yours exactly where you left it. Nothing is destroyed and nothing is asked. **Existing datasets are untouched** — a dataset that never changes family keeps every setting it has, byte for byte.
-- **Resolution stays global on purpose.** 768 and 1024 mean the same thing on every family, so remembering it per family would mean silently raising your 768 back to 768+1024 on a switch — a new silent change to fix an old one. The one combination that costs you (1024 on a 12B with a small card) is a pre-launch row instead, and that row no longer tells you to "drop the resolution to 768" when you are already at 768.
-
-
-- **Memory saving** — three switches (`quantize`, `quantize_te`, `low_vram`) that used to be hard-coded. **The defaults have not changed:** Z-Image, Krea 2, FLUX.1 and FLUX.2 Klein quantise the base model and the text encoder to `qfloat8` and stream blocks between CPU and GPU, which is what makes a 12B model train on a 24 GB card; Anima and SDXL are small enough to run without any of it. Turning them **off** trades VRAM for precision and speed — worth it only if your card is bigger than the target. As a rough order of magnitude with the savers off: **Z-Image ≈ 18 GB**, **FLUX.2 Klein 4B ≈ 14 GB**, **FLUX.2 Klein 9B ≈ 24 GB**, **Krea 2 / FLUX.1 ≈ 30 GB** (estimates: bf16 weights plus headroom, not a measurement on your exact card). The panel detects your GPU and says which side of that line you are on; if it can't (no NVIDIA card, `nvidia-smi` missing), it falls back to a generic note and blocks nothing. ⚠️ **The failure mode is slowness, not a crash.** On Windows there is no clean out-of-memory error: the driver silently pages to system RAM and the run creeps along for hours. If a run that used to take 40 minutes is still going after three, put the switches back. The setting also works the other way — a small card can turn quantisation **on** for Anima or SDXL. It's recorded in each run's snapshot and in the ⎘ Share config, so two runs can be compared honestly.
-
-- **Masked training (background at 10%)** — **on by default**, and since the 28/07 wave it is stored **on the dataset** instead of in the browser you set it in. A person mask is generated for every image (rembg, CPU) and the background only weighs 10% of the loss, so the LoRA binds the identity to the subject rather than to the room. What changed and why it matters: the toggle used to be a `localStorage` preference (`trainMasked_v1`) that reached the server only as a launch parameter, so **the readiness badge could not warn about it**, opening the app **from a phone or another machine** silently reverted to the default, and the value appeared in **no run snapshot** — two runs differing only by masking looked identical when compared. All three are fixed: it is patched like any other advanced option, stamped into every run's snapshot (local **and** cloud), and the pre-flight badge now carries a **Masked training ready** row that says *rembg is not installed — this dataset is set to masked but the run trains unmasked* **before** you open the launch dialog. It is a **warning, never a blocker** (a run without masks is a valid run), and it is **not** filtered out on the cloud lane: the masks are generated locally and uploaded with the images, so rembg missing here means the **paid** run trains unmasked. **Concept and Style datasets force it off** (a person mask erases the recurring concept, and a style must be learned across the whole frame), and **slider mode** ignores masks entirely — the panel says so instead of hiding the control. **Existing datasets do not change behaviour:** an untouched dataset resolves to the historical default (on). A browser that had explicitly turned masking **off** is asked once, in the training panel, whether to carry that choice onto the dataset or keep masking on — nothing is written until you answer, in either direction.
-
-- **Dual captions (long + short)** — off by default. When on, the run uses ai-toolkit's native `short_and_long_captions`: every image trains with **both** its full caption and a short one (text-side augmentation, so the LoRA leans less on any single wording). The short variant is **derived from the long caption** the next time you (re-)caption — text-only, via the local vision model, honouring the same kind rules (no trigger; the identity/concept/aesthetic stays omitted) — and you can edit it per image in the **⛶** caption editor. **Local training only for now:** the cloud pod's dataset upload doesn't carry the JSON caption file the short is read from, so cloud runs train on the long caption alone. **Not available on Krea 2 or Anima:** those families pre-cache their text embeddings and unload the text encoder, so no second caption can be encoded — the toggle is reported as ignored on the training panel and in the pre-launch check, and the run trains on the long caption alone (issue #22, reported by 1Tomber).
-
 ## Server & access
 
 How the app binds and who can reach it. **These are the settings that need a restart** — the card shows a **Running vs Saved** banner and a **Save & restart to apply** button that does it in one click.
@@ -797,13 +880,10 @@ How the app binds and who can reach it. **These are the settings that need a res
 
 ## Maintenance
 
-Housekeeping and diagnostics. Only one true setting lives here; the rest are actions.
+Keeping the **app itself** healthy: updating it, and getting a bug report out of it. No setting lives here, only actions. Everything about the **disk** — the trash, the run image archive, the dataset root and the folders that fill a drive — moved to *Storage* above, where those questions are answered together.
 
 - **Updates** — **Check for updates** and **Update & restart**, plus a *see what's in this update* compare link. **The button adapts to how you installed.** A **git checkout** fast-forwards to the latest commits. A **packaged (ZIP) install** announces the release and its size (*Update to vX — download ~XX MB*) and shows a **live progress bar** while it downloads and installs (a release ZIP is far larger than a git pull), then backs up the current files and swaps in the new ones — keeping `data/`, `config.json`, `.env` and your `.venv` untouched — and restarts. A mid-way failure rolls back automatically, so a broken download never leaves you with a half-updated install. If the app can't identify a downloadable release (no ZIP asset, or offline), the button steps aside and links to the releases page instead of promising an update it can't perform.
-- **Trash** — **Open folder** and **Empty trash**. Everything the app deletes goes here first; emptying is the one destructive action, and it asks for confirmation.
-- **Run image archive** — its size, its ceiling, and **Clear archive**. When a training run is launched, a **deduplicated** copy of the images it trains on is kept so that comparing two runs can still *show* an image you have since deleted from its dataset. Copies are **content-addressed**: relaunching an unchanged dataset stores nothing the second time, and only images that were added or re-edited cost anything. Clearing it keeps your runs, their settings and their caption text — you only lose the ability to look at images that are no longer in their dataset. The ceiling is `provenance.archive_max_gb` (see *Config-file-only settings*); past it, nothing more is stored and the compare panel says the picture is unavailable instead of showing a wrong one.
 - **Back up everything** — not on this page but on the **Datasets library**: one button archives every dataset, its **training history** and your settings into a single file (⬇ download or 📂 open folder), and the library's **Import backup** restores it — datasets come back under **Trained**, not "Not trained yet". Tick **Include trained LoRAs** to bundle the (large) trained `.safetensors` too. **API keys and tokens are never included** — re-enter them on the new install. See *Using the app → Back up everything*.
-- **Dataset images root** → `paths.dataset_images_root`. Where dataset images are stored. Default **empty → `<data dir>/datasets`**. Point it at a bigger or faster drive if your default data directory is tight on space. This folder (and every dataset folder under it) is refused as an **image bank** source: a bank points at a live folder and can delete from it, so the two must never share files — see *Using the app → A bank and a dataset never share files*. Moving this root onto a folder an existing bank already uses is not blocked here, but that bank will say so the next time you open it, and its 🗑 Delete rejected will be refused.
 - **Diagnostic report** — a one-click, **paste-safe** report for bug reports: it carries the version, capability status and a log tail, with **no secrets** and file paths reduced to booleans (present/absent). Safe to drop into Discord or a GitHub issue.
 - **Server log** — a live tail of the server log, with **Copy all**, for when you need to see what just happened.
 
@@ -924,6 +1004,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `server.port` | Port the server listens on (default `5050`). |
 | `server.require_token` | On a non-loopback bind, require remote clients to present an access token (default `false` — a trusted LAN needs none). Toggle and token also live in Settings → Server & access. |
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
+| `paths.cloud_runs_dir` | Working area of cloud training runs (dataset copy, samples, logs). Empty string defaults to `<data dir>/cloud_runs`. |
+| `paths.checkpoints_dir` | Durable store for the checkpoints cloud runs produce. Empty string defaults to `<data dir>/checkpoints`. No cleanup ever removes a file from it. |
 | `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still be at most 16 Mi-pixels and 8192 px per side; a larger one is rejected and must be converted or resized before import. Not retroactive. Editable in Settings → Captioning & quality. |
 | `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The 16 Mi-pixel / 8192 px-per-side input limit applies to every mode. Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
@@ -953,19 +1035,19 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `engines.chatgpt_subscription_model` | Codex **router** model for the subscription lane (default `gpt-5.4-mini`) — not an image model. |
 | `captioning.backend` | Caption backend: `auto` (prefer JoyCaption, fall back to Ollama), `joycaption`, `ollama`, or `none`. |
 | `training.default_family` | Default model family preselected for new training runs (`zimage`, `sdxl`, `krea`, `flux`, `flux2klein`, or `anima`). |
-| `cloud.max_concurrent_runs` | Simultaneous cloud pods allowed (default `1`, 1–10). Also in Settings → Training. |
+| `cloud.max_concurrent_runs` | Simultaneous cloud pods allowed (default `1`, 1–10). Also in Settings → Storage. |
 | `cloud.max_price_per_hour` | Safety cap on the hourly offer price in $ (default `0.80`); pricier hosts are skipped before launch. |
 | `cloud.monthly_budget_usd` | Hard monthly spend ceiling in $ (default `0` = unlimited); launches are blocked past it. |
 | `cloud.stall_timeout_minutes` | Kill + rescue a cloud run after this many minutes without step progress (default `30`, 5–240). |
-| `cloud.first_step_timeout_minutes` | Kill a run that reaches no training step **and** reports no new downloaded bytes for this long (default `45`, 5–240). Also in Settings → Training. |
-| `cloud.first_step_download_budget_minutes` | Absolute ceiling on the pre-training base-model download, even while it is progressing (default `180`; `0` = no ceiling). Also in Settings → Training. |
-| `cloud.max_runtime_minutes` | Hard stop on the whole run (default `480`, 30–1440); the newest checkpoint is rescued first. Enforced by the out-of-run supervisor too. Also in Settings → Training. |
+| `cloud.first_step_timeout_minutes` | Kill a run that reaches no training step **and** reports no new downloaded bytes for this long (default `45`, 5–240). Also in Settings → Storage. |
+| `cloud.first_step_download_budget_minutes` | Absolute ceiling on the pre-training base-model download, even while it is progressing (default `180`; `0` = no ceiling). Also in Settings → Storage. |
+| `cloud.max_runtime_minutes` | Hard stop on the whole run (default `480`, 30–1440); the newest checkpoint is rescued first. Enforced by the out-of-run supervisor too. Also in Settings → Storage. |
 | `cloud.freeze_watchdog_minutes` | Terminate a training run whose **pod** shows no progress for this long (step, download bytes or a new checkpoint), from outside the run's own supervision; the clock is durable and survives an app restart (default `45`; `0` = warn on the card only). |
-| `cloud.upload_stall_minutes` | Give up a run whose dataset upload has had **no byte at all** reach the pod for this long, and release the machine (default `25`; `0` = never cut). Not a ceiling on the transfer's duration — a slow upload that keeps moving is never cut. Also in Settings → Training. |
+| `cloud.upload_stall_minutes` | Give up a run whose dataset upload has had **no byte at all** reach the pod for this long, and release the machine (default `25`; `0` = never cut). Not a ceiling on the transfer's duration — a slow upload that keeps moving is never cut. Also in Settings → Storage. |
 | `cloud.min_reliability` | vast.ai host-reliability floor (default `0.98`, 0.9–0.999); lower surfaces cheaper, riskier hosts. |
 | `cloud.verified_only` | Restrict to vast.ai verified hosts (default `true`). |
 | `cloud.secure_cloud_only` | Restrict to vast.ai's Secure Cloud (datacenter) tier (default `false`; narrows the market, raises price). |
-| `cloud.full_transformer.private_storage_limit_gb` | Private Hugging Face allowance the dense pre-check compares against (default `0` = infer from the documented plan, an estimate). Also in Settings → Training. |
+| `cloud.full_transformer.private_storage_limit_gb` | Private Hugging Face allowance the dense pre-check compares against (default `0` = infer from the documented plan, an estimate). Also in Settings → Storage. |
 | `cloud.full_transformer.storage_margin_gb` | Headroom added to that forecast (default `20`). |
 | `cloud.full_transformer.checkpoint_size_gb` | Dense checkpoint size used by that forecast (default `0` = measured from past runs, else ~26 GB). |
 | `face_scoring.python` | Python interpreter used to run the InsightFace subprocess (empty = current interpreter). |

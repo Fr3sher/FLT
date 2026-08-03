@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-checkpoint-store-survives-cleanup',
+    date: '2026-08-03',
+    title: 'A cleanup can no longer delete a checkpoint you never deployed',
+    blurb:
+      '“Clean finished runs” said it was trashing “checkpoint duplicates already imported”. For a checkpoint you had never sent to ComfyUI there was no duplicate: the run’s staging folder was its only copy, and emptying the trash destroyed it. Trained files now land in their own checkpoint store the moment they are downloaded, and no cleanup path can reach them — cleaning a run moves its dataset copy, its sample images and its logs, and nothing else. Anything still sitting in an old staging folder is swept into the store at startup, and a button in Settings › Storage re-runs that sweep whenever you want. Two more honest answers while we were there: a run folder nothing points at is now listed with its size instead of being answered “already clean”, and a kept pod stops sparing tens of gigabytes once its recovery window has actually closed.',
+    to: '/settings/storage',
+  },
+  {
+    id: '2026-08-03-settings-storage-tab',
+    date: '2026-08-03',
+    title: 'One tab that says where everything lives — and moves it to another drive',
+    blurb:
+      'When C: fills up, the answer used to be a config.json edit and a manual copy. Settings › Storage now shows every folder the app writes to — datasets, banks, cloud run staging, the checkpoint store, the trash, the archive, the Hugging Face cache — with its real path, what it holds and the free space on its drive. Press 📏 Measure everything to see the sizes (never on open: walking a hundred gigabytes while you read is not a thing a page should do). Three of those roots can be pointed anywhere: type a path, the app proves it can really write there, then you choose out loud — move what is already there, with a progress bar and the old folder removed only once the last byte has landed, or start using the new folder empty and leave the old files exactly where they are. Nothing is ever moved silently. The trash, the run image archive and the Hugging Face allowance moved here too, so the disk questions are answered together instead of one card per screen.',
+    to: '/settings/storage',
+  },
+  {
     id: '2026-08-03-person-pass-checks-folders-first',
     date: '2026-08-03',
     title: 'The person pass now checks your folders first — and asks once',

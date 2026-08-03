@@ -27,6 +27,7 @@ const SETTINGS_ANCHOR = {
   'local-tools': 'local-tools',
   captioning: 'captioning-quality',
   training: 'training',
+  storage: 'storage',
   server: 'server-access',
   maintenance: 'maintenance',
 };
@@ -92,8 +93,14 @@ const TOPICS = [
     keywords: ['server', 'access', 'port', 'lan', 'network', 'token', 'remote', 'phone'],
     guide: { chapter: 'settings-reference', anchor: 'server-access' },
     app: { route: '/settings/server' } },
+  { id: 'settings-storage', kind: 'section', title: 'Settings · Storage',
+    keywords: ['storage', 'disk', 'space', 'disk full', 'drive', 'another drive', 'move folder',
+      'relocate', 'path', 'location', 'where are my files', 'c drive full', 'trash',
+      'archive', 'checkpoint store', 'staging', 'cloud runs', 'free space', 'gb'],
+    guide: { chapter: 'settings-reference', anchor: 'storage' },
+    app: { route: '/settings/storage' } },
   { id: 'settings-maintenance', kind: 'section', title: 'Settings · Maintenance',
-    keywords: ['maintenance', 'update', 'restart', 'log', 'trash', 'data', 'storage', 'diagnostic', 'version'],
+    keywords: ['maintenance', 'update', 'restart', 'log', 'diagnostic', 'version', 'bug report'],
     guide: { chapter: 'settings-reference', anchor: 'maintenance' },
     app: { route: '/settings/maintenance' } },
   { id: 'dataset-settings-modal', kind: 'section', title: 'Per-dataset settings',
@@ -768,6 +775,24 @@ const TOPICS = [
      'gb on disk', 'how big is this run', 'free space', 'purge run', 'clean finished runs',
      'trash', 'empty the trash', 'nothing was freed', 'cleanup did nothing'],
     '/cloud', 'troubleshooting', 'a-cloud-run-seems-stuck'),
+  action('storage-measure', 'See what each folder weighs',
+    ['what lives where', 'disk usage', 'measure', 'how big', 'size', 'space',
+     'where are my files', 'which folder', 'free space', 'drive'],
+    '/settings/storage', 'settings-reference', 'storage'),
+  action('storage-move-location', 'Move a folder to another drive',
+    ['move', 'relocate', 'another drive', 'change folder', 'd drive', 'c drive full',
+     'disk full', 'out of space', 'external drive', 'adopt', 'start empty',
+     'move my datasets', 'move my checkpoints'],
+    '/settings/storage', 'settings-reference', 'storage'),
+  action('storage-orphan-run-folders', 'Clean run folders nothing points at',
+    ['orphan', 'unclaimed', 'run folder', 'already clean', 'nothing was freed',
+     'cleanup did nothing', 'leftover', 'restored backup', 'still full'],
+    '/settings/storage', 'settings-reference', 'storage'),
+  action('storage-checkpoint-store', 'Where trained checkpoints are kept',
+    ['checkpoint store', 'safetensors', 'lost checkpoint', 'deleted my checkpoint',
+     'cleanup deleted', 'purge deleted my lora', 'stray checkpoint', 'durable',
+     'move stray checkpoints'],
+    '/settings/storage', 'settings-reference', 'storage'),
 
   // ---- Settings: per-field topics (kind 'setting') -----------------------
   // engines
@@ -1020,14 +1045,17 @@ const TOPICS = [
     ['cloud', 'verified', 'host', 'vast', 'offer', 'filter']),
   setting('cloud.secure_cloud_only', 'training', 'cloud-secure-cloud-only', 'Secure Cloud only',
     ['cloud', 'secure', 'community', 'vast', 'offer', 'filter']),
-  setting('cloud.full_transformer.private_storage_limit_gb', 'training',
+  // The Hugging Face allowance is a DISK question, so its card moved to
+  // Settings › Storage with the rest of them. Ids stay put: they are stored in
+  // the "seen" maps of existing installs.
+  setting('cloud.full_transformer.private_storage_limit_gb', 'storage',
     'cloud-private-storage-limit', 'Private storage allowance',
     ['hugging face', 'huggingface', 'storage', 'quota', 'private', 'limit', 'allowance',
       'full model', 'dense', 'krea', '403', 'forbidden', 'push', 'checkpoint']),
   action('cloud.hf_storage', 'Hugging Face storage & custom-base caches',
     ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
       'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
-    '/settings/training', 'settings-reference', 'training'),
+    '/settings/storage', 'settings-reference', 'storage'),
   // Dual captions is a per-run Advanced training option (not a global Setting),
   // so it points at the dataset guide's dedicated section rather than
   // settings-reference, and its route is the training workspace section. Its tip
@@ -1135,9 +1163,15 @@ const TOPICS = [
     ['token', 'require', 'access', 'remote', 'phone', 'security', 'lan']),
   setting('server.access_token', 'server', 'server-token', 'Access token',
     ['token', 'access', 'remote', 'phone', 'password', 'qr']),
-  // maintenance
-  setting('paths.dataset_images_root', 'maintenance', 'dataset-images-root', 'Dataset images root',
+  // storage
+  setting('paths.dataset_images_root', 'storage', 'dataset-images-root', 'Dataset images root',
     ['data', 'storage', 'path', 'dataset', 'images', 'root', 'location', 'disk']),
+  setting('paths.cloud_runs_dir', 'storage', 'cloud-runs-dir', 'Cloud run staging folder',
+    ['cloud runs', 'staging', 'run folder', 'disk', 'space', 'move', 'another drive',
+      'dataset copy', 'samples', 'logs', 'tens of gb', 'disk full']),
+  setting('paths.checkpoints_dir', 'storage', 'checkpoints-dir', 'Checkpoint store folder',
+    ['checkpoint', 'store', 'safetensors', 'where are my checkpoints', 'lost checkpoint',
+      'deleted checkpoint', 'move', 'another drive', 'durable', 'disk']),
 
   // ---- Action topics (kind 'action') -------------------------------------
   action('action-edit-reference', 'Edit the reference photo',

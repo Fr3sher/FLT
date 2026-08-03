@@ -628,6 +628,71 @@ def run_archive_clear():
     return jsonify({'ok': True, **run_archive.clear()})
 
 
+@bp.get('/storage/locations')
+def storage_locations():
+    """The “what lives where” map: every category, its effective path and
+    whether it can be relocated. Deliberately size-free — measuring means
+    walking tens of thousands of files, which belongs to an explicit click
+    (see /storage/sizes), never to a tab mount."""
+    from ..services import storage_locations as sl
+    payload = {'locations': sl.locations()}
+    for entry in payload['locations']:
+        if entry['path']:
+            entry['volume'] = sl.free_space(entry['path'])
+    return jsonify(payload)
+
+
+@bp.get('/storage/sizes')
+def storage_sizes():
+    """Bytes held by each requested category (?keys=a,b — all of them when
+    absent). This is the walk the map's “Measure” button pays for."""
+    from ..services import storage_locations as sl
+    raw = (request.args.get('keys') or '').strip()
+    keys = [k for k in raw.split(',') if k.strip()] if raw else None
+    sizes = sl.sizes(keys)
+    return jsonify({'ok': True, 'sizes': sizes,
+                    'total_bytes': sum(sizes.values())})
+
+
+@bp.post('/storage/validate')
+def storage_validate():
+    """Is this folder usable for that category? Proves writability by writing a
+    probe file — permission bits lie on Windows. Writes no config."""
+    from ..services import storage_locations as sl
+    body = request.get_json(silent=True) or {}
+    key = str(body.get('key') or '')
+    return jsonify(sl.validate_target(key, body.get('path')))
+
+
+@bp.post('/storage/move')
+def storage_move():
+    """Start moving a category's current content into its new folder. The
+    location change itself is a normal settings save; this only carries the
+    bytes, and never runs unless the user asked for it (the alternative,
+    “adopt the empty folder”, saves without calling this)."""
+    from ..services import storage_locations as sl
+    body = request.get_json(silent=True) or {}
+    try:
+        res = sl.start_move(str(body.get('key') or ''), body.get('path'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **res})
+
+
+@bp.get('/storage/move/progress')
+def storage_move_progress():
+    from ..services import storage_locations as sl
+    return jsonify({'ok': True, 'job': sl.move_progress(request.args.get('job_id'))})
+
+
+@bp.post('/storage/adopt-checkpoints')
+def storage_adopt_checkpoints():
+    """Re-run the staging → checkpoint-store retrofit on demand. Idempotent: on
+    an already-migrated install it moves nothing and says so."""
+    from ..services import cloud_training as ct
+    return jsonify({'ok': True, **ct.migrate_checkpoints_into_store(force=True)})
+
+
 @bp.post('/trash/open')
 def trash_open():
     """Open the server-resolved trash directory; the client supplies no path."""

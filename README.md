@@ -90,6 +90,7 @@ API generation follows each provider's billing and content policy. Read the dire
 | **Hugging Face publishing** | Publish kept pairs to a dataset repository, private by default and gated by an explicit rights confirmation |
 | **ComfyUI deployment** | Deploy individual checkpoints or downloaded cloud results into the configured LoRA tree |
 | **Recoverable deletion** | Deleted app data goes to Trash; destructive Image Bank actions state their destination before confirmation |
+| **Storage you can see and move** | Settings › Storage lists every folder the app writes to with its path and (on request) its size, and can point the dataset root, the cloud run staging and the checkpoint store at another drive — moving what is already there, or adopting the new folder empty, never silently. Trained checkpoints live in their own store that no cleanup touches; the trash sits on the same disk, so space returns only when you empty it. |
 
 ### A quick visual tour
 

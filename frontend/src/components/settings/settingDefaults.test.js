@@ -24,7 +24,8 @@ import {
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const SECTION_FILES = ['EnginesSection.jsx', 'CaptioningSection.jsx', 'TrainingSection.jsx',
-  'LocalToolsSection.jsx', 'ServerSection.jsx', 'ScrapingSection.jsx', 'MaintenanceSection.jsx'];
+  'LocalToolsSection.jsx', 'ServerSection.jsx', 'ScrapingSection.jsx', 'MaintenanceSection.jsx', 'StorageSection.jsx',
+  'HfStorageCard.jsx'];
 const sources = Object.fromEntries(SECTION_FILES.map((f) => [f, read(`./${f}`)]));
 const button = read('./ResetToDefault.jsx');
 const settingsPage = read('../../pages/SettingsPage.jsx');
@@ -184,7 +185,9 @@ const COVERED = [
   ['LocalToolsSection.jsx', 'ollama', 'vision_keep_warm_seconds'],
   ['ServerSection.jsx', 'server', 'port'],
   ['ScrapingSection.jsx', 'klein', 'small_image_prompt'],
-  ['MaintenanceSection.jsx', 'paths', 'dataset_images_root'],
+  ['StorageSection.jsx', 'paths', 'dataset_images_root'],
+  ['StorageSection.jsx', 'paths', 'cloud_runs_dir'],
+  ['StorageSection.jsx', 'paths', 'checkpoints_dir'],
 ];
 
 /* Which `section.field` pairs a file actually offers a reset for.
@@ -198,8 +201,16 @@ const COVERED = [
    read is a reset it cannot guarantee. */
 const resetPairs = (src) => {
   const pairs = new Set();
-  const re = /<ResetToDefault[^>]*section="(\w+)" field=(?:"(\w+)"|\{([\w.]+)\})/g;
-  for (const [, section, literal, expr] of src.matchAll(re)) {
+  const re = /<ResetToDefault[^>]*section=(?:"(\w+)"|\{(\w+)\}) field=(?:"(\w+)"|\{([\w.]+)\})/g;
+  for (const [, section, sectionExpr, literal, expr] of src.matchAll(re)) {
+    // A generic editor component: BOTH props arrive from the call site, so the
+    // pairs are the literal section/field the call sites in this same file give
+    // it (Settings › Storage renders one LocationEditor per relocatable root).
+    if (!section && sectionExpr === 'section' && expr === 'field') {
+      for (const m of src.matchAll(/section="(\w+)" field="(\w+)"/g)) pairs.add(`${m[1]}.${m[2]}`);
+      continue;
+    }
+    if (!section) throw new Error(`unresolvable ResetToDefault section: {${sectionExpr}}`);
     if (literal) { pairs.add(`${section}.${literal}`); continue; }
     if (expr === 'configKey') {
       for (const m of src.matchAll(/configKey="(\w+)"/g)) pairs.add(`${section}.${m[1]}`);
