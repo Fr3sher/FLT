@@ -30,7 +30,7 @@ import { runNumber } from '../../utils/runIdentity';
 
 export default function CanvasBlendPanel({
   selection, mode, onMode, weights, onWeight, blocker = null, familyReason = null,
-  sets = {}, onToggleChip = null, count = 1,
+  sets = {}, onToggleChip = null, count = 1, secondsPerImage = null,
 }) {
   const blend = mode === 'blend';
   const triggers = canvasStackTriggers(selection);
@@ -133,7 +133,8 @@ export default function CanvasBlendPanel({
             })}
           </ul>
 
-          <BlendSweepSummary configCount={configCount} count={count} />
+          <BlendSweepSummary configCount={configCount} count={count}
+            secondsPerImage={secondsPerImage} />
 
           {/* No silent magic: the exact tokens that will be prefixed to whatever
               prompt is typed below, in the order they will be prefixed in. */}

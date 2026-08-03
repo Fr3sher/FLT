@@ -79,6 +79,14 @@ export const WHATS_NEW = [
     to: '/settings/storage',
   },
   {
+    id: '2026-08-03-prompt-batch-no-cap',
+    date: '2026-08-03',
+    title: 'The prompt batch no longer caps at 24 — and the time estimate is now yours',
+    blurb:
+      'Ticking more than 24 saved prompts was refused. That number was a guess, not a limit: nothing breaks past it, and it governed the wrong thing — 24 prompts across eight checkpoints went through, while 25 on a single one did not, even though the second run is far shorter. Tick as many as you like. What you get instead is the real cost, before the click: the panel counts every generation the run will queue and tells you how long that takes at the pace your own machine has actually been running at, measured from your recent tests rather than assumed. Past about an hour it asks once whether you meant it, and reminds you that the queue is serial — you can stop it whenever you like and keep what is already done. Every duration in the Studio and on the canvas now comes from that same measured pace, so a slower card stops being told it will take twenty minutes when it will take two hours.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-03-person-pass-checks-folders-first',
     date: '2026-08-03',
     title: 'The person pass now checks your folders first — and asks once',

@@ -1720,7 +1720,17 @@ def _batch_lora_axis(batch_loras, run_family) -> list:
 # garde « a test run is already in progress » (et le GPU est sérialisé de toute
 # façon) : le lot est donc un AXE, comme les formats ou les cfg — une cellule par
 # prompt, mêmes checkpoints, mêmes réglages, même seed.
-_MAX_PROMPTS_PER_RUN = 24
+#
+# ⚠️ AUCUN PLAFOND, et c'est la règle de CE module (cf. l'en-tête et build_matrix :
+# « PAS de plafond sur le nombre de cellules : la file est sérielle et
+# l'utilisateur voit le compte + l'estimation de durée avant de lancer »). Une
+# première version de ce lot refusait au-delà de 24 prompts. Ce 24 était un
+# jugement, pas une mesure : rien ne casse à 33 — le corps de requête pèse
+# quelques kilo-octets contre 64 Mo autorisés, `prompt` est un TEXT sans
+# longueur, la file n'a pas de profondeur maximale et aucune vue de résultats ne
+# tronque. Le seul coût réel est le TEMPS GPU, et il se gouverne par un
+# avertissement chiffré avant le clic — pas par un refus sur un axe pris au
+# hasard parmi les six que le run multiplie.
 
 
 def _prompt_axis(prompts, fallback) -> list:
@@ -1728,11 +1738,7 @@ def _prompt_axis(prompts, fallback) -> list:
     l'ordre d'arrivée ; vide → `[fallback]`, c'est-à-dire EXACTEMENT le
     comportement d'avant (un seul prompt, celui du champ). `fallback` peut être
     None quand l'appelant laisse chaque cellule retomber sur le prompt d'identité
-    de son dataset (comparaison multi-datasets).
-
-    Borné : au-delà de 24 prompts le lot est refusé avec son compte plutôt que
-    tronqué en silence — une grille qui rend la moitié de ce qui a été coché est
-    pire qu'un refus qui dit lequel."""
+    de son dataset (comparaison multi-datasets)."""
     seen, out = set(), []
     for p in (prompts or []):
         if not isinstance(p, str):
@@ -1741,12 +1747,64 @@ def _prompt_axis(prompts, fallback) -> list:
         if s and s not in seen:
             seen.add(s)
             out.append(s)
-    if not out:
-        return [fallback]
-    if len(out) > _MAX_PROMPTS_PER_RUN:
-        raise ValueError(f'at most {_MAX_PROMPTS_PER_RUN} prompts per run — '
-                         f'{len(out)} were selected; untick some')
-    return out
+    return out or [fallback]
+
+
+# --- Rythme MESURÉ de la machine ---------------------------------------------
+# L'UI annonçait « ~12 s/image » en dur. C'est vrai sur une 4090 en Z-Image Turbo
+# et faux partout ailleurs : sur une carte lente, un balayage annoncé « 20 min »
+# en prend deux heures, et l'utilisateur ne l'apprend qu'en le vivant. Or la file
+# enregistre `started_at`/`completed_at` de chaque job depuis toujours — le vrai
+# chiffre était déjà là, personne ne le lisait.
+_PACE_SCAN_ROWS = 200      # lignes de file relues au plus (bornées, index sur completed_at)
+_PACE_SAMPLE_SIZE = 30     # échantillons retenus : assez pour une médiane stable
+_PACE_MIN_SAMPLES = 3      # en-dessous, on ne prétend rien et l'UI garde son défaut
+_PACE_MIN_SECONDS = 0.5    # garde-fou bas : une cellule « faite » en 0,1 s n'a rien rendu
+_PACE_MAX_SECONDS = 900.0  # garde-fou haut : une machine mise en veille pendant un job
+                           # signerait « 8 h par image » et ruinerait l'estimation
+DEFAULT_SECONDS_PER_IMAGE = 12.0   # le repli historique, quand il n'y a pas d'historique
+
+
+def measured_seconds_per_image(family=None) -> float | None:
+    """La durée MÉDIANE d'une génération de test réellement observée ici.
+
+    Médiane et non moyenne : un job resté coincé derrière un téléchargement de
+    modèle tirerait une moyenne vers le haut pour les cent runs suivants.
+    `family` restreint aux cellules de cette pipeline (une image Krea et une
+    Z-Image Turbo ne coûtent pas la même chose) ; sans assez d'échantillons on
+    renvoie None — l'appelant dit alors « ~ » avec son défaut plutôt que
+    d'inventer un chiffre précis à partir de deux mesures."""
+    try:
+        rows = (db.session.query(ImageGenerationQueue.started_at,
+                                 ImageGenerationQueue.completed_at,
+                                 LoraTestImage.checkpoint)
+                .join(LoraTestImage, LoraTestImage.job_id == ImageGenerationQueue.job_id)
+                .filter(ImageGenerationQueue.status == 'completed',
+                        ImageGenerationQueue.started_at.isnot(None),
+                        ImageGenerationQueue.completed_at.isnot(None))
+                .order_by(ImageGenerationQueue.completed_at.desc())
+                .limit(_PACE_SCAN_ROWS).all())
+    except Exception:                      # base legacy sans l'une des colonnes
+        logger.debug('pace: queue timings unreadable', exc_info=True)
+        return None
+    secs = []
+    for started, completed, checkpoint in rows:
+        if family and family_of_lora(checkpoint or '') not in (None, family):
+            continue
+        try:
+            d = (completed - started).total_seconds()
+        except (TypeError, AttributeError):
+            continue
+        if _PACE_MIN_SECONDS <= d <= _PACE_MAX_SECONDS:
+            secs.append(d)
+        if len(secs) >= _PACE_SAMPLE_SIZE:
+            break
+    if len(secs) < _PACE_MIN_SAMPLES:
+        return None
+    secs.sort()
+    mid = len(secs) // 2
+    median = secs[mid] if len(secs) % 2 else (secs[mid - 1] + secs[mid]) / 2
+    return round(median, 1)
 
 
 def checkpoint_origins(checkpoints, explicit=None) -> dict:
@@ -3417,6 +3475,10 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'steps2_choices': (STEPS_CHOICES if eff == 'sdxl' else None),
         'default_steps2': (DEFAULT_STEPS if eff == 'sdxl' else None),
         'max_images': MAX_TEST_IMAGES,
+        # Le rythme RÉEL de cette machine sur cette pipeline (médiane observée),
+        # ou null quand l'historique est trop court : l'estimation de durée du
+        # panneau cesse d'être « ~12 s/image » sur toutes les cartes du monde.
+        'seconds_per_image': measured_seconds_per_image(eff),
         'cells': [{'id': r.id, 'checkpoint': r.checkpoint,
                    'label': format_trained_lora_label(r.checkpoint) or _basename(r.checkpoint).rsplit('.', 1)[0],
                    'strength': r.strength, 'aspect': r.aspect, 'filename': r.filename,

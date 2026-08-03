@@ -541,7 +541,12 @@ const TOPICS = [
      'select several prompts', 'tick prompts', 'checkbox', 'checkboxes',
      'replay prompts', 'rerun prompts', 'run all my prompts', 'queue several prompts',
      'one image per prompt', 'n selected', 'clear selection', 'untick',
-     'how many images will this make', 'too many prompts', 'at most 24 prompts'],
+     'how many images will this make', 'too many prompts', 'at most 24 prompts',
+     // Ce que quelqu'un tape après avoir été refusé par le plafond qui a existé
+     // une journée — et ce qu'il cherche maintenant : le coût, pas la limite.
+     'prompt limit', 'maximum prompts', 'why was my batch refused', 'no limit',
+     'how long will this take', 'estimated time', 'duration', 'at your current pace',
+     'this run will queue', 'confirmation before a long run', 'seconds per image'],
     '/studio', 'dataset-guide', '6-after-training-pick-the-right-checkpoint'),
   action('studio-enhance-prompt', '✨ Enhance: enrich the test prompt with the local model',
     ['studio', 'test studio', 'enhance', 'enhance prompt', 'improve prompt', 'better prompt',

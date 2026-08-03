@@ -178,6 +178,7 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
           weights={weights}
           onWeight={(k, v) => setWeights((cur) => ({ ...cur, [k]: v }))}
           sets={sets} onToggleChip={toggleChip} count={form?.genCount ?? 1}
+          secondsPerImage={studio.data?.seconds_per_image ?? null}
           blocker={blendBlocker} familyReason={familyReason} />
       )}
     </>

@@ -12,8 +12,9 @@
  */
 import { blendSweepCost } from './loraStack';
 
-export default function BlendSweepSummary({ configCount, count = 1, batchMult = 1 }) {
-  const cost = blendSweepCost({ configCount, count, batchMult });
+export default function BlendSweepSummary({ configCount, count = 1, batchMult = 1,
+  secondsPerImage = null }) {
+  const cost = blendSweepCost({ configCount, count, batchMult, secondsPerImage });
   if (cost.configs <= 1) return null;   // une seule configuration : rien à annoncer
 
   return (
@@ -26,7 +27,8 @@ export default function BlendSweepSummary({ configCount, count = 1, batchMult = 
       <span aria-hidden>{cost.warn ? '⚠' : '🧮'}</span>{' '}
       <strong className="tabular-nums">{cost.configs}</strong> weight combinations
       {' → '}<strong className="tabular-nums">{cost.cells}</strong> image
-      {cost.cells > 1 ? 's' : ''}, about {cost.minutes} min.
+      {cost.cells > 1 ? 's' : ''}, about {cost.label}
+      {cost.measured ? ' at your current pace' : ''}.
       {cost.warn && ' That is a long queue — untick a few weights if you did not mean it.'}
     </p>
   );

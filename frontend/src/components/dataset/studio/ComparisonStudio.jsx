@@ -306,6 +306,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
           sets={stackSets}
           onToggleChip={toggleStackChip}
           count={count}
+          secondsPerImage={axes?.seconds_per_image ?? null}
           onWeight={(k, v) => setStackWeights((cur) => ({ ...cur, [k]: v }))} />
         <div id="st-setup" className="scroll-mt-16">
           <StudioRunSetup
@@ -326,6 +327,7 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
             combineBlocked={combineBlocked}
             configCount={blendConfigCount(selection, { weights: stackWeights, sets: stackSets })}
             axisTotal={axisTotal({ cfgs: effectiveCfgs, steps: effectiveSteps, steps2: effectiveSteps2 })}
+            secondsPerImage={axes?.seconds_per_image ?? null}
             /* 🎛 Les axes de rendu, dans le panneau de réglage du run et pas dans
                un bloc à part : c'est le même geste que choisir une strength. Le
                MÊME composant que le studio mono-LoRA et le canvas — base et format
