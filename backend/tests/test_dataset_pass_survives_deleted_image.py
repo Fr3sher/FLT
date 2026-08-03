@@ -1,0 +1,203 @@
+"""📁 Dataset — deleting an image mid-pass skips that image, never the pass.
+
+The dataset half of the window closed for the 🗃️ bank in b87830f6. Same cause,
+same consequence, different file: a pass loads its rows, then walks them for
+minutes-to-hours with one model call per image, committing as it goes. With
+`expire_on_commit` on, every row it has not reached yet is a lazy re-SELECT —
+and the grid stays fully interactive while the pass runs, so deleting a bad tile
+during a captioning or watermark run is ordinary use, not a race anyone has to
+engineer.
+
+SQLAlchemy's default answer is fatal: an attribute read on an expired row whose
+database row is gone raises ObjectDeletedError (verified — including for the
+PRIMARY KEY, which is why holding ids taken *before* any commit is the immune
+shape), and a commit carrying a write staged on such a row raises too, poisoning
+the session for the `finally`. Either one kills the WHOLE pass and discards the
+work already done on every other image.
+
+The shape these passes are moved to is the one `analyze_faces` already uses and
+that this file treats as the reference: hold plain values, not ORM objects, and
+re-read by id immediately before touching a row.
+
+Each test below deletes ONE image from the middle of a pass, through that pass's
+own inference hook — i.e. while the pass is inside a model call, which is where
+the real click lands — and pins: the pass finished, the survivors were written,
+and the count it returns is the count it actually wrote.
+"""
+import io
+import json
+
+import pytest
+from PIL import Image
+
+
+def _png(color=(255, 0, 0)):
+    buf = io.BytesIO()
+    Image.new('RGB', (64, 64), color).save(buf, 'PNG')
+    return buf.getvalue()
+
+
+def _dataset_with_files(svc, n=3, **row_kw):
+    """A dataset with ``n`` kept images that really exist on disk."""
+    import os
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    ds = svc.create_dataset(LOCAL_USER, 'Pass', 'passds')
+    folder = svc._dataset_path(ds.id)
+    os.makedirs(folder, exist_ok=True)
+    for i in range(n):
+        name = f'img{i}.png'
+        with open(os.path.join(folder, name), 'wb') as fh:
+            fh.write(_png((10 * i, 90, 160)))
+        db.session.add(FaceDatasetImage(dataset_id=ds.id, filename=name,
+                                        status='keep', **row_kw))
+    db.session.commit()
+    return ds
+
+
+def _ids(dataset_id):
+    from app.models import FaceDatasetImage
+    return [r.id for r in FaceDatasetImage.query
+            .filter_by(dataset_id=dataset_id)
+            .order_by(FaceDatasetImage.id.asc()).all()]
+
+
+def _delete_image_row(image_id):
+    """Delete one row the way another request would.
+
+    A bulk DELETE with ``synchronize_session=False`` plus a commit reproduces
+    exactly what the pass's session sees when a DIFFERENT session removed the
+    row: gone from the database, while the pass still holds the (now expired)
+    instance in its identity map."""
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    FaceDatasetImage.query.filter(FaceDatasetImage.id == image_id).delete(
+        synchronize_session=False)
+    db.session.commit()
+
+
+@pytest.fixture()
+def ctx(app):
+    with app.app_context():
+        yield
+
+
+def test_the_framing_classifier_survives_an_image_deleted_under_it(ctx, monkeypatch):
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+    from app.services import vision_ollama
+
+    ds = _dataset_with_files(svc, 3, source='import')
+    ids = _ids(ds.id)
+    calls = {'n': 0}
+
+    def fake_describe(image_bytes, *a, **k):
+        if calls['n'] == 0:
+            _delete_image_row(ids[1])
+        calls['n'] += 1
+        return '{"framing": "face", "label": "portrait"}'
+
+    monkeypatch.setattr(vision_ollama, 'describe_image_ollama', fake_describe)
+    monkeypatch.setattr(vision_ollama, 'unload_vision_model', lambda *a, **k: True)
+    n = svc.classify_images(LOCAL_USER, ds.id)
+    assert n == 2, f'the pass reported {n} classified over two surviving images'
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).framing, (
+            'the pass continued but stopped writing its classifications')
+
+
+def test_the_watermark_detector_survives_an_image_deleted_under_it(ctx, monkeypatch):
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+    from app.services import vision_ollama
+
+    ds = _dataset_with_files(svc, 3)
+    ids = _ids(ds.id)
+    calls = {'n': 0}
+
+    def fake_describe(image_bytes, *a, **k):
+        if calls['n'] == 0:
+            _delete_image_row(ids[1])
+        calls['n'] += 1
+        return '{"present": false}'
+
+    monkeypatch.setattr(vision_ollama, 'describe_image_ollama', fake_describe)
+    monkeypatch.setattr(vision_ollama, 'unload_vision_model', lambda *a, **k: True)
+    counts = svc.detect_watermarks(LOCAL_USER, ds.id)
+    # 'checked' counts the images this pass really examined. The vanished one is
+    # NOT reported as a fourth key: `counts` is the route's response shape and is
+    # pinned exactly by test_watermarks.py, so the skip is logged instead.
+    assert counts['checked'] == 2, (
+        f'the pass reported {counts["checked"]} checked over two surviving images')
+    assert set(counts) == {'detected', 'none', 'checked'}, (
+        'the response shape gained a key — test_watermarks.py pins it exactly')
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).watermark_state == 'none', (
+            'the pass continued but stopped writing its verdicts')
+
+
+def test_the_watermark_cleaner_survives_an_image_deleted_under_its_batch(ctx, monkeypatch):
+    """LaMa repaints the whole selection in ONE batch, so the pass holds its rows
+    across a call that runs for minutes — the widest window of the four. It also
+    has to throw away the staged edit of a row that vanished, rather than promote
+    a repainted file over a master no row points at any more."""
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+    from app.services import watermark_lama
+
+    ds = _dataset_with_files(svc, 3, watermark_state='detected',
+                             watermark_bbox=json.dumps([0.0, 0.90, 1.0, 1.0]))
+    ids = _ids(ds.id)
+
+    def fake_batch(items, device='cpu'):
+        _delete_image_row(ids[1])          # deleted while the batch was running
+        return {it['image_path']: (True, None) for it in items}
+
+    monkeypatch.setattr(watermark_lama, 'is_available', lambda: True)
+    monkeypatch.setattr(watermark_lama, 'inpaint_batch', fake_batch)
+    monkeypatch.setattr(watermark_lama, 'inpaint_watermark',
+                        lambda p, b, **k: (True, None))
+    monkeypatch.setattr(watermark_lama, 'inpaint_watermarks',
+                        lambda p, b, **k: (True, None))
+    # allow_crop=False forces the inpaint route, which is the batch we want to
+    # exercise; a border box would otherwise be cropped in PIL and never queued.
+    out, _error = svc.clean_watermarks(LOCAL_USER, ds.id, allow_crop=False)
+    assert out['inpainted'] == 2, (
+        f'the pass reported {out["inpainted"]} inpainted over two surviving images')
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).watermark_state == 'cleaned', (
+            'the pass continued but stopped recording its repaints')
+
+
+def test_the_short_caption_pass_survives_an_image_deleted_under_it(ctx, monkeypatch):
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+
+    ds = _dataset_with_files(svc, 3, caption='a long caption to shorten')
+    # The pass is a no-op unless the dataset opted into dual captions — without
+    # this the test would take an early return and prove nothing at all.
+    ds.train_settings = json.dumps({'dual_captions': True})
+    db.session.commit()
+    ids = _ids(ds.id)
+    calls = {'n': 0}
+
+    def fake_generate(prompt):
+        if calls['n'] == 0:
+            _delete_image_row(ids[1])
+        calls['n'] += 1
+        return 'a short caption'
+
+    n = svc.derive_short_captions(LOCAL_USER, ds.id, generate=fake_generate)
+    assert n == 2, f'the pass reported {n} shortened over two surviving images'
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).caption_short, (
+            'the pass continued but stopped writing its short captions')

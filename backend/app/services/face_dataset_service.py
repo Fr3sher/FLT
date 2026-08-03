@@ -1972,6 +1972,38 @@ def _owned_image(user_id, image_id):
     return img if ds and str(ds.user_id) == str(user_id) else None
 
 
+# --- rows that can vanish under a long pass ---------------------------------
+# A pass loads its rows, then walks them for minutes to hours with one model
+# call per image, committing as it goes. `expire_on_commit` is on, so every row
+# it has not reached yet is a lazy re-SELECT — and the grid stays fully
+# interactive while the pass runs, so deleting a bad tile mid-caption is
+# ordinary use rather than a race anyone has to engineer.
+#
+# SQLAlchemy's default answer is fatal: an attribute read on an expired row
+# whose database row is gone raises ObjectDeletedError (measured — including for
+# the PRIMARY KEY, which is why ids captured BEFORE any commit are the immune
+# shape), and a commit carrying a write staged on such a row raises too, leaving
+# the session poisoned for the `finally`. Either killed the WHOLE pass and threw
+# away the work already done on every other image.
+#
+# `analyze_faces` is the reference shape in this file and needs none of this: it
+# carries plain tuples and writes through `update(...).where(...)` + rowcount.
+# The passes below keep their ORM writes and get the same immunity by holding
+# ids and re-reading through the helper immediately before each touch.
+def _live_image_row(image_id):
+    """The dataset row as the database has it RIGHT NOW, or None when it is gone.
+
+    Always re-reads (``populate_existing``): a row the session still holds
+    unexpired would otherwise come back from the identity map, and the whole
+    question here is whether the image still exists. Measured on a 36 000-row
+    bank: on an already-expired row this is ~31 us/image CHEAPER than the lazy
+    attribute refresh it replaces, because that refresh emitted a SELECT anyway.
+    """
+    if image_id is None:
+        return None
+    return db.session.get(FaceDatasetImage, image_id, populate_existing=True)
+
+
 def resolve_small_image_rescue(user_id, dataset_id, candidate_id, choice):
     """Resolve an original/Klein rescue pair in one DB commit.
 
@@ -5591,13 +5623,22 @@ def classify_images(user_id, dataset_id):
         return 0
     rows = FaceDatasetImage.query.filter_by(
         dataset_id=dataset_id, source='import', framing=None).all()
+    # Ids, not ORM objects: see _live_image_row. The commit at the bottom of this
+    # loop expires every row it has not reached, and a tile deleted from the grid
+    # meanwhile used to kill the whole classification.
+    row_ids = [img.id for img in rows]
     n = 0
+    vanished = 0
     # Persistent progress indicator (survives a page reload): try/finally guarantees
     # end() runs even if the batch raises → no phantom "Classifying…" spinner.
-    token = dataset_activity.begin(dataset_id, 'classify', total=len(rows))
+    token = dataset_activity.begin(dataset_id, 'classify', total=len(row_ids))
     try:
-        for i, img in enumerate(rows):
+        for i, image_id in enumerate(row_ids):
             dataset_activity.progress(token, done=i + 1)
+            img = _live_image_row(image_id)
+            if img is None:      # deleted while the pass ran
+                vanished += 1
+                continue
             path = _img_path(img) if img.filename else ''
             if not os.path.exists(path):
                 continue
@@ -5617,6 +5658,9 @@ def classify_images(user_id, dataset_id):
     finally:
         unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
         dataset_activity.end(token)
+    if vanished:
+        logger.info('classify: %s image(s) were deleted while the pass ran, skipped',
+                    vanished)
     return n
 
 
@@ -6612,13 +6656,27 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
                                            detail=f'Deriving {len(rows)} short caption(s)…')
         token = own_token
     n = 0
+    vanished = 0
+    # Ids, not ORM objects: see _live_image_row. The commit below expires every
+    # row still to come, and this loop pays a text generation per image — long
+    # enough for the user to delete a tile from the grid meanwhile, which used to
+    # kill the pass on the next `img.caption` read.
+    row_ids = [img.id for img in rows]
     try:
-        for img in rows:
+        for image_id in row_ids:
             if dataset_activity.cancel_requested(dataset_id):
                 break   # graceful stop at an image boundary (see caption_images)
             dataset_activity.bump(token)
+            img = _live_image_row(image_id)
+            if img is None:      # deleted while the pass ran
+                vanished += 1
+                continue
             short = _scrub_short_like_long(ds, gen(_shorten_prompt(ds, img.caption)), mode)
             if not short:
+                continue
+            img = _live_image_row(image_id)
+            if img is None:      # deleted DURING its own generation
+                vanished += 1
                 continue
             img.caption_short = _cap_caption(short) or None
             db.session.commit()
@@ -6627,6 +6685,9 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
         _unload()
         if own_token is not None:
             dataset_activity.end(own_token)
+    if vanished:
+        logger.info('short captions: %s image(s) were deleted while the pass ran, '
+                    'skipped', vanished)
     return n
 
 
@@ -7210,13 +7271,26 @@ def detect_watermarks(user_id, dataset_id, *, include_dismissed=False):
         return {'detected': 0, 'none': 0, 'checked': 0}
     rows = (FaceDatasetImage.query.filter_by(dataset_id=dataset_id, status='keep')
             .filter(FaceDatasetImage.filename.isnot(None)).all())
+    # Ids, not ORM objects: see _live_image_row. This loop commits per image, so
+    # every row it has not reached is expired, and deleting a tile from the grid
+    # mid-scan used to kill the scan.
+    row_ids = [img.id for img in rows]
     counts = {'detected': 0, 'none': 0, 'checked': 0}
+    # Deliberately NOT a key in `counts`: that dict is this route's response
+    # shape and four tests pin it exactly. A counter that is zero on every
+    # ordinary run does not justify changing an API contract — and surfacing it
+    # usefully would mean a UI decision, not a silent extra field. Logged below.
+    vanished = 0
     # Persistent progress indicator (survives a page reload); try/finally clears it
     # even if the vision pass raises → no phantom "Scanning…" spinner.
-    token = dataset_activity.begin(dataset_id, 'watermark_detect', total=len(rows))
+    token = dataset_activity.begin(dataset_id, 'watermark_detect', total=len(row_ids))
     try:
-        for i, img in enumerate(rows):
+        for i, image_id in enumerate(row_ids):
             dataset_activity.progress(token, done=i + 1)
+            img = _live_image_row(image_id)
+            if img is None:      # deleted while the pass ran
+                vanished += 1
+                continue
             # Dismissed = a confirmed false positive; don't waste a vision call re-asking
             # (and never silently re-flag it) unless the caller opts back in.
             if not include_dismissed and img.watermark_state == 'dismissed':
@@ -7248,6 +7322,9 @@ def detect_watermarks(user_id, dataset_id, *, include_dismissed=False):
     finally:
         unload_vision_model()  # rend la VRAM a ComfyUI en fin de batch
         dataset_activity.end(token)
+    if vanished:
+        logger.info('watermark detect: %s image(s) were deleted while the pass ran, '
+                    'skipped', vanished)
     return counts
 
 
@@ -7335,8 +7412,13 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                if isinstance(i, (int, float, str)) and str(i).lstrip('-').isdigit()]
         q = q.filter(FaceDatasetImage.id.in_(ids or [-1]))   # empty subset -> match nothing
     rows = q.all()
+    row_ids = [img.id for img in rows]
     out = {'cropped': 0, 'inpainted': 0, 'inpainted_klein': 0, 'needs_review': 0,
            'failed': 0, 'skipped': 0}
+    # NOT a key in `out`: that dict is the route's response shape and existing
+    # tests pin it. 'skipped' already means "engine unavailable" and must not be
+    # overloaded with "the image no longer exists". Logged at the end instead.
+    vanished = 0
     error = None
     lama_ok = watermark_lama.is_available()
     klein_ok = method == 'klein' and watermark_klein.is_available()
@@ -7352,9 +7434,11 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
         from . import klein_edit_helper as keh
         if not keh.klein_model_on_disk(klein_model):
             raise keh.KleinModelGone(klein_model)
-    # (img, live_path, staged_path, bboxes, manual_regions). The VLM/browser
-    # boxes apply to the staged upright file; the master is replaced only after
-    # a successful engine result has passed verification.
+    # (image_id, live_path, staged_path, bboxes, manual_regions). An ID, not an
+    # ORM row: this list is carried across the whole per-image loop AND across
+    # the LaMa batch, which runs for minutes -- by the time the tail loop writes,
+    # those rows have been expired by a dozen commits and any one of them may
+    # have been deleted from the grid. See _live_image_row.
     lama_pending = []
 
     def _backup_failed(img, staged_path=None):
@@ -7417,8 +7501,12 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
         dataset_id, 'watermark_clean', total=len(rows),
         detail=f'Cleaning watermarks on {device_label}…')
     try:
-        for i, img in enumerate(rows):
+        for i, image_id in enumerate(row_ids):
             dataset_activity.progress(token, done=i + 1)
+            img = _live_image_row(image_id)
+            if img is None:      # deleted while the pass ran
+                vanished += 1
+                continue
             path = _img_path(img)
             if img.watermark_regions is not None:
                 try:
@@ -7458,7 +7546,7 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                     _backup_failed(img, staged)
                     db.session.commit()
                     continue
-                lama_pending.append((img, path, staged, regions, True))
+                lama_pending.append((img.id, path, staged, regions, True))
                 continue
             bbox = _safe_json(img.watermark_bbox)
             if not os.path.exists(path) or not (isinstance(bbox, list) and len(bbox) == 4):
@@ -7506,7 +7594,7 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                         staged = _stage_oriented_watermark_edit(path)
                         if staged:
                             if _preserve_original(path):
-                                lama_pending.append((img, path, staged, [bbox], False))
+                                lama_pending.append((img.id, path, staged, [bbox], False))
                             else:
                                 _backup_failed(img, staged)
                         else:
@@ -7520,7 +7608,7 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
         if lama_pending:
             try:
                 if len(lama_pending) == 1:
-                    img, live_path, staged_path, boxes, manual = lama_pending[0]
+                    _pid, live_path, staged_path, boxes, manual = lama_pending[0]
                     if manual:
                         ok, err = watermark_lama.inpaint_watermarks(
                             staged_path, boxes,
@@ -7533,10 +7621,18 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                 else:
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': staged_path, 'bboxes': boxes}
-                         for _img, _live_path, staged_path, boxes, _manual in lama_pending],
+                         for _pid, _live_path, staged_path, boxes, _manual in lama_pending],
                         device=device,
                     )
-                for img, live_path, staged_path, _boxes, manual in lama_pending:
+                for pending_id, live_path, staged_path, _boxes, manual in lama_pending:
+                    img = _live_image_row(pending_id)
+                    if img is None:
+                        # Deleted while the batch ran: there is no row left to
+                        # point at the repainted file, so drop the staged edit
+                        # rather than promote it over a master nobody owns.
+                        _discard_staged_watermark_edit(staged_path)
+                        vanished += 1
+                        continue
                     ok, err = results.get(
                         staged_path,
                         (False, {'kind': 'failed', 'detail': 'missing inpaint result'}),
@@ -7566,7 +7662,11 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
             except Exception as exc:  # engine/process faults must not leak a staged edit
                 logger.exception('watermark: LaMa execution failed for dataset %s', dataset_id)
                 error = {'kind': 'failed', 'detail': f'watermark inpaint failed: {exc}'}
-                for img, _live_path, _staged_path, _boxes, manual in lama_pending:
+                for pending_id, _live_path, _staged_path, _boxes, manual in lama_pending:
+                    img = _live_image_row(pending_id)
+                    if img is None:
+                        vanished += 1
+                        continue
                     if not manual:
                         img.watermark_state = 'failed'
                     out['failed'] += 1
@@ -7575,8 +7675,11 @@ def clean_watermarks(user_id, dataset_id, image_ids=None, device='cpu', method='
                 # The engine can crash before returning a result; in that case its
                 # disposable EXIF-oriented copy still has to disappear, while the
                 # master remains exactly where it was.
-                for _img, _live_path, staged_path, _boxes, _manual in lama_pending:
+                for _pid, _live_path, staged_path, _boxes, _manual in lama_pending:
                     _discard_staged_watermark_edit(staged_path)
+        if vanished:
+            logger.info('watermark clean: %s image(s) were deleted while the pass '
+                        'ran, skipped', vanished)
         return out, error
     finally:
         dataset_activity.end(token)
