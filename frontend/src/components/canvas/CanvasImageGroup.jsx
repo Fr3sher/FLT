@@ -1,3 +1,4 @@
+import { groupBarHeight } from '../../utils/canvasNodeChrome';
 import CanvasImageNode from './CanvasImageNode';
 
 /* 🖼🖼 Several pinned images fused into ONE node: a continuous strip, side by
@@ -49,6 +50,13 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
   onClose, onOpen, dropHint = null, blendNotes = null }) {
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
+  // The drag-out hint below is CHROME, not content: it must stay readable at
+  // 24 % exactly as at 100 %, which is the one thing groupBarHeight computes.
+  // Recomputed here rather than passed down, so the hint and the bar's own
+  // label keep ONE source of truth for that counter-scale — the bar moved out
+  // of this file and took the binding with it, which is how the hint came to
+  // reference a `barH` nothing declared any more.
+  const barH = groupBarHeight(boardScale, group.h);
 
   return (
     <div
@@ -89,7 +97,8 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
           strip, where the finger is. Without it, letting go one pixel too early
           just looks like the drag failed. */}
       {dropHint === 'leaving' && (
-        <div style={{ position: 'absolute', left: 0, top: 0, width: group.w, height: group.h }}
+        <div data-testid="canvas-group-drop-hint"
+          style={{ position: 'absolute', left: 0, top: 0, width: group.w, height: group.h }}
           className="pointer-events-none flex items-end justify-center rounded-md bg-indigo-500/10 ring-2 ring-inset ring-indigo-300/50">
           <span style={{ fontSize: Math.max(9, barH * 0.42), marginBottom: barH * 0.3 }}
             className="rounded bg-app/90 px-1.5 py-0.5 font-semibold text-indigo-100">

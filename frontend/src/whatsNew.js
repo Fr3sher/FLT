@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-group-drag-out-crash',
+    date: '2026-08-03',
+    title: 'Pulling a picture out of a group on the canvas no longer blanks the board',
+    blurb:
+      'Dragging one image off a strip of grouped images showed the error screen instead of the picture coming loose — the board went blank and the only way back was a reload. The hint that appears while you pull ("Drag it off the group to take it out") was reading a size that had moved to another file when the group\'s title bar was split out earlier today, so the very gesture it exists to explain was the one that crashed. It is back, at the same size as the bar\'s own label at every zoom. Nothing you had pinned was lost — the board reloads exactly as you left it.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-checkpoint-store-survives-cleanup',
     date: '2026-08-03',
     title: 'A cleanup can no longer delete a checkpoint you never deployed',
