@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-dataset-passes-survive-a-deleted-image',
+    date: '2026-08-03',
+    title: 'A long pass no longer dies if you delete an image while it is running',
+    blurb:
+      'Captioning, watermark detection and cleaning, framing, short captions — these walk your whole dataset for minutes or hours, and the grid stays clickable the whole time. Delete a bad tile, press ⏹ Stop, or start an improve while one of them is working, and the pass could die on the spot with a cryptic database error, losing the work it had already done on every other image. It now skips whatever disappeared and carries on. ⏹ Stop also reports the number of generations it really cancelled rather than the number it attempted, so the count and the grid can no longer disagree.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-03-bank-coverage-sees-more',
     date: '2026-08-03',
     title: 'The bank’s Coverage advice can now see that your images all look the same',
