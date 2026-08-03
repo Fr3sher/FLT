@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-caption-mismatch-names-your-family',
+    date: '2026-08-03',
+    title: 'The caption-mismatch warning names YOUR model family, not Z-Image',
+    blurb:
+      'If your captions did not match the family you picked, the app refused the launch with a message that always said “this Z-Image dataset… but Z-Image expects prose” — even when you were training Krea 2, FLUX.1 or FLUX.2 Klein. The sentence was frozen into the code while the truth depends on the family. It now names the one you actually chose, so the advice matches what you are looking at.',
+    to: '/datasets?section=training&panel=launch',
+  },
+  {
     id: '2026-08-03-anima-hybrid-captions',
     date: '2026-08-03',
     title: 'Anima takes booru tags too — the app stops calling them a mistake',

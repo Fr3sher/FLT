@@ -8377,7 +8377,9 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
                      variant=None, allow_not_ready=False) -> None:
     """Lève ValueError si le dataset n'est pas prêt : trop peu d'images gardées,
     captions manquantes, ou STYLE de caption incohérent avec le type de modèle
-    (SDXL booru-native attend des tags booru ; Z-Image attend de la prose). Le
+    (SDXL booru-native attend des tags booru ; Z-Image attend de la prose ; anima
+    est HYBRIDE — les deux formes sont natives, donc aucun mismatch n'existe pour
+    elle, cf. _EXPECTED_CAPTION_FORM). Le
     `train_type` effectif est passé par l'appelant car il n'est persisté qu'APRÈS
     cet appel. `allow_caption_mismatch=True` = override explicite (bouton « forcer »).
     `allow_uncaptioned=True` = confirm explicite « train anyway » : les captions
@@ -8476,8 +8478,13 @@ def assert_trainable(dataset_id, train_type=None, allow_caption_mismatch=False,
                     "MISMATCH_CAPTION: this SDXL dataset has PROSE captions, but a booru "
                     "model (bigLove type) is prompted with tags. Re-caption in 'Booru tags' mode "
                     "before training, or force the training.")
+            # `label`, not a hard-coded "Z-Image": this branch fires for EVERY
+            # prose family (Krea 2, FLUX.1, FLUX.2 Klein…), and telling a Klein
+            # user they have a Z-Image dataset is the same disease as the anima
+            # bug above — a claim frozen into a string where the truth is
+            # per-family. `label` was already resolved for the image floor.
             raise ValueError(
-                "MISMATCH_CAPTION: this Z-Image dataset has booru TAG captions, but Z-Image "
+                f"MISMATCH_CAPTION: this {label} dataset has booru TAG captions, but {label} "
                 "expects prose. Re-caption in 'Prose' mode, or force the training.")
 
 

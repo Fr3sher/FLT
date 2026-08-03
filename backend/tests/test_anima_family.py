@@ -237,16 +237,24 @@ def test_anima_hybrid_does_not_loosen_the_mono_form_families(app):
     from app.models import FaceDatasetImage
     from app.config import LOCAL_USER
     with app.app_context():
-        for slug, train_type, caption in [('zchar_sx', 'sdxl', PROSE_CAPTION),
-                                          ('zchar_zi', 'zimage', BOORU_CAPTION)]:
+        # (family, captions it must refuse, the label its message must name)
+        cases = [('zchar_sx', 'sdxl', PROSE_CAPTION, 'SDXL'),
+                 ('zchar_zi', 'zimage', BOORU_CAPTION, 'Z-Image'),
+                 ('zchar_k2', 'krea', BOORU_CAPTION, 'Krea 2'),
+                 ('zchar_fk', 'flux2klein', BOORU_CAPTION, 'FLUX.2 Klein')]
+        for slug, train_type, caption, label in cases:
             ds = svc.create_dataset(LOCAL_USER, slug.upper(), slug,
                                     train_type=train_type)
             for _ in range(30):        # above the SDXL floor too
                 svc.db.session.add(FaceDatasetImage(dataset_id=ds.id, status='keep',
                                                     filename='x.webp', caption=caption))
             svc.db.session.commit()
-            with pytest.raises(ValueError, match='MISMATCH_CAPTION'):
+            with pytest.raises(ValueError, match='MISMATCH_CAPTION') as err:
                 lt.assert_trainable(ds.id, train_type=train_type)
+            # The message names the family the user actually picked. It used to
+            # say "Z-Image" to everyone on the prose side — a Klein user was told
+            # about a dataset they do not have.
+            assert label in str(err.value), (train_type, str(err.value))
             lt.assert_trainable(ds.id, train_type=train_type,
                                 allow_caption_mismatch=True)
 
