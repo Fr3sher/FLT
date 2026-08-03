@@ -354,8 +354,11 @@ const SEEDVR2_RESOLUTION_MIN = 256
 const SEEDVR2_RESOLUTION_MAX = 4096
 const SEEDVR2_MAX_RESOLUTION_MAX = 8192
 const SEEDVR2_BLOCKS_MAX = 36
-// Mirrors seedvr2_helper.TILE_ABOVE_SHORT_EDGE — shown, never enforced here.
-const SEEDVR2_TILE_ABOVE = 1536
+// seedvr2_helper.TILE_PX_MIN / TILE_PX_MAX, and the factor the 'auto' crossover
+// is derived from (TILE_ABOVE_FACTOR) — shown, never enforced here.
+const SEEDVR2_TILE_MIN = 512
+const SEEDVR2_TILE_MAX = 2048
+const SEEDVR2_TILE_ABOVE_FACTOR = 1.5
 // seedvr2_helper.COLOR_CORRECTIONS — the node's own enum, in its own order.
 const SEEDVR2_COLOR_MODES = ['lab', 'wavelet', 'wavelet_adaptive', 'hsv', 'adain', 'none']
 
@@ -492,6 +495,20 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
   }, [ready])
   const installed = (models && models.installed) || []
   const catalog = (models && models.catalog) || []
+  // Every file in the SEEDVR2 folder, split on whether its NAME looks like a
+  // VAE. The unlikely ones are still offered, in their own group and labelled:
+  // the pin exists for the install whose VAE is named something the automatic
+  // path cannot recognise, and hiding those files would leave that install with
+  // a picker it cannot use.
+  const vaeChoices = (models && models.vae_choices) || []
+  const vaeLikely = vaeChoices.filter((v) => v.likely_vae)
+  const vaeOther = vaeChoices.filter((v) => !v.likely_vae)
+  const tilePx = Number(svr.tile_px ?? dflt('tile_px')) || SEEDVR2_TILE_MIN
+  // What 'auto' will actually use as its crossover: the explicit threshold, or
+  // the tile side x1.5 — the same arithmetic the server does.
+  const tileAbove = Number(svr.tile_threshold ?? dflt('tile_threshold')) > 0
+    ? Number(svr.tile_threshold ?? dflt('tile_threshold'))
+    : Math.round(tilePx * SEEDVR2_TILE_ABOVE_FACTOR)
   return (
     <Card
       id="seedvr2-engine"
@@ -571,6 +588,34 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
       </div>
 
       <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-vae" className="block text-xs font-medium text-content">
+          VAE build (optional)
+        </label>
+        <select
+          id="seedvr2-vae"
+          value={svr.vae ?? ''}
+          onChange={(e) => setField('seedvr2', 'vae', e.target.value)}
+          className={INPUT_CLASS}
+        >
+          <option value="">auto — ema_vae_fp16, or the first VAE in the folder</option>
+          {vaeLikely.map((v) => <option key={v.file} value={v.file}>{v.file}</option>)}
+          {vaeOther.length > 0 && (
+            <optgroup label="Other files in models/SEEDVR2 (not named like a VAE)">
+              {vaeOther.map((v) => <option key={v.file} value={v.file}>{v.file}</option>)}
+            </optgroup>
+          )}
+        </select>
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          Leave it on auto unless your VAE file is named something with no
+          &ldquo;vae&rdquo; in it — that is the only case the automatic search misses, and
+          the reason the second group above is offered at all. Picking a DiT build here
+          fails inside the loader node, so choose from that group only if you know the
+          file is a VAE.
+        </p>
+        <ResetToDefault label="VAE build" section="seedvr2" field="vae" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
         <label htmlFor="seedvr2-tiling" className="block text-xs font-medium text-content">
           High-resolution tiling
         </label>
@@ -589,12 +634,64 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
           effect. Tiling is not only about memory: a tile is upscaled at the size the
           model works well at, so a large frame keeps far more fine detail than one
           processed whole — contributed and measured by SurpassHR (GitHub&nbsp;#32).
-          On <b>Tile when it helps</b> nothing is tiled below roughly {SEEDVR2_TILE_ABOVE} px
-          on the short edge: the model is already in its comfortable range there and a grid
-          would only add seams. <b>Always</b> tiles any frame bigger than one tile; pick
+          On <b>Tile when it helps</b> nothing is tiled below {tileAbove} px on the short
+          edge: the model is already in its comfortable range there and a grid would only
+          add seams. <b>Always</b> tiles any frame bigger than one tile; pick{' '}
           <b>never</b> if you ever see a seam.
         </p>
         <ResetToDefault label="High-resolution tiling" section="seedvr2" field="tiling" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-tile-px" className="block text-xs font-medium text-content">
+          Tile size (px)
+        </label>
+        <input
+          id="seedvr2-tile-px"
+          type="number"
+          min={SEEDVR2_TILE_MIN}
+          max={SEEDVR2_TILE_MAX}
+          step={64}
+          value={svr.tile_px ?? dflt('tile_px')}
+          onChange={(e) => setField('seedvr2', 'tile_px',
+            e.target.value === '' ? dflt('tile_px') : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          The memory dial of this engine: a run holds one tile at a time, so
+          <b> lower it if upscales run out of VRAM</b> (768 or 512 on an 8 GB card) and
+          raise it on a big card for fewer seams and more context per tile.
+          {' '}{dflt('tile_px')} px is the contributed default. It also sizes the model&rsquo;s
+          own tiled encode/decode, so it helps even <i>without</i> the tiling node
+          pack — this is the one setting worth touching before giving up on a large upscale.
+        </p>
+        <ResetToDefault label="Tile size" section="seedvr2" field="tile_px" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-tile-threshold" className="block text-xs font-medium text-content">
+          Start tiling above (px on the short edge, 0 = automatic)
+        </label>
+        <input
+          id="seedvr2-tile-threshold"
+          type="number"
+          min={0}
+          max={SEEDVR2_MAX_RESOLUTION_MAX}
+          step={64}
+          value={svr.tile_threshold ?? dflt('tile_threshold')}
+          onChange={(e) => setField('seedvr2', 'tile_threshold',
+            e.target.value === '' ? dflt('tile_threshold') : Number(e.target.value))}
+          className={INPUT_CLASS}
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          Where <b>Tile when it helps</b> switches over. <b>0</b> (default) follows the tile
+          size — {SEEDVR2_TILE_ABOVE_FACTOR}&times; it, so {tilePx} px tiles start tiling
+          above {Math.round(tilePx * SEEDVR2_TILE_ABOVE_FACTOR)} px. Set a number to place
+          the crossover yourself: lower it to tile sooner (safer on a small card), raise it
+          to keep more targets in one fast pass. It has no effect on <b>always</b> or
+          <b> never</b>.
+        </p>
+        <ResetToDefault label="Start tiling above" section="seedvr2" field="tile_threshold" {...reset} />
       </div>
 
       <div className="mt-3 sm:max-w-md">

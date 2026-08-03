@@ -369,3 +369,76 @@ def test_an_unknown_mode_degrades_to_the_recommended_one(app):
         assert svr.tiling_mode('never') == 'never'
         config.save_config({'seedvr2': {'tiling': 'garbage'}})
         assert svr.tiling_mode() == 'auto'
+
+
+# --- The two dials the lane is made of --------------------------------------
+# Requested with the engine itself (SurpassHR, GitHub #32: "DiT/VAE model
+# locations, target resolution, batch size, etc."). The tile SIDE is the honest
+# answer to the memory half of that list: batch size is a temporal window and
+# shipping it would ship a way to corrupt a batch, while the tile is what a pass
+# actually holds — and 1024 was chosen on one card, not on everyone's.
+
+def test_the_tile_size_default_is_the_contributed_value(app):
+    from app import config
+    from app.services import seedvr2_helper as svr
+    with app.app_context():
+        assert config.DEFAULTS['seedvr2']['tile_px'] == svr.TILE_PX
+        assert svr.tile_size() == 1024
+
+
+def test_the_tile_size_is_clamped_and_snapped(app):
+    """A hand-typed number reaches ComfyUI. Below 512 a tile carries too little
+    context to restore anything; a side that is not a multiple of 64 is padded
+    inside the VAE, so it is snapped here where it can be explained."""
+    from app import config
+    from app.services import seedvr2_helper as svr
+    with app.app_context():
+        for stored, expected in ((768, 768), (100, 512), (99999, 2048),
+                                 (700, 640), ('nonsense', 1024), (None, 1024)):
+            config.save_config({'seedvr2': {'tile_px': stored}})
+            assert svr.tile_size() == expected, f'tile_px={stored!r}'
+
+
+def test_the_crossover_follows_the_tile_unless_it_is_set(app):
+    """0 = derived, so someone who halves the tile to fit an 8 GB card also gets
+    tiling half as early, without having to know the second setting exists."""
+    from app import config
+    from app.services import seedvr2_helper as svr
+    with app.app_context():
+        assert config.DEFAULTS['seedvr2']['tile_threshold'] == 0
+        assert svr.tile_threshold() == svr.TILE_ABOVE_SHORT_EDGE == 1536
+        config.save_config({'seedvr2': {'tile_px': 512}})
+        assert svr.tile_threshold() == 768
+        config.save_config({'seedvr2': {'tile_threshold': 900}})
+        assert svr.tile_threshold() == 900          # explicit wins over derived
+        config.save_config({'seedvr2': {'tile_threshold': 12}})
+        assert svr.tile_threshold() == svr.RESOLUTION_MIN
+
+
+def test_a_smaller_tile_tiles_sooner():
+    """The lane decision, not just the arithmetic: the same 1200 px request that
+    stays whole at a 1024 tile is tiled at a 512 one."""
+    from app.services import seedvr2_helper as svr
+    modest = dict(width=768, height=1024, short_edge=1200)
+    assert svr.choose_lane(**modest, tiling_ok=True,
+                           ceiling_mp=BIG_CARD)['lane'] == 'full'
+    lane = svr.choose_lane(**modest, tiling_ok=True, ceiling_mp=BIG_CARD,
+                           tile_px=512)
+    assert lane['lane'] == 'tiled'
+    assert lane['plan']['tile_width'] == 512
+    # An explicit crossover overrides the derived one, in both directions.
+    assert svr.choose_lane(**modest, tiling_ok=True, ceiling_mp=BIG_CARD,
+                           tile_px=512, tile_above=4096)['lane'] == 'full'
+
+
+def test_the_shipped_defaults_change_nothing():
+    """The whole promise of this settings wave: someone who touches nothing gets
+    the exact graph the previous release built."""
+    from app.services import seedvr2_helper as svr
+    lane = svr.choose_lane(**BIG, tiling_ok=True, ceiling_mp=BIG_CARD,
+                           tile_px=svr.TILE_PX, tile_above=svr.TILE_ABOVE_SHORT_EDGE)
+    assert lane == svr.choose_lane(**BIG, tiling_ok=True, ceiling_mp=BIG_CARD)
+    g = svr.build_workflow('s.png', dit='d', vae='v', seed=42, tiled_vae=True)
+    vae = next(n for n in g.values() if n['class_type'] == 'SeedVR2LoadVAEModel')
+    assert vae['inputs']['encode_tile_size'] == 1024
+    assert vae['inputs']['encode_tile_overlap'] == 128

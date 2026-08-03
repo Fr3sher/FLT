@@ -327,7 +327,13 @@ def seedvr2_models_list():
     plus the catalog of builds the app can talk about.
 
     ``{installed: [name], catalog: [{file, label, size_gb, vram_gb, recommended,
-    installed}], resolved: name|null, vae: name|null}``.
+    installed}], resolved: name|null, vae: name|null,
+    vae_choices: [{file, likely_vae}]}``.
+
+    ``vae_choices`` covers the WHOLE folder, each entry flagged with whether its
+    name looks like a VAE: the automatic path already handles every install
+    where it does, so the pin exists for the one where it does not, and a picker
+    that hid those files could not express that install.
 
     Only installed builds are offered as a pin: the pack's loader nodes download
     an unknown name on first use, so a picker listing everything would turn a
@@ -341,12 +347,14 @@ def seedvr2_models_list():
         installed = svr.installed_dit_models()
         resolved = svr.resolve_seedvr2_dit()
         vae = svr.resolve_seedvr2_vae()
+        vae_choices = svr.vae_choices()
     except Exception:
         current_app.logger.exception('seedvr2 model scan failed')
-        installed, resolved, vae = [], None, None
+        installed, resolved, vae, vae_choices = [], None, None, []
     catalog = [{**v, 'installed': v['file'] in installed} for v in svr.DIT_VARIANTS]
     return jsonify({'installed': installed, 'catalog': catalog,
-                    'resolved': resolved, 'vae': vae})
+                    'resolved': resolved, 'vae': vae,
+                    'vae_choices': vae_choices})
 
 
 @bp.get('/scoring-python')

@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-seedvr2-tile-and-vae-settings',
+    date: '2026-08-03',
+    title: 'SeedVR2 upscaling now fits smaller cards — tile size is a setting',
+    blurb:
+      'The fidelity upscaler used to hold one 1024 px tile at a time whatever your GPU, which is where a large upscale ran out of memory on an 8 GB card. Settings ▸ Image engines now has a Tile size: lower it to 768 or 512 and the same 4K upscale fits, at the cost of a few more seams. It also sizes the model\'s own tiled encode/decode, so it lowers memory use even without the optional tiling node pack. Two more dials came with it — where automatic tiling switches over, and which VAE file to load when yours is named something the automatic search cannot recognise. Defaults are unchanged, so nothing moves unless you touch it. Thanks to SurpassHR (GitHub) for asking for these knobs alongside the engine itself.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-03-restart-no-longer-kills-a-live-cloud-run',
     date: '2026-08-03',
     title: 'Restarting the app no longer kills a cloud run that is training fine',
