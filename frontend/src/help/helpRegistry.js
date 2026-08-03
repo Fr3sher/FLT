@@ -1261,6 +1261,17 @@ const TOPICS = [
      'original pending', 'original undecided', 'automatic unkeep', 'keep both',
      'bulk keep', 'batch keep', 'nothing deleted', 'do not delete'],
     '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
+  // ✨ in the CANVAS lightbox. Its own topic, not a variant of the dataset one:
+  // the result lands somewhere else (the checkpoint's gallery, not the curation
+  // grid), and "where did my upscale go" is the question this button actually
+  // raises on a screen where nothing moves when you press it.
+  action('action-canvas-improve', 'Upscale a picture straight from the LoRA Canvas',
+    ['canvas', 'board', 'improve', 'upscale', 'upscale & improve', 'enhance', 'klein',
+     'seedvr2', 'sharpen', 'detail', 'resolution', 'megapixels', 'lightbox',
+     'pinned image', 'generated image', 'where did it go', 'result', 'gallery',
+     'checkpoint gallery', 'improve from canvas', 'no improve button',
+     'improve an improvement', 'reference face', 'retry', 'failed upscale'],
+    '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
      'worst first', 'face similarity', 'similarity', 'resemblance', 'looks like',

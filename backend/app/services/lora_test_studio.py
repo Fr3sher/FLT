@@ -67,6 +67,70 @@ from ..utils.zimage_helper import apply_zimage_settings
 
 logger = logging.getLogger(__name__)
 
+# ✨ The derivation kind of a row that lives in lora_test_image WITHOUT being a
+# Test Studio cell: the Upscale & improve result produced from the ◉ Canvas
+# lightbox. It has to be in this table because `canvas_image_node.image_id` is a
+# `lora_test_image.id` and the board must be able to pin it — but no checkpoint×
+# strength sweep ever made it.
+CANVAS_IMAGE_IMPROVE = 'canvas_image_improve'
+
+
+def _is_cell():
+    """The predicate `_cells()` applies, for the queries that cannot START from it.
+
+    A join that selects columns from another table (see
+    `measured_seconds_per_image`) builds its own query and cannot be handed a
+    `LoraTestImage.query`. It still needs the SAME rule, so the rule is written
+    once here and both spellings share it — two hand-written copies of
+    `derivation_kind IS NULL` is how the two would eventually disagree.
+    """
+    return LoraTestImage.derivation_kind.is_(None)
+
+
+def _cells():
+    """EVERY query in this module that means "the Test Studio cells" starts here.
+
+    A derived row (see CANVAS_IMAGE_IMPROVE) is in the same table and must not be
+    read as a cell. Auditing the 21 read sites found TEN that break otherwise,
+    and none of them is theoretical:
+
+      * `_active_run_count` counts pending rows with no file, so an improve still
+        rendering answered "a test run is already in progress" and BLOCKED every
+        new Test Studio launch;
+      * the resume path picks up cancelled/failed rows by dataset and would have
+        re-queued a failed improve as a Z-Image cell — wrong workflow, wrong
+        engine;
+      * `cell_scores` / `model_net_scores` aggregate by (checkpoint, strength, …),
+        so a 👍 given to an UPSCALE in the gallery became a vote for the
+        checkpoint that did not produce it;
+      * `best_cell` and its per-checkpoint sibling take `order_by(id.desc())`, so
+        the improvement — newest by construction — became the representative
+        image of the winning config;
+      * the face-scoring pass would spend GPU on it and `face_ranking` would
+        average its score into its checkpoint's.
+
+    So the filter is not a detail of one query, it is the meaning of "cell", and
+    it lives in ONE place. `test_canvas_image_improve.py` forbids a bare
+    `LoraTestImage.query` anywhere else in this module, so a future reader cannot
+    reintroduce the leak by writing the obvious thing. A query that legitimately
+    needs every row carries a `lds-allow-bare-lora-test-query:` comment saying
+    why — the four that exist today all resolve ONE row by `job_id`, and the
+    completion callback is among them: filtering derived rows out of it would
+    leave every improvement pending forever.
+
+    ⚠️ WHERE THIS HELPER MUST **NOT** BE USED — this boundary is the feature.
+    `services/cloud_training.py` (checkpoint_gallery, run_gallery,
+    canvas_image_nodes) and `services/gallery_download.py` read the SAME table and
+    deliberately do NOT filter these rows out: showing the improvement in the
+    gallery it was made from, next to its source, and letting it be pinned onto
+    the board, IS what the ✨ button was asked for. "Harmonising" by applying this
+    helper there would silently delete the feature, so a test pins both
+    directions: absent from the studio's cells, present in the checkpoint gallery
+    and pinnable.
+    """
+    return LoraTestImage.query.filter(_is_cell())
+
+
 # Plafond dur d'images par run (~4-6 min de GPU max en Z-Image Turbo).
 MAX_TEST_IMAGES = 24
 
@@ -480,6 +544,8 @@ def _comfyui_recovery_target() -> dict | None:
         return None
     job_id = owner['job_id']
     queue_row = ImageGenerationQueue.query.filter_by(job_id=job_id, status='stalled').first()
+    # lds-allow-bare-lora-test-query: resolved by job_id — a stalled ComfyUI job
+    # must be matched to whatever row owns it, derived rows included.
     cells = (LoraTestImage.query
              .filter_by(job_id=job_id, status='pending')
              .filter(LoraTestImage.filename.is_(None)).limit(2).all())
@@ -527,7 +593,7 @@ def _active_run_count(dataset_id=None) -> int:
     """In-flight cells (pending, no file yet). dataset_id=None → garde GLOBALE
     (tous datasets confondus, ce qu'exige une comparaison multi-LoRA) ; fourni →
     une seule run active par dataset (comportement historique)."""
-    q = (LoraTestImage.query
+    q = (_cells()
          .filter_by(status='pending')
          .filter(LoraTestImage.filename.is_(None)))
     if dataset_id is not None:
@@ -1781,7 +1847,17 @@ def measured_seconds_per_image(family=None) -> float | None:
                 .join(LoraTestImage, LoraTestImage.job_id == ImageGenerationQueue.job_id)
                 .filter(ImageGenerationQueue.status == 'completed',
                         ImageGenerationQueue.started_at.isnot(None),
-                        ImageGenerationQueue.completed_at.isnot(None))
+                        ImageGenerationQueue.completed_at.isnot(None),
+                        # ✨ An Upscale & improve job is NOT a test generation and
+                        # its duration says nothing about the pace of a sweep: it
+                        # is a 2 MP Klein edit or a SeedVR2 restoration, minutes
+                        # where a Turbo cell takes seconds. It passes the family
+                        # filter below (a derived row copies its source's
+                        # `checkpoint`) and sits well inside the 0.5-900 s window,
+                        # so with a 30-sample median a handful of them visibly
+                        # inflate the duration this estimate promises before a
+                        # launch. Same rule as _cells(), same predicate.
+                        _is_cell())
                 .order_by(ImageGenerationQueue.completed_at.desc())
                 .limit(_PACE_SCAN_ROWS).all())
     except Exception:                      # base legacy sans l'une des colonnes
@@ -1941,7 +2017,7 @@ def stack_variants(run_id, rows, limit=8) -> list:
         return []
     sig = _stack_signature(members)
     head_ds = members[0].get('dataset_id')
-    scanned = (LoraTestImage.query
+    scanned = (_cells()
                .filter(LoraTestImage.dataset_id == head_ds,
                        LoraTestImage.extra_loras.isnot(None))
                .order_by(LoraTestImage.id.desc()).limit(_STACK_SCAN_ROWS).all())
@@ -2571,11 +2647,11 @@ def cancel_run(user_id, dataset_id=None, run_id=None) -> int:
 
     with GPU_ARBITER_LOCK:
         if run_id is not None:
-            rows = (LoraTestImage.query
+            rows = (_cells()
                     .filter_by(run_id=run_id, status='pending')
                     .filter(LoraTestImage.filename.is_(None)).all())
         else:
-            rows = (LoraTestImage.query
+            rows = (_cells()
                     .filter_by(dataset_id=dataset_id, status='pending')
                     .filter(LoraTestImage.filename.is_(None)).all())
 
@@ -2652,6 +2728,8 @@ def confirm_unknown_comfyui_restart(user_id, *, dataset_id=None, run_id=None,
         if str(cell_id) != owner.get('cell_id'):
             raise RuntimeError('This paused job has an invalid Test Studio cell identity.')
 
+        # lds-allow-bare-lora-test-query: resolved by job_id (and an explicit id)
+        # — recovery identifies ONE known row, whatever kind it is.
         cell_query = (LoraTestImage.query.filter_by(id=cell_id, job_id=job_id, status='pending')
                       .filter(LoraTestImage.filename.is_(None)))
         if run_id is not None:
@@ -2696,7 +2774,7 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
             raise GpuBusyError(reason)
         if _active_run_count():
             raise ValueError('a test run is already in progress')
-        rows = (LoraTestImage.query.filter_by(run_id=run_id)
+        rows = (_cells().filter_by(run_id=run_id)
                 .filter(LoraTestImage.status.in_(['cancelled', 'failed'])).all())
     else:
         ds = fds.get_dataset(user_id, dataset_id)
@@ -2707,7 +2785,7 @@ def resume_run(user_id, dataset_id=None, run_id=None) -> dict:
             raise GpuBusyError(reason)
         if _active_run_count(dataset_id):
             raise ValueError('a test run is already in progress')
-        rows = (LoraTestImage.query.filter_by(dataset_id=dataset_id)
+        rows = (_cells().filter_by(dataset_id=dataset_id)
                 .filter(LoraTestImage.status.in_(['cancelled', 'failed'])).all())
     if not rows:
         raise ValueError('no cell to resume')
@@ -2829,9 +2907,14 @@ def link_completed_test_image(job_id, filename, failed=False, reason=None):
     `reason` (the job row's error_message: a ComfyUI 400 validation body / node
     execution error / timeout) is persisted on the failed cell so the tile can
     say WHY it's empty instead of a mute red square (P0-b)."""
+    # lds-allow-bare-lora-test-query: resolved by job_id. This is the completion
+    # callback and it MUST see derived rows — an ✨ improve started from the canvas
+    # lands through exactly this path, so filtering it out here would leave every
+    # improvement pending forever.
     img = LoraTestImage.query.filter_by(job_id=job_id).first()
     if img is None:
         db.session.rollback()  # drop the stale read snapshot, then re-read
+        # lds-allow-bare-lora-test-query: same lookup, fresh snapshot.
         img = LoraTestImage.query.filter_by(job_id=job_id).first()
     if img is None:
         logger.warning(f"lora-test link: no LoraTestImage row for job {job_id}")
@@ -2881,6 +2964,139 @@ def link_completed_test_image(job_id, filename, failed=False, reason=None):
     db.session.commit()
 
 
+# --- ✨ Upscale & improve, from the ◉ Canvas lightbox --------------------------
+# The board's pictures are `LoraTestImage` rows, so the dataset improve route
+# (`/api/dataset/image/<id>/improve`, which resolves a `FaceDatasetImage`) cannot
+# serve them: the two tables have INDEPENDENT id spaces, and passing a board id to
+# it does not 404 — it finds a real, unrelated dataset image and improves that
+# one. A silent wrong answer is the worst failure available here, which is why
+# this lane exists instead of a one-line reuse of the other route.
+#
+# What it does NOT re-implement: the engine choice, the readiness preflight and
+# the Klein/SeedVR2 hand-off are `face_dataset_service`'s, called as-is. So the
+# 409 bodies that offer to install SeedVR2 on demand are the same ones, and a
+# change to either engine reaches both surfaces at once.
+
+# Worded as the user reads them, so the button can explain itself BEFORE the
+# click instead of surfacing an error after it.
+IMPROVE_SOURCE_GONE = 'that image is no longer in the library'
+IMPROVE_FILE_GONE = 'that image file is no longer on disk'
+IMPROVE_NOT_DONE = 'this image is still rendering'
+IMPROVE_ALREADY_DERIVED = 'an upscale & improve result cannot be improved again'
+
+
+def improve_canvas_image(user_id, image_id, engine=None):
+    """Queue one non-destructive ✨ Upscale & improve of a board image.
+
+    The source row and its file are never modified: the result is a SEPARATE row
+    that copies `record_id`/`step`, so it appears in the same checkpoint gallery,
+    right next to the picture it was made from, and can be pinned onto the board —
+    which is the whole request.
+
+    Returns ``{'candidate_id', 'job_id', 'engine'}``, or ``None`` when the image
+    is not the caller's. Clicking twice while one is in flight returns the SAME
+    candidate rather than spending the GPU on a duplicate. A candidate that
+    FAILED does not block a new attempt — pressing ✨ again is how you retry,
+    because the Test Studio's own resume path deliberately no longer picks these
+    rows up (it would re-queue them as Z-Image cells, which is the wrong engine
+    and the wrong workflow).
+    """
+    row = db.session.get(LoraTestImage, image_id)
+    if row is None:
+        return None
+    ds = fds.get_dataset(user_id, row.dataset_id)
+    if not ds:
+        return None
+    if row.derivation_kind:
+        raise ValueError(IMPROVE_ALREADY_DERIVED)
+    if row.status != 'done' or not row.filename:
+        raise ValueError(IMPROVE_NOT_DONE)
+    source_path = os.path.join(fds._dataset_dir(row.dataset_id), row.filename)
+    if not os.path.isfile(source_path):
+        raise ValueError(IMPROVE_FILE_GONE)
+
+    # Idempotent while one is ACTUALLY in flight (pending). A finished candidate
+    # does not block a second one: unlike the dataset lane there is no keep/reject
+    # review to force here — the result is just another picture in the gallery.
+    # lds-allow-bare-lora-test-query: this one wants the EXACT OPPOSITE of
+    # _cells() — it looks for derived rows on purpose.
+    active = (LoraTestImage.query
+              .filter_by(parent_image_id=row.id, derivation_kind=CANVAS_IMAGE_IMPROVE,
+                         status='pending')
+              .order_by(LoraTestImage.id.desc()).first())
+    if active is not None and active.job_id:
+        return {'candidate_id': active.id, 'job_id': active.job_id,
+                'engine': engine or ''}
+
+    engine = fds.resolve_improve_engine(engine)
+    fds._improve_preflight(engine)          # same refusals, same actionable 409s
+    prompt = fds._improve_prompt() if engine == 'klein' else ''
+
+    candidate = LoraTestImage(
+        dataset_id=row.dataset_id,
+        # NOT NULL columns, and honest: this IS an upscale of that checkpoint's
+        # render at that strength.
+        checkpoint=row.checkpoint, strength=row.strength,
+        status='pending', filename=None,
+        # WHERE it shows up: same checkpoint, same step → same gallery, next to
+        # its source. `run_id` stays NULL, which is what keeps it out of the
+        # checkpoint timeline (it filters `run_id IS NOT NULL`) — a 2 MP upscale
+        # spliced into an epoch-by-epoch morph would be a lie.
+        record_id=row.record_id, step=row.step, run_id=None,
+        seed=row.seed,           # the download name keeps the lineage
+        # The pass that ACTUALLY ran. A SeedVR2 restoration sends no prompt at
+        # all, so storing Klein's instruction on one would put a sentence on
+        # screen that had no effect on the picture (same rule as the dataset lane).
+        prompt=(prompt[:500] if engine == 'klein'
+                else 'SeedVR2 upscale (no prompt — restoration pass)'),
+        # Deliberately NOT copied: z_model, aspect, cfg, steps, sampler, scheduler,
+        # negative, extra_loras. None of them decided this image — the improve
+        # profile did — and the lightbox renders them as "Made with", where a
+        # copied value would be a lie about how the picture was produced.
+        parent_image_id=row.id,
+        derivation_kind=CANVAS_IMAGE_IMPROVE,
+    )
+    db.session.add(candidate)
+    db.session.commit()                      # row BEFORE enqueue: no orphan job
+    candidate_id = candidate.id
+
+    try:
+        job_id = fds._enqueue_improve(
+            engine, user_id=user_id, source=row, source_path=source_path,
+            prompt=prompt, label='', dataset=ds,
+            # `is_lora_test` is what routes the finished job back to
+            # link_completed_test_image (job_queue._dispatch_completion checks it
+            # FIRST, before the model_name branch), so the result lands in THIS
+            # table instead of being looked up as a dataset image that does not
+            # exist.
+            extra_metadata={
+                'is_lora_test': True,
+                'dataset_id': str(row.dataset_id),
+                'cell_id': candidate_id,
+                'derivation_kind': CANVAS_IMAGE_IMPROVE,
+                'parent_image_id': row.id,
+                'action': 'upscale_improve',
+                'improve_engine': engine,
+            })
+    except Exception:
+        # No ghost row. A candidate left `pending` with no file is exactly the
+        # shape `_active_run_count` counts, so a failed enqueue that kept its row
+        # would have been a permanent "a test run is already in progress" if the
+        # derivation filter ever slipped. Belt and braces on the worst case.
+        stale = db.session.get(LoraTestImage, candidate_id)
+        if stale is not None:
+            db.session.delete(stale)
+            db.session.commit()
+        raise
+
+    saved = db.session.get(LoraTestImage, candidate_id)
+    if saved is None:                        # cancelled mid-enqueue
+        return None
+    saved.job_id = job_id
+    db.session.commit()
+    return {'candidate_id': candidate_id, 'job_id': job_id, 'engine': engine}
+
+
 # --- Rating + best settings ---------------------------------------------------
 def _owned_test_image(user_id, image_id):
     """Single-user app: no cross-user ownership check (SRC compared the
@@ -2923,7 +3139,7 @@ def cell_scores(dataset_id, family=None) -> list[dict]:
     = borne basse de Wilson sur le taux de 👍 (taux × confiance) - pas sur le
     compte brut, qui biaisait vers les configs simplement plus testées. Tri
     best-first : rank ↓, nb de votes ↓ (confiance), strength ↑ (anti-overfit)."""
-    rows = LoraTestImage.query.filter_by(dataset_id=dataset_id).all()
+    rows = _cells().filter_by(dataset_id=dataset_id).all()
     # Failed cells produced no image and can't be judged — exclude them so a broken
     # config doesn't inflate the 'images' denominator or otherwise pollute the
     # ranking / best-config pick (P0-b).
@@ -2961,7 +3177,7 @@ def cell_scores(dataset_id, family=None) -> list[dict]:
 def model_net_scores(dataset_id) -> dict:
     """Sentiment net par modèle (👍−👎 sur toutes ses images) - exposé pour
     l'affichage. Le gate de best_cell, lui, utilise le TAUX (voir _model_like_rates)."""
-    rows = LoraTestImage.query.filter_by(dataset_id=dataset_id).all()
+    rows = _cells().filter_by(dataset_id=dataset_id).all()
     net = {}
     for r in rows:
         if r.rating == 1:
@@ -3077,7 +3293,7 @@ def best_preset(dataset_id, scores=None) -> dict | None:
     bc = best_cell(dataset_id, scores=scores)
     if not bc:
         return None
-    img = (LoraTestImage.query
+    img = (_cells()
            .filter_by(dataset_id=dataset_id, checkpoint=bc['checkpoint'],
                       strength=bc['strength'], aspect=bc.get('aspect'),
                       z_model=bc.get('z_model'), cfg=bc.get('cfg'),
@@ -3115,7 +3331,7 @@ def best_per_checkpoint(dataset_id, scores=None) -> list[dict]:
         best_by_cp.setdefault(e['checkpoint'], e)
     out = []
     for bc in best_by_cp.values():
-        img = (LoraTestImage.query
+        img = (_cells()
                .filter_by(dataset_id=dataset_id, checkpoint=bc['checkpoint'],
                           strength=bc['strength'], aspect=bc.get('aspect'),
                           z_model=bc.get('z_model'), cfg=bc.get('cfg'),
@@ -3310,7 +3526,7 @@ def score_faces(user_id, dataset_id, family=None) -> dict:
     if not os.path.exists(ref_path):
         raise ValueError('reference photo missing')
     eff = _resolve_family(ds, family, available_families(ds))
-    rows = (LoraTestImage.query.filter_by(dataset_id=dataset_id, status='done')
+    rows = (_cells().filter_by(dataset_id=dataset_id, status='done')
             .filter(LoraTestImage.filename.isnot(None)).all())
     rows = [r for r in rows if (family_of_lora(r.checkpoint) or 'zimage') == eff]
     ds_dir = fds._dataset_dir(dataset_id)
@@ -3344,7 +3560,7 @@ def face_ranking(dataset_id, family) -> list:
     """Classement des checkpoints par similarité faciale MOYENNE (cellules déjà
     scorées, famille donnée). [{checkpoint, label, avg, n}] trié meilleur d'abord -
     le front marque le 1er comme « 🏆 best epoch »."""
-    rows = (LoraTestImage.query.filter_by(dataset_id=dataset_id)
+    rows = (_cells().filter_by(dataset_id=dataset_id)
             .filter(LoraTestImage.face_score.isnot(None)).all())
     rows = [r for r in rows if (family_of_lora(r.checkpoint) or 'zimage') == family]
     agg = {}
@@ -3377,7 +3593,7 @@ def delete_prompt(user_id, dataset_id, prompt) -> int:
     dataset_dir = fds._dataset_path(dataset_id)
 
     with GPU_ARBITER_LOCK:
-        rows = LoraTestImage.query.filter_by(dataset_id=dataset_id, prompt=p).all()
+        rows = _cells().filter_by(dataset_id=dataset_id, prompt=p).all()
         if not rows:
             return 0
         # Do every safe cancellation before touching a file. A refusal retains
@@ -3427,7 +3643,7 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         return None
     fams = available_families(ds)
     eff = _resolve_family(ds, family, fams)
-    rows_all = (LoraTestImage.query.filter_by(dataset_id=dataset_id)
+    rows_all = (_cells().filter_by(dataset_id=dataset_id)
                 .order_by(LoraTestImage.id.asc()).all())
     # Grille = cellules de la famille effective (famille déduite du checkpoint).
     rows = [r for r in rows_all if (family_of_lora(r.checkpoint) or 'zimage') == eff]
@@ -3524,7 +3740,7 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
 def lora_net_scores(run_id) -> list[dict]:
     """Classement PAR-LoRA d'un run : agrège les votes des cellules par dataset_id
     (= un LoRA). Trié par score net (likes - dislikes) puis likes, décroissant."""
-    rows = LoraTestImage.query.filter_by(run_id=run_id).filter(
+    rows = _cells().filter_by(run_id=run_id).filter(
         LoraTestImage.filename.isnot(None)).all()
     agg = {}
     for r in rows:
@@ -3546,7 +3762,7 @@ def lora_net_scores(run_id) -> list[dict]:
 def studio_payload_run(user_id, run_id) -> dict | None:
     """Payload d'un run (mono ou multi-LoRA). Requêté par run_id + ajoute le
     classement par-LoRA et la liste des LoRA présents."""
-    rows = (LoraTestImage.query.filter_by(run_id=run_id)
+    rows = (_cells().filter_by(run_id=run_id)
             .order_by(LoraTestImage.id.asc()).all())
     if not rows:
         return None
@@ -3634,7 +3850,7 @@ def user_recent_prompts(user_id, limit=None) -> list[dict]:
     ds_ids = [d.id for d in FaceDataset.query.filter_by(user_id=str(user_id)).all()]
     if not ds_ids:
         return []
-    rows = (LoraTestImage.query.filter(LoraTestImage.dataset_id.in_(ds_ids))
+    rows = (_cells().filter(LoraTestImage.dataset_id.in_(ds_ids))
             .order_by(LoraTestImage.id.desc()).limit(1500).all())
     return _recent_prompts(rows, limit=limit)
 

@@ -47,6 +47,8 @@ import {
   groupPinnedBatchBySource, groupPinnedBatchTogether,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
+import { canImproveCanvasImage, canvasImproveLaunchMessage } from '../../utils/canvasImprove';
+import { improveEngine } from '../../utils/improveEngines';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
@@ -1278,6 +1280,26 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     })));
   }, [allImageNodes, onSaveImageNodes]);
 
+  /* ✨ Upscale & improve THIS picture. Its own route on purpose: a board image is
+     a `lora_test_image` row and the dataset improve endpoint resolves a
+     `face_dataset_image` — two tables, two id spaces, so reusing it would have
+     improved an unrelated picture without failing. The result is a row of the
+     same checkpoint's gallery, so the toast says where to find it: nothing on
+     the board moves, and a bare "started" would read as a dead click. */
+  const handleImproveCanvasImage = useCallback(async (imageId, engineId) => {
+    try {
+      const d = await postJson(`/api/canvas/image/${imageId}/improve`,
+        engineId ? { engine: engineId } : {});
+      if (!d?.ok) {
+        toast.error(d?.error || 'Could not start the improvement');
+        return;
+      }
+      toast.success(canvasImproveLaunchMessage(improveEngine(d.engine).label));
+    } catch (err) {
+      toast.error(err?.message || 'Could not start the improvement');
+    }
+  }, [toast]);
+
   /* 📌 Pin ALL of a finished run's images, in one click.
      A lot spanning four checkpoints used to mean opening four galleries and
      pinning five pictures one by one — the board's own generation, and the
@@ -1757,7 +1779,11 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           prompt, and the copy buttons. The node on the board is the picture;
           the facts stay one click away rather than crammed onto a thumbnail. */}
       <GeneratedImageLightbox img={pinnedZoom} alt="Pinned generated image"
-        onClose={() => setPinnedZoom(null)} />
+        onClose={() => setPinnedZoom(null)}
+        /* ✨ only where it means something: a picture with a library row that is
+           not itself an improvement (canvasImprove.js states both reasons). */
+        onImprove={canImproveCanvasImage(pinnedZoom) ? handleImproveCanvasImage : undefined}
+        datasetId={pinnedZoom?.dataset_id ?? null} />
 
       {/* 🪪 The lane's reference face, full size — and only that. A reference
           has no seed, no sampler and no prompt, so it gets no facts column. */}

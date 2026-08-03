@@ -5606,6 +5606,15 @@ def _gallery_image(r) -> dict:
         'aspect': r.aspect,
         'extra_loras': r.extra_loras,
         'face_score': r.face_score,
+        # ✨ Whether this row IS an Upscale & improve result, and of what. The
+        # galleries and canvas_image_nodes read this table WITHOUT the studio's
+        # `_cells()` filter — deliberately, because showing the improvement next
+        # to its source and letting it be pinned is the point of the button. The
+        # front needs the two keys for the same reason the dataset grid does:
+        # to say so on the tile, and to refuse to improve an improvement before
+        # the click rather than through a 400 after it.
+        'derivation_kind': r.derivation_kind,
+        'parent_image_id': r.parent_image_id,
     }
 
 

@@ -1901,6 +1901,38 @@ The graph embedded in a dataset's *Checkpoints & LoRAs* panel is unchanged and
 still holds the per-checkpoint actions (download, deploy, continue from here,
 inline previews). The canvas is a second way in, not a replacement.
 
+## Upscale a picture straight from the board
+
+Click a pinned picture (🔍, or the picture itself) and the full-screen view now
+carries **✨ Upscale & improve** next to **⬇ Download** — the same pass, and the
+same choice of engine, as the one in the dataset lightbox:
+
+- **✨ Improve via Klein** re-renders detail and texture. Sharper, but skin and
+  colour can shift. The note under the button quotes the exact instruction it is
+  about to send and links to where you can edit it or switch it off.
+- **🔍 Upscale via SeedVR2** resolves detail at a higher resolution and keeps the
+  original look. It appears once SeedVR2 is installed; until then Setup ▸ ComfyUI
+  can download it for you, and pressing ✨ before that answers with the same
+  offer to install it rather than a plain error.
+
+**Where the result goes.** The picture on the board is never touched. The
+improvement arrives as its **own image in that checkpoint's gallery**, right next
+to the original — open the gallery from the checkpoint pill (🖼) and you can
+compare the two, download either, or pin the improved one onto the board beside
+its source. Nothing on the board moves on its own, which is why the confirmation
+says where to look.
+
+Two things it deliberately will not do. An **improvement cannot be improved
+again** — running two passes over the same pixels is how a face turns to
+plastic — and the **lane's reference face** has no ✨ at all, because it is a
+photo you supplied, not something the app generated. If a pass fails, press ✨
+again: that is the retry.
+
+**It stays out of the Test Studio.** These upscales are not sweep cells, so they
+never appear in the Test Studio grid, never count as a run in progress, and never
+enter the 👍/👎 ranking of a checkpoint — a rating you give an *upscale* would
+otherwise be read as a vote for the checkpoint that did not produce it.
+
 ## Tips that save runs
 
 - Trust the composition meter over your instinct — a set that "looks varied"
