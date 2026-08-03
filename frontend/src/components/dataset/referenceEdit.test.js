@@ -5,7 +5,7 @@ import {
   batchLiveNote, editPhase, editEngineOptions, editCostNote, editKeepNote,
   editRefNote, acceptsExtraEditRefs, acceptsExtraEditRefsForBatch, editRefSupport,
   editBatchBlockedReason, referenceEditCandidates,
-  retryRequestForReferenceEdit,
+  retryRequestForReferenceEdit, MAX_EDIT_REFS, maxEditRefsForBatch,
 } from './referenceEdit.js';
 import {
   STORAGE_ENGINES, STORAGE_PRIMARY, ENGINES, API_ENGINES, LOCAL_ENGINES, ENGINE_LABELS,
@@ -175,43 +175,47 @@ test('the Keep line does not claim a refund that never applied', () => {
   for (const e of ['krea', 'nanobanana']) assert.match(editKeepNote(e), /can’t be undone/);
 });
 
-test('an engine that takes fewer references SAYS so at pick time', () => {
+test('each local engine names WHERE its second reference comes from', () => {
   assert.equal(editRefSupport('chatgpt'), 'all');
   assert.equal(editRefNote('chatgpt'), null);          // nothing to warn about
-  // Krea's node pack has ONE extra slot. Naming the ceiling beats handing it
-  // three angles and letting two vanish between the modal and the graph.
-  assert.match(editRefNote('krea', { datasetExtraCount: 3 }), /FIRST of the dataset's 3/);
-  assert.match(editRefNote('krea', { datasetExtraCount: 1 }), /the dataset's extra reference photo/);
-  // And WHAT that slot is for, in every state — a user who picks another angle
-  // of the same face gets a duplicated subject and blames the engine.
-  for (const n of [0, 1, 3]) {
-    assert.match(editRefNote('krea', { datasetExtraCount: n }), /a different subject/);
-  }
-  assert.doesNotMatch(editRefNote('klein', { datasetExtraCount: 3 }), /a different subject/);
-  assert.match(editRefNote('klein', { datasetExtraCount: 2 }), /2 extra reference photos/);
-  assert.match(editRefNote('klein'), /not sent/);
-});
 
-test('with no extra angles yet, both local engines say WHERE to add them', () => {
-  // The transient picker is hidden for local engines, and a hidden picker reads
-  // as "this engine takes none" — wrong for both of them. Point at the card that
-  // does accept angles instead of leaving the row blank.
-  for (const engine of ['klein', 'krea']) {
-    assert.match(editRefNote(engine, { datasetExtraCount: 0 }), /reference card/);
-  }
-  // Once the dataset has angles the pointer is noise, so it goes away.
+  // The two local engines want opposite photos, so they must not point at the
+  // same pool. Krea reads THIS dialog (a different subject to compose with);
+  // Klein reads the dataset's angles (the same face, locked across every
+  // generation). Sending Krea to the dataset pool -- which holds only more views
+  // of the same person -- is the bug this split exists to prevent.
+  const krea = editRefNote('krea');
+  assert.match(krea, /right here/);
+  assert.match(krea, /a different subject/);
+  assert.match(krea, /does not read the dataset's extra angles/);
+  assert.doesNotMatch(krea, /reference card/);
+
+  const klein = editRefNote('klein', { datasetExtraCount: 2 });
+  assert.match(klein, /2 extra reference photos/);
+  assert.match(klein, /not to Klein/);                 // per engine, not "no local engine"
+  assert.doesNotMatch(klein, /a different subject/);
+  // With no angles yet the picker shows Klein nothing, which reads as "it takes
+  // none" — so it points at the card that does accept them.
+  assert.match(editRefNote('klein', { datasetExtraCount: 0 }), /reference card/);
   assert.doesNotMatch(editRefNote('klein', { datasetExtraCount: 1 }), /reference card/);
-  assert.doesNotMatch(editRefNote('krea', { datasetExtraCount: 1 }), /reference card/);
 });
 
-test('the transient reference picker is hidden for engines that cannot take it', () => {
+test('the picker appears for the engines that read it, capped per selection', () => {
   // Hidden, not ignored: an input whose files are silently dropped returns an
   // edit that used half of what the user handed it.
   assert.equal(acceptsExtraEditRefs('chatgpt'), true);
-  assert.equal(acceptsExtraEditRefs('klein'), false);
-  assert.equal(acceptsExtraEditRefs('krea'), false);
-  assert.equal(acceptsExtraEditRefsForBatch(['klein', 'krea']), false);
-  assert.equal(acceptsExtraEditRefsForBatch(['klein', 'chatgpt']), true);
+  assert.equal(acceptsExtraEditRefs('krea'), true);    // reads one, so it is shown
+  assert.equal(acceptsExtraEditRefs('klein'), false);  // reads the dataset instead
+  assert.equal(acceptsExtraEditRefsForBatch(['klein', 'krea']), true);
+  assert.equal(acceptsExtraEditRefsForBatch(['klein']), false);
+
+  // The MOST generous consumer sets the cap. Capping at the strictest would let
+  // Krea silently shrink what a ChatGPT sibling in the same batch can use.
+  assert.equal(maxEditRefsForBatch(['krea']), 1);
+  assert.equal(maxEditRefsForBatch(['chatgpt']), MAX_EDIT_REFS);
+  assert.equal(maxEditRefsForBatch(['krea', 'chatgpt']), MAX_EDIT_REFS);
+  assert.equal(maxEditRefsForBatch(['klein']), 0);
+  assert.equal(maxEditRefsForBatch([]), 0);
 });
 
 test('batchLiveNote informs only while a generate batch runs, never blocks', () => {

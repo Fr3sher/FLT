@@ -904,19 +904,19 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     anything is copied or queued), ValueError on a missing source, RuntimeError
     when ComfyUI isn't configured.
 
-    `extra_ref_paths`: the dataset's extra angles, in order. ONE of them is used
-    — `Krea2EditModelPatch` and `Krea2EditGroundedEncode` each expose a single
-    extra slot (`_b`) and no more, so the rest are dropped here rather than
+    `extra_ref_paths`: the SECOND subject, in order — one is used, because
+    `Krea2EditModelPatch` and `Krea2EditGroundedEncode` each expose a single
+    extra slot (`_b`) and no more. Anything beyond it is dropped here rather than
     silently at graph-build time. A path that no longer exists is skipped with a
-    log line, never fatal: an edit must not die over an optional angle (the same
-    tolerance as the Klein multi-ref path).
+    log line, never fatal: an edit must not die over an optional reference.
 
-    Read the pack before widening this: its `_b` slot was trained for a SECOND,
-    DIFFERENT subject ("scene first, subject second"; "two distinct people ...
-    subject B on the `_b` inputs"). Feeding it another angle of the SAME person
-    is off-label — it is what the dataset lane wants, but the documented failure
-    mode is a duplicated subject, which is why only one extra is passed and the
-    modal says what it does.
+    WHAT belongs here, per the pack: a DIFFERENT subject — "scene first, subject
+    second", "two distinct people ... subject B on the `_b` inputs". Another
+    angle of the SAME person is off-label and comes back duplicated. That is why
+    the caller feeds this from the edit DIALOG and never from the dataset's extra
+    references, which are angles of one face by construction (see
+    face_dataset_service.LOCAL_EDIT_REF_SUPPORT). Wiring it to the dataset pool
+    was this feature's first shape, and it guaranteed the wrong photo.
 
     `generation_loras`: ordered [{file, strength}] rows of the run's always-on
     LoRA preset (already resolved from config by the caller — a request only ever
