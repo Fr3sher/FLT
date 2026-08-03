@@ -8,3 +8,12 @@ simple-lama-inpainting>=0.1.2
 # insightface 0.7.3 uses numpy's removed np.int and links numpy<2 ABI - numpy 2.x
 # import-crashes it. Cap below 2 (1.26.4 is the last with wheels for Py 3.10-3.12).
 numpy>=1.26,<2
+
+# Video lane. PyAV decodes in-process (probe, thumbnails, PTS); imageio-ffmpeg
+# ships a static ffmpeg binary so exporting works on a machine that has never
+# installed one. transnetv2-pytorch is the shot detector — MIT, weights bundled in
+# the wheel (~33 MB), so no download step and it works offline; it drags torch and
+# therefore installs into the bank-scoring environment, never the Flask venv.
+av>=13
+imageio-ffmpeg>=0.5
+transnetv2-pytorch>=1.0.5

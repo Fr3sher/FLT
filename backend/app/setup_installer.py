@@ -242,7 +242,8 @@ _NODE_PACKS = {
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
                    'bank_scoring',
-                   'watermark_detect') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
+                   'watermark_detect',
+                   'video', 'shot_detect') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -311,17 +312,29 @@ _CAPABILITY_PACKAGES = {
     'face_scoring': ('insightface', 'onnxruntime', 'numpy', 'opencv-python-headless'),
     'masks': ('rembg', 'onnxruntime', 'numpy', 'opencv-python-headless'),
     'watermark_inpaint': (_WATERMARK_PKG,),
+    # 🎬 The video lane, split across two environments on purpose.
+    #   video       decoding (PyAV, imported IN-PROCESS by Flask, so it must land
+    #               in the app's own interpreter) plus a bundled static ffmpeg
+    #               binary, which is what lets a user who has never installed
+    #               ffmpeg export a dataset. Small; the generic ML worker handles it.
+    #   shot_detect TransNetV2, which drags torch — so it rides the environment
+    #               bank scoring already manages instead of costing a second
+    #               ~2.5 GB copy. Its own worker, like watermark_detect; listed
+    #               here so the anti-orphan test sees its package covered.
+    'video': ('imageio-ffmpeg', 'av'),
+    'shot_detect': ('transnetv2-pytorch',),
 }
 # The capabilities served by the GENERIC per-capability pip worker
 # (_run_ml_capability). watermark_inpaint keeps its own worker, so it's excluded.
-_CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks')
+_CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks', 'video')
 
 # Actions whose success makes a NEW importable package appear -> the probe
 # import-cache must be dropped so the capability flips without waiting out the
 # 600 s TTL (ml_extras/scrape_extras via -r, the scoped per-capability installs).
 _IMPORT_CACHE_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                          | set(_CAPABILITY_ML_ACTIONS)
-                         | {'watermark_inpaint', 'bank_scoring', 'watermark_detect'})
+                         | {'watermark_inpaint', 'bank_scoring', 'watermark_detect',
+                            'shot_detect'})
 
 # Actions that invoke pip and therefore MUST NOT run concurrently: two pip processes
 # writing the same environment race on a shared package's files/dist-info and corrupt
@@ -337,7 +350,8 @@ _PIP_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                 # (that sharing is the whole point — it saves a second 2.5 GB
                 # torch), so it must share the pip queue too or the two race on
                 # one environment's dist-info.
-                | {'watermark_inpaint', 'bank_scoring', 'watermark_detect'})
+                | {'watermark_inpaint', 'bank_scoring', 'watermark_detect',
+                   'shot_detect'})
 
 # Transient file-lock errors an install can hit even without concurrency: an antivirus
 # or the search indexer briefly holding a just-written file at the moment pip renames
@@ -577,6 +591,14 @@ def manual_command(action) -> str:
         pkgs = ' '.join(_BANK_SCORING_PKGS)
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
+    if action == 'shot_detect':
+        # One line, and no weights step: transnetv2-pytorch carries its own inside
+        # the wheel. Targets the scoring environment because of torch.
+        python = (cfg.get('shot_detect.python') or cfg.get('bank_scoring.python')
+                  or _bank_scoring_env_python())
+        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+                f'&&  {_quote(python)} -m pip install '
+                f'"{_requirement_spec("transnetv2-pytorch")}"')
     if action == 'watermark_detect':
         # Packages then weights. The weights line names the FILES on purpose —
         # a bare `snapshot_download` of the SigLIP2 repo pulls its training
@@ -2443,12 +2465,97 @@ def _run_ollama_model(action) -> int:
             run['response'] = None
 
 
+def _run_shot_detect(action) -> int:
+    """Install TransNetV2 — the shot-boundary detector the video bank cuts with.
+
+    It goes into the environment bank scoring already manages, not the app's own
+    Python, for one reason: it needs torch. A second torch is ~2.5 GB the user
+    gains nothing from, and the watermark detector already settled this question
+    the same way. The capability probe resolves the interpreter through the same
+    chain, so the install target and the later import cannot drift.
+
+    Unlike the watermark detector there is no weights step: transnetv2-pytorch
+    ships its ~33 MB weights inside the wheel, so "installed" really does mean
+    "usable offline". That is most of why it was chosen over the alternatives.
+    """
+    managed_python = _bank_scoring_env_python()
+    configured = (cfg.get('shot_detect.python') or '').strip()
+    if configured and not _same_path(configured, managed_python):
+        # A BORROWED environment — checked, never changed (the ⚡ picker's promise).
+        for line in (
+            'shot_detect.python points at an environment this app did not create,',
+            'so nothing was installed into it — borrowed environments are checked,',
+            'never changed. To add the detector there yourself, run:',
+            f'  "{configured}" -m pip install torch transnetv2-pytorch',
+            'Or clear shot_detect.python and click Install again — the app then uses',
+            'its own scoring environment, which already has torch.',
+        ):
+            _append(action, line)
+        return 1
+    python = configured or _ensure_bank_scoring_env(action)
+    if not python:
+        return 1
+    if _is_flask_venv(python):
+        for line in (
+            "Shot detection needs torch, which never installs into the app's own Python.",
+            'Nothing was installed. Clear shot_detect.python and click Install again —',
+            'the app builds a dedicated Python for you.',
+        ):
+            _append(action, line)
+        return 1
+    _append(action, f'target interpreter: {python}')
+    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu) if needed')
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
+                           '--index-url', _TORCH_CPU_INDEX])
+    if rc != 0:
+        _append(action, f'torch install failed (rc={rc}) — see the log above')
+        return rc
+    rc = _run_pip(action, [python, '-m', 'pip', 'install',
+                           _requirement_spec('transnetv2-pytorch')])
+    if rc != 0:
+        return rc
+    if not _verify_shot_detect_import(action, python):
+        return 1
+    try:
+        cfg.save_config({'shot_detect': {'python': python}})
+    except Exception as e:      # noqa: BLE001
+        _append(action, f'warning: could not save shot_detect.python ({e}); '
+                        'the environment still works for this run')
+    return 0
+
+
+def _verify_shot_detect_import(action, python) -> bool:
+    """Run the SAME import the probe will, in the target environment, once pip
+    says it is done — otherwise an install reports success while the capability
+    stays off with no reason shown anywhere. A timeout is 'still warming', never
+    a failure."""
+    if not os.path.isfile(python):
+        return True
+    _append(action, 'verifying the install (first import — this also warms it)…')
+    try:
+        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch'],
+                              capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        _append(action, 'still warming up — the capability turns green on its own '
+                        'shortly; no restart needed')
+        return True
+    if proc.returncode == 0:
+        return True
+    _append(action, 'the packages installed but the import still fails:')
+    for line in (proc.stderr or '').strip().splitlines()[-8:]:
+        _append(action, f'  {line}')
+    return False
+
+
 _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + scrape_extras
             'ollama_model': _run_ollama_model,
-            **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks
+            **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks + video
             'watermark_inpaint': _run_watermark_inpaint,
             'bank_scoring': _run_bank_scoring,
             'watermark_detect': _run_watermark_detect,
+            'shot_detect': _run_shot_detect,
             **{a: _run_model_download for a in _MODEL_DOWNLOADS},
             **{a: _run_node_pack for a in _NODE_PACKS}}
 # Structural invariant: every whitelisted action MUST have a worker — a missing
