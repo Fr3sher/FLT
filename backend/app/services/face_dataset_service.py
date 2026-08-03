@@ -5920,16 +5920,19 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         q = q.filter(FaceDatasetImage.id.in_(image_ids))
     if not force:
         q = q.filter((FaceDatasetImage.caption.is_(None)) | (FaceDatasetImage.caption == ''))
-    todo = [(img, _img_path(img)) for img in q.all() if img.filename]
-    todo = [(img, p) for img, p in todo if p and os.path.exists(p)]
+    # (image_id, path), not (row, path): the loops below commit per image and
+    # this pass runs for a long time over a live grid. See _live_image_row.
+    todo = [(img.id, _img_path(img)) for img in q.all() if img.filename]
+    todo = [(image_id, p) for image_id, p in todo if p and os.path.exists(p)]
     if not todo:
         return 0
     # Total for the persistent progress indicator (token owned by the caller).
     dataset_activity.progress(token, total=len(todo),
                               detail=f'Preparing {len(todo)} concept caption(s)…')
     n = 0
+    vanished = 0
     remaining = list(todo)
-    refine_targets = []  # (img, p, joycap) -> Joy draft refined by Qwen
+    refine_targets = []  # (image_id, p, joycap) -> Joy draft refined by Qwen
     # 1) JoyCaption batch (draft) when the backend allows it.
     if backend in ('auto', 'joycaption'):
         jc = {}
@@ -5948,21 +5951,25 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         except Exception as e:
             logger.warning('caption concept: JoyCaption indisponible (%s)', e)
         still = []
-        for img, p in remaining:
+        for image_id, p in remaining:
             cap = (jc.get(p) or '').strip().strip('"').strip()
             if cap:
-                refine_targets.append((img, p, cap))
+                refine_targets.append((image_id, p, cap))
             else:
-                still.append((img, p))
+                still.append((image_id, p))
         remaining = still
     # 2a) Backend 'joycaption' forced: no Qwen. Store Joy drafts scrubbed mechanically
     #     (leak_re from the desc words only) - respects "no Ollama fallback".
     if backend == 'joycaption':
         leak_re = _concept_terms_re(_fallback_concept_terms(concept_desc))
-        for img, p, joycap in refine_targets:
+        for image_id, p, joycap in refine_targets:
             if dataset_activity.cancel_requested(ds.id):
                 break   # graceful stop at an image boundary (see caption_images)
             dataset_activity.bump(token)
+            img = _live_image_row(image_id)
+            if img is None:      # deleted while the pass ran
+                vanished += 1
+                continue
             try:
                 with open(p, 'rb') as fh:
                     data = fh.read()
@@ -5993,7 +6000,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
         leak_re = _concept_terms_re(_get_concept_terms(ds, image_path=sample,
                                                        describe=describe))
         try:
-            for img, p, joycap in refine_targets:
+            for image_id, p, joycap in refine_targets:
                 if dataset_activity.cancel_requested(ds.id):
                     break   # graceful stop at an image boundary (see caption_images)
                 dataset_activity.bump(token)
@@ -6025,7 +6032,8 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                 else:
                     # Unusable refine (reasoning trace / loop) -> direct Qwen caption
                     # (natively omits the concept), else keep the Joy draft.
-                    logger.info('caption concept: refine rejected -> direct Qwen (image %s)', img.id)
+                    logger.info('caption concept: refine rejected -> direct Qwen (image %s)',
+                                image_id)
                     alt = ''
                     try:
                         alt = describe(data, cap_prompt, num_predict=2000,
@@ -6037,6 +6045,12 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     final = alt or joycap
                 final = _enforce_concept_omission(final, leak_re, data, concept_desc,
                                                   describe=describe) or final
+                # Re-read only now: everything above is model work measured in
+                # seconds per image, and the tile can be deleted during it.
+                img = _live_image_row(image_id)
+                if img is None:
+                    vanished += 1
+                    continue
                 if not _usable_caption(final):
                     # Refine AND direct both unusable → fall back to the Joy draft (clean
                     # prose), scrubbed of any leak; leave blank if even that fails.
@@ -6048,12 +6062,13 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                         if force and (img.caption or ''):
                             img.caption = ''
                             db.session.commit()
-                        logger.info('caption concept: no usable caption for image %s -> left blank', img.id)
+                        logger.info('caption concept: no usable caption for image %s '
+                                    '-> left blank', image_id)
                         continue
                 img.caption = _cap_caption(final)
                 db.session.commit()
                 n += 1
-            for img, p in remaining:
+            for image_id, p in remaining:
                 if dataset_activity.cancel_requested(ds.id):
                     break   # graceful stop at an image boundary (see caption_images)
                 dataset_activity.bump(token)
@@ -6067,6 +6082,11 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                 if cap:
                     cap = _enforce_concept_omission(cap, leak_re, data, concept_desc,
                                                     describe=describe) or cap
+                # Re-read after the call, for the same reason as the refine loop.
+                img = _live_image_row(image_id)
+                if img is None:
+                    vanished += 1
+                    continue
                 if _usable_caption(cap):
                     img.caption = _cap_caption(cap)
                     db.session.commit()
@@ -6075,12 +6095,16 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     if force and (img.caption or ''):
                         img.caption = ''
                         db.session.commit()
-                    logger.info('caption concept: no usable direct caption for image %s -> left blank', img.id)
+                    logger.info('caption concept: no usable direct caption for image '
+                                '%s -> left blank', image_id)
         finally:
             if ollama_model:
                 unload_vision_model(model=ollama_model)
             else:
                 unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
+    if vanished:
+        logger.info('caption concept: %s image(s) were deleted while the pass ran, '
+                    'skipped', vanished)
     return n
 
 
@@ -6183,8 +6207,11 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
     if not force:
         q = q.filter((FaceDatasetImage.caption.is_(None)) | (FaceDatasetImage.caption == ''))
     rows = q.all()
-    todo = [(img, _img_path(img)) for img in rows if img.filename]
-    todo = [(img, p) for img, p in todo if p and os.path.exists(p)]
+    # (image_id, path), not (row, path): both loops below commit per image, which
+    # expires every row still to come, and this pass runs for minutes-to-hours
+    # over a grid the user keeps working in. See _live_image_row.
+    todo = [(img.id, _img_path(img)) for img in rows if img.filename]
+    todo = [(image_id, p) for image_id, p in todo if p and os.path.exists(p)]
     if not todo:
         return 0
     # Persistent progress indicator (survives a page reload): 'recaption' when force
@@ -6198,6 +6225,7 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
                 dataset_id, backend, mode, force, len(todo))
     try:
         n = 0
+        vanished = 0
         remaining = todo
         # In 'auto', why JoyCaption didn't contribute (deps missing / crash). Kept so a
         # LATER Ollama failure reports BOTH reasons instead of only the Ollama one —
@@ -6233,22 +6261,28 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
                 joycaption_note = str(e)
                 logger.warning('caption_images: JoyCaption indisponible (%s)', e)
             still = []
-            for img, p in remaining:
+            for image_id, p in remaining:
                 cap = (jc.get(p) or '').strip().strip('"').strip()
                 if cap:
+                    img = _live_image_row(image_id)
+                    if img is None:      # deleted while the batch ran
+                        vanished += 1
+                        dataset_activity.bump(token)
+                        continue
                     cleaned = cleaner(cap) or cap
                     img.caption = _cap_caption(cleaned)
                     db.session.commit()
                     n += 1
                     dataset_activity.bump(token)   # this image is captioned (done)
                 else:
-                    still.append((img, p))
+                    still.append((image_id, p))
             remaining = still
             dataset_activity.progress(
                 token, detail=f'JoyCaption finished; {len(remaining)} image(s) remaining…')
             if backend == 'joycaption':  # backend forcé JoyCaption -> pas de repli Ollama
-                logger.info('captioning finished: dataset=%s backend=%s captioned=%s elapsed=%.1fs',
-                            dataset_id, backend, n, time.monotonic() - started)
+                logger.info('captioning finished: dataset=%s backend=%s captioned=%s '
+                            'deleted_mid_pass=%s elapsed=%.1fs',
+                            dataset_id, backend, n, vanished, time.monotonic() - started)
                 return n
         # 2) Ollama (Qwen3-VL) pour les images non couvertes par JoyCaption ('auto'),
         # ou pour TOUT le lot si le backend force 'ollama'.
@@ -6258,7 +6292,7 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
             except ImportError:
                 raise RuntimeError('vision (Ollama) service not configured/available yet')
             try:
-                for index, (img, p) in enumerate(remaining, 1):
+                for index, (image_id, p) in enumerate(remaining, 1):
                     # Graceful stop: the user asked to stop and we're at an image
                     # boundary (nothing decoding) — leave the rest uncaptioned and let
                     # the finally below free the model, exactly like a normal finish.
@@ -6274,6 +6308,14 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
                             auto_start_local=(index == 1), timeout=(10, 300))
                     cap = (cap or '').strip().strip('"').strip()
                     if cap:
+                        # Re-read AFTER the call: the answer we are about to store
+                        # took a full VLM inference to arrive, and the tile can
+                        # have been deleted from the grid in that time.
+                        img = _live_image_row(image_id)
+                        if img is None:
+                            vanished += 1
+                            dataset_activity.bump(token)
+                            continue
                         cleaned = cleaner(cap) or cap
                         img.caption = _cap_caption(cleaned)
                         db.session.commit()
@@ -6289,8 +6331,9 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None):
                 raise
             finally:
                 unload_vision_model()  # libère la VRAM pour ComfyUI en fin de batch
-        logger.info('captioning finished: dataset=%s backend=%s captioned=%s elapsed=%.1fs',
-                    dataset_id, backend, n, time.monotonic() - started)
+        logger.info('captioning finished: dataset=%s backend=%s captioned=%s '
+                    'deleted_mid_pass=%s elapsed=%.1fs',
+                    dataset_id, backend, n, vanished, time.monotonic() - started)
         return n
     except Exception:
         logger.exception('captioning failed: dataset=%s backend=%s elapsed=%.1fs',

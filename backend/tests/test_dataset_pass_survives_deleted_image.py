@@ -37,13 +37,17 @@ def _png(color=(255, 0, 0)):
     return buf.getvalue()
 
 
-def _dataset_with_files(svc, n=3, **row_kw):
+def _dataset_with_files(svc, n=3, kind=None, **row_kw):
     """A dataset with ``n`` kept images that really exist on disk."""
     import os
     from app.config import LOCAL_USER
     from app.extensions import db
     from app.models import FaceDatasetImage
-    ds = svc.create_dataset(LOCAL_USER, 'Pass', 'passds')
+    # A concept dataset REFUSES to exist without a concept_desc — without it this
+    # helper raises and the test would go red on the setup, proving nothing.
+    ds = (svc.create_dataset(LOCAL_USER, 'Pass', 'passds', kind=kind,
+                             concept_desc='a recurring act') if kind
+          else svc.create_dataset(LOCAL_USER, 'Pass', 'passds'))
     folder = svc._dataset_path(ds.id)
     os.makedirs(folder, exist_ok=True)
     for i in range(n):
@@ -174,6 +178,73 @@ def test_the_watermark_cleaner_survives_an_image_deleted_under_its_batch(ctx, mo
     for i in (ids[0], ids[2]):
         assert db.session.get(FaceDatasetImage, i).watermark_state == 'cleaned', (
             'the pass continued but stopped recording its repaints')
+
+
+def _force_ollama_backend(monkeypatch, svc):
+    """Pin the caption backend so the test exercises the Ollama loop, not
+    whatever JoyCaption happens to be installed on the machine running it."""
+    orig_get = svc.cfg.get
+    monkeypatch.setattr(svc.cfg, 'get',
+                        lambda k, *a, **kw: ('ollama' if k == 'captioning.backend'
+                                             else orig_get(k, *a, **kw)))
+
+
+def test_the_caption_pass_survives_an_image_deleted_under_it(ctx, monkeypatch):
+    """The longest pass in the app: one VLM call per image, a commit per image,
+    over a grid the user keeps working in."""
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+    from app.services import vision_ollama
+
+    ds = _dataset_with_files(svc, 3)
+    ids = _ids(ds.id)
+    _force_ollama_backend(monkeypatch, svc)
+    calls = {'n': 0}
+
+    def fake_describe(image_bytes, *a, **k):
+        if calls['n'] == 0:
+            _delete_image_row(ids[1])
+        calls['n'] += 1
+        return 'a caption for this image'
+
+    monkeypatch.setattr(vision_ollama, 'describe_image_ollama', fake_describe)
+    monkeypatch.setattr(vision_ollama, 'unload_vision_model', lambda *a, **k: True)
+    n = svc.caption_images(LOCAL_USER, ds.id)
+    assert n == 2, f'the pass reported {n} captioned over two surviving images'
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).caption, (
+            'the pass continued but stopped storing captions')
+
+
+def test_the_concept_caption_pass_survives_an_image_deleted_under_it(ctx, monkeypatch):
+    """Concept datasets take a SEPARATE caption path (_caption_concept) with its
+    own loops — fixing caption_images does nothing for it."""
+    from app.models import FaceDatasetImage
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.services import face_dataset_service as svc
+    from app.services import vision_ollama
+
+    ds = _dataset_with_files(svc, 3, kind='concept')
+    ids = _ids(ds.id)
+    _force_ollama_backend(monkeypatch, svc)
+    calls = {'n': 0}
+
+    def fake_describe(image_bytes, *a, **k):
+        if calls['n'] == 0:
+            _delete_image_row(ids[1])
+        calls['n'] += 1
+        return 'a concept caption for this image'
+
+    monkeypatch.setattr(vision_ollama, 'describe_image_ollama', fake_describe)
+    monkeypatch.setattr(vision_ollama, 'unload_vision_model', lambda *a, **k: True)
+    n = svc.caption_images(LOCAL_USER, ds.id)
+    assert n == 2, f'the pass reported {n} captioned over two surviving images'
+    for i in (ids[0], ids[2]):
+        assert db.session.get(FaceDatasetImage, i).caption, (
+            'the concept pass continued but stopped storing captions')
 
 
 def test_the_short_caption_pass_survives_an_image_deleted_under_it(ctx, monkeypatch):
