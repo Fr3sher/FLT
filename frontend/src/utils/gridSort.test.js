@@ -130,6 +130,8 @@ test('bank sort ids are the ones the server accepts (never rename: they are stor
     'flat_desc', 'flat_asc', 'detail_desc', 'detail_asc',
     'bars_desc', 'bars_asc', 'jpeg_desc', 'jpeg_asc',
     'face_desc', 'face_asc',
+    'yaw_desc', 'yaw_asc',
+    'medium_conf_desc', 'medium_conf_asc',
   ]);
   // Every measure is offered BOTH ways — the point of the widening. A one-way
   // sort is the gap the chips already had.
@@ -154,7 +156,7 @@ test('bank menu groups by pass, keeps every option, and heads with Default', () 
       title: groups[0].options[0].title }],
   });
   assert.deepEqual(groups.map((g) => g.group),
-    ['', '📁 File', '✨ Score', '🔎 Scan quality', '🎭 Faces']);
+    ['', '📁 File', '✨ Score', '🔎 Scan quality', '🎭 Faces', '🎨 Medium']);
   // Grouping is a RE-ARRANGEMENT: no option invented, none lost, none duplicated.
   const flat = groups.flatMap((g) => g.options.map((o) => o.id));
   assert.deepEqual(flat.slice().sort(), BANK_SORTS.map((s) => s.id).slice().sort());
