@@ -3990,10 +3990,93 @@ def _dual_caption_json_path(dataset_folder) -> str:
     return (str(dataset_folder).rstrip('/\\') + '/' + _DUAL_CAPTION_FILENAME)
 
 
+# --- Export encoding (2026-08-03) ---------------------------------------------
+# The exporter used to re-encode EVERY master to lossless PNG. On a 6 211-image
+# style dataset that turned 3.6 GB of masters into 23.7 GB of staging and burned
+# 24 min of CPU before a single byte reached the network — measured, not guessed
+# — which is what filled the disk ([Errno 28] with no pod created), what left a
+# half-hour window in which any app restart killed the run, and what made the
+# upload "12 422 files and 24 GB" that RemoteAiToolkit.upload_dataset already
+# documents. The re-encode exists for exactly two reasons: bake EXIF orientation
+# into the pixels (an upright JPEG must never train sideways) and hand the
+# trainer a format it reads. A master that has NO EXIF block at all needs
+# neither the baking nor the metadata stripping, so its own bytes go straight
+# through.
+#
+# Extensions verified at the source, not assumed: ai-toolkit scans
+# `img_ext_list = ['.jpg', '.jpeg', '.png', '.webp']` (toolkit/dataloader_mixins.py)
+# and pairs a mask by STEM + any of those, so a copied .jpg still finds its .png
+# mask; the pod uploader's own whitelist (_DATA_EXTS) already carries the same four.
+_TRAINER_IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.webp')
+
+# Free space demanded on top of the estimate: captions, masks, the samples dir a
+# cloud run puts beside the dataset, and the plain fact that an export that ends
+# on a disk with nothing left is a broken export.
+_EXPORT_DISK_MARGIN_BYTES = 2 * 1024 ** 3
+
+
+def _export_copy_is_safe(im, ext) -> bool:
+    """Can this master's own bytes be handed to the trainer untouched?
+
+    Four conditions, all necessary: an extension ai-toolkit reads; NO EXIF block
+    at all (nothing to bake into pixels, and nothing — GPS, camera, timestamps —
+    to ship to a rented pod); already RGB (palette/CMYK/alpha must be converted);
+    a single frame. Anything else keeps the historical PNG re-encode."""
+    try:
+        exif = im.getexif()
+    except Exception:                       # a corrupt EXIF block: re-encode
+        return False
+    return (ext in _TRAINER_IMAGE_EXTS and not len(exif)
+            and im.mode == 'RGB' and int(getattr(im, 'n_frames', 1) or 1) == 1)
+
+
+def _export_image_bytes(src) -> int:
+    """Bytes `src` will occupy in the export, without writing anything.
+
+    A copied master costs exactly its file size; a re-encoded one is bounded by
+    its raw RGB size (PNG of a photo lands well under that). Unreadable headers
+    fall back to the file size rather than failing the estimate — the export
+    itself skips those files anyway."""
+    try:
+        with Image.open(src) as im:
+            if _export_copy_is_safe(im, os.path.splitext(src)[1].lower()):
+                return os.path.getsize(src)
+            w, h = im.size
+            return int(w) * int(h) * 3
+    except OSError:
+        try:
+            return os.path.getsize(src)
+        except OSError:
+            return 0
+
+
+def _assert_export_fits(out, srcs) -> None:
+    """Refuse an export that cannot fit BEFORE writing its first file.
+
+    Half a written export is worse than none: it fails with a bare
+    "[Errno 28] No space left on device" (twice, live, on runs that had already
+    spent 20 minutes), it leaves the partial copy behind, and it names neither
+    the size it wanted nor the space there was."""
+    need = int(sum(_export_image_bytes(s) for s in srcs) * 1.05) + _EXPORT_DISK_MARGIN_BYTES
+    try:
+        free = shutil.disk_usage(out).free
+    except OSError:
+        return                              # cannot measure -> do not invent a refusal
+    if free >= need:
+        return
+    raise ValueError(
+        f'not enough free disk space to export this dataset: about '
+        f'{need / 1e9:.1f} GB needed, {free / 1e9:.1f} GB free where the export '
+        f'goes ({out}). Free some space — finished cloud runs keep their staging '
+        f'copy until you clean it up (🧹 in the cloud run list) — then relaunch.')
+
+
 def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_dir=None,
                                 masked_faces: bool = True) -> str:
-    """Écrit les images `keep` en paires .png/.txt dans
-    DATASETS_DIR/<trigger>. Character/concept = trigger + caption éditée ; Style
+    """Écrit les images `keep` en paires image/.txt dans
+    DATASETS_DIR/<trigger>. L'image garde ses octets d'origine (.jpg/.webp/.png)
+    quand le trainer les lit tels quels et qu'aucun EXIF n'est à appliquer, sinon
+    elle est ré-encodée en .png — cf `_export_copy_is_safe`. Character/concept = trigger + caption éditée ; Style
     always-on = caption de contenu seule (le trigger interne n'est jamais exporté).
     Retourne le dossier.
 
@@ -4066,6 +4149,9 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
             .filter(FaceDatasetImage.filename.isnot(None)).all())
     if not kept:
         raise ValueError('no kept images to export')
+    _assert_export_fits(out, [p for p in
+                             (os.path.join(fds._dataset_dir(img.dataset_id), img.filename)
+                              for img in kept) if os.path.isfile(p)])
     n = 0
     exported = []
     dual = fds.dual_captions_enabled(ds)
@@ -4075,12 +4161,19 @@ def export_dataset_to_aitoolkit(user_id, dataset_id, masked: bool = True, dest_d
         if not os.path.isfile(src):
             continue
         stem = f'{trigger}_{n:03d}'
-        dst = os.path.join(out, f'{stem}.png')
-        # Dataset masters can retain their native JPEG/PNG/WebP/BMP bytes. The
-        # trainer receives this disposable PNG instead: bake EXIF orientation into
-        # pixels before dropping metadata so an upright JPEG never trains sideways.
+        ext = os.path.splitext(src)[1].lower()
+        # Dataset masters can retain their native JPEG/PNG/WebP/BMP bytes. A
+        # master the trainer already reads, carrying no EXIF at all, is copied
+        # byte for byte; anything else gets the historical disposable PNG, which
+        # bakes EXIF orientation into pixels and drops metadata so an upright
+        # JPEG never trains sideways. See _export_copy_is_safe.
         with Image.open(src) as source:
-            ImageOps.exif_transpose(source).convert('RGB').save(dst, 'PNG')
+            verbatim = _export_copy_is_safe(source, ext)
+            dst = os.path.join(out, f'{stem}{ext if verbatim else ".png"}')
+            if not verbatim:
+                ImageOps.exif_transpose(source).convert('RGB').save(dst, 'PNG')
+        if verbatim:
+            shutil.copyfile(src, dst)
         exported.append(dst)
         cap = fds.style_content_caption(ds, img.caption)
         body = cap if fds.is_style(ds) else (f'{trigger}, {cap}' if cap else trigger)

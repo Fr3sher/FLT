@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-export-keeps-original-bytes',
+    date: '2026-08-03',
+    title: 'Big datasets stop bloating on their way to training',
+    blurb:
+      'Preparing a dataset for training used to re-encode every picture to a lossless PNG, even when nothing needed changing. On a 6 200-image style dataset that turned 3.6 GB of photos into 24 GB and took half an hour before training could even start — long enough to fill a disk and fail with a bare "no space left on device", and long enough that any restart in between killed the run. Pictures the trainer already reads as they are now go through untouched: same dataset, 3.6 GB, a couple of minutes. Anything that genuinely needs converting — a photo with a rotation tag to bake in, an unusual colour mode, a format the trainer does not read — still is. And if the disk really cannot hold the export, you are now told before it starts, with the size it needs and the space you have, instead of finding out halfway through.',
+  },
+  {
     id: '2026-08-03-canvas-group-bar-reachable',
     date: '2026-08-03',
     title: 'Groups of pinned images can be moved and closed again',
