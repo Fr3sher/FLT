@@ -2709,7 +2709,7 @@ def cancel_pending(user_id, dataset_id):
     rows = (FaceDatasetImage.query
             .filter_by(dataset_id=dataset_id, status='pending')
             .filter(FaceDatasetImage.filename.is_(None)).all())
-    n = 0
+    targeted_ids = [img.id for img in rows]
     retry_pending = 0
     restart_required = 0
     recovery_error = 0
@@ -2735,8 +2735,20 @@ def cancel_pending(user_id, dataset_id):
             # cancelled / terminal / missing are all safe: cancel_job_outcome
             # proved that this exact job owns no durable recovery barrier.
         _finish_cancelled_generation_row(img)
-        n += 1
     db.session.commit()
+    # Counted from the DATABASE, never from the loop. `cancel_job_outcome` can
+    # roll back internally, and a rollback discards the `db.session.delete(img)`
+    # staged by EARLIER iterations — while a counter incremented in the loop has
+    # already counted them. Stop then reported cancellations that never happened
+    # and the tiles were still there on refresh. Asking which rows actually went
+    # cannot drift from what the user sees.
+    still_there = set()
+    for i0 in range(0, len(targeted_ids), 500):
+        chunk = targeted_ids[i0:i0 + 500]
+        still_there.update(
+            row_id for (row_id,) in db.session.query(FaceDatasetImage.id)
+            .filter(FaceDatasetImage.id.in_(chunk)).all())
+    n = len(targeted_ids) - len(still_there)
     # Stop deleted the in-flight rows: clear the Klein 'generate' indicator now
     # (its completion callbacks won't fire for cancelled jobs). An API batch's own
     # begin/end entry is untouched — its worker unwinds and end()s on its own.
@@ -2768,14 +2780,24 @@ def confirm_unknown_generation_restart(user_id, dataset_id, *,
             .filter_by(dataset_id=dataset_id, status='pending')
             .filter(FaceDatasetImage.filename.is_(None))
             .filter(FaceDatasetImage.job_id.isnot(None)).all())
-    n = 0
+    targeted_ids = [img.id for img in rows]
     for img in rows:
         if not queue_manager.confirm_unknown_comfyui_restart(
                 img.job_id, str(user_id), restart_confirmed=True):
             continue
         _finish_cancelled_generation_row(img)
-        n += 1
     db.session.commit()
+    # Counted from the database, not from the loop — same reason as
+    # cancel_pending: confirm_unknown_comfyui_restart can roll back internally,
+    # which discards deletes staged by earlier iterations that a loop counter has
+    # already counted.
+    still_there = set()
+    for i0 in range(0, len(targeted_ids), 500):
+        chunk = targeted_ids[i0:i0 + 500]
+        still_there.update(
+            row_id for (row_id,) in db.session.query(FaceDatasetImage.id)
+            .filter(FaceDatasetImage.id.in_(chunk)).all())
+    n = len(targeted_ids) - len(still_there)
     _sync_generate_activity(dataset_id)
     return n
 
@@ -9115,6 +9137,16 @@ def _run_nanobanana_batch(app, items, ref_bytes, engine='nanobanana', dataset_id
                 return
             if out:
                 ds = db.session.get(FaceDataset, img.dataset_id)
+                if ds is None:
+                    # The whole DATASET was deleted while this batch ran. The row
+                    # above survived only because its cascade has not landed yet;
+                    # reading ds.user_id here raised AttributeError, which escaped
+                    # _run_one and abandoned every REMAINING item of the batch.
+                    # Nothing to write this result to, so drop it and let the rest
+                    # of the batch finish.
+                    logger.info('%s batch: dataset gone for row %s, dropping the '
+                                'result', engine, image_id)
+                    return
                 fn = f"{ds.user_id}_{tag}_{uuid.uuid4().hex[:8]}.webp"
                 try:
                     # Conserve le ratio demandé (pas de letterbox carré sur les corps).

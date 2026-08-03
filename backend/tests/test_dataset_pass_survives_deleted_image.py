@@ -315,3 +315,42 @@ def test_generate_variations_survives_stop_deleting_its_row(ctx, monkeypatch):
     ids = svc.generate_variations(LOCAL_USER, ds.id,
                                   [{'prompt': 'p', 'label': 'l'}], 1)
     assert ids == [], f'a row deleted by Stop should not be reported as queued: {ids}'
+
+
+def test_stop_does_not_report_cancellations_its_own_rollback_discarded(ctx, monkeypatch):
+    """⏹ Stop stages `db.session.delete(img)` per row and commits ONCE at the end.
+
+    The queue helper it calls per row can roll back internally. A rollback
+    discards the deletes staged by EARLIER iterations — but the counter has
+    already counted them, so Stop reports cancellations that did not happen and
+    the tiles are still there when the grid refreshes. This pins the count
+    against reality rather than against itself.
+    """
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc
+
+    ds = _dataset_with_files(svc, 0)
+    for i in range(3):
+        db.session.add(FaceDatasetImage(dataset_id=ds.id, status='pending',
+                                        filename=None, job_id=f'job-{i}'))
+    db.session.commit()
+
+    calls = {'n': 0}
+
+    def fake_outcome(job_id, user_id, kind):
+        calls['n'] += 1
+        if calls['n'] == 2:
+            # What the real helper does on one of its failure paths.
+            db.session.rollback()
+        return 'cancelled'
+
+    from app.job_queue import queue_manager
+    monkeypatch.setattr(queue_manager, 'cancel_job_outcome', fake_outcome)
+    out = svc.cancel_pending(LOCAL_USER, ds.id)
+    left = FaceDatasetImage.query.filter_by(dataset_id=ds.id).count()
+    assert out['cancelled'] == 3 - left, (
+        f"Stop reported {out['cancelled']} cancelled but {left} row(s) are still "
+        f'there — an internal rollback discarded deletes the counter had already '
+        f'counted')
