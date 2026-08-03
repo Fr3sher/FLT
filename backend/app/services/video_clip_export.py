@@ -1,0 +1,166 @@
+"""Turning a pair of timestamps into one training clip on disk.
+
+This module is where every quiet way an export can be wrong is made loud. The
+failures it guards against share a shape: ffmpeg exits 0, a file appears, the
+dataset looks complete, and the training is subtly poisoned. Several of them are
+documented behaviours of the trainers this output is written for:
+
+  * musubi-tuner CRASHES if a clip's caption sidecar is missing — FileNotFoundError
+    out of a worker future, with no handler on the path.
+  * diffusion-pipe DROPS such a clip instead: skip_empty_caption defaults to true,
+    whatever its README says.
+  * diffusion-pipe and finetrainers read captions with a bare open(), i.e. the
+    host's locale encoding.
+  * ai-toolkit never drops a too-short clip and never warns: it clamps frame
+    indices and re-expands, so a five-frame clip trains as repeated stills.
+
+WHY WE ALWAYS RE-ENCODE. `-c copy` is not an optimisation we skipped, it is
+disqualified. A stream copy can only start on a keyframe, and scraped material
+routinely carries a 250-frame GOP (~10 s). Cutting 3-second clips that way makes
+the boundary error the size of the clip, throwing away the frame-exact cut the
+detector just produced. We would have to re-encode anyway to normalise the frame
+rate and the resolution.
+
+WHY WE ASK FOR FRAMES, NOT SECONDS. The target's VAE accepts a frame COUNT — 81,
+or 121, or something congruent to 5 modulo 17. `-t 5.0` asks for a duration and
+leaves the count to rounding. `-frames:v 81` asks for the thing that matters.
+And nothing downstream will correct a mistake here: Wan's "should be 4n+1" is a
+CLI help string, not an assert.
+
+x264 on the CPU rather than NVENC, deliberately: a 3-second clip at 848x480
+encodes in well under a second, so there is nothing to gain, and the GPU has to
+stay free for captioning and training.
+"""
+import os
+
+from . import video_targets
+
+# Quality knobs. CRF 16 is visually lossless for training material; `slow` costs
+# a fraction of a second per clip at these sizes and buys real bitrate efficiency,
+# which matters because these files are read thousands of times during training.
+_CRF = '16'
+_PRESET = 'slow'
+
+# Audio, when the target is a joint audio-video model. 160 kbps stereo AAC is
+# transparent enough for a training signal and costs ~60 kB on a 3-second clip.
+_AUDIO_CODEC = 'aac'
+_AUDIO_BITRATE = '160k'
+
+# Floating-point slack when comparing a segment's length against what we need.
+# Bounds arrive as PTS seconds, so an exact 5.0 can present as 4.999999999999999 —
+# refusing that clip would be arithmetic, not judgement. A quarter of a frame at
+# 240 fps is far below any real tolerance question and far above float noise.
+_EPSILON = 1.0 / 960
+
+
+class ClipTooShort(Exception):
+    """The segment cannot supply the requested number of frames.
+
+    Raised rather than silently shortening the clip: handed 2 seconds when it
+    needs 5, ffmpeg writes a 32-frame file and exits 0. Nothing downstream can
+    tell the difference between a short clip and a correct one — ai-toolkit will
+    train on it as repeated stills without a word — so this is the only place the
+    mistake can be caught.
+    """
+
+
+def clip_duration_s(frames, fps):
+    """Seconds of source a clip of `frames` frames needs, at the TARGET's fps.
+
+    (frames - 1) / fps: N frames span N-1 intervals. Using frames/fps asks for one
+    frame period more than the cut needs and refuses segments that fit exactly.
+    """
+    return (frames - 1) / float(fps)
+
+
+def clip_filename(index):
+    """`clip_0001.mp4`. Zero-padded because trainers walk the folder in filename
+    order, and clip_10 sorting before clip_2 is a reordered dataset. Lowercase
+    extension because musubi-tuner matches extensions by exact string against an
+    explicit list — a `.MP4` is never found, and never mentioned."""
+    return f'clip_{index:04d}.mp4'
+
+
+def sidecar_path(clip_path):
+    """The homonym `.txt` that carries the caption."""
+    return os.path.splitext(clip_path)[0] + '.txt'
+
+
+def write_sidecar(clip_path, caption):
+    """Write the caption file for a clip. ALWAYS — an absent caption is an empty
+    file, never a missing one.
+
+    Wave 1 produces no captions at all, so without this every clip it exports
+    would land on the missing-sidecar path: a crash in musubi-tuner, a silent drop
+    in diffusion-pipe.
+
+    UTF-8 with no BOM and Unix newlines, because two of the four trainers read
+    these with a bare open() at the host's locale encoding. A BOM becomes a stray
+    character at the head of the first caption; an accent on a cp1252 Windows host
+    becomes a UnicodeDecodeError that kills the run.
+    """
+    with open(sidecar_path(clip_path), 'w', encoding='utf-8', newline='\n') as fh:
+        fh.write(caption or '')
+
+
+def clip_command(*, ffmpeg, src, dst, start_s, end_s, frames, fps, size=None,
+                 keep_audio=False):
+    """The argv that cuts ONE clip. Pure — nothing is executed or written here.
+
+    `size` is (width, height) or None. None means "keep the source's size", which
+    is what a target with a free size wants; an identity scale would be a resample
+    that costs quality for nothing.
+    """
+    needed = clip_duration_s(frames, fps)
+    if (end_s - start_s) + _EPSILON < needed:
+        raise ClipTooShort(
+            f'{end_s - start_s:.3f}s available, {needed:.3f}s needed for '
+            f'{frames} frames at {fps} fps')
+
+    # Resample first, then scale: scaling frames that are about to be dropped is
+    # work thrown away, and on a 30->16 fps conversion that is nearly half of them.
+    filters = [f'fps={fps}']
+    if size:
+        filters.append(f'scale={size[0]}:{size[1]}:flags=lanczos')
+
+    args = [
+        ffmpeg, '-y',
+        # BEFORE -i. After the input, ffmpeg decodes the file from zero and throws
+        # the result away; on a two-hour rush cut into hundreds of clips that is
+        # the difference between minutes and hours.
+        '-ss', f'{start_s:.6f}',
+        '-i', src,
+        '-frames:v', str(frames),
+        '-vf', ','.join(filters),
+        '-c:v', 'libx264', '-crf', _CRF, '-preset', _PRESET,
+        '-pix_fmt', 'yuv420p',
+        # One keyframe per second of output. Trainers seek into these files
+        # repeatedly; a long GOP makes every seek decode a chain of frames.
+        '-g', str(fps),
+    ]
+    if keep_audio:
+        # Only for joint audio-video targets. Trimmed to the video's length so the
+        # two tracks agree — LTX derives its audio length from frames/fps and will
+        # mis-trim a longer track.
+        args += ['-c:a', _AUDIO_CODEC, '-b:a', _AUDIO_BITRATE, '-shortest']
+    else:
+        args += ['-an']
+    args += ['-movflags', '+faststart', dst]
+    return args
+
+
+def command_for_profile(*, ffmpeg, src, dst, start_s, end_s, profile_key, frames,
+                        size=None):
+    """`clip_command` with the fps AND the audio policy read from the target
+    catalogue rather than passed in.
+
+    The form callers should prefer, because it removes the two places a caller
+    could get it wrong on their own: handing in the SOURCE's frame rate, and
+    stripping the audio of a joint audio-video model.
+    """
+    profile = video_targets.get(profile_key)
+    if profile is None or not profile['fps']:
+        raise ValueError(f'{profile_key} declares no fps to encode at')
+    return clip_command(ffmpeg=ffmpeg, src=src, dst=dst, start_s=start_s,
+                        end_s=end_s, frames=frames, fps=profile['fps'], size=size,
+                        keep_audio=profile['keep_audio'])
