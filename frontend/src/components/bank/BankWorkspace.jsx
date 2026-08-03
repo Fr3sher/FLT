@@ -15,7 +15,7 @@ import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
 // 👤 "Single person here" — a folder the user declares to hold one person.
 import SubfolderPersonPanel from './SubfolderPersonPanel'
-import { assertionFor } from './folderPerson.js'
+import { assertionFor, folderMarker, scanOffer, suggestionFor } from './folderPerson.js'
 // 🎚 The twelve triage thresholds, edited here instead of in Settings.
 import BankThresholdsPanel from './BankThresholdsPanel.jsx'
 // Source-folder re-walk messages (pure/testable).
@@ -581,6 +581,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [subfolders, setSubfolders] = useState([])
   // 👤 Folder-level person assertions ("this subfolder is one person").
   const [folderPersons, setFolderPersons] = useState([])
+  // The whole folder-person payload: assertions PLUS the suggestions the app
+  // probed by itself, and what a scan would cost.
+  const [folderPersonInfo, setFolderPersonInfo] = useState(null)
   const [folderPersonBusy, setFolderPersonBusy] = useState(false)
   const [offset, setOffset] = useState(0)
   const [page, setPage] = useState({ images: [], total: 0 })
@@ -792,8 +795,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // a job LANDS too: the sample check writes its verdict from the background.
   const loadFolderPersons = useCallback(() => {
     apiFetch(`/api/bank/${bankId}/folder-persons`)
-      .then((d) => setFolderPersons(d.assertions || []))
-      .catch(() => setFolderPersons([]))
+      .then((d) => { setFolderPersons(d.assertions || []); setFolderPersonInfo(d) })
+      .catch(() => { setFolderPersons([]); setFolderPersonInfo(null) })
   }, [bankId])
 
   useEffect(() => { loadFolderPersons() }, [loadFolderPersons, live])
@@ -828,6 +831,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     () => postJson(`/api/bank/${bankId}/folder-person/check`,
       { subfolder: filter.subfolder }),
     (d) => `Checking ${d.sample_size} images of this folder…`,
+  )
+
+  const scanFolderPersons = () => runFolderPerson(
+    () => postJson(`/api/bank/${bankId}/folder-scan`, {}),
+    () => 'Sampling the folders — nothing is grouped until you confirm',
   )
 
   // Leaving the selection view: back to the facet grid.
@@ -1598,6 +1606,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                   {subfolders.map((s) => (
                     <option key={s.name || '__root__'} value={s.name}>
                       {s.name === '' ? '(bank root)' : s.name} · {s.count}
+                      {/* '👤?' = the app sampled this folder and it looked like
+                          one person. A hint that something is worth opening,
+                          never a claim — the panel below says the numbers. */}
+                      {folderMarker(folderPersonInfo?.suggestions, s.name)}
                     </option>
                   ))}
                 </select>
@@ -1605,10 +1617,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               <SubfolderPersonPanel
                 subfolder={filter.subfolder}
                 entry={assertionFor(folderPersons, filter.subfolder)}
+                suggestion={suggestionFor(folderPersonInfo?.suggestions, filter.subfolder)}
+                offer={scanOffer(folderPersonInfo)}
                 busy={folderPersonBusy}
                 onAssert={assertFolderPerson}
                 onRevoke={revokeFolderPerson}
-                onCheck={checkFolderPerson} />
+                onCheck={checkFolderPerson}
+                onScan={scanFolderPersons} />
             </div>
           )}
         </div>

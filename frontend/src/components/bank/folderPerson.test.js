@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SAMPLE_SIZE, assertionFor, assertionSummary, checkCostNote, folderLabel,
-  revokeNote, toCheckNote, verdictLine, verdictTone,
+  folderMarker, revokeNote, scanOffer, suggestedFolders, suggestionFor,
+  suggestionLine, suggestionTone, toCheckNote, verdictLine, verdictTone,
 } from './folderPerson.js';
 
 const ENTRY = { subfolder: 'anna', cluster_id: 3, images: 412, sample: null, to_check: [] };
@@ -76,4 +77,70 @@ test('revoking says what it does AND what it does not do', () => {
   assert.match(n, /normal clustering/);
   assert.match(n, /Nothing is deleted/);
   assert.match(revokeNote(''), /the bank root/);
+});
+
+// ── automatic suggestions ───────────────────────────────────────────────────
+const LIKELY = {
+  subfolder: 'anna', verdict: 'consistent', sample: 15, scorable: 15,
+  largest: 15, faces: 1, stale: false,
+};
+
+test('a suggestion is phrased as a QUESTION, never as something already done', () => {
+  const line = suggestionLine(LIKELY);
+  assert.match(line, /Looks like one person/);
+  assert.match(line, /assert\?$/);          // it asks
+  assert.equal(suggestionTone(LIKELY), 'ok');
+  // It never claims the folder IS one person, nor that anything was grouped.
+  assert.ok(!/\bis one person\b/.test(line));
+  assert.ok(!/grouped|asserted/i.test(line));
+});
+
+test('the offer says how much of the folder it actually looked at', () => {
+  assert.match(suggestionLine(LIKELY), /15\/15 of the 15 sampled/);
+});
+
+test('a mixed or thin sample is never dressed up as an offer', () => {
+  const mixed = { ...LIKELY, verdict: 'mixed', faces: 2 };
+  assert.match(suggestionLine(mixed), /probably not one person/);
+  assert.equal(suggestionTone(mixed), 'muted');
+  const thin = { ...LIKELY, verdict: 'inconclusive', scorable: 1 };
+  assert.match(suggestionLine(thin), /Too few usable faces/);
+  assert.equal(suggestionTone(thin), 'muted');
+});
+
+test('a STALE probe never surfaces — the folder it describes is gone', () => {
+  const stale = [{ ...LIKELY, stale: true }];
+  assert.equal(suggestionFor(stale, 'anna'), null);
+  assert.deepEqual(suggestedFolders(stale), []);
+  assert.equal(folderMarker(stale, 'anna'), '');
+});
+
+test('only a "looks like one person" folder gets a marker in the picker', () => {
+  const list = [LIKELY, { ...LIKELY, subfolder: 'bob', verdict: 'mixed' }];
+  assert.equal(folderMarker(list, 'anna'), ' · 👤?');
+  assert.equal(folderMarker(list, 'bob'), '');
+  assert.equal(folderMarker(list, 'nobody'), '');
+  assert.deepEqual(suggestedFolders(list), ['anna']);
+  assert.deepEqual(suggestedFolders(undefined), []);
+});
+
+test('the scan states its cost BEFORE it is paid, and who decides', () => {
+  const o = scanOffer({ scannable: 6, scan_limit: 20, sample_size: 15 });
+  assert.match(o.label, /Scan 6 folders/);
+  assert.match(o.note, /~15 images each/);
+  assert.match(o.note, /only suggests; you confirm/);
+  assert.ok(!/waiting/.test(o.note));      // nothing left over, so nothing claimed
+});
+
+test('a ceiling is announced rather than silently applied', () => {
+  const o = scanOffer({ scannable: 200, scan_limit: 20, sample_size: 15 });
+  assert.match(o.label, /Scan 20 folders/);
+  assert.match(o.note, /200 are waiting/);
+  assert.match(o.note, /biggest go first/);
+});
+
+test('nothing left to scan means no button at all, not a dead one', () => {
+  assert.equal(scanOffer({ scannable: 0, scan_limit: 20 }), null);
+  assert.equal(scanOffer(null), null);
+  assert.match(scanOffer({ scannable: 1, scan_limit: 20 }).label, /Scan 1 folder$/);
 });

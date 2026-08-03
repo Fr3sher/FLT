@@ -313,7 +313,12 @@ const TOPICS = [
      'skip the face pass', 'skip embeddings', 'save time', 'faster', 'too slow',
      'expensive', 'gpu time', 'thousands of images', 'sample check', 'check a sample',
      'verify', 'sample consistent', 'two faces', 'different faces', 'wrong person',
-     'revoke', 'undo the assertion', 'not one person', 'bank', 'triage'],
+     'revoke', 'undo the assertion', 'not one person', 'bank', 'triage',
+     // The app now asks the question for you — same topic, same chapter.
+     'suggestion', 'suggested', 'suggests', 'looks like one person', 'scan folders',
+     'scan subfolders', 'probe', 'detect folders', 'find one-person folders',
+     'automatic', 'automatically', 'confirm', 'confirmation', 'what is this 👤?',
+     'question mark badge', 'folder badge', 'why is a folder marked'],
     '/bank', 'using-the-app', 'when-a-folder-is-already-one-person'),
   action('bank-review-one-by-one', 'Review a bank one image at a time',
     ['review', 'review one by one', 'one by one', 'lightbox', 'full size', 'fullscreen',

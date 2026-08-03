@@ -669,6 +669,7 @@ def delete_bank(user_id, bank_id) -> bool:
     imported_source = bank.source_path if _is_imported_source(bank.source_path) else None
     from . import folder_person
     folder_person.drop_for_bank(bank_id)   # children first — no relationship()
+    folder_person.drop_probes_for_bank(bank_id)
     BankImage.query.filter_by(bank_id=bank_id).delete(synchronize_session=False)
     db.session.delete(bank)
     db.session.commit()
@@ -3965,6 +3966,11 @@ def _faces_job(bank_id, angles_only=False):
             # such, or "0 clusters" would read as "no one in this bank".
             detail += (f', {skipped_asserted} image(s) skipped '
                        f'(subfolder asserted as one person)')
+        # The embeddings are cached NOW, so asking "which folders look like one
+        # person?" costs nothing here and would cost a pass of its own later.
+        # It only ever produces a suggestion the user confirms (folder_person).
+        if not angles_only and not bank_jobs.cancelled(job):
+            detail += folder_person.probe_after_faces(job, bank_id)
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         bank_jobs.progress(job, detail=detail)
@@ -4163,8 +4169,47 @@ def _score_job(bank_id):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if missing:
             detail += f' ({" + ".join(missing)} head unavailable)'
+        if not bank_jobs.cancelled(job):
+            detail += _chain_medium_after_score(job, bank_id)
         bank_jobs.progress(job, detail=detail)
     return run
+
+
+def _chain_medium_after_score(job, bank_id) -> str:
+    """Run 🎨 Medium immediately after ✨ Score, inside the SAME job.
+
+    Why automatically: Medium computes NO image inference of its own — it reads
+    the embeddings Score just cached and multiplies them by a handful of text
+    vectors (0.16 s for 23 000 images, no GPU). Leaving it behind a second button
+    meant the bank sat there with the data for the answer and not the answer,
+    and most users never learned the pass existed. Chaining it here is the only
+    moment it is genuinely free: the embeddings are on disk and warm.
+
+    The manual 🎨 Medium button stays exactly as it was — it is how you re-run
+    the pass alone, and how ``rescan`` re-classifies rows that already have a
+    verdict, which this chain deliberately never does.
+
+    NEVER raises: Score has already succeeded by the time this runs, and a
+    classification that could not run must not turn a finished pass red. It
+    returns a suffix for the pass's detail line, so what happened is visible
+    either way — including "skipped", with the reason."""
+    reason = medium_prereq(bank_id)
+    if reason:
+        # The common one is "the text encoder is not installed" — a Setup step,
+        # not a failure of this bank. Said once, in passing, never as an alarm.
+        return f' · 🎨 Medium skipped ({reason})'
+    before = (BankImage.query.filter_by(bank_id=bank_id)
+              .filter(BankImage.medium.isnot(None)).count())
+    try:
+        _medium_job(bank_id, False)(job)
+    except Exception as e:  # noqa: BLE001 — see the docstring
+        logger.warning('bank %s: chained medium pass failed', bank_id,
+                       exc_info=True)
+        return (f' · 🎨 Medium could not run ({type(e).__name__}) — '
+                'the 🎨 Medium button re-runs it')
+    after = (BankImage.query.filter_by(bank_id=bank_id)
+             .filter(BankImage.medium.isnot(None)).count())
+    return f' · 🎨 Medium: {after - before} classified'
 
 
 # --- watermark pass (reuses the dataset Qwen3-VL overlaid-mark detector) -----

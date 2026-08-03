@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-bank-suggests-one-person-folders',
+    date: '2026-08-03',
+    title: '👤 The bank now spots your one-person folders — suggested automatically, you confirm',
+    blurb:
+      'Telling the bank a subfolder holds a single person saves the whole face pass on it, but you had to know which folders those were. It now samples them and asks: a folder that looks consistent gets a 👤? in the Subfolder picker and offers "Looks like one person (15/15 sampled) — assert?", and a folder holding several people says that too. Nothing is ever grouped on its own — the suggestion is an offer, confirming stays your click, because a wrong grouping made silently is one you would never think to look for. It runs free at the end of 👤 Group by person (the embeddings are already cached, so covering every folder costs no inference), or on demand with 🔎 Scan folders, which tells you what it will cost and what it did not reach. A suggestion expires by itself when the folder gains or loses images.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-03-medium-runs-itself-after-score',
+    date: '2026-08-03',
+    title: '🎨 Medium classifies itself at the end of ✨ Score',
+    blurb:
+      'Sorting a bank into photo / anime / 3D render / illustration reads the embeddings ✨ Score already computed — no GPU, seconds for 23 000 images. It was still a second button you had to know about, so banks sat there holding the data for the answer without the answer. Score now finishes the job and says so on its own line ("· 🎨 Medium: 812 classified"), or names the reason it could not. The 🎨 Classify medium button stays for re-running it alone, and the automatic pass never re-judges an image that already has a verdict.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-03-export-keeps-original-bytes',
     date: '2026-08-03',
     title: 'Big datasets stop bloating on their way to training',

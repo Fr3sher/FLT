@@ -325,16 +325,23 @@ def test_the_saving_is_counted_in_inferences_not_claimed(client, tmp_path, app,
     seen = {}
 
     def fake_driver(job, python, script, payload, cache_path, rx, window):
-        imgs = json.loads(payload)['images']
-        seen['n'] = len(imgs)
+        req = json.loads(payload)
+        imgs = req['images']
+        # EVERY call is recorded, not the last one: the pass now chains a folder
+        # probe behind itself, and a fake that only remembers the newest call
+        # would silently measure the probe and call it the pass.
+        seen.setdefault('calls', []).append(len(imgs))
         return ({'ok': True,
                  'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
-                 'clusters': {p: 1 for p in imgs}}, deque(), 0)
+                 'clusters': {p: 1 for p in imgs},
+                 'group_clusters': {g['name']: {p: 1 for p in g['images']}
+                                    for g in (req.get('groups') or [])}},
+                deque(), 0)
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
     with app.app_context():
         banks._faces_job(bank_id)(_fresh_job('faces'))
-    assert seen['n'] == 40                 # 340 images, 300 asserted away
+    assert seen['calls'][0] == 40          # 340 images, 300 asserted away
     # And every one of those 300 still has a person id — the group is real, it
     # was simply not paid for.
     from app.models import BankImage
@@ -346,6 +353,226 @@ def test_the_saving_is_counted_in_inferences_not_claimed(client, tmp_path, app,
     rows = _rows(app, bank_id)
     ids = {rows[f'person{f}/000.jpg'][0] for f in range(6)}
     assert len(ids) == 6
+
+
+# --- automatic suggestion (probe) -------------------------------------------
+def _big_tree(folders=3, per=20):
+    files = {}
+    for f in range(folders):
+        for i in range(per):
+            files[os.path.join(f'model{f}', f'{i:03d}.jpg')] = _flat(i)
+    return files
+
+
+def _probe_driver(seen, clusters_of):
+    def fake_driver(job, python, script, payload, cache_path, rx, window):
+        req = json.loads(payload)
+        imgs = req['images']
+        seen.setdefault('calls', []).append(req)
+        return ({'ok': True,
+                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'group_clusters': {g['name']: clusters_of(g['name'], g['images'])
+                                    for g in (req.get('groups') or [])}},
+                deque(), 0)
+    return fake_driver
+
+
+def test_the_probe_suggests_but_never_groups_a_single_image(client, tmp_path, app,
+                                                            monkeypatch):
+    """The whole safety property in one test: a folder the app believes is one
+    person is OFFERED, and until the user clicks, not one image has moved."""
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree())
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    r = client.post(f'/api/bank/{bank_id}/folder-scan')
+    assert r.status_code == 202, r.get_json()
+
+    data = client.get(f'/api/bank/{bank_id}/folder-persons').get_json()
+    assert data['assertions'] == []                    # nothing was declared
+    assert {s['subfolder'] for s in data['suggestions']} == {'model0', 'model1', 'model2'}
+    assert all(s['verdict'] == 'consistent' for s in data['suggestions'])
+    # NOT ONE image was grouped. This is the line that must never go green by
+    # accident: a suggestion that grouped anything would be an assertion.
+    assert all(v == (None, None) for v in _rows(app, bank_id).values())
+
+
+def test_one_child_call_covers_every_folder_and_clusters_them_apart(
+        client, tmp_path, app, monkeypatch):
+    """Forty folders must not be forty subprocesses — and the folders must be
+    clustered SEPARATELY, or two folders merging into one cluster would read as
+    'consistent' when it means the opposite."""
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=4))
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/folder-scan')
+    assert len(seen['calls']) == 1                     # ONE subprocess
+    req = seen['calls'][0]
+    assert {g['name'] for g in req['groups']} == {'model0', 'model1', 'model2', 'model3'}
+    assert all(len(g['images']) == folder_person.SAMPLE_SIZE for g in req['groups'])
+    # And the child is asked to cluster per group, at the clustering threshold.
+    with app.app_context():
+        assert req['threshold'] == banks.thresholds()['face_threshold']
+
+
+def test_a_mixed_folder_is_reported_as_such_and_never_suggested_as_one(
+        client, tmp_path, app, monkeypatch):
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=2))
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+
+    def clusters_of(name, imgs):
+        if name == 'model1':      # two people in this one
+            return {p: (1 if i % 2 else 2) for i, p in enumerate(imgs)}
+        return {p: 1 for p in imgs}
+
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver({}, clusters_of))
+    client.post(f'/api/bank/{bank_id}/folder-scan')
+    got = {s['subfolder']: s['verdict'] for s in
+           client.get(f'/api/bank/{bank_id}/folder-persons').get_json()['suggestions']}
+    assert got == {'model0': 'consistent', 'model1': 'mixed'}
+
+
+def test_a_probe_expires_when_the_folder_changes(client, tmp_path, app, monkeypatch):
+    """A verdict describes the folder it sampled. Add images and it stops being
+    an answer about the folder in front of you — so it is marked stale rather
+    than quietly kept."""
+    bank_id, src = _mkbank(client, tmp_path, _big_tree(folders=1))
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver({}, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/folder-scan')
+    assert client.get(f'/api/bank/{bank_id}/folder-persons') \
+        .get_json()['suggestions'][0]['stale'] is False
+    _save(str(src / 'model0' / 'new.jpg'), _flat(9))
+    with app.app_context():
+        banks.refresh_bank(LOCAL_USER, bank_id, force=True)
+    fresh = client.get(f'/api/bank/{bank_id}/folder-persons').get_json()
+    assert fresh['suggestions'][0]['stale'] is True
+    # And a stale folder is offered to the scan again rather than left behind.
+    with app.app_context():
+        assert 'model0' in [n for n, _c in folder_person.scan_candidates(bank_id)]
+
+
+def test_confirming_a_suggestion_removes_it(client, tmp_path, app, monkeypatch):
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=2))
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver({}, lambda n, imgs: {p: 1 for p in imgs}))
+    client.post(f'/api/bank/{bank_id}/folder-scan')
+    client.post(f'/api/bank/{bank_id}/folder-person', json={'subfolder': 'model0'})
+    data = client.get(f'/api/bank/{bank_id}/folder-persons').get_json()
+    assert [s['subfolder'] for s in data['suggestions']] == ['model1']
+    assert [a['subfolder'] for a in data['assertions']] == ['model0']
+
+
+def test_tiny_and_asserted_folders_are_not_probed(client, tmp_path, app, monkeypatch):
+    """Two folders a suggestion would only add noise to: one already declared,
+    one too small for fifteen images to mean anything."""
+    files = _big_tree(folders=1)
+    files[os.path.join('scraps', 'a.jpg')] = _flat(1)
+    files[os.path.join('scraps', 'b.jpg')] = _flat(2)
+    bank_id, _src = _mkbank(client, tmp_path, files)
+    client.post(f'/api/bank/{bank_id}/folder-person', json={'subfolder': 'model0'})
+    with app.app_context():
+        assert folder_person.scan_candidates(bank_id) == []
+
+
+def test_the_scan_states_what_it_did_not_reach(client, tmp_path, app, monkeypatch):
+    """A ceiling that says nothing would read as 'the rest are not one person'."""
+    from app.services import folder_person as fp
+    monkeypatch.setattr(fp, 'MAX_SCAN_FOLDERS', 2)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=5))
+    from app.services import face_similarity, image_bank_service as banks
+    monkeypatch.setattr(face_similarity, 'is_available', lambda: True)
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver({}, lambda n, imgs: {p: 1 for p in imgs}))
+    job = _fresh_job('folder-scan')
+    with app.app_context():
+        fp._folder_scan_job(bank_id)(job)
+    assert '2 folder(s) sampled' in job['detail']
+    assert '3 folder(s) not reached' in job['detail']
+
+
+def test_the_face_pass_probes_for_free_and_says_what_it_found(
+        client, tmp_path, app, monkeypatch):
+    """The automatic trigger. It runs inside the face pass because that is the
+    one moment the embeddings are already cached."""
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=2))
+    from app.services import image_bank_service as banks
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    job = _fresh_job('faces')
+    with app.app_context():
+        banks._faces_job(bank_id)(job)
+    assert '2 folder(s) look like a single person' in job['detail']
+    # Two calls: the pass, then the probe — and the probe reuses the pass's OWN
+    # cache file, which is what makes it free.
+    assert len(seen['calls']) == 2
+    assert seen['calls'][1]['cache'] == seen['calls'][0]['cache']
+    data = client.get(f'/api/bank/{bank_id}/folder-persons').get_json()
+    assert len(data['suggestions']) == 2
+    assert all(v[1] is None for v in _rows(app, bank_id).values())   # still nothing asserted
+
+
+def test_a_failing_probe_never_turns_a_finished_face_pass_red(
+        client, tmp_path, app, monkeypatch):
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1))
+    from app.services import folder_person as fp, image_bank_service as banks
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+
+    def fake_driver(job, python, script, payload, cache_path, rx, window):
+        imgs = json.loads(payload)['images']
+        return ({'ok': True,
+                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'clusters': {p: 1 for p in imgs}}, deque(), 0)
+
+    monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
+    monkeypatch.setattr(fp, '_run_probe',
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError('boom')))
+    job = _fresh_job('faces')
+    with app.app_context():
+        banks._faces_job(bank_id)(job)
+    assert job['error'] is None
+    assert 'person cluster' in job['detail']       # the pass still reports itself
+    assert 'boom' not in (job['detail'] or '')
+
+
+def test_the_angle_lane_never_probes(client, tmp_path, app, monkeypatch):
+    """⤢ Angles re-runs on rows that already have a face_state. Probing there
+    would re-suggest folders on every backfill, for nothing new."""
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1))
+    from app.services import image_bank_service as banks
+    from app.extensions import db as _db
+    from app.models import BankImage
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    with app.app_context():
+        for r in BankImage.query.filter_by(bank_id=bank_id).all():
+            r.face_state = 'scorable'
+        _db.session.commit()
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _probe_driver(seen, lambda n, imgs: {p: 1 for p in imgs}))
+    with app.app_context():
+        banks._faces_job(bank_id, angles_only=True)(_fresh_job('angles'))
+    assert len(seen['calls']) == 1
+    assert not seen['calls'][0].get('groups')
 
 
 def test_a_stratified_sample_spans_the_whole_folder():

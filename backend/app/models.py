@@ -519,6 +519,46 @@ class BankFolderPerson(db.Model):
                 f'{self.subfolder!r} #{self.cluster_id}>')
 
 
+class BankFolderProbe(db.Model):
+    """"This subfolder LOOKS like one person" — a MEASUREMENT about a folder.
+
+    Deliberately a different table from BankFolderPerson, because it is a
+    different kind of thing with a different lifetime. A probe is something the
+    app found out by sampling ~15 images; an assertion is something the user
+    declared. Conflating them is exactly the mistake this feature exists to
+    avoid: a suggestion must never be able to become a grouping on its own.
+
+    So this table only ever feeds a SUGGESTION. It groups nothing, it writes no
+    face_cluster, and confirming it is a click the user makes.
+
+    ``content_sig`` is what makes a probe expire honestly: a cheap
+    "<image count>:<highest image id>" fingerprint of the folder at probe time.
+    Images added or removed since → the verdict describes a folder that no longer
+    exists, and the UI drops it rather than suggest from stale evidence."""
+    __tablename__ = 'bank_folder_probe'
+    __table_args__ = (db.UniqueConstraint('bank_id', 'subfolder',
+                                          name='uq_bank_folder_probe'),)
+    id = db.Column(Integer, primary_key=True)
+    bank_id = db.Column(
+        Integer, db.ForeignKey('image_bank.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    subfolder = db.Column(Text, nullable=False, default='')
+    # 'consistent' | 'mixed' | 'inconclusive' — the same three the single-folder
+    # check produces, from the same function. One vocabulary, one meaning.
+    verdict = db.Column(String(14), nullable=False)
+    sample = db.Column(Integer, nullable=True)      # images actually embedded
+    scorable = db.Column(Integer, nullable=True)    # of those, with a usable face
+    largest = db.Column(Integer, nullable=True)     # biggest same-person group
+    faces = db.Column(Integer, nullable=True)       # distinct people in the sample
+    note = db.Column(Text, nullable=True)           # the sentence shown to the user
+    content_sig = db.Column(String(40), nullable=True)
+    checked_at = db.Column(DateTime, default=db.func.current_timestamp())
+
+    def __repr__(self):
+        return (f'<BankFolderProbe bank={self.bank_id} '
+                f'{self.subfolder!r} {self.verdict}>')
+
+
 class LoraTestImage(db.Model):
     """One cell image of a LoRA Test-Studio run (checkpoint x strength grid).
 

@@ -524,6 +524,35 @@ Images in the folder that the face machinery could not read — no face in frame
 a face too small or too turned — are listed as *worth a look*. They stay in the
 group: "I could not see a face here" is not "this is someone else".
 
+### The app asks the question for you
+
+You should not have to guess which of your forty folders are worth declaring, so
+the same sampling runs by itself and **suggests**. A folder it sampled and found
+consistent gets a **👤?** next to its name in the Subfolder picker, and scoping
+to it says *Looks like one person (15/15 of the 15 sampled) — assert?* next to
+the button. A folder holding several people says so too, which is just as useful.
+
+**It suggests. It never asserts.** Confirming is always the same single click it
+always was. This is deliberate: a wrong assertion made silently would corrupt
+your person grouping with something you never said, and you would have no reason
+to go looking for it.
+
+It runs in two places, and the difference is cost:
+
+- **automatically at the end of 👤 Group by person** — free. That pass has just
+  cached an embedding for every image, so sampling every folder adds no
+  inference at all and no GPU time. The pass's line then ends with *N folder(s)
+  look like a single person*.
+- **on demand, with 🔎 Scan folders** — for asking *before* ever running the
+  heavy pass. This one pays about fifteen embeddings per folder, so it says how
+  many folders it will cover before you click, and covers the twenty biggest
+  first when there are more. It tells you what it did not reach rather than
+  leaving you to assume the rest are not one person.
+
+A suggestion expires when the folder changes. If images arrive or leave, the
+verdict no longer describes what is in front of you, so it is dropped and the
+folder goes back into the queue instead of advising you from stale evidence.
+
 ## Pick a balanced set
 
 Advice is only half the gesture, so **📊 Coverage advice** ends with **⚖️ Pick a
@@ -626,6 +655,15 @@ embedding the **✨ Score** pass already computed, so it looks at no image twice
 downloads nothing, and never touches the GPU. On a 23 000-image bank it finishes
 in seconds. An image ✨ Score has not reached has no embedding and stays
 unclassified; the row says how many.
+
+**You no longer have to ask for it.** Because it costs nothing beyond what
+✨ Score already paid, it now runs **automatically at the end of every ✨ Score
+pass**, and the pass's own line reports it (`· 🎨 Medium: 812 classified`). If
+the CLIP text encoder is missing, the line says *skipped* and names the reason
+rather than staying quiet. The **🎨 Classify medium** button is still there: it
+is how you re-run the pass on its own, and how you re-classify images that
+already carry a verdict — something the automatic run never does, so a verdict
+you are looking at is never rewritten behind your back.
 
 This is **not** the same question as **🔎 Origin** above. Origin reads the
 *file's metadata* and answers "who made this file". Medium reads *the picture*

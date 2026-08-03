@@ -73,3 +73,69 @@ export function revokeNote(subfolder) {
   return `${folderLabel(subfolder)} goes back to normal clustering, and the `
     + 'group disappears. Nothing is deleted.'
 }
+
+// ── Automatic suggestions ───────────────────────────────────────────────────
+// The app samples folders on its own and offers the ones that look like a
+// single person. Everything below is wording for an OFFER: it must never read
+// as something the app already did, and it must never be more certain than
+// fifteen images allow. A stale probe is dropped rather than shown, because a
+// suggestion about a folder that has since changed is worse than none.
+
+/** The probe covering one subfolder, or null. Stale probes never surface. */
+export function suggestionFor(suggestions, subfolder) {
+  if (subfolder == null || !Array.isArray(suggestions)) return null
+  const got = suggestions.find((s) => s.subfolder === subfolder)
+  return got && !got.stale ? got : null
+}
+
+/** The subfolders currently being offered as "looks like one person". */
+export function suggestedFolders(suggestions) {
+  if (!Array.isArray(suggestions)) return []
+  return suggestions
+    .filter((s) => !s.stale && s.verdict === 'consistent')
+    .map((s) => s.subfolder)
+}
+
+/** The offer, phrased as a question the user answers — never as a fact. */
+export function suggestionLine(entry) {
+  if (!entry) return null
+  if (entry.verdict === 'consistent') {
+    return `Looks like one person (${entry.largest}/${entry.scorable} of the `
+      + `${entry.sample} sampled) — assert?`
+  }
+  if (entry.verdict === 'mixed') {
+    return `Sampled ${entry.faces} different faces here — probably not one person.`
+  }
+  return `Too few usable faces in the sample to tell (${entry.scorable} of `
+    + `${entry.sample}).`
+}
+
+export function suggestionTone(entry) {
+  if (!entry) return 'muted'
+  return entry.verdict === 'consistent' ? 'ok' : 'muted'
+}
+
+/** Marker appended to a folder's name in the picker, so the offer is visible
+ *  without scoping every folder one by one. Deliberately a hint, not a claim. */
+export function folderMarker(suggestions, subfolder) {
+  const got = suggestionFor(suggestions, subfolder)
+  return got && got.verdict === 'consistent' ? ' · 👤?' : ''
+}
+
+/** What the "scan folders" button should say, and whether it should be there.
+ *  It always states the cost BEFORE it is paid, and never promises to cover
+ *  more folders than the server will. */
+export function scanOffer(payload) {
+  const pending = (payload && payload.scannable) || 0
+  if (!pending) return null
+  const limit = (payload && payload.scan_limit) || pending
+  const covered = Math.min(pending, limit)
+  const size = (payload && payload.sample_size) || SAMPLE_SIZE
+  let note = `Samples ${covered} folder${covered === 1 ? '' : 's'} `
+    + `(~${size} images each) and tells you which look like a single person.`
+  if (pending > limit) {
+    note += ` ${pending} are waiting — the biggest go first, run it again for the rest.`
+  }
+  note += ' It only suggests; you confirm.'
+  return { label: `🔎 Scan ${covered} folder${covered === 1 ? '' : 's'}`, note, pending }
+}

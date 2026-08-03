@@ -992,3 +992,25 @@ def bank_check_folder_person(bank_id):
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
     return jsonify({'ok': True, 'sample_size': folder_person.SAMPLE_SIZE}), 202
+
+
+@bp.post('/bank/<int:bank_id>/folder-scan')
+def bank_scan_folder_persons(bank_id):
+    """Sample the unprobed subfolders and SUGGEST the ones that look like a
+    single person. It suggests only — nothing here groups an image; confirming
+    stays the one-click gesture it already was.
+
+    The same scan runs by itself at the end of 👤 Group by person, where it is
+    free (the embeddings are cached); this button is for asking before ever
+    running that pass, and it says what it costs."""
+    from ..services import folder_person
+    try:
+        folder_person.start_folder_scan(_app(), LOCAL_USER, bank_id)
+    except ValueError as e:
+        return _folder_person_error(e)
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 400
+    except bank_jobs.BankJobBusy as e:
+        return _busy(e)
+    return jsonify({'ok': True, 'sample_size': folder_person.SAMPLE_SIZE,
+                    'limit': folder_person.MAX_SCAN_FOLDERS}), 202

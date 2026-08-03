@@ -7,10 +7,12 @@ inside its GPU-exclusive window). CUDA requested but unavailable → CPU fallbac
 Protocol (same family as face_score_infer.py):
   stdin  : {"images": [abs paths], "models_root": path|null,
             "cache": abs path to a .npz|null, "threshold": 0.45,
-            "device": "cpu"|"cuda", "require_yaw": bool}
+            "device": "cpu"|"cuda", "require_yaw": bool,
+            "groups": [{"name": str, "images": [abs paths]}]  # OPTIONAL}
   stdout : ONE JSON line {"ok": bool,
             "results": {path: {state, det, bbox_frac, yaw|null}},
-            "clusters": {path: int}, "used_gpu": bool, "error"?: str}
+            "clusters": {path: int}, "used_gpu": bool, "error"?: str,
+            "group_clusters": {name: {path: int}}  # only when groups was given}
   stderr : "[embed] i/N <state>" progress lines (the parent streams these to
             drive the UI progress bar).
 
@@ -300,8 +302,21 @@ def main() -> int:
                       # null, never 0.0 — "not measured" is its own answer.
                       'yaw': None if yaw != yaw else float(yaw)}
     clusters = _cluster(images, cache, threshold)
-    print(json.dumps({'ok': True, 'results': results, 'clusters': clusters,
-                      'used_gpu': used_gpu}))
+    out = {'ok': True, 'results': results, 'clusters': clusters,
+           'used_gpu': used_gpu}
+    # Optional per-GROUP clustering, for the caller asking "is EACH of these
+    # folders one person?" — a question the flat clustering above cannot answer:
+    # it would happily merge two folders into a single cluster and let that read
+    # as "consistent". Same threshold, same union-find, run once per group, and
+    # riding on the SAME child call so a scan over forty folders costs one
+    # subprocess and one model load — none at all when every image is cached.
+    groups = req.get('groups') or []
+    if groups:
+        out['group_clusters'] = {
+            str(g.get('name')): _cluster(
+                [str(p) for p in (g.get('images') or [])], cache, threshold)
+            for g in groups}
+    print(json.dumps(out))
     return 0
 
 

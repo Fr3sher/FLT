@@ -54,7 +54,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 
 from ..extensions import db
-from ..models import BankFolderPerson, BankImage
+from ..models import BankFolderPerson, BankFolderProbe, BankImage
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +63,17 @@ logger = logging.getLogger(__name__)
 # decent share of the folder is very likely to be drawn at least once.
 SAMPLE_SIZE = 15
 ASSERTED = 'asserted'
+# A folder too small to sample meaningfully is not probed: below this, "15 of 3
+# images agree" is arithmetic, not evidence, and a suggestion built on it would
+# be noise on every stray folder a scrape leaves behind.
+MIN_PROBE_IMAGES = 5
+# Ceiling for the MANUAL scan, which pays ~15 embeddings per folder. A bank with
+# 200 subfolders would otherwise cost 3 000 inferences behind one click. The
+# biggest unprobed folders go first (they are where a suggestion is worth most)
+# and the job says out loud how many it left. The automatic pass after 👤 Group
+# by person has NO ceiling: it reuses embeddings that pass already cached, so it
+# costs nothing to cover every folder.
+MAX_SCAN_FOLDERS = 20
 
 
 def _svc():
@@ -139,7 +150,12 @@ def payload(user_id, bank_id) -> dict | None:
             'sample': _report_of(row),
             'to_check': _to_check(bank_id, row.subfolder),
         })
-    return {'assertions': out, 'sample_size': SAMPLE_SIZE}
+    return {'assertions': out, 'sample_size': SAMPLE_SIZE,
+            # Folders the app probed by itself. They are OFFERS, not decisions:
+            # nothing here has grouped a single image.
+            'suggestions': suggestions(bank_id),
+            'scannable': len(scan_candidates(bank_id)),
+            'scan_limit': MAX_SCAN_FOLDERS}
 
 
 # --- writing ----------------------------------------------------------------
@@ -383,3 +399,287 @@ def _sample_job(bank_id, subfolder):
             db.session.commit()
         bank_jobs.progress(job, detail=sentence)
     return run
+
+
+# --- automatic suggestion (the same probe, over every folder) ---------------
+# The single-folder check above answers "was I right?" AFTER the user declared.
+# The same fifteen embeddings answer "would you like to declare?" BEFORE they
+# did — which is the question that actually saves them work, because on a
+# scraped bank most folders are one person and the user has no reason to guess
+# which. So the probe runs over the folders on its own and the app SUGGESTS.
+#
+# It suggests. It never asserts. A wrong assertion made silently would corrupt
+# the person grouping with something the user never said, and they would have no
+# reason to look for it — so confirming stays one deliberate click.
+def _folder_signature(bank_id, subfolder) -> str:
+    """A cheap fingerprint of a folder's CONTENT: how many images it holds and
+    the highest row id among them. Both change the moment images are added or
+    removed, which is exactly when a probe stops describing reality. No hashing,
+    no disk access — one aggregate query."""
+    q = _folder_rows_q(bank_id, subfolder)
+    n = q.count()
+    top = q.with_entities(func.max(BankImage.id)).scalar() or 0
+    return f'{int(n)}:{int(top)}'
+
+
+def _sample_pool(bank_id, subfolder):
+    """The rows a probe may sample: the folder's NON-REJECTED images. Rejected
+    ones are excluded on purpose — they are outside what the face pass looks at,
+    so sampling them would both cost embeddings nothing else has cached and let
+    images the user already threw away drive a suggestion."""
+    return (_folder_rows_q(bank_id, subfolder)
+            .filter(BankImage.status != 'reject')
+            .order_by(BankImage.relpath.asc()).all())
+
+
+def probe_for(bank_id, subfolder):
+    return (BankFolderProbe.query
+            .filter_by(bank_id=bank_id, subfolder=subfolder or '').first())
+
+
+def _probe_dict(row, fresh: bool) -> dict:
+    return {'subfolder': row.subfolder, 'verdict': row.verdict,
+            'sample': row.sample, 'scorable': row.scorable,
+            'largest': row.largest, 'faces': row.faces, 'note': row.note,
+            'checked_at': row.checked_at.isoformat() if row.checked_at else None,
+            'stale': not fresh}
+
+
+def suggestions(bank_id) -> list:
+    """Every folder the app has probed and NOT been told about, with the stale
+    ones marked rather than dropped silently."""
+    asserted = asserted_subfolders(bank_id)
+    out = []
+    for row in (BankFolderProbe.query.filter_by(bank_id=bank_id)
+                .order_by(BankFolderProbe.subfolder.asc()).all()):
+        if row.subfolder in asserted:
+            continue          # already declared — a suggestion would be noise
+        fresh = row.content_sig == _folder_signature(bank_id, row.subfolder)
+        out.append(_probe_dict(row, fresh))
+    return out
+
+
+def scan_candidates(bank_id, limit=None) -> list:
+    """(subfolder, image_count) for the folders worth probing, biggest first.
+
+    Skipped: folders the user already declared (nothing to suggest), folders
+    below MIN_PROBE_IMAGES (too small for a sample to mean anything), and
+    folders whose probe still matches their content (already answered)."""
+    from collections import Counter
+    counts: Counter = Counter()
+    for (rel,) in (db.session.query(BankImage.relpath)
+                   .filter(BankImage.bank_id == bank_id,
+                           BankImage.status != 'reject').all()):
+        counts[_svc()._subfolder_of(rel)] += 1
+    asserted = asserted_subfolders(bank_id)
+    out = []
+    for name, n in counts.items():
+        if name in asserted or n < MIN_PROBE_IMAGES:
+            continue
+        got = probe_for(bank_id, name)
+        if got is not None and got.content_sig == _folder_signature(bank_id, name):
+            continue
+        out.append((name, n))
+    out.sort(key=lambda kv: (-kv[1], kv[0]))
+    return out if limit is None else out[:limit]
+
+
+def _write_probe(bank_id, subfolder, sizes, sample_n) -> str:
+    """Persist one folder's verdict and return its sentence."""
+    scorable = sum(sizes.values())
+    faces = len(sizes)
+    largest = max(sizes.values()) if sizes else 0
+    verdict, sentence = _verdict(largest, scorable, faces)
+    row = probe_for(bank_id, subfolder)
+    if row is None:
+        row = BankFolderProbe(bank_id=bank_id, subfolder=subfolder)
+        db.session.add(row)
+    row.verdict, row.note = verdict, sentence
+    row.sample, row.scorable = sample_n, scorable
+    row.largest, row.faces = largest, faces
+    row.content_sig = _folder_signature(bank_id, subfolder)
+    row.checked_at = datetime.now(timezone.utc)
+    return verdict
+
+
+def drop_probes_for_bank(bank_id) -> int:
+    return (BankFolderProbe.query.filter_by(bank_id=bank_id)
+            .delete(synchronize_session=False))
+
+
+def _probe_groups(bank_id, bank, candidates) -> tuple:
+    """({folder: {path: image_id}}, [child group payloads]) for a set of folders."""
+    banks = _svc()
+    by_folder, groups = {}, []
+    for name, _n in candidates:
+        picked = _stratified(_sample_pool(bank_id, name))
+        paths = {}
+        for r in picked:
+            p = banks.abs_image_path(bank, r)
+            if banks._is_safe_bank_source(p, label='folder person probe'):
+                paths[p] = r.id
+        if len(paths) >= 2:      # nothing to compare below two faces
+            by_folder[name] = paths
+            groups.append({'name': name, 'images': list(paths)})
+    return by_folder, groups
+
+
+def _apply_probe_results(bank_id, by_folder, data) -> dict:
+    """Write the states back and persist one probe per folder. Returns
+    {verdict: count} for the job's report."""
+    banks = _svc()
+    results = data.get('results') or {}
+    group_clusters = data.get('group_clusters') or {}
+    tally = {}
+    for name, paths in by_folder.items():
+        for p, image_id in paths.items():
+            live = banks._live_image(image_id)
+            if live is None or live.face_state is not None:
+                continue
+            res = results.get(p) or {}
+            live.face_state = res.get('state')
+            live.face_det = res.get('det')
+        sizes = {}
+        for cid in (group_clusters.get(name) or {}).values():
+            sizes[cid] = sizes.get(cid, 0) + 1
+        verdict = _write_probe(bank_id, name, sizes, len(paths))
+        tally[verdict] = tally.get(verdict, 0) + 1
+    db.session.commit()
+    return tally
+
+
+def _probe_detail(tally, scanned, left) -> str:
+    """What the scan found, in the user's terms — and what it did NOT reach."""
+    if not scanned:
+        return 'no folder left to look at'
+    likely = tally.get('consistent', 0)
+    bits = [f'{likely} folder(s) look like one person' if likely
+            else 'no folder looked like a single person']
+    if tally.get('mixed'):
+        bits.append(f'{tally["mixed"]} hold several')
+    if tally.get('inconclusive'):
+        bits.append(f'{tally["inconclusive"]} had too few faces to tell')
+    out = f'{scanned} folder(s) sampled — ' + ', '.join(bits)
+    if likely:
+        out += ' — confirm the ones you recognise'
+    if left:
+        # Never mute a ceiling: a scan that covered 20 of 200 folders and said
+        # nothing would read as "the other 180 are not one person".
+        out += f' · {left} folder(s) not reached (biggest first — run it again)'
+    return out
+
+
+def _run_probe(job, bank_id, candidates, *, allow_inference: bool):
+    """Sample ``candidates`` in ONE child call and persist their verdicts.
+
+    ``allow_inference=False`` is the automatic path: it runs straight after the
+    face pass, whose cache already holds every embedding it needs, so the child
+    loads no model and touches no GPU. If an image is somehow missing from that
+    cache the child would embed it — cheap at this size, and still bounded by the
+    sample, but the flag is what lets the caller say honestly which it was."""
+    from contextlib import nullcontext
+    from . import bank_jobs
+    from ..gpu_window import gpu_exclusive_vision_window
+    from ..models import ImageBank
+    banks = _svc()
+    bank = db.session.get(ImageBank, bank_id)
+    if not bank or not candidates:
+        return None
+    by_folder, groups = _probe_groups(bank_id, bank, candidates)
+    if not groups:
+        return None
+    every_path = [p for g in groups for p in g['images']]
+    banks._bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
+    th = banks.thresholds()
+    device, use_gpu = banks._resolve_face_device()
+    # The BANK's own face cache, deliberately: after 👤 Group by person every one
+    # of these images is already in it, so the probe is free. One job runs per
+    # bank, so nothing else can be writing this file underneath us.
+    cache_path = banks._face_cache_path(bank_id)
+    req = json.dumps({
+        'images': every_path,
+        'groups': groups,
+        'models_root': banks.cfg.get('face_scoring.models_root') or None,
+        'cache': str(cache_path),
+        'cancel_file': str(cache_path) + '.cancel',
+        'threshold': th['face_threshold'],
+        'device': device,
+    })
+    import sys
+    python = banks.cfg.get('face_scoring.python') or sys.executable
+    window = (gpu_exclusive_vision_window(flag_ttl=900)
+              if (use_gpu and allow_inference) else nullcontext())
+    banks._release_db_before_inference()
+    data, stderr_tail, returncode = banks._drive_infer_subprocess(
+        job, python, banks._EMBED_SCRIPT, req, cache_path,
+        _SAMPLE_PROGRESS_RE, window)
+    if data.get('cancelled'):
+        return None
+    if not data.get('ok'):
+        tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
+        raise RuntimeError(tail or f'folder scan produced no output '
+                                   f'(rc={returncode})')
+    return _apply_probe_results(bank_id, by_folder, data)
+
+
+def start_folder_scan(app, user_id, bank_id):
+    """Sample every unprobed folder and suggest the ones that look like a single
+    person. Costs ~15 embeddings per folder, capped at MAX_SCAN_FOLDERS."""
+    from .face_similarity import is_available
+    from . import bank_jobs
+    banks = _svc()
+    if not banks.get_bank(user_id, bank_id):
+        raise ValueError('bank not found')
+    if not is_available():
+        raise RuntimeError(
+            'face scoring is not installed (Quality tools step in Setup)')
+    pending = scan_candidates(bank_id)
+    if not pending:
+        raise ValueError('every folder here has already been looked at '
+                         '(or is asserted, or too small to sample)')
+    return bank_jobs.start(app, bank_id, 'folder-scan',
+                           _folder_scan_job(bank_id),
+                           total=min(len(pending), MAX_SCAN_FOLDERS))
+
+
+def _folder_scan_job(bank_id):
+    def run(job):
+        from . import bank_jobs
+        pending = scan_candidates(bank_id)
+        picked = pending[:MAX_SCAN_FOLDERS]
+        left = len(pending) - len(picked)
+        bank_jobs.progress(job, done=0, total=len(picked),
+                           detail=f'sampling {len(picked)} folder(s)')
+        tally = _run_probe(job, bank_id, picked, allow_inference=True)
+        if tally is None:
+            bank_jobs.progress(job, detail='folder scan stopped — '
+                                           'nothing was changed')
+            return
+        bank_jobs.progress(job, detail=_probe_detail(tally, len(picked), left))
+    return run
+
+
+def probe_after_faces(job, bank_id) -> str:
+    """Run the probe over EVERY unprobed folder right after the face pass, in
+    that pass's own job. This is where the suggestion belongs: the embeddings it
+    needs were just computed and cached, so covering two hundred folders costs no
+    inference at all — the child loads no model when nothing is left to embed.
+
+    It never raises: the face pass has already succeeded by the time this runs,
+    and a failed suggestion must not turn a finished pass into a red one."""
+    try:
+        pending = scan_candidates(bank_id)
+        if not pending:
+            return ''
+        tally = _run_probe(job, bank_id, pending, allow_inference=False)
+        if not tally:
+            return ''
+        likely = tally.get('consistent', 0)
+        if not likely:
+            return ''
+        return (f' · {likely} folder(s) look like a single person — '
+                f'confirm to skip them next time')
+    except Exception as e:      # noqa: BLE001 — a suggestion is never worth a failure
+        logger.warning('bank %s: folder probe after the face pass failed: %s',
+                       bank_id, e, exc_info=True)
+        return ''

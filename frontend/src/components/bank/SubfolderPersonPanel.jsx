@@ -1,6 +1,7 @@
 import {
   SAMPLE_SIZE, assertionSummary, checkCostNote, folderLabel, revokeNote,
-  toCheckNote, verdictLine, verdictTone,
+  scanOffer, suggestionLine, suggestionTone, toCheckNote, verdictLine,
+  verdictTone,
 } from './folderPerson'
 
 /** 👤 "Single person here" — the folder-level person assertion, shown right under
@@ -17,9 +18,20 @@ import {
  *
  *  Wording lives in folderPerson.js so it can be tested without a DOM. */
 export default function SubfolderPersonPanel({
-  subfolder, entry, busy, onAssert, onRevoke, onCheck,
+  subfolder, entry, suggestion, offer, busy, onAssert, onRevoke, onCheck, onScan,
 }) {
-  if (subfolder == null) return null
+  // The scan offer stands on its own: it is how you ask the question before any
+  // folder is scoped, so it shows with no subfolder selected too.
+  const scan = offer && onScan ? (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-content-subtle">
+      <button type="button" onClick={onScan} disabled={busy} title={offer.note}
+        className="rounded-md border border-border px-2 py-1 font-semibold text-content hover:bg-white/10 disabled:opacity-50">
+        {offer.label}
+      </button>
+      <span>{offer.note}</span>
+    </div>
+  ) : null
+  if (subfolder == null) return scan
   const sample = entry && entry.sample
   const tone = verdictTone(sample)
   const verdict = verdictLine(sample)
@@ -29,18 +41,34 @@ export default function SubfolderPersonPanel({
     : tone === 'warn' ? 'text-amber-300' : 'text-content-subtle'
 
   if (!entry) {
+    // An offer the app made about THIS folder replaces the generic pitch: it is
+    // more specific and it is evidence, but it is still only an offer — the
+    // button below is the one thing that groups anything.
+    const offered = suggestionLine(suggestion)
+    const offeredTone = suggestionTone(suggestion) === 'ok'
+      ? 'text-emerald-300' : 'text-content-subtle'
     return (
-      <div className="flex flex-wrap items-center gap-2 text-xs text-content-subtle">
-        <button type="button" onClick={onAssert} disabled={busy}
-          title={`Group every image of ${folderLabel(subfolder)} as one person, `
-            + 'with no face pass. Undoable at any time.'}
-          className="rounded-md border border-border px-2 py-1 font-semibold text-content hover:bg-white/10 disabled:opacity-50">
-          👤 Single person here
-        </button>
-        <span>
-          Already one person’s folder? Say so — the 👤 Group by person pass then
-          skips it instead of paying an embedding per image to find out.
-        </span>
+      <div className="space-y-1.5">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-content-subtle">
+          <button type="button" onClick={onAssert} disabled={busy}
+            title={`Group every image of ${folderLabel(subfolder)} as one person, `
+              + 'with no face pass. Undoable at any time.'}
+            className={`rounded-md border px-2 py-1 font-semibold hover:bg-white/10 disabled:opacity-50 ${
+              suggestionTone(suggestion) === 'ok'
+                ? 'border-emerald-400/50 text-emerald-200'
+                : 'border-border text-content'}`}>
+            👤 Single person here
+          </button>
+          {offered
+            ? <span className={offeredTone}>{offered}</span>
+            : (
+              <span>
+                Already one person’s folder? Say so — the 👤 Group by person pass
+                then skips it instead of paying an embedding per image to find out.
+              </span>
+            )}
+        </div>
+        {scan}
       </div>
     )
   }
