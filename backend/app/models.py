@@ -353,6 +353,20 @@ class BankImage(db.Model):
     # Non-NULL is what makes the readers (promote, thumbnails, the file route)
     # prefer the cleaned blob over the untouched source.
     watermark_clean_method = db.Column(String(16), nullable=True)
+    # WHICH detector produced watermark_state: NULL (a row scanned before this
+    # column existed, or never scanned) | 'vision' (the Ollama vision model, the
+    # route that has always existed and still runs when the extra is absent) |
+    # 'detector' (the dedicated SigLIP2 + Grounding DINO extra). Persisted rather
+    # than derived because a bank is scanned over weeks and can hold BOTH — and
+    # the two disagree at the margins, so "why is this flagged?" has to be
+    # answerable per image, not per bank. Additive column (see _SCHEMA_ADDITIONS).
+    watermark_source = db.Column(String(16), nullable=True)
+    # The detector's raw score in 0..1 for this image (NULL for a vision-model row:
+    # that route produces a sentence, not a number). Kept because the flag itself
+    # is a THRESHOLD applied to it — storing only the verdict would mean a rescan
+    # of the whole bank to answer "what would 0.92 have flagged?", and the
+    # threshold is the one knob this feature offers.
+    watermark_score = db.Column(Float, nullable=True)
     # Caption pass — a plain DESCRIPTIVE caption (no trigger, no identity omission:
     # a bank has no trigger word and nothing to protect). It doubles as the bank's
     # search text (the search bar matches caption + relpath) AND rides along to the

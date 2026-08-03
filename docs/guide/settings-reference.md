@@ -573,7 +573,14 @@ pure-coverage behaviour this button had before the slider existed** — the chan
 of default does change what a given bank returns. See *Using the app ▸ Curate down
 to the right subset*.
 
-The **✨ Score** pass (aesthetic · NSFW · style) needs the **Bank scoring** extra (Setup ▸ Quality tools); **🚩 Find watermarks** reuses the vision model from **Captioning**. Both are GPU passes, serialized against training and captioning, and detection-only — the bank never edits your source files.
+- **Watermark detector sensitivity** → `watermark_detect.threshold`. The score (0–1) at or above which **🚩 Find watermarks** flags an image, *when the optional watermark-detector extra is installed* (Setup ▸ Quality tools). Default **`0.94`**. *Applies at the next scan.*
+  This number is **measured, not chosen**, and it is deliberately nowhere near the 0.5 a probability normally implies: the classifier's scores sit hard against 1. On a 110-image sample drawn from a real 29 759-image bank and labelled by eye (2026-08-03, CPU), a threshold of 0.5 would have flagged **52 of the 55 clean images**; 0.94 flagged **none** of them and still caught **54 of the 55** marked ones. The clean images topped out at 0.939 and the marked ones bottomed out at 0.929, so the two populations overlap by about 0.01 — there is no setting that is perfect, only a knee. Lower it towards 0.92 to catch the faintest marks and hand-check a few clean images; raise it towards 0.96 to miss a mark rather than crop anything by mistake.
+- **Watermark detector interpreter** → `watermark_detect.python`. Written by the installer, not edited here. Empty means "use the **Bank scoring** environment", which already carries the two packages this extra needs.
+- **Watermark detector weights** → `watermark_detect.models_root`. Empty means `data/models/watermark_detect` (~0.9 GB, downloaded once at install).
+- **Watermark detector device** → `watermark_detect.device` (`auto` | `cuda` | `cpu`). The extra installs CPU-only torch, so this is CPU unless you point `watermark_detect.python` at an environment with a CUDA torch. The pass only takes the exclusive-GPU window (which unloads ComfyUI and blocks a training start) when it will actually use the card.
+- **Locate the mark** → `watermark_detect.locate` (default on). Runs the second model on the images the first one flagged, to record **where** the mark sits. Off means images are flagged with no position, and neither **✂ Auto-crop** nor **🧽 Inpaint** can route on them — only worth turning off on a bank you intend to filter rather than clean.
+
+The **✨ Score** pass (aesthetic · NSFW · style) needs the **Bank scoring** extra (Setup ▸ Quality tools). **🚩 Find watermarks** runs one of two ways: the **watermark detector** extra when it is installed (~0.14 s per image, and it does not need Ollama at all), otherwise the vision model from **Captioning** (~1.7 s per image). Installing the extra only ever adds the faster route — with nothing installed the pass behaves exactly as it always has. Both are detection-only: the bank never edits your source files.
 
 ## Training
 

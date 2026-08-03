@@ -352,6 +352,11 @@ function qualityStep(caps) {
   // Four scoped ML capabilities now (face scoring, masks, watermark inpainting,
   // bank scoring) — each installs/repairs on its own. The step is ready only when
   // all of them are in.
+  // The watermark DETECTOR is deliberately NOT in this list. It is a pure
+  // accelerator — everything it does the vision model already does — and it costs
+  // ~0.9 GB, so counting it would flip every existing install from "ready" back to
+  // "partial" on update to nag about a download nobody asked for. Its card is on
+  // the step (installable, explained); the step's verdict just doesn't wait on it.
   const parts = [!!caps.face_scoring, !!caps.masks, !!caps.watermark_inpaint,
     !!caps.bank_scoring]
   const ready = parts.every(Boolean)
@@ -364,6 +369,7 @@ function qualityStep(caps) {
     faceScoring: !!caps.face_scoring, masks: !!caps.masks,
     watermarkInpaint: !!caps.watermark_inpaint,
     bankScoring: !!caps.bank_scoring,
+    watermarkDetect: !!caps.watermark_detect,
   }
 }
 
@@ -517,6 +523,7 @@ export const INSTALL_ALL_ACTION_LABELS = {
   face_scoring: 'Face-similarity scoring',
   masks: 'Person masks',
   watermark_inpaint: 'Watermark inpainting',
+  watermark_detect: 'Watermark detector',
   ollama_model: 'Vision model (captioning)',
   klein_model: 'Klein model (local generation)',
   klein_text_encoder: 'Klein text encoder',

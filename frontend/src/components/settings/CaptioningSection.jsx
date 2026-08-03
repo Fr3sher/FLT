@@ -310,6 +310,32 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
               config={config} configDefaults={configDefaults} setField={setField} />
           </div>
           <div>
+            <label htmlFor="wmdet-threshold" className="block text-sm font-medium text-content">
+              Watermark detector sensitivity
+            </label>
+            <input id="wmdet-threshold" type="number" min="0" max="1" step="0.01"
+              value={config.watermark_detect?.threshold
+                ?? defaultValueAt(configDefaults, 'watermark_detect', 'threshold')}
+              onChange={(e) => setField('watermark_detect', 'threshold',
+                parseFloat(e.target.value) || 0)}
+              className={INPUT_CLASS} />
+            {/* The number looks wrong until you know why, so the help says why:
+                this model's scores sit hard against 1, and the default is the
+                knee MEASURED on a real bank, not a probability you can reason
+                about from first principles. */}
+            <p className="mt-0.5 text-xs text-content-muted">
+              Score (0–1) at or above which 🚩 Find flags an image, when the watermark
+              detector extra is installed. 0.94 is measured on a 110-image hand-labelled
+              sample of a real 29 759-image bank: it flagged none of the 55 clean images
+              and 54 of the 55 marked ones. Lower it to ~0.92 to catch the faintest marks
+              (and hand-check a few clean ones); raise it to ~0.96 to miss a mark rather
+              than crop anything by mistake. Applies at the next scan.
+            </p>
+            <ResetToDefault label="Watermark detector sensitivity" section="watermark_detect"
+              field="threshold" config={config} configDefaults={configDefaults}
+              setField={setField} />
+          </div>
+          <div>
             <label htmlFor="bank-style-threshold" className="block text-sm font-medium text-content">
               Same-style similarity
             </label>

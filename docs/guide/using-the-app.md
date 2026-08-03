@@ -1229,6 +1229,44 @@ If a bank was scanned by an older version, its flagged images carry no recorded
 mark position; the panel says so and one more **🚩 Find watermarks** run makes
 them cleanable.
 
+### Who decided an image is watermarked
+
+**🚩 Find watermarks** can run two ways, and the panel says which one produced
+the verdicts you are looking at ("Judged 1 240 by the detector, 300 by the vision
+model") and which one a new run would use.
+
+- **The vision model** — the way that has always worked. It asks the local vision
+  model, in words, whether the picture carries a mark, once per image. About
+  1.7 seconds each, so about fifteen hours on a 30 000-image bank.
+- **The watermark detector** — an optional extra (Setup ▸ Quality tools). A small
+  classifier scores each image in about **0.14 second**, and a second model marks
+  where the logo sits so the two cleaning steps still have a box to work on. It
+  needs no Ollama at all.
+
+Install nothing and nothing changes. Install the extra and it takes over on its
+own; there is no switch to flip. What it costs is ~0.9 GB of weights, downloaded
+once into the same Python the **✨ Score** pass already uses.
+
+**How good is it, measured.** On 110 images pulled from a real bank and labelled
+by eye — half of them hard on purpose: faint corner logos, semi-transparent
+handles across the subject, an `OnlyFans.com/…` line barely a few pixels tall, and
+clean photos containing legitimate signage — the detector at its default setting
+flagged **none of the 55 clean images** and **54 of the 55 marked ones**. The
+vision model, on the exact same 110, flagged one clean image and missed one marked
+one. So the detector is not a downgrade in judgement; the gain you actually buy is
+the ten-fold speed-up. Neither is a verdict: both are a review flag, and both leave
+your source files untouched.
+
+The one image the detector missed was a `MET-ART.com` line in a bottom corner
+scoring 0.929, just under the 0.94 cut — and the highest-scoring clean image sat
+at 0.939. The two overlap by about a hundredth, which is why the cut is a
+**setting** (Settings ▸ Captioning & quality ▸ *Watermark detector sensitivity*)
+and not a constant.
+
+Images flagged **without** a position — the detector was sure there is a mark but
+could not place it — stay flagged and are counted separately in the pass's report.
+Draw a zone on them with **🚩 Edit mask** below, or leave them as a filter.
+
 
 ## Fix a watermark mask in a bank
 

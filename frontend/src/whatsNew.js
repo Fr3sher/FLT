@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-watermark-detector-extra',
+    date: '2026-08-03',
+    title: 'Finding watermarks in a big bank now takes minutes instead of hours',
+    blurb:
+      'Until now, 🚩 Find watermarks asked the vision model, in words, "is there a watermark here?" once per image — about 1.7 seconds each, which is fifteen hours on a 30 000-image bank for a question whose answer is usually no. There is now an optional extra (Setup ▸ Quality tools ▸ Watermark detector) that answers it with a small classifier instead, in about 0.14 seconds, and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint still have something to work on. It does not need Ollama at all, so a machine with no vision model can scan too. On a hand-labelled sample of 110 images from a real bank it flagged none of the 55 clean ones and 54 of the 55 marked ones — slightly better than the vision model on the same images, which also missed one. Install nothing and nothing changes: the vision model keeps doing exactly the same job, slower. The flag score is tunable in Settings ▸ Captioning & quality.',
+    to: '/setup',
+  },
+  {
     id: '2026-08-03-canvas-image-controls-see-through',
     date: '2026-08-03',
     title: 'Pinned pictures are no longer hidden by their own buttons',

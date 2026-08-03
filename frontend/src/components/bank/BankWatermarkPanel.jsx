@@ -23,7 +23,7 @@ import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useToast } from '../common/Toast'
 import {
   cropLevelState, findLevelState, hasCleanedImages, inpaintLevelState,
-  levelCounts, maskNote, progressSummary, rescanNote,
+  levelCounts, maskNote, progressSummary, rescanNote, sourceNote,
 } from './bankWatermark.js'
 import { localEngineUnavailableReason } from '../../utils/localEngineReason'
 
@@ -88,7 +88,12 @@ export default function BankWatermarkPanel({ bankId, live, onChanged }) {
   // picker and the ✦ Edit modal show — instead of a per-screen catch-all that
   // blames ComfyUI and the weights whatever the real gap is.
   const kleinReason = localEngineUnavailableReason('klein', caps)
-  const find = findLevelState(levels, { live, visionReady: !!caps.ollama?.vision_model_ready })
+  const find = findLevelState(levels, {
+    live,
+    visionReady: !!caps.ollama?.vision_model_ready,
+    detectorReady: !!caps.watermark_detect,
+  })
+  const source = sourceNote(levels)
   const crop = cropLevelState(levels, { live })
   const inpaint = inpaintLevelState(levels, {
     live,
@@ -135,6 +140,10 @@ export default function BankWatermarkPanel({ bankId, live, onChanged }) {
         find them, then clear them in two manual steps — your original files are never modified
       </p>
       <p className="text-xs text-content-subtle">{progressSummary(levels)}</p>
+      {/* WHO ruled, and who will rule next. Wraps onto its own line at 400 px
+          rather than being truncated — the source is the actionable half of a
+          flag the user disagrees with. */}
+      {source && <p className="text-[0.6875rem] text-content-subtle">🔎 {source}</p>}
       {note && <p className="text-xs text-amber-300/90">⚠️ {note}</p>}
       {masks && <p className="text-xs text-content-subtle">🚩 {masks}</p>}
 

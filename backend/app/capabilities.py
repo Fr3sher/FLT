@@ -668,6 +668,12 @@ CAPABILITY_IMPORTS = {
     'masks': 'import rembg',
     'bank_scoring': 'import torch, open_clip, transformers',
     'watermark_inpaint': 'import simple_lama_inpainting',
+    # The detector extra runs backend/infer/watermark_detect_infer.py, which needs
+    # torch (both models) and transformers (BOTH heads are transformers-native —
+    # that is precisely why Grounding DINO was chosen over Florence-2, whose
+    # trust_remote_code file no longer loads). Nothing else: no einops, no
+    # flash-attn, no vendored modelling code.
+    'watermark_detect': 'import torch, transformers',
 }
 
 
@@ -741,6 +747,91 @@ def probe_watermark_inpaint() -> dict:
     python = cfg.get('watermark.python') or cfg.get('masks.python') or sys.executable
     ok = _cached_import('watermark', python, CAPABILITY_IMPORTS['watermark_inpaint'])
     return {'ok': ok, 'detail': 'simple-lama-inpainting import OK' if ok else 'import failed'}
+
+
+def probe_watermark_detect() -> dict:
+    """The dedicated watermark DETECTOR extra (SigLIP2 ranker + Grounding DINO
+    locator). Dedicated interpreter key, else the bank-scoring one — which is not
+    a fallback but the intended shared home: it already holds torch and
+    transformers, and a second copy would cost the user another ~2.5 GB.
+
+    Importing is necessary but NOT sufficient: the weights (~0.9 GB) must also be
+    on disk, and an environment that imports torch while the models were never
+    downloaded would light this capability green and then fail a whole pass with a
+    network error. So the presence of the model cache is part of the verdict, and
+    the two failures are reported apart — 'the packages are missing' and 'the
+    weights are missing' send the user to different buttons.
+
+    False here is never a refusal: the Find pass keeps using the vision model,
+    exactly as it does today (fail-open).
+
+    ORDER IS DELIBERATE — the filesystem check runs FIRST. The import check is a
+    subprocess that runs `import torch`, and on the overwhelmingly common machine
+    (this extra not installed) that subprocess can never change the answer, since
+    no weights means not-ready whatever imports. Probing the other way round made
+    every capability poll — and every test that drops the probe cache — pay a
+    torch import for a capability nobody has. That cost is paid by every agent and
+    every CI run, forever, which is precisely how a suite drifts from minutes to
+    an hour."""
+    if not watermark_detect_weights_present():
+        return {'ok': False,
+                'detail': 'the detector weights are not downloaded yet '
+                          '(Setup ▸ Quality tools ▸ Watermark detector)'}
+    python = cfg.get('watermark_detect.python') or cfg.get('bank_scoring.python') or sys.executable
+    ok = _cached_import('watermark_detect', python,
+                        CAPABILITY_IMPORTS['watermark_detect'])
+    if not ok:
+        return {'ok': False,
+                'detail': 'the weights are there but torch + transformers do not '
+                          'import in the detector environment'}
+    return {'ok': True, 'detail': 'torch + transformers OK, weights on disk'}
+
+
+def watermark_detect_gpu_available() -> bool:
+    """True only when the detector's interpreter can actually run torch on CUDA.
+
+    Same reasoning as bank_scoring_gpu_available, and the same UNKNOWN handling:
+    the parent uses this to decide whether to take the GPU-exclusive window (which
+    unloads ComfyUI and blocks a training start for the whole pass), so an
+    unanswered probe on a machine that HAS a card resolves to "assume the card is
+    in play" — leaving the GPU unprotected is the expensive mistake, not holding a
+    window one extra time."""
+    python = (cfg.get('watermark_detect.python') or cfg.get('bank_scoring.python')
+              or sys.executable)
+    if (cfg.get('watermark_detect.device') or 'auto').lower() == 'cpu':
+        return False
+    state = _cached_import_state(
+        'watermark_detect_gpu', python,
+        'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)')
+    if state is None:
+        return gpu_vram_gb() is not None
+    return state
+
+
+def _watermark_detect_threshold() -> float:
+    from .services import watermark_detector
+    return watermark_detector.threshold()
+
+
+def watermark_detect_weights_present() -> bool:
+    """True when BOTH model repos are cached under the detector's models_root.
+    A cheap directory check — huggingface_hub names its cache folders
+    ``models--<owner>--<name>``, and a snapshot folder that exists but is empty is
+    a half-finished download, which counts as absent."""
+    from .services import watermark_detector
+    root = watermark_detector.models_root()
+    if not root:
+        return False
+    for repo in watermark_detector.MODEL_REPOS:
+        folder = os.path.join(root, 'models--' + repo.replace('/', '--'), 'snapshots')
+        try:
+            snaps = [d for d in os.listdir(folder)
+                     if os.listdir(os.path.join(folder, d))]
+        except OSError:
+            return False
+        if not snaps:
+            return False
+    return True
 
 
 # Prebuilt wheels for the ML extras (insightface 0.7.3, numpy<2, onnxruntime,
@@ -1459,6 +1550,7 @@ def probe(force=False) -> dict:
     masks = probe_masks()
     bank_scoring = probe_bank_scoring()
     watermark_inpaint = probe_watermark_inpaint()
+    watermark_detect = probe_watermark_detect()
     joycaption = probe_joycaption(aitoolkit)
     models = _scan_models()
     # Klein engine readiness is now honest tri-component: the graph needs the UNET
@@ -1709,6 +1801,15 @@ def probe(force=False) -> dict:
         # Lets the front adapt the watermark Clean tooltip: when False, Clean is
         # crop-only (LaMa-routed watermarks are skipped with an install hint).
         'watermark_inpaint': watermark_inpaint['ok'],
+        # The dedicated detector extra. True → 🚩 Find runs the classifier instead
+        # of the vision model (roughly ten times faster, and it does not need
+        # Ollama at all). False changes NOTHING: the vision model still does the
+        # work, so this only ever unlocks a faster route, never blocks the old one.
+        'watermark_detect': watermark_detect['ok'],
+        'watermark_detect_detail': watermark_detect['detail'],
+        # The measured flag threshold, published so the panel and the Settings
+        # field quote the SAME number the pass will actually use.
+        'watermark_detect_threshold': _watermark_detect_threshold(),
         # Klein-inpaint (V2, quality) readiness = same as the Klein engine (ComfyUI
         # reachable + Klein models on disk). The custom-node preflight is a clean-time
         # 409. Greys the batch's "Klein (quality)" option when False.

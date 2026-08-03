@@ -44,13 +44,21 @@ export function levelCounts(levels) {
 /** Step 1 — FIND. Detection is the first rung of the same ladder, not a pass
  * that lives elsewhere: the two cleaning levels are dead without it (they route
  * on the box it stores), and splitting them across the page is what made the
- * feature read as two unrelated things. Needs the vision model. */
-export function findLevelState(levels, { live = false, visionReady = false } = {}) {
+ * feature read as two unrelated things.
+ *
+ * TWO routes can drive it. The dedicated detector extra, when installed, does not
+ * need Ollama at all — so the "pull the vision model" refusal must NOT fire on a
+ * machine that has the detector, or the fast route would be locked behind a
+ * dependency it removed. */
+export function findLevelState(levels, {
+  live = false, visionReady = false, detectorReady = false,
+} = {}) {
   const c = levelCounts(levels);
   const reason = live
     ? 'A pass is already running on this bank — wait for it to finish.'
-    : !visionReady
-      ? 'Pull the vision model (Settings ▸ Captioning & quality) to scan for watermarks.'
+    : !visionReady && !detectorReady
+      ? 'Pull the vision model (Settings ▸ Captioning & quality), or install the '
+        + 'watermark detector (Setup ▸ Quality tools), to scan for watermarks.'
       : null;
   return {
     done: c.scanned,
@@ -169,6 +177,35 @@ export function maskNote(levels) {
   if (!c.emptyMasks) return drawn;
   return `${drawn} ${c.emptyMasks} of them has an EMPTY mask and will be cleaned by `
     + 'neither level — draw a zone in ▶ Review, or dismiss the image.';
+}
+
+/** WHO decided these verdicts, and who will decide the next ones — one sentence,
+ * or null when there is nothing scanned and nothing to say.
+ *
+ * This is not trivia. The two routes are different instruments: the detector
+ * returns a SCORE compared against a threshold the user can move, the vision
+ * model returns a sentence it wrote. A user looking at a flag and asking "why?"
+ * gets a different answer, and a different remedy, depending on which one ruled
+ * — so a panel that hides the source hides the only actionable half. */
+export function sourceNote(levels) {
+  const l = levels || {};
+  const s = l.sources || {};
+  const detector = num(s.detector);
+  const vision = num(s.vision);
+  const unknown = num(s.unknown);
+  const next = l.next_source === 'detector' ? 'detector' : 'vision';
+  const thr = Number.isFinite(l.threshold) ? l.threshold : null;
+  const nextLabel = next === 'detector'
+    ? `the watermark detector${thr === null ? '' : ` (flags at a score of ${thr})`}`
+    : 'the vision model';
+  if (detector + vision + unknown === 0) return `Nothing scanned yet — ${nextLabel} will do it.`;
+  const done = [];
+  if (detector) done.push(`${detector} by the detector`);
+  if (vision) done.push(`${vision} by the vision model`);
+  // Never attributed to either route: these rows were scanned before the app
+  // recorded which one ruled. Saying "by the vision model" would be a guess.
+  if (unknown) done.push(`${unknown} before the source was recorded`);
+  return `Judged ${done.join(', ')}. A new run uses ${nextLabel}.`;
 }
 
 /** Rows a previous build flagged without keeping the box: they are invisible to

@@ -241,7 +241,8 @@ _NODE_PACKS = {
 
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
-                   'bank_scoring') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
+                   'bank_scoring',
+                   'watermark_detect') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
 
 _ML_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-ml.txt'
 _SCRAPE_REQUIREMENTS = cfg.BACKEND_DIR / 'requirements-scrape.txt'
@@ -320,7 +321,7 @@ _CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks')
 # 600 s TTL (ml_extras/scrape_extras via -r, the scoped per-capability installs).
 _IMPORT_CACHE_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                          | set(_CAPABILITY_ML_ACTIONS)
-                         | {'watermark_inpaint', 'bank_scoring'})
+                         | {'watermark_inpaint', 'bank_scoring', 'watermark_detect'})
 
 # Actions that invoke pip and therefore MUST NOT run concurrently: two pip processes
 # writing the same environment race on a shared package's files/dist-info and corrupt
@@ -332,7 +333,11 @@ _IMPORT_CACHE_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
 # running in parallel.
 _PIP_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                 | set(_CAPABILITY_ML_ACTIONS)
-                | {'watermark_inpaint', 'bank_scoring'})
+                # watermark_detect installs into the SAME venv bank_scoring owns
+                # (that sharing is the whole point — it saves a second 2.5 GB
+                # torch), so it must share the pip queue too or the two race on
+                # one environment's dist-info.
+                | {'watermark_inpaint', 'bank_scoring', 'watermark_detect'})
 
 # Transient file-lock errors an install can hit even without concurrency: an antivirus
 # or the search indexer briefly holding a just-written file at the moment pip renames
@@ -572,6 +577,22 @@ def manual_command(action) -> str:
         pkgs = ' '.join(_BANK_SCORING_PKGS)
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
+    if action == 'watermark_detect':
+        # Packages then weights. The weights line names the FILES on purpose —
+        # a bare `snapshot_download` of the SigLIP2 repo pulls its training
+        # checkpoints and costs 2.4 GB instead of 371 MB (measured).
+        python = _watermark_detect_python()
+        from .services import watermark_detector
+        root = watermark_detector.models_root() or '<data>/models/watermark_detect'
+        pulls = '  &&  '.join(
+            f'{_quote(python)} -c "from huggingface_hub import hf_hub_download as d; '
+            + '; '.join(f"d(repo_id='{repo}', filename='{name}', cache_dir=r'{root}')"
+                        for name in meta['files'])
+            + '"'
+            for repo, meta in watermark_detector.MODEL_FILES.items())
+        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+                f'&&  {_quote(python)} -m pip install transformers huggingface_hub '
+                f'safetensors  &&  {pulls}')
     if action == 'ollama_model':
         # The Studio container need not have an Ollama CLI; this action is HTTP-only.
         return ''
@@ -1514,6 +1535,140 @@ def _verify_bank_scoring_import(action, python) -> bool:
     return False
 
 
+def _watermark_detect_python() -> str:
+    """The interpreter the detector extra installs into.
+
+    Deliberately the bank-scoring venv unless the user pointed elsewhere: it
+    already holds torch and transformers, which is the ENTIRE dependency list of
+    this extra, and building a second environment would ask for another ~2.5 GB
+    to hold a byte-identical copy. When bank scoring was never installed, that
+    same managed venv is built here — which is why this returns the path either
+    way and _run_watermark_detect provisions it."""
+    return (cfg.get('watermark_detect.python') or '').strip() or _bank_scoring_env_python()
+
+
+def _run_watermark_detect(action) -> int:
+    """Install the dedicated watermark DETECTOR: the packages (torch +
+    transformers, into the app's own bank-scoring venv) and then the weights.
+
+    Both halves matter and they fail differently. Packages missing = "the extra
+    is not installed". Weights missing = "it is installed but the first scan will
+    die on a network error an hour in" — which is why the capability probe checks
+    the model cache too, and why this worker downloads them here rather than
+    lazily on first use."""
+    managed_python = _bank_scoring_env_python()
+    configured = (cfg.get('watermark_detect.python') or '').strip()
+    if configured and not _same_path(configured, managed_python):
+        # A BORROWED environment (the ⚡ picker's promise: checked, never changed).
+        for line in (
+            'watermark_detect.python points at an environment this app did not create,',
+            'so nothing was installed into it — borrowed environments are checked,',
+            'never changed. To add the detector packages there yourself, run:',
+            f'  "{configured}" -m pip install torch transformers',
+            'Or clear watermark_detect.python and click Install again — the app then',
+            'uses its own scoring environment, which already has both packages.',
+        ):
+            _append(action, line)
+        return 1
+    python = configured or _ensure_bank_scoring_env(action)
+    if not python:
+        return 1
+    if _is_flask_venv(python):
+        for line in (
+            "The detector needs torch, which never installs into the app's own Python.",
+            'Nothing was installed. Clear watermark_detect.python and click Install',
+            'again — the app builds a dedicated Python for you.',
+        ):
+            _append(action, line)
+        return 1
+    _append(action, f'target interpreter: {python}')
+    _append(action, 'installing CPU torch (download.pytorch.org/whl/cpu) if needed')
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
+                           '--index-url', _TORCH_CPU_INDEX])
+    if rc != 0:
+        _append(action, f'torch install failed (rc={rc}) — see the log above')
+        return rc
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'transformers',
+                           'huggingface_hub', 'safetensors'])
+    if rc != 0:
+        return rc
+    if not _verify_watermark_detect_import(action, python):
+        return 1
+    try:
+        cfg.save_config({'watermark_detect': {'python': python}})
+    except Exception as e:      # noqa: BLE001
+        _append(action, f'warning: could not save watermark_detect.python ({e}); '
+                        'the environment still works for this run')
+    return _download_watermark_detect_models(action, python)
+
+
+def _verify_watermark_detect_import(action, python) -> bool:
+    """Same honesty-and-warming gate as the other heavy extras: import in the
+    TARGET environment once pip says done. A timeout is 'still warming'."""
+    if not os.path.isfile(python):
+        return True
+    _append(action, 'verifying the install (first import — this also warms it)…')
+    try:
+        proc = subprocess.run([python, '-c', 'import torch, transformers'],
+                              capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        _append(action, 'still warming up — the capability turns green on its own '
+                        'shortly; no restart needed')
+        return True
+    except OSError as e:
+        _append(action, f'could not run the verification import ({e}) — skipping the check')
+        return True
+    if proc.returncode == 0:
+        return True
+    _append(action, 'installed, but torch/transformers do not import in this '
+                    'environment yet — the install is not usable:')
+    for line in (proc.stderr or '').strip().splitlines()[-4:]:
+        _append(action, f'  {line}')
+    return False
+
+
+def _download_watermark_detect_models(action, python) -> int:
+    """Fetch the two model repos, NAMING every file.
+
+    Never a bare snapshot_download. Measured on 2026-08-03: the SigLIP2 repo also
+    publishes its training checkpoints (checkpoint-712/, checkpoint-1424/,
+    optimizer.pt) next to a model that weighs 371 MB, so a whole-repo pull costs
+    2.4 GB, and the Grounding DINO repo would add a duplicate pytorch_model.bin.
+    Listing the files brings the download to ~0.9 GB — for identical behaviour."""
+    from .services import watermark_detector
+    root = watermark_detector.models_root()
+    if not root:
+        _append(action, 'could not resolve where to store the detector weights')
+        return 1
+    try:
+        os.makedirs(root, exist_ok=True)
+    except OSError as e:
+        _append(action, f'could not create {root}: {e}')
+        return 1
+    _append(action, f'downloading the detector weights (~{watermark_detector.DOWNLOAD_MB} MB) '
+                    f'to {root}')
+    for repo, meta in watermark_detector.MODEL_FILES.items():
+        _append(action, f'  {repo} — {meta["license"]}, {meta["role"]}')
+        code = (
+            'import sys, json\n'
+            'from huggingface_hub import hf_hub_download\n'
+            'repo, root, files = json.loads(sys.argv[1])\n'
+            'for name in files:\n'
+            '    hf_hub_download(repo_id=repo, filename=name, cache_dir=root)\n'
+            'print("ok")\n'
+        )
+        payload = json.dumps([repo, root, list(meta['files'])])
+        rc = _run_pip(action, [python, '-c', code, payload])
+        if rc != 0:
+            _append(action, f'could not download {repo} (rc={rc}) — the detector stays '
+                            'unavailable and the vision model keeps doing the work')
+            return rc
+    _append(action, 'weights ready — 🚩 Find watermarks now uses the detector')
+    return 0
+
+
 def _run_ml_capability(action) -> int:
     """Install JUST the packages ONE ML capability needs (face_scoring | masks)
     into the interpreter that capability's probe resolves — so a user can install
@@ -2293,6 +2448,7 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
             **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks
             'watermark_inpaint': _run_watermark_inpaint,
             'bank_scoring': _run_bank_scoring,
+            'watermark_detect': _run_watermark_detect,
             **{a: _run_model_download for a in _MODEL_DOWNLOADS},
             **{a: _run_node_pack for a in _NODE_PACKS}}
 # Structural invariant: every whitelisted action MUST have a worker — a missing

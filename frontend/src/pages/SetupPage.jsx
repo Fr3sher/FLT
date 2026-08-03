@@ -1055,6 +1055,9 @@ export default function SetupPage() {
           body: 'Repaints small off-center watermarks (LaMa) during 🧽 Clean instead of only cropping border marks. It can use CUDA or CPU from Settings. Without it, off-center marks are skipped.' },
         { action: 'bank_scoring', cap: 'bank_scoring', icon: '✨', title: 'Bank scoring (aesthetic · NSFW · style)',
           body: "Powers the 🗃️ Bank's ✨ Score pass: rates images for aesthetics (1–10), flags NSFW and groups them by visual style with one CLIP pass — and makes 'keep best' prefer the nicest-looking duplicate. Installs into its own Python (CLIP + a small NSFW model). Without it, the Score button is disabled with this hint." },
+        { action: 'watermark_detect', cap: 'watermark_detect', icon: '🚩',
+          title: 'Watermark detector (faster 🚩 Find)',
+          body: "Makes the Bank's 🚩 Find watermarks pass roughly ten times faster and lets it run without Ollama: a small classifier scores each image (~0.14 s instead of ~1.7 s asking the vision model in words), and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint have something to work on. Adds ~0.9 GB of weights into the scoring Python it shares with ✨ Score. Without it nothing breaks — the vision model keeps doing the same job, slower." },
       ]
       return (
         <div className="space-y-3">

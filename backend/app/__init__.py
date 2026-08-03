@@ -212,6 +212,12 @@ _SCHEMA_ADDITIONS = (
     # of the dataset's watermark_regions. Additive: a database that never gains it
     # simply has no hand-edited mask and both levels keep routing on the bbox.
     ('bank_image', 'watermark_regions', 'TEXT'),
+    # Which detector produced the watermark verdict, and its raw score. Both stay
+    # NULL on every row scanned before the dedicated detector existed — those rows
+    # are vision-model verdicts we cannot retro-label, and the panel says
+    # "unknown" for them rather than inventing a source.
+    ('bank_image', 'watermark_source', 'VARCHAR(16)'),
+    ('bank_image', 'watermark_score', 'REAL'),
     # Bank provenance pass — effective resolution, letterbox, JPEG quality and the
     # ai/camera/unknown origin. Same additive path: existing banks keep every row
     # and simply carry NULLs until the next quality scan fills them in.

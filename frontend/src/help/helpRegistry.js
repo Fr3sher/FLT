@@ -448,7 +448,10 @@ const TOPICS = [
   setupStep('setup-quality', 'quality', 'Install the optional ML helpers',
     ['face scoring', 'face similarity', 'insightface', 'person masks', 'masks', 'rembg',
      'watermark inpainting', 'lama', 'inpaint', 'bank scoring', 'ml extras', 'install',
-     'reinstall', 'repair', 'optional helpers']),
+     'reinstall', 'repair', 'optional helpers',
+     'watermark detector', 'detector', 'siglip', 'siglip2', 'grounding dino',
+     'faster watermark', 'watermark speed', 'find watermarks faster',
+     'watermark without ollama']),
   setupStep('setup-training', 'training', 'Set up ai-toolkit (LoRA training)',
     ['ai-toolkit', 'aitoolkit', 'training', 'lora training', 'run.py', 'python',
      'interpreter', 'install training', 'train']),
@@ -1091,7 +1094,10 @@ const TOPICS = [
       text: 'Clean has two engines — LaMa (fast) and Klein (quality) — and auto-crop can be turned off.' }),
   action('action-bank-watermark-clean', 'Clean a bank\'s watermarks (2 levels)',
     ['watermark', 'bank', 'clean', 'crop', 'auto-crop', 'inpaint', 'lama', 'klein',
-     'remove watermark', 'logo', 'url', 'undo cleaning', 'before after', 'original'],
+     'remove watermark', 'logo', 'url', 'undo cleaning', 'before after', 'original',
+     // Asked in the panel's own words: "who decided this was a watermark?"
+     'watermark source', 'detector', 'vision model', 'why is this flagged',
+     'watermark score', 'sensitivity', 'threshold', 'false positive'],
     '/bank', 'using-the-app', 'clean-the-watermarks-a-bank-found'),
   // 🎨 Medium and ⤢ Angle share one guide section but get a topic EACH: they are
   // two separate chip rows, asked about in two very different words ("is this

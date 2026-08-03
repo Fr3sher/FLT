@@ -780,6 +780,13 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'aesthetic_score': row.aesthetic_score, 'nsfw_score': row.nsfw_score,
         'style_cluster': row.style_cluster, 'watermark_state': row.watermark_state,
         'watermark_clean_method': row.watermark_clean_method,
+        # Who ruled on THIS image, and with what score. Per image rather than per
+        # bank because a bank scanned over weeks holds both routes' verdicts, and
+        # "why is this one flagged?" is asked about one tile, not about a bank.
+        # NULL source = scanned before the app recorded it; NULL score = the
+        # vision route, which writes a sentence and not a number.
+        'watermark_source': row.watermark_source,
+        'watermark_score': row.watermark_score,
         'detail_ratio': row.detail_ratio, 'bars_ratio': row.bars_ratio,
         'jpeg_quality': row.jpeg_quality,
         'origin': row.origin, 'origin_evidence': row.origin_evidence,
@@ -4182,10 +4189,21 @@ def _watermark_scan_query(bank_id, rescan):
 
 
 def start_watermark(app, user_id, bank_id, rescan=False):
-    """Launch the overlaid-watermark scan over the bank's non-rejected images,
-    reusing the SAME Qwen3-VL detector the datasets use. Needs the vision model
-    pulled; serialized against training/vision (503 when the GPU is held)."""
+    """Launch the overlaid-watermark scan over the bank's non-rejected images.
+
+    TWO routes, and which one runs is decided here, once:
+
+      * the dedicated DETECTOR extra when it is installed — a SigLIP2 classifier
+        that answers the binary question in ~0.14 s per image against the vision
+        model's ~1.7 s, plus a second model that locates the mark. It does not
+        need Ollama at all, so a machine with no vision model can still scan.
+      * otherwise the vision model, exactly as before. That is the fail-open
+        contract: the extra can only ever ADD a faster route, never remove the
+        one that has always worked.
+
+    Serialized against training/vision (503 when the GPU is held)."""
     from ..capabilities import probe_ollama_model
+    from . import watermark_detector
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
@@ -4198,18 +4216,22 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     # (no Ollama) failed a release on it while two agents read it as a flake.
     if bank_jobs.running(bank_id):
         raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
-    if not probe_ollama_model().get('ok'):
+    use_detector = watermark_detector.available()
+    if not use_detector and not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
                            '(Settings ▸ Captioning & quality)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
     return bank_jobs.start(app, bank_id, 'watermark',
-                           _watermark_job(bank_id, rescan),
+                           _watermark_job(bank_id, rescan, use_detector=use_detector),
                            total=_watermark_scan_query(bank_id, rescan).count())
 
 
-def _watermark_job(bank_id, rescan):
+def _watermark_job(bank_id, rescan, use_detector=False):
+    if use_detector:
+        return _watermark_detector_job(bank_id, rescan)
+
     def run(job):
         import json as _json
         from .face_dataset_service import WATERMARK_BBOX_PROMPT, _parse_watermark_bbox
@@ -4294,6 +4316,13 @@ def _watermark_job(bank_id, rescan):
                         unanswered += 1
                     else:
                         bbox = _parse_watermark_bbox(raw)
+                        # Stamp WHICH detector ruled, on every row this pass
+                        # touches. A bank scanned over weeks can hold verdicts
+                        # from both routes, and they disagree at the margins —
+                        # so "why is this one flagged?" has to stay answerable
+                        # per image rather than per bank.
+                        row.watermark_source = 'vision'
+                        row.watermark_score = None      # this route has no score
                         if bbox:
                             row.watermark_state = 'detected'
                             # Keep the box — the crop/inpaint levels route on it.
@@ -4333,6 +4362,184 @@ def _watermark_job(bank_id, rescan):
         if unanswered:
             detail += (f', {unanswered} not analysed (the vision model returned '
                        'nothing — check Ollama in Settings, then run it again)')
+        if errors:
+            detail += f', {errors} unreadable'
+        bank_jobs.progress(job, detail=detail)
+    return run
+
+
+def _watermark_detector_job(bank_id, rescan):
+    """The same pass, run by the dedicated detector extra instead of the vision
+    model. Deliberately the same SHAPE as the vision job above, because the two
+    have to be interchangeable: same resume semantics, same per-image commit,
+    same survives-a-deletion discipline, same honest final sentence.
+
+    The one structural difference is where the work happens. The vision route
+    overlaps network calls through a thread pool; here a single child process
+    holds both models (loading them costs ~10 s, so it must be paid once) and
+    streams one verdict per image back. Cancellation therefore travels as a
+    sentinel FILE the child polls between images — killing a process that holds
+    two loaded models mid-forward is how a stop turns into a corrupted half-write.
+    """
+    def run(job):
+        import contextlib
+        import json as _json
+        import tempfile
+        from . import watermark_detector
+        from ..gpu_window import gpu_exclusive_vision_window
+        bank = _detach_bank(db.session.get(ImageBank, bank_id))
+        if not bank:
+            return
+        rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
+        bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
+        if not rows:
+            return
+        detected = clean = errors = vanished = 0
+        threshold = watermark_detector.threshold()
+
+        # Paths are resolved HERE, on the owning thread, exactly like the vision
+        # route: everything that reads the database or has a side effect (the
+        # destructive discard below included) stays off the worker.
+        planned = []
+        for row_id in [r.id for r in rows]:
+            row = _live_image(row_id)
+            if row is None:      # deleted since the pass started — see _live_image
+                logger.info('bank watermark scan: image %s was deleted mid-pass, '
+                            'skipping it', row_id)
+                vanished += 1
+                bank_jobs.bump(job)
+                continue
+            # Always detect on the SOURCE pixels: a re-scan of an already cleaned
+            # image drops its cleaned version first, or we would be asking "is
+            # there a watermark?" about our own edit.
+            if row.watermark_clean_method:
+                _discard_clean_blob(bank_id, row)
+            path = abs_image_path(bank, row)
+            if not path:
+                # No resolvable file. Counted and bumped rather than quietly
+                # dropped: a pass that says "done — 12 with a watermark" over a
+                # bank of 20 while 8 were never looked at is the kind of silent
+                # arithmetic this pass has already been fixed for once.
+                vanished += 1
+                bank_jobs.bump(job)
+                continue
+            planned.append((row_id, path))
+        db.session.commit()
+        if not planned:
+            bank_jobs.progress(
+                job, detail='done — nothing left to scan'
+                + (f' ({vanished} skipped: gone while the pass ran)' if vanished else ''))
+            return
+        by_path = {}
+        for row_id, path in planned:
+            by_path.setdefault(path, []).append(row_id)
+
+        cancel_dir = tempfile.mkdtemp(prefix='lds-wmdet-')
+        cancel_file = os.path.join(cancel_dir, 'cancel')
+
+        def should_cancel():
+            if not bank_jobs.cancelled(job):
+                return False
+            try:                            # the child polls for this file
+                open(cancel_file, 'wb').close()
+            except OSError:
+                pass
+            return True
+
+        # The GPU window is taken only when this extra would actually USE the
+        # card. The stock install is CPU-only torch, and a pass that never
+        # touches the GPU must never unload ComfyUI or block a training start —
+        # the exact rule the scoring pass already follows.
+        from ..capabilities import watermark_detect_gpu_available
+        on_gpu = watermark_detect_gpu_available()
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if on_gpu
+                  else contextlib.nullcontext())
+        located = 0
+        try:
+            with window:
+                for path, state, score, regions, error in watermark_detector.scan(
+                        [p for _rid, p in planned],
+                        should_cancel=should_cancel, cancel_file=cancel_file):
+                    # Match on the path the child echoed, popping it so a bank
+                    # that holds the same file twice gets one verdict each
+                    # rather than both landing on the first row.
+                    waiting = by_path.get(path) or []
+                    row_id = waiting.pop(0) if waiting else None
+                    row = _live_image(row_id) if row_id is not None else None
+                    if row is None:
+                        logger.info('bank watermark scan: image %s was deleted while '
+                                    'it was being analysed, skipping it', row_id)
+                        vanished += 1
+                        bank_jobs.bump(job)
+                        continue
+                    row.watermark_source = 'detector'
+                    row.watermark_score = (round(float(score), 4)
+                                           if score is not None else None)
+                    if state == 'error':
+                        # One bad file never sinks the pass, same as the vision route.
+                        row.watermark_state = 'error'
+                        errors += 1
+                    elif state == 'detected':
+                        row.watermark_state = 'detected'
+                        # Only ONE box is persisted: the child's FIRST, which it
+                        # orders most-peripheral-first precisely because this
+                        # line only takes one (see _merge_boxes — "biggest" put
+                        # a crop on the subject). watermark_bbox holds
+                        # one rectangle (it is what both cleaning levels route
+                        # on), and the multi-zone column next to it means
+                        # something else entirely — it is the HAND-DRAWN
+                        # override, and writing machine output there would make
+                        # every flagged image look hand-corrected and silently
+                        # exclude it from ✂ Auto-crop. Losing the smaller boxes
+                        # is the honest cost; the mask editor still lets the user
+                        # add them back.
+                        if regions:
+                            row.watermark_bbox = _json.dumps(
+                                [round(float(v), 4) for v in regions[0][:4]])
+                            located += 1
+                        else:
+                            # Flagged with no box: known to be marked, position
+                            # unknown. Exactly the state the pre-box builds
+                            # produced, and _watermark_scan_query already adopts
+                            # those rows on a plain re-run.
+                            row.watermark_bbox = None
+                        detected += 1
+                    else:
+                        row.watermark_state = 'none'
+                        row.watermark_bbox = None
+                        clean += 1
+                    bank_jobs.bump(job)
+                    # Per image, for the same reason the vision route commits per
+                    # image: never hold the single SQLite write lock across an
+                    # unbounded number of inferences.
+                    db.session.commit()
+        except watermark_detector.DetectorUnavailable as e:
+            # The extra probed OK but could not actually run (weights half
+            # downloaded, a torch that no longer imports in that env). Say so and
+            # leave every unscanned row untouched — a retry, or an uninstall back
+            # to the vision model, both finish the job.
+            db.session.commit()
+            logger.warning('bank watermark scan: detector unavailable (%s)', e)
+            bank_jobs.progress(
+                job, detail=f'stopped — the watermark detector could not run ({e}). '
+                            'Nothing was mis-flagged; the images it had not reached '
+                            'are still unscanned.')
+            return
+        finally:
+            db.session.commit()
+            shutil.rmtree(cancel_dir, ignore_errors=True)
+        if bank_jobs.cancelled(job):
+            bank_jobs.progress(job, detail=f'cancelled — {detected} with a watermark '
+                                           f'so far')
+            return
+        detail = (f'done — {detected} with a watermark, {clean} clean '
+                  f'(detector, score ≥ {threshold:g})')
+        if detected and located < detected:
+            detail += (f', {detected - located} flagged without a position '
+                       '(they cannot be cropped or repainted until you draw a zone '
+                       'in ▶ Review)')
+        if vanished:
+            detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
         bank_jobs.progress(job, detail=detail)
@@ -4888,6 +5095,35 @@ def dismiss_watermarks(user_id, bank_id, image_ids) -> int:
     return len(rows)
 
 
+def _watermark_source_counts(bank_id) -> dict:
+    """How many SCANNED rows each detection route produced. A row with a state but
+    no source predates the column — counted as 'unknown', never attributed."""
+    scanned = BankImage.query.filter_by(bank_id=bank_id).filter(
+        BankImage.watermark_state.isnot(None))
+    detector = scanned.filter(BankImage.watermark_source == 'detector').count()
+    vision = scanned.filter(BankImage.watermark_source == 'vision').count()
+    return {'detector': detector, 'vision': vision,
+            'unknown': scanned.count() - detector - vision}
+
+
+def _detector_ready() -> bool:
+    """Never raises: a probe that explodes must not 500 the whole panel — it just
+    means the next run is the vision model, which is the shipped behaviour."""
+    try:
+        from . import watermark_detector
+        return watermark_detector.available()
+    except Exception:      # noqa: BLE001
+        return False
+
+
+def _detector_threshold() -> float:
+    try:
+        from . import watermark_detector
+        return watermark_detector.threshold()
+    except Exception:      # noqa: BLE001
+        return 0.94
+
+
 def watermark_levels(user_id, bank_id) -> dict | None:
     """Where each cleaning level stands — the numbers the UI shows per level.
     None when the bank is gone."""
@@ -4938,6 +5174,18 @@ def watermark_levels(user_id, bank_id) -> dict | None:
             BankImage.watermark_clean_method.in_(('lama', 'klein'))).count(),
         'dismissed': base.filter_by(watermark_state='dismissed').count(),
         'needs_rescan': _needs_rescan_count(bank_id),
+        # WHO ruled on the images already scanned. Surfaced because the two
+        # routes are not the same instrument and a bank scanned over weeks can
+        # hold both: 'detector' rows carry a score and a threshold you can
+        # change, 'vision' rows carry a sentence a model wrote. 'unknown' is
+        # every row scanned before this was recorded — named rather than
+        # attributed, because guessing which one produced them would be a lie.
+        'sources': _watermark_source_counts(bank_id),
+        # Which route the NEXT run would take, and (when it is the detector) the
+        # score it will flag at. The panel quotes these instead of keeping its own
+        # copy of the default.
+        'next_source': ('detector' if _detector_ready() else 'vision'),
+        'threshold': _detector_threshold(),
         # A few already-cleaned ids so the panel can offer a before/after strip
         # (each image is served cleaned, or original with ?original=1) without a
         # second endpoint just to list them.
