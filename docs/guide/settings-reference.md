@@ -927,6 +927,18 @@ These have no UI control — they're for advanced users editing `config.json` by
 |---|---|---|
 | `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane — not the image model. The subscription lane renders on whatever image model your plan serves; the API-key lane's image model is `engines.chatgpt_image_model`. |
 
+**Shot detection (video bank):** the boundary detector that cuts a long source into
+individual shots. No UI control yet — the defaults are the reference
+implementation's, and neither of the two numbers below has been measured against
+this app's material, so they are stated as adjustable rather than tuned.
+
+| Key | Default | Role |
+|---|---|---|
+| `shot_detect.python` | `''` | Interpreter that runs the detector. Empty means **reuse the Bank scoring environment**, which already carries torch — a second copy would cost you ~2.5 GB for nothing. Written by the installer; you rarely set it by hand. |
+| `shot_detect.threshold` | `0.5` | Cut probability at or above which a frame is treated as a shot boundary. Lower it to cut more finely on soft transitions; raise it if dissolves are being split into fragments. |
+| `shot_detect.min_shot_frames` | `5` | Shots shorter than this are **dropped, not merged** into a neighbour. Merging would silently move that neighbour's boundary, and a boundary is the one thing this whole lane exists to get right. 5 rejects a stray flash cut while leaving real rapid montages intact. |
+| `shot_detect.device` | `auto` | `auto` \| `cuda` \| `cpu`. The network runs on 48×27 frames and is never the bottleneck — decoding is. CPU is a perfectly reasonable choice, and it leaves the GPU free for captioning and training. |
+
 **Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
 
 | Key | Default | Role |

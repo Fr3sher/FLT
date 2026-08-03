@@ -344,6 +344,26 @@ DEFAULTS = {
     #   only worth it to save time on a bank you intend to filter, not clean.
     'watermark_detect': {'python': '', 'models_root': '', 'threshold': 0.94,
                          'device': 'auto', 'locate': True},
+    # 🎬 Shot-boundary detection for the video bank (TransNetV2). Declared here so
+    # a full-config Save round-trips these keys instead of failing "unknown config
+    # section" — the same reason bank_scoring is declared above.
+    # python: its interpreter. Empty = reuse the bank-scoring environment, which
+    #   already carries torch; a second copy would cost the user ~2.5 GB for
+    #   nothing. Then the app's own, which simply probes unavailable.
+    # threshold: the detector's cut probability at or above which a frame is a
+    #   boundary. 0.5 is the reference implementation's own default and is NOT a
+    #   measured value for this app's material — lower it to cut more finely on
+    #   soft transitions, raise it if dissolves are being split into fragments.
+    # min_shot_frames: shots shorter than this are DROPPED, not merged into a
+    #   neighbour — merging would silently move that neighbour's boundary, and a
+    #   boundary is the one thing the whole lane is built to get right. 5 rejects
+    #   a stray flash cut while leaving real rapid montages intact. Also not a
+    #   measured constant; no labelled sample of "too short" exists yet.
+    # device: auto|cuda|cpu. The network runs on 48x27 frames, so it is never the
+    #   bottleneck — decoding is. CPU is a perfectly reasonable choice here, and
+    #   it leaves the GPU free for captioning and training.
+    'shot_detect': {'python': '', 'threshold': 0.5, 'min_shot_frames': 5,
+                    'device': 'auto'},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/
     # background), not the face — its own guide says start at 0.5 and that
     # 0.8-1.0 "can prevent edits from applying". 0.9 made every variation a
