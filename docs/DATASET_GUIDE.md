@@ -111,6 +111,42 @@ Concretely:
    exception:** it reads both forms natively, so neither is ever blocked there
    (see the Anima note above).
 
+**Caption length.** ⚙️ *Options* on the Captions panel carries a **Caption length**
+preset — *Standard* (the prompt untouched), *Concise* (aims for one short sentence,
+~20–30 words) or *Detailed* (several sentences). It is a **target the vision model
+follows loosely**, not a hard cap: expect a spread around it, not a word count. Pick
+*Concise* when detailed captions keep describing the identity you want bound to the
+trigger, *Detailed* when you want scene, outfit and lighting to stay independently
+promptable.
+
+What that looked like when measured — 18 real portrait photos, the shipped default
+vision model (`huihui_ai/qwen3-vl-abliterated:8b-instruct`), the plain descriptive
+prompt, one pass per preset:
+
+| Preset | Median | Range |
+|---|---|---|
+| Concise | 24.5 words | 18–30 |
+| Standard | 87.5 words | 65–112 |
+| Detailed | 126 words | 106–152 |
+
+Your numbers will differ — another vision model, JoyCaption, or a different kind of
+image all move them. Treat the presets as *shorter / as-is / longer*, not as a
+contract on a word count.
+
+Two more things worth knowing:
+
+- **Order.** The prompt is built as: the base prompt with its omission rules, then the
+  vocabulary register, then the length preset, then your free **Extra instructions**
+  last — so a hand-written steer that contradicts a preset is what the model reads
+  most recently and wins. The identity/concept leak cleaners run after all of it
+  regardless, so no wording here can reintroduce a banned term.
+- **Concise is not the "short" of long + short captions.** Dual captions derive a
+  short variant *from* the stored long caption into its own field; the length preset
+  changes the long caption itself. They are separate axes and compose freely.
+- Concise stays **prose** on purpose (never a comma-separated tag list), so a Concise
+  dataset still passes the caption-style check for prose-native families instead of
+  being mistaken for booru tags at launch.
+
 **Concept datasets** (training a *thing/style/act*, not a person) invert the rule:
 describe everything **except the concept** — the concept is what must bind to the
 trigger. Keep *person* masking **off** for concepts — a person mask would erase the

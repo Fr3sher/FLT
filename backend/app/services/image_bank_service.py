@@ -4755,7 +4755,8 @@ def _framing_job(bank_id, rescan):
 
 
 # --- caption pass (reuses the dataset caption engines) ----------------------
-def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None):
+def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
+                  length=None):
     """Launch the caption pass over a selection (``ids``) or, when empty, every
     non-rejected readable image. Reuses the dataset caption engines (JoyCaption /
     Ollama per Settings) through a dataset-free descriptive brick; the captions
@@ -4768,14 +4769,21 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None)
     dataset caption uses, appended as an instruction. Explicit only spells sexual
     content out when the backend runs an abliterated Ollama model; the choice rides
     per-call (the UI passes it), so a call WITHOUT it is byte-identical to before
-    (no instruction appended). Richer captions also mean richer 🔍 search text."""
+    (no instruction appended). Richer captions also mean richer 🔍 search text.
+
+    ``length`` picks the SIZE preset (one of CAPTION_LENGTHS: 'concise' | 'detailed';
+    None/'' = standard, nothing appended) — an axis orthogonal to the register, again
+    the same lane and the same text as the dataset caption."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    from .face_dataset_service import CAPTION_VOCABULARIES
+    from .face_dataset_service import CAPTION_LENGTHS, CAPTION_VOCABULARIES
     vocab = (vocabulary or '').strip().lower() or None
     if vocab and vocab not in CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
+    size = (length or '').strip().lower() or None
+    if size and size not in CAPTION_LENGTHS:
+        raise ValueError(f'invalid caption length: {size}')
     backend = (cfg.get('captioning.backend') or 'auto').lower()
     if backend == 'none':
         raise ValueError('no captioning backend configured (Settings ▸ Captioning & quality)')
@@ -4790,12 +4798,12 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None)
         q = q.filter(or_(BankImage.caption.is_(None), BankImage.caption == ''))
     total = q.count()
     return bank_jobs.start(app, bank_id, 'caption',
-                           _caption_job(bank_id, ids, force, vocab), total=total)
+                           _caption_job(bank_id, ids, force, vocab, size), total=total)
 
 
-def _caption_job(bank_id, ids, force, vocabulary=None):
+def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
     def run(job):
-        from .face_dataset_service import caption_paths, vocabulary_instruction
+        from .face_dataset_service import caption_paths, caption_preset_instructions
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -4838,9 +4846,10 @@ def _caption_job(bank_id, ids, force, vocabulary=None):
 
         # GPU-exclusive for the whole pass, exactly like the score/watermark passes:
         # frees ComfyUI VRAM and blocks a training start for the duration.
-        # The vocabulary register rides in as the SAME appended instruction the
-        # dataset pass uses (None when unset → byte-identical to the plain pass).
-        extra = vocabulary_instruction(vocabulary)
+        # The vocabulary register and the length preset ride in as the SAME appended
+        # instructions the dataset pass uses, in the same order (None when neither is
+        # set → byte-identical to the plain pass).
+        extra = caption_preset_instructions(vocabulary, length)
         with gpu_exclusive_vision_window(flag_ttl=1800):
             caption_paths(
                 paths,

@@ -1071,8 +1071,9 @@ def dataset_caption_cancel(dataset_id):
 
 @bp.get('/dataset/<int:dataset_id>/caption/options')
 def dataset_caption_options_get(dataset_id):
-    """Per-dataset caption method overrides {backend, ollama_model, instructions} for the
-    ⚙️ Options popover. Empty values mean "follow the global default"."""
+    """Per-dataset caption method overrides {backend, ollama_model, vocabulary, length,
+    instructions} for the ⚙️ Options popover. Empty values mean "follow the global
+    default" (for length, the standard prompt with nothing appended)."""
     ds = svc.get_dataset(LOCAL_USER, dataset_id)
     if not ds:
         return jsonify({'error': 'not found'}), 404
@@ -1120,7 +1121,8 @@ def dataset_image_caption_preview(dataset_id, image_id):
             result = svc.preview_caption(
                 LOCAL_USER, dataset_id, image_id,
                 backend=data.get('backend'), ollama_model=data.get('ollama_model', ''),
-                vocabulary=data.get('vocabulary'), instructions=data.get('instructions'),
+                vocabulary=data.get('vocabulary'), length=data.get('length'),
+                instructions=data.get('instructions'),
                 should_cancel=lambda: dataset_activity.cancel_requested(dataset_id))
     except Exception as e:
         return _map_error(e)

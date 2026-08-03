@@ -913,12 +913,44 @@ _VOCABULARY_INSTRUCTION = {
         'refer to any nudity only in general, non-graphic language.'),
 }
 
+# Length preset (idea by djpraxis on Reddit): how LONG the caption should be, on an axis
+# ORTHOGONAL to the vocabulary register. '' = standard — nothing appended, byte-identical
+# to the pre-preset prompt, which is why the default stays the empty string forever.
+#
+# Two things these texts must never stop doing:
+#  1. STAY PROSE. 'concise' explicitly forbids a comma-separated tag list, because
+#     face_variations.caption_style() votes 'booru' on >=3 short comma segments with no
+#     sentence punctuation — a "short caption" phrased as key phrases would trip the
+#     MISMATCH_CAPTION guard at training launch on every prose family. Asking for one
+#     full sentence keeps a Concise dataset trainable without a force.
+#  2. STAY A LENGTH, NOT A CONTENT RULE. The kind omission rules (identity / concept /
+#     style) are built into the base prompt and post-filtered by the cleaners; a preset
+#     that told the model WHAT to leave out would fight them. These only say how much.
+#
+# 'concise' is NOT the short half of dual long+short captioning: that one is DERIVED from
+# the stored long caption by a separate text pass (_SHORTEN_BASE) and lives in its own
+# column. Concise changes the long caption itself. The two axes compose.
+_CAPTION_LENGTHS = ('concise', 'detailed')
+_LENGTH_INSTRUCTION = {
+    'concise': (
+        'Keep the caption SHORT: ONE single sentence of roughly 20 to 30 words, naming '
+        'only the subject, the pose or action, the clothing and the setting. Write it as '
+        'a complete sentence in plain prose — never a comma-separated list of tags or key '
+        'phrases. Do not add a second sentence, a list, or any commentary.'),
+    'detailed': (
+        'Write a DETAILED caption: several complete sentences in plain prose, covering the '
+        'subject and pose, the expression, the clothing and accessories, the setting and '
+        'background, the lighting, and the camera framing and angle. Describe only what is '
+        'clearly visible — do not speculate, and do not add commentary about the image.'),
+}
+
 
 def caption_options(ds) -> dict:
     """Normalized per-dataset caption overrides: {backend, ollama_model, instructions}.
     Empty strings = "use the global default". Never raises ({} defaults on a missing or
     corrupt blob) so every caption path can read it unconditionally."""
-    out = {'backend': '', 'ollama_model': '', 'instructions': '', 'vocabulary': ''}
+    out = {'backend': '', 'ollama_model': '', 'instructions': '', 'vocabulary': '',
+           'length': ''}
     raw = getattr(ds, 'caption_options', None) if ds else None
     if not raw:
         return out
@@ -942,6 +974,9 @@ def caption_options(ds) -> dict:
     vocab = str(data.get('vocabulary') or '').strip().lower()
     if vocab in _CAPTION_VOCABULARIES:
         out['vocabulary'] = vocab
+    length = str(data.get('length') or '').strip().lower()
+    if length in _CAPTION_LENGTHS:
+        out['length'] = length
     return out
 
 
@@ -969,6 +1004,11 @@ def set_caption_options(user_id, dataset_id, patch) -> dict:
         if v and v not in _CAPTION_VOCABULARIES:
             raise ValueError(f'invalid caption vocabulary: {v}')
         cur['vocabulary'] = v
+    if 'length' in patch:
+        ln = str(patch.get('length') or '').strip().lower()
+        if ln and ln not in _CAPTION_LENGTHS:
+            raise ValueError(f'invalid caption length: {ln}')
+        cur['length'] = ln
     stored = {k: v for k, v in cur.items() if v}
     ds.caption_options = json.dumps(stored) if stored else None
     db.session.commit()
@@ -1032,15 +1072,28 @@ def _with_caption_instructions(prompt: str, instructions: str) -> str:
     return f'{prompt}\n\nAdditional instructions from the user:\n{extra}'
 
 
-def _combined_caption_instructions(opts) -> str:
-    """The text appended to a caption prompt for a run: the vocabulary preset (if any),
-    then the user's free-text instructions. Empty when neither is set — so a dataset that
-    never touched the popover produces byte-identical prompts. Both ride at the END of the
-    prompt, after the kind omission rules, and the output cleaners still post-filter."""
+def _caption_preset_parts(vocabulary=None, length=None) -> list:
+    """The preset instructions for a run, in their fixed order: vocabulary register first
+    (how to name things), then length (how much to write). One list so the dataset pass,
+    the Caption Lab preview and the image bank never drift on that order."""
     parts = []
-    preset = _VOCABULARY_INSTRUCTION.get(opts.get('vocabulary'))
-    if preset:
-        parts.append(preset)
+    register = _VOCABULARY_INSTRUCTION.get((vocabulary or '').strip().lower())
+    if register:
+        parts.append(register)
+    size = _LENGTH_INSTRUCTION.get((length or '').strip().lower())
+    if size:
+        parts.append(size)
+    return parts
+
+
+def _combined_caption_instructions(opts) -> str:
+    """The text appended to a caption prompt for a run: the presets (vocabulary register,
+    then length), then the user's free-text instructions LAST — closest to the model, so a
+    hand-written steer overrides a preset it contradicts. Empty when none is set, so a
+    dataset that never touched the popover produces byte-identical prompts. All of it rides
+    at the END of the prompt, after the kind omission rules, and the output cleaners still
+    post-filter."""
+    parts = _caption_preset_parts(opts.get('vocabulary'), opts.get('length'))
     extra = (opts.get('instructions') or '').strip()
     if extra:
         parts.append(extra)
@@ -6365,14 +6418,13 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
 # compare raw model output side by side and pick the config, not to produce the final
 # stored caption (that still goes through the normal caption pass with its kind rules).
 
-def _compose_preview_instructions(vocabulary, instructions) -> str | None:
-    """Combine a vocabulary preset (the SAME appended register the dataset pass uses,
-    from _VOCABULARY_INSTRUCTION) with the user's free extra instructions into the single
-    ``extra_instructions`` string caption_paths appends to the prompt. None when neither
-    is set (byte-identical to a plain descriptive pass)."""
-    parts = []
-    if vocabulary:
-        parts.append(_VOCABULARY_INSTRUCTION[vocabulary])
+def _compose_preview_instructions(vocabulary, instructions, length=None) -> str | None:
+    """Combine the presets (the SAME appended register and length text the dataset pass
+    uses) with the user's free extra instructions into the single ``extra_instructions``
+    string caption_paths appends to the prompt. Same order as the dataset pass — presets
+    first, free text last. None when nothing is set (byte-identical to a plain descriptive
+    pass)."""
+    parts = _caption_preset_parts(vocabulary, length)
     extra = (instructions or '').strip()[:_CAPTION_INSTRUCTIONS_MAX]
     if extra:
         parts.append(extra)
@@ -6380,8 +6432,10 @@ def _compose_preview_instructions(vocabulary, instructions) -> str | None:
 
 
 # Public so the image bank's caption lane validates against — and appends — the SAME
-# vocabulary registers as the dataset pass, rather than duplicating the tuple or the text.
+# vocabulary registers and length presets as the dataset pass, rather than duplicating the
+# tuples or the texts.
 CAPTION_VOCABULARIES = _CAPTION_VOCABULARIES
+CAPTION_LENGTHS = _CAPTION_LENGTHS
 
 
 def vocabulary_instruction(vocabulary) -> str | None:
@@ -6393,8 +6447,17 @@ def vocabulary_instruction(vocabulary) -> str | None:
     return _VOCABULARY_INSTRUCTION.get((vocabulary or '').strip().lower())
 
 
+def caption_preset_instructions(vocabulary=None, length=None) -> str | None:
+    """The combined preset block (vocabulary register, then length) for a run that has no
+    per-dataset options to read — the image bank's per-run lane. None when neither is set,
+    so a call without presets appends nothing at all."""
+    parts = _caption_preset_parts(vocabulary, length)
+    return '\n\n'.join(parts) if parts else None
+
+
 def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model='',
-                    vocabulary=None, instructions=None, should_cancel=None) -> dict:
+                    vocabulary=None, length=None, instructions=None,
+                    should_cancel=None) -> dict:
     """Caption ONE dataset image with a candidate config and return the text WITHOUT
     persisting it — the Caption Lab's ephemeral A/B probe. Reuses caption_paths(), so the
     engine/model/GPU serialization contract is identical to the batch pass.
@@ -6403,7 +6466,9 @@ def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model
                    rejected here — a preview with captioning disabled makes no sense).
     vocabulary   : '' / None → the model's own wording; else an _CAPTION_VOCABULARIES
                    preset, appended as an instruction exactly like the dataset options.
-    instructions : free extra instructions, appended after the vocabulary preset.
+    length       : '' / None → standard (nothing appended); else a _CAPTION_LENGTHS
+                   preset ('concise' | 'detailed'), on an axis orthogonal to vocabulary.
+    instructions : free extra instructions, appended after both presets.
     should_cancel: polled by caption_paths at the image boundary (Ollama phase) so the
                    existing Stop path can abort a preview cleanly.
 
@@ -6427,7 +6492,10 @@ def preview_caption(user_id, dataset_id, image_id, *, backend=None, ollama_model
     vocab = (vocabulary or '').strip().lower() or None
     if vocab and vocab not in _CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
-    extra = _compose_preview_instructions(vocab, instructions)
+    size = (length or '').strip().lower() or None
+    if size and size not in _CAPTION_LENGTHS:
+        raise ValueError(f'invalid caption length: {size}')
+    extra = _compose_preview_instructions(vocab, instructions, size)
     ollama_model = normalize_ollama_model_ref(
         ollama_model, allow_empty=True) or None
     started = time.perf_counter()

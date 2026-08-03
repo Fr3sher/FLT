@@ -31,7 +31,7 @@ import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
 import { openerLabel } from './scoringPython.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it.
-import { VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
+import { CAPTION_LENGTH_OPTIONS, VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
 // Ordered zone model + the "what's next" accent, both pure/testable.
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 // Provenance wording (effective resolution, origin, black bars) — pure/testable.
@@ -615,6 +615,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // Caption register for the 🏷️ Caption pass ('' = model's own wording). Explicit is
   // the NSFW lane — same registers as the dataset caption, passed per-run.
   const [captionVocab, setCaptionVocab] = useState('')
+  // Caption LENGTH preset, per RUN like the vocabulary register above (a bank has no
+  // caption_options row to persist to). '' = standard: nothing appended to the prompt.
+  const [captionLength, setCaptionLength] = useState('')
   // Coverage advice (idea by @antonp) — a collapsible read-only panel, fetched
   // on demand (and refreshed whenever it's open and the bank changes).
   const [coverageOpen, setCoverageOpen] = useState(false)
@@ -870,6 +873,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     () => postJson(`/api/bank/${bankId}/caption`, {
       ...(selected.size ? { image_ids: [...selected] } : {}),
       ...(captionVocab ? { vocabulary: captionVocab } : {}),
+      ...(captionLength ? { length: captionLength } : {}),
     }), null)
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
   /* Posts with the dialog still OPEN and answers {ok,error}: a refused launch —
@@ -1333,6 +1337,15 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
               className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs disabled:opacity-40">
               {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-xs text-content-subtle">
+            <span className="sr-only">Caption length</span>
+            <select value={captionLength} onChange={(e) => setCaptionLength(e.target.value)}
+              disabled={live} aria-label="Caption length"
+              title="How much the captioner writes. Concise aims for one short sentence, Detailed for several - a target the model follows loosely, not a hard cap. Standard leaves the prompt untouched. Longer captions give the search more to match on."
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs disabled:opacity-40">
+              {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
         </div>

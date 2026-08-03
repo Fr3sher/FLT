@@ -283,3 +283,25 @@ def test_caption_refuses_when_gpu_busy(client, tmp_path, app, monkeypatch):
     r = client.post(f'/api/bank/{bank_id}/caption', json={})
     assert r.status_code == 503
     assert 'training' in r.get_json()['error']
+
+
+def test_caption_length_preset_rides_per_run(client, tmp_path, app, monkeypatch):
+    """The bank offers the same length dial per run as the dataset popover persists,
+    with the same text and the same order (register first, then length)."""
+    _use_ollama_backend(app)
+    bank_id, _ = _mkbank(client, tmp_path, {'a.png': _flat()})
+    seen = _capture_prompts(monkeypatch)
+    client.post(f'/api/bank/{bank_id}/caption',
+                json={'vocabulary': 'clinical', 'length': 'detailed'})
+    assert len(seen) == 1
+    i_vocab = seen[0].index('clinical, anatomical terms')
+    i_len = seen[0].index('Write a DETAILED caption')
+    assert i_vocab < i_len
+
+
+def test_caption_rejects_unknown_length(client, tmp_path, app):
+    _use_ollama_backend(app)
+    bank_id, _ = _mkbank(client, tmp_path, {'a.png': _flat()})
+    r = client.post(f'/api/bank/{bank_id}/caption', json={'length': 'epic'})
+    assert r.status_code == 400
+    assert 'length' in r.get_json()['error']

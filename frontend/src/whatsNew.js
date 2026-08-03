@@ -104,6 +104,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-03-caption-length-preset',
+    date: '2026-08-03',
+    title: 'Ask for shorter — or longer — captions in one click',
+    blurb:
+      'Captions came out at whatever length the vision model felt like, and the only way to steer that was to hand-write it into Extra instructions on every dataset. ⚙️ Options on the Captions panel now has a Caption length dial: Concise aims for one short sentence, Detailed for several, Standard leaves the prompt exactly as it was. On 18 real photos with the shipped default vision model that came out at a median of 24 words for Concise, 88 for Standard and 126 for Detailed — a target the model follows loosely, not a word cap, and your own numbers will differ. Concise stays full prose, so a short-captioned dataset still trains on prose families without forcing past the caption-style check, and it is a different axis from the long + short dual captions — use both if you want. Saved per dataset, offered per run on the image bank\'s caption pass too, and your Extra instructions still get the last word. Suggested by djpraxis (Reddit).',
+    to: '/datasets?section=captions&panel=generate',
+  },
+  {
     id: '2026-08-03-review-opens-instantly',
     date: '2026-08-03',
     title: '▶ Review opens instantly, even on a 20 000-image bank',
