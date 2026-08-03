@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import DiagnosticReport from '../common/DiagnosticReport'
 import DockerUpdateInstructions from '../common/DockerUpdateInstructions'
+import PinokioUpdateInstructions from '../common/PinokioUpdateInstructions'
 import { Card, TextField } from './primitives'
 import ResetToDefault from './ResetToDefault'
 import { installMode, zipUpdateHeadline, progressLabel, progressPercent } from './updateStatus'
@@ -81,6 +82,9 @@ function UpdatesCard() {
     // Defense in depth: Docker owns /app as image content. The button is not
     // rendered in this mode, and a stale callback must not POST an apply anyway.
     if (mode === 'docker') return
+    // Same guard for Pinokio: the pull would succeed and the restart would
+    // detach the server from the launcher that owns it.
+    if (mode === 'pinokio') return
     setApplying(true); setPhase('pulling'); setProgress(null)
     try {
       const res = await postJson('/api/update/apply', {})
@@ -104,11 +108,14 @@ function UpdatesCard() {
   // In-app update is possible for a git clone (pull) or a packaged install whose
   // latest release ships a ZIP asset (download + swap). Otherwise: link out.
   const dockerMode = mode === 'docker'
+  const pinokioMode = mode === 'pinokio'
   const canPull = s && s.update_available && (mode === 'git' || mode === 'zip')
   return (
     <Card title="Updates" help={dockerMode
       ? 'Docker installs are updated by pulling the host checkout and rebuilding the image.'
-      : 'Pull the latest version from GitHub and restart — without leaving the app.'}>
+      : pinokioMode
+        ? 'Pinokio starts and stops this app, so it also owns the update: Stop, Update, Start.'
+        : 'Pull the latest version from GitHub and restart — without leaving the app.'}>
       <div className="flex flex-wrap items-center gap-3">
         <button type="button" onClick={check} disabled={checking || applying}
           className="rounded-md border border-border-strong px-3 py-1.5 text-sm font-medium text-content hover:bg-surface-raised disabled:opacity-50">
@@ -172,6 +179,16 @@ function UpdatesCard() {
                 Update available{s.latest ? ` — v${s.latest}` : ''}. The running container cannot replace its own image.
               </p>
               <DockerUpdateInstructions />
+            </div>
+          ) : pinokioMode && s.update_available ? (
+            <div className="space-y-2">
+              <p className="text-content">
+                <span aria-hidden>⬆</span>{' '}
+                {typeof s.behind === 'number' && s.behind > 0
+                  ? `${s.behind} commit${s.behind === 1 ? '' : 's'} behind${s.current_sha && s.remote_sha ? ` (${s.current_sha} → ${s.remote_sha})` : ''}.`
+                  : `Update available${s.latest ? ` — v${s.latest}` : ''}.`}
+              </p>
+              <PinokioUpdateInstructions />
             </div>
           ) : canPull ? (
             <div className="flex flex-wrap items-center gap-3">

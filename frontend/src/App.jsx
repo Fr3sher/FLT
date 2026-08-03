@@ -11,6 +11,7 @@ import ConnectionBanner from './components/common/ConnectionBanner'
 import SetupHealthNotice from './components/setup/SetupHealthNotice'
 import ComfyRecoveryBanner from './components/common/ComfyRecoveryBanner'
 import DockerUpdateInstructions from './components/common/DockerUpdateInstructions'
+import PinokioUpdateInstructions from './components/common/PinokioUpdateInstructions'
 import DatasetPage from './pages/DatasetPage'
 import BankPage from './pages/BankPage'
 import StudioPage from './pages/StudioPage'
@@ -332,6 +333,8 @@ function UpdateBanner() {
     // Docker owns /app as image content. The action is hidden below, but keep a
     // hard guard so an already-bound/stale callback cannot call the endpoint.
     if (installMode(info) === 'docker') return
+    // Pinokio owns start/stop: an in-app restart would orphan the server.
+    if (installMode(info) === 'pinokio') return
     setApplying(true); setPhase('pulling'); setError(null)
     try {
       const res = await postJson('/api/update/apply', {})
@@ -353,6 +356,7 @@ function UpdateBanner() {
 
   if (!info) return null
   const dockerMode = installMode(info) === 'docker'
+  const pinokioMode = installMode(info) === 'pinokio'
   return (
     <div className="mx-auto max-w-5xl px-4 pt-3">
       <div role="status"
@@ -377,6 +381,8 @@ function UpdateBanner() {
             </span>
             {dockerMode ? (
               <DockerUpdateInstructions />
+            ) : pinokioMode ? (
+              <PinokioUpdateInstructions />
             ) : (
               <>
                 <button type="button" onClick={apply}

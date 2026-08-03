@@ -451,6 +451,10 @@ def update_check():
             return jsonify(_git_check_cache['data'])
         gs = updater.git_update_status()
         if gs is not None:
+            # Pinokio: the commits-behind answer stays true and useful (its
+            # Update tab pulls exactly those), only the in-app apply must go.
+            if updater.is_pinokio_runtime():
+                gs.update(updater.pinokio_update_payload())
             _git_check_cache.update(ts=now, data=gs)
             return jsonify(gs)
     now = time.time()
@@ -462,6 +466,8 @@ def update_check():
            'update_available': False, 'url': f'https://github.com/{repo}/releases'}
     if docker_runtime:
         out.update(updater.docker_update_payload())
+    if updater.is_pinokio_runtime():
+        out.update(updater.pinokio_update_payload())
     sha = updater.current_sha()
     if sha:
         out['current_sha'] = sha
@@ -485,7 +491,10 @@ def update_check():
                     zip_size = int(a.get('size') or 0)
                     if 'windows' in name:
                         break
-            if not docker_runtime:
+            # Neither container nor Pinokio install may advertise an in-app
+            # apply just because the release carries a ZIP: both update from
+            # outside this process.
+            if not docker_runtime and not updater.is_pinokio_runtime():
                 out['can_apply'] = bool(zip_size) or any(
                     (a.get('name') or '').lower().endswith('.zip') and a.get('browser_download_url')
                     for a in (j.get('assets') or []))
@@ -518,6 +527,16 @@ def update_apply():
             'ok': False,
             'reason': 'Docker GPU installs must be updated by rebuilding the image.',
             **updater.docker_update_payload(),
+        })
+    # Pinokio owns the process: pulling here would work, but the restart that
+    # follows would detach the server from the launcher that is supposed to
+    # stop and start it. Refuse before touching git.
+    if updater.is_pinokio_runtime():
+        return jsonify({
+            'ok': False,
+            'reason': 'Pinokio installs are updated from the launcher: '
+                      'Stop, then Update, then Start.',
+            **updater.pinokio_update_payload(),
         })
     if updater.is_git_checkout():
         res = updater.apply_update()

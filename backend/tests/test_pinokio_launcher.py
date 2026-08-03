@@ -69,6 +69,25 @@ def test_update_stays_compatible_with_the_in_app_updater():
     assert 'git pull --ff-only' in read('update.js')
 
 
+def test_start_declares_the_runtime_the_updater_keys_off():
+    """Without this the app cannot tell it was launched by Pinokio, and its
+    Updates card offers an in-app restart that would detach the server from the
+    launcher (see updater.is_pinokio_runtime)."""
+    assert 'LDS_RUNTIME: "pinokio"' in read('start.js')
+    updater = (ROOT / 'backend' / 'app' / 'services' / 'updater.py').read_text(encoding='utf-8')
+    assert "PINOKIO_RUNTIME = 'pinokio'" in updater
+
+
+@pytest.mark.parametrize('name', ('install.js', 'start.js'))
+def test_scripts_name_the_pinokio_toolkit_they_need(name):
+    """`requires.bundle` is how Pinokio 8 routes a machine with a missing
+    conda/git/uv to its own setup page instead of failing mid-command. "python"
+    (conda, git, uv, node) — not "ai", which would also pull CUDA and the
+    Visual Studio Build Tools this app never uses."""
+    src = read(name)
+    assert 'requires' in src and 'bundle: "python"' in src
+
+
 def test_reset_does_not_delete_user_data():
     """The stock launcher reset removes the cloned app folder. Here that folder
     holds data/ and config.json, so reset is scoped to the venv."""

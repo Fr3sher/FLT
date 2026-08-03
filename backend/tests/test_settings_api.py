@@ -604,6 +604,74 @@ def test_update_check_docker_reports_manual_rebuild_even_with_zip(
     ]
 
 
+def test_update_check_pinokio_keeps_the_git_answer_but_drops_the_button(
+        client, monkeypatch, _reset_update_cache):
+    """Unlike Docker, a Pinokio install IS a git checkout worth measuring: its
+    Update tab pulls exactly those commits, so "3 commits behind" stays true and
+    useful. Only the in-app apply goes away."""
+    from app.services import updater
+    monkeypatch.setenv('LDS_RUNTIME', 'pinokio')
+    monkeypatch.setattr(updater, 'is_git_checkout', lambda root=None: True)
+    monkeypatch.setattr(updater, 'git_update_status', lambda root=None: {
+        'ok': True, 'is_git': True, 'update_available': True, 'behind': 3,
+        'current_sha': 'aaaaaaa', 'remote_sha': 'bbbbbbb',
+    })
+
+    d = client.get('/api/update/check?force=1').get_json()
+
+    assert d['behind'] == 3 and d['is_git'] is True
+    assert d['install_mode'] == 'pinokio' and d['can_apply'] is False
+    assert d['manual'] is True
+    assert d['instructions'] == [
+        'Stop the app in Pinokio',
+        'Click the Update tab',
+        'Click Start',
+    ]
+
+
+def test_update_check_pinokio_never_advertises_a_zip_apply(
+        client, monkeypatch, _reset_update_cache):
+    """The passive (non-git-aware) path must not hand back can_apply just
+    because the latest release ships a ZIP asset."""
+    import requests
+    from app.services import updater
+    monkeypatch.setenv('LDS_RUNTIME', 'pinokio')
+    monkeypatch.setattr(updater, 'is_git_checkout', lambda root=None: False)
+    monkeypatch.setattr(requests, 'get', lambda *a, **k: _FakeResp(200, {
+        'tag_name': 'v9999.12.31',
+        'assets': [{'name': 'LoRA-Dataset-Studio-windows.zip',
+                    'browser_download_url': 'https://x/win'}],
+    }))
+
+    d = client.get('/api/update/check').get_json()
+
+    assert d['update_available'] is True
+    assert d['install_mode'] == 'pinokio' and d['can_apply'] is False
+
+
+def test_update_apply_pinokio_refuses_before_touching_git(client, monkeypatch):
+    from app.services import updater
+    monkeypatch.setenv('LDS_RUNTIME', 'pinokio')
+    forbidden = lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError('Pinokio apply must refuse before an updater is selected'))
+    monkeypatch.setattr(updater, 'is_git_checkout', forbidden)
+    monkeypatch.setattr(updater, 'apply_update', forbidden)
+    monkeypatch.setattr(updater, 'start_zip_update', forbidden)
+    monkeypatch.setattr(updater, 'schedule_restart', forbidden)
+
+    response = client.post('/api/update/apply')
+    body = response.get_json()
+
+    assert response.status_code == 200
+    assert body['ok'] is False and body['manual'] is True
+    assert body['install_mode'] == 'pinokio' and body['can_apply'] is False
+    assert body['instructions'] == [
+        'Stop the app in Pinokio',
+        'Click the Update tab',
+        'Click Start',
+    ]
+
+
 def test_update_check_same_version_and_cache(client, monkeypatch, _reset_update_cache):
     import requests
     from app.version import APP_VERSION

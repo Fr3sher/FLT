@@ -4,9 +4,12 @@ import assert from 'node:assert/strict';
 import {
   DOCKER_UPDATE_COMMANDS,
   DOCKER_UPDATE_GUIDE_URL,
+  PINOKIO_UPDATE_STEPS,
+  PINOKIO_UPDATE_GUIDE_URL,
   formatMB,
   installMode,
   isDockerInstall,
+  isPinokioInstall,
   zipUpdateHeadline,
   progressPercent,
   progressLabel,
@@ -39,6 +42,37 @@ test('docker mode is a safety boundary even if other apply flags are present', (
   assert.equal(isDockerInstall(contradictory), true);
   assert.equal(installMode(contradictory), 'docker');
   assert.equal(isDockerInstall({ install_mode: 'git' }), false);
+});
+
+test('a Pinokio install outranks its own git checkout', () => {
+  // The payload really does carry is_git/behind (its Update tab pulls those
+  // commits); reading it as plain 'git' would put the stranding button back.
+  const pinokio = {
+    ok: true,
+    install_mode: 'pinokio',
+    is_git: true,
+    behind: 3,
+    update_available: true,
+  };
+  assert.equal(isPinokioInstall(pinokio), true);
+  assert.equal(installMode(pinokio), 'pinokio');
+  assert.equal(installMode({ ...pinokio, can_apply: true }), 'pinokio');
+  assert.equal(isPinokioInstall({ install_mode: 'git' }), false);
+  assert.equal(isDockerInstall(pinokio), false);
+});
+
+test('pinokio update steps are three clicks, not shell commands', () => {
+  assert.deepEqual(PINOKIO_UPDATE_STEPS, [
+    'Stop the app in Pinokio',
+    'Click the Update tab',
+    'Click Start',
+  ]);
+  assert.equal(Object.isFrozen(PINOKIO_UPDATE_STEPS), true);
+  for (const step of PINOKIO_UPDATE_STEPS) {
+    assert.doesNotMatch(step, /git |docker |pip /,
+      'this install shape never opens a terminal — do not name commands');
+  }
+  assert.match(PINOKIO_UPDATE_GUIDE_URL, /#option-5--pinokio-one-click-any-os$/);
 });
 
 test('docker update instructions are exact, ordered and point to the GPU guide', () => {

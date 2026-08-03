@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-pinokio-update-hands-back',
+    date: '2026-08-03',
+    title: 'Installed from Pinokio? Updates now tell you the right three clicks',
+    blurb:
+      'Pinokio starts and stops the app itself, so pressing "Update & restart" in Settings would have relaunched the server in a window Pinokio no longer follows — it would show the app as stopped while the old one still held the port, and Start would have opened a second one on the same datasets. The Updates card and the update banner now show Stop, Update, Start instead of that button, while still telling you how many commits behind you are. Every other install shape is unchanged.',
+    to: '/settings/maintenance',
+  },
+  {
     id: '2026-08-03-seedvr2-tiled-highres',
     date: '2026-08-03',
     title: 'Big SeedVR2 upscales no longer have to fit on your card in one piece',

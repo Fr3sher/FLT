@@ -46,10 +46,12 @@ python backend/run.py
 `https://github.com/perfectgf/lora-dataset-studio.git`, then **Install** and
 **Start**. Pinokio creates the environment (`env/`), installs the core
 requirements and opens Studio on the port it really bound. Two things to know:
-the optional tools are still connected from **Setup**, and updates should go
-through Pinokio's **Update** tab — it runs the same `git pull --ff-only` as the
-in-app updater, but the in-app **Update & restart** button relaunches the server
-in a window Pinokio no longer tracks.
+the optional tools are still connected from **Setup**, and updates go through
+Pinokio's **Update** tab — it runs the same `git pull --ff-only` as the in-app
+updater. You do not have to remember that last part: the app recognises a
+Pinokio launch and its Updates card shows *Stop → Update → Start* (with how many
+commits behind you are) instead of the **Update & restart** button, which would
+relaunch the server in a window Pinokio no longer tracks.
 
 **Docker (API-only):** `cp .env.example .env`, then `docker compose up --build`.
 

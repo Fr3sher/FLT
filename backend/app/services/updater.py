@@ -58,6 +58,42 @@ def docker_update_payload() -> dict:
         'instructions': list(DOCKER_UPDATE_INSTRUCTIONS),
     }
 
+
+# A Pinokio install (start.js sets LDS_RUNTIME) is a perfectly ordinary git
+# checkout — the tree updates the same way — but the RESTART is not ours to do.
+# `schedule_restart` relaunches through a detached helper in its own console:
+# under Pinokio the daemon shell would see the server exit and mark the app
+# stopped, while an untracked server kept the port. Pressing Start then boots a
+# SECOND server on the next free port, against the same data folder. So the
+# pull is handed back to Pinokio, whose Update tab runs the same
+# `git pull --ff-only` and whose Start owns the process.
+PINOKIO_RUNTIME = 'pinokio'
+PINOKIO_UPDATE_INSTRUCTIONS = (
+    'Stop the app in Pinokio',
+    'Click the Update tab',
+    'Click Start',
+)
+
+
+def is_pinokio_runtime() -> bool:
+    """Whether this process was launched by the Pinokio launcher (start.js)."""
+    return os.environ.get('LDS_RUNTIME', '').strip().lower() == PINOKIO_RUNTIME
+
+
+def pinokio_update_payload() -> dict:
+    """Structured manual-update contract shared by check/apply endpoints.
+
+    Same shape as :func:`docker_update_payload`, so the frontend has one
+    contract for "this install updates elsewhere" rather than two. Unlike
+    Docker, this payload is merged ON TOP of the real git status: how many
+    commits behind the tree is stays true and useful — only the button goes."""
+    return {
+        'install_mode': 'pinokio',
+        'can_apply': False,
+        'manual': True,
+        'instructions': list(PINOKIO_UPDATE_INSTRUCTIONS),
+    }
+
 # Top-level entries the ZIP update must NEVER overwrite or delete: user state and
 # the live runtime. A real release ZIP contains none of these (it ships only the
 # app source + built frontend + launcher), so this guard is defense in depth — it

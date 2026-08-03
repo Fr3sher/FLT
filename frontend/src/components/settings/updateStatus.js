@@ -5,6 +5,11 @@
    - 'docker'      a container image: the host checkout must be pulled and the
                    image rebuilt; files inside the running container are never
                    replaced by the in-app updater.
+   - 'pinokio'     launched by the Pinokio launcher: the tree is a git checkout
+                   and updates the same way, but the RESTART belongs to Pinokio.
+                   Updating here would relaunch the server detached from the
+                   launcher, which would then show the app as stopped while an
+                   untracked one held the port.
    - 'git'         a git checkout: "Update & restart" fast-forwards (unchanged).
    - 'zip'         a packaged install whose latest release ships a ZIP asset: the
                    button downloads + swaps the release, with a progress bar.
@@ -26,6 +31,22 @@ export function isDockerInstall(s) {
   return s?.install_mode === 'docker'
 }
 
+// Pinokio's own three clicks. Not shell commands — the user never opens a
+// terminal in this install shape, so naming `git pull` here would send them
+// looking for one. Pinokio's Update tab runs the same `git pull --ff-only`.
+export const PINOKIO_UPDATE_STEPS = Object.freeze([
+  'Stop the app in Pinokio',
+  'Click the Update tab',
+  'Click Start',
+])
+
+export const PINOKIO_UPDATE_GUIDE_URL =
+  'https://github.com/perfectgf/lora-dataset-studio#option-5--pinokio-one-click-any-os'
+
+export function isPinokioInstall(s) {
+  return s?.install_mode === 'pinokio'
+}
+
 export function formatMB(bytes) {
   if (!bytes || bytes <= 0) return ''
   const mb = bytes / 1e6
@@ -38,6 +59,9 @@ export function installMode(s) {
   // writable git checkout or ZIP asset. Never surface the in-app apply action in
   // a container just because /app happens to contain .git metadata.
   if (isDockerInstall(s)) return 'docker'
+  // Before the is_git branch ON PURPOSE: a Pinokio install IS a git checkout,
+  // and answering 'git' would put back the button that strands the launcher.
+  if (isPinokioInstall(s)) return 'pinokio'
   if (s.ok === false) return 'unknown'
   if (s.is_git) return 'git'
   if (s.can_apply) return 'zip'
