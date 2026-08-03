@@ -391,13 +391,32 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const layoutRef = useRef(layoutByLane);
   useEffect(() => { layoutRef.current = layoutByLane; }, [layoutByLane]);
 
+  // ⊕ / ⤢ What the gesture in flight would DO on release: a merge target, or
+  // "this one is on its way out of its group". Feedback only — the decision is
+  // taken again from the same functions at pointerup.
+  const [dropHint, setDropHint] = useState(null);
+
+  // A lane has to be big enough to hold its pinned pictures too, or Fit would
+  // crop one off the board with no way back to it. Measured on the STRIPS: a
+  // group is wider than any of its members and cropping it would put a picture
+  // out of reach with no way back.
+  const world = useMemo(() => stackLanes(placed.map((e) => {
+    const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
+    return {
+      ...e,
+      width: Math.max(e.graph?.width || 0, ext.width),
+      height: Math.max(e.graph?.height || 0, ext.height),
+    };
+  })), [placed, layoutByLane]);
+
   /* 🧬 GENERATION PROVENANCE — a blended picture descends from SEVERAL pills at
      once, and they are routinely in different lanes (blending across datasets is
      the point of doing it from the board). A cross-lane edge cannot live in a
      lane's own <svg>, so these are computed in WORLD units here and drawn once,
      under everything (see the layer below). The head LoRA keeps the ordinary
      image → pill edge its lane already draws; only the other parents are added,
-     or one pair would carry two connectors. */
+     or one pair would carry two connectors. Declared after `world` — the
+     dependency array reads it at render time, not lazily inside the memo. */
   const provenance = useMemo(() => {
     const nodes = [];
     for (const lane of world.lanes) {
@@ -416,23 +435,6 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     }
     return out;
   }, [provenance]);
-  // ⊕ / ⤢ What the gesture in flight would DO on release: a merge target, or
-  // "this one is on its way out of its group". Feedback only — the decision is
-  // taken again from the same functions at pointerup.
-  const [dropHint, setDropHint] = useState(null);
-
-  // A lane has to be big enough to hold its pinned pictures too, or Fit would
-  // crop one off the board with no way back to it. Measured on the STRIPS: a
-  // group is wider than any of its members and cropping it would put a picture
-  // out of reach with no way back.
-  const world = useMemo(() => stackLanes(placed.map((e) => {
-    const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
-    return {
-      ...e,
-      width: Math.max(e.graph?.width || 0, ext.width),
-      height: Math.max(e.graph?.height || 0, ext.height),
-    };
-  })), [placed, layoutByLane]);
 
   // The latest placement, for the pointer handlers (which must not re-bind on
   // every board change just to read a card's current position).

@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-opens-again-hotfix',
+    date: '2026-08-03',
+    title: 'The LoRA Canvas opens again — v2026.08.03 broke it for a few minutes',
+    blurb:
+      'If you updated to v2026.08.03 in the short window it was live, the Canvas page crashed on load (“An unexpected error occurred”). The provenance-edges feature read a value before it existed. Fixed — nothing else in that release was affected, and no data was touched.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-canvas-blend-provenance',
     date: '2026-08-03',
     title: '🧬 A blended picture now shows every checkpoint it came from',
