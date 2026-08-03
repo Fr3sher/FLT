@@ -752,9 +752,10 @@ is deliberately not the same as *empty*.
 
 ### Moving a folder to another drive
 
-Three roots can be pointed anywhere: **Dataset images root**
-(`paths.dataset_images_root`), **Cloud run staging** (`paths.cloud_runs_dir`) and
-the **Checkpoint store** (`paths.checkpoints_dir`). All three default to **empty →
+Four roots can be pointed anywhere: **Dataset images root**
+(`paths.dataset_images_root`), **Cloud run staging** (`paths.cloud_runs_dir`),
+the **Checkpoint store** (`paths.checkpoints_dir`) and **Video datasets**
+(`paths.video_datasets_dir`). All four default to **empty →
 a folder inside the app's data directory**; the field's *Reset to default* gives
 that implicit state back rather than writing today's path in.
 
@@ -778,6 +779,8 @@ leaves the app pointing at a half-filled folder.
 - **Dataset images root** → `paths.dataset_images_root`. Where dataset images are stored. Default **empty → `<data dir>/datasets`**. This folder (and every dataset folder under it) is refused as an **image bank** source: a bank points at a live folder and can delete from it, so the two must never share files — see *Using the app → A bank and a dataset never share files*. Moving this root onto a folder an existing bank already uses is not blocked here, but that bank will say so the next time you open it, and its 🗑 Delete rejected will be refused.
 - **Cloud run staging** → `paths.cloud_runs_dir`. The working area of cloud training runs: the exported dataset copy, the sample images and the mirrored log, one `run_<id>` folder per run. Default **empty → `<data dir>/cloud_runs`**. This is the folder that grows to tens of gigabytes, and the one a cleanup empties.
 - **Checkpoint store** → `paths.checkpoints_dir`. Where the `.safetensors` your cloud runs produce are kept, one `run_<id>` folder per run. Default **empty → `<data dir>/checkpoints`**. **No cleanup in the app ever removes a file from here** — only you can, from the Checkpoints panel or by emptying the trash.
+- **Video datasets** → `paths.video_datasets_dir`. The flat folders of `.mp4` clips (plus their homonym `.txt` captions) that a video bank produces when you promote a selection. Default **empty → `<data dir>/video_datasets`**. **This is where the video lane actually uses disk.** A video bank itself stores almost nothing — only timestamps and one small thumbnail per detected shot — because cutting a clip means re-encoding it, and that is paid once, at promotion, for the clips you kept.
+- **Video banks (working data)** → no path setting; it follows the data directory. Holds the shot thumbnails only: never your source videos, which a bank references in place and never writes to, and never the clips, which do not exist until you promote them.
 
 ### Why checkpoints have their own folder
 
@@ -1019,6 +1022,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
 | `paths.cloud_runs_dir` | Working area of cloud training runs (dataset copy, samples, logs). Empty string defaults to `<data dir>/cloud_runs`. |
 | `paths.checkpoints_dir` | Durable store for the checkpoints cloud runs produce. Empty string defaults to `<data dir>/checkpoints`. No cleanup ever removes a file from it. |
+| `paths.video_datasets_dir` | Where promoted video datasets are written — a flat folder of `.mp4` clips with homonym `.txt` captions per dataset. Empty string defaults to `<data dir>/video_datasets`. |
 | `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still be at most 16 Mi-pixels and 8192 px per side; a larger one is rejected and must be converted or resized before import. Not retroactive. Editable in Settings → Captioning & quality. |
 | `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The 16 Mi-pixel / 8192 px-per-side input limit applies to every mode. Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
