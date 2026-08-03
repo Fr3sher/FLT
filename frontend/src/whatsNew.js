@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-phone-layout-full-width',
+    date: '2026-08-03',
+    title: 'The dataset page uses the whole screen again on a phone',
+    blurb:
+      'On a phone (and in the installed app), the dataset page drew everything at about three quarters of the screen width — the header bar, the section chips, every card — with a dead strip down the right-hand side. Nothing was cut off and nothing looked broken up close, which is what made it hard to place: the culprit was a one-pixel, invisible label that the horizontal section rail was failing to keep inside itself, which stretched the page wider than the screen and made the browser shrink the whole thing to fit. The rail now holds its contents, so the page measures the width of your screen and uses it. The Settings and Guide chip rails got the same treatment before they could catch it.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-07-captions-say-who-wrote-them',
     date: '2026-08-07',
     title: 'Every caption now says who wrote it',
