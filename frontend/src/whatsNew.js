@@ -48,6 +48,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-gallery-lightbox-upscale-improve',
+    date: '2026-08-04',
+    title: 'Upscale & improve is now in the checkpoint gallery — the screen the result lands on',
+    blurb:
+      'Yesterday ✨ Upscale & improve arrived on the ◉ LoRA Canvas lightbox. It was missing from the one place an improvement actually appears: a checkpoint’s gallery. Open any picture from a pill’s 🖼 gallery or from a run card and the button is there, next to ⬇ Download — the same pass, the same choice between Klein (re-renders detail and texture) and SeedVR2 (resolves detail, keeps the look), and the same quote of the instruction Klein is about to send. It is the same action on the same picture as on the board, wired once rather than twice, so the two screens can never start behaving differently. The original is never touched: the improvement arrives as its own image in that very gallery, beside the picture it came from, ready to compare, download or pin onto the board. One honest limit — the pass takes minutes and a gallery left open does not refresh by itself, so close it and open it again to find the new picture waiting at the top.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-04-canvas-drop-keeps-your-view',
+    date: '2026-08-04',
+    title: 'Arranging the canvas no longer throws your framing away',
+    blurb:
+      'Park a render up beside another dataset’s lane, let go — and the whole board zoomed out from under you, because it had just become bigger. Every time you tidied, the canvas re-framed the thing you were tidying, and the further you placed something the harder it kicked. From now on, moving anything — a pinned picture or a run card — means you have taken the view over: the board keeps the zoom and the position you chose and never re-frames itself again. ✦ Fit is still one click away for when you do want the whole board back, which is the difference between an offer and an interruption. A board you have never arranged still opens fitted to your screen, exactly as before.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-krea-edit-takes-an-extra-angle',
     date: '2026-08-03',
     title: 'Krea 2 Edit takes a second image — add it in the edit dialog, and use it to compose',
@@ -59,7 +75,7 @@ export const WHATS_NEW = [
     date: '2026-08-03',
     title: 'Pinned images go anywhere on the canvas, not just below and right of their run',
     blurb:
-      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. Three things came with it. ✦ Tidy up is the way home — it brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart — and it is no longer greyed out on a board where only pictures have been moved, which is exactly when you need it. The board no longer re-zooms under your finger while you drag something past its edge; it settles once, when you let go. And a strip of grouped pictures now draws ONE line back to each checkpoint it came from instead of one per picture, so a long link stays readable.',
+      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. Three things came with it. ✦ Tidy up is the way home — it brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart — and it is no longer greyed out on a board where only pictures have been moved, which is exactly when you need it. The board no longer re-zooms under your finger while you drag something past its edge — nor when you let go of it (see the entry above). And a strip of grouped pictures now draws ONE line back to each checkpoint it came from instead of one per picture, so a long link stays readable.',
     to: '/canvas',
   },
   {

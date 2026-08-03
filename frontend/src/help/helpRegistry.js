@@ -579,7 +579,11 @@ const TOPICS = [
      'tidy up', 'reset the layout', 'positions', 'long press', 'pick up a card',
      'datasets filter', 'filter is collapsed', 'filter is folded',
      'where is the dataset list', 'show fewer datasets',
-     'my board keeps moving', 'new run moved everything', 'organise runs'],
+     'my board keeps moving', 'new run moved everything', 'organise runs',
+     // "the board zoomed out when I let go" — the auto-fit at the drop, which a
+     // drop now switches off for good. People search for the SYMPTOM.
+     'board zooms out', 'view jumps', 'board re-frames itself', 'zoom keeps resetting',
+     'lost my zoom', 'stop the board resizing', 'auto fit', 'fit keeps happening'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-generate', 'Generate from the board',
     ['generate from the canvas', 'generate on the board', 'test a checkpoint from the canvas',
@@ -1308,16 +1312,21 @@ const TOPICS = [
      'original pending', 'original undecided', 'automatic unkeep', 'keep both',
      'bulk keep', 'batch keep', 'nothing deleted', 'do not delete'],
     '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
-  // ✨ in the CANVAS lightbox. Its own topic, not a variant of the dataset one:
-  // the result lands somewhere else (the checkpoint's gallery, not the curation
-  // grid), and "where did my upscale go" is the question this button actually
-  // raises on a screen where nothing moves when you press it.
-  action('action-canvas-improve', 'Upscale a picture straight from the LoRA Canvas',
+  // ✨ in the CANVAS lightbox AND in the checkpoint / run gallery's. Its own
+  // topic, not a variant of the dataset one: the result lands somewhere else
+  // (the checkpoint's gallery, not the curation grid), and "where did my upscale
+  // go" is the question this button actually raises on a screen where nothing
+  // moves when you press it. ONE topic for both surfaces on purpose — it is the
+  // same pass on the same row, and two topics would be two answers to drift.
+  action('action-canvas-improve', 'Upscale a picture from the board or its gallery',
     ['canvas', 'board', 'improve', 'upscale', 'upscale & improve', 'enhance', 'klein',
      'seedvr2', 'sharpen', 'detail', 'resolution', 'megapixels', 'lightbox',
      'pinned image', 'generated image', 'where did it go', 'result', 'gallery',
      'checkpoint gallery', 'improve from canvas', 'no improve button',
-     'improve an improvement', 'reference face', 'retry', 'failed upscale'],
+     'improve an improvement', 'reference face', 'retry', 'failed upscale',
+     'improve from the gallery', 'upscale from the gallery', 'run gallery',
+     'gallery lightbox', 'improve a test image', 'improve a render',
+     'gallery did not update', 'upscale not showing'],
     '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
