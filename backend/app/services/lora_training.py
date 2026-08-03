@@ -57,6 +57,11 @@ KREA_TRAIN_RESOLUTION = 1024
 # predictable cadence bounds disk use while preserving restartability.
 FULL_TRANSFORMER_SAVE_EVERY = 250
 FULL_TRANSFORMER_SAMPLE_EVERY = 250
+# How many dense saves live side by side. Named (rather than the literal it used
+# to be) because the Hugging Face storage pre-check multiplies by it: the
+# forecast and the job config must never disagree about how many ~26 GB objects
+# a run produces.
+FULL_TRANSFORMER_MAX_STEP_SAVES = 1
 FULL_TRANSFORMER_BASE = 'krea/Krea-2-Raw'
 FULL_TRANSFORMER_VAE = 'Qwen/Qwen-Image-2512'
 
@@ -4600,7 +4605,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'save': {
                         'dtype': 'bf16',
                         'save_every': FULL_TRANSFORMER_SAVE_EVERY,
-                        'max_step_saves_to_keep': 1,
+                        'max_step_saves_to_keep': FULL_TRANSFORMER_MAX_STEP_SAVES,
                     },
                     'datasets': [{
                         'folder_path': dataset_folder,

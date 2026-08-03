@@ -217,6 +217,88 @@ def test_full_launch_rejects_slider_and_missing_hf_token(
         assert ct.CloudTrainingRun.query.count() == 0
 
 
+class _FullAccountHfApi(_FakeHfApi):
+    """The same dense token, on an account whose PRIVATE storage is already
+    full — the state that killed run #146 at step 2750/3000."""
+
+    def list_models(self, author=None, expand=None):
+        repo = SimpleNamespace(id=f'{author}/lds-base-h1111', private=True,
+                               last_modified=None)
+        repo.usedStorage = 95 * 1000 ** 3
+        return [repo]
+
+    def list_datasets(self, author=None, expand=None):
+        return []
+
+
+def test_full_launch_refuses_before_renting_when_hf_storage_is_full(
+        ct, app, dataset_id, monkeypatch, tmp_path):
+    """The pre-check has to fire BEFORE the reservation row exists: the point is
+    to lose nothing, and every later refusal has already cost something."""
+    api = _FullAccountHfApi(tmp_path)
+    monkeypatch.setattr(ct, '_make_hf_api', lambda token: api)
+    with app.app_context():
+        with pytest.raises(ValueError) as excinfo:
+            ct.launch_cloud_training(
+                'local', dataset_id, train_type='krea', variant='base',
+                training_mode='full_transformer')
+        message = str(excinfo.value)
+        assert message.startswith('HF_STORAGE_FULL: ')
+        assert 'lds-base-h1111' in message
+        assert ct.CloudTrainingRun.query.count() == 0
+        assert api.created == []
+
+
+def test_full_launch_honours_the_storage_override_and_stamps_it(
+        ct, app, dataset_id, monkeypatch, tmp_path):
+    """The ceiling is an estimate, so 'Train anyway' must exist — and be
+    replayed by an automatic retry rather than re-litigated."""
+    api = _FullAccountHfApi(tmp_path)
+    monkeypatch.setattr(ct, '_make_hf_api', lambda token: api)
+    with app.app_context():
+        result = ct.launch_cloud_training(
+            'local', dataset_id, train_type='krea', variant='base',
+            training_mode='full_transformer', allow_hf_storage=True)
+        run = ct.db.session.get(ct.CloudTrainingRun, result['run_id'])
+        params = json.loads(run.train_params)
+        assert params['allow_hf_storage'] is True
+        assert ct._confirmation_flags(params)['allow_hf_storage'] is True
+
+
+def test_the_storage_precheck_never_reaches_for_the_general_token(
+        ct, app, dataset_id, monkeypatch, tmp_path):
+    """The pre-check measures with HF_CLOUD_TOKEN and stays blind otherwise.
+
+    Reading the general HF_TOKEN would give a better forecast on a dense token
+    too narrow to list its namespace — and it is deliberately NOT done: dense
+    runs are cut off from that credential, and widening a least-privilege
+    boundary to sharpen an estimate is the wrong trade. Pinned here so the
+    blind spot stays a decision rather than becoming a regression."""
+    dense = _FakeHfApi(tmp_path)                     # no list_models at all
+    general = _FullAccountHfApi(tmp_path)            # would have said "full"
+    monkeypatch.setattr(
+        ct, '_make_hf_api',
+        lambda token: general if token == 'hf-general-must-not-reach-dense' else dense)
+    with app.app_context():
+        result = ct.launch_cloud_training(
+            'local', dataset_id, train_type='krea', variant='base',
+            training_mode='full_transformer')
+        assert result['run_id']
+
+
+def test_full_launch_is_not_blocked_by_an_unmeasurable_account(
+        ct, app, dataset_id, monkeypatch, tmp_path):
+    """_FakeHfApi has no list_models at all — the Hub could not be measured, and
+    an unmeasurable number must never lock a user out of their own GPU."""
+    api = _FakeHfApi(tmp_path)
+    monkeypatch.setattr(ct, '_make_hf_api', lambda token: api)
+    with app.app_context():
+        result = ct.launch_cloud_training(
+            'local', dataset_id, train_type='krea', variant='base',
+            training_mode='full_transformer')
+        assert result['run_id']
+
+
 def test_full_continue_and_seeded_retry_are_refused(ct, app, dataset_id):
     with app.app_context():
         done = ct.CloudTrainingRun(

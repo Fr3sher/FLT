@@ -686,6 +686,59 @@ Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token
 | **Verified hosts only** | `cloud.verified_only` | **on** | toggle | Restrict to vast.ai's verified hosts (the historical, safer behaviour). |
 | **Secure Cloud only** | `cloud.secure_cloud_only` | **off** | toggle | Restrict to vast.ai's *datacenter* (Secure Cloud) tier — usually narrows the market and raises the price, so it's opt-in. |
 
+### Hugging Face storage
+
+Full-model (dense) cloud training does not download its result: each ~26 GB
+checkpoint is pushed straight from the pod into a **private** Hugging Face repo,
+and custom training bases are cached there too (one `lds-base-<hash>` repo per
+distinct base). Both eat the same **private storage allowance** — and the push
+happens at the *end* of the run, so an allowance that is already full turns into
+a `403 … private repository storage limit reached` after the GPU is paid for.
+
+The **Hugging Face storage** card is the answer to that. Nothing here runs on
+page load; **Check storage** is an explicit click.
+
+- **What it measures.** Hugging Face publishes **no quota endpoint**. The card
+  therefore sums the `usedStorage` the Hub reports for each of your private
+  repos (models and datasets) — the same number you can read on
+  huggingface.co — and compares it with what one dense run needs: one checkpoint
+  (sized from what your **past runs actually delivered**, else ~26 GB) × the
+  saves kept, plus a margin.
+- **What it cannot know.** The **ceiling**. The published plan table says 100 GB
+  of private storage for a free account and 1 TB for PRO, but a real refusal has
+  been observed well below the free figure. Everything the card says about
+  "allowance" and "room left" is therefore an **estimate**, clearly labelled as
+  one, and the launch refusal it produces is always confirmable — *Train anyway*
+  exists on purpose. Storage is also billed over git history: a superseded
+  revision keeps counting until a repo's history is squashed, which this
+  estimate does not model.
+- **One blind spot, on purpose.** The *launch* pre-check measures with the
+  dedicated `HF_CLOUD_TOKEN` only — dense runs are deliberately cut off from the
+  general `HF_TOKEN`, and reading it here to sharpen an estimate would widen
+  that boundary. So a fine-grained cloud token too narrow to *list* its delivery
+  namespace makes the forecast **unknown**, and unknown never blocks a launch.
+  The card below uses `HF_TOKEN` and stays fully sighted, so **Check storage**
+  shows the whole picture even when the launch forecast could not.
+- **Custom-base caches.** Every `lds-base-*` repo is listed with its size, the
+  local file it mirrors, and the last cloud run that used it. Each is a **cache**:
+  the local file is the source of truth, so deleting one costs a single
+  re-upload the next time you launch on that base — *unless* the local file is
+  gone, in which case the card says **Only copy** and the confirmation says so
+  too. **Delete all** sweeps them in one go and reports partial failures.
+
+| Setting | Key | Default | Notes |
+|---|---|---|---|
+| **Private storage allowance (GB)** | `cloud.full_transformer.private_storage_limit_gb` | `0` | What the pre-check compares against. `0` = infer from the plan documented by Hugging Face (100 GB free / 1 TB PRO) — a guess, as above. Put your account's real ceiling here to make the check exact. |
+
+**When a run hits the wall anyway.** A dense run whose checkpoint push is refused
+for storage now says so: the run card reads *HF private storage full — free space
+then resume from the kept pod*, and the run closes as **error_pod_kept** — the
+paid pod is **kept**, not destroyed, for the recovery window (`cloud.max_runtime_minutes`
+after the failure). Free space here, then recover the checkpoint from the pod
+(its URL is on the run card) and use **Verify HF delivery** on the Runs page once
+it lands. Nothing is auto-resumed: a dense checkpoint is never downloaded to your
+machine, so the pod is the only place it exists.
+
 ### Advanced options (per run)
 
 These live under **⚙️ Advanced options** in a dataset's training panel — rank, resolution, save/sample cadence, optimizer, scheduler, EMA, LoKr and more. Each carries its own inline **Why/How** note, so they aren't repeated here. Two are worth calling out because of a caveat.
@@ -817,6 +870,8 @@ These have no UI control — they're for advanced users editing `config.json` by
 | `cloud.disk_gb` | `60` | Instance disk (base model + dataset + checkpoints). |
 | `cloud.min_vram_gb` | `{zimage:24, sdxl:16, krea:24, flux2klein:32}` | Minimum VRAM **per family**. flux2klein uses 32 (the 9B is the cloud-first lane; a 32 GB pod also trains the 4B). |
 | `cloud.onstart` | `''` | Optional startup command for the raw-image fallback. |
+| `cloud.full_transformer.storage_margin_gb` | `20` | Headroom added on top of *checkpoint × saves kept* in the Hugging Face storage pre-check. |
+| `cloud.full_transformer.checkpoint_size_gb` | `0` | Size of one dense checkpoint used by that pre-check. `0` = measure it from what past dense runs really delivered, else ~26 GB. |
 
 **Quality-tool interpreters and models:**
 
@@ -910,6 +965,9 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `cloud.min_reliability` | vast.ai host-reliability floor (default `0.98`, 0.9–0.999); lower surfaces cheaper, riskier hosts. |
 | `cloud.verified_only` | Restrict to vast.ai verified hosts (default `true`). |
 | `cloud.secure_cloud_only` | Restrict to vast.ai's Secure Cloud (datacenter) tier (default `false`; narrows the market, raises price). |
+| `cloud.full_transformer.private_storage_limit_gb` | Private Hugging Face allowance the dense pre-check compares against (default `0` = infer from the documented plan, an estimate). Also in Settings → Training. |
+| `cloud.full_transformer.storage_margin_gb` | Headroom added to that forecast (default `20`). |
+| `cloud.full_transformer.checkpoint_size_gb` | Dense checkpoint size used by that forecast (default `0` = measured from past runs, else ~26 GB). |
 | `face_scoring.python` | Python interpreter used to run the InsightFace subprocess (empty = current interpreter). |
 | `face_scoring.models_root` | Directory where InsightFace model weights are stored/downloaded. |
 | `face_scoring.green` | Similarity score threshold (0–1) above which an image is flagged "green" (strong match). |

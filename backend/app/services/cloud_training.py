@@ -101,6 +101,11 @@ _CONFIRMATION_FLAGS = (
     # like the caption flags, and stamped into train_params so a thin cloud run is
     # honestly explainable in the Runs hub.
     'allow_not_ready',
+    # « Train anyway » on the Hugging Face private-storage pre-check. Replayed
+    # like the others: the ceiling the check compares against is an ESTIMATE, so
+    # a user who already judged their own account must not have an automatic
+    # retry blocked by the same guess.
+    'allow_hf_storage',
 )
 
 
@@ -397,6 +402,79 @@ def _validate_full_transformer_token(token, _api=None):
             'HF_CLOUD_TOKEN cannot read krea/Krea-2-Raw; accept its licence '
             'with the same Hugging Face account and grant this token access') from None
     return api, str(namespace), broad_access
+
+
+def _dense_whoami(api) -> dict:
+    """``whoami`` as a plain dict, or {} — used only to read ``isPro`` for the
+    storage-allowance ESTIMATE. Never fatal: a missing plan just means the
+    forecast falls back to the free-tier figure."""
+    try:
+        who = api.whoami()
+    except Exception:
+        return {}
+    return who if isinstance(who, dict) else {}
+
+
+# The Hub's refusal when an account's PRIVATE allowance is exhausted. Matched on
+# the pod's job info and its log because that 403 arrives mid-training, on the
+# checkpoint push — the run is otherwise perfectly healthy, and the generic
+# "remote job error" it used to produce sent people looking at the GPU.
+_HF_STORAGE_FULL_SIGNS = (
+    'private repository storage limit',
+    'private storage limit',
+    'storage limit reached',
+    'storage quota exceeded',
+    'exceeded your storage quota',
+)
+
+
+def _hf_storage_full(text) -> bool:
+    low = str(text or '').lower()
+    return any(sign in low for sign in _HF_STORAGE_FULL_SIGNS)
+
+
+def _assert_dense_storage_headroom(namespace, dense_api, allow_override):
+    """Refuse a dense launch whose delivery plainly will not fit in the
+    namespace's PRIVATE Hugging Face storage — before anything is rented.
+
+    Measured with HF_CLOUD_TOKEN and ONLY with it. Falling back to the general
+    HF_TOKEN would measure more accounts, and it was tried — but dense runs are
+    deliberately cut off from that credential (see _hf_token_for_mode, and the
+    launch test that asserts no dense path ever touches it), and a read that
+    widens a least-privilege boundary to improve an ESTIMATE is a bad trade. The
+    quota that matters is the delivery namespace's anyway, which is what this
+    token is scoped to. The cost is a real blind spot: a token that cannot list
+    that namespace makes the forecast unknown, and unknown never blocks. The
+    Settings ▸ Training storage card, which manages the caches rather than the
+    delivery, does use HF_TOKEN and stays fully sighted.
+    """
+    from . import hf_storage
+    forecast = hf_storage.dense_storage_forecast(
+        namespace, None, keeps=lt.FULL_TRANSFORMER_MAX_STEP_SAVES,
+        who=_dense_whoami(dense_api), _api=dense_api)
+    if forecast.get('fits') is False and not allow_override:
+        raise ValueError(hf_storage.storage_refusal_message(forecast))
+    return forecast
+
+
+def _dense_remote_failure(status, info, log_text) -> tuple:
+    """(phase_detail, error) for a dense run whose remote job ended badly.
+
+    Every branch here is RECOVERABLE by construction — the caller is
+    _keep_full_transformer_pod, which closes as ``error_pod_kept`` and does not
+    destroy the instance. Split out of the poll loop so the storage verdict is
+    testable without driving a whole monitor.
+    """
+    if _hf_storage_full(f'{info}\n{log_text}'):
+        return ('HF private storage full — free space then resume from the '
+                'kept pod',
+                'Hugging Face refused the checkpoint push: your PRIVATE storage '
+                'allowance is full. Free space in Settings ▸ Training ▸ Hugging '
+                'Face storage (the lds-base-* caches are re-pushable), then '
+                'recover the checkpoint from the kept pod — it is held for the '
+                'recovery window, not destroyed.')
+    return (f'Remote dense job unexpectedly {status}; pod kept',
+            f'remote job {status}; pod kept for recovery')
 
 
 def full_transformer_token_status(token, _api=None) -> dict:
@@ -1439,6 +1517,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                           allow_caption_mismatch=False, allow_uncaptioned=False,
                           allow_caption_quality=False,
                           allow_unverified_weights=False, allow_not_ready=False,
+                          allow_hf_storage=False,
                           gpu_name=None, resume_ckpt_path=None, resume_step=None,
                           auto_retry_count=0, auto_retry_of=None,
                           strict_gpu=False, train_settings_snapshot=_UNSET,
@@ -1542,13 +1621,23 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         # Validate token type/scopes and real Krea-base readability before the
         # reservation row exists. Repository creation later proves write
         # access before any monitor can rent a pod.
-        _validate_full_transformer_token(cfg.secret('HF_CLOUD_TOKEN'))
+        dense_api, delivery_namespace, _broad = _validate_full_transformer_token(
+            cfg.secret('HF_CLOUD_TOKEN'))
+        # ...and then the OTHER wall run #146 hit, after hours of paid GPU: the
+        # delivery namespace's private storage. One dense save is ~26 GB and the
+        # push happens at the END of the run, so a full private allowance is a
+        # 403 nobody sees coming. Measure it here, before a pod is rented.
+        # Deliberately confirmable and fail-open — the exact plan ceiling is not
+        # knowable through the API (see hf_storage's module note).
+        _assert_dense_storage_headroom(delivery_namespace, dense_api,
+                                       bool(allow_hf_storage))
     confirmations = {
         'allow_caption_mismatch': bool(allow_caption_mismatch),
         'allow_uncaptioned': bool(allow_uncaptioned),
         'allow_caption_quality': bool(allow_caption_quality),
         'allow_unverified_weights': bool(allow_unverified_weights),
         'allow_not_ready': bool(allow_not_ready),
+        'allow_hf_storage': bool(allow_hf_storage),
     }
     recipe = None
     if fam == 'zimage':
@@ -3849,10 +3938,12 @@ def _monitor(app, run_id):
                     return
                 if status in ('error', 'stopped'):
                     if _is_full_transformer_run(run):
+                        # The 403 that killed run #146 at step 2750/3000: the
+                        # training was fine, the PUSH was refused. Naming it is
+                        # what turns "rent another GPU" into "click Settings".
+                        detail, error = _dense_remote_failure(status, info, log_text)
                         _keep_full_transformer_pod(
-                            run,
-                            detail=f'Remote dense job unexpectedly {status}; pod kept',
-                            error=(f'remote job {status}; pod kept for recovery'),
+                            run, detail=detail, error=error,
                             stop_remote=(status == 'error'))
                     else:
                         _try_download_checkpoint(run, remote, allow_stale=True)

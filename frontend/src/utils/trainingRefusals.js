@@ -19,6 +19,11 @@ export const CONFIRMABLE_REFUSALS = [
   // Custom-weights arch sniff couldn't positively verify the file → the
   // window.confirm IS the answer, retry carries allow_unverified_weights.
   ['CUSTOM_WEIGHTS_UNVERIFIED: ', 'allow_unverified_weights'],
+  // Full-model cloud run whose delivery would not fit in the account's PRIVATE
+  // Hugging Face storage. Confirmable ON PURPOSE: Hugging Face publishes no
+  // quota endpoint, so the ceiling the server compared against is an estimate —
+  // a wrong guess must never lock a user out of their own paid GPU.
+  ['HF_STORAGE_FULL: ', 'allow_hf_storage'],
 ];
 
 /* The readiness floor (NOT_READY:) is confirmable too, but the dataset panel

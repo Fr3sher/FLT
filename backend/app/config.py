@@ -236,6 +236,21 @@ DEFAULTS = {
             # recovery instead of declaring success or destroying the only copy.
             'verification_attempts': 3,
             'verification_retry_seconds': 5,
+            # Private Hugging Face storage the delivery needs, checked BEFORE a
+            # pod is rented (run #146 died at step 2750/3000 on a 403 "private
+            # repository storage limit reached"). 0 = infer the allowance from
+            # the plan documented by Hugging Face (100 GB free / 1 TB PRO) —
+            # an ESTIMATE: the Hub publishes no quota endpoint, and the observed
+            # refusal came well below the documented free figure. Set the real
+            # number here to make the pre-check exact. Never a hard lock: the
+            # refusal is confirmable ("Train anyway").
+            'private_storage_limit_gb': 0,
+            # Headroom on top of checkpoint × saves kept (model card, licence,
+            # a push that lands exactly on the ceiling still fails).
+            'storage_margin_gb': 20,
+            # 0 = size one dense checkpoint from what past runs really delivered
+            # (their persisted Hub integrity proof), else ~26 GB.
+            'checkpoint_size_gb': 0,
         },
         'onstart': '',                 # raw-image fallback: optional startup command
     },

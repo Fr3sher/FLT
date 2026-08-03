@@ -1020,6 +1020,14 @@ const TOPICS = [
     ['cloud', 'verified', 'host', 'vast', 'offer', 'filter']),
   setting('cloud.secure_cloud_only', 'training', 'cloud-secure-cloud-only', 'Secure Cloud only',
     ['cloud', 'secure', 'community', 'vast', 'offer', 'filter']),
+  setting('cloud.full_transformer.private_storage_limit_gb', 'training',
+    'cloud-private-storage-limit', 'Private storage allowance',
+    ['hugging face', 'huggingface', 'storage', 'quota', 'private', 'limit', 'allowance',
+      'full model', 'dense', 'krea', '403', 'forbidden', 'push', 'checkpoint']),
+  action('cloud.hf_storage', 'Hugging Face storage & custom-base caches',
+    ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
+      'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
+    '/settings/training', 'settings-reference', 'training'),
   // Dual captions is a per-run Advanced training option (not a global Setting),
   // so it points at the dataset guide's dedicated section rather than
   // settings-reference, and its route is the training workspace section. Its tip

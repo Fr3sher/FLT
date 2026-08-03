@@ -155,6 +155,10 @@ test('the retry lane can answer every pre-flight guard Start can answer', () => 
   assert.deepEqual(flags.slice().sort(), [
     'allow_caption_mismatch',
     'allow_caption_quality',
+    // Full-model cloud runs only: the private Hugging Face storage forecast.
+    // It rides the shared list because the ceiling it compares against is an
+    // ESTIMATE — every lane that can start a run must be able to say "anyway".
+    'allow_hf_storage',
     'allow_not_ready',
     'allow_uncaptioned',
     'allow_unverified_weights',

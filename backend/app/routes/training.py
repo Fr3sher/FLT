@@ -1587,6 +1587,10 @@ def dataset_train_cloud(dataset_id):
             allow_caption_quality=bool(d.get('allow_caption_quality')),
             allow_unverified_weights=bool(d.get('allow_unverified_weights')),
             allow_not_ready=bool(d.get('allow_not_ready')),
+            # « Train anyway » on the HF private-storage pre-check: the ceiling
+            # it compares against is an estimate, so the user always keeps the
+            # last word (see hf_storage).
+            allow_hf_storage=bool(d.get('allow_hf_storage')),
             gpu_name=d.get('gpu_name'))
     except Exception as e:
         return _map_error(e)
@@ -1649,6 +1653,102 @@ def dataset_train_cloud_custom_base_push(dataset_id):
         # preflight_custom_paths' confirmable marker (CUSTOM_WEIGHTS_UNVERIFIED)
         return jsonify({'error': str(e)}), 400
     return jsonify({'ok': True, **out})
+
+
+# --- Hugging Face private storage (Settings ▸ Training) -----------------------
+# Every route below talks to the Hub, so none of them runs on page load: the
+# Settings card fetches on an explicit click. The namespace is resolved from the
+# token, never taken from the client.
+
+def _hf_storage_namespace():
+    """(namespace, token) for the account whose private storage matters, or a
+    (None, reason) pair. HF_TOKEN owns the lds-base-* caches; HF_CLOUD_TOKEN is
+    scoped to the dense DELIVERY namespace and may not even be able to list
+    them, so the general token is preferred and the dense one is the fallback."""
+    from ..services.hf_publish import HfPublishError, _make_api
+    for key in ('HF_TOKEN', 'HF_CLOUD_TOKEN'):
+        token = cfg.secret(key)
+        if not token:
+            continue
+        try:
+            who = _make_api(token).whoami() or {}
+        except HfPublishError:
+            continue
+        except Exception:
+            continue
+        name = str((who or {}).get('name') or '').strip()
+        if name:
+            return name, token, who
+    return None, None, {}
+
+
+@bp.get('/cloud/hf-storage')
+def cloud_hf_storage():
+    """Measured private storage + the lds-base-* cache inventory.
+
+    Answers 200 with ok=false rather than an error status when the Hub cannot be
+    measured: this card must be able to SAY it does not know."""
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import hf_storage
+    namespace, token, who = _hf_storage_namespace()
+    if not namespace:
+        return jsonify({'ok': False, 'reason': 'no_token',
+                        'error': 'no Hugging Face token configured — add HF_TOKEN '
+                                 'in Settings ▸ Local tools'})
+    usage = hf_storage.private_storage_usage(namespace, token)
+    inventory = hf_storage.base_cache_inventory(namespace, token, LOCAL_USER,
+                                                _usage=usage)
+    forecast = hf_storage.dense_storage_forecast(
+        namespace, token, keeps=lt.FULL_TRANSFORMER_MAX_STEP_SAVES, who=who,
+        _usage=usage)
+    forecast.pop('usage', None)
+    inventory.pop('usage', None)
+    return jsonify({'ok': usage['ok'], 'namespace': namespace,
+                    'reason': usage.get('reason'),
+                    'partial': usage.get('partial', False),
+                    'used_bytes': usage.get('used_bytes'),
+                    'private_repo_count': usage.get('private_repo_count'),
+                    'unsized_repo_count': usage.get('unsized_repo_count'),
+                    'forecast': forecast, **inventory})
+
+
+@bp.delete('/cloud/hf-storage/base/<repo_name>')
+def cloud_hf_storage_delete_base(repo_name):
+    """Delete ONE lds-base-* cache repo (the service validates the name)."""
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import hf_storage
+    from ..services.hf_publish import HfPublishError
+    namespace, token, _who = _hf_storage_namespace()
+    if not namespace:
+        return jsonify({'error': 'no Hugging Face token configured'}), 400
+    try:
+        out = hf_storage.delete_base_cache(namespace, repo_name, token)
+    except HfPublishError as e:
+        return jsonify({'error': e.message, 'error_code': e.code}), 400
+    except Exception as e:
+        return _map_error(e)
+    return jsonify(out)
+
+
+@bp.post('/cloud/hf-storage/base/delete-all')
+def cloud_hf_storage_delete_all_bases():
+    """Delete every lds-base-* cache of the account. Partial failures reported."""
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import hf_storage
+    namespace, token, _who = _hf_storage_namespace()
+    if not namespace:
+        return jsonify({'error': 'no Hugging Face token configured'}), 400
+    try:
+        out = hf_storage.delete_all_base_caches(namespace, token, LOCAL_USER)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify(out)
 
 
 @bp.post('/dataset/train/retry')

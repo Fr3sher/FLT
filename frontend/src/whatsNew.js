@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-03-hf-storage-precheck-and-cleanup',
+    date: '2026-08-03',
+    title: 'Full-model cloud runs now check your Hugging Face space before renting a GPU',
+    blurb:
+      'A full-model (dense) Krea run delivers each ~26 GB checkpoint straight into a private Hugging Face repo — and that push happens at the very end. A run died at step 2750 of 3000 on “private repository storage limit reached”, hours of paid GPU gone, because the account\'s private space was full of custom-base caches nothing in the app ever showed you. Now the launch measures your private storage first and refuses before a pod is rented, saying how much is missing and what is taking the room — with Train anyway always available, because Hugging Face publishes no quota endpoint and the ceiling is an estimate. Settings ▸ Training gained a Hugging Face storage card that lists every lds-base-* cache with its size, the local file it mirrors and the run that last used it, and deletes them one by one or all at once — warning you when a cache is the last copy left. And if a run hits the wall anyway, it now says so in plain words and keeps the pod so the checkpoint is recoverable.',
+    to: '/settings/training',
+  },
+  {
     id: '2026-08-03-seedvr2-tile-and-vae-settings',
     date: '2026-08-03',
     title: 'SeedVR2 upscaling now fits smaller cards — tile size is a setting',
