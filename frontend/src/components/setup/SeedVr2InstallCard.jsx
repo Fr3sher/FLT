@@ -5,6 +5,7 @@ import {
   INSTALL_ALL_ACTION_LABELS, seedvr2InstallPlan, seedvr2NeedsComfyuiRestart,
 } from '../../hooks/useSetupSteps'
 import { HelpBadge } from '../../help/HelpMode'
+import { ceilingLine, tilingStatus, TTP_PACK, TTP_URL } from './seedvr2Tiling.js'
 
 const POLL_MS = 1200
 
@@ -27,6 +28,13 @@ function fmtSize(b) {
    someone who prefers cloning by hand needs, the weights repo is what the
    button below downloads (3.9 GB — say where from), and the original project is
    the credit. Apache-2.0 throughout. */
+const TILING_TONE = {
+  ready: 'border-emerald-500/30 bg-emerald-500/10',
+  restart: 'border-amber-500/40 bg-amber-500/10',
+  absent: 'border-border bg-surface-raised',
+  unknown: 'border-border bg-surface-raised',
+}
+
 const PACK_URL = 'https://github.com/numz/ComfyUI-SeedVR2_VideoUpscaler'
 const WEIGHTS_URL = 'https://huggingface.co/numz/SeedVR2_comfyUI'
 const PROJECT_URL = 'https://github.com/ByteDance-Seed/SeedVR'
@@ -58,6 +66,10 @@ export default function SeedVr2InstallCard({ caps, onDone }) {
   const dirValid = !!cu.dir_valid
   const ready = cu.seedvr2_ready === true
   const needsRestart = seedvr2NeedsComfyuiRestart(caps)
+  // The optional high-resolution lane. Its own detection, its own wording:
+  // it is a SECOND pack, from a different author, and it is not required.
+  const tiling = tilingStatus(caps)
+  const ceiling = ceilingLine(caps)
   // On disk but not loaded is a RESTART; absent from disk is an install the user
   // has to run in ComfyUI. Two different sentences, so they are two states.
   const packMissing = !cu.seedvr2_nodes_installed
@@ -206,6 +218,25 @@ export default function SeedVr2InstallCard({ caps, onDone }) {
           </button>
         </>
       )}
+
+      {/* THE OPTIONAL HIGH-RESOLUTION LANE — a different pack, a different
+          author, and genuinely optional: without it the upscaler still works,
+          it is only limited to what the card holds in one pass. Contributed by
+          SurpassHR (GitHub #32), who hit that limit as a CUDA out-of-memory and
+          shipped the tiled workflow this lane is ported from. */}
+      <div className={`mt-3 rounded-md border px-3 py-2 text-sm text-content ${
+        TILING_TONE[tiling.state] || TILING_TONE.absent}`}>
+        <div className="font-semibold">
+          {tiling.state === 'ready' ? '✓' : '○'} High-resolution upscales (tiling)
+        </div>
+        {ceiling && <p className="mt-1 text-content-muted">{ceiling}</p>}
+        <p className="mt-1 text-content-muted">{tiling.text}</p>
+        <p className="mt-1 text-xs text-content-subtle">
+          <a href={TTP_URL} target="_blank" rel="noreferrer"
+            className="text-sky-300 underline hover:text-sky-200">{TTP_PACK} →</a>
+          {' — MIT. Tiling workflow contributed by SurpassHR (GitHub #32).'}
+        </p>
+      </div>
 
       {/* The half this app deliberately does NOT install. Spelled out rather than
           hidden behind a button that could not work: the pack's Python

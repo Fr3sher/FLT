@@ -138,6 +138,141 @@ DIT_VARIANTS = (
 )
 
 
+# --- The HIGH-RESOLUTION lane (tiling) --------------------------------------
+# Idea, workflow and the measurement behind it: SurpassHR (GitHub #32), who hit
+# a real CUDA OOM upscaling full-frame on an 11.6 GB card and shipped a tiled
+# graph on his fork that reaches >4K on the same machine.
+#
+# WHAT WE PORTED, AND WHAT WE DID NOT. His graph chains three node packs: TTP
+# (MIT) for the tiling itself, ComfyUI_essentials (MIT) and ComfyUI-Easy-Use
+# (GPL-3.0) for what is, in the end, arithmetic — normalising a pixel count,
+# dividing by 1024 to count tiles, resizing at the end. This repo is MIT and has
+# refused a dependency over its licence before, and none of that arithmetic
+# needs to happen inside a graph: it happens here, in Python, where it is also
+# testable without a ComfyUI. So the lane depends on TTP alone, two classes.
+#
+# Node names read from the pack's CODE (TTP_toolsets.py NODE_CLASS_MAPPINGS),
+# never its README — in this very pack `TTP_Tile_image_size` maps to a class
+# named `Tile_imageSize`, so the two do not even match.
+TTP_NODE_CLASSES = ('TTP_Image_Tile_Batch', 'TTP_Image_Assy')
+TTP_NODE_PACK = {
+    'pack': 'Comfyui_TTP_Toolset',
+    'url': 'https://github.com/TTPlanetPig/Comfyui_TTP_Toolset',
+    'search': 'TTP Toolset',
+    'license': 'MIT',
+}
+
+# Tiles are square and this is their side. 1024 is what SurpassHR's graph uses
+# and what the SeedVR2 VAE's own tiled encode/decode is sized for.
+TILE_PX = 1024
+# Fraction of a tile shared with its neighbour. TTP_Image_Assy blends the seam
+# across that band, so too little shows a grid and too much wastes GPU time on
+# pixels computed twice. 0.1 is his value.
+TILE_OVERLAP_RATE = 0.1
+
+# How many megapixels the FULL-FRAME lane can hold, per GB of VRAM on the card.
+# Deliberately conservative and deliberately a single number: this exists to say
+# "past here you want tiles" BEFORE a run dies, not to predict VRAM use, which
+# moves with the build, the batch and block swapping. Calibrated on the report
+# that opened this: full-frame OOM at ~4K (8.3 MP) on 11.6 GB.
+#
+# KNOWN TO BE FALSELY PESSIMISTIC, and left that way ON PURPOSE. That OOM was
+# measured BEFORE this lane gained the two memory savings taken from the same
+# contribution — the DiT offloading to system RAM between phases and the tiled
+# VAE encode/decode, both of which now apply to the full-frame lane too. The
+# real headroom is therefore higher than 0.55 MP/GB implies, and this number
+# will warn about frames that would in fact have fitted. Raising it would need a
+# measurement nobody has taken; inventing a better-looking constant would trade
+# a documented, harmless pessimism for an undocumented, harmful optimism. The
+# failure mode of being too cautious is an unnecessary suggestion to install a
+# node pack; the failure mode of being too bold is the CUDA out-of-memory this
+# exists to prevent. Measure before you touch it.
+MP_PER_VRAM_GB = 0.55
+# Below this we never claim a ceiling at all — an unknown or tiny card gets the
+# honest "we cannot tell", not a made-up number.
+MIN_CEILING_MP = 1.0
+# With no ceiling to compare against (unknown card), tile only past this. A frame
+# under it fits essentially anywhere, and tiling it would spend seam-blending on
+# a picture that never needed it.
+TILE_WORTH_IT_MP = 6.0
+
+
+_PROBE_VRAM = object()   # "not supplied" — distinct from an explicit unknown
+
+
+def full_frame_ceiling_mp(vram_gb=_PROBE_VRAM):
+    """Megapixels the full-frame lane is willing to promise on this machine, or
+    None when the VRAM is unknown (no nvidia-smi, CPU-only, a remote ComfyUI).
+
+    None means "say nothing", never "no limit": a number invented for a card we
+    cannot see would be exactly the false promise this function exists to
+    replace. Note the sentinel — passing None explicitly means "I looked and
+    could not tell", and must NOT be mistaken for "go and probe"."""
+    if vram_gb is _PROBE_VRAM:
+        from .. import capabilities
+        vram_gb = capabilities.gpu_vram_gb()
+    try:
+        vram = float(vram_gb)
+    except (TypeError, ValueError):
+        return None
+    if not (vram > 0):
+        return None
+    ceiling = vram * MP_PER_VRAM_GB
+    return round(ceiling, 1) if ceiling >= MIN_CEILING_MP else None
+
+
+def output_megapixels(width, height, short_edge):
+    """MP the upscaler will actually produce for a source of `width`x`height`
+    asked to reach `short_edge` on its short side, aspect ratio preserved."""
+    try:
+        w, h, target = float(width), float(height), float(short_edge)
+    except (TypeError, ValueError):
+        return 0.0
+    if not (w > 0 and h > 0 and target > 0):
+        return 0.0
+    scale = target / min(w, h)
+    return (w * scale) * (h * scale) / 1_000_000
+
+
+def tile_plan(width, height, short_edge, tile_px=TILE_PX,
+              overlap_rate=TILE_OVERLAP_RATE):
+    """The tiling this source needs to reach `short_edge`, or None when one tile
+    already covers it (there is nothing to gain from tiling a small image, and
+    a 1x1 grid pays the seam-blending cost for nothing).
+
+    Returns ``{tile_width, tile_height, columns, rows, tiles, output_width,
+    output_height}``. Pure arithmetic — this is the part SurpassHR's graph did
+    with three extra node packs.
+
+    It answers "what WOULD the grid be", never "is tiling worth it": that second
+    question needs the card's ceiling, so it lives in `choose_lane`. Keeping them
+    apart is what stopped a 0.8 MP thumbnail being cut into two tiles merely
+    because the tile side is 1024."""
+    try:
+        w, h, target = int(width), int(height), int(short_edge)
+    except (TypeError, ValueError):
+        return None
+    if w <= 0 or h <= 0 or target <= 0:
+        return None
+    scale = target / min(w, h)
+    out_w, out_h = max(1, round(w * scale)), max(1, round(h * scale))
+    side = max(64, int(tile_px))
+    # The overlap is shared between neighbours, so the NEW ground each tile
+    # covers is a step, not the full side. Columns are counted on that step.
+    try:
+        rate = min(0.45, max(0.0, float(overlap_rate)))
+    except (TypeError, ValueError):
+        rate = TILE_OVERLAP_RATE
+    step = max(1, int(round(side * (1 - rate))))
+    columns = max(1, -(-max(0, out_w - side) // step) + 1)
+    rows = max(1, -(-max(0, out_h - side) // step) + 1)
+    if columns * rows <= 1:
+        return None
+    return {'tile_width': side, 'tile_height': side,
+            'columns': columns, 'rows': rows, 'tiles': columns * rows,
+            'output_width': out_w, 'output_height': out_h}
+
+
 class SeedVR2ModelsMissing(Exception):
     """A SeedVR2 asset is not on disk and/or the custom-node pack is absent, so
     no valid job can be built. Raised BEFORE any row or job is created, so a
@@ -290,6 +425,7 @@ def seedvr2_invalid_assets():
 # must never block a pass.
 _NODES_OK_TTL_S = 300
 _nodes_ok_until = 0.0
+_ttp_ok_until = 0.0
 
 
 def seedvr2_missing_nodes():
@@ -308,10 +444,37 @@ def seedvr2_missing_nodes():
     return out
 
 
+def ttp_missing_nodes():
+    """[class_type] of the TTP tiling nodes this ComfyUI does not expose.
+
+    Same contract as seedvr2_missing_nodes and for the same reasons — success
+    cached, misses never, FAIL-OPEN on an unreachable ComfyUI. One difference
+    that matters: an absent TTP pack is NOT an error. The high-resolution lane
+    is optional; without it the default lane still works, it is only capped."""
+    global _ttp_ok_until
+    if time.time() < _ttp_ok_until:
+        return []
+    from ..utils.comfyui import fetch_object_info_classes
+    available = fetch_object_info_classes()
+    if available is None:
+        return []
+    out = sorted(c for c in TTP_NODE_CLASSES if c not in available)
+    if not out:
+        _ttp_ok_until = time.time() + _NODES_OK_TTL_S
+    return out
+
+
+def tiling_available(comfy_ok=True):
+    """Can the high-resolution lane run here? Requires a reachable ComfyUI (the
+    probe cannot fail open into a promise) AND both TTP classes."""
+    return bool(comfy_ok) and not ttp_missing_nodes()
+
+
 def clear_nodes_cache():
     """Drop the success TTL so the next probe re-asks /object_info."""
-    global _nodes_ok_until
+    global _nodes_ok_until, _ttp_ok_until
     _nodes_ok_until = 0.0
+    _ttp_ok_until = 0.0
 
 
 def seedvr2_node_pack_installed():
@@ -426,9 +589,38 @@ def blocks_to_swap():
 
 # --- Graph -------------------------------------------------------------------
 
+def _dit_loader(dit, swap_blocks):
+    """The DiT loader node, shared by both lanes.
+
+    `offload_device: cpu` (SurpassHR's value, GitHub #32) parks the model in
+    system RAM between phases instead of holding it on the card — a free VRAM
+    win the full-frame lane was leaving on the table."""
+    return {'class_type': 'SeedVR2LoadDiTModel',
+            'inputs': {'model': dit, 'device': 'cuda:0',
+                       'offload_device': 'cpu', 'cache_model': False,
+                       'blocks_to_swap': int(swap_blocks),
+                       'swap_io_components': False,
+                       'attention_mode': 'sdpa'},
+            '_meta': {'title': 'SeedVR2 DiT model'}}
+
+
+def _vae_loader(vae, tiled):
+    """The VAE loader node. `tiled` runs encode AND decode in 1024 px tiles with
+    a 128 px overlap — the other half of SurpassHR's VRAM saving, and the reason
+    the tiled lane can assemble a >4K frame at all."""
+    inputs = {'model': vae, 'device': 'cuda:0',
+              'offload_device': 'cpu', 'cache_model': False,
+              'encode_tiled': bool(tiled), 'decode_tiled': bool(tiled)}
+    if tiled:
+        inputs.update({'encode_tile_size': 1024, 'encode_tile_overlap': 128,
+                       'decode_tile_size': 1024, 'decode_tile_overlap': 128})
+    return {'class_type': 'SeedVR2LoadVAEModel', 'inputs': inputs,
+            '_meta': {'title': 'SeedVR2 VAE'}}
+
+
 def build_workflow(source_image, *, dit, vae, seed, resolution=1080,
                    max_res=0, color_correct='lab', swap_blocks=0,
-                   filename_prefix='seedvr2_upscale'):
+                   tiled_vae=False, filename_prefix='seedvr2_upscale'):
     """The ComfyUI API-format graph. Pure function of its arguments — no config
     read, no disk access — so a test can assert the exact wiring without a
     ComfyUI, and every loader value is one a resolver produced.
@@ -441,18 +633,8 @@ def build_workflow(source_image, *, dit, vae, seed, resolution=1080,
     the memory the next generation (or a training run) needs; the app already
     treats the GPU as a contended resource everywhere else."""
     return {
-        '1': {'class_type': 'SeedVR2LoadDiTModel',
-              'inputs': {'model': dit, 'device': 'cuda:0',
-                         'offload_device': 'none', 'cache_model': False,
-                         'blocks_to_swap': int(swap_blocks),
-                         'swap_io_components': False,
-                         'attention_mode': 'sdpa'},
-              '_meta': {'title': 'SeedVR2 DiT model'}},
-        '2': {'class_type': 'SeedVR2LoadVAEModel',
-              'inputs': {'model': vae, 'device': 'cuda:0',
-                         'offload_device': 'none', 'cache_model': False,
-                         'encode_tiled': False, 'decode_tiled': False},
-              '_meta': {'title': 'SeedVR2 VAE'}},
+        '1': _dit_loader(dit, swap_blocks),
+        '2': _vae_loader(vae, tiled_vae),
         '3': {'class_type': 'LoadImage', 'inputs': {'image': source_image}},
         '4': {'class_type': 'SeedVR2VideoUpscaler',
               'inputs': {'image': ['3', 0], 'dit': ['1', 0], 'vae': ['2', 0],
@@ -467,6 +649,124 @@ def build_workflow(source_image, *, dit, vae, seed, resolution=1080,
         '5': {'class_type': 'SaveImage',
               'inputs': {'filename_prefix': filename_prefix, 'images': ['4', 0]}},
     }
+
+
+def build_tiled_workflow(source_image, *, dit, vae, seed, plan,
+                         resolution=1080, color_correct='lab', swap_blocks=0,
+                         padding=64, filename_prefix='seedvr2_upscale'):
+    """The HIGH-RESOLUTION graph: cut the source into overlapping tiles, upscale
+    each, blend them back. Pure, like its full-frame sibling.
+
+    PORTED FROM SurpassHR's fork (GitHub #32) — and deliberately NOT identical
+    to it, so here is the difference in one place rather than in a chat log. His
+    graph chains three node packs: TTP for the tiling, plus ComfyUI_essentials
+    (MIT) and ComfyUI-Easy-Use (GPL-3.0) for arithmetic — normalising a pixel
+    count, dividing by 1024 to count tiles, resizing at the end. This repo is MIT
+    and has refused a dependency over its licence before, and that arithmetic
+    does not need to run inside a graph, so `tile_plan` does it in Python and
+    hands the result in as `plan`. Net effect: one node pack instead of three,
+    MIT instead of GPL-3.0, two classes to probe instead of six, and geometry
+    that a test can check without a ComfyUI at all.
+
+    The upscaler runs on the tile BATCH: `TTP_Image_Tile_Batch` emits every tile
+    as one image batch, so a single SeedVR2 pass covers them all and never holds
+    more than one tile's worth of activations. `batch_size` stays 1 for the same
+    reason it does full-frame — it is a temporal window, and tiles of one still
+    image are not frames of a video.
+
+    `resolution` is the SHORT EDGE OF A TILE, not of the picture: each tile is
+    already `plan['tile_width']` px of source, and asking for the frame's target
+    here would upscale every tile to the whole frame's size."""
+    return {
+        '1': _dit_loader(dit, swap_blocks),
+        '2': _vae_loader(vae, True),
+        '3': {'class_type': 'LoadImage', 'inputs': {'image': source_image}},
+        # Scale the SOURCE to the target frame size first, then cut: tiling a
+        # small image and enlarging each tile would ask the model to invent the
+        # same detail with less context each time.
+        '4': {'class_type': 'ImageScale',
+              'inputs': {'image': ['3', 0], 'upscale_method': 'lanczos',
+                         'width': int(plan['output_width']),
+                         'height': int(plan['output_height']), 'crop': 'disabled'},
+              '_meta': {'title': 'Target frame size'}},
+        '5': {'class_type': 'TTP_Image_Tile_Batch',
+              'inputs': {'image': ['4', 0],
+                         'tile_width': int(plan['tile_width']),
+                         'tile_height': int(plan['tile_height'])},
+              '_meta': {'title': f"Cut into {plan['tiles']} tiles"}},
+        '6': {'class_type': 'SeedVR2VideoUpscaler',
+              'inputs': {'image': ['5', 0], 'dit': ['1', 0], 'vae': ['2', 0],
+                         'seed': int(seed), 'resolution': int(resolution),
+                         'max_resolution': 0, 'batch_size': 1,
+                         'uniform_batch_size': False, 'temporal_overlap': 0,
+                         'prepend_frames': 0,
+                         'color_correction': color_correct,
+                         'input_noise_scale': 0.0, 'latent_noise_scale': 0.0,
+                         'offload_device': 'cpu', 'enable_debug': False},
+              '_meta': {'title': 'SeedVR2 upscale (per tile)'}},
+        '7': {'class_type': 'TTP_Image_Assy',
+              'inputs': {'tiles': ['6', 0], 'positions': ['5', 1],
+                         'original_size': ['5', 2], 'grid_size': ['5', 3],
+                         'padding': int(padding)},
+              '_meta': {'title': 'Blend the seams back together'}},
+        '8': {'class_type': 'SaveImage',
+              'inputs': {'filename_prefix': filename_prefix, 'images': ['7', 0]}},
+    }
+
+
+def _source_size(path):
+    """(width, height) of the staged source, or a neutral square when it cannot
+    be measured — an unreadable header must pick a lane, not crash the enqueue."""
+    try:
+        from PIL import Image
+        from . import image_encoding
+        with Image.open(path) as im:
+            return image_encoding.visual_size_from_header(im)
+    except Exception:
+        return (1024, 1024)
+
+
+def choose_lane(width, height, *, short_edge, tiling_ok, ceiling_mp=None,
+               tile_px=TILE_PX, overlap_rate=TILE_OVERLAP_RATE):
+    """Which lane runs, and what the user must be told BEFORE the GPU starts.
+
+    Returns ``{lane, plan, output_mp, ceiling_mp, capped, notice}``:
+      * ``lane`` — 'tiled' when tiling is available AND worth it, else 'full'.
+      * ``plan`` — the tile geometry for the tiled lane, None otherwise.
+      * ``capped`` — True when the request exceeds what full-frame can promise
+        on this card and tiling is NOT available. The caller still runs (the
+        ceiling is guidance, not a gate — see below), but ``notice`` says so.
+
+    WHY THE CEILING NEVER REFUSES. It is arithmetic over a single constant, on a
+    card whose real headroom moves with the build, block swapping and whatever
+    else holds VRAM. Turning that into a hard stop would refuse runs that would
+    have worked. What it must not do is stay SILENT: the report that opened this
+    (SurpassHR, GitHub #32) is someone discovering the limit as a CUDA OOM in a
+    log. So the honest contract is: always run, always say."""
+    out_mp = output_megapixels(width, height, short_edge)
+    # Tile only when the frame would not fit comfortably in one pass. Tiling is
+    # not free — it blends seams and runs the model once per tile — so a picture
+    # this card can hold whole must stay whole. With no ceiling (unknown card)
+    # we fall back to a fixed floor rather than tiling everything.
+    budget = ceiling_mp if ceiling_mp else TILE_WORTH_IT_MP
+    worth_it = out_mp > budget
+    plan = (tile_plan(width, height, short_edge, tile_px, overlap_rate)
+            if (tiling_ok and worth_it) else None)
+    if plan:
+        return {'lane': 'tiled', 'plan': plan, 'output_mp': round(out_mp, 1),
+                'ceiling_mp': ceiling_mp, 'capped': False,
+                'notice': (f"Tiling this one: {plan['columns']}x{plan['rows']} tiles "
+                           f"blended back together, so the card never holds the whole "
+                           f"{round(out_mp, 1)} MP frame at once.")}
+    over = bool(ceiling_mp) and out_mp > ceiling_mp
+    notice = None
+    if over:
+        notice = (f"This asks for about {round(out_mp, 1)} MP in one pass, and this "
+                  f"GPU is only good for roughly {ceiling_mp} MP full-frame — it may "
+                  f"run out of memory. Install the {TTP_NODE_PACK['pack']} node pack "
+                  f"to upscale it in tiles instead, or lower the target resolution.")
+    return {'lane': 'full', 'plan': None, 'output_mp': round(out_mp, 1),
+            'ceiling_mp': ceiling_mp, 'capped': over, 'notice': notice}
 
 
 def _comfy_input_dir() -> str:
@@ -509,17 +809,31 @@ def enqueue_seedvr2_upscale(user_id, source_filename, source_path=None,
         source_path, f'seedvr2_source_{uid}_{source_stem}.png', comfy_input_dir)
     comfy_input = os.path.basename(staged_source)
 
-    workflow = build_workflow(
-        comfy_input, dit=dit, vae=vae, seed=seed,
-        resolution=target_resolution(), max_res=max_resolution(),
-        color_correct=color_correction(), swap_blocks=blocks_to_swap(),
-        # UNIQUE prefix per job: SaveImage numbers from what is currently in the
-        # output folder and the app moves each result out right after completion,
-        # so a shared prefix makes the counter re-issue the same name.
-        filename_prefix=f'{user_id}_DatasetSeedVR2_{uid}')
+    # UNIQUE prefix per job: SaveImage numbers from what is currently in the
+    # output folder and the app moves each result out right after completion,
+    # so a shared prefix makes the counter re-issue the same name.
+    prefix = f'{user_id}_DatasetSeedVR2_{uid}'
+    short_edge = target_resolution()
+    src_w, src_h = _source_size(staged_source)
+    lane = choose_lane(src_w, src_h, short_edge=short_edge,
+                       tiling_ok=tiling_available(), ceiling_mp=full_frame_ceiling_mp())
+    if lane['notice']:
+        logger.info('seedvr2: %s', lane['notice'])
+    if lane['lane'] == 'tiled':
+        workflow = build_tiled_workflow(
+            comfy_input, dit=dit, vae=vae, seed=seed, plan=lane['plan'],
+            resolution=min(short_edge, lane['plan']['tile_width']),
+            color_correct=color_correction(), swap_blocks=blocks_to_swap(),
+            filename_prefix=prefix)
+    else:
+        workflow = build_workflow(
+            comfy_input, dit=dit, vae=vae, seed=seed,
+            resolution=short_edge, max_res=max_resolution(),
+            color_correct=color_correction(), swap_blocks=blocks_to_swap(),
+            tiled_vae=True, filename_prefix=prefix)
 
     job_id = str(uuid.uuid4())
-    meta = {'model_name': 'seedvr2_upscale'}
+    meta = {'model_name': 'seedvr2_upscale', 'seedvr2_lane': lane['lane']}
     if extra_metadata:
         meta.update(extra_metadata)
     meta['staged_inputs'] = [comfy_input]   # dropped again when the job ends

@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-seedvr2-tiled-highres',
+    date: '2026-08-03',
+    title: 'Big SeedVR2 upscales no longer have to fit on your card in one piece',
+    blurb:
+      'Upscaling a whole frame at once needs the whole frame in VRAM, and past a certain size that simply fails — with a CUDA out-of-memory error in a log, which is a terrible way to find out. Two things change. The app now tells you, before it starts, roughly how many megapixels your GPU is good for in one pass. And if you install the Comfyui_TTP_Toolset node pack in ComfyUI, anything bigger is automatically cut into overlapping tiles, upscaled tile by tile and blended back together — so a 4K result works on a card that could not hold it whole. Without the pack nothing breaks: upscales still run, they are just capped. Tiled workflow and the measurement behind it contributed by SurpassHR (GitHub #32).',
+    to: '/setup',
+  },
+  {
     id: '2026-08-03-dataset-passes-survive-a-deleted-image',
     date: '2026-08-03',
     title: 'A long pass no longer dies if you delete an image while it is running',
