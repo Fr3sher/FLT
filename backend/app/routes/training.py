@@ -1461,9 +1461,36 @@ def dataset_train_checkpoints_cleanup(dataset_id):
 
 @bp.post('/dataset/train/cloud/purge')
 def dataset_train_cloud_purge():
-    """Trash the staging dirs of finished cloud runs (dataset copies, samples,
-    checkpoint duplicates already imported)."""
+    """Trash the working files of finished cloud runs — the exported dataset
+    copy, the sample images and the logs. Checkpoints are moved into the durable
+    store instead and never trashed. Also reports orphan run folders found on
+    disk, which the caller can then purge explicitly."""
     return jsonify({'ok': True, **ct.purge_finished_runs()})
+
+
+@bp.get('/dataset/train/cloud/orphans')
+def dataset_train_cloud_orphans():
+    """Run folders on disk that no run row claims — the tens of GB the cleanup
+    used to answer 'already clean' about. Walks the disk, so it is its own
+    endpoint and never rides the hub's poll."""
+    orphans = ct.orphan_staging_dirs()
+    return jsonify({'ok': True, 'orphans': orphans,
+                    'total_bytes': sum(o['size_bytes'] for o in orphans)})
+
+
+@bp.post('/dataset/train/cloud/purge-orphans')
+def dataset_train_cloud_purge_orphans():
+    """Trash the named orphan run folders (all of them when `names` is absent).
+    Loose checkpoints inside them are rescued into the store first."""
+    body = request.get_json(silent=True) or {}
+    names = body.get('names')
+    if names is not None and not isinstance(names, list):
+        return jsonify({'error': 'names must be a list'}), 400
+    try:
+        res = ct.purge_orphan_staging_dirs(names)
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **res})
 
 
 @bp.get('/dataset/train/cloud/staging-sizes')
@@ -1529,9 +1556,14 @@ def dataset_train_import(dataset_id):
         dense_response = _full_transformer_artifact_response(crun)
         if dense_response:
             return dense_response
-        if not crun.staging_dir:
+        # Where THIS save actually sits: the durable checkpoint store, or the
+        # legacy staging dir on an install that has not been retrofitted yet.
+        saves = ct.run_checkpoint_files(crun)
+        src = saves.get(os.path.basename(fn or '')) or (
+            sorted(saves.values())[0] if saves else None)
+        if not src:
             return jsonify({'error': 'unknown cloud run'}), 404
-        kw['src_dir'] = crun.staging_dir
+        kw['src_dir'] = os.path.dirname(src)
         kw['version'] = ct._run_param(crun, 'version')
         # Tag the deployed name with THIS cloud run's id (☁ #N) so importing the
         # same step from two different runs never overwrites one with the other.
@@ -2172,18 +2204,16 @@ def dataset_train_cloud_checkpoint(dataset_id):
     dense_response = _full_transformer_artifact_response(run)
     if dense_response:
         return dense_response
-    # ?filename targets ONE harvested epoch in this run's staging (the ◉ Graph's
-    # per-checkpoint ⬇). Path-guarded: basename only, and it must really be a
-    # .safetensors sitting in THIS run's staging_dir. Absent → the run's final
-    # LoRA, the historical behaviour.
+    # ?filename targets ONE harvested epoch of this run (the ◉ Graph's
+    # per-checkpoint ⬇). Absent → the run's final LoRA, the historical
+    # behaviour.
     fn = request.args.get('filename')
     if fn:
-        safe = os.path.basename(fn)
-        if (safe != fn or not safe.lower().endswith('.safetensors')
-                or not run.staging_dir):
-            abort(404)
-        path = os.path.join(run.staging_dir, safe)
-        if not os.path.isfile(path):
+        # Resolved through the run's own save list (durable store first, legacy
+        # staging second) — basename-only by construction, so the client can
+        # never point this at a path of its choosing.
+        path = ct.run_checkpoint_path(run, fn)
+        if not path or not os.path.isfile(path):
             abort(404)
         return send_file(path, as_attachment=True)
     if not run.checkpoint_local_path or not os.path.isfile(run.checkpoint_local_path):

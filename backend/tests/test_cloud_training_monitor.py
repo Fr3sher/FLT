@@ -723,11 +723,15 @@ def test_midrun_checkpoint_sync_harvests_every_save(ct, app, client, monkeypatch
                              'j_000000300.safetensors']
         # checkpoint_local_path tracks the NEWEST; every epoch stays on disk
         assert run.checkpoint_local_path.endswith('j_000000300.safetensors')
-        files = os.listdir(run.staging_dir)
+        # Saves land in the DURABLE store, not in the disposable staging dir:
+        # the cleanup used to be the only copy of a never-deployed checkpoint.
+        files = os.listdir(ct.checkpoint_store_dir(run))
         assert sorted(f for f in files if f.endswith('.safetensors')) == \
             ['j_000000100.safetensors', 'j_000000200.safetensors',
              'j_000000300.safetensors']
         assert not any(f.endswith('.part') for f in files)
+        assert not any(f.endswith('.safetensors')
+                       for f in os.listdir(run.staging_dir))
         # ...and the panel lists all of them
         assert [c['step'] for c in ct.cloud_checkpoints(ds_id)] == [100, 200, 300]
 
@@ -751,7 +755,7 @@ def test_completion_retrieves_intermediates_still_on_pod(ct, app, client, monkey
         ct._monitor(app, run_id)
         run = ct.CloudTrainingRun.query.get(run_id)
         assert run.status == 'done'
-        staged = sorted(f for f in os.listdir(run.staging_dir)
+        staged = sorted(f for f in os.listdir(ct.checkpoint_store_dir(run))
                         if f.endswith('.safetensors'))
         assert staged == ['j_000000050.safetensors', 'j_000000100.safetensors']
         # every epoch mirrored into the local run dir under local naming

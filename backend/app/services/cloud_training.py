@@ -125,13 +125,157 @@ def _stop_event_for(run_id):
 
 
 def _staging_root() -> Path:
-    # face_dataset_service has no DATA_DIR of its own (its image root is
-    # cfg.dataset_images_root() = DATA_DIR/datasets); the actual data root
-    # lives in config.py as the private _data_dir() (same convention already
-    # used by services.chatgpt_oauth). cloud_runs is a sibling of datasets/.
-    root = cfg._data_dir() / 'cloud_runs'
-    root.mkdir(parents=True, exist_ok=True)
-    return root
+    # Working area only (dataset copy, samples, log). Relocatable through
+    # Settings › Storage; '' means DATA_DIR/cloud_runs, the historical place.
+    return cfg.cloud_runs_root()
+
+
+# ── The durable checkpoint store ──────────────────────────────────────────────
+# Written after an incident: "Clean finished runs" said it was trashing
+# "checkpoint duplicates already imported", but a checkpoint that was never
+# deployed to ComfyUI had NO duplicate — staging was its only copy. Emptying the
+# trash destroyed it. Weights now land in their own store, which no cleanup path
+# touches, and staging goes back to being genuinely disposable.
+
+def checkpoint_store_dir(run, create=False) -> str | None:
+    """Where THIS run's ``.safetensors`` live for good: ``<store>/run_<id>``.
+    None for a row that has no id yet (never flushed) — a run with no identity
+    has no store, and inventing one would scatter files under ``run_None``."""
+    if getattr(run, 'id', None) is None:
+        return None
+    d = cfg.checkpoints_root(create=create) / f'run_{int(run.id)}'
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return str(d)
+
+
+def _checkpoint_dirs(run) -> list:
+    """Directories that may hold this run's saves, in PRECEDENCE order: the
+    store first, then the legacy staging dir. The legacy read is what keeps an
+    install that trained before the store existed from losing its checkpoint
+    list before the retrofit pass has moved anything."""
+    dirs = []
+    if getattr(run, 'id', None) is not None:
+        dirs.append(str(cfg.checkpoints_root(create=False) / f'run_{int(run.id)}'))
+    if run.staging_dir:
+        dirs.append(run.staging_dir)
+    return dirs
+
+
+def run_checkpoint_files(run) -> dict:
+    """``{filename: absolute path}`` of every save of this run, store winning
+    over staging on a duplicate name. Empty dict when the run produced none —
+    never raises on a directory that is gone (purged, hand-deleted, relocated)."""
+    out = {}
+    for d in _checkpoint_dirs(run):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for name in names:
+            if name.lower().endswith('.safetensors') and name not in out:
+                out[name] = os.path.join(d, name)
+    return out
+
+
+def run_checkpoint_path(run, filename) -> str | None:
+    """Resolve ONE save of this run by basename, or None. Basename-only by
+    construction, so a caller can hand it a filename straight from a request."""
+    if not filename or os.path.basename(filename) != filename:
+        return None
+    return run_checkpoint_files(run).get(filename)
+
+
+def _adopt_checkpoints_into_store(run) -> int:
+    """Move this run's ``.safetensors`` out of staging and into the store.
+
+    Runs after every sync and again from the retrofit pass, so a weight is in
+    the store BEFORE any cleanup can look at staging. Best-effort per file: a
+    move that fails leaves the file where it is (still readable through the
+    legacy path) rather than losing it. Returns how many files moved."""
+    sd = run.staging_dir
+    if not sd or not os.path.isdir(sd):
+        return 0
+    moved = 0
+    dest_dir = None
+    try:
+        names = sorted(os.listdir(sd))
+    except OSError:
+        return 0
+    for name in names:
+        if not name.lower().endswith('.safetensors'):
+            continue
+        if dest_dir is None:
+            dest_dir = checkpoint_store_dir(run, create=True)
+            if dest_dir is None:
+                return moved
+        src = os.path.join(sd, name)
+        dest = os.path.join(dest_dir, name)
+        try:
+            if os.path.exists(dest):
+                # Already in the store (a previous pass, or a re-sync): the
+                # staging copy is the redundant one and may go.
+                if os.path.getsize(dest) == os.path.getsize(src):
+                    os.remove(src)
+                    continue
+                # Same name, different bytes — keep both rather than pick.
+                continue
+            shutil.move(src, dest)
+            moved += 1
+        except OSError as e:
+            logger.warning('checkpoint %s not moved into the store: %s', name, e)
+    if moved and run.checkpoint_local_path:
+        base = os.path.basename(run.checkpoint_local_path)
+        landed = os.path.join(dest_dir or '', base)
+        if os.path.isfile(landed):
+            _set(run, checkpoint_local_path=landed)
+    return moved
+
+
+_STORE_MIGRATION_KEY = 'cloud_checkpoint_store'
+_STORE_MIGRATION_VERSION = 1
+
+
+def migrate_checkpoints_into_store(force=False) -> dict:
+    """Retrofit: sweep every known run's staging dir into the checkpoint store.
+
+    Called once at boot (guarded by a persisted version flag) and on demand from
+    Settings › Storage, because an install that has not booted since the store
+    landed still keeps its only copies in a directory the cleanup may trash.
+    Never raises — a failed retrofit must not keep the app from starting."""
+    state = None
+    try:
+        state = SystemState.query.filter_by(key=_STORE_MIGRATION_KEY).first()
+        if not force and state is not None \
+                and str(state.value or '') == str(_STORE_MIGRATION_VERSION):
+            return {'ran': False, 'runs': 0, 'moved': 0}
+    except Exception as e:                       # pragma: no cover - legacy DB
+        logger.debug('checkpoint store migration flag unavailable: %s', e)
+    runs = 0
+    moved = 0
+    try:
+        for run in CloudTrainingRun.query.all():
+            n = _adopt_checkpoints_into_store(run)
+            if n:
+                runs += 1
+                moved += n
+    except Exception as e:
+        logger.warning('checkpoint store migration incomplete: %s', e)
+    try:
+        if state is None:
+            state = SystemState(key=_STORE_MIGRATION_KEY,
+                                value=str(_STORE_MIGRATION_VERSION))
+            db.session.add(state)
+        else:
+            state.value = str(_STORE_MIGRATION_VERSION)
+        db.session.commit()
+    except Exception as e:                       # pragma: no cover - legacy DB
+        logger.debug('checkpoint store migration flag not persisted: %s', e)
+        db.session.rollback()
+    if moved:
+        logger.info('checkpoint store: moved %s save(s) of %s run(s) out of staging',
+                    moved, runs)
+    return {'ran': True, 'runs': runs, 'moved': moved}
 
 
 def get_active_runs():
@@ -1155,26 +1299,27 @@ def _cloud_resume_state() -> dict:
 
 
 def _run_staging_checkpoints(run) -> list:
-    """This run's HARVESTED checkpoints that still live in staging (NOT the
-    trash — trashed saves are moved out of staging_dir): list of
-    {'filename', 'step', 'path'}, step-sorted ascending. Mirrors
-    cloud_checkpoints' step extraction so 'continue' resumes from the exact same
-    checkpoint the hub lists. The unsuffixed FINAL save (no _<step> suffix) is
-    the run's target step count."""
+    """This run's HARVESTED checkpoints that are still on disk (NOT the trash —
+    a trashed save is moved out of its folder): list of {'filename', 'step',
+    'path'}, step-sorted ascending. Mirrors cloud_checkpoints' step extraction so
+    'continue' resumes from the exact same checkpoint the hub lists. The
+    unsuffixed FINAL save (no _<step> suffix) is the run's target step count.
+
+    Reads the durable store (falling back to the legacy staging dir) — kept
+    under its historical name because "continue from an earlier epoch" is wired
+    to it everywhere; what changed is only WHERE the files live."""
     if _is_full_transformer_run(run):
         return []
-    sd = run.staging_dir
-    if not sd or not os.path.isdir(sd):
+    saves = run_checkpoint_files(run)
+    if not saves:
         return []
     target = int(_run_param(run, 'steps') or 0)
     out = []
-    for name in os.listdir(sd):
-        if not name.lower().endswith('.safetensors'):
-            continue
+    for name, path in saves.items():
         m = re.search(r'_(\d{6,})\.safetensors$', name)
         out.append({'filename': name,
                     'step': int(m.group(1)) if m else target,
-                    'path': os.path.join(sd, name),
+                    'path': path,
                     'resume_state': _cloud_resume_state()})
     # step asc; a suffixed save wins ties over the unsuffixed final (deterministic).
     out.sort(key=lambda e: (e['step'], bool(re.search(r'_(\d{6,})\.safetensors$',
@@ -1313,8 +1458,8 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         _parent_topology)
     cks = _run_staging_checkpoints(run)
     if not cks:
-        raise ValueError('no harvested checkpoint to continue from — its staging '
-                         'was cleaned; relaunch a fresh cloud run instead')
+        raise ValueError('no harvested checkpoint to continue from — this run '
+                         'has none left on disk; relaunch a fresh cloud run instead')
     # Which harvested checkpoint to resume from. Default = the latest; a specific
     # step restarts from an earlier epoch (seeding it onto the fresh pod is the same
     # channel, and the source run's staging is read-only here — nothing destroyed).
@@ -4271,7 +4416,11 @@ def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
       file is deleted and the fetch fails rather than registering garbage."""
     remote_path = ckpt['path']
     name = os.path.basename(remote_path.replace('\\', '/'))
-    dest = os.path.join(run.staging_dir, name)
+    # Straight into the durable store, never into staging: a weight that only
+    # ever existed in a directory the cleanup may trash is how checkpoints were
+    # lost. The .part-then-rename below still applies, one folder over.
+    dest = os.path.join(checkpoint_store_dir(run, create=True) or run.staging_dir,
+                        name)
     if run.checkpoint_local_path and os.path.isfile(dest) \
             and os.path.basename(run.checkpoint_local_path) == name:
         return dest
@@ -4484,7 +4633,7 @@ def _import_result(run):
                              os.path.basename(run.checkpoint_local_path),
                              base_model=params.get('base_model', ''),
                              family=params.get('train_type'),
-                             src_dir=run.staging_dir,
+                             src_dir=os.path.dirname(run.checkpoint_local_path),
                              version=params.get('version'),
                              variant=params.get('variant'),
                              run_id=run.id, run_source='cloud')
@@ -4507,11 +4656,12 @@ def _download_intermediates(run, remote):
         logger.warning('intermediate listing failed: %s', e)
         return
     have = os.path.basename(run.checkpoint_local_path or '')
+    store = checkpoint_store_dir(run, create=True) or run.staging_dir
     for f in files:
         name = os.path.basename(f['path'].replace('\\', '/'))
         if name == have:
             continue
-        dest = os.path.join(run.staging_dir, name)
+        dest = os.path.join(store, name)
         want = int(f.get('size') or 0)
         try:
             if os.path.isfile(dest) and (not want or os.path.getsize(dest) == want):
@@ -4532,7 +4682,8 @@ def _mirror_into_local_run(run):
     if _is_full_transformer_run(run):
         return
     try:
-        if not run.staging_dir or not os.path.isdir(run.staging_dir):
+        saves = run_checkpoint_files(run)
+        if not saves:
             return
         params = json.loads(run.train_params or '{}')
         # Mirror into THIS run's local dir: the stamped base ('' = official,
@@ -4543,17 +4694,16 @@ def _mirror_into_local_run(run):
                               variant=params.get('variant'))
         os.makedirs(run_dir, exist_ok=True)
         base = os.path.basename(os.path.normpath(run_dir))     # lora_<trigger>
-        for src_name in sorted(os.listdir(run.staging_dir)):
-            if not src_name.lower().endswith('.safetensors'):
-                continue
-            _mirror_one(run, run_dir, base, src_name)
+        for src_name in sorted(saves):
+            _mirror_one(run, run_dir, base, saves[src_name])
     except Exception as e:
         # RuntimeError from _run_dir = ai-toolkit not configured -> fine
         logger.debug('local run-dir mirror skipped: %s', e)
 
 
-def _mirror_one(run, run_dir, base, src_name):
+def _mirror_one(run, run_dir, base, src_path):
     try:
+        src_name = os.path.basename(src_path)
         m = re.search(r'_(\d{6,})\.safetensors$', src_name)
         dest_name = f'{base}_{m.group(1)}.safetensors' if m else f'{base}.safetensors'
         dest = os.path.join(run_dir, dest_name)
@@ -4565,7 +4715,7 @@ def _mirror_one(run, run_dir, base, src_name):
             logger.warning('local run dir already has %s — cloud mirror skipped '
                            '(local checkpoint left untouched)', dest_name)
             return
-        shutil.copy2(os.path.join(run.staging_dir, src_name), dest)
+        shutil.copy2(src_path, dest)
         logger.info('mirrored cloud checkpoint into local run dir: %s/%s',
                     run_dir, dest_name)
     except (OSError, re.error) as e:
@@ -4608,16 +4758,10 @@ def _dataset_name(dataset_id):
 
 
 def _staging_save_count(run) -> int:
-    """How many checkpoints (.safetensors) this run's staging currently holds —
-    the 'saves' figure on the Runs-hub cards. 0 when staging is gone (purged /
-    hand-deleted): the card simply drops the metric, never crashes."""
-    if not run.staging_dir:
-        return 0
-    try:
-        return sum(1 for f in os.listdir(run.staging_dir)
-                   if f.lower().endswith('.safetensors'))
-    except OSError:
-        return 0
+    """How many checkpoints this run still HAS — the 'saves' figure on the
+    Runs-hub cards. Reads the durable store (plus the legacy staging dir), so
+    cleaning a run's staging no longer makes its saves vanish from the card."""
+    return len(run_checkpoint_files(run))
 
 
 def _latest_sample_name(samples_dir):
@@ -4795,9 +4939,13 @@ def _run_payload(run) -> dict:
             # checkpoints the pod saved (live count of the staging downloads)
             'steps': _run_param(run, 'steps'),
             'saves': _staging_save_count(run),
-            # Distinct steps of the harvested checkpoints still in staging — the
+            # Why the 🧹 must skip this run, or None. Computed server-side so the
+            # hub button and the backend can never disagree about a kept pod
+            # whose recovery window has since closed (the frontend cannot know).
+            'staging_spare_reason': staging_spare_reason(run),
+            # Distinct steps of the harvested checkpoints still on disk — the
             # ▶ Continue dialog offers them so a finished run can resume from an
-            # EARLIER epoch, not only its last (empty when staging was purged).
+            # EARLIER epoch, not only its last (empty when they are all gone).
             'resume_steps': (sorted({c['step'] for c in _run_staging_checkpoints(run)})
                              if run.status == 'done' else []),
             'resume_checkpoints': (
@@ -6640,13 +6788,14 @@ def cloud_checkpoint_groups(dataset_id, train_type=None, variant=None) -> list:
                 str(_run_param(run, 'variant') or wanted_variant).lower()
                 != wanted_variant):
             continue
-        if not run.staging_dir or not os.path.isdir(run.staging_dir):
+        # The store first, staging only as a legacy read (see _checkpoint_dirs):
+        # a run whose staging was cleaned still lists every save it produced.
+        saves = run_checkpoint_files(run)
+        if not saves:
             continue
         run_variant = _run_param(run, 'variant')
         entries = []
-        for name in os.listdir(run.staging_dir):
-            if not name.lower().endswith('.safetensors'):
-                continue
+        for name in saves:
             m = re.search(r'_(\d{6,})\.safetensors$', name)
             step = int(m.group(1)) if m else int(_run_param(run, 'steps') or 0)
             entries.append({'filename': name, 'step': step, 'cloud': True,
@@ -6691,18 +6840,16 @@ def delete_cloud_checkpoint(dataset_id, run_id, filename) -> str:
     — the sync re-downloads it). Clears checkpoint_local_path when it pointed
     at the trashed file."""
     run = CloudTrainingRun.query.get(int(run_id))
-    if not run or run.dataset_id != int(dataset_id) or not run.staging_dir:
+    if not run or run.dataset_id != int(dataset_id):
         raise ValueError('unknown cloud run')
     if run.status in ACTIVE_STATES:
         raise ValueError('this cloud run is still active — its save would just '
                          'be re-synced; stop the run first')
-    allowed = {f for f in os.listdir(run.staging_dir)
-               if f.lower().endswith('.safetensors')}
-    if filename not in allowed:
+    path = run_checkpoint_path(run, filename)
+    if not path:
         raise ValueError('unknown checkpoint')
     from . import trash
-    trash.send_to_trash(os.path.join(run.staging_dir, filename),
-                        context=f'cloudckpt_run{run.id}')
+    trash.send_to_trash(path, context=f'cloudckpt_run{run.id}')
     if run.checkpoint_local_path \
             and os.path.basename(run.checkpoint_local_path) == filename:
         _set(run, checkpoint_local_path=None)
@@ -6720,28 +6867,76 @@ def staging_spare_reason(run) -> str | None:
     if run.status in ACTIVE_STATES:
         return 'this run is still active — its staging is being written to'
     if run.status == 'error_pod_kept':
-        return ('its pod was kept for manual recovery — clean it up after you '
-                'have retrieved what you need')
+        # Spared only while the recovery window is genuinely OPEN. A kept pod is
+        # billed for at most cloud.max_runtime_minutes past the run's end; after
+        # that the pod is gone and sparing its staging forever just froze tens of
+        # GB on a full disk with no upside.
+        if _full_transformer_recovery_open(run):
+            return ('its pod was kept for manual recovery — clean it up after '
+                    'you have retrieved what you need')
+        return None
     return None
 
 
+# What a staging dir is allowed to contain besides the working payload. The
+# cleanup NEVER trashes an entry it does not recognise: an unexpected file gets
+# left behind rather than destroyed.
+_PURGEABLE_STAGING_DIRS = ('dataset', 'samples')
+_PURGEABLE_STAGING_SUFFIXES = ('.log', '.txt', '.json', '.yaml', '.yml', '.part')
+
+
+def _purgeable_staging_entries(staging_dir) -> list:
+    """Names inside a staging dir the cleanup may throw away: the exported
+    dataset copy, the sample images and the mirrored logs/progress files.
+
+    Everything else stays — and `.safetensors` can never appear here anyway,
+    because the caller rescues them into the store first. Keeping BOTH guards is
+    deliberate: this is the function whose past over-reach destroyed weights."""
+    out = []
+    try:
+        names = sorted(os.listdir(staging_dir))
+    except OSError:
+        return out
+    for name in names:
+        path = os.path.join(staging_dir, name)
+        if os.path.isdir(path):
+            if name in _PURGEABLE_STAGING_DIRS:
+                out.append(name)
+            continue
+        if name.lower().endswith('.safetensors'):
+            continue
+        if name.lower().endswith(_PURGEABLE_STAGING_SUFFIXES):
+            out.append(name)
+    return out
+
+
 def _trash_staging(run) -> int:
-    """Move ONE run's staging dir to the trash; returns the bytes it held (0 when
-    there was nothing on disk). Callers own the sparing check."""
+    """Clean ONE run's staging: rescue its checkpoints into the durable store,
+    then move the dataset copy, the samples and the logs to the trash. Returns
+    the bytes moved (0 when there was nothing). Callers own the sparing check.
+
+    It used to trash the whole directory — including `.safetensors` that had
+    never been deployed anywhere else. Emptying the trash then destroyed them."""
     from . import trash
+    _adopt_checkpoints_into_store(run)
     sd = run.staging_dir
     if not sd or not os.path.isdir(sd):
         return 0
-    size = lt._dir_size(sd)
-    trash.send_to_trash(sd, context=f'staging_run{run.id}')
+    freed = 0
+    for name in _purgeable_staging_entries(sd):
+        path = os.path.join(sd, name)
+        try:
+            freed += lt._dir_size(path) if os.path.isdir(path) \
+                else os.path.getsize(path)
+            trash.send_to_trash(path, context=f'staging_run{run.id}')
+        except OSError as e:
+            logger.warning('purge: could not trash %s: %s', name, e)
     _staging_size_cache.pop(run.id, None)
-    if run.checkpoint_local_path:
-        _set(run, checkpoint_local_path=None)
-    return size
+    return freed
 
 
 # run_id -> (expires_at, bytes). A staging dir is a dataset copy + samples +
-# checkpoints — thousands of files per run, tens of thousands across a history.
+# logs — thousands of files per run, tens of thousands across a history.
 # Walking them belongs to an EXPLICIT request, never to the hub's 5 s poll, and a
 # short TTL keeps a re-open (or a second tab) from re-walking the same disk.
 _staging_size_cache = {}
@@ -6783,17 +6978,20 @@ def staging_sizes(run_ids=None) -> dict:
 
 
 def purge_run_staging(run_id) -> dict:
-    """Per-run 🧹: move THIS run's staging dir to the trash. Same sparing rule as
-    the global purge (staging_spare_reason), so the two can't disagree; the DB row
-    stays (history). Raises ValueError on an unknown or spared run — the caller
-    turns it into a 400 with the reason, instead of a silent no-op."""
+    """Per-run 🧹: trash THIS run's dataset copy, samples and logs (its
+    checkpoints are rescued into the store first — see _trash_staging). Same
+    sparing rule as the global purge (staging_spare_reason), so the two can't
+    disagree; the DB row stays (history). Raises ValueError on an unknown or
+    spared run — the caller turns it into a 400 with the reason."""
     run = CloudTrainingRun.query.get(int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
     reason = staging_spare_reason(run)
     if reason:
         raise ValueError(f'this run\'s staging is spared: {reason}')
-    if not run.staging_dir or not os.path.isdir(run.staging_dir):
+    if not run.staging_dir or not os.path.isdir(run.staging_dir) \
+            or not _purgeable_staging_entries(run.staging_dir):
+        _adopt_checkpoints_into_store(run)
         return {'purged': False, 'freed_bytes': 0, 'already_clean': True}
     try:
         freed = _trash_staging(run)
@@ -6805,10 +7003,11 @@ def purge_run_staging(run_id) -> dict:
 
 
 def purge_finished_runs() -> dict:
-    """Hub 'Clean finished runs': move the staging dirs of TERMINAL runs to the
-    trash — dataset copies, samples and checkpoint duplicates of results that
-    are already imported/mirrored. Active runs and error_pod_kept (manual
-    recovery may still be under way) are spared. DB rows stay (history).
+    """Hub 'Clean finished runs': for every TERMINAL run, move the dataset copy,
+    the sample images and the logs to the trash. Checkpoints are NOT part of the
+    deal — they are moved into the durable store first and left alone. Active
+    runs, and kept pods still inside their recovery window, are spared. DB rows
+    stay (history).
 
     `already_clean` tells "there was nothing to purge" apart from "0 purged
     because every attempt failed" — the caller shows two different messages."""
@@ -6820,14 +7019,127 @@ def purge_finished_runs() -> dict:
             continue
         if not run.staging_dir or not os.path.isdir(run.staging_dir):
             continue
+        if not _purgeable_staging_entries(run.staging_dir):
+            _adopt_checkpoints_into_store(run)
+            continue
         candidates += 1
         try:
             freed += _trash_staging(run)
             purged += 1
         except OSError as e:
             logger.warning('purge: could not trash %s: %s', run.staging_dir, e)
+    orphans = orphan_staging_dirs()
     return {'purged_runs': purged, 'freed_bytes': freed,
-            'already_clean': candidates == 0}
+            'already_clean': candidates == 0,
+            'orphans': orphans,
+            'orphan_bytes': sum(o['size_bytes'] for o in orphans)}
+
+
+# ── Orphaned run folders ─────────────────────────────────────────────────────
+# A `run_<id>` folder on disk that NO row points at — left behind by a deleted
+# database, a restored backup, a relocated data dir or an interrupted purge.
+# The cleanup used to answer "already clean" while 25 GB sat right there, so it
+# now names them instead and offers to trash them explicitly.
+
+def orphan_staging_dirs() -> list:
+    """`[{name, size_bytes}]` of the run folders under the cloud-runs root that
+    no run row claims. Sizes are walked here on purpose: this list is only built
+    by an explicit cleanup request, never by the hub's poll."""
+    try:
+        root = _staging_root()
+    except OSError:
+        return []
+    try:
+        entries = sorted(os.listdir(root))
+    except OSError:
+        return []
+    claimed = set()
+    for run in CloudTrainingRun.query.all():
+        if run.staging_dir:
+            claimed.add(os.path.normcase(os.path.abspath(run.staging_dir)))
+    out = []
+    for name in entries:
+        path = root / name
+        if not name.startswith('run_') or not path.is_dir():
+            continue
+        if os.path.normcase(os.path.abspath(str(path))) in claimed:
+            continue
+        try:
+            size = lt._dir_size(str(path))
+        except OSError:
+            continue
+        out.append({'name': name, 'size_bytes': size,
+                    'checkpoints': len(_loose_checkpoints(str(path)))})
+    return out
+
+
+def _loose_checkpoints(path) -> list:
+    """`.safetensors` sitting directly in a folder — what an orphan from before
+    the store may still be the only home of."""
+    try:
+        return [n for n in sorted(os.listdir(path))
+                if n.lower().endswith('.safetensors')]
+    except OSError:
+        return []
+
+
+def purge_orphan_staging_dirs(names=None) -> dict:
+    """Trash the named orphan run folders (all of them when `names` is None).
+
+    Guarded twice: the name must be one this scan actually reported as an
+    orphan, and it is resolved under the cloud-runs root — a caller can never
+    aim this at an arbitrary path.
+
+    Any `.safetensors` still loose in an orphan is RESCUED into the checkpoint
+    store before the folder goes; an orphan is exactly the case where nobody can
+    tell you whether that weight exists anywhere else."""
+    from . import trash
+    found = {o['name']: o['size_bytes'] for o in orphan_staging_dirs()}
+    wanted = list(found) if names is None else [str(n) for n in names]
+    root = _staging_root()
+    purged = 0
+    freed = 0
+    rescued = 0
+    skipped = []
+    for name in wanted:
+        if name not in found:
+            skipped.append(name)
+            continue
+        path = root / name
+        try:
+            rescued += _rescue_loose_checkpoints(str(path), name)
+            trash.send_to_trash(str(path), context=f'orphan_{name}')
+            purged += 1
+            freed += found[name]
+        except OSError as e:
+            logger.warning('orphan purge: could not trash %s: %s', name, e)
+            skipped.append(name)
+    return {'purged_dirs': purged, 'freed_bytes': freed,
+            'rescued_checkpoints': rescued, 'skipped': skipped}
+
+
+def _rescue_loose_checkpoints(path, folder_name) -> int:
+    """Move an orphan folder's `.safetensors` into the checkpoint store, under
+    the same `run_<id>` name. Returns how many were rescued."""
+    names = _loose_checkpoints(path)
+    if not names:
+        return 0
+    dest_dir = cfg.checkpoints_root() / folder_name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    moved = 0
+    for name in names:
+        dest = dest_dir / name
+        if dest.exists():
+            continue
+        try:
+            shutil.move(os.path.join(path, name), str(dest))
+            moved += 1
+        except OSError as e:
+            logger.warning('orphan rescue: %s not moved: %s', name, e)
+    if moved:
+        logger.info('orphan %s: rescued %s checkpoint(s) into the store',
+                    folder_name, moved)
+    return moved
 
 
 def cloud_progress(user_id, dataset_id, train_type=None) -> dict:

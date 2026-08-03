@@ -486,6 +486,16 @@ def create_app(config_object=None):
         # leaving the restarted app stuck on "GPU busy" until the TTL expires.
         from .gpu_window import recover_stale_vision_window
         recover_stale_vision_window()
+        # Move cloud checkpoints out of the disposable staging dirs and into the
+        # durable store. Until this has run, an install trained before the store
+        # existed still keeps its ONLY copy of a never-deployed .safetensors in a
+        # directory the cleanup is allowed to trash (see services.cloud_training).
+        # Once, guarded by a persisted flag, and swallows its own failures.
+        try:
+            from .services.cloud_training import migrate_checkpoints_into_store
+            migrate_checkpoints_into_store()
+        except Exception:
+            app.logger.exception('checkpoint store retrofit skipped')
 
     from .routes import register_blueprints
     register_blueprints(app, csrf)

@@ -53,7 +53,18 @@ DEFAULTS = {
     # remote devices (access_token is then generated + persisted here so it
     # survives restarts and is copyable from Settings). Loopback never needs it.
     'server': {'host': '127.0.0.1', 'port': 5050, 'require_token': False, 'access_token': ''},
-    'paths': {'dataset_images_root': ''},                      # '' -> DATA_DIR/datasets
+    # Every path here means "'' = the default under DATA_DIR". Storing the
+    # resolved path instead would freeze today's disk into config.json and make
+    # a later DATA_DIR move silently wrong, so blank stays blank.
+    #   cloud_runs_dir     working area of a cloud run (dataset copy, samples,
+    #                      logs) — big, and safe to throw away once a run ended.
+    #   checkpoints_dir    the DURABLE checkpoint store. Deliberately NOT under
+    #                      cloud_runs_dir: the staging cleanup used to be the
+    #                      only copy of a never-deployed .safetensors, and
+    #                      emptying the trash after it destroyed weights.
+    'paths': {'dataset_images_root': '',                       # '' -> DATA_DIR/datasets
+              'cloud_runs_dir': '',                            # '' -> DATA_DIR/cloud_runs
+              'checkpoints_dir': ''},                          # '' -> DATA_DIR/checkpoints
     'comfyui': {'api_url': 'http://127.0.0.1:8188', 'base_dir': '',
                 'output_dir': '', 'input_dir': '', 'models_dir': '', 'loras_dir': '',
                 # setup_skipped (default False): the user consciously chose "continue
@@ -1027,6 +1038,30 @@ def dataset_images_root() -> Path:
     p = get('paths.dataset_images_root') or ''
     root = Path(p) if p else _data_dir() / 'datasets'
     root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def cloud_runs_root(create=True) -> Path:
+    """Working area of cloud training runs (one ``run_<id>/`` per run: the
+    exported dataset copy, the sample images and the mirrored training log).
+    Relocatable — this is the directory that grows to tens of GB. It no longer
+    holds the only copy of anything: checkpoints live in checkpoints_root()."""
+    p = get('paths.cloud_runs_dir') or ''
+    root = Path(p) if p else _data_dir() / 'cloud_runs'
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def checkpoints_root(create=True) -> Path:
+    """The durable checkpoint store — one ``run_<id>/`` per cloud run holding the
+    ``.safetensors`` it produced. Separate from cloud_runs_root() on purpose: the
+    staging cleanup is allowed to throw its directory away, this one never is.
+
+    ``create=False`` for the READ path: listing a run's saves happens on every
+    hub poll, and an mkdir per run per poll buys nothing."""
+    p = get('paths.checkpoints_dir') or ''
+    root = Path(p) if p else _data_dir() / 'checkpoints'
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 def backups_dir() -> Path:
