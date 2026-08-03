@@ -644,6 +644,13 @@ const TOPICS = [
      'close a pinned image', 'reopen a pinned image', 'my image came back',
      'image position remembered', 'unpin', 'image node', 'image linked to checkpoint',
      'my pinned image disappeared', 'pinned image after tidy up',
+     // Free placement: the wall at the lane's corner is gone, and both halves
+     // of that are things people look up — "why can I not drag it up there"
+     // before, "how do I get it back" after.
+     'move an image anywhere', 'image stuck in its lane', 'cannot drag an image up',
+     'cannot move an image left', 'image outside its lane', 'image above its lane',
+     'move an image to another lane', 'image next to another dataset',
+     'lost a pinned image', 'bring a pinned image back', 'image far away on the board',
      // The feature existed for a while with no way to FIND it (viewer-only), so
      // "where is it" is a real search, not a hypothetical one.
      'where is pin to canvas', 'cannot find pin', 'pin from the thumbnail',

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
   groupPinnedBatchBySource, groupPinnedBatchTogether, pinBatchLabel, pinBatchPending,
-  pinBatchPendingAcrossLanes, placeImageBatch,
+  pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows,
 } from './canvasPinBatch.js';
 import { CARD_W } from './lineageGraph.js';
 
@@ -460,4 +460,109 @@ test('an over-cap lot keeps the EARLY epochs and says what it dropped', () => {
   const keptSteps = res.placed.map((p) => p.image.step);
   assert.ok(Math.min(...droppedSteps) > Math.max(...keptSteps),
     'the tail of the training is what gets refused, not an arbitrary slice');
+});
+
+// ---- ✦ Tidy up: bringing a strayed STRIP home -----------------------------
+/* Free placement lets a whole side-by-side strip be parked thousands of units
+   above or left of everything. ✦ Tidy up is the way back — and it has to bring
+   the strip back as ONE object. A tidy that re-flowed its members one by one
+   would not tidy the strip, it would dismantle it. */
+
+const stripRow = (groupId, anchor, members) => ({
+  kind: 'group',
+  key: `grp:${groupId}`,
+  groupId,
+  x: anchor.x,
+  y: anchor.y,
+  w: members.length * anchor.h,
+  h: anchor.h,
+  members: members.map((m, i) => ({
+    key: `img:${m.imageId}`,
+    node: m,
+    x: anchor.x + i * anchor.h,
+    y: anchor.y,
+    w: anchor.h,
+    h: anchor.h,
+  })),
+});
+
+const member = (imageId, recordId, over = {}) => ({
+  imageId,
+  x: 0,
+  y: 0,
+  w: 200,
+  h: 200,
+  visible: true,
+  groupId: 'g1',
+  groupPos: 0,
+  image: { id: imageId, url: `/img/${imageId}.png`, record_id: recordId, step: 2500 },
+  ...over,
+});
+
+const overlaps = (a, b) => (a.x < b.x + b.w && b.x < a.x + a.w
+  && a.y < b.y + b.h && b.y < a.y + a.h);
+
+test('a strip parked far off the board comes back beside the run that made it', () => {
+  const anchor = member(80, 114, { x: -9000, y: -7000, groupPos: 0 });
+  const layout = [stripRow('g1', anchor, [anchor, member(81, 114, { groupPos: 1 })])];
+  const { rows } = tidyGroupRows({ graph: GRAPH, layout });
+  assert.equal(rows.length, 1, 'only the anchor is written — the strip derives from it');
+  assert.equal(rows[0].imageId, 80);
+  const sourceCard = GRAPH.nodes.find((n) => n.node.record_id === 114);
+  assert.ok(rows[0].x >= sourceCard.x + CARD_W, 'to the right of its own card');
+  assert.ok(rows[0].x >= 0 && rows[0].y >= 0, 'back inside the lane');
+});
+
+test('tidying a strip never touches its membership, so it cannot dissolve', () => {
+  const anchor = member(80, 114, { x: -500, y: -500 });
+  const layout = [stripRow('g1', anchor, [anchor, member(81, 114, { groupPos: 1 })])];
+  const { rows } = tidyGroupRows({ graph: GRAPH, layout });
+  assert.ok(!('groupId' in rows[0]) && !('groupPos' in rows[0]),
+    'a write that only mentions geometry can never dissolve a group');
+  assert.deepEqual([rows[0].w, rows[0].h], [anchor.w, anchor.h],
+    'the strip keeps the size it had — only where it sits changes');
+});
+
+test('a repatriated strip lands on no card and on nothing already placed', () => {
+  const a1 = member(80, 114, { x: -900, y: -900, groupPos: 0 });
+  const a2 = member(90, 114, { x: -400, y: -400, groupId: 'g2', groupPos: 0 });
+  const layout = [
+    stripRow('g1', a1, [a1, member(81, 114, { groupPos: 1 })]),
+    stripRow('g2', a2, [a2, member(91, 114, { groupId: 'g2', groupPos: 1 })]),
+  ];
+  const { rows, boxes } = tidyGroupRows({ graph: GRAPH, layout });
+  assert.equal(rows.length, 2);
+  for (const n of GRAPH.nodes) {
+    const cardBox = { x: n.x, y: n.y, w: CARD_W, h: n.cellH };
+    for (const row of rows) {
+      assert.ok(!overlaps(row, cardBox),
+        `strip ${row.imageId} landed on run ${n.node.record_id}`);
+    }
+  }
+  const [b1, b2] = boxes.slice(-2);
+  assert.ok(!overlaps(b1, b2), 'the two strips do not land on each other');
+  // The footprints handed back are what the contact-sheet band must avoid, and
+  // they reserve the group's drag BAR as well as its pictures.
+  assert.ok(b1.h > rows[0].h, 'the bar above the strip is reserved too');
+});
+
+test('two strips are repatriated in the same order whatever order they arrive in', () => {
+  const build = (straight) => {
+    const a1 = member(80, 106, { x: -900, y: -900 });
+    const a2 = member(90, 117, { x: -400, y: -400, groupId: 'g2' });
+    const s1 = stripRow('g1', a1, [a1, member(81, 106, { groupPos: 1 })]);
+    const s2 = stripRow('g2', a2, [a2, member(91, 117, { groupId: 'g2', groupPos: 1 })]);
+    return tidyGroupRows({ graph: GRAPH, layout: straight ? [s1, s2] : [s2, s1] }).rows;
+  };
+  const byId = (list) => [...list].sort((a, b) => a.imageId - b.imageId)
+    .map((r) => [r.imageId, r.x, r.y]);
+  assert.deepEqual(byId(build(true)), byId(build(false)));
+});
+
+test('a lane with no strip on it asks for no writes at all', () => {
+  const lone = member(80, 114, { groupId: null, groupPos: null });
+  const layout = [{ kind: 'single', key: 'img:80', node: lone, x: 0, y: 0, w: 200, h: 200 }];
+  const { rows, boxes } = tidyGroupRows({ graph: GRAPH, layout });
+  assert.deepEqual(rows, []);
+  assert.deepEqual(boxes, [], 'and it does not pretend the cards are taken either');
 });

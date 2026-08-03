@@ -979,8 +979,22 @@ class CanvasImageNode(db.Model):
 
     Same table shape and the same reasoning as ``CanvasNodePosition``, one row
     per (dataset, image): coordinates are LANE-LOCAL, the same world units the
-    card positions use, so both live in one coordinate system and one lane
-    extent.
+    card positions use, so both live in one coordinate system.
+
+    ⚠️ Lane-local is the ANCHOR, not a cage — and unlike a card's, these
+    coordinates may be NEGATIVE. A picture goes wherever it is dropped, above or
+    left of its own lane included; only the point it is measured FROM is the
+    lane's origin. That reference is what makes the number survive: a lane's
+    position on the board is derived from which datasets are ticked in the
+    canvas filter and from the height of every lane above it, so it moves by
+    hundreds of world units whenever an unrelated dataset is unticked or gains a
+    run. Board-absolute coordinates would leave every picture hovering over the
+    wrong lane after one filter click, and would need a migration nobody could
+    compute server-side (lane heights are laid out in the browser). Measured
+    from its own lane, a picture travels with the run it is evidence about, and
+    every row ever written keeps meaning exactly what it meant — no migration,
+    on any database. ``cloud_training.CANVAS_IMAGE_REACH`` bounds the distance
+    so one corrupt row cannot collapse ✦ Fit; ✦ Tidy up is the way back.
 
     ⚠️ ``visible`` is the whole feature, not a flag. Closing a pinned image must
     NOT forget where it was: re-opening it has to put it back exactly where and

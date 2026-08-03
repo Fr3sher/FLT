@@ -55,6 +55,14 @@ export const WHATS_NEW = [
       'Editing your reference with Krea 2 Edit used the main photo and nothing else. You can now add a second image, with the “+” inside the ✦ Edit reference dialog. What it is for matters more than the fact it exists: that slot was trained on two-input edits where the second image is a *different* subject — another person, or a scene to place yours in. So it composes (“put her in this room”, “next to him”). Another angle of the same face is off-label there and can come back duplicated, which is why it deliberately does NOT read the dataset’s extra reference photos: those are angles of one person by definition. Extra angles keep doing what they always did, on the engines built for them — Klein chains every one of them from the reference card and locks identity across every generation, and the API engines use them too. Two different jobs, two different places, and the dialog now says which is which before you press Generate.',
   },
   {
+    id: '2026-08-03-canvas-images-go-anywhere',
+    date: '2026-08-03',
+    title: 'Pinned images go anywhere on the canvas, not just below and right of their run',
+    blurb:
+      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. And ✦ Tidy up is the way home — it now brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-canvas-group-drag-out-crash',
     date: '2026-08-03',
     title: 'Pulling a picture out of a group on the canvas no longer blanks the board',

@@ -427,6 +427,15 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       ...e,
       width: Math.max(e.graph?.width || 0, ext.width),
       height: Math.max(e.graph?.height || 0, ext.height),
+      // …and as far ABOVE and LEFT of the lane as anything reaches. A picture is
+      // no longer penned into the quadrant below its lane's corner, so the board
+      // is a BOX whose top-left may be negative rather than a size measured from
+      // the origin. Without these two the one gesture free placement exists for
+      // — drag a render up, above its lane — would produce something ✦ Fit
+      // frames off the top of the screen with no way back to it. The lanes
+      // themselves do not move: stackLanes only grows the box around them.
+      minX: ext.minX,
+      minY: ext.minY,
     };
   })), [placed, layoutByLane]);
 
@@ -480,12 +489,21 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const touched = useRef(false);
   const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
   const lastFit = useRef('');
+  // …and NEVER mid-gesture. The board's size is recomputed from the thing being
+  // dragged, so on a board whose view the user has not taken over yet, every
+  // frame of a drag that grows the board used to re-fit it: the picture followed
+  // the finger while the whole board zoomed and slid underneath it. Free
+  // placement made that reachable in one short drag — dragging UP past a lane's
+  // corner grows the board immediately — where before it needed a long haul to
+  // the bottom right. A drop still fits, so nothing is left off-screen; it just
+  // happens once, when the hand has let go.
+  const gesturing = Boolean(drag || imgDrag);
   useEffect(() => {
-    if (touched.current || lastFit.current === fitSignature) return;
+    if (touched.current || gesturing || lastFit.current === fitSignature) return;
     if (!viewport.width || !viewport.height) return;
     lastFit.current = fitSignature;
     setView(initialView(world, viewport));
-  }, [fitSignature, world, viewport]);
+  }, [fitSignature, world, viewport, gesturing]);
 
   const applyView = useCallback((next) => {
     touched.current = true;
@@ -1406,9 +1424,19 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
 
   const pct = Math.round(clampScale(view.scale) * 100);
   const empty = !world.lanes.length;
-  // Has anything on the visible board been moved? Drives ✦ Tidy up: a button
-  // that clears nothing should say so by being disabled, not by doing nothing.
-  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0);
+  /* Has anything on the visible board been PLACED by hand? Drives ✦ Tidy up: a
+     button that clears nothing should say so by being disabled, not by doing
+     nothing.
+
+     Pinned pictures count, and that is not a detail. This asked about moved
+     CARDS only — so a board where the user had only ever moved pictures offered
+     a greyed-out "Nothing has been moved yet", which was false and, now that a
+     picture can be parked anywhere on the board, was the way home being locked
+     at exactly the moment it is needed. A picture on the board is itself a
+     placement; the worst this costs is a click that tidies a board already
+     tidy, against a picture nobody can get back. */
+  const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0
+    || (imagesByLane[e.datasetId] || []).length > 0);
 
   return (
     <>
@@ -1442,11 +1470,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         </button>
         {/* The way out of an arrangement that got away from you. Twenty runs
             later a hand-tidied board can be a knot, and "move them all back by
-            hand" is not an answer — this drops every remembered position and
-            hands the board to the automatic tree again. */}
+            hand" is not an answer — this drops every remembered position, hands
+            the board to the automatic tree again, and brings every picture back
+            beside the run that made it, however far it was dragged. */}
         <button type="button" onClick={onTidyUp} disabled={!arranged}
           title={arranged
-            ? 'Forget every moved card and rebuild the automatic tree'
+            ? 'Forget every moved card, rebuild the automatic tree, and bring '
+              + 'every pinned image back beside its run'
             : 'Nothing has been moved yet'}
           className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
           <span aria-hidden>✦</span> Tidy up
