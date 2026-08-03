@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-seedvr2-tiling-is-a-choice',
+    date: '2026-08-03',
+    title: 'Tiled upscaling is now the default — it keeps more detail, not just less VRAM',
+    blurb:
+      'Yesterday tiling only kicked in when a frame would not fit on your card. SurpassHR (GitHub #32) re-tested it and sent the source renders: side by side, the full-frame result does not just soften fine texture, it rewrites it — short dense stubble comes back as long smeared strands. A tile is upscaled at the size the model works well at, while a whole 4K frame spreads its capacity over four times the surface. That made the old rule backwards: the bigger your GPU, the less often you got the better picture. So with the tiling node pack installed, large upscales are now tiled by default, and Settings ▸ Image engines lets you choose — tile when it helps (recommended), always tile large frames, or never. Nothing is tiled below roughly 1536 px on the short edge, where the model already works at a good size and a grid would only add seams.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-03-bank-suggests-one-person-folders',
     date: '2026-08-03',
     title: '👤 The bank now spots your one-person folders — suggested automatically, you confirm',

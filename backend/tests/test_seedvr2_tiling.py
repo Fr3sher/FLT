@@ -248,3 +248,124 @@ def test_capabilities_publishes_the_lane_and_the_ceiling(app, monkeypatch):
                 'seedvr2_ceiling_mp'):
         assert key in caps
     assert caps['seedvr2_tiling_ready'] is False
+
+
+# --- The lane is a CHOICE, not a VRAM fallback ------------------------------
+# SurpassHR re-tested the shipped version and posted a side-by-side on his own
+# hardware (GitHub #32): the full-frame result lost detail and gained artifacts,
+# the tiled one did not. Tiling is therefore a QUALITY decision, and the old
+# rule — tile only past the VRAM ceiling — had a perverse consequence: the
+# bigger the card, the less often anyone got the better picture. These tests pin
+# the new default and the two escape hatches.
+
+BIG = dict(width=2000, height=3000, short_edge=2160)
+SMALL_CARD = 6.4      # ~11.6 GB
+BIG_CARD = 13.2       # ~24 GB
+
+
+def test_the_default_tiles_on_a_BIG_card_too():
+    """THE regression this feature exists for. On 24 GB the 4K frame fits whole,
+    so the old VRAM-only rule kept it whole — and the person with the best
+    hardware was the only one never getting the better result."""
+    from app.services import seedvr2_helper as svr
+    lane = svr.choose_lane(**BIG, tiling_ok=True, ceiling_mp=BIG_CARD)
+    assert lane['lane'] == 'tiled', (
+        'with the pack installed the default must tile for quality, not wait '
+        'for the card to run out of memory')
+    assert lane['plan']['tiles'] == 12
+
+
+def test_never_forces_full_frame_whatever_the_geometry():
+    from app.services import seedvr2_helper as svr
+    lane = svr.choose_lane(**BIG, tiling_ok=True, ceiling_mp=SMALL_CARD, mode='never')
+    assert lane['lane'] == 'full' and lane['plan'] is None
+    # ...and the ceiling still does its one honest job.
+    assert lane['capped'] is True
+    assert 'run out of memory' in lane['notice']
+
+
+def test_always_is_literal_and_tiles_below_the_crossover_too():
+    """'always' means what it says: cut whenever there is a grid to make, even
+    at a target the default would leave whole. For whoever wants tiling
+    unconditionally — and the only way to get a grid under the crossover."""
+    from app.services import seedvr2_helper as svr
+    modest = dict(width=768, height=1024, short_edge=1200)
+    assert svr.choose_lane(**modest, tiling_ok=True,
+                           ceiling_mp=BIG_CARD)['lane'] == 'full'
+    assert svr.choose_lane(**modest, tiling_ok=True, ceiling_mp=BIG_CARD,
+                           mode='always')['lane'] == 'tiled'
+
+
+def test_the_refuted_vram_only_rule_is_gone_as_an_option():
+    """The pre-#32 default (tile ONLY when it would not fit) is not offered
+    under any name: it is the rule the side-by-side refuted, and keeping it
+    would be nostalgia for the setting that gave the biggest cards the worst
+    pictures."""
+    from app.services import seedvr2_helper as svr
+    assert svr.TILING_MODES == ('auto', 'always', 'never')
+    # On a card that can hold the 4K frame, NO mode reproduces "leave it whole
+    # because it fits" except the explicit opt-out.
+    tiled = [m for m in svr.TILING_MODES
+             if svr.choose_lane(**BIG, tiling_ok=True, ceiling_mp=BIG_CARD,
+                                mode=m)['lane'] == 'tiled']
+    assert tiled == ['auto', 'always']
+
+
+def test_no_pack_means_no_tiles_in_any_mode():
+    """The setting cannot conjure a node pack. Without TTP every mode runs
+    full-frame — and the over-budget case still says what would help."""
+    from app.services import seedvr2_helper as svr
+    for mode in svr.TILING_MODES:
+        lane = svr.choose_lane(**BIG, tiling_ok=False, ceiling_mp=SMALL_CARD, mode=mode)
+        assert lane['lane'] == 'full', f'{mode} tiled without the pack'
+        assert lane['capped'] is True
+        assert 'Comfyui_TTP_Toolset' in lane['notice']
+
+
+def test_a_frame_inside_one_tile_is_never_tiled_even_on_always():
+    """Not even the literal mode can "cut" a picture that fits in one tile:
+    there is no grid, and paying seam blending for a single piece is nonsense."""
+    from app.services import seedvr2_helper as svr
+    # 768x1024 asked for a 768 short edge stays 768x1024 — both sides within one
+    # 1024 px tile, so there is no grid to make. (Ask for 1024 instead and the
+    # height becomes 1365: that DOES need two tiles, and 'always' rightly cuts
+    # it — the literal mode is literal.)
+    lane = svr.choose_lane(768, 1024, short_edge=768, tiling_ok=True,
+                           ceiling_mp=BIG_CARD, mode='always')
+    assert lane['lane'] == 'full' and lane['plan'] is None
+    assert svr.choose_lane(768, 1024, short_edge=1024, tiling_ok=True,
+                           ceiling_mp=BIG_CARD, mode='always')['lane'] == 'tiled'
+
+
+def test_the_default_leaves_a_1080_target_whole():
+    """The shipped default resolution. The model already runs at a comfortable
+    size there, so tiling would buy nothing and still pay for seams and a second
+    pass — this is the guard that stopped 'tile for quality' becoming 'tile
+    everything'."""
+    from app.services import seedvr2_helper as svr
+    lane = svr.choose_lane(832, 1216, short_edge=1080, tiling_ok=True,
+                           ceiling_mp=BIG_CARD)
+    assert lane['lane'] == 'full'
+
+
+def test_the_shipped_default_is_auto(app):
+    from app import config
+    from app.services import seedvr2_helper as svr
+    with app.app_context():
+        assert config.DEFAULTS['seedvr2']['tiling'] == 'auto'
+        assert svr.tiling_mode() == 'auto'
+
+
+def test_an_unknown_mode_degrades_to_the_recommended_one(app):
+    """A stale tab or a typo in config must not refuse a batch."""
+    from app import config
+    from app.services import seedvr2_helper as svr
+    with app.app_context():
+        assert svr.tiling_mode('nonsense') == 'auto'
+        assert svr.tiling_mode('NEVER') == 'never'
+        config.save_config({'seedvr2': {'tiling': 'always'}})
+        assert svr.tiling_mode() == 'always'
+        # an explicit request still wins over the setting
+        assert svr.tiling_mode('never') == 'never'
+        config.save_config({'seedvr2': {'tiling': 'garbage'}})
+        assert svr.tiling_mode() == 'auto'

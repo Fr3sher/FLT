@@ -228,9 +228,16 @@ Settings:
 Upscaling a whole frame at once needs the whole frame in VRAM, so past a certain size it simply fails. Two things follow from that:
 
 - **You are told the limit before a run, not after.** Setup ▸ ComfyUI shows roughly how many megapixels this GPU is good for in a single pass. It is a guide, not a gate — real headroom moves with the build, block swapping and whatever else holds VRAM, so LDS still runs what you ask for and says when it looks over budget. On a GPU it cannot see (no `nvidia-smi`, a remote ComfyUI) it says **nothing**, rather than inventing a number.
-- **With the [Comfyui_TTP_Toolset](https://github.com/TTPlanetPig/Comfyui_TTP_Toolset) node pack installed (MIT), anything larger is tiled automatically**: the frame is cut into overlapping 1024 px tiles, each is upscaled, and the seams are blended back. Nothing to configure and no new setting — the lane switches on the geometry. Install it in ComfyUI-Manager and restart ComfyUI; LDS detects the two node classes it needs.
+- **With the [Comfyui_TTP_Toolset](https://github.com/TTPlanetPig/Comfyui_TTP_Toolset) node pack installed (MIT), large frames are tiled**: the frame is cut into overlapping 1024 px tiles, each is upscaled, and the seams are blended back. Nothing to configure and no new setting — the lane switches on the geometry. Install it in ComfyUI-Manager and restart ComfyUI; LDS detects the two node classes it needs.
 
-Without the pack nothing breaks: upscales still run, they are just capped by the card. LDS ports only the tiling itself — the original workflow also chained two further node packs to do arithmetic (counting tiles, normalising a pixel count), one of them GPL-3.0, and that arithmetic is done in Python here instead.
+Without the pack nothing breaks: upscales still run, they are just capped by the card.
+
+- **High-resolution tiling** → `seedvr2.tiling`. One of `auto` (default), `always`, `never`. Tiling is **not only a memory trick**: SeedVR2's target resolution is the size the model actually works at, so a whole 4K frame spreads its capacity over four times the surface while a tile is upscaled in the range it is good at. SurpassHR's side-by-side on his own card showed the full-frame result losing detail and gaining artifacts where the tiled one did not — which also means the old rule (tile only when the frame would not fit) had it backwards: the bigger your GPU, the less often you got the better picture.
+  - `auto` — tile once the target short edge is past ~1536 px, or when the frame would not fit anyway. This is the recommended setting and the reason the pack is worth installing.
+  - `always` — tile any frame bigger than a single tile, including below that crossover.
+  - `never` — always full-frame. Pick this if you ever see a seam; the VRAM warning still applies.
+  On `auto` nothing is tiled below the crossover: the model is already at a comfortable size and a grid would only add seams. The pre-#32 rule (tile *only* when the frame would not fit) is deliberately not offered — it is the default the side-by-side refuted.
+ LDS ports only the tiling itself — the original workflow also chained two further node packs to do arithmetic (counting tiles, normalising a pixel count), one of them GPL-3.0, and that arithmetic is done in Python here instead.
 
 **There is no batch-size setting, on purpose.** SeedVR2's `batch_size` is a *video* window whose frames share temporal attention to stay coherent — feeding it unrelated dataset photos would let them bleed into each other. Images are upscaled one per job; throughput comes from the normal generation queue and its fan-out cap.
 

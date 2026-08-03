@@ -195,6 +195,17 @@ MIN_CEILING_MP = 1.0
 # under it fits essentially anywhere, and tiling it would spend seam-blending on
 # a picture that never needed it.
 TILE_WORTH_IT_MP = 6.0
+# Above this OUTPUT SHORT EDGE, 'always' tiles. The mechanism decides the shape
+# of this rule: SeedVR2's `resolution` is the size the model actually works at,
+# so tiling helps exactly when full-frame would push it well past the tile size
+# it is comfortable with. At a 1080 target the model runs at 1080 either way —
+# tiling would buy nothing and still pay for seams and a second pass; at 2160 it
+# runs at 2160 full-frame versus 1024 per tile, which is the gap SurpassHR's
+# side-by-side shows (GitHub #32).
+# The 1.5x factor itself is a JUDGEMENT, not a measurement: it is placed so the
+# shipped 1080 default keeps its single fast pass while 4K work tiles. If anyone
+# measures the crossover properly, this is the number to move.
+TILE_ABOVE_SHORT_EDGE = int(TILE_PX * 1.5)
 
 
 _PROBE_VRAM = object()   # "not supplied" — distinct from an explicit unknown
@@ -557,6 +568,41 @@ def _clamp_int(value, lo, hi, default):
         return default
 
 
+TILING_MODES = ('auto', 'always', 'never')
+
+
+def tiling_mode(requested=None):
+    """`seedvr2.tiling`, clamped to a value the lane understands.
+
+    'auto' is the DEFAULT and the recommended one: tile when tiling actually
+    buys something — past the size the model is comfortable at, or when the
+    frame would not fit at all. Tiling is a QUALITY decision before it is a
+    memory one (SurpassHR's A/B, GitHub #32), but below the crossover the model
+    already works at a good size and a grid would only add seams.
+
+    'always' is the literal reading: cut whenever there is more than one tile to
+    make, whatever the size. For whoever wants tiling unconditionally.
+
+    'never' stays full-frame whatever the geometry, for whoever sees a seam and
+    prefers the softer image. The VRAM warning still applies there.
+
+    The pre-#32 rule — tile ONLY when the frame would not fit — is deliberately
+    gone: it was the default SurpassHR's side-by-side refuted, and keeping it
+    under a name would just be nostalgia for a setting that made the biggest
+    cards get the worst pictures.
+
+    Unknown values fall back to the default rather than raising: a stale tab or
+    a typo in config must degrade to the recommended behaviour, never refuse a
+    batch."""
+    for candidate in (requested, cfg.get('seedvr2.tiling')):
+        name = str(candidate or '').strip().lower()
+        if name in TILING_MODES:
+            return name
+        if name:
+            logger.warning('unknown seedvr2.tiling %r — using auto', candidate)
+    return 'auto'
+
+
 def target_resolution():
     """Short-edge target in pixels. The node scales the SHORT edge to this and
     keeps the aspect ratio, so 1080 on a 3:2 photo gives 1620x1080. Snapped to an
@@ -727,14 +773,19 @@ def _source_size(path):
 
 
 def choose_lane(width, height, *, short_edge, tiling_ok, ceiling_mp=None,
-               tile_px=TILE_PX, overlap_rate=TILE_OVERLAP_RATE):
+               tile_px=TILE_PX, overlap_rate=TILE_OVERLAP_RATE, mode=None):
     """Which lane runs, and what the user must be told BEFORE the GPU starts.
 
     Returns ``{lane, plan, output_mp, ceiling_mp, capped, notice}``:
       * ``lane`` — 'tiled' when tiling is available AND worth it, else 'full'.
       * ``plan`` — the tile geometry for the tiled lane, None otherwise.
       * ``capped`` — True when the request exceeds what full-frame can promise
-        on this card and tiling is NOT available. The caller still runs (the
+        on this card and no tiled lane will run (pack absent, or 'never').
+
+    ``mode`` is `seedvr2.tiling`: 'auto' (default — tile when it helps: past the
+    model's comfortable size, or when the frame would not fit), 'always' (tile
+    whenever there is more than one tile to make) or 'never' (full-frame always;
+    the ceiling still warns). The caller still runs (the
         ceiling is guidance, not a gate — see below), but ``notice`` says so.
 
     WHY THE CEILING NEVER REFUSES. It is arithmetic over a single constant, on a
@@ -743,15 +794,40 @@ def choose_lane(width, height, *, short_edge, tiling_ok, ceiling_mp=None,
     have worked. What it must not do is stay SILENT: the report that opened this
     (SurpassHR, GitHub #32) is someone discovering the limit as a CUDA OOM in a
     log. So the honest contract is: always run, always say."""
+    mode = tiling_mode(mode)
     out_mp = output_megapixels(width, height, short_edge)
-    # Tile only when the frame would not fit comfortably in one pass. Tiling is
-    # not free — it blends seams and runs the model once per tile — so a picture
-    # this card can hold whole must stay whole. With no ceiling (unknown card)
-    # we fall back to a fixed floor rather than tiling everything.
+    # WHY TILING IS NOT JUST A VRAM WORKAROUND — the comment that used to sit
+    # here said "a picture this card can hold whole must stay whole", and it was
+    # WRONG. SurpassHR posted a side-by-side on his own hardware (GitHub #32):
+    # the full-frame result lost detail and gained artifacts, the tiled one did
+    # not. The reason is in SeedVR2's `resolution` argument — it sets the size
+    # the model actually works at, so a whole 4K frame spreads the model's
+    # capacity across four times the surface, while a tile is upscaled in the
+    # range the model is good at. Tiling therefore preserves HIGH-FREQUENCY
+    # DETAIL, and framing it as a memory trick had a perverse consequence: the
+    # threshold scaled with VRAM, so the bigger the card, the less often anyone
+    # got the better picture. Someone on 24 GB essentially never did.
+    #
+    # So the lane is now a CHOICE (seedvr2.tiling), defaulting to 'auto', which
+    # tiles whenever tiling helps rather than only when memory forces it. The
+    # VRAM ceiling keeps its one honest job — warning when the pack is absent
+    # and a frame will not fit.
     budget = ceiling_mp if ceiling_mp else TILE_WORTH_IT_MP
-    worth_it = out_mp > budget
+    over_budget = out_mp > budget
+    if mode == 'never':
+        wants_tiles = False
+    elif mode == 'always':
+        # Literal: cut whenever there is a grid to make. `tile_plan` still
+        # returns None for anything that fits in a single tile, so this cannot
+        # "cut" a picture into one piece.
+        wants_tiles = True
+    else:                              # 'auto' — the default
+        # Tile when it actually buys something: past the size the model is
+        # comfortable at, or when the frame would not fit at all. Below that,
+        # the model already runs at a good size and a grid is pure cost.
+        wants_tiles = short_edge > TILE_ABOVE_SHORT_EDGE or over_budget
     plan = (tile_plan(width, height, short_edge, tile_px, overlap_rate)
-            if (tiling_ok and worth_it) else None)
+            if (tiling_ok and wants_tiles) else None)
     if plan:
         return {'lane': 'tiled', 'plan': plan, 'output_mp': round(out_mp, 1),
                 'ceiling_mp': ceiling_mp, 'capped': False,
@@ -816,7 +892,8 @@ def enqueue_seedvr2_upscale(user_id, source_filename, source_path=None,
     short_edge = target_resolution()
     src_w, src_h = _source_size(staged_source)
     lane = choose_lane(src_w, src_h, short_edge=short_edge,
-                       tiling_ok=tiling_available(), ceiling_mp=full_frame_ceiling_mp())
+                       tiling_ok=tiling_available(), ceiling_mp=full_frame_ceiling_mp(),
+                       mode=tiling_mode())
     if lane['notice']:
         logger.info('seedvr2: %s', lane['notice'])
     if lane['lane'] == 'tiled':

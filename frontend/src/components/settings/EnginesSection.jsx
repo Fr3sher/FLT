@@ -354,6 +354,8 @@ const SEEDVR2_RESOLUTION_MIN = 256
 const SEEDVR2_RESOLUTION_MAX = 4096
 const SEEDVR2_MAX_RESOLUTION_MAX = 8192
 const SEEDVR2_BLOCKS_MAX = 36
+// Mirrors seedvr2_helper.TILE_ABOVE_SHORT_EDGE — shown, never enforced here.
+const SEEDVR2_TILE_ABOVE = 1536
 // seedvr2_helper.COLOR_CORRECTIONS — the node's own enum, in its own order.
 const SEEDVR2_COLOR_MODES = ['lab', 'wavelet', 'wavelet_adaptive', 'hsv', 'adain', 'none']
 
@@ -566,6 +568,33 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
           </ul>
         )}
         <ResetToDefault label="Model build" section="seedvr2" field="model" {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="seedvr2-tiling" className="block text-xs font-medium text-content">
+          High-resolution tiling
+        </label>
+        <select
+          id="seedvr2-tiling"
+          value={svr.tiling ?? dflt('tiling')}
+          onChange={(e) => setField('seedvr2', 'tiling', e.target.value)}
+          className={INPUT_CLASS}
+        >
+          <option value="auto">Tile when it helps (recommended)</option>
+          <option value="always">Always tile large frames</option>
+          <option value="never">Never tile</option>
+        </select>
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          Needs the <code>Comfyui_TTP_Toolset</code> node pack; without it this has no
+          effect. Tiling is not only about memory: a tile is upscaled at the size the
+          model works well at, so a large frame keeps far more fine detail than one
+          processed whole — contributed and measured by SurpassHR (GitHub&nbsp;#32).
+          On <b>Tile when it helps</b> nothing is tiled below roughly {SEEDVR2_TILE_ABOVE} px
+          on the short edge: the model is already in its comfortable range there and a grid
+          would only add seams. <b>Always</b> tiles any frame bigger than one tile; pick
+          <b>never</b> if you ever see a seam.
+        </p>
+        <ResetToDefault label="High-resolution tiling" section="seedvr2" field="tiling" {...reset} />
       </div>
 
       <div className="mt-3 sm:max-w-md">

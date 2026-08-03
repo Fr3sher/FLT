@@ -475,6 +475,15 @@ DEFAULTS = {
         # tone better on heavily degraded sources. Colour fidelity is the whole
         # reason this engine exists, so this is deliberately exposed.
         'color_correction': 'lab',
+        # How the high-resolution (tiled) lane is chosen, when the TTP node pack
+        # is installed. 'auto' (default) tiles when tiling helps — past the size
+        # the model is comfortable at, or when the frame would not fit. Tiling
+        # preserves high-frequency detail, not just VRAM (SurpassHR's
+        # side-by-side, GitHub #32); the old VRAM-only rule meant the bigger
+        # your card the less often you got the better picture, and it is gone.
+        # 'always' tiles whenever there is more than one tile to make; 'never'
+        # stays full-frame. Without the pack this has no effect.
+        'tiling': 'auto',
         # Transformer blocks offloaded to system RAM during inference. 0 = none
         # (fastest). Raise it to fit a bigger build on a smaller card; it trades
         # speed for VRAM headroom, it does not change the result.
