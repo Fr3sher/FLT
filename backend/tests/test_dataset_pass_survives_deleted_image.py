@@ -272,3 +272,46 @@ def test_the_short_caption_pass_survives_an_image_deleted_under_it(ctx, monkeypa
     for i in (ids[0], ids[2]):
         assert db.session.get(FaceDatasetImage, i).caption_short, (
             'the pass continued but stopped writing its short captions')
+
+
+def test_generate_variations_survives_stop_deleting_its_row(ctx, monkeypatch):
+    """⏹ Stop deletes exactly the rows this function is creating (status='pending'
+    AND filename IS NULL), and it can land while the enqueue is in flight."""
+    from app.config import LOCAL_USER
+    from app.extensions import db
+    from app.models import FaceDatasetImage
+    from app.services import face_dataset_service as svc
+    global _ORIG_CFG_GET
+    _ORIG_CFG_GET = svc.cfg.get
+
+    ds = _dataset_with_files(svc, 1)
+    ds.ref_filename = 'img0.png'
+    db.session.commit()
+    created = []
+
+    def fake_enqueue(**kw):
+        # The row was committed (and therefore expired) just above; Stop removes
+        # it while we are here, inside the enqueue.
+        row = (FaceDatasetImage.query.filter_by(dataset_id=ds.id, status='pending')
+               .order_by(FaceDatasetImage.id.desc()).first())
+        if row is not None and not created:
+            created.append(row.id)
+            FaceDatasetImage.query.filter(FaceDatasetImage.id == row.id).delete(
+                synchronize_session=False)
+            db.session.commit()
+        return 'job-1'
+
+    # Imported INSIDE the function, so it must be patched at its source module —
+    # patching it on face_dataset_service silently does nothing.
+    from app.services import klein_edit_helper
+    monkeypatch.setattr(klein_edit_helper, 'enqueue_klein_edit', fake_enqueue)
+    # The pass preflights the Klein model files before creating any row; without
+    # this it refuses long before the window under test and the probe is red on
+    # its setup (the third time this campaign — see the concept test).
+    monkeypatch.setattr(klein_edit_helper, 'klein_missing_assets', lambda *a, **k: [])
+    monkeypatch.setattr(svc.cfg, 'get',
+                        lambda k, *a, **kw: ('C:/comfy' if k == 'comfyui.base_dir'
+                                             else _ORIG_CFG_GET(k, *a, **kw)))
+    ids = svc.generate_variations(LOCAL_USER, ds.id,
+                                  [{'prompt': 'p', 'label': 'l'}], 1)
+    assert ids == [], f'a row deleted by Stop should not be reported as queued: {ids}'

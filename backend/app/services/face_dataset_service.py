@@ -7868,6 +7868,10 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                                        variation_prompt=v['prompt'], klein_model=klein_model)
                 db.session.add(img)
                 db.session.commit()
+                # Captured NOW, while the row certainly exists: ⏹ Stop deletes
+                # exactly this shape (status='pending' AND filename IS NULL), and
+                # it can land while the enqueue below is in flight.
+                image_id = img.id
                 # NSFW (flag explicite OU label du catalogue NSFW) : wrapper sans le
                 # clamp SFW — chemin Klein local uniquement, les moteurs API sont
                 # refusés en amont (route + generate_variations_nanobanana).
@@ -7893,12 +7897,17 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                         extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                                         'variation_label': v.get('label')})
                 except Exception:
-                    img.status = 'failed'
-                    db.session.commit()
+                    row = _live_image_row(image_id)
+                    if row is not None:
+                        row.status = 'failed'
+                        db.session.commit()
                     raise
-                img.job_id = job_id
+                row = _live_image_row(image_id)
+                if row is None:
+                    continue     # Stop removed it mid-enqueue; nothing to report
+                row.job_id = job_id
                 db.session.commit()
-                ids.append(img.id)
+                ids.append(image_id)
     finally:
         _sync_generate_activity(dataset_id)
     return ids
@@ -7958,6 +7967,9 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier,
                                        klein_model=KREA_ENGINE)
                 db.session.add(img)
                 db.session.commit()
+                # Same reason as the Klein path: ⏹ Stop deletes exactly this
+                # pending/filename-less shape, and the enqueue below is the window.
+                image_id = img.id
                 nsfw = bool(v.get('nsfw')) or is_nsfw_label(v.get('label'))
                 try:
                     job_id = keh.enqueue_krea_edit(
@@ -7979,12 +7991,17 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier,
                         extra_metadata={'is_dataset': True, 'dataset_id': dataset_id,
                                         'variation_label': v.get('label')})
                 except Exception:
-                    img.status = 'failed'
-                    db.session.commit()
+                    row = _live_image_row(image_id)
+                    if row is not None:
+                        row.status = 'failed'
+                        db.session.commit()
                     raise
-                img.job_id = job_id
+                row = _live_image_row(image_id)
+                if row is None:
+                    continue     # Stop removed it mid-enqueue; nothing to report
+                row.job_id = job_id
                 db.session.commit()
-                ids.append(img.id)
+                ids.append(image_id)
     finally:
         _sync_generate_activity(dataset_id)
     return ids
