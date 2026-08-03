@@ -11,8 +11,16 @@ Clones the dataset fan-out mechanics exactly:
     completion/failure/cancel by ``link_completed_test_image`` (called from
     job_queue, same anchor point as ``is_dataset``),
   - completed files moved to the per-dataset folder,
-  - free (never debited) but hard-capped (MAX_TEST_IMAGES per run, one active
-    run per dataset, refused while training/vision holds the GPU).
+  - free (never debited), one active run per dataset, refused while
+    training/vision holds the GPU.
+
+    ⚠️ Il n'y a PAS de plafond sur le nombre de cellules d'un run, et c'est
+    délibéré : cf. `build_matrix`, « la file est sérielle et l'utilisateur voit
+    le compte + l'estimation de durée avant de lancer ». Cette ligne a longtemps
+    annoncé un « hard-capped (MAX_TEST_IMAGES per run) » que rien n'appliquait —
+    `MAX_TEST_IMAGES` n'est lu QUE pour être renvoyé au frontend (`max_images`),
+    où il sert de seuil d'AVERTISSEMENT. Un commentaire qui promet une garantie
+    que le code ne tient pas est pire qu'un commentaire absent.
 
 Lifted from the parent project's app/services/lora_test_studio.py (1981
 lines) for LoRA Dataset Studio: SRC's module-level WORKFLOW_ZTURBO_PATH /
@@ -31,6 +39,7 @@ log to save into or hide from (`saved_to_gallery` isn't a column on our
 """
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
@@ -1832,21 +1841,39 @@ def stack_variants(run_id, rows, limit=8) -> list:
                .filter(LoraTestImage.dataset_id == head_ds,
                        LoraTestImage.extra_loras.isnot(None))
                .order_by(LoraTestImage.id.desc()).limit(_STACK_SCAN_ROWS).all())
+    # Regroupement par (run, VECTEUR DE POIDS) et non par run seul. Un run était
+    # forcément une combinaison unique jusqu'au balayage 🧬 ; depuis, UN run porte
+    # N combinaisons, et grouper par run seul les écraserait en une variante
+    # unique étiquetée avec les poids de sa première cellule — un mensonge sur
+    # l'image qu'on regarde. Avec un poids par LoRA le vecteur est constant sur
+    # tout le run, donc le regroupement est exactement celui d'avant.
+    def _weight_vector(row):
+        comp = stack_of_row(row)
+        return tuple((m.get('filename'), m.get('weight')) for m in (comp or []))
+
     groups = {}
     for r in scanned:
-        groups.setdefault(r.run_id, []).append(r)
-    groups.setdefault(run_id, list(rows))  # le run courant ne dépend pas de la fenêtre
+        if not r.run_id:
+            continue
+        groups.setdefault((r.run_id, _weight_vector(r)), []).append(r)
+    # Le run courant ne dépend pas de la fenêtre de scan : ses combinaisons sont
+    # réinjectées telles quelles, chacune sous sa propre clé.
+    for r in rows:
+        groups.setdefault((run_id, _weight_vector(r)), [])
+        if r not in groups[(run_id, _weight_vector(r))]:
+            groups[(run_id, _weight_vector(r))].append(r)
 
     out = []
-    for rid, grp in groups.items():
-        # `limit` ne doit JAMAIS évincer le run affiché : sa colonne est celle que
-        # l'utilisateur regarde. Les autres s'arrêtent au plafond.
+    for (rid, _vector), grp in groups.items():
+        # `limit` ne doit JAMAIS évincer le run affiché : ses colonnes sont celles
+        # que l'utilisateur regarde — et un balayage en a plusieurs. Les autres
+        # s'arrêtent au plafond.
         if len(out) >= limit and rid != run_id:
             continue
         # Les cellules sans run_id (colonne ajoutée après coup sur des bases legacy)
         # ne forment pas UN run : les agréger fabriquerait une variante fantôme dont
         # les images viennent de générations sans rapport.
-        if not rid:
+        if not rid or not grp:
             continue
         cells = sorted(grp, key=lambda x: x.id)
         comp = stack_of_row(cells[0])
@@ -2081,6 +2108,28 @@ def _combine_weight(sel) -> float:
         return 1.0
 
 
+def _combine_weights(sel) -> list:
+    """Les poids que CE LoRA balaye dans la pile : la liste `weights` si elle est
+    fournie (cases de poids du panneau 🧬 Blend), sinon le scalaire `weight`.
+
+    Toujours non vide, clampée 0..2, arrondie au centième, dédupliquée en gardant
+    l'ordre reçu. Une sélection qui ne parle que de `weight` (client d'avant le
+    balayage, ou repli d'un frontend neuf sur un backend ancien) rend donc
+    exactement une valeur — le balayage est ADDITIF, il ne réinterprète rien."""
+    raw = (sel or {}).get('weights')
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return [_combine_weight(sel)]
+    out = []
+    for v in raw:
+        try:
+            w = max(0.0, min(2.0, round(float(v), 2)))
+        except (TypeError, ValueError):
+            continue
+        if w not in out:
+            out.append(w)
+    return out or [_combine_weight(sel)]
+
+
 def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None,
                           z_model=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None,
                           count=1, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None,
@@ -2243,8 +2292,20 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # secondaire est revalidé contre les checkpoints réellement déployés de SON
     # dataset : la whitelist des extras est permissive côté montage, l'anti
     # path-injection se joue donc ici.
+    #
+    # 🧬 BALAYAGE : chaque sélection peut porter PLUSIEURS poids (`weights`), et le
+    # run rend alors le PRODUIT CARTÉSIEN des combinaisons — une configuration
+    # chacune, dans le MÊME run. Un seul poids par LoRA (le cas d'avant, et celui
+    # d'un client qui n'envoie que `weight`) donne un produit d'un élément : le
+    # chemin est donc strictement le même qu'avant pour tout ce qui existait.
+    # Le poids du LoRA de TÊTE reste porté par `LoraTestImage.strength` et ceux des
+    # membres par le JSON `extra_loras` — donc chaque cellule sait déjà dire de
+    # quelle combinaison elle est, sans une colonne de plus.
     combine = bool(combine) and len(selections) > 1
-    stack_extra, stack_row, stack_triggers = [], [], []
+    # [(stack_extra, stack_row)] par combinaison, alignés sur `combos`.
+    stack_triggers = []
+    combos = [None]
+    members = []
     if combine:
         for sel in selections[1:]:
             _ds_i, _allowed_i = _dataset_and_checkpoints(sel.get('dataset_id'))
@@ -2253,18 +2314,17 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
             fn = sel.get('checkpoint')
             if fn not in _allowed_i:
                 raise ValueError(f'unknown checkpoint for {_ds_i.name}: {fn}')
-            entry = {'filename': fn, 'strength': _combine_weight(sel)}
-            stack_extra.append(entry)
-            # `stack_extra` (monté dans le graphe) reste au format des always-on ;
-            # seule la copie PERSISTÉE porte l'identité du membre, pour que la vue
-            # pile puisse redonner son dataset et son trigger sans re-deviner.
-            stack_row.append({**entry, 'combined': True, 'dataset_id': _ds_i.id,
-                              'trigger': getattr(_ds_i, 'trigger_word', None) or None})
+            members.append({'filename': fn, 'weights': _combine_weights(sel),
+                            'dataset_id': _ds_i.id,
+                            'trigger': getattr(_ds_i, 'trigger_word', None) or None})
             if getattr(_ds_i, 'trigger_word', None):
                 stack_triggers.append(_ds_i.trigger_word)
-        # L'axe strengths perd son sens quand chaque LoRA porte son propre poids :
-        # il est réduit au poids du LoRA de tête pour garder UNE seule cellule.
-        selections, strengths = selections[:1], [_combine_weight(selections[0])]
+        # Une combinaison = (poids de tête, poids du membre 1, …). Le dernier LoRA
+        # varie le plus vite, comme dans le panneau qui l'annonce.
+        head_weights = _combine_weights(selections[0])
+        combos = [tuple(c) for c in itertools.product(
+            head_weights, *[m['weights'] for m in members])]
+        selections = selections[:1]
 
     run_id = uuid.uuid4().hex
     # Materialize the original selection-major plan, then stable-partition it
@@ -2274,14 +2334,28 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     cell_plan = []
     for sel in selections:
         checkpoint = sel.get('checkpoint')
-        for cell in build_matrix([checkpoint], strengths, aspects, cfgs,
-                                 steps_list, steps2_list):
-            cell_plan.append((sel, cell))
+        for combo in combos:
+            # En pile, l'axe strengths n'a plus de sens (chaque LoRA porte son
+            # poids) : il vaut le poids de TÊTE de la combinaison courante.
+            combo_strengths = [combo[0]] if combo is not None else strengths
+            for cell in build_matrix([checkpoint], combo_strengths, aspects, cfgs,
+                                     steps_list, steps2_list):
+                cell_plan.append((sel, cell, combo))
     cell_plan = _krea_zero_strength_first(
         cell_plan, run_type, lambda planned: planned[1][1])
 
     ids = []
-    for sel, cell in cell_plan:
+    for sel, cell, combo in cell_plan:
+        # Les poids des MEMBRES de cette combinaison. `stack_extra` (monté dans le
+        # graphe) garde le format des always-on ; seule la copie PERSISTÉE porte
+        # l'identité du membre, pour que la vue pile puisse redonner son dataset et
+        # son trigger sans re-deviner.
+        stack_extra, stack_row = [], []
+        for i, m in enumerate(members):
+            entry = {'filename': m['filename'], 'strength': combo[i + 1]}
+            stack_extra.append(entry)
+            stack_row.append({**entry, 'combined': True,
+                              'dataset_id': m['dataset_id'], 'trigger': m['trigger']})
         ds, allowed = _dataset_and_checkpoints(sel.get('dataset_id'))
         if not ds:
             raise ValueError(f"dataset {sel.get('dataset_id')} not found")
@@ -2329,8 +2403,13 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                                                    if combine else ds.trigger_word),
                                      available_classes=available_classes))
             ids.append(img.id)
+    # `len(members)`, pas `len(stack_extra)` : celui-ci vit maintenant DANS la boucle
+    # et vaudrait la dernière combinaison — ou n'existerait pas du tout sur un plan
+    # vide. Le nombre de combinaisons est journalisé : c'est le premier chiffre
+    # qu'on cherche quand un balayage rend plus d'images que prévu.
     logger.info(f"lora-test: {'combined' if combine else 'comparison'} run {run_id} -> "
-                f"{len(ids)} cellule(s), {len(selections) + len(stack_extra)} LoRA, seed {seed}")
+                f"{len(ids)} cellule(s), {len(selections) + len(members)} LoRA, "
+                f"{len(combos) if combine else 1} combinaison(s), seed {seed}")
     return {'created': len(ids), 'seed': seed, 'count': count, 'run_id': run_id, 'ids': ids}
 
 

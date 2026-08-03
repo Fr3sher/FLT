@@ -171,9 +171,12 @@ test('blending needs two picks of ONE family, and says which rule is in the way'
 test('a blend payload carries one weight per pick; Compare stays byte for byte what it was', () => {
   const sel = [pick(1, 10, 1000), pick(2, 20, 2000)];
   const weights = { [canvasStackKey(sel[0])]: 0.9, [canvasStackKey(sel[1])]: 0.55 };
+  // Depuis le balayage, chaque pastille porte sa LISTE de poids ; sans case
+  // cochee elle vaut un element (le curseur), et `weight` reste envoye pour un
+  // backend qui ignorerait encore le balayage.
   assert.deepEqual(canvasRunSelections(sel, { blend: true, weights }), [
-    { dataset_id: 1, checkpoint: 'krea\\lora_x_1000.safetensors', record_id: 10, step: 1000, weight: 0.9 },
-    { dataset_id: 2, checkpoint: 'krea\\lora_x_2000.safetensors', record_id: 20, step: 2000, weight: 0.55 },
+    { dataset_id: 1, checkpoint: 'krea\\lora_x_1000.safetensors', record_id: 10, step: 1000, weight: 0.9, weights: [0.9] },
+    { dataset_id: 2, checkpoint: 'krea\\lora_x_2000.safetensors', record_id: 20, step: 2000, weight: 0.55, weights: [0.55] },
   ]);
   // No `blend` → not one extra key. The comparison runs must not change shape.
   for (const entry of canvasRunSelections(sel)) {

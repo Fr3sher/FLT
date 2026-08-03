@@ -20,7 +20,7 @@ import { useQuickVote } from '../../../hooks/useQuickVote';
 import { fmt } from '../../../utils/studioFormat';
 import { flipOrder } from './flipOrder';
 import { DEFAULT_STRENGTHS, FAMILY_LABELS } from './constants';
-import { buildSelectionsPayload, combineBlocker } from './loraStack';
+import { blendConfigCount, buildSelectionsPayload, combineBlocker } from './loraStack';
 import { isStackRun, stackMembers } from './stackResults';
 import StudioRunSetup from './StudioRunSetup';
 import LoraStackPanel from './LoraStackPanel';
@@ -63,6 +63,18 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
     try { return JSON.parse(localStorage.getItem('studioComp_weights') || '{}') || {}; }
     catch { return {}; }
   });
+  // Les poids COCHÉS par LoRA (balayage 🧬). Clé neuve : rien de ce qui est déjà
+  // stocké ne change de sens, et une install qui n'en a pas lit {} = aucune case
+  // cochée = les curseurs gouvernent, exactement comme avant.
+  const [stackSets, setStackSets] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('studioComp_weightSets') || '{}') || {}; }
+    catch { return {}; }
+  });
+  const toggleStackChip = (k, w) => setStackSets((cur) => {
+    const list = Array.isArray(cur[k]) ? cur[k] : [];
+    const next = list.includes(w) ? list.filter((v) => v !== w) : [...list, w];
+    return { ...cur, [k]: next };
+  });
   const [count, setCount] = useState(() => {
     try { return Math.max(1, parseInt(localStorage.getItem('studioComp_count'), 10) || 1); } catch { return 1; }
   });
@@ -73,8 +85,9 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
       localStorage.setItem('studioComp_count', String(count));
       localStorage.setItem('studioComp_mode', mode);
       localStorage.setItem('studioComp_weights', JSON.stringify(stackWeights));
+      localStorage.setItem('studioComp_weightSets', JSON.stringify(stackSets));
     } catch { /* private mode */ }
-  }, [strengths, prompt, count, mode, stackWeights]);
+  }, [strengths, prompt, count, mode, stackWeights, stackSets]);
   const [launching, setLaunching] = useState(false);
   // 409 `studio_missing` au lancement (P0-a) → bandeau des modèles/nodes manquants.
   const [preflight, setPreflight] = useState(null);
@@ -184,7 +197,7 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
     setLaunching(true);
     try {
       const body = {
-        selections: buildSelectionsPayload(selection, { combine, weights: stackWeights }),
+        selections: buildSelectionsPayload(selection, { combine, weights: stackWeights, sets: stackSets }),
         // En combine chaque LoRA porte son poids : l'axe strengths n'est plus envoyé
         // (le backend le remplace par le poids du LoRA de tête).
         ...(combine ? { combine: true } : { strengths }),
@@ -253,6 +266,9 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
         )}
         <LoraStackPanel selection={selection} mode={mode} onMode={setMode}
           weights={stackWeights}
+          sets={stackSets}
+          onToggleChip={toggleStackChip}
+          count={count}
           onWeight={(k, v) => setStackWeights((cur) => ({ ...cur, [k]: v }))} />
         <div id="st-setup" className="scroll-mt-16">
           <StudioRunSetup
@@ -271,6 +287,7 @@ export default function ComparisonStudio({ selection, baseModels = [], runType =
             batchMult={1 + ((genSettings.batch_loras || []).length)}
             combine={combine}
             combineBlocked={combineBlocked}
+            configCount={blendConfigCount(selection, { weights: stackWeights, sets: stackSets })}
           />
         </div>
         {/* Réglages de génération globaux (parité Generate, hors prompt builder).

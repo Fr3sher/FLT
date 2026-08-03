@@ -301,8 +301,25 @@ it. The reliable pairings are **character + style** and **character + concept**.
 In Blend mode the strength sweep disappears: each LoRA already carries its own
 weight, so the run is one configuration instead of a grid. Start both around
 0.7-0.9 — two LoRAs at 1.0 usually fight each other, and the one you care about
-most should be the heavier of the two. Result tiles from a stack carry a **🧬 +N**
-badge naming what was loaded alongside.
+most should be the heavier of the two. Result tiles from a stack carry a **🧬**
+badge naming the exact weights that made them.
+
+**Trying several weights at once.** Under each LoRA's slider is a row of weight
+boxes. Tick two on one LoRA and two on the other, and the launch renders **all
+four combinations** in a single run — the search you would otherwise do by
+launching, looking, moving a slider and launching again. Each image is labelled
+with its own pair, and the stack view lines the combinations up side by side so
+you can pick the one that works and save its weights with ★.
+
+Tick nothing and the slider governs, exactly as before the boxes existed; the
+slider is also how you use a weight that is not on the grid. Tick one box and you
+get one configuration — one image — like any other blend.
+
+The count is spelled out before you launch ("4 weight combinations → 4 images,
+about 1 min"), and past 24 images it turns amber and says so. It never refuses:
+the queue is serial and it is your machine. Two LoRAs at four weights each is 16
+images — the multiplication is quick, which is exactly why the panel does it for
+you.
 
 **One family per run, always.** A Krea LoRA and an SDXL LoRA cannot be blended:
 they need different base models and different workflows. The picker greys out the

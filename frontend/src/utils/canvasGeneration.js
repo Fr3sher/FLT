@@ -25,7 +25,8 @@
 // resolve extensionless specifiers) as well as by Vite.
 import { famLabel } from './familyLabels.js';
 import {
-  combineBlocker, stackKey, stackWeight,
+  blendCombinations, blendConfigCount, combineBlocker, stackKey, stackWeight,
+  stackWeightList, stackWeightSet,
 } from '../components/dataset/studio/loraStack.js';
 
 /** Stable identity of one pick. The canvas holds several datasets at once, so a
@@ -93,8 +94,26 @@ export function canvasStackSelection(selection) {
     dataset_id: e.datasetId,
     checkpoint: `${e.recordId}:${e.step}`,
     family: e.family,
+    // Le nom que `blendComboLabel` mettra sur la cellule. Le Test Studio y met un
+    // nom de LoRA, le board y met sa lane et sa pastille — d'où le champ ici
+    // plutôt qu'un second fabricant d'étiquettes.
+    lora_label: `${e.datasetName || `Dataset ${e.datasetId}`} #${e.recordId}·${e.step}`,
   }));
 }
+
+/** Les poids COCHÉS d'une pastille (balayage 🧬), et ceux qu'elle balayera
+ *  réellement — cases si elle en a, curseur sinon. La règle est celle du Test
+ *  Studio, importée, pas réécrite. */
+export const canvasStackWeightSet = (sets, entry) =>
+  stackWeightSet(sets, canvasStackSelection([entry])[0]);
+export const canvasStackWeightList = (weights, sets, entry) =>
+  stackWeightList(weights, sets, canvasStackSelection([entry])[0]);
+
+/** Combien de combinaisons ce board va lancer, et lesquelles. */
+export const canvasBlendConfigCount = (selection, opts = {}) =>
+  blendConfigCount(canvasStackSelection(selection), opts);
+export const canvasBlendCombinations = (selection, opts = {}) =>
+  blendCombinations(canvasStackSelection(selection), opts);
 
 /** Weight-map key of ONE pick — equal to `canvasCheckpointKey` by construction. */
 export const canvasStackKey = (entry) => stackKey(canvasStackSelection([entry])[0]);
@@ -132,14 +151,19 @@ export const canvasStackWithoutTrigger = (selection) =>
  *
  *  In a 🧬 blend each entry also carries its `weight`; in Compare the body stays
  *  byte for byte what it always was, so existing runs change in nothing. */
-export function canvasRunSelections(selection, { blend = false, weights = {} } = {}) {
+export function canvasRunSelections(selection, { blend = false, weights = {}, sets = {} } = {}) {
   return (selection || [])
     .filter((e) => e.deployed && e.filename)
     .map((e) => ({ dataset_id: e.datasetId,
       checkpoint: e.filename,
       record_id: e.recordId,
       step: e.step,
-      ...(blend ? { weight: canvasStackWeight(weights, e) } : {}) }));
+      ...(blend ? {
+        // Comme le Studio : `weight` scalaire EN PLUS de la liste, pour qu'un
+        // backend qui ignore encore le balayage rende une image sensée.
+        weight: canvasStackWeightList(weights, sets, e)[0],
+        weights: canvasStackWeightList(weights, sets, e),
+      } : {}) }));
 }
 
 /** The checkpoints that would have to be deployed into ComfyUI before this

@@ -17,13 +17,17 @@
  * ./loraStack.js — testée sous `node --test`, que le JSX rend inaccessible ici.
  */
 import { HelpBadge } from '../../../help/HelpMode';
+import BlendWeightRow from './BlendWeightRow';
+import BlendSweepSummary from './BlendSweepSummary';
 import {
-  COMBINE_MAX_WEIGHT, COMBINE_MIN_WEIGHT, combineBlocker, stackKey, stackWeight,
+  blendConfigCount, combineBlocker, stackKey, stackWeight, stackWeightSet,
 } from './loraStack';
 
-export default function LoraStackPanel({ selection, mode, onMode, weights, onWeight }) {
+export default function LoraStackPanel({ selection, mode, onMode, weights, onWeight,
+  sets = {}, onToggleChip = null, count = 1, batchMult = 1 }) {
   const combine = mode === 'combine';
   const blocker = combine ? combineBlocker(selection) : null;
+  const configCount = blendConfigCount(selection, { weights, sets });
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
@@ -51,8 +55,8 @@ export default function LoraStackPanel({ selection, mode, onMode, weights, onWei
       <p className="m-0 text-content-subtle text-[0.6875rem]">
         {combine
           ? 'All checked LoRAs load together in the same image, each at its own weight. '
-            + 'Every trigger word is injected into the prompt. One image per seed — the '
-            + 'strength sweep is replaced by these weights.'
+            + 'Every trigger word is injected into the prompt. Tick several weights on a '
+            + 'LoRA and the launch renders every combination of them.'
           : 'Each LoRA is tested on its own, one column per LoRA, swept across the '
             + 'strengths below.'}
       </p>
@@ -65,39 +69,27 @@ export default function LoraStackPanel({ selection, mode, onMode, weights, onWei
       )}
 
       {combine && !blocker && (
-        <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
-          {selection.map((s, i) => {
-            const k = stackKey(s);
-            const w = stackWeight(weights, s);
-            return (
-              // Le nom et le curseur sont sur DEUX lignes : côte à côte, la colonne
-              // étroite du studio (320 px, et 400 px en mobile) écrasait le nom en
-              // « l.. » — un sélecteur de LoRA où on ne lit pas le LoRA.
-              <li key={k}
-                className="flex flex-col gap-1 rounded-lg border border-border bg-surface-raised px-2.5 py-1.5">
-                <div className="flex min-w-0 items-center gap-2">
-                  <span className="shrink-0 text-content-subtle text-[0.625rem] tabular-nums">{i + 1}.</span>
-                  <span className="min-w-0 flex-1 truncate text-content text-sm" title={s.lora_label}>
-                    {s.lora_label}
-                  </span>
-                  {s.trigger_word && (
-                    <code className="shrink-0 rounded border border-indigo-400/40 bg-indigo-500/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-indigo-300">
-                      {s.trigger_word}
-                    </code>
-                  )}
-                </div>
-                <label className="flex items-center gap-1.5 text-content-muted text-[0.6875rem]">
-                  <span className="shrink-0 uppercase">Weight</span>
-                  <input type="range" min={COMBINE_MIN_WEIGHT} max={COMBINE_MAX_WEIGHT} step="0.05"
-                    value={w} onChange={(e) => onWeight(k, Number(e.target.value))}
-                    aria-label={`Weight for ${s.lora_label}`}
-                    className="min-w-0 flex-1 accent-primary" />
-                  <span className="w-9 shrink-0 text-right tabular-nums text-content">{w.toFixed(2)}</span>
-                </label>
-              </li>
-            );
-          })}
-        </ul>
+        <>
+          <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
+            {selection.map((s, i) => (
+              <BlendWeightRow
+                key={stackKey(s)}
+                index={i + 1}
+                label={s.lora_label}
+                weight={stackWeight(weights, s)}
+                onWeight={(v) => onWeight(stackKey(s), v)}
+                set={stackWeightSet(sets, s)}
+                onToggleChip={(w) => onToggleChip?.(stackKey(s), w)}
+                trigger={s.trigger_word ? (
+                  <code className="shrink-0 rounded border border-indigo-400/40 bg-indigo-500/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-indigo-300">
+                    {s.trigger_word}
+                  </code>
+                ) : null}
+              />
+            ))}
+          </ul>
+          <BlendSweepSummary configCount={configCount} count={count} batchMult={batchMult} />
+        </>
       )}
     </div>
   );

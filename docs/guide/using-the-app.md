@@ -1503,6 +1503,18 @@ A blend is one configuration, not one per pick, so the strength sweep disappears
 (each LoRA carries its own weight instead) and the image counter drops to one
 picture per seed.
 
+**Trying several weights at once.** Each picked checkpoint has a row of weight
+boxes under its slider. Tick two on one and two on another, and the launch
+renders **all four combinations** in a single run instead of making you launch,
+look, move a slider and launch again. Every image is labelled with the pair that
+produced it. Tick nothing and the slider governs, exactly as before; the slider
+is also how you use a weight that is not on the grid.
+
+The panel counts the cost before you commit — "4 weight combinations → 4 images,
+about 1 min" — and turns amber past 24 images. It does not refuse: the queue is
+serial and the machine is yours. Two checkpoints at four weights each is 16
+images, which is exactly why the panel does the multiplication for you.
+
 What blending actually does is worth saying plainly: **two identity LoRAs give
 you a hybrid person** — someone who is neither of the two. That is a real use, on
 purpose, but it is not "both people in one shot". The combination that usually

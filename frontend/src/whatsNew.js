@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-blend-weight-sweep',
+    date: '2026-08-03',
+    title: '🧬 Tick several weights and blend every combination in one run',
+    blurb:
+      'Finding the right balance between two LoRAs meant launching, looking, moving a slider, launching again. Each LoRA in a 🧬 Blend now has weight boxes next to its slider: tick 0.6 and 0.8 on one, 0.4 and 1.0 on the other, and the launch renders all four combinations in a single run — each image labelled with the pair that made it, and lined up side by side in the stack view so you can just pick. The button says the cost before you commit (“4 weight combinations → 4 images, about 1 min”) and warns past 24, without ever refusing: it is your machine. Tick nothing and the slider governs, exactly as before. Works in the Test Studio and from the LoRA Canvas board.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-03-concept-sdxl-refusal-tells-the-truth',
     date: '2026-08-03',
     title: 'A Concept dataset on SDXL is told the truth instead of sent hunting',

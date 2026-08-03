@@ -24,13 +24,15 @@ export default function StudioRunSetup({
   selectionCount, strengths, onToggleStrength,
   prompt, onPrompt, seed, onReroll, count, onCount,
   onLaunch, launching, gpuBusy, batchMult = 1, combine = false, combineBlocked = null,
+  configCount = 1,
 }) {
   // batchMult = 1 + nb de LoRA cochés « ⚖ batch » (axe sans/avec) — le backend
   // multiplie les cellules d'autant, le compteur de coût doit suivre.
   // En mode « pile » (combine) l'axe strengths disparaît : chaque LoRA porte son
-  // propre poids, la pile ne produit donc qu'UNE configuration.
+  // propre poids. La pile vaut UNE configuration — ou `configCount` quand des
+  // cases de poids sont cochées et que le lancement balaye leurs combinaisons.
   const cells = cellCount({
-    selectionCount, strengthCount: strengths.length, count, batchMult, combine,
+    selectionCount, strengthCount: strengths.length, count, batchMult, combine, configCount,
   });
   const canLaunch = cells > 0 && !launching && !gpuBusy && !combineBlocked;
 
@@ -122,10 +124,16 @@ export default function StudioRunSetup({
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-content-subtle text-[0.6875rem]"
           title={combine
-            ? `GPU cost: one combined stack of ${selectionCount} LoRAs × images per config`
+            ? `GPU cost: ${configCount} weight combination(s) of ${selectionCount} LoRAs × images per config`
             : `GPU cost: checked LoRAs × strengths × images per config${batchMult > 1 ? ` × ${batchMult} (⚖ batch axis: without + with each checked LoRA)` : ''}`}>
           {combine
-            ? <>1 stack of {selectionCount} LoRA × {count}</>
+            ? (
+              <>
+                {configCount > 1
+                  ? <>{configCount} weight combos of {selectionCount} LoRA</>
+                  : <>1 stack of {selectionCount} LoRA</>} × {count}
+              </>
+            )
             : <>{selectionCount} LoRA × {strengths.length} strength × {count}</>}
           {batchMult > 1 && <span className="text-amber-300"> × {batchMult} ⚖</span>} ={' '}
           <span className={`tabular-nums font-semibold ${cells > 0 ? 'text-content' : 'text-content-subtle'}`}>{cells}</span>{' '}

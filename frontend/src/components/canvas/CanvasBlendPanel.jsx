@@ -20,20 +20,22 @@
  * learned: side by side, a 400-px screen truncated the checkpoint to "#1…".
  */
 import { HelpBadge } from '../../help/HelpMode';
+import BlendWeightRow from '../dataset/studio/BlendWeightRow';
+import BlendSweepSummary from '../dataset/studio/BlendSweepSummary';
 import {
-  COMBINE_MAX_WEIGHT, COMBINE_MIN_WEIGHT,
-} from '../dataset/studio/loraStack';
-import {
-  canvasStackKey, canvasStackTriggers, canvasStackWeight, canvasStackWithoutTrigger,
+  canvasBlendConfigCount, canvasStackKey, canvasStackTriggers, canvasStackWeight,
+  canvasStackWeightSet, canvasStackWithoutTrigger,
 } from '../../utils/canvasGeneration';
 import { runNumber } from '../../utils/runIdentity';
 
 export default function CanvasBlendPanel({
   selection, mode, onMode, weights, onWeight, blocker = null, familyReason = null,
+  sets = {}, onToggleChip = null, count = 1,
 }) {
   const blend = mode === 'blend';
   const triggers = canvasStackTriggers(selection);
   const untriggered = canvasStackWithoutTrigger(selection);
+  const configCount = canvasBlendConfigCount(selection, { weights, sets });
 
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-app/40 p-2">
@@ -105,43 +107,33 @@ export default function CanvasBlendPanel({
           <ul className="m-0 flex list-none flex-col gap-1.5 p-0">
             {selection.map((e, i) => {
               const k = canvasStackKey(e);
-              const w = canvasStackWeight(weights, e);
               const label = `#${e.recordId} · step ${e.step}`;
               return (
-                <li key={k}
-                  className="flex flex-col gap-1 rounded-lg border border-border bg-surface-raised px-2.5 py-1.5">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <span className="shrink-0 text-content-subtle text-[0.625rem] tabular-nums">{i + 1}.</span>
-                    <span className="min-w-0 flex-1 truncate text-content text-[0.75rem]"
-                      title={`${e.datasetName || `Dataset ${e.datasetId}`} — run ${runNumber({ record_id: e.recordId })}, step ${e.step}`}>
-                      {e.datasetName || `Dataset ${e.datasetId}`}
-                      <span className="text-content-subtle"> · {label}</span>
+                <BlendWeightRow
+                  key={k}
+                  index={i + 1}
+                  label={`${e.datasetName || `Dataset ${e.datasetId}`} · ${label}`}
+                  title={`${e.datasetName || `Dataset ${e.datasetId}`} — run ${runNumber({ record_id: e.recordId })}, step ${e.step}`}
+                  weight={canvasStackWeight(weights, e)}
+                  onWeight={(v) => onWeight(k, v)}
+                  set={canvasStackWeightSet(sets, e)}
+                  onToggleChip={(w) => onToggleChip?.(k, w)}
+                  trigger={e.triggerWord ? (
+                    <code className="shrink-0 rounded border border-indigo-400/40 bg-indigo-500/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-indigo-300">
+                      {e.triggerWord}
+                    </code>
+                  ) : (
+                    <span className="shrink-0 text-amber-300/80 text-[0.625rem]"
+                      title="This dataset has no trigger word — nothing of it is added to the prompt">
+                      no trigger
                     </span>
-                    {e.triggerWord
-                      ? (
-                        <code className="shrink-0 rounded border border-indigo-400/40 bg-indigo-500/10 px-1.5 py-0.5 text-[0.625rem] font-semibold text-indigo-300">
-                          {e.triggerWord}
-                        </code>
-                      )
-                      : (
-                        <span className="shrink-0 text-amber-300/80 text-[0.625rem]"
-                          title="This dataset has no trigger word — nothing of it is added to the prompt">
-                          no trigger
-                        </span>
-                      )}
-                  </div>
-                  <label className="flex items-center gap-1.5 text-content-muted text-[0.6875rem]">
-                    <span className="shrink-0 uppercase">Weight</span>
-                    <input type="range" min={COMBINE_MIN_WEIGHT} max={COMBINE_MAX_WEIGHT} step="0.05"
-                      value={w} onChange={(ev) => onWeight(k, Number(ev.target.value))}
-                      aria-label={`Weight for ${e.datasetName || `dataset ${e.datasetId}`} ${label}`}
-                      className="min-w-0 flex-1 accent-primary" />
-                    <span className="w-9 shrink-0 text-right tabular-nums text-content">{w.toFixed(2)}</span>
-                  </label>
-                </li>
+                  )}
+                />
               );
             })}
           </ul>
+
+          <BlendSweepSummary configCount={configCount} count={count} />
 
           {/* No silent magic: the exact tokens that will be prefixed to whatever
               prompt is typed below, in the order they will be prefixed in. */}

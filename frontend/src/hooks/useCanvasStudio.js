@@ -43,7 +43,7 @@ import { useLoraTestStudio } from './useLoraTestStudio';
 import { canvasRunSelections, canvasUndeployed } from '../utils/canvasGeneration';
 
 export function useCanvasStudio(selection, family,
-  { onDeploy, tracker, blend = false, weights = null } = {}) {
+  { onDeploy, tracker, blend = false, weights = null, sets = null } = {}) {
   const toast = useToast();
   const anchorId = selection?.[0]?.datasetId ?? null;
   // The settings payload comes from ONE dataset — the first pick. Everything it
@@ -84,7 +84,8 @@ export function useCanvasStudio(selection, family,
       //    single-LoRA run, and asking for it would only strip the strength
       //    sweep off a run the user can still legitimately sweep.
       const blending = blend && canvasRunSelections(picks).length > 1;
-      const selections = canvasRunSelections(picks, { blend: blending, weights: weights || {} });
+      const selections = canvasRunSelections(picks, {
+        blend: blending, weights: weights || {}, sets: sets || {} });
       if (!selections.length) {
         return { ok: false, error: 'No deployed checkpoint in the selection' };
       }
@@ -115,7 +116,7 @@ export function useCanvasStudio(selection, family,
     } finally {
       setLaunching(false);
     }
-  }, [selection, onDeploy, toast, tracker, blend, weights]);
+  }, [selection, onDeploy, toast, tracker, blend, weights, sets]);
 
   // The payload RunSetupPanel reads: the anchor's SETTINGS, the canvas run's LIVE
   // state, and the ticked pills standing in for the picker's checkpoint list.

@@ -4,7 +4,8 @@ import CanvasBlendPanel from './CanvasBlendPanel';
 import { useCanvasStudio } from '../../hooks/useCanvasStudio';
 import { useStudioForm } from '../../hooks/useStudioForm';
 import {
-  canvasBlendBlocker, canvasFamily, canvasSelectionSummary, describeCanvasLaunch,
+  canvasBlendBlocker, canvasBlendConfigCount, canvasFamily, canvasSelectionSummary,
+  describeCanvasLaunch,
 } from '../../utils/canvasGeneration';
 import { famLabel } from '../../utils/familyLabels';
 import { DEPLOY_BAR_CLASS } from '../../utils/checkpointDeployState';
@@ -104,12 +105,19 @@ function CanvasCheckpointRecap({ selection, onToggle, onClear }) {
    stored under an existing name changes meaning. */
 const MODE_KEY = 'canvasStack_mode';
 const WEIGHTS_KEY = 'canvasStack_weights';
+// Les poids COCHÉS (balayage 🧬). Clé neuve : une install qui n'en a pas lit {},
+// c'est-à-dire aucune case cochée, c'est-à-dire les curseurs — comme avant.
+const SETS_KEY = 'canvasStack_weightSets';
 const readMode = () => {
   try { return localStorage.getItem(MODE_KEY) === 'blend' ? 'blend' : 'compare'; }
   catch { return 'compare'; }
 };
 const readWeights = () => {
   try { return JSON.parse(localStorage.getItem(WEIGHTS_KEY) || '{}') || {}; }
+  catch { return {}; }
+};
+const readSets = () => {
+  try { return JSON.parse(localStorage.getItem(SETS_KEY) || '{}') || {}; }
   catch { return {}; }
 };
 
@@ -120,12 +128,18 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
   // Keyed on the PILL (see canvasGeneration), so a weight survives un-ticking
   // another pick, deploying, and reloading the page.
   const [weights, setWeights] = useState(readWeights);
+  const [sets, setSets] = useState(readSets);
   useEffect(() => {
     try {
       localStorage.setItem(MODE_KEY, mode);
       localStorage.setItem(WEIGHTS_KEY, JSON.stringify(weights));
+      localStorage.setItem(SETS_KEY, JSON.stringify(sets));
     } catch { /* private mode — persistence is best effort */ }
-  }, [mode, weights]);
+  }, [mode, weights, sets]);
+  const toggleChip = (k, w) => setSets((cur) => {
+    const list = Array.isArray(cur[k]) ? cur[k] : [];
+    return { ...cur, [k]: list.includes(w) ? list.filter((v) => v !== w) : [...list, w] };
+  });
 
   // Mixed families kill the whole launch, blend or not, and `verdict` already
   // says so in the better words. Only when the launch is otherwise possible does
@@ -143,7 +157,9 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
     ? { ...verdict, blocked: true, reason: blendBlocker }
     : verdict;
 
-  const studio = useCanvasStudio(selection, family, { onDeploy, tracker, blend, weights });
+  const configCount = blend ? canvasBlendConfigCount(selection, { weights, sets }) : 1;
+  const studio = useCanvasStudio(selection, family, {
+    onDeploy, tracker, blend, weights, sets });
   const pinned = useMemo(
     () => (studio.data?.checkpoints || []).map((c) => c.filename), [studio.data]);
   // Namespaced per FAMILY, never per dataset: a canvas run is cross-dataset by
@@ -157,6 +173,7 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
         <CanvasBlendPanel selection={selection} mode={mode} onMode={setMode}
           weights={weights}
           onWeight={(k, v) => setWeights((cur) => ({ ...cur, [k]: v }))}
+          sets={sets} onToggleChip={toggleChip} count={form?.genCount ?? 1}
           blocker={blendBlocker} familyReason={familyReason} />
       )}
     </>
@@ -205,7 +222,10 @@ export default function CanvasGenerationPanel({ selection, onToggle, onClear, on
               // count must stop multiplying by it — or the panel would announce
               // six images and queue one.
               showStrengths={!blend}
-              cellTotal={blend ? form.axisTotal : null}
+              // 🧬 Un balayage rend `configCount` configurations, pas une :
+              // le compteur du bouton doit les multiplier, ou il annonce une
+              // image là où la file en recevra neuf.
+              cellTotal={blend ? form.axisTotal * configCount : null}
               genStoragePrefix={`studioGen_canvas_${family || 'default'}`}
               // The Studio's fixed bottom bar would sit ON this sheet at 400 px.
               actionBar={false}

@@ -59,20 +59,137 @@ export function combineBlocker(selection) {
  * injecte TOUS les triggers) ; en comparaison le payload reste celui d'avant, sans
  * `weight`, pour ne rien changer aux runs existants.
  */
-export function buildSelectionsPayload(selection, { combine = false, weights = {} } = {}) {
-  return (selection || []).map((s) => (combine
-    ? { dataset_id: s.dataset_id, checkpoint: s.checkpoint, weight: stackWeight(weights, s) }
-    : { dataset_id: s.dataset_id, checkpoint: s.checkpoint }));
+export function buildSelectionsPayload(selection, { combine = false, weights = {}, sets = {} } = {}) {
+  return (selection || []).map((s) => {
+    if (!combine) return { dataset_id: s.dataset_id, checkpoint: s.checkpoint };
+    const list = stackWeightList(weights, sets, s);
+    return {
+      dataset_id: s.dataset_id,
+      checkpoint: s.checkpoint,
+      // `weight` (scalaire) reste envoyé EN PLUS de `weights` : cette app se met à
+      // jour par `git pull`, donc un frontend neuf peut tourner quelques minutes
+      // contre un backend qui ne connaît pas encore le balayage. Il rend alors la
+      // tête de liste — une image au lieu de N, dégradé et juste, pas cassé.
+      weight: list[0],
+      weights: list,
+    };
+  });
+}
+
+/* ---------------------------------------------------------------------------
+   🧬 BLEND SWEEP — plusieurs poids COCHÉS par LoRA → un lot de combinaisons.
+
+   Le curseur donne UN poids par LoRA : une pile = une image, et comparer
+   « 0.8/0.6 » à « 0.6/0.8 » demandait deux lancements et deux attentes. Les
+   cases de poids remplacent ça par un balayage : chaque LoRA porte un ENSEMBLE
+   de poids, et le lancement rend le PRODUIT CARTÉSIEN des combinaisons, une
+   cellule chacune, dans un seul run.
+
+   Règle du curseur, explicite parce qu'elle décide de tout le reste :
+   AUCUNE case cochée = le curseur gouverne (comportement d'avant, au centième
+   près, valeurs hors grille comprises). Dès qu'une case est cochée, ce sont LES
+   CASES qui gouvernent — une seule case = une seule configuration, donc
+   exactement une image, comme avant.
+
+   Pas de plafond dur, délibérément : `build_matrix` côté serveur porte la même
+   règle écrite (« PAS de plafond sur le nombre de cellules : la file est
+   sérielle et l'utilisateur voit le compte + l'estimation de durée avant de
+   lancer »). Un blend sweep est un sweep comme l'axe strengths, il obéit donc à
+   la même règle plutôt qu'à une seconde. Au-delà de BLEND_WARN_CELLS on AVERTIT
+   (le coût est réel), on n'interdit pas. Passer à un plafond dur = utiliser
+   cette constante comme borne au lieu d'un seuil, à UN endroit.
+   --------------------------------------------------------------------------- */
+
+/** Grille de cases proposée sous chaque curseur. Des valeurs rondes qui couvrent
+ *  la plage utile d'un blend ; le curseur reste là pour le hors-grille. */
+export const BLEND_WEIGHT_CHIPS = [0.4, 0.6, 0.8, 1.0];
+
+/** Seuil d'AVERTISSEMENT (pas de refus) sur le nombre d'images d'un lancement.
+ *  Aligné sur `MAX_TEST_IMAGES` du backend, qui n'était jusqu'ici qu'un nombre
+ *  annoncé au frontend sans que rien ne le vérifie. */
+export const BLEND_WARN_CELLS = 24;
+
+/** Les poids COCHÉS d'une sélection : clampés, arrondis, dédupliqués, triés.
+ *  Vide = aucune case cochée. */
+export function stackWeightSet(sets, sel) {
+  const raw = (sets || {})[stackKey(sel)];
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const v of raw) {
+    const n = Number(v);
+    if (!Number.isFinite(n)) continue;
+    const w = Math.round(Math.min(COMBINE_MAX_WEIGHT, Math.max(COMBINE_MIN_WEIGHT, n)) * 100) / 100;
+    if (!out.includes(w)) out.push(w);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/** Les poids que CE LoRA va réellement balayer : ses cases si elle en a, sinon
+ *  la valeur du curseur. Jamais vide — un LoRA contribue toujours un poids. */
+export function stackWeightList(weights, sets, sel) {
+  const chosen = stackWeightSet(sets, sel);
+  return chosen.length ? chosen : [stackWeight(weights, sel)];
+}
+
+/** Toutes les combinaisons de poids, produit cartésien dans l'ordre de la
+ *  sélection, le DERNIER LoRA variant le plus vite (l'ordre de lecture d'un
+ *  tableau : on parcourt les poids du second en gardant le premier). Chaque
+ *  combinaison est un tableau de poids aligné sur `selection`. */
+export function blendCombinations(selection, { weights = {}, sets = {} } = {}) {
+  const lists = (selection || []).map((s) => stackWeightList(weights, sets, s));
+  if (!lists.length) return [];
+  return lists.reduce((acc, list) => acc.flatMap((combo) => list.map((w) => [...combo, w])), [[]]);
+}
+
+/** Combien de configurations le lancement va rendre (hors seeds et axe batch). */
+export function blendConfigCount(selection, opts = {}) {
+  return (selection || []).length
+    ? (selection || []).reduce(
+      (n, s) => n * stackWeightList(opts.weights || {}, opts.sets || {}, s).length, 1)
+    : 0;
+}
+
+const fmtWeight = (w) => {
+  const n = Number(w);
+  if (!Number.isFinite(n)) return '?';
+  return String(Math.round(n * 100) / 100);
+};
+
+/** L'étiquette d'UNE combinaison, telle qu'elle est montrée sur sa cellule :
+ *  « margot 0.8 × telegram 0.6 ». Le nom vient de la sélection (`lora_label`),
+ *  le poids de la combinaison — les deux surfaces alimentent `lora_label`, donc
+ *  l'étiquette est fabriquée ici et pas deux fois. */
+export function blendComboLabel(selection, combo) {
+  return (selection || [])
+    .map((s, i) => `${s.lora_label || s.checkpoint || `LoRA ${i + 1}`} ${fmtWeight((combo || [])[i])}`)
+    .join(' × ');
+}
+
+/** Ce que le bouton doit dire du COÛT avant de lancer, et quand s'en inquiéter.
+ *  `warn` ne bloque JAMAIS : il colore et il chiffre. */
+export function blendSweepCost({ configCount, count = 1, batchMult = 1 }) {
+  const cells = Math.max(0, Number(configCount) || 0)
+    * Math.max(1, Number(count) || 0) * Math.max(1, Number(batchMult) || 1);
+  return {
+    configs: Math.max(0, Number(configCount) || 0),
+    cells,
+    warn: cells > BLEND_WARN_CELLS,
+    // Même estimation que SeedControls (~12 s/image) : deux compteurs qui
+    // annonceraient deux durées pour un seul lancement seraient pires que zéro.
+    minutes: Math.ceil((cells * 12) / 60),
+  };
 }
 
 /**
- * Nombre de cellules annoncé AVANT lancement. Une pile combinée = UNE configuration
- * (l'axe strengths est remplacé par les poids), d'où `1 × count × batchMult` au lieu
- * de `nbLoRA × nbStrengths × count × batchMult`.
+ * Nombre de cellules annoncé AVANT lancement. Une pile combinée valait UNE
+ * configuration ; avec des cases de poids elle en vaut `configCount` (le produit
+ * cartésien), d'où `configCount × count × batchMult`. `configCount` absent =
+ * 1 configuration, c'est-à-dire exactement le comportement d'avant les cases.
  */
-export function cellCount({ selectionCount, strengthCount, count, batchMult = 1, combine = false }) {
+export function cellCount({ selectionCount, strengthCount, count, batchMult = 1,
+  combine = false, configCount = 1 }) {
   const n = Math.max(0, Number(count) || 0);
   const mult = Math.max(1, Number(batchMult) || 1);
-  if (combine) return selectionCount >= 2 ? n * mult : 0;
+  if (combine) return selectionCount >= 2 ? Math.max(0, Number(configCount) || 0) * n * mult : 0;
   return Math.max(0, selectionCount) * Math.max(0, strengthCount) * n * mult;
 }

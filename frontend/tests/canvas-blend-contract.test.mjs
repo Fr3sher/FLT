@@ -21,6 +21,7 @@ const PANEL = read('components/canvas/CanvasGenerationPanel.jsx')
 const HOOK = read('hooks/useCanvasStudio.js')
 const UTIL = read('utils/canvasGeneration.js')
 const SETUP = read('components/dataset/studio/RunSetupPanel.jsx')
+const ROW = read('components/dataset/studio/BlendWeightRow.jsx')
 
 test('the board imports the Test Studio stack module instead of copying it', () => {
   // A second clamp, a second "one family" rule or a second key shape is a second
@@ -28,7 +29,13 @@ test('the board imports the Test Studio stack module instead of copying it', () 
   assert.match(UTIL, /from '\.\.\/components\/dataset\/studio\/loraStack\.js'/)
   assert.match(UTIL, /combineBlocker/)
   assert.match(UTIL, /stackWeight/)
-  assert.match(BLEND, /COMBINE_MAX_WEIGHT[\s\S]*from '\.\.\/dataset\/studio\/loraStack'/)
+  // Le curseur ET les cases d'un LoRA sont UN composant partagé par les deux
+  // surfaces (BlendWeightRow) : deux copies du même contrôle, ce serait deux
+  // occasions de diverger sur « aucune case cochée = le curseur gouverne ».
+  assert.match(BLEND, /import BlendWeightRow from '\.\.\/dataset\/studio\/BlendWeightRow'/)
+  assert.match(ROW, /from '\.\/loraStack'/)
+  assert.match(ROW, /BLEND_WEIGHT_CHIPS/)
+  assert.doesNotMatch(ROW, /const BLEND_WEIGHT_CHIPS\s*=/)
   // …and does not redeclare the bounds it just imported.
   assert.doesNotMatch(BLEND, /const COMBINE_(MIN|MAX)_WEIGHT\s*=/)
 })
@@ -57,7 +64,10 @@ test('a blocked blend blocks the LAUNCH, it does not just colour a panel', () =>
 test('the launch really switches the request, and the deploy still runs first', () => {
   assert.match(HOOK, /blend && canvasRunSelections\(picks\)\.length > 1/)
   assert.match(HOOK, /\.\.\.\(blending \? \{ combine: true \} : \{ strengths \}\)/)
-  assert.match(HOOK, /canvasRunSelections\(picks, \{ blend: blending, weights/)
+  assert.match(HOOK, /canvasRunSelections\(picks, \{[\s\S]{0,80}blend: blending, weights/)
+  // …et les cases de poids voyagent avec les curseurs, sinon le board annonce
+  // neuf images et en lance une.
+  assert.match(HOOK, /sets: sets \|\| \{\}/)
   // The deploy gate is upstream of the payload: a blend can never load a subset
   // of the checkpoints it announced.
   const deployAt = HOOK.indexOf('canvasUndeployed(picks).length')
@@ -69,7 +79,9 @@ test('a blend announces ONE configuration, not one per pick and strength', () =>
   // The strength sweep has nothing left to sweep, so it leaves the panel AND the
   // counter — a panel promising six images while queueing one is the bug here.
   assert.match(PANEL, /showStrengths=\{!blend\}/)
-  assert.match(PANEL, /cellTotal=\{blend \? form\.axisTotal : null\}/)
+  // …et depuis le balayage, `configCount` combinaisons plutôt qu'une.
+  assert.match(PANEL, /cellTotal=\{blend \? form\.axisTotal \* configCount : null\}/)
+  assert.match(PANEL, /const configCount = blend \? canvasBlendConfigCount/)
   assert.match(SETUP, /const total = cellTotal != null \? cellTotal : form\.total/)
   assert.match(SETUP, /total=\{total \* batchMult\}/)
 })
