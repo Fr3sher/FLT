@@ -178,9 +178,24 @@ test('the Keep line does not claim a refund that never applied', () => {
 test('an engine that takes fewer references SAYS so at pick time', () => {
   assert.equal(editRefSupport('chatgpt'), 'all');
   assert.equal(editRefNote('chatgpt'), null);          // nothing to warn about
-  assert.match(editRefNote('krea'), /main reference only/);
+  // Krea's node pack has ONE extra slot. Naming the ceiling beats handing it
+  // three angles and letting two vanish between the modal and the graph.
+  assert.match(editRefNote('krea', { datasetExtraCount: 3 }), /FIRST of the dataset's 3/);
+  assert.match(editRefNote('krea', { datasetExtraCount: 1 }), /the dataset's extra reference photo/);
   assert.match(editRefNote('klein', { datasetExtraCount: 2 }), /2 extra reference photos/);
   assert.match(editRefNote('klein'), /not sent/);
+});
+
+test('with no extra angles yet, both local engines say WHERE to add them', () => {
+  // The transient picker is hidden for local engines, and a hidden picker reads
+  // as "this engine takes none" — wrong for both of them. Point at the card that
+  // does accept angles instead of leaving the row blank.
+  for (const engine of ['klein', 'krea']) {
+    assert.match(editRefNote(engine, { datasetExtraCount: 0 }), /reference card/);
+  }
+  // Once the dataset has angles the pointer is noise, so it goes away.
+  assert.doesNotMatch(editRefNote('klein', { datasetExtraCount: 1 }), /reference card/);
+  assert.doesNotMatch(editRefNote('krea', { datasetExtraCount: 1 }), /reference card/);
 });
 
 test('the transient reference picker is hidden for engines that cannot take it', () => {

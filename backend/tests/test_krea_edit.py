@@ -445,6 +445,62 @@ def test_the_krea_graph_defaults_favor_prompt_adherence_without_weakening_identi
     assert lora['inputs']['strength_model'] == 1.0
 
 
+def _graph_with_extra(extra='extra.png'):
+    from app.services import krea_edit_helper as keh
+    return keh.build_workflow('ref.png', 'a prompt', unet='Krea/base.safetensors',
+                              clip='te.safetensors', vae='vae.safetensors',
+                              lora_name='krea/id.safetensors', width=1024, height=1024,
+                              seed=7, extra_source_image=extra)
+
+
+def _patch_inputs(g):
+    return next(n for n in g.values()
+                if n['class_type'] == 'Krea2EditModelPatch')['inputs']
+
+
+def test_a_second_reference_reaches_the_patch_and_BOTH_grounded_encodes():
+    """The pack's own two-reference workflow grounds the NEGATIVE branch on both
+    images as well — that is the trained unconditional, not an optimisation we
+    could skip on the branch whose prompt is empty."""
+    g = _graph_with_extra()
+    extra_id = next(k for k, n in g.items()
+                    if n['class_type'] == 'LoadImage' and n['inputs']['image'] == 'extra.png')
+    encodes = [n for n in g.values() if n['class_type'] == 'Krea2EditGroundedEncode']
+    assert _patch_inputs(g)['source_image_b'] == [extra_id, 0]
+    assert len(encodes) == 2
+    assert all(n['inputs']['image_b'] == [extra_id, 0] for n in encodes)
+
+
+def test_the_second_reference_adds_no_vae_encode_the_node_would_never_read():
+    """`Krea2EditModelPatch` rebuilds its sources from the PIXEL path whenever vae
+    + source_image are connected, which this graph always does — `source_latent_b`
+    is then never read. Wiring it 'for symmetry' would buy a VAE encode per render
+    and change nothing."""
+    g = _graph_with_extra()
+    assert sum(1 for n in g.values() if n['class_type'] == 'VAEEncode') == 1
+    assert 'source_latent_b' not in _patch_inputs(g)
+
+
+def test_a_second_reference_does_not_move_the_boost_off_the_primary():
+    """The node applies `ref_boost` to the LAST reference and `ref_boost_a` to the
+    first. Adding an angle demotes the primary to first — without the handoff the
+    user's tuned value would land on the extra and the primary would silently
+    fall back to the hardcoded 1.0."""
+    one, two = _patch_inputs(_graph()), _patch_inputs(_graph_with_extra())
+    assert (one['ref_boost'], one['ref_boost_a']) == (0.25, 1.0)
+    assert two['ref_boost'] == two['ref_boost_a'] == 0.25
+
+
+def test_no_second_reference_leaves_the_graph_exactly_as_it_was():
+    """The single-reference render is what every existing install gets: adding the
+    optional slot must not perturb one node of it."""
+    from app.services import krea_edit_helper as keh
+    assert _graph() == keh.build_workflow(
+        'ref.png', 'a prompt', unet='Krea/base.safetensors', clip='te.safetensors',
+        vae='vae.safetensors', lora_name='krea/id.safetensors', width=1024,
+        height=1024, seed=7, extra_source_image=None)
+
+
 def test_the_clip_loader_asks_for_the_krea2_type():
     g = _graph()
     clip = next(n for n in g.values() if n['class_type'] == 'CLIPLoader')

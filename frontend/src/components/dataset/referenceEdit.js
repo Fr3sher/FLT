@@ -69,12 +69,13 @@ export function defaultEditEngine(storage, usable = null) {
  *                      ReferenceLatent nodes (Klein). The transient uploads are
  *                      request-scoped bytes and both local graphs want file
  *                      paths, so they are refused, not dropped.
- *   - 'primary_only' : the reference and nothing else (Krea's edit patch takes
- *                      one source; what a second does to identity is unmeasured).
+ *   - 'dataset_one'  : primary + the FIRST dataset extra (Krea). Its node pack
+ *                      exposes a single extra slot, so the ceiling is the
+ *                      graph's, not a policy we could lift here.
  */
 export const EDIT_REF_SUPPORT = {
   klein: 'dataset_only',
-  krea: 'primary_only',
+  krea: 'dataset_one',
 };
 export function editRefSupport(engine) {
   return EDIT_REF_SUPPORT[engine] || 'all';
@@ -104,15 +105,32 @@ export function editRefNote(engine, { datasetExtraCount = 0 } = {}) {
   const label = ENGINE_LABELS[engine] || engine;
   const n = Math.max(0, Number(datasetExtraCount) || 0);
   if (support === 'all') return null;
-  if (support === 'dataset_only') {
-    const uses = n > 0
-      ? `${label} uses your reference plus the dataset's ${n} extra reference `
-        + `photo${n === 1 ? '' : 's'}.`
-      : `${label} uses your reference photo (and any extra angles you add to the dataset).`;
-    return `${uses} Images added here are not sent to a local engine.`;
+
+  // With no extras yet, hiding the picker is the whole message a user gets, and
+  // it reads as "this engine can't take any" — the wrong conclusion for both
+  // local engines. So point at the place that DOES accept them: the reference
+  // card this dialog was opened from, one Cancel away.
+  const where = 'Add angles with + on the reference card behind this dialog.';
+  const notSent = 'Images added here are not sent to a local engine.';
+
+  if (support === 'dataset_one') {
+    if (n === 0) {
+      return `${label} uses your reference photo, and reads one extra angle if the `
+        + `dataset holds any. ${where} ${notSent}`;
+    }
+    const uses = n === 1
+      ? `${label} uses your reference plus the dataset's extra reference photo.`
+      : `${label} uses your reference plus the FIRST of the dataset's ${n} extra reference `
+        + 'photos — its edit model has room for one.';
+    return `${uses} ${notSent}`;
   }
-  return `${label} edits the main reference only — extra reference photos, including the `
-    + "dataset's, are not used.";
+
+  const uses = n > 0
+    ? `${label} uses your reference plus the dataset's ${n} extra reference `
+      + `photo${n === 1 ? '' : 's'}.`
+    : `${label} uses your reference photo, and reads every extra angle the dataset `
+      + `holds. ${where}`;
+  return `${uses} ${notSent}`;
 }
 
 /** What this edit costs and how long it takes, per engine. The old sentence said

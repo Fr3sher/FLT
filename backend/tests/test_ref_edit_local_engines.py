@@ -365,7 +365,13 @@ def test_mixed_api_local_batch_shares_snapshot_and_activity_until_local_lands(
 
     assert response.status_code == 202
     assert len(krea_calls) == 1
-    assert 'extra_ref_paths' not in krea_calls[0]
+    # Krea now HAS an extra-reference slot, so the guard can no longer be "the
+    # argument was never passed". What it always meant is the part that still
+    # holds: the modal's transient upload reaches the API engine and NOTHING
+    # else. This dataset has no extra angles, so the local lane must receive an
+    # empty list — asserting the VALUE catches a leak the old absence check
+    # would have missed the moment the argument started being passed.
+    assert krea_calls[0]['extra_ref_paths'] == []
     assert api_calls[0][0] == 'chatgpt'
     assert len(api_calls[0][1]) == 2       # primary + modal upload, API only
     assert api_calls[0][1][0] == local_primary[0]

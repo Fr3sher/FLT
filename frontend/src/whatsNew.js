@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-krea-edit-takes-an-extra-angle',
+    date: '2026-08-03',
+    title: 'Krea 2 Edit now looks at a second angle — and both local engines say where to add one',
+    blurb:
+      'Editing your reference with Krea 2 Edit used the main photo and nothing else, so a great side-angle shot sitting on the dataset went unused. It now also reads the first extra angle on the reference card. One, not three: its edit graph has exactly one spare slot, and the dialog names that ceiling instead of quietly dropping the rest. The bigger fix is what you can see — because local engines never accepted the “+ Add reference images” of the edit dialog, that row simply disappeared when you picked Klein or Krea, which read as “this engine takes no extra references at all”. Wrong for both: Klein has always chained every angle on the dataset. Both now tell you what they use and, when you have none yet, exactly where to add them. One caveat worth knowing: Krea’s second slot was trained to place a *different* subject next to the first, so a second photo of the same person occasionally duplicates them — if that happens, remove the extra angle and re-run.',
+  },
+  {
     id: '2026-08-03-canvas-group-drag-out-crash',
     date: '2026-08-03',
     title: 'Pulling a picture out of a group on the canvas no longer blanks the board',

@@ -3652,15 +3652,31 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
 
 #: Reference images each LOCAL engine actually consumes, so the UI can say it at
 #: pick time. Klein chains the dataset's extra refs as native ReferenceLatent
-#: nodes; Krea's Krea2EditModelPatch takes ONE source (a second slot exists but
-#: what it does to identity has not been measured — see enqueue_krea_edit).
+#: nodes, with no ceiling of its own; Krea takes exactly ONE, because its node
+#: pack exposes a single extra slot (`_b`) and no more.
 #: Neither takes the modal's transient uploads: both engines want file PATHS and
 #: the transient images are request-scoped bytes. Refused loudly by the route.
 #: LOAD-BEARING, not documentation: the enqueue below reads it, so a third local
 #: engine cannot be added without deciding what it does with the extra refs. The
 #: values are mirrored in frontend EDIT_REF_SUPPORT (contract-tested), because
 #: the UI has to say this at pick time, not discover it as a silent drop.
-LOCAL_EDIT_REF_SUPPORT = {'klein': 'dataset_only', 'krea': 'primary_only'}
+LOCAL_EDIT_REF_SUPPORT = {'klein': 'dataset_only', 'krea': 'dataset_one'}
+
+#: How many dataset extras each support value forwards. None = no ceiling beyond
+#: the dataset's own MAX_EXTRA_REFS. A support value absent from this map takes
+#: none — which is what a newly added engine should do until someone decides.
+LOCAL_EDIT_REF_LIMITS = {'dataset_only': None, 'dataset_one': 1}
+
+
+def local_edit_extra_refs(engine, extra_ref_paths):
+    """The dataset extras THIS engine's graph can actually consume, in order.
+
+    One place decides, so the enqueue below and the count the modal shows can
+    never disagree — the failure this prevents is a UI promising two angles to a
+    graph with room for one."""
+    limit = LOCAL_EDIT_REF_LIMITS.get(LOCAL_EDIT_REF_SUPPORT.get(engine), 0)
+    paths = list(extra_ref_paths or [])
+    return paths if limit is None else paths[:limit]
 
 
 def _enqueue_local_reference_edit(user_id, dataset_id, ds, engine, prompt, token,
@@ -3683,15 +3699,17 @@ def _enqueue_local_reference_edit(user_id, dataset_id, ds, engine, prompt, token
             from . import krea_edit_helper as helper
             job_id = helper.enqueue_krea_edit(
                 user_id=str(user_id), source_filename=os.path.basename(ref_path),
-                source_path=ref_path, edit_prompt=prompt, extra_metadata=meta)
+                source_path=ref_path, edit_prompt=prompt, extra_metadata=meta,
+                # One angle, decided by the table — Krea's node pack has a single
+                # extra slot, so handing it more would drop them further down.
+                extra_ref_paths=local_edit_extra_refs(engine, extra_ref_paths))
         else:
             from .klein_edit_helper import enqueue_klein_edit
             # The dataset's extra refs DO reach Klein (native ReferenceLatent
             # chaining) — the same anchors the API lane sends as bytes. Gated on
             # the table above rather than on the engine name, so the two can't
             # disagree.
-            extras = (list(extra_ref_paths)
-                      if LOCAL_EDIT_REF_SUPPORT.get(engine) == 'dataset_only' else [])
+            extras = local_edit_extra_refs(engine, extra_ref_paths)
             job_id = enqueue_klein_edit(
                 user_id=str(user_id), source_filename=os.path.basename(ref_path),
                 source_path=ref_path, edit_prompt=prompt, extra_ref_paths=extras,

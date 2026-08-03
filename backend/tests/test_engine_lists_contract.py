@@ -95,6 +95,20 @@ def test_the_local_engines_reference_support_matches_on_both_sides():
         assert engine in svc.LOCAL_EDIT_REF_SUPPORT, engine
 
 
+def test_each_local_engine_forwards_only_what_its_graph_can_hold():
+    """The ceiling belongs to the graph, not to a policy: Krea's node pack has one
+    `_b` slot, Klein chains as many ReferenceLatents as the dataset holds. Slicing
+    HERE — one function both the enqueue and the modal's wording answer to — is
+    what stops the UI promising three angles to a graph with room for one."""
+    paths = ['a.png', 'b.png', 'c.png']
+    assert svc.local_edit_extra_refs('klein', paths) == paths
+    assert svc.local_edit_extra_refs('krea', paths) == ['a.png']
+    assert svc.local_edit_extra_refs('krea', None) == []
+    # An engine nobody has decided about forwards NONE rather than everything —
+    # the safe default for a local graph that may not have a slot at all.
+    assert svc.local_edit_extra_refs('nanobanana', paths) == []
+
+
 def test_the_engine_labels_are_worded_identically_on_both_sides():
     """Both sides word a refusal from these labels ('pick Klein, Krea 2 Edit, Nano
     Banana Pro, ChatGPT or OpenRouter'), so the same engine must not be called two

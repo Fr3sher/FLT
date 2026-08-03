@@ -31,8 +31,10 @@ captioning rules and a few guards change with the dataset kind.
    per edit, on the model set in *Settings › Image engines*. The engines differ in
    what else they look at: the API ones take the dataset's extra references *and*
    images you drop into the dialog, Klein takes the dataset's extra references,
-   and Krea edits the main reference only — the dialog says which, before you
-   press Generate.
+   and Krea takes the first of them — its edit graph has room for one. Neither
+   local engine reads the images you drop into the dialog itself: add angles with
+   the **+** on the reference card. The dialog says all of this before you press
+   Generate.
 3. **Generate variations** — pick an engine (Nano Banana Pro, ChatGPT,
    OpenRouter, or local Klein) and fire the **variation catalog**: 53 shots
    across expression, angle, lighting, framing, outfit and background, each

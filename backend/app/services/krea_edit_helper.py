@@ -24,6 +24,10 @@ THE GRAPH (validated against /object_info on a live install)
                                                               negative: Krea2EditGroundedEncode('',     image)
     CLIPLoader(qwen3-vl 4B, type='krea2') · VAELoader(qwen image vae) · EmptySD3LatentImage
 
+An OPTIONAL second reference (one extra angle, the pack's only `_b` slot) joins
+the patch as `source_image_b` and both encodes as `image_b`. See build_workflow
+for the two traps it carries (no second VAEEncode; ref_boost changes hands).
+
 BOTH custom nodes are mandatory:
   * `Krea2EditGroundedEncode` is what makes the text encoder actually SEE the
     reference. With a plain `CLIPTextEncode` the reference has no effect at all
@@ -765,7 +769,8 @@ def _existing_generation_lora_rows(rows, identity_lora=None):
 def build_workflow(source_image, prompt, *, unet, clip, vae, lora_name,
                    width, height, seed, steps=None, grounding=None,
                    ref_boost=None, lora_strength=None, fit_mode='fit',
-                   filename_prefix='krea_edit', generation_loras=None):
+                   filename_prefix='krea_edit', generation_loras=None,
+                   extra_source_image=None):
     """The ComfyUI API-format graph. Pure function of its arguments — no config
     read, no disk access — so a test can assert the exact wiring without a
     ComfyUI, and every loader value is one a resolver produced.
@@ -779,7 +784,11 @@ def build_workflow(source_image, prompt, *, unet, clip, vae, lora_name,
     always-on LoRA preset, chained between the identity LoRA (4) and the model
     patch (7). Rows arrive ALREADY existence-checked and clamped from
     enqueue_krea_edit — this function must stay pure, so it neither reads config
-    nor touches the disk. None/[] leaves the graph exactly as it was."""
+    nor touches the disk. None/[] leaves the graph exactly as it was.
+
+    `extra_source_image` (optional): the ComfyUI input filename of a SECOND
+    reference. The node pack exposes exactly one extra slot (`source_image_b` /
+    `image_b`) — there is no third, so this is a single name, not a list."""
     steps = 8 if steps is None else max(1, int(steps))
     grounding = 512 if grounding is None else int(grounding)
     ref_boost = 0.25 if ref_boost is None else float(ref_boost)
@@ -823,6 +832,38 @@ def build_workflow(source_image, prompt, *, unet, clip, vae, lora_name,
         '13': {'class_type': 'SaveImage',
                'inputs': {'filename_prefix': filename_prefix, 'images': ['12', 0]}},
     }
+    # --- Optional SECOND reference (the pack's `_b` slots) ---------------------
+    # Wired EXACTLY like the pack's own two-reference workflow
+    # (workflows/krea2_identity_edit.json): the extra image reaches the patch and
+    # BOTH grounded encodes — the negative included, because that is the trained
+    # unconditional.
+    #
+    # Two things here are counter-intuitive and were read off the node source, not
+    # guessed. Do not "complete" either of them:
+    #
+    #  1. NO second VAEEncode. The pack also exposes `source_latent_b`, and its
+    #     reference workflow connects it — but `Krea2EditModelPatch.patch` rebuilds
+    #     `src` from the PIXEL path whenever `vae` + `source_image` are both
+    #     connected, which this graph always does. `source_latent_b` is therefore
+    #     read only when the pixel path is off; adding it here would encode an
+    #     image on every render for a value the node never looks at.
+    #
+    #  2. `ref_boost_a` is raised to the SAME value as `ref_boost`. The node
+    #     applies `ref_boost` to the LAST reference and `ref_boost_a` to the
+    #     FIRST. With one reference the primary IS the last one, so it gets the
+    #     configured krea.ref_boost. Adding a second reference silently demotes
+    #     the primary to "first" — without this line the user's tuned value would
+    #     jump onto the extra angle and the primary would fall back to the
+    #     hardcoded 1.0. Keeping both equal means adding an angle changes what the
+    #     model sees, never how hard it pulls on the reference already there.
+    if extra_source_image:
+        g['14'] = {'class_type': 'LoadImage',
+                   'inputs': {'image': extra_source_image},
+                   '_meta': {'title': 'Second reference (extra angle)'}}
+        g['7']['inputs']['source_image_b'] = ['14', 0]
+        g['7']['inputs']['ref_boost_a'] = ref_boost
+        g['8']['inputs']['image_b'] = ['14', 0]
+        g['9']['inputs']['image_b'] = ['14', 0]
     # Always-on generation LoRAs: chained AFTER the identity LoRA and BEFORE the
     # model patch, in list order, so the patch (and through it the KSampler) sees
     # the whole stack. Named node keys — this graph is ours, unlike Klein's
@@ -854,7 +895,7 @@ def _comfy_input_dir() -> str:
 
 def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
                       extra_metadata=None, krea_model=None, aspect_ratio=None,
-                      generation_loras=None):
+                      generation_loras=None, extra_ref_paths=None):
     """Copy the reference into ComfyUI's input folder, build the Krea 2 Edit
     graph against what is ACTUALLY installed, and enqueue it. Returns the app
     job_id.
@@ -863,11 +904,19 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     anything is copied or queued), ValueError on a missing source, RuntimeError
     when ComfyUI isn't configured.
 
-    Deliberately NO extra-reference chaining: `Krea2EditModelPatch` takes a
-    SECOND source (`source_latent_b` / `source_image_b`) and no more, and we have
-    not measured what a second reference does to identity here. Shipping an
-    unmeasured multi-ref path would be guessing — the dataset's extra refs are
-    simply ignored by this engine, and the UI says so.
+    `extra_ref_paths`: the dataset's extra angles, in order. ONE of them is used
+    — `Krea2EditModelPatch` and `Krea2EditGroundedEncode` each expose a single
+    extra slot (`_b`) and no more, so the rest are dropped here rather than
+    silently at graph-build time. A path that no longer exists is skipped with a
+    log line, never fatal: an edit must not die over an optional angle (the same
+    tolerance as the Klein multi-ref path).
+
+    Read the pack before widening this: its `_b` slot was trained for a SECOND,
+    DIFFERENT subject ("scene first, subject second"; "two distinct people ...
+    subject B on the `_b` inputs"). Feeding it another angle of the SAME person
+    is off-label — it is what the dataset lane wants, but the documented failure
+    mode is a duplicated subject, which is why only one extra is passed and the
+    modal says what it does.
 
     `generation_loras`: ordered [{file, strength}] rows of the run's always-on
     LoRA preset (already resolved from config by the caller — a request only ever
@@ -896,6 +945,22 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
         source_path, f'krea_source_{uid}_{source_stem}.png', comfy_input_dir)
     comfy_input = os.path.basename(staged_source)
 
+    # The single extra angle, staged the same way. Only the basename is logged:
+    # a dataset path names a machine and the log is what users paste into a bug
+    # report.
+    extra_input = None
+    for candidate in (extra_ref_paths or []):
+        if not candidate or not os.path.exists(candidate):
+            # Says "skipped", not "running with the primary alone": a caller may
+            # hand over several candidates and a later one can still be usable.
+            logger.warning('krea: extra reference is not on disk — skipped: %s',
+                           os.path.basename(str(candidate or '')))
+            continue
+        staged_extra = comfy_fs.stage_input_image(
+            candidate, f'krea_ref_b_{uid}.png', comfy_input_dir)
+        extra_input = os.path.basename(staged_extra)
+        break
+
     # Measure the exact sanitized, EXIF-oriented PNG handed to the graph, never
     # the raw camera raster whose aspect can be transposed by orientation 5–8.
     # A dataset card may request a different output ratio; free-prompt reference
@@ -909,6 +974,7 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
         grounding=grounding_px(), ref_boost=_ref_boost(),
         lora_strength=_identity_strength(),
         generation_loras=_existing_generation_lora_rows(generation_loras, identity_lora=lora_name),
+        extra_source_image=extra_input,
         # UNIQUE prefix per job: SaveImage numbers from what is currently in the
         # output folder and the app moves each result out right after completion,
         # so a shared prefix makes the counter re-issue the same name (the Klein
@@ -919,7 +985,9 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     meta = {'model_name': 'krea_identity_edit_dataset'}
     if extra_metadata:
         meta.update(extra_metadata)
-    meta['staged_inputs'] = [comfy_input]   # dropped again when the job ends
+    # Dropped again when the job ends — the extra angle is staged too, so it has
+    # to be listed or it would linger in ComfyUI's input folder for good.
+    meta['staged_inputs'] = [comfy_input] + ([extra_input] if extra_input else [])
     queue_manager.add_job(job_type='image', user_id=str(user_id),
                           workflow_data=workflow, prompt=edit_prompt,
                           job_id=job_id, metadata=meta)

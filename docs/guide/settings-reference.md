@@ -190,7 +190,7 @@ The pipeline's reference boost is an internal Krea calibration, not a second use
 Two behaviours worth knowing before you build a dataset with it:
 
 - **The selected card's framing is honored.** Krea Fit v1.2 uses the selected catalog card's framing and aspect ratio (including its 1:1 / 3:4 shape) instead of copying the source photo's shape.
-- **Extra reference images are ignored.** Identity comes from the primary reference alone. Klein and the API engines still use your extra refs.
+- **Extra reference images are ignored when generating variations.** Identity comes from the primary reference alone. The ✦ Edit reference dialog is the exception: there Krea also reads the **first** extra angle on the reference card — its edit graph has exactly one spare slot, so any further angles are still unused. That slot was trained to hold a *different* subject, so a second photo of the same person can occasionally duplicate them; remove the extra angle if you see it. Klein and the API engines use your extra refs in both places.
 
 Outfits and expressions are steered differently here than on the other engines: this model preserves anything it is not *positively* told to change, so the catalog's "a different outfit (not the one in the reference)" phrasing is rewritten at generation time into a concrete garment ("wearing a red knit sweater"), picked from the shot's own name — so outfits genuinely differ across the dataset while regenerating one shot reproduces its own.
 
