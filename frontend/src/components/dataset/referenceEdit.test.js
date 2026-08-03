@@ -182,6 +182,12 @@ test('an engine that takes fewer references SAYS so at pick time', () => {
   // three angles and letting two vanish between the modal and the graph.
   assert.match(editRefNote('krea', { datasetExtraCount: 3 }), /FIRST of the dataset's 3/);
   assert.match(editRefNote('krea', { datasetExtraCount: 1 }), /the dataset's extra reference photo/);
+  // And WHAT that slot is for, in every state — a user who picks another angle
+  // of the same face gets a duplicated subject and blames the engine.
+  for (const n of [0, 1, 3]) {
+    assert.match(editRefNote('krea', { datasetExtraCount: n }), /a different subject/);
+  }
+  assert.doesNotMatch(editRefNote('klein', { datasetExtraCount: 3 }), /a different subject/);
   assert.match(editRefNote('klein', { datasetExtraCount: 2 }), /2 extra reference photos/);
   assert.match(editRefNote('klein'), /not sent/);
 });

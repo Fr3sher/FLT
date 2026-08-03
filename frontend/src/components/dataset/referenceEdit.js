@@ -110,26 +110,37 @@ export function editRefNote(engine, { datasetExtraCount = 0 } = {}) {
   // it reads as "this engine can't take any" — the wrong conclusion for both
   // local engines. So point at the place that DOES accept them: the reference
   // card this dialog was opened from, one Cancel away.
-  const where = 'Add angles with + on the reference card behind this dialog.';
+  // The pointer names what THIS engine wants: telling a Krea user to "add
+  // angles" would contradict the sentence above it, which just said angles are
+  // the wrong photo for its second slot.
+  const whereFor = (what) => `Add ${what} with + on the reference card behind this dialog.`;
   const notSent = 'Images added here are not sent to a local engine.';
 
   if (support === 'dataset_one') {
+    // Naming what the slot is FOR beats naming how big it is. The pack trained
+    // it to place a second, DIFFERENT subject ("scene first, subject second"),
+    // so a second angle of the same face is off-label and can duplicate them.
+    // Someone who knows that picks the right photo; someone told only "one
+    // extra" picks the wrong one and concludes the engine is bad.
+    const purpose = 'That second slot was trained to hold a different subject — another '
+      + 'person, or a scene to place yours in. Another angle of the same face is off-label '
+      + 'there and can duplicate them.';
     if (n === 0) {
-      return `${label} uses your reference photo, and reads one extra angle if the `
-        + `dataset holds any. ${where} ${notSent}`;
+      return `${label} uses your reference photo, and can read one more. ${purpose} `
+        + `${whereFor('one')} ${notSent}`;
     }
     const uses = n === 1
       ? `${label} uses your reference plus the dataset's extra reference photo.`
       : `${label} uses your reference plus the FIRST of the dataset's ${n} extra reference `
-        + 'photos — its edit model has room for one.';
-    return `${uses} ${notSent}`;
+        + 'photos — it has room for one.';
+    return `${uses} ${purpose} ${notSent}`;
   }
 
   const uses = n > 0
     ? `${label} uses your reference plus the dataset's ${n} extra reference `
       + `photo${n === 1 ? '' : 's'}.`
     : `${label} uses your reference photo, and reads every extra angle the dataset `
-      + `holds. ${where}`;
+      + `holds. ${whereFor('angles')}`;
   return `${uses} ${notSent}`;
 }
 
