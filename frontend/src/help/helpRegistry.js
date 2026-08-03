@@ -542,6 +542,8 @@ const TOPICS = [
      'hybrid character', 'identity plus style', 'identity and concept',
      'weight per checkpoint', 'weight slider', 'both triggers', 'trigger words',
      'one family only', 'why is blend greyed out',
+     'purple line', 'violet line', 'where did this image come from',
+     'blend sources', 'sources not on the board', 'missing source', 'provenance',
      'weight boxes', 'sweep weights', 'every combination', 'blend sweep'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-continue', '▶ Continue training from a checkpoint on the board',

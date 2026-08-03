@@ -54,6 +54,7 @@ import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
 import CanvasGroupBar from './CanvasGroupBar';
+import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges';
 import ExportGridModal from '../dataset/studio/ExportGridModal';
 import CheckpointGalleryPanel from '../shared/CheckpointGalleryPanel';
 import { useToast } from '../common/Toast';
@@ -228,7 +229,7 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
  *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
 function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, onExportGrid,
-  boardScale, hint }) {
+  boardScale, hint, blendNotes }) {
   if (!layout.length) return null;
   // Edges are drawn from where each picture actually IS — a member's slot in
   // its strip, not the box it remembers while it waits to leave one.
@@ -241,11 +242,13 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, o
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
           laneName={lane.name} onClose={onClose} onOpen={onOpen} boardScale={boardScale}
+          blendNotes={blendNotes}
           dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
       ) : (
         <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
           laneName={lane.name} onGeometry={onGeometry} onClose={onClose}
-          onOpen={onOpen} boardScale={boardScale} />
+          onOpen={onOpen} boardScale={boardScale}
+          blendNote={blendNotes?.get(r.node.imageId) || null} />
       )))}
       {/* 🖼🖼 The groups' title bars, drawn AFTER every picture and every strip.
           A bar sits on board space above its own strip, so as an ordinary
@@ -387,6 +390,32 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   }, [placed, imagesByLane, imgDrag]);
   const layoutRef = useRef(layoutByLane);
   useEffect(() => { layoutRef.current = layoutByLane; }, [layoutByLane]);
+
+  /* 🧬 GENERATION PROVENANCE — a blended picture descends from SEVERAL pills at
+     once, and they are routinely in different lanes (blending across datasets is
+     the point of doing it from the board). A cross-lane edge cannot live in a
+     lane's own <svg>, so these are computed in WORLD units here and drawn once,
+     under everything (see the layer below). The head LoRA keeps the ordinary
+     image → pill edge its lane already draws; only the other parents are added,
+     or one pair would carry two connectors. */
+  const provenance = useMemo(() => {
+    const nodes = [];
+    for (const lane of world.lanes) {
+      for (const n of drawnNodes(layoutByLane[lane.datasetId] || [])) {
+        nodes.push({ ...n, datasetId: lane.datasetId });
+      }
+    }
+    return blendEdgesFor(nodes, world.lanes);
+  }, [world.lanes, layoutByLane]);
+  // What each blended picture must OWN UP TO: the sources it could not place.
+  const blendNotes = useMemo(() => {
+    const out = new Map();
+    for (const [imageId, entry] of provenance.unresolved) {
+      const note = blendSourcesNote(entry);
+      if (note) out.set(imageId, note);
+    }
+    return out;
+  }, [provenance]);
   // ⊕ / ⤢ What the gesture in flight would DO on release: a merge target, or
   // "this one is on its way out of its group". Feedback only — the decision is
   // taken again from the same functions at pointerup.
@@ -1479,10 +1508,24 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           <div style={{ position: 'absolute', left: 0, top: 0,
             width: Math.max(world.width, 1), height: Math.max(world.height, 1),
             transform: viewTransform(view), transformOrigin: '0 0' }}>
+            {/* 🧬 The provenance layer. FIRST child and `pointer-events: none`,
+                both deliberate: an edge is CONTEXT, not content. It must never
+                cover a card or a picture, and it must never take a click —
+                chrome and content fighting over the pointer is exactly how a
+                group of pinned images became impossible to move AND to close.
+                Under the lanes means a long edge passes behind the cards and
+                reappears between them, which is already how this board reads
+                descent. */}
+            <svg width="1" height="1" aria-hidden
+              data-testid="canvas-provenance-layer"
+              className="pointer-events-none absolute left-0 top-0 block overflow-visible">
+              <LineageEdges edges={provenance.edges} isLit={() => false} />
+            </svg>
             {world.lanes.map((lane) => (
               <div key={lane.datasetId}>
                 <LaneHeader lane={lane} onZoomRef={setRefZoom} />
                 <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || []}
+                  blendNotes={blendNotes}
                   onGeometry={handleImageGeometry} onClose={handleCloseImage}
                   onCloseGroup={handleCloseGroup}
                   onExportGrid={(group) => setExportGroup({

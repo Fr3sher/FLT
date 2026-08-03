@@ -46,7 +46,7 @@ import CanvasImageNode from './CanvasImageNode';
    wide one. */
 
 export default function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
-  onClose, onOpen, dropHint = null }) {
+  onClose, onOpen, dropHint = null, blendNotes = null }) {
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
 
@@ -70,7 +70,8 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
         <CanvasImageNode key={m.node.imageId} node={m.node} datasetId={datasetId}
           laneName={laneName} variant="member"
           box={{ x: m.x - group.x, y: m.y - group.y, w: m.w, h: m.h }}
-          onClose={onClose} onOpen={onOpen} boardScale={boardScale} />
+          onClose={onClose} onOpen={onOpen} boardScale={boardScale}
+          blendNote={blendNotes?.get(m.node.imageId) || null} />
       ))}
 
       {/* Resizing the strip resizes it as a WHOLE, keeping its shape: a member

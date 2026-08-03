@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-03-canvas-blend-provenance',
+    date: '2026-08-03',
+    title: '🧬 A blended picture now shows every checkpoint it came from',
+    blurb:
+      'A picture pinned on the LoRA Canvas was linked back to one checkpoint — but a 🧬 Blend loads several, often from different datasets, so the board was showing one parent out of two or three. Violet lines now join a blended picture to every source it was made from, across lanes, next to the existing indigo training lineage. When a source is no longer on the board — its run deleted, its dataset unticked — no line is invented: the picture says “1 of 2 sources is not on the board” instead. Blends made before this update keep their images and simply have no lines to show.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-seedvr2-tiling-is-a-choice',
     date: '2026-08-03',
     title: 'Tiled upscaling is now the default — it keeps more detail, not just less VRAM',

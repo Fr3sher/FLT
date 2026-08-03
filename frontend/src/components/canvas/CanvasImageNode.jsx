@@ -47,7 +47,7 @@ import { useImageDownload } from '../../hooks/useImageDownload';
    arithmetic is nudgeImageNode(), unit-tested; this file only routes keys. */
 
 export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
-  onClose, onOpen, boardScale = 1, variant = 'node', box = null }) {
+  onClose, onOpen, boardScale = 1, variant = 'node', box = null, blendNote = null }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
   const facts = imageFactsLine(img);
@@ -198,6 +198,22 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           className="absolute bottom-0 left-0 z-10 max-w-full cursor-pointer rounded-tr-md bg-red-900/90 px-1 py-0.5 text-[0.5rem] leading-tight text-red-50">
           {dl.error}
         </div>
+      )}
+      {/* 🧬 A blended picture whose sources are not all on the board SAYS SO.
+          The violet edges show the provenance we could place; this badge is the
+          other half of the same honesty — without it, "two edges" and "three
+          sources" are indistinguishable, and the board silently under-reports
+          where a picture came from. Nothing is drawn when every source is
+          placed: a badge that always speaks is noise. */}
+      {blendNote && (
+        <span data-testid="canvas-blend-note"
+          style={{ transform: `scale(${Math.max(1, 1 / Math.max(boardScale, 0.01))})`,
+            transformOrigin: 'bottom left' }}
+          title={`🧬 Blended image — ${blendNote}. Only the sources still on the `
+            + 'board can be linked to it.'}
+          className="pointer-events-none absolute bottom-0 left-0 z-10 max-w-full truncate rounded-tr-md border-r border-t border-purple-400/50 bg-black/60 px-1 py-px text-[0.5rem] font-semibold leading-tight text-purple-200 backdrop-blur-sm">
+          <span aria-hidden>🧬</span> {blendNote}
+        </span>
       )}
       <div className="relative min-h-0 flex-1 bg-black/30">
         <img src={img.url} alt={`Generated at ${stepLabel}`} draggable={false}
