@@ -40,7 +40,7 @@ import ResultLightbox from './ResultLightbox';
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 export default function ComparisonStudio({ selection, baseModels = [], axes = null,
-  modelDefaults = null, runType = 'zimage' }) {
+  modelDefaults = null, runType = 'zimage', baseNote = null }) {
   const toast = useToast();
 
   // --- Réglages du run (persistés : recharger la page ne les perd plus) --------
@@ -111,8 +111,10 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   // mauvais chiffres pour exactement les modèles qui coûtent le plus cher à
   // tester. Un axe que l'utilisateur a touché (selCfgs non nul) n'est jamais
   // réécrit — ici comme là-bas.
-  const baseDefaults = (modelDefaults && selectedBase
-    ? modelDefaults[selectedBase] : null) || null;
+  // `selectedBase` vaut '' quand la famille n'offre aucune alternative — et la clé
+  // '' du payload EST celle du défaut élu. L'ignorer renvoyait une base non
+  // distillée sur les chiffres Turbo (cfg 1 / 8 steps), l'esquisse floue de #18.
+  const baseDefaults = (modelDefaults ? modelDefaults[selectedBase || ''] : null) || null;
   const defaultCfg = baseDefaults?.cfg ?? axes?.default_cfg;
   const defaultSteps = baseDefaults?.steps ?? axes?.default_steps;
   const effectiveCfgs = effectiveAxis(selCfgs, defaultCfg);
@@ -295,9 +297,17 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[320px_1fr] gap-4 items-start">
       <aside className="flex flex-col gap-3 lg:sticky lg:top-16 lg:max-h-[calc(100vh-7rem)] lg:overflow-auto">
+        {/* Ce que le défaut de base a d'anormal — affiché même sans sélecteur :
+            l'install qui n'a qu'une base est celle qui doit le lire. */}
+        {baseNote && (
+          <p className="m-0 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2
+                        text-[0.6875rem] leading-snug text-amber-300/80 break-words">
+            {baseNote}
+          </p>
+        )}
         {/* Picker de base — toutes familles. Krea : l'endpoint ne renvoie une liste
-            (Official + alternatives) que si des UNET Krea locaux existent ; sinon
-            vide → le sélecteur reste caché (défaut câblé du workflow). */}
+            (défaut élu + alternatives) que si des UNET Krea locaux existent ; sinon
+            vide → le sélecteur reste caché (défaut élu appliqué au node 20). */}
         {baseModels.length > 0 && (
           <div className="flex flex-col gap-1 rounded-lg border border-border bg-surface p-3">
             <span className="text-content-muted text-[0.625rem] uppercase">

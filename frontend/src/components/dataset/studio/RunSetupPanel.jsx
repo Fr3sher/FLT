@@ -226,6 +226,7 @@ export default function RunSetupPanel({ d, studio, form, datasetId,
             onToggleStep2={form.toggleStep2}
             defaultSteps2={d.default_steps2}
             mixedDefaults={form.mixedModelDefaults}
+            baseNote={d.base_note}
             fmt={fmt}
           />
 

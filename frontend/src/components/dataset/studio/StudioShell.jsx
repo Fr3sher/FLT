@@ -52,8 +52,12 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   // esquisse floue lue comme « l'entraînement a raté ». Le studio mono-LoRA les
   // recevait déjà par son propre payload ; c'est la même source.
   const [modelDefaults, setModelDefaults] = useState(null);
+  // Ce que le défaut de base a d'anormal, quand il en a. Servi par le même appel,
+  // et présent MÊME quand `models` est vide — c'est l'install sans alternative qui
+  // en a le plus besoin.
+  const [baseNote, setBaseNote] = useState(null);
   useEffect(() => {
-    if (!runType) { setBaseModels([]); setAxes(null); setModelDefaults(null); return; }
+    if (!runType) { setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null); return; }
     let cancelled = false;
     fetch(`/api/studio/base-models?type=${encodeURIComponent(runType)}`, { credentials: 'include' })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
@@ -62,9 +66,10 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
         setBaseModels(d.models || []);
         setAxes(d.axes || null);
         setModelDefaults(d.model_defaults || null);
+        setBaseNote(d.base_note || null);
       })
       .catch(() => {
-        if (!cancelled) { setBaseModels([]); setAxes(null); setModelDefaults(null); }
+        if (!cancelled) { setBaseModels([]); setAxes(null); setModelDefaults(null); setBaseNote(null); }
       });
     return () => { cancelled = true; };
   }, [runType]);
@@ -99,7 +104,7 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
 
       {comparison ? (
         <ComparisonStudio selection={selection} baseModels={baseModels} axes={axes}
-          modelDefaults={modelDefaults} runType={runType} />
+          modelDefaults={modelDefaults} runType={runType} baseNote={baseNote} />
       ) : soloDatasetId ? (
         // `key` force un remontage propre quand on change de LoRA solo OU de famille
         // (reset des hooks/état du studio riche — sinon on garderait la grille du précédent).

@@ -74,14 +74,26 @@ _open = open
 _lock = threading.Lock()
 _cache: dict = {}   # (abspath, mtime_ns, size) -> (verdict_code, reason_or_None)
 _quant_cache: dict = {}   # same key -> quantization_report() payload
+_payload_cache: dict = {}   # same key -> foreign_payload_report() payload
 
 
 def clear_cache() -> None:
-    """Drop the structural-verdict and quantization caches (test hygiene;
+    """Drop the structural-verdict, quantization and payload caches (test hygiene;
     production self-invalidates on the (path, mtime, size) key)."""
     with _lock:
         _cache.clear()
         _quant_cache.clear()
+        _payload_cache.clear()
+
+
+def _stat_key(path):
+    """(abspath, mtime_ns, size) — the cache identity of a file on disk, or None
+    when it cannot be stat'ed (then the caller simply does not cache)."""
+    try:
+        st = os.stat(str(path))
+    except OSError:
+        return None
+    return (os.path.abspath(str(path)), st.st_mtime_ns, st.st_size)
 
 
 def _human_size(n: int) -> str:
@@ -417,6 +429,133 @@ def base_precision_warning(report) -> str | None:
             'gives a better LoRA for the same GPU time. (This check reads the '
             'packing, not the architecture: a checkpoint can still be refused '
             'at load for carrying tensors this model family does not have.)')
+
+
+# --- payloads the file says are NOT weights -----------------------------------
+# A third question the same header answers, and the one that decides which file a
+# family may ELECT as its default base: does this checkpoint carry tensors the
+# model architecture never declared?
+#
+# In general that question needs the architecture's key set, which this module
+# refuses to model (see the SCOPE paragraph above). But one large sub-case answers
+# itself, because the file ANNOUNCES it. Measured 2026-08-04 on three community
+# Krea 2 repacks from two different repackers:
+#
+#   * `krea2_turbo_fp8.safetensors` — 12.90 GB, **432** tensors, F8_E4M3 x266 +
+#     F32 x166, `__metadata__` = conversion, fp8_format, krea2_fp8 **+ egg_c,
+#     egg_format, egg_h, egg_w**;
+#   * `krea-2-turbo-int8-convrot.safetensors` (16.17 GB) and its `-aggressive`
+#     twin (13.76 GB) — same four `egg_*` keys, nothing else in `__metadata__`.
+#
+# All three carry two tensors that the family's own full-precision checkpoint does
+# not: `last.down.weight` and `last.up.weight`, `[6144, 6144]` each. The reference
+# — Krea 2 Raw bf16, same folder — has **430** tensors and its `last.*` block is
+# exactly `last.linear.weight/bias`, `last.norm.scale`, `last.modulation.lin`.
+# `egg_h == egg_w == 6144` is the tensor side and `egg_format = chw_m1p1_flat`
+# names a raster layout, so the file states in its own metadata that those two
+# tensors are an IMAGE: ~75 MB of the fp8 build's download, carried through every
+# copy, and two keys a strict load rejects for a reason unrelated to quantization.
+#
+# WHAT THIS DOES NOT CATCH — read before treating a clean verdict as a guarantee.
+# It only sees a payload the file DECLARES. A repack that appends foreign tensors
+# without saying so is invisible here, and so is a checkpoint whose keys simply
+# belong to another architecture. `present=False` therefore means "nothing
+# announced", never "these are exactly the tensors this family declares".
+PAYLOAD_EMBEDDED_RASTER = 'embedded_raster'
+
+# The convention above: a raster stored inside the tensor block, described by its
+# own metadata. `egg_format` is the decisive key (it names the layout); the
+# dimensions alone could plausibly be something else, so one of them is required
+# alongside it rather than either being enough on its own.
+_RASTER_FORMAT_KEY = 'egg_format'
+_RASTER_DIM_KEYS = ('egg_w', 'egg_h', 'egg_c')
+
+
+def foreign_payload_report(path) -> dict:
+    """``{present, kind, signals, note}`` — does this weights file DECLARE, in its
+    own ``__metadata__``, that part of what it stores is not weights?
+
+    Header-only and cached like the other two reports. ``present=False`` covers
+    both "nothing announced" and "header unreadable"; it is deliberately not a
+    clean bill of health (see the block comment)."""
+    key = _stat_key(path)
+    if key is not None:
+        with _lock:
+            hit = _payload_cache.get(key)
+        if hit is not None:
+            return {**hit, 'signals': list(hit['signals'])}
+    out = _foreign_payload_uncached(path)
+    if key is not None:
+        with _lock:
+            _payload_cache[key] = out
+    return {**out, 'signals': list(out['signals'])}
+
+
+def _foreign_payload_uncached(path) -> dict:
+    parsed = _header_index(str(path))
+    out = {'present': False, 'kind': '', 'signals': [], 'note': None}
+    if parsed is None:
+        return out
+    meta, _index = parsed
+    keys = {str(k) for k in meta}
+    if _RASTER_FORMAT_KEY in keys:
+        dims = sorted(k for k in _RASTER_DIM_KEYS if k in keys)
+        if dims:
+            out['present'] = True
+            out['kind'] = PAYLOAD_EMBEDDED_RASTER
+            out['signals'] = [_RASTER_FORMAT_KEY] + dims
+            name = os.path.basename(str(path))
+            out['note'] = (
+                f'{name} carries something that is not weights: its own metadata '
+                f'({", ".join(out["signals"])}) describes an image stored among '
+                f'its tensors. Generation still works — ComfyUI does not load '
+                f'strictly — but those tensors are not part of this model family, '
+                f'so the file is never preferred over one without them.')
+    return out
+
+
+# --- electing a default base --------------------------------------------------
+# The order a family uses to pick its own default when several candidates sit in
+# the same folder. Lower is better. Full precision first, then a plain cast, then
+# a packed export, and a file announcing a non-weight payload last whatever its
+# precision — that is the "never elect it" rule, expressed as a rank rather than a
+# removal so an install where it is the ONLY candidate still gets a default.
+HEALTH_FULL_PRECISION = 0
+HEALTH_BARE_CAST = 1
+HEALTH_PACKED_EXPORT = 2
+HEALTH_FOREIGN_PAYLOAD = 3
+
+_HEALTH_LABELS = {
+    HEALTH_FULL_PRECISION: 'full precision',
+    HEALTH_BARE_CAST: 'quantized cast',
+    HEALTH_PACKED_EXPORT: 'packed inference export',
+    HEALTH_FOREIGN_PAYLOAD: 'carries non-weight tensors',
+}
+
+
+def base_health(path) -> dict:
+    """``{rank, label, note}`` for a weights file offered as a family's default.
+
+    One ordering, so every surface that has to choose a default base chooses the
+    same way. ``note`` is the sentence to show when this file is the one elected
+    and its rank is not `HEALTH_FULL_PRECISION` — the reason it was still taken."""
+    payload = foreign_payload_report(path)
+    if payload['present']:
+        return {'rank': HEALTH_FOREIGN_PAYLOAD,
+                'label': _HEALTH_LABELS[HEALTH_FOREIGN_PAYLOAD],
+                'note': payload['note']}
+    report = quantization_report(path)
+    form = report.get('form') or ''
+    if form == FORM_STRUCTURED:
+        return {'rank': HEALTH_PACKED_EXPORT,
+                'label': _HEALTH_LABELS[HEALTH_PACKED_EXPORT],
+                'note': None}
+    if form == FORM_BARE_CAST:
+        return {'rank': HEALTH_BARE_CAST,
+                'label': _HEALTH_LABELS[HEALTH_BARE_CAST],
+                'note': base_precision_warning(report)}
+    return {'rank': HEALTH_FULL_PRECISION,
+            'label': _HEALTH_LABELS[HEALTH_FULL_PRECISION], 'note': None}
 
 
 def training_base_advisory(path) -> dict:

@@ -98,16 +98,32 @@ def studio_base_models():
         return jsonify({'models': models, 'axes': axes,
                         'model_defaults': _base_defaults(kind, models)})
     if kind == 'krea':
-        # Bases Krea locales ALTERNATIVES au UNET câblé de krea2_turbo.json (node 20).
-        # « Official » (filename vide → z_model absent → node intact) en tête = défaut.
-        # Aucune alternative sur disque → liste vide, le front masque le sélecteur.
+        # Bases Krea locales ALTERNATIVES au défaut ÉLU (cf. lts.krea_default_base).
+        # L'entrée de tête (filename vide → base_model absent → défaut élu) reste le
+        # défaut ; `base_note` dit quel fichier c'est quand ce n'est pas celui que
+        # Setup installe. La note est publiée MÊME sans alternative : c'est
+        # précisément l'install où l'utilisateur n'a rien d'autre qui doit le lire.
+        entry = lts.krea_default_base_entry()
+        # Les chiffres du défaut sont ceux du fichier RÉELLEMENT élu : sans ça une
+        # base non distillée élue par défaut repartait sur cfg 1 / 8 steps — la
+        # même esquisse floue que le correctif #18 avait déjà réglée ailleurs. La
+        # clé '' est publiée pour l'écran qui la lit sans sélecteur.
+        base_defaults = None
+        if entry['source']:
+            base_defaults = lts.krea_model_defaults(entry['source'])
+            axes = {**axes, 'default_cfg': base_defaults['cfg'],
+                    'default_steps': base_defaults['steps']}
         alts = lts.krea_alt_base_models()
         if not alts:
-            return jsonify({'models': [], 'axes': axes, 'model_defaults': {}})
-        out = [{'filename': '', 'label': 'Official – Krea 2 Turbo'}]
+            return jsonify({'models': [], 'axes': axes, 'base_note': entry['note'],
+                            'model_defaults': {'': base_defaults} if base_defaults else {}})
+        out = [{'filename': '', 'label': entry['label']}]
         out += [{'filename': m, 'label': m.split('\\')[-1].rsplit('.', 1)[0]} for m in alts]
-        return jsonify({'models': out, 'axes': axes,
-                        'model_defaults': _base_defaults(kind, out)})
+        defaults = _base_defaults(kind, out)
+        if base_defaults:
+            defaults[''] = base_defaults
+        return jsonify({'models': out, 'axes': axes, 'base_note': entry['note'],
+                        'model_defaults': defaults})
     out = [{'filename': m, 'label': m.split('\\')[-1]} for m in get_zimage_models()]
     return jsonify({'models': out, 'axes': axes,
                     'model_defaults': _base_defaults(kind, out)})

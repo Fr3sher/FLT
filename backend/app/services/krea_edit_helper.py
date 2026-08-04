@@ -238,16 +238,107 @@ def _krea_base_compatible(name):
     return not any(tok in low for tok in KREA_INCOMPATIBLE_TOKENS)
 
 
+# The basename Setup installs for this family: Comfy-Org's own Krea 2 Turbo
+# build. This is the ONE filename the resolver knows, and it is deliberately not
+# a "list of known community files" — it is this app's installation contract,
+# declared in `setup_installer._KREA_DOWNLOADS['krea_model']` and repeated here so
+# the default is the file Setup fetches. `test_krea_install` asserts the two agree,
+# so a changed download can never leave the resolver pointing at a name nobody
+# installs.
+KREA_CANONICAL_UNET = 'krea2_turbo_fp8_scaled.safetensors'
+
+# The sampling regime the Krea graphs are built for. `build_workflow` pins cfg 1.0
+# and a few steps, which is what a guidance-distilled ("turbo") build IS; a "raw"
+# build renders mush at those settings. So the regime outranks file quality: a
+# clean full-precision Raw checkpoint is a WORSE default here than a turbo one,
+# and that is not a preference, it is what the graph can drive.
+#
+# Read that again before "improving" the order, because it is counter-intuitive
+# and the failure it prevents is silent: the BEST file at the WRONG sampling
+# regime produces failed images, and the user concludes the model is bad. A
+# blurry sketch is never read as "this base wanted 25 steps" — it is read as
+# "the training did not work".
+_KREA_REGIME_TOKENS = ('turbo', 'raw')
+
+
+def _krea_regime_tier(name: str) -> int:
+    """0 = the canonical file Setup installs, 1 = a 'turbo' build, 2 = a 'raw'
+    build, 3 = anything else Krea-shaped. Name-level only; the tie inside a tier
+    is broken by the file's header (see `_krea_candidates`)."""
+    low = (name or '').lower()
+    if low == KREA_CANONICAL_UNET.lower():
+        return 0
+    for i, token in enumerate(_KREA_REGIME_TOKENS):
+        if token in low:
+            return 1 + i
+    return 1 + len(_KREA_REGIME_TOKENS)
+
+
+def _krea_health_rank(rel_name: str) -> int:
+    """Header verdict for one candidate: full precision < plain cast < packed
+    export < a file whose own metadata says it carries something that is not
+    weights. Unreadable / unresolvable → treated as a plain cast, i.e. neither
+    promoted nor punished for being uninspectable."""
+    from . import model_integrity
+    path = comfy_model_paths.resolve_model_file('diffusion_models', rel_name)
+    if not path:
+        return model_integrity.HEALTH_BARE_CAST
+    return model_integrity.base_health(path)['rank']
+
+
+def elect_krea_base(candidates):
+    """The Krea 2 base to use as a default, out of `candidates` — an ordered list
+    of ComfyUI-relative names (``'Krea\\\\x.safetensors'``, or a bare filename at a
+    root). None when the list is empty or holds nothing loadable.
+
+    ONE ranking, shared by every surface that has to choose a Krea base, so the
+    Generate resolver and the Test Studio can never elect different files from the
+    same folder. The order is documented on `resolve_krea_unet`. It reads headers
+    ONLY to break a tie inside the best regime tier, so a single-candidate install
+    pays no I/O.
+
+    The list this is applied to is the CALLER's — the Studio ranks what its own
+    picker offers, Generate ranks what its own resolver found. Ranking a name the
+    caller does not list would elect a base its own whitelist then refuses."""
+    ranked = [(name, i) for i, name in enumerate(candidates or [])
+              if name and comfy_model_paths.is_loadable_model(name)
+              and _krea_base_compatible(os.path.basename(str(name).replace('\\', '/')))]
+    if not ranked:
+        return None
+    tiers = {name: _krea_regime_tier(os.path.basename(str(name).replace('\\', '/')))
+             for name, _i in ranked}
+    best = min(tiers[name] for name, _i in ranked)
+    short = [(name, i) for name, i in ranked if tiers[name] == best]
+    if len(short) > 1:
+        short.sort(key=lambda c: (_krea_health_rank(c[0]), c[1]))
+    return short[0][0]
+
+
 def resolve_krea_unet(selected=None):
     """ComfyUI-relative `unet_name` for the UNETLoader, WITH its subfolder prefix
-    (e.g. 'Krea\\krea2_turbo_fp8.safetensors'), or None when no compatible Krea 2
-    base is on disk.
+    (e.g. 'Krea\\krea2_turbo_fp8_scaled.safetensors'), or None when no compatible
+    Krea 2 base is on disk.
 
-    Preference: the explicit pick (`selected`, or the `krea.base_model` setting —
-    matched on its BASENAME across every krea folder, so a value copied from a
-    listing still resolves), then a 'turbo' build, then a 'raw' build, then the
-    first candidate. Deterministic: the same install always resolves the same
-    file, which is what makes a regenerate reproduce its original render."""
+    THE ELECTION, in order:
+
+      1. the explicit pick (`selected`, or the `krea.base_model` setting — matched
+         on its BASENAME across every krea folder, so a value copied from a
+         listing still resolves). A user's choice is never second-guessed;
+      2. the SAMPLING REGIME the graph needs: the canonical file Setup installs,
+         then a 'turbo' build, then a 'raw' one, then anything else;
+      3. inside that tier, what the file's HEADER says: full precision, then a
+         plain low-precision cast, then a packed inference export, then — last,
+         always — a file whose own metadata declares it carries tensors that are
+         not weights (`model_integrity.base_health`). Last, not excluded: an
+         install where that file is the ONLY Krea base still gets a default
+         rather than a broken engine;
+      4. the scan order of the candidate list itself (roots in ComfyUI's own
+         priority order, names sorted), so the same install always resolves the
+         same file — which is what makes a regenerate reproduce its original
+         render.
+
+    Step 3 reads headers, so it runs ONLY when more than one candidate survives
+    step 2 — a single-candidate install pays nothing."""
     folders = _krea_unet_folders()
     if not folders:
         return None
@@ -259,20 +350,8 @@ def resolve_krea_unet(selected=None):
                 return os.path.join(sub, bare_pick)
         logger.warning('krea.base_model %r not found under any krea folder — '
                        'falling back to automatic resolution', pick)
-    # Automatic resolution must never PICK a file a loader cannot open: the
-    # token match is on the NAME, and a .gguf named …turbo… would win here.
-    folders = [(sub, [n for n in names if comfy_model_paths.is_loadable_model(n)])
-               for sub, names in folders]
-    folders = [(sub, names) for sub, names in folders if names]
-    if not folders:
-        return None
-    for token in ('turbo', 'raw'):
-        for sub, names in folders:
-            for n in names:
-                if token in n.lower():
-                    return os.path.join(sub, n)
-    sub, names = folders[0]
-    return os.path.join(sub, names[0])
+    return elect_krea_base([os.path.join(sub, n) for sub, names in folders
+                            for n in names])
 
 
 def resolve_krea_text_encoder():

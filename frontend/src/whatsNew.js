@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/datasets?section=checkpoints',
   },
   {
+    id: '2026-08-04-studio-krea-base-is-chosen-not-hardcoded',
+    date: '2026-08-04',
+    title: 'The Test Studio picks its Krea base instead of hoping one file is there',
+    blurb:
+      'The Krea 2 base the Studio rendered on was a filename frozen into a workflow file — and not the one Setup installs. On a machine that simply followed Setup, that name matched nothing ComfyUI publishes, and the whole run was refused before a single step: it only ever worked if you happened to own that one community repack. The base is now chosen from what is actually on your disk, in an order you can check: the file Setup installs first, then a Turbo build (these graphs run at CFG 1 and a handful of steps, which only a distilled build can do), then whichever file the header says is in better shape — full precision ahead of a quantized cast, ahead of a packed export. Last of all comes anything carrying tensors the model family never declares: the repack that used to be the default hides about 75 MB of image inside itself, 432 tensors where Krea 2 has 430, announced in its own metadata. It stays usable — if it is the only Krea file you own it is still the default — but the Studio now tells you which file it picked and why, and the sampler numbers follow that file instead of assuming Turbo.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-04-merge-a-lora-into-a-base-checkpoint',
     date: '2026-08-04',
     title: 'Turn your LoRA into a full model you can publish',

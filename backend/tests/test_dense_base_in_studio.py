@@ -127,20 +127,39 @@ def test_the_twin_is_read_as_an_undistilled_build(comfy):
 def test_the_comparison_branch_now_publishes_the_per_base_settings(client, comfy):
     """`/studio/base-models` fed the comparison / blend screen with no
     `model_defaults`, so a Raw base there silently kept Turbo's cfg 1 / 8 steps —
-    the exact mush the solo payload had already been fixed for."""
+    the exact mush the solo payload had already been fixed for.
+
+    The delivered twin is now the ELECTED default (it is the only Krea base on
+    disk), so it is no longer repeated in the alternatives — the picker would show
+    the same file twice. What must survive is the settings, and they must reach
+    BOTH the '' key and the family fallback, because the screen has no selector to
+    read them from."""
     _put(comfy, 'Krea_full_x_fp8.safetensors')
     body = client.get('/api/studio/base-models?type=krea').get_json()
+    assert body['model_defaults'][''] == {'cfg': 4.0, 'steps': 25}
+    assert body['axes']['default_cfg'] == 4.0 and body['axes']['default_steps'] == 25
+
+
+def test_a_second_local_base_is_offered_next_to_the_elected_one(client, comfy):
+    """With an alternative on disk the picker comes back, and the alternative
+    keeps its own settings."""
+    _put(comfy, 'Krea_full_x_fp8.safetensors')
+    _put(comfy, 'krea_turbo_merge.safetensors')
+    body = client.get('/api/studio/base-models?type=krea').get_json()
+    # The turbo build wins the election (the graph is distilled), so the Raw twin
+    # is the one offered as an alternative.
     assert [m['filename'] for m in body['models']] == ['', 'Krea_full_x_fp8.safetensors']
     assert body['model_defaults']['Krea_full_x_fp8.safetensors'] == {'cfg': 4.0, 'steps': 25}
 
 
-def test_the_official_turbo_entry_keeps_the_family_defaults(client, comfy):
-    from app.services import lora_test_studio as lts
-    _put(comfy, 'Krea_full_x_fp8.safetensors')
+def test_the_default_entry_carries_the_settings_of_the_file_it_elects(client, comfy):
+    """It used to carry the family's Turbo numbers because the '' entry stood for
+    the wired UNET, which was always a Turbo build. It now stands for whatever was
+    elected — so pinning it to the family constants would put an undistilled base
+    back on cfg 1 / 8 steps, which is the bug, not the guard."""
+    _put(comfy, 'Krea_full_x_fp8.safetensors')     # reads as a RAW build
     body = client.get('/api/studio/base-models?type=krea').get_json()
-    # The '' entry is the wired UNET — it must not inherit the Raw numbers.
-    assert body['model_defaults'].get('') in (None, {'cfg': lts.DEFAULT_CFG,
-                                                     'steps': lts.DEFAULT_STEPS})
+    assert body['model_defaults'][''] == {'cfg': 4.0, 'steps': 25}
 
 
 def test_the_other_families_are_unchanged(client, comfy):
