@@ -600,11 +600,49 @@ too big. A mis-shifted schedule looks like a tuned run and is not one.
 > was checked against the pinned one, and each run now records the image the pod
 > actually booted, so a run can say for itself which trainer produced its weights.
 
+### Where a finished run lands, and why in that order
+
+A finished full model is brought **to this computer first** — into the checkpoint
+folder (Settings ▸ Storage) — and the pod is destroyed **only** once that file is
+proven: its byte count matches what the pod advertised, and its safetensors
+header re-reads and declares tensors. Nothing is pushed to Hugging Face *while
+the run trains*, which is the whole point: a full private quota used to arrive as
+a `403` at step 2750 of 3000 and end a paid run. Once the local copy exists, the
+master is uploaded to your private repository as a **backup**, and that upload is
+allowed to fail — it costs the ability to *continue* this model later, nothing
+more.
+
+Three deliveries, in Settings ▸ Storage ▸ **Full-model delivery**:
+
+| Delivery | What you get | What it costs |
+| --- | --- | --- |
+| **This computer, then a Hugging Face backup** (default) | The model here, plus a Hub copy that keeps the run resumable. | The Hub copy still needs private storage. |
+| **This computer only** | Nothing touches your Hugging Face quota. | The run can **not** be continued later. |
+| **Hugging Face only** | The behaviour of runs made before this existed. | A full quota can end the run itself. |
+
+If anything interrupts the download — a cut stream, a full drive, a cancelled
+transfer — the run ends as **error_pod_kept** with the machine alive, and the
+Runs page offers **Fetch to this computer**, which resumes from the byte it
+stopped at. A launch also refuses (confirmably) when the checkpoint drive plainly
+has no room for what is coming.
+
+### Continuing a full model
+
+▶ Continue works on a full model, from **its Hugging Face copy**: the fresh pod
+downloads that checkpoint itself over a datacenter link, drops it into its job
+folder, and ai-toolkit resumes from the step written in the file — so a run that
+stopped at 3000 continues to 4000 instead of paying for the first 3000 again.
+
+The copy **on this computer** cannot be used for that, and the app says so rather
+than trying: the only channel that puts a file on a pod builds its whole request
+in memory, which a 26 GB file cannot survive. That is why the default delivery
+keeps a Hub copy — it is what makes a full model resumable at all.
+
 ### The two files a finished run delivers
 
-A dense run pushes its ~26 GB **bf16 master** to your private Hugging Face repo.
-Nobody generates with a file that size, so the app then quantizes it **on the pod**
-and uploads a **~10 GB fp8 export** next to it:
+A dense run produces a ~26 GB **bf16 master**. Nobody generates with a file that
+size, so the app quantizes it **on the pod** and delivers a **~10 GB fp8 export**
+next to it:
 
 - **the fp8 file is the one to download for ComfyUI.** It is a scaled fp8
   checkpoint (per-tensor `float8_e4m3fn` weights with their scales) and loads
@@ -614,8 +652,10 @@ and uploads a **~10 GB fp8 export** next to it:
   master* is ON by default for exactly that reason — turning it off halves your
   storage and closes that door permanently.
 
-If the export fails, the run is still a success: the master was delivered before
-the export ever ran, and the panel says so rather than reporting a failure.
+If the export fails, the run is still a success: the master is delivered either
+way, and the panel says so rather than reporting a failure. Only the master is
+ever backed up to Hugging Face — the fp8 twin is regenerated from it in seconds,
+and pushing both would eat the private quota twice as fast.
 
 ### Quantizing a model you already have
 

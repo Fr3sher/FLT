@@ -159,6 +159,9 @@ test('the retry lane can answer every pre-flight guard Start can answer', () => 
     // It rides the shared list because the ceiling it compares against is an
     // ESTIMATE — every lane that can start a run must be able to say "anyway".
     'allow_hf_storage',
+    // ... and its twin about this machine's disk, for the same reason: the
+    // delivery lands here first and its size is an estimate.
+    'allow_local_disk',
     'allow_not_ready',
     'allow_uncaptioned',
     'allow_unverified_weights',

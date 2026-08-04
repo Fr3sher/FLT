@@ -64,6 +64,22 @@ export const WHATS_NEW = [
     to: '/datasets?section=images',
   },
   {
+    id: '2026-08-04-full-model-lands-on-your-computer',
+    date: '2026-08-04',
+    title: 'A finished full model now lands on YOUR computer — and a full Hugging Face quota can no longer end a training',
+    blurb:
+      '🖥 Until now a full-model (dense) run had exactly one address: a private Hugging Face repository the pod pushed to while it trained. That address has a ceiling nobody controls, and it collected: a run died 250 steps from the end on “403 private repository storage limit reached”, after eight hours of paid GPU, and only survived because 50 GB were deleted by hand. So the order is reversed. The finished model is downloaded to your checkpoint folder FIRST, the ~10 GB fp8 file for ComfyUI with it, and the pod is destroyed only once the file here is proven — the byte count has to match what the pod advertised, and the safetensors header has to re-read. Only then is the master uploaded to Hugging Face as a backup, and that upload is now allowed to fail: it costs the ability to continue that model later, nothing else. Nothing is pushed while the run trains, so the quota can no longer reach the training at all. The transfer is tens of minutes of 26 GB, so it shows its progress, survives an app restart, and can be stopped and resumed without losing what already landed — and if it fails, the machine is kept and the Runs page offers “Fetch to this computer”. A launch also checks this machine’s disk before renting anything, and refuses (confirmably, like every other estimate) when the drive plainly has no room. Choose the delivery in Settings ▸ Storage ▸ Full-model delivery; runs made before today keep their Hugging-Face-only behaviour exactly as it was.',
+    to: '/settings/storage',
+  },
+  {
+    id: '2026-08-04-continue-a-full-model',
+    date: '2026-08-04',
+    title: 'Continue a full model instead of paying for its first 3000 steps again',
+    blurb:
+      '▶ A full-model run that stopped at step 3000 can now be continued to 4000 — the same ▶ Continue as a LoRA, with the same guardrails, cost estimate and “from which step” choice. The fresh machine downloads the checkpoint from the run’s Hugging Face copy itself, over a datacenter link, and training picks up at the step written inside the file. Two honest limits, said in the app rather than discovered: the copy on your computer cannot be used for this (the only channel that puts a file on a pod builds its whole request in memory, which 26 GB cannot survive), so a run delivered to this computer ONLY is not resumable — the default delivery keeps a Hugging Face copy precisely to leave that door open.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
     date: '2026-08-04',
     title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',

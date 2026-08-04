@@ -266,6 +266,21 @@ DEFAULTS = {
             # 0 = size one dense checkpoint from what past runs really delivered
             # (their persisted Hub integrity proof), else ~26 GB.
             'checkpoint_size_gb': 0,
+            # Where a full model is delivered: 'both' (default) downloads it to
+            # this computer FIRST, proves it, and only then backs the master up
+            # to the private Hugging Face repository; 'local' skips the backup
+            # (and with it the ability to continue that run later); 'hub' is the
+            # historical Hugging-Face-only delivery. The order is the point: a
+            # full private quota can no longer end a training, because nothing
+            # is pushed while it trains.
+            'delivery': 'both',
+            # Free space to leave on the checkpoint volume on top of the
+            # delivery itself, checked before the pod is rented.
+            'local_disk_margin_gb': 15,
+            # Ceilings for the two pod-side Hugging Face transfers (backing the
+            # master up, and pulling it back when continuing a run).
+            'hub_push_budget_seconds': 3600,
+            'hub_fetch_budget_seconds': 3600,
         },
         'onstart': '',                 # raw-image fallback: optional startup command
     },

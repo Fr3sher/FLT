@@ -24,6 +24,15 @@ class RemoteError(RuntimeError):
     pass
 
 
+class TransferCancelled(RemoteError):
+    """The caller asked for the transfer to stop (a user stop, a closing run).
+
+    Its own type because the partial file is deliberately KEPT: a cancelled
+    26 GB download that threw away 20 GB of progress would make "cancel" the
+    most expensive button in the app.
+    """
+
+
 class RemoteAiToolkit:
     def __init__(self, base_url: str, token: str):
         self.base_url = base_url.rstrip('/')
@@ -187,7 +196,7 @@ class RemoteAiToolkit:
     # -- downloads (public, path-restricted routes) ---------------------------
     def _download(self, route: str, remote_path: str, dest_path: str,
                   timeout=None, expected_size=None, attempts=3,
-                  on_progress=None) -> None:
+                  on_progress=None, resume=False, should_cancel=None) -> None:
         """Stream to dest_path.part, then rename. RESUME-CAPABLE: some vast
         hosts' proxies cut the stream every ~0.5-2 MB (observed live
         2026-07-13 on 2 of 3 pods — an 85 MB checkpoint needed ~100 resumed
@@ -199,18 +208,41 @@ class RemoteAiToolkit:
         on_progress(bytes_so_far, expected_size) is called as the bytes land,
         so a caller can prove to its own watchdogs that a long transfer is
         alive; it is throttled by the caller, and never allowed to break the
-        download (a raising callback is logged and disabled)."""
+        download (a raising callback is logged and disabled).
+
+        resume=True ADOPTS a ``.part`` left by an earlier call instead of
+        deleting it, and only makes sense with expected_size (the size is what
+        turns a leftover into a valid offset). A LoRA save is small enough that
+        restarting it costs nothing, which is why the default stays False; a
+        dense checkpoint is 26 GB, and losing that to an app restart is the
+        difference between a resumable transfer and a lost evening.
+
+        should_cancel() is polled as the bytes land: a true answer raises
+        TransferCancelled and KEEPS the partial file, so the next attempt
+        continues where this one stopped."""
         url_path = f'{route}{quote(remote_path, safe="")}'
         tmp = dest_path + '.part'
-        try:
-            os.remove(tmp)                    # stale leftover from a past run
-        except OSError:
-            pass
-        got = 0
+        if resume and expected_size:
+            try:
+                # Never adopt something bigger than the target: that is not a
+                # prefix of the file, it is garbage from a different save.
+                if os.path.getsize(tmp) > int(expected_size):
+                    os.remove(tmp)
+            except OSError:
+                pass
+        else:
+            try:
+                os.remove(tmp)                # stale leftover from a past run
+            except OSError:
+                pass
+        got = os.path.getsize(tmp) if (resume and os.path.exists(tmp)) else 0
         want = int(expected_size or 0)
         for _ in range(max(1, int(attempts))):
             before = got
             clean = False
+            if should_cancel is not None and should_cancel():
+                raise TransferCancelled(
+                    f'download of {remote_path} cancelled ({got} bytes kept)')
             try:
                 headers = {'Range': f'bytes={got}-'} if got else {}
                 with self._request('GET', url_path, stream=True, headers=headers,
@@ -226,6 +258,11 @@ class RemoteAiToolkit:
                         written = got
                         with open(tmp, 'ab' if got else 'wb') as fh:
                             for chunk in r.iter_content(chunk_size=1024 * 256):
+                                if should_cancel is not None and should_cancel():
+                                    fh.flush()
+                                    raise TransferCancelled(
+                                        f'download of {remote_path} cancelled '
+                                        f'({written} bytes kept)')
                                 if chunk:
                                     fh.write(chunk)
                                     written += len(chunk)
@@ -264,14 +301,18 @@ class RemoteAiToolkit:
 
     def download_public_file(self, remote_path: str, dest_path: str,
                              timeout=None, expected_size=None, attempts=3,
-                             on_progress=None) -> None:
+                             on_progress=None, resume=False,
+                             should_cancel=None) -> None:
         # timeout/attempts overrides: the OPPORTUNISTIC mid-run checkpoint sync
         # fails fast (few attempts, short timeout — the monitor loop must not
         # hang); the FINAL end-of-run download passes a large attempts budget
         # so a sick-proxy host still delivers via many resumed connections.
+        # resume/should_cancel are the dense harvest's: a 26 GB transfer has to
+        # survive an app restart and has to be interruptible.
         self._download('/api/files/', remote_path, dest_path, timeout=timeout,
                        expected_size=expected_size, attempts=attempts,
-                       on_progress=on_progress)
+                       on_progress=on_progress, resume=resume,
+                       should_cancel=should_cancel)
 
     def download_sample(self, remote_path: str, dest_path: str) -> None:
         self._download('/api/img/', remote_path, dest_path)

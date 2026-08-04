@@ -929,12 +929,15 @@ Runs page.
 
 ### Hugging Face storage
 
-Full-model (dense) cloud training does not download its result: each ~26 GB
-checkpoint is pushed straight from the pod into a **private** Hugging Face repo,
-and custom training bases are cached there too (one `lds-base-<hash>` repo per
-distinct base). Both eat the same **private storage allowance** — and the push
-happens at the *end* of the run, so an allowance that is already full turns into
-a `403 … private repository storage limit reached` after the GPU is paid for.
+Full-model (dense) cloud training now delivers its ~26 GB result **to this
+computer first** — the checkpoint folder set above — and only then backs the
+master up to a **private** Hugging Face repo. Custom training bases are still
+cached there (one `lds-base-<hash>` repo per distinct base), so the **private
+storage allowance** still matters; what changed is that nothing is pushed *while
+the run trains*. A full allowance used to arrive as
+`403 … private repository storage limit reached` at the end of a paid run and
+end it (this happened at step 2750 of 3000). It can now cost only the backup —
+and with it the ability to continue that model later.
 
 The **Hugging Face storage** card is the answer to that. Nothing here runs on
 page load; **Check storage** is an explicit click.
@@ -971,16 +974,32 @@ page load; **Check storage** is an explicit click.
 
 | Setting | Key | Default | Notes |
 |---|---|---|---|
+| **Full-model delivery** | `cloud.full_transformer.delivery` | `both` | Where a finished full model goes. `both` = download it here, verify it (byte count **and** a re-read of the safetensors header), release the pod, then upload the master to the private repo as a backup. `local` = skip the backup and save the quota — the run can then **not** be continued later, because a 26 GB checkpoint can only reach a fresh pod from the Hub. `hub` = the historical Hugging-Face-only delivery, with its mid-training pushes. Runs launched before this setting existed keep the `hub` behaviour for ever. |
 | **Private storage allowance (GB)** | `cloud.full_transformer.private_storage_limit_gb` | `0` | What the pre-check compares against. `0` = infer from the plan documented by Hugging Face (100 GB free / 1 TB PRO) — a guess, as above. Put your account's real ceiling here to make the check exact. |
 
-**When a run hits the wall anyway.** A dense run whose checkpoint push is refused
-for storage now says so: the run card reads *HF private storage full — free space
-then resume from the kept pod*, and the run closes as **error_pod_kept** — the
-paid pod is **kept**, not destroyed, for the recovery window (`cloud.max_runtime_minutes`
-after the failure). Free space here, then recover the checkpoint from the pod
-(its URL is on the run card) and use **Verify HF delivery** on the Runs page once
-it lands. Nothing is auto-resumed: a dense checkpoint is never downloaded to your
-machine, so the pod is the only place it exists.
+**Which forecast blocks, and which one only warns.** With `delivery = hub` the
+repository is the artifact's only address, so a forecast that does not fit is a
+**refusal** (confirmable — the ceiling is an estimate). With a delivery that also
+brings the model home, the same forecast is a **warning shown at launch**: the
+run is unaffected, but you are told before the GPU is rented that this model will
+probably not be resumable. A second, separate check looks at **this machine's**
+disk (`LOCAL_DISK_FULL:`) and refuses — also confirmably — a launch whose
+delivery plainly will not fit in the checkpoint folder.
+
+**When a transfer fails.** The pod is destroyed **only** after the local file is
+proven. Anything that goes wrong before that (a truncated stream, a full drive, a
+cancelled transfer, the runtime cap) closes the run as **error_pod_kept** with the
+machine still alive, and the Runs page grows a **Fetch to this computer** button
+that resumes the download from where it stopped — an interrupted transfer keeps
+every byte it had already written. Cancelling is a second click on the same
+button.
+
+**When a run hits the Hugging Face wall anyway.** A `hub`-only dense run whose
+checkpoint push is refused for storage says so: the run card reads *HF private
+storage full — free space then resume from the kept pod*, and the run closes as
+**error_pod_kept** — the paid pod is **kept**, not destroyed, for the recovery
+window (`cloud.max_runtime_minutes` after the failure). Free space here, then use
+**Verify HF delivery** on the Runs page once the push lands.
 
 ## Server & access
 
@@ -1163,6 +1182,10 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `cloud.min_reliability` | vast.ai host-reliability floor (default `0.98`, 0.9–0.999); lower surfaces cheaper, riskier hosts. |
 | `cloud.verified_only` | Restrict to vast.ai verified hosts (default `true`). |
 | `cloud.secure_cloud_only` | Restrict to vast.ai's Secure Cloud (datacenter) tier (default `false`; narrows the market, raises price). |
+| `cloud.full_transformer.delivery` | Where a finished full model is delivered: `both` (default — this computer first, Hugging Face backup after), `local`, or `hub`. Also in Settings → Storage. |
+| `cloud.full_transformer.local_disk_margin_gb` | Free space left on the checkpoint volume on top of the delivery itself, checked before a pod is rented (default `15`). |
+| `cloud.full_transformer.hub_push_budget_seconds` | Ceiling on the pod-side upload of the master to Hugging Face (default `3600`). |
+| `cloud.full_transformer.hub_fetch_budget_seconds` | Ceiling on the pod-side download of a checkpoint when continuing a full model (default `3600`). |
 | `cloud.full_transformer.private_storage_limit_gb` | Private Hugging Face allowance the dense pre-check compares against (default `0` = infer from the documented plan, an estimate). Also in Settings → Storage. |
 | `cloud.full_transformer.storage_margin_gb` | Headroom added to that forecast (default `20`). |
 | `cloud.full_transformer.checkpoint_size_gb` | Dense checkpoint size used by that forecast (default `0` = measured from past runs, else ~26 GB). |

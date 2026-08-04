@@ -76,15 +76,29 @@ def _require_cloud():
 def _full_transformer_artifact_response(run):
     """409 redirect metadata for routes that otherwise treat a file as a LoRA.
 
-    Dense checkpoints are delivered as a private Hugging Face repository.  A
-    stray/staging ``.safetensors`` file is never sufficient proof that one can
-    be deployed to ComfyUI as an adapter.
+    A dense checkpoint is a FULL model, wherever it lives — on this disk since
+    the local delivery landed, in a private Hugging Face repository before that.
+    Neither makes it an adapter, and a stray/staging ``.safetensors`` file is
+    never sufficient proof that one can be deployed to ComfyUI as one.
     """
     if not run or not ct._is_full_transformer_run(run):
         return None
+    local_name = ct._run_param(run, 'local_weight_filename')
+    local_dir = ct._run_param(run, 'local_artifact_dir')
+    if local_name and local_dir:
+        # It IS on this machine now — but re-serving 26 GB through the browser
+        # would only write a second copy of a file the user already has. Say
+        # where it is instead.
+        error = (f'this full model is already on this computer: {local_name} in '
+                 f'{local_dir}. It is a full checkpoint, not a LoRA adapter, so '
+                 'it cannot be imported as one.')
+    else:
+        error = ('full_transformer artifacts are delivered through Hugging Face '
+                 'and cannot be imported or downloaded as a LoRA checkpoint')
     return jsonify({
-        'error': ('full_transformer artifacts are delivered through Hugging Face '
-                  'and cannot be imported or downloaded as a LoRA checkpoint'),
+        'error': error,
+        'local_weight_filename': local_name,
+        'local_artifact_dir': local_dir,
         'training_mode': 'full_transformer',
         'artifact_kind': (ct._run_param(run, 'artifact_kind')
                           or 'full_transformer'),
@@ -1623,6 +1637,9 @@ def dataset_train_cloud(dataset_id):
             # it compares against is an estimate, so the user always keeps the
             # last word (see hf_storage).
             allow_hf_storage=bool(d.get('allow_hf_storage')),
+            # ... and the same last word about THIS machine's disk, for a full
+            # model that is delivered here.
+            allow_local_disk=bool(d.get('allow_local_disk')),
             gpu_name=d.get('gpu_name'))
     except Exception as e:
         return _map_error(e)
@@ -1947,6 +1964,25 @@ def dataset_train_cloud_recheck_delivery():
         return jsonify({'error': 'run_id is required'}), 400
     try:
         result = ct.recheck_full_transformer_delivery(body['run_id'])
+    except Exception as exc:
+        return _map_error(exc)
+    return jsonify(result)
+
+
+@bp.post('/dataset/train/cloud/fetch-local')
+def dataset_train_cloud_fetch_local():
+    """Bring ONE kept dense run's files home (or stop doing it).
+
+    Answers immediately: the transfer is tens of minutes of ~26 GB and runs in
+    the background, reporting through the run's own phase line. ``cancel: true``
+    stops it and keeps every byte already downloaded.
+    """
+    body = request.get_json(silent=True) or {}
+    if body.get('run_id') in (None, ''):
+        return jsonify({'error': 'run_id is required'}), 400
+    try:
+        result = ct.fetch_dense_locally(body['run_id'],
+                                        cancel=body.get('cancel') is True)
     except Exception as exc:
         return _map_error(exc)
     return jsonify(result)

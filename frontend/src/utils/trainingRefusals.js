@@ -24,6 +24,11 @@ export const CONFIRMABLE_REFUSALS = [
   // quota endpoint, so the ceiling the server compared against is an estimate —
   // a wrong guess must never lock a user out of their own paid GPU.
   ['HF_STORAGE_FULL: ', 'allow_hf_storage'],
+  // The same question about THIS machine's disk: a full model is delivered here
+  // first, and the size it will take is an estimate too (a checkpoint that does
+  // not exist yet). Confirmable for the same reason — and said before the GPU
+  // is rented rather than discovered when the drive fills up at the very end.
+  ['LOCAL_DISK_FULL: ', 'allow_local_disk'],
 ];
 
 /* The readiness floor (NOT_READY:) is confirmable too, but the dataset panel

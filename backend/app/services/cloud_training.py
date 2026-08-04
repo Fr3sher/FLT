@@ -26,11 +26,12 @@ from sqlalchemy import func
 from .. import config as cfg
 from ..extensions import db
 from ..models import CloudTrainingRun, SystemState
+from . import dense_local_delivery as dld
 from . import face_dataset_service as fds
 from . import gpu_speed
 from . import lora_training as lt
 from . import vast_client
-from .aitoolkit_remote import RemoteAiToolkit
+from .aitoolkit_remote import RemoteAiToolkit, TransferCancelled
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +107,10 @@ _CONFIRMATION_FLAGS = (
     # a user who already judged their own account must not have an automatic
     # retry blocked by the same guess.
     'allow_hf_storage',
+    # ... and its twin on THIS machine's disk, for a dense run that delivers
+    # locally. Same reasoning, same replay: the size of a checkpoint that does
+    # not exist yet is an estimate too.
+    'allow_local_disk',
 )
 
 
@@ -578,7 +583,7 @@ def _hf_storage_full(text) -> bool:
 
 
 def _assert_dense_storage_headroom(namespace, dense_api, allow_override,
-                                   keeps=None, fp8_export=True):
+                                   keeps=None, fp8_export=True, required=True):
     """Refuse a dense launch whose delivery plainly will not fit in the
     namespace's PRIVATE Hugging Face storage — before anything is rented.
 
@@ -592,13 +597,17 @@ def _assert_dense_storage_headroom(namespace, dense_api, allow_override,
     that namespace makes the forecast unknown, and unknown never blocks. The
     Settings ▸ Training storage card, which manages the caches rather than the
     delivery, does use HF_TOKEN and stays fully sighted.
+
+    ``required=False`` measures without refusing: the caller then only wants the
+    forecast, because the Hub copy is a backup taken AFTER a verified local one
+    and can no longer cost the run anything.
     """
     from . import hf_storage
     forecast = hf_storage.dense_storage_forecast(
         namespace, None,
         keeps=(lt.FULL_TRANSFORMER_MAX_STEP_SAVES if keeps is None else keeps),
         who=_dense_whoami(dense_api), _api=dense_api, fp8_export=fp8_export)
-    if forecast.get('fits') is False and not allow_override:
+    if required and forecast.get('fits') is False and not allow_override:
         raise ValueError(hf_storage.storage_refusal_message(forecast))
     return forecast
 
@@ -832,12 +841,17 @@ def _export_full_transformer_fp8(run, remote) -> dict:
         return {'state': 'skipped', 'detail': 'fp8 export is off for this dataset'}
     keep_bf16 = (lt.dense_keep_bf16_master(ds) if ds is not None
                  else _run_param(run, 'keep_bf16_master') is not False)
+    # A run that brings its files home exports the twin ON the pod and fetches
+    # it like the master: pushing a second ~10 GB object through a private
+    # quota to download it back would be paying twice for a file that is
+    # regenerated from the master in seconds.
+    upload = not _dense_delivers_local(run)
     outcome = dense_fp8_delivery.run_pod_fp8_export(
         run, remote,
         instance_id=run.vast_instance_id,
         repo_id=_run_param(run, 'hf_repo_id'),
         hf_token=cfg.secret('HF_CLOUD_TOKEN'),
-        keep_bf16=keep_bf16,
+        keep_bf16=keep_bf16, upload=upload,
         budget_seconds=int(dense.get('fp8_export_budget_seconds')
                            or dense_fp8_delivery.DEFAULT_BUDGET_SECONDS),
         on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]))
@@ -1078,6 +1092,31 @@ def _is_full_transformer_run(run) -> bool:
     return _run_training_mode(run) == 'full_transformer'
 
 
+def _dense_delivery(run) -> str:
+    """Where THIS run's dense artifact goes: 'local', 'hub' or 'both'.
+
+    Read from the run's OWN stamp, never from the live config — the delivery is
+    frozen at launch for the same reason the family and the settings snapshot
+    are (see _RunConfigDataset): the monitor decides what to do with a ~26 GB
+    file hours later, and a setting changed in between must not retarget a run
+    already in flight. An unstamped row predates the choice and delivered to
+    Hugging Face only, which is exactly what dense_local_delivery.run_mode
+    answers for it."""
+    try:
+        params = json.loads(run.train_params or '{}')
+    except (ValueError, TypeError):
+        params = {}
+    return dld.run_mode(params if isinstance(params, dict) else {})
+
+
+def _dense_delivers_local(run) -> bool:
+    return _is_full_transformer_run(run) and dld.delivers_local(_dense_delivery(run))
+
+
+def _dense_delivers_hub(run) -> bool:
+    return _is_full_transformer_run(run) and dld.delivers_hub(_dense_delivery(run))
+
+
 class _RunConfigDataset:
     """Read-only view of a dataset whose config inputs are forced to the values
     stamped for this run; every other attribute delegates to the real dataset.
@@ -1316,8 +1355,12 @@ def retry_cloud_run(user_id, run_id) -> dict:
         p = {}
     if (p.get('training_mode') == 'full_transformer'
             and p.get('resume_ckpt_path')):
-        raise ValueError('full_transformer resume/continue is not supported in '
-                         'this MVP; launch a fresh dense Krea-2-Raw run')
+        # A dense seed is never a local file (launch refuses that: the pod's
+        # upload seam cannot carry 26 GB), so a row carrying one is a legacy
+        # shape and retrying it would replay something we can no longer do.
+        raise ValueError('this full-model run resumes from a local file, which '
+                         'a pod cannot be handed; continue it from its Hugging '
+                         'Face copy instead')
     _assert_recipe_replayable(p, 'retry')
     snapshot = p.get(_TRAIN_SETTINGS_SNAPSHOT, _UNSET)
     if p.get('resume_ckpt_path'):
@@ -1339,6 +1382,11 @@ def retry_cloud_run(user_id, run_id) -> dict:
         **_confirmation_flags(p),
         gpu_name=p.get('requested_gpu'),
         resume_ckpt_path=p.get('resume_ckpt_path'),
+        # A dense continuation replays its Hub seed verbatim: the retry is the
+        # same run, on a fresh pod, and it must resume from the same weights.
+        resume_hf=({'repo_id': p.get('resume_hf_repo_id'),
+                    'filename': p.get('resume_hf_filename')}
+                   if p.get('resume_hf_repo_id') else None),
         resume_step=p.get('resume_step'),
         train_settings_snapshot=snapshot,
         train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET))
@@ -1389,6 +1437,39 @@ def _run_staging_checkpoints(run) -> list:
     out.sort(key=lambda e: (e['step'], bool(re.search(r'_(\d{6,})\.safetensors$',
                                                        e['filename']))))
     return out
+
+
+def _dense_resume_candidates(run) -> list:
+    """What a FULL-MODEL run can be continued from, and where that lives.
+
+    The Hugging Face copy, and only it. A dense master is ~26 GB: the pod can
+    pull that from the Hub in minutes over a datacenter link, but it cannot be
+    handed the copy sitting on this computer — the pod's only upload seam builds
+    its whole request in memory. Offering a source we would have to refuse would
+    be worse than a short list, so the local copy is deliberately absent here
+    and the refusal that names the reason lives in launch_cloud_training.
+
+    Same shape as _run_staging_checkpoints (step / filename / resume_state) so
+    the selection logic in continue_cloud_run stays ONE piece of code."""
+    if not _is_full_transformer_run(run):
+        return []
+    repo_id = _run_param(run, 'hf_repo_id')
+    filename = _run_param(run, 'hf_weight_filename')
+    if not repo_id or not filename:
+        return []
+    if _run_param(run, 'artifact_status') != 'available':
+        # Unverified is not a source: seeding a checkpoint that may be truncated
+        # would spend a fresh pod to train from garbage.
+        return []
+    name = os.path.basename(str(filename))
+    if dld.is_fp8_name(name):
+        # A quantized twin cannot be trained further — its weights are fp8 with
+        # per-tensor scales, not the bf16 the trainer loads.
+        return []
+    step = dld.step_of(name, default=int(_run_param(run, 'steps') or 0))
+    return [{'step': int(step or 0), 'filename': name, 'source': 'hub',
+             'repo_id': str(repo_id), 'hf_filename': str(filename),
+             'path': None, 'resume_state': _cloud_resume_state()}]
 
 
 def _merge_resume_overrides(snapshot, patch):
@@ -1504,9 +1585,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         p = {}
     if not isinstance(p, dict):
         p = {}
-    if p.get('training_mode') == 'full_transformer':
-        raise ValueError('full_transformer runs cannot be continued or resumed '
-                         'in this MVP; launch a fresh dense Krea-2-Raw run')
+    dense = p.get('training_mode') == 'full_transformer'
     _assert_recipe_replayable(p, 'continue')
     override_patch = lt.validate_resume_overrides(overrides)
     # The raw cloud snapshot historically omitted LoKr's full-rank bit, while
@@ -1520,7 +1599,15 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     snapshot = _resume_snapshot_with_recorded_topology(
         user_id, run.dataset_id, p.get(_TRAIN_SETTINGS_SNAPSHOT, _UNSET),
         _parent_topology)
-    cks = _run_staging_checkpoints(run)
+    cks = _dense_resume_candidates(run) if dense else _run_staging_checkpoints(run)
+    if not cks and dense:
+        raise ValueError(
+            'this full model has no Hugging Face copy to continue from. A '
+            'dense checkpoint is ~26 GB: the pod can download it from the Hub '
+            'in minutes, but it cannot be handed the copy on this computer. '
+            'Give future runs the "This computer + Hugging Face" delivery '
+            '(Settings ▸ Training) so they stay resumable, and check that this '
+            "run's Hugging Face delivery is verified.")
     if not cks:
         raise ValueError('no harvested checkpoint to continue from — this run '
                          'has none left on disk; relaunch a fresh cloud run instead')
@@ -1564,6 +1651,11 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         snapshot = _merge_resume_overrides(snapshot, override_patch)
     # Lineage: the source record above is also the parent edge. Legacy cloud
     # runs that predate the registry have no record -> the child is a root.
+    # Where the fresh pod will take its checkpoint FROM — the one difference
+    # between continuing a LoRA and continuing a full model, and it is worth
+    # saying out loud in the answer: 'local' is uploaded from here, 'hub' is
+    # pulled by the pod itself.
+    from_hub = chosen.get('source') == 'hub'
     res = launch_cloud_training(
         user_id, run.dataset_id,
         steps=chosen['step'] + extra,
@@ -1571,15 +1663,22 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
         variant=p.get('variant'),
         train_type=p.get('train_type'),
         masked=p.get('masked', True),
+        training_mode=p.get('training_mode') or 'lora',
         **_confirmation_flags(p),
         gpu_name=p.get('requested_gpu'),
-        resume_ckpt_path=chosen['path'], resume_step=chosen['step'],
+        resume_ckpt_path=(None if from_hub else chosen['path']),
+        resume_hf=({'repo_id': chosen['repo_id'],
+                    'filename': chosen['hf_filename']} if from_hub else None),
+        resume_step=chosen['step'],
         train_settings_snapshot=snapshot,
         train_slider_snapshot=p.get(_TRAIN_SLIDER_SNAPSHOT, _UNSET),
         parent_record_id=(_parent.id if _parent else None),
         resumed_from=chosen['step'])
     res['resumed_from'] = chosen['step']
     res['target_steps'] = chosen['step'] + extra
+    res['resume_source'] = 'hub' if from_hub else 'local'
+    res['resume_from'] = (f"{chosen['repo_id']}/{chosen['filename']}" if from_hub
+                          else chosen['filename'])
     return res
 
 
@@ -1618,8 +1717,13 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     if not ds:
         raise ValueError('dataset not found')
     if lt.normalize_training_mode(training_mode) == 'full_transformer':
-        raise ValueError('full_transformer checkpoints cannot be continued or '
-                         'resumed in this MVP; launch a fresh dense Krea-2-Raw run')
+        # Not an MVP limit any more, a transport one: this lane seeds the pod
+        # from a file on this computer, and a ~26 GB dense master cannot go
+        # through the pod's upload seam. A full model continues from its
+        # Hugging Face copy, in the Runs hub.
+        raise ValueError('a full model cannot be sent to a pod from this '
+                         'computer — continue it from its Hugging Face copy '
+                         'in the Runs hub instead')
     fam = lt._train_type(ds, train_type)
     var = variant or getattr(ds, 'train_variant', None) or lt._default_variant_for(fam)
     # base_model _UNSET = the dataset's persisted base (the queue's behaviour);
@@ -1726,8 +1830,9 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                           allow_caption_mismatch=False, allow_uncaptioned=False,
                           allow_caption_quality=False,
                           allow_unverified_weights=False, allow_not_ready=False,
-                          allow_hf_storage=False,
+                          allow_hf_storage=False, allow_local_disk=False,
                           gpu_name=None, resume_ckpt_path=None, resume_step=None,
+                          resume_hf=None,
                           auto_retry_count=0, auto_retry_of=None,
                           strict_gpu=False, train_settings_snapshot=_UNSET,
                           train_slider_snapshot=_UNSET,
@@ -1815,9 +1920,20 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         if base_model:
             raise ValueError('full_transformer cloud training requires the '
                              'official Krea-2-Raw base; custom weights are unsupported')
-        if resume_ckpt_path or resume_step is not None or resumed_from is not None:
-            raise ValueError('full_transformer resume/continue is not supported '
-                             'in this MVP; launch a fresh dense Krea-2-Raw run')
+        # Continuing a dense run IS supported now — but only from a checkpoint
+        # the POD can fetch itself. Seeding a local file goes through the pod's
+        # dataset-upload route, whose multipart body is built ENTIRELY in memory
+        # (an 85 MB LoRA is fine; 26 GB is an OOM) under a 300 s timeout. Saying
+        # so is the whole message: a refusal that names the fix is worth more
+        # than a transfer that dies at 2 GB.
+        if resume_ckpt_path:
+            raise ValueError(
+                'a full model cannot be resumed from the copy on this computer: '
+                'the pod is handed its checkpoint through an upload that builds '
+                'the whole request in memory, which a 26 GB file cannot survive. '
+                'Continue from the Hugging Face copy of the run instead — keep '
+                'the "This computer + Hugging Face" delivery so every full model '
+                'has one.')
         slider_value = (getattr(ds, 'train_slider', None)
                         if train_slider_snapshot is _UNSET
                         else train_slider_snapshot)
@@ -1828,24 +1944,47 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
             raise ValueError('full_transformer cloud training is incompatible '
                              'with Slider LoRA mode')
         # Validate token type/scopes and real Krea-base readability before the
-        # reservation row exists. Repository creation later proves write
-        # access before any monitor can rent a pod.
+        # reservation row exists. Required whatever the delivery is: the Krea 2
+        # base itself is GATED, so the pod needs this credential to read it.
+        # Repository creation later proves write access before any pod is rented.
         dense_api, delivery_namespace, _broad = _validate_full_transformer_token(
             cfg.secret('HF_CLOUD_TOKEN'))
+        dense_delivery = dld.configured_mode()
+        dense_keep_bf16 = lt.dense_keep_bf16_master(ds)
+        dense_fp8 = lt.dense_fp8_export_enabled(ds)
+        if dld.delivers_local(dense_delivery):
+            # THIS machine's disk, checked with the same care as the Hub's:
+            # the drive filled up twice in one week, and a delivery that runs
+            # out of room lands after the money is spent. Confirmable, and an
+            # unmeasurable volume never blocks.
+            dld.assert_local_disk_headroom(
+                keeps=lt.dense_max_step_saves_for(ds), fp8_export=dense_fp8,
+                keep_bf16=dense_keep_bf16,
+                allow_override=bool(allow_local_disk))
         # ...and then the OTHER wall run #146 hit, after hours of paid GPU: the
-        # delivery namespace's private storage. One dense save is ~26 GB and the
-        # push happens at the END of the run, so a full private allowance is a
-        # 403 nobody sees coming. Measure it here, before a pod is rented.
-        # Deliberately confirmable and fail-open — the exact plan ceiling is not
-        # knowable through the API (see hf_storage's module note).
-        # Both halves of the arithmetic come from THIS dataset's recipe, never
-        # from the shipped constants: "keep 3 checkpoints" is a user choice now,
-        # and 3 x 26 GB is exactly the kind of number that must be said before
-        # the pod, not discovered at the last push.
-        _assert_dense_storage_headroom(
+        # delivery namespace's private storage. One dense save is ~26 GB.
+        # It is no longer the same bet, and that is the point of the ordering:
+        #  * hub-only — the repository is the ONLY address the artifact will
+        #    ever have, so a forecast that does not fit is a refusal (still
+        #    confirmable: the ceiling is an estimate).
+        #  * anything with a local copy — the Hub copy is a BACKUP taken after
+        #    the local file is harvested and proven, so it cannot cost the run
+        #    any more. It only buys resumability, so a bad forecast is a WARNING
+        #    said before the GPU, not a wall.
+        # The Hub copy is the master alone (one file, once), never the fp8 twin:
+        # the twin is regenerated from the master in seconds and would eat the
+        # private quota twice as fast.
+        hub_only = not dld.delivers_local(dense_delivery)
+        dense_storage_forecast = _assert_dense_storage_headroom(
             delivery_namespace, dense_api, bool(allow_hf_storage),
-            keeps=lt.dense_max_step_saves_for(ds),
-            fp8_export=lt.dense_fp8_export_enabled(ds))
+            keeps=(lt.dense_max_step_saves_for(ds) if hub_only else 1),
+            fp8_export=dense_fp8 if hub_only else False,
+            required=hub_only) if dld.delivers_hub(dense_delivery) else None
+        dense_hub_warning = (dld.hub_backup_warning(dense_storage_forecast)
+                             if not hub_only else None)
+    else:
+        dense_delivery = None
+        dense_hub_warning = None
     confirmations = {
         'allow_caption_mismatch': bool(allow_caption_mismatch),
         'allow_uncaptioned': bool(allow_uncaptioned),
@@ -1853,6 +1992,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         'allow_unverified_weights': bool(allow_unverified_weights),
         'allow_not_ready': bool(allow_not_ready),
         'allow_hf_storage': bool(allow_hf_storage),
+        'allow_local_disk': bool(allow_local_disk),
     }
     recipe = None
     if fam == 'zimage':
@@ -1935,8 +2075,16 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                 'base_model': base_model, 'training_mode': mode,
                 'artifact_kind': (_FULL_TRANSFORMER_ARTIFACT
                                   if mode == 'full_transformer' else 'lora'),
-                'artifact_status': ('creating_repository'
-                                    if mode == 'full_transformer' else None),
+                # Stamped in the RESERVATION row, not only in the full params:
+                # everything downstream reads the run's own delivery, and the
+                # window between these two writes is one an app restart can
+                # land in. Absent = the legacy Hugging-Face-only meaning.
+                **({'dense_delivery': dense_delivery}
+                   if mode == 'full_transformer' else {}),
+                'artifact_status': (
+                    ('creating_repository' if dld.delivers_hub(dense_delivery)
+                     else 'not_requested')
+                    if mode == 'full_transformer' else None),
                 **confirmations,
             }))
         db.session.add(run)
@@ -1953,7 +2101,11 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         _set(run, vast_label=f'lds-{run.id}',
              job_name=f'{job_prefix}lds{run.id}_{run_name}')
         artifact = {}
-        if mode == 'full_transformer':
+        if mode == 'full_transformer' and dld.delivers_hub(dense_delivery):
+            # Created up front even though the push now happens at the END: the
+            # repository carries the Krea 2 licence, NOTICE and model card, and
+            # a derivative that reaches the Hub without them is a compliance
+            # problem, not a missing nicety.
             artifact = _create_full_transformer_repo(
                 run, cfg.secret('HF_CLOUD_TOKEN'))
         # Mirror the LOCAL launch: persist this dataset's family/variant as its
@@ -1986,9 +2138,21 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                   'artifact_kind': (_FULL_TRANSFORMER_ARTIFACT
                                     if mode == 'full_transformer' else 'lora'),
                   'masked': bool(masked), **confirmations}
+        if mode == 'full_transformer':
+            params['dense_delivery'] = dense_delivery
+            if dld.delivers_local(dense_delivery):
+                params['local_artifact_status'] = 'pending'
+                params['fp8_keep_bf16'] = bool(dense_keep_bf16)
+            if dense_hub_warning:
+                params['hub_backup_warning'] = dense_hub_warning
         if artifact:
             params.update(artifact)
             params['artifact_status'] = 'pending'
+        elif mode == 'full_transformer':
+            params['artifact_status'] = 'not_requested'
+            params['artifact_status_detail'] = (
+                'This full model is delivered to this computer only — no '
+                'Hugging Face copy was requested.')
         if base_repo:
             # The monitor's rebuild (and any retry/continue replay) must route
             # the pod's name_or_path to the PRIVATE repo without recomputing
@@ -2027,6 +2191,17 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         # on a normal launch (the seed step is then a no-op).
         if resume_ckpt_path:
             params['resume_ckpt_path'] = str(resume_ckpt_path)
+            params['resume_source'] = 'local'
+            if resume_step is not None:
+                params['resume_step'] = int(resume_step)
+        elif resume_hf:
+            # The other seed channel: the POD downloads the checkpoint from the
+            # Hub itself. Same contract as the local seed — it lands in the
+            # job's save_root before start_job and ai-toolkit auto-resumes from
+            # it — but the 26 GB never crosses the user's uplink.
+            params['resume_hf_repo_id'] = str(resume_hf.get('repo_id') or '')
+            params['resume_hf_filename'] = str(resume_hf.get('filename') or '')
+            params['resume_source'] = 'hub'
             if resume_step is not None:
                 params['resume_step'] = int(resume_step)
         # Provenance registry (same as local launches): dataset version at
@@ -2053,8 +2228,13 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
               'training_mode': mode}
     if mode == 'full_transformer':
         result.update({'artifact_kind': _FULL_TRANSFORMER_ARTIFACT,
+                       'dense_delivery': dense_delivery,
                        'hf_repo_id': params.get('hf_repo_id'),
                        'hf_url': params.get('hf_url')})
+        if dense_hub_warning:
+            # Said at LAUNCH, in the launch response, because "this model will
+            # not be resumable" is worth knowing before eight hours of GPU.
+            result['warning'] = dense_hub_warning
     return result
 
 
@@ -3019,7 +3199,14 @@ def supervise_active_runs() -> list:
         for run in get_active_runs():
             try:
                 age = (now - (run.created_at or now)).total_seconds()
-                if age > max_seconds + _SUPERVISOR_MARGIN_SECONDS:
+                if age > max_seconds + _SUPERVISOR_MARGIN_SECONDS \
+                        and not _rescuing_checkpoint(run, now):
+                    # ... unless the monitor is, right now, pulling the result
+                    # off the pod and still writing while it does. The cap is
+                    # there so a run stops COSTING, and cutting the rescue would
+                    # spend the whole run and keep nothing — the same reasoning
+                    # the stop deadline already applies, and it matters far more
+                    # for a 26 GB dense master than for an 85 MB LoRA.
                     res = _force_stop(
                         run, detail='Max runtime reached — pod terminated by '
                                     'the supervisor', error='max runtime cap hit')
@@ -3046,7 +3233,12 @@ def supervise_active_runs() -> list:
                 limit = _freeze_limit_seconds(run, c)
                 if limit and _silent_seconds(run, now) > limit:
                     if (_is_full_transformer_run(run)
-                            and run.status == 'training'
+                            # 'downloading' joined 'training' when the dense
+                            # master started coming home: a monitor that dies
+                            # mid-harvest leaves the ONLY copy on the pod, and
+                            # destroying it there would be the loss this whole
+                            # lane exists to prevent.
+                            and run.status in ('training', 'downloading')
                             and run.remote_job_id):
                         _keep_full_transformer_pod(
                             run,
@@ -3454,18 +3646,28 @@ def _cloudify_job_config(job_config: dict, job_name: str,
     proc['training_folder'] = pod_settings['TRAINING_FOLDER']
     proc['device'] = 'cuda:0'
     if (run_params or {}).get('training_mode') == 'full_transformer':
+        delivery = dld.run_mode(run_params or {})
         repo_id = (run_params or {}).get('hf_repo_id')
-        if not repo_id:
-            raise RuntimeError('full_transformer run has no Hugging Face '
-                               'delivery repository')
         if proc.get('network') is not None:
             raise RuntimeError('full_transformer job unexpectedly contains a '
                                'LoRA network block')
-        save = dict(proc.get('save') or {})
-        save.update({'push_to_hub': True,
-                     'hf_repo_id': repo_id,
-                     'hf_private': True})
-        proc['save'] = save
+        if dld.delivers_local(delivery):
+            # The trainer pushes NOTHING. This is the change run #146 paid for:
+            # its 403 arrived on a mid-training push at step 2750/3000, and a
+            # storage ceiling on a service we do not control must never be able
+            # to end a training. The saves stay on the pod and are harvested at
+            # the end; the Hub backup, when asked for, is a separate step taken
+            # AFTER the local copy is proven.
+            proc['save'] = dict(proc.get('save') or {})
+        else:
+            if not repo_id:
+                raise RuntimeError('full_transformer run has no Hugging Face '
+                                   'delivery repository')
+            save = dict(proc.get('save') or {})
+            save.update({'push_to_hub': True,
+                         'hf_repo_id': repo_id,
+                         'hf_private': True})
+            proc['save'] = save
     # Dual captions are LOCAL-ONLY for now: remote.upload_dataset only ships the images
     # and their .txt sidecars (its extension filter skips the JSON caption file), so a
     # pod folder_path pointing at that missing JSON would find zero images. Revert to the
@@ -3624,6 +3826,33 @@ def _mark_verified_full_transformer_cleanup_complete(
         finished_at=datetime.utcnow(), train_params=json.dumps(params))
 
 
+def _destroy_dense_pod(run) -> bool:
+    """Terminate a dense run's pod and say — truthfully — whether it is gone.
+
+    Shared by both dense finalizers (a verified Hugging Face delivery, and a
+    verified local one) because the rule they enforce is the same one: the pod
+    is the thing that costs money, the vast API is the only authority on
+    whether it is gone, and an ambiguous answer must never be published as a
+    clean ending.
+    """
+    instance_id = run.vast_instance_id
+    if not instance_id:
+        return True
+    try:
+        pod_gone = bool(vast_client.destroy_instance(instance_id))
+        if not pod_gone:
+            logger.warning(
+                'run %s: verified dense delivery, but pod termination was '
+                'not confirmed', run.id)
+        return pod_gone
+    except Exception:
+        # Never interpolate authenticated vast.ai diagnostics.
+        logger.warning(
+            'run %s: verified dense delivery pod termination raised; '
+            'cleanup remains pending', run.id)
+        return False
+
+
 def _finalize_verified_full_transformer(run, *, require_open=False) -> bool:
     """Destroy the paid pod first; publish ``done`` only after confirmation.
 
@@ -3635,20 +3864,7 @@ def _finalize_verified_full_transformer(run, *, require_open=False) -> bool:
     if require_open:
         _assert_run_open(run)
     instance_id = run.vast_instance_id
-    pod_gone = not bool(instance_id)
-    if instance_id:
-        try:
-            pod_gone = bool(vast_client.destroy_instance(instance_id))
-            if not pod_gone:
-                logger.warning(
-                    'run %s: verified dense delivery, but pod termination was '
-                    'not confirmed', run.id)
-        except Exception:
-            # Never interpolate authenticated vast.ai diagnostics.
-            pod_gone = False
-            logger.warning(
-                'run %s: verified dense delivery pod termination raised; '
-                'cleanup remains pending', run.id)
+    pod_gone = _destroy_dense_pod(run)
 
     if pod_gone:
         _mark_verified_full_transformer_cleanup_complete(
@@ -3700,6 +3916,336 @@ def _complete_full_transformer_delivery(run, _api=None):
     return _keep_full_transformer_pod(run, detail, error)
 
 
+# ── Dense delivery to THIS computer ───────────────────────────────────────────
+# The pod already knows how to hand its files back — it is how every LoRA
+# checkpoint reaches its user. Dense was excluded from that path by a handful of
+# early returns, not by anything technical. What follows is the dense half of
+# the same harvest, with two rules the LoRA lane does not need:
+#   * a 26 GB transfer must survive an app restart (resume from .part) and be
+#     interruptible (should_cancel), because restarting it is an evening;
+#   * the pod is destroyed only after the local file is PROVEN — size, then a
+#     real safetensors header read. Destroying it before that is how a run is
+#     lost, and the whole point of bringing the file home is not to lose runs.
+
+def _dense_local_dir(run) -> str:
+    return checkpoint_store_dir(run, create=True) or run.staging_dir
+
+
+def _dense_free_space_error(entries) -> str | None:
+    """Refuse to start a transfer the disk plainly cannot hold. Best-effort: a
+    volume we cannot measure never blocks (same rule as every other forecast)."""
+    from . import storage_locations
+    need = sum(int((e or {}).get('size') or 0) for e in entries)
+    if not need:
+        return None
+    root = str(cfg.checkpoints_root(create=False))
+    info = storage_locations.free_space(root) or {}
+    free = info.get('free_bytes')
+    if not isinstance(free, int) or isinstance(free, bool):
+        return None
+    need += dld.disk_margin_bytes()
+    if free >= need:
+        return None
+    from .hf_storage import fmt_bytes
+    # No machine path in the sentence: it lands in run.error, which is exactly
+    # the text people paste into a bug report.
+    return (f'not enough room on this computer: the full model needs '
+            f'{fmt_bytes(need)} in the checkpoint folder and {fmt_bytes(free)} '
+            f'is free. Free space (or point it at a bigger drive in '
+            f'Settings ▸ Storage) and fetch it again — the pod is kept '
+            f'until then.')
+
+
+def _harvest_dense_artifacts(run, remote, should_cancel=None) -> dict:
+    """Download this dense run's files from the pod and prove them.
+
+    Returns ``{'ok', 'detail', 'error', 'cancelled', 'master', 'files'}`` and
+    never raises: every caller has a pod to keep alive on failure.
+    """
+    out = {'ok': False, 'detail': '', 'error': None, 'cancelled': False,
+           'master': None, 'files': []}
+    try:
+        files = remote.list_files(run.remote_job_id)
+    except Exception as e:
+        out['error'] = (f'the pod would not list its files ({e}); nothing was '
+                        'downloaded and the pod is kept')
+        return out
+    keep_bf16 = _run_param(run, 'fp8_keep_bf16') is not False
+    picked = dld.select_pod_artifacts(files, keep_bf16=keep_bf16)
+    wanted = [entry for entry in (picked['master'], picked['fp8']) if entry]
+    if not wanted:
+        out['error'] = ('the pod holds no full-model checkpoint to fetch — '
+                        'check the run log before deleting anything')
+        return out
+    room = _dense_free_space_error(wanted)
+    if room:
+        out['error'] = room
+        return out
+    proofs = []
+    for kind, entry in (('master', picked['master']), ('fp8', picked['fp8'])):
+        if not entry:
+            continue
+        name = os.path.basename(str(entry['path']).replace('\\', '/'))
+        label = 'full model' if kind == 'master' else 'fp8 file'
+        _set(run, status='downloading',
+             phase_detail=f'Fetching the {label} to this computer — {name}'[:500])
+        try:
+            dest = _fetch_checkpoint(
+                run, remote, entry, attempts=_DENSE_FETCH_ATTEMPTS,
+                on_progress=_download_heartbeat(run, name),
+                resume=True, should_cancel=should_cancel)
+            proof = dld.verify_local_file(dest, entry.get('size'))
+        except TransferCancelled as e:
+            out['cancelled'] = True
+            out['error'] = str(e)
+            out['detail'] = ('Transfer stopped — what was already downloaded is '
+                             'kept and the next attempt continues from there')
+            return out
+        except Exception as e:
+            out['error'] = (f'the {label} could not be brought home ({e}); the '
+                            'pod is kept so it can be fetched again')
+            return out
+        proof['kind'] = kind
+        proofs.append(proof)
+        if kind == 'master':
+            out['master'] = entry
+            # Point the run at the master: every disk-accounting and cleanup
+            # path reads this, and a weight nothing points at is a weight the
+            # next 'clean finished runs' is free to consider spare.
+            _set(run, checkpoint_local_path=proof['path'])
+    out['files'] = proofs
+    master = next((p for p in proofs if p['kind'] == 'master'), None)
+    fp8 = next((p for p in proofs if p['kind'] == 'fp8'), None)
+    _persist_run_params(
+        run,
+        local_artifact_status='available',
+        local_artifact_dir=_dense_local_dir(run),
+        local_weight_filename=(master or {}).get('name'),
+        local_weight_bytes=(master or {}).get('size_bytes'),
+        local_fp8_filename=(fp8 or {}).get('name'),
+        local_fp8_bytes=(fp8 or {}).get('size_bytes'),
+        local_verified_at=datetime.utcnow().isoformat(),
+        local_artifact_detail=('Downloaded from the pod and verified '
+                               '(byte count and safetensors header).'))
+    out['ok'] = True
+    names = ' + '.join(p['name'] for p in proofs)
+    out['detail'] = f'Full model on this computer — {names}'
+    return out
+
+
+def _dense_hub_backup(run, remote, master_entry) -> dict:
+    """Best-effort Hugging Face copy of the master, pushed BY THE POD.
+
+    Runs only once the local copy is verified, which is what makes it safe to
+    be best-effort: a refused push (a full private quota — the exact wall run
+    #146 hit) costs the ability to CONTINUE this model later, and nothing else.
+    The fp8 twin is deliberately not pushed: it is regenerated from the master
+    in seconds and would consume the quota twice as fast.
+    """
+    from . import dense_pod_hub
+    repo_id = _run_param(run, 'hf_repo_id')
+    path = str((master_entry or {}).get('path') or '')
+    if not repo_id:
+        outcome = {'state': 'skipped',
+                   'detail': 'No Hugging Face copy was requested for this run.'}
+    elif not path:
+        # "Keep the bf16 master" is off, so there is no master to back up — and
+        # the fp8 twin is deliberately never pushed. Say which, because the
+        # consequence (this run cannot be continued) is the same either way.
+        outcome = {'state': 'skipped',
+                   'detail': ('No Hugging Face backup: this run kept only its '
+                              'fp8 file, and a quantized twin cannot be trained '
+                              'again. Keep the bf16 master to stay resumable.')}
+    else:
+        dense = ((cfg.get('cloud') or {}).get('full_transformer') or {})
+        outcome = dense_pod_hub.push_master(
+            remote, instance_id=run.vast_instance_id, src_path=path,
+            repo_id=repo_id, path_in_repo=os.path.basename(path),
+            hf_token=cfg.secret('HF_CLOUD_TOKEN'),
+            tmp_dir=run.staging_dir or _dense_local_dir(run),
+            budget_seconds=int(dense.get('hub_push_budget_seconds')
+                               or dense_pod_hub.DEFAULT_PUSH_BUDGET_SECONDS),
+            on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]))
+    try:
+        _persist_run_params(run, hub_backup_status=outcome['state'],
+                            hub_backup_detail=outcome['detail'])
+    except Exception:
+        logger.debug('could not stamp the hub backup state of run %s', run.id)
+    if outcome['state'] == 'done':
+        # Prove what landed with the reader that already exists — repo metadata
+        # only, never a 26 GB download.
+        try:
+            _verify_full_transformer_artifact(run)
+        except Exception:
+            logger.warning('run %s: hub backup verification unavailable', run.id)
+    else:
+        _persist_artifact_state(
+            run, 'missing' if repo_id else 'not_requested',
+            artifact_status_detail=outcome['detail'])
+    return outcome
+
+
+def _finalize_dense_local_delivery(run, *, require_open=False) -> bool:
+    """Release the pod once the local copy is proven, and publish the result.
+
+    Same contract as its Hugging Face twin: an ambiguous termination leaves the
+    (already verified, already local) model visible while the run stays
+    recoverable, so a billing pod is never hidden by a successful delivery.
+    """
+    if require_open:
+        _assert_run_open(run)
+    instance_id = run.vast_instance_id
+    pod_gone = _destroy_dense_pod(run)
+    detail = _run_param(run, 'local_artifact_detail') or 'Full model downloaded'
+    if pod_gone:
+        if run.status in ACTIVE_STATES:
+            _stop_event_for(run.id).set()
+        _clear_progress_watch(run.id)
+        params = _updated_artifact_params(
+            run, _run_param(run, 'artifact_status') or 'not_requested',
+            artifact_cleanup_status='complete',
+            artifact_cleanup_detail='vast.ai pod termination confirmed')
+        _set(run, status='done', error=None, finished_at=datetime.utcnow(),
+             phase_detail=('Training complete — full model on this computer '
+                           f'({_run_param(run, "local_weight_filename") or "verified"})')[:500],
+             train_params=json.dumps(params))
+        return True
+    if run.status in ACTIVE_STATES:
+        _stop_event_for(run.id).set()
+    _clear_progress_watch(run.id)
+    params = _updated_artifact_params(
+        run, _run_param(run, 'artifact_status') or 'not_requested',
+        artifact_cleanup_status='pending',
+        artifact_cleanup_detail=(
+            'The full model is on this computer; vast.ai pod termination is '
+            'not yet confirmed and will be retried automatically'))
+    _set(run, status='error_pod_kept',
+         phase_detail=f'{detail} — pod cleanup pending'[:500],
+         error=(f'The full model is on this computer, but termination of '
+                f'instance {instance_id} was not confirmed. Cleanup will retry '
+                'automatically; the pod may still be billing.'),
+         finished_at=run.finished_at or datetime.utcnow(),
+         train_params=json.dumps(params))
+    return False
+
+
+def _deliver_dense_locally(run, remote, *, should_cancel=None,
+                           require_open=False) -> bool:
+    """Harvest → prove → (optional) Hub backup → release the pod. False keeps it."""
+    report = _harvest_dense_artifacts(run, remote, should_cancel=should_cancel)
+    if not report['ok']:
+        # Stamp WHY on the run, not only in the error line: the delivery card
+        # reads this, and "not downloaded" without a reason is what sends
+        # someone hunting a fault that a sentence would have named.
+        try:
+            _persist_run_params(
+                run, local_artifact_status=('cancelled' if report['cancelled']
+                                            else 'failed'),
+                local_artifact_detail=(report['detail'] or report['error']))
+        except Exception:
+            logger.debug('could not stamp the failed local delivery of run %s',
+                         run.id)
+        _keep_full_transformer_pod(
+            run,
+            detail=(report['detail'] or 'Full model not downloaded; pod kept'),
+            error=report['error'],
+            require_open=require_open)
+        return False
+    if _dense_delivers_hub(run):
+        _set_soft(run, phase_detail='Backing the full model up to Hugging Face…')
+        _dense_hub_backup(run, remote, report['master'])
+    _finalize_dense_local_delivery(run, require_open=require_open)
+    return True
+
+
+# Fetches started from the Runs hub, one per run. In-process on purpose: the
+# transfer belongs to the app that is showing its progress, and a run whose app
+# restarts mid-fetch keeps its .part file and is simply fetched again.
+_dense_fetch_threads = {}
+
+
+def _can_fetch_dense_locally(run) -> bool:
+    """Whether "Fetch to this computer" applies to this run right now.
+
+    Deliberately narrow: a KEPT pod (the state every recoverable dense failure
+    ends in), a delivery that wants a local copy, a pod we can still address,
+    and no verified local file yet. Computed server-side so the button and the
+    endpoint can never disagree."""
+    return bool(_dense_delivers_local(run)
+                and run.status == 'error_pod_kept'
+                and run.vast_instance_id and run.remote_job_id and run.base_url
+                and _run_param(run, 'local_artifact_status') != 'available')
+
+
+def _dense_fetch_worker(app, run_id):
+    with app.app_context():
+        run = db.session.get(CloudTrainingRun, int(run_id))
+        if run is None:
+            _dense_fetch_threads.pop(int(run_id), None)
+            return
+        # The recovery window is anchored on finished_at, and a kept pod bills
+        # until it closes. Retrying a transfer must never push that deadline
+        # back — the same rule recheck_full_transformer_delivery follows.
+        finished = run.finished_at
+        try:
+            _deliver_dense_locally(
+                run, _make_remote(run),
+                should_cancel=_stop_event_for(run.id).is_set,
+                require_open=False)
+        except Exception as e:
+            logger.warning('run %s: local dense fetch failed (%s)', run_id, e)
+            try:
+                _set(run, phase_detail=f'Fetch failed — {e}'[:500])
+            except Exception:
+                logger.debug('could not record the failed fetch', exc_info=True)
+        finally:
+            try:
+                if finished and run.finished_at != finished:
+                    _set(run, finished_at=finished)
+            except Exception:
+                logger.debug('could not restore the recovery deadline',
+                             exc_info=True)
+            _dense_fetch_threads.pop(int(run_id), None)
+
+
+def fetch_dense_locally(run_id, cancel=False) -> dict:
+    """Start (or stop) bringing ONE kept dense run's files home.
+
+    Returns immediately: a 26 GB transfer cannot be an HTTP request. Progress is
+    the run's own phase line, which is what the hub already polls; cancelling
+    keeps every byte already downloaded, so a resumed attempt continues from
+    there instead of starting over.
+    """
+    run = db.session.get(CloudTrainingRun, int(run_id))
+    if not run:
+        raise ValueError('unknown cloud run')
+    if not _is_full_transformer_run(run):
+        raise ValueError('fetching to this computer is a full-model action')
+    running = _dense_fetch_threads.get(int(run.id))
+    if cancel:
+        if not running:
+            return {'ok': True, 'state': 'idle', 'run': _run_payload(run)}
+        _stop_event_for(run.id).set()
+        return {'ok': True, 'state': 'cancelling', 'run': _run_payload(run)}
+    if running:
+        return {'ok': True, 'state': 'fetching', 'run': _run_payload(run)}
+    if not _can_fetch_dense_locally(run):
+        raise ValueError(
+            'this run has nothing to fetch: it needs a kept pod, a full-model '
+            'delivery that includes this computer, and no verified local copy '
+            'yet')
+    from flask import current_app
+    _stop_event_for(run.id).clear()
+    _set(run, phase_detail='Fetching the full model to this computer…')
+    thread = threading.Thread(
+        target=_dense_fetch_worker,
+        args=(current_app._get_current_object(), int(run.id)),
+        daemon=True, name=f'dense-fetch-{run.id}')
+    _dense_fetch_threads[int(run.id)] = thread
+    thread.start()
+    return {'ok': True, 'state': 'fetching', 'run': _run_payload(run)}
+
+
 def _full_transformer_recovery_open(run, now=None) -> bool:
     """Whether a kept dense pod remains inside its bounded recovery window."""
     if not run.finished_at:
@@ -3722,6 +4268,9 @@ def recheck_full_transformer_delivery(run_id, _api=None) -> dict:
         raise ValueError('unknown cloud run')
     if not _is_full_transformer_run(run):
         raise ValueError('delivery recheck is only available for full_transformer runs')
+    if not _dense_delivers_hub(run):
+        raise ValueError('this full model is delivered to this computer only — '
+                         'there is no Hugging Face delivery to verify')
     if run.status == 'done' and _run_param(run, 'artifact_status') == 'available':
         return {
             'ok': True, 'delivery': 'available', 'cleanup_pending': False,
@@ -4164,6 +4713,17 @@ def _monitor(app, run_id):
                         remote.stop_job(job_id)
                     except Exception:
                         pass
+                    if _dense_delivers_local(run):
+                        # The cap is about not paying for ever, not about
+                        # throwing the result away: a dense master that only
+                        # exists on this pod dies with it. Bring it home first —
+                        # the supervisor leaves a monitor that is actively
+                        # writing alone (see _rescuing_checkpoint) — then the
+                        # pod goes, exactly as the cap intends.
+                        _deliver_dense_locally(
+                            run, remote, should_cancel=stop_event.is_set,
+                            require_open=True)
+                        return
                     _try_download_checkpoint(run, remote, allow_stale=True)
                     _finish_if_open(run, 'stopped',
                                     detail='Max runtime reached — pod terminated',
@@ -4176,6 +4736,15 @@ def _monitor(app, run_id):
                         remote.stop_job(job_id)
                     except Exception:
                         pass
+                    if _dense_delivers_local(run):
+                        # Stopping the TRAINING is not abandoning the result:
+                        # the LoRA lane rescues its checkpoint here too. A
+                        # second press of Stop cancels the transfer itself
+                        # (should_cancel), keeping what already landed.
+                        _deliver_dense_locally(
+                            run, remote, should_cancel=stop_event.is_set,
+                            require_open=True)
+                        return
                     _try_download_checkpoint(run, remote, allow_stale=True)
                     _finish_if_open(run, 'stopped', detail='Stopped by user')
                     return
@@ -4207,9 +4776,18 @@ def _monitor(app, run_id):
                         # LAST use of the pod, and the only moment the ~26 GB
                         # master and a GPU are in the same place: turn it into
                         # the ~10 GB file people actually load in ComfyUI.
-                        # Fail-open by construction — the master is already on
-                        # Hugging Face, pushed by the trainer itself.
+                        # Fail-open by construction — the master exists either
+                        # way, on the pod and (for a hub run) on the Hub.
                         _export_full_transformer_fp8(run, remote)
+                        if _dense_delivers_local(run):
+                            # Local FIRST, and the pod stays until the file on
+                            # this computer is proven. Everything after that
+                            # point — the Hub backup, the pod cleanup — can
+                            # fail without costing the run.
+                            _deliver_dense_locally(
+                                run, remote, should_cancel=stop_event.is_set,
+                                require_open=True)
+                            return
                         _set(run, phase_detail='Verifying Hugging Face delivery…')
                         _complete_full_transformer_delivery(run)
                         return
@@ -4489,16 +5067,39 @@ def _seed_resume_checkpoint(run, remote, pod_settings):
     renamed to THIS job's prefix so the glob matches (the save the trainer would
     itself write). No resume checkpoint stamped in train_params -> no-op (a
     normal launch). A missing/failed seed RAISES: a 'continue' that cannot
-    resume must fail loudly, never silently train from scratch."""
+    resume must fail loudly, never silently train from scratch.
+
+    TWO channels, one destination. A LoRA (tens to hundreds of MB) is uploaded
+    from this machine. A dense master (~26 GB) cannot be: the pod's upload route
+    builds its multipart body entirely in memory. So the POD fetches that one
+    itself, straight from the Hugging Face copy of the source run — same
+    directory, same name, same auto-resume."""
     src = _run_param(run, 'resume_ckpt_path')
-    if not src:
+    repo_id = _run_param(run, 'resume_hf_repo_id')
+    if not src and not repo_id:
         return
-    if not os.path.isfile(src):
-        raise RuntimeError(f'resume checkpoint vanished before upload: {src}')
     step = int(_run_param(run, 'resume_step') or 0)
     remote_name = f'{run.job_name}_{step:09d}.safetensors'
     training_folder = pod_settings['TRAINING_FOLDER'].rstrip('/')
     dest_dir = f'{training_folder}/{run.job_name}'
+    if repo_id:
+        from . import dense_pod_hub
+        filename = _run_param(run, 'resume_hf_filename')
+        dense = ((cfg.get('cloud') or {}).get('full_transformer') or {})
+        _set(run, phase_detail='Fetching the checkpoint to resume from…')
+        dense_pod_hub.fetch_checkpoint(
+            remote, instance_id=run.vast_instance_id, repo_id=repo_id,
+            filename=filename, dest_path=f'{dest_dir}/{remote_name}',
+            hf_token=cfg.secret('HF_CLOUD_TOKEN'),
+            tmp_dir=run.staging_dir or _staging_root(),
+            budget_seconds=int(dense.get('hub_fetch_budget_seconds')
+                               or dense_pod_hub.DEFAULT_FETCH_BUDGET_SECONDS),
+            on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]))
+        logger.info('run %s: the pod fetched its resume checkpoint from the Hub '
+                    '-> %s', run.id, dest_dir)
+        return
+    if not os.path.isfile(src):
+        raise RuntimeError(f'resume checkpoint vanished before upload: {src}')
     _set(run, phase_detail='Seeding checkpoint for resume…')
     remote.seed_checkpoint(pod_settings['DATASETS_FOLDER'], dest_dir,
                            remote_name, src)
@@ -4557,7 +5158,7 @@ def _newest_remote_checkpoint(remote, job_id):
 
 
 def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
-                      on_progress=None) -> str:
+                      on_progress=None, resume=False, should_cancel=None) -> str:
     """Download the checkpoint entry ({'path','size'}) into staging and return
     the local path. Skips the transfer when this exact save is already local
     (the mid-run sync usually got there first). Two integrity layers:
@@ -4579,7 +5180,8 @@ def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
         return dest
     remote.download_public_file(remote_path, dest, timeout=timeout,
                                 expected_size=ckpt.get('size'), attempts=attempts,
-                                on_progress=on_progress)
+                                on_progress=on_progress, resume=resume,
+                                should_cancel=should_cancel)
     want = int(ckpt.get('size') or 0)
     got = os.path.getsize(dest)
     if want and got != want:
@@ -4590,6 +5192,12 @@ def _fetch_checkpoint(run, remote, ckpt, timeout=None, attempts=3,
         raise RuntimeError(f'truncated download of {name}: {got}/{want} bytes')
     return dest
 
+
+# A dense master is ~26 GB on a proxy that can cut the stream every couple of
+# MB. Each cut costs one attempt and resumes at the offset, so the budget has to
+# be counted in thousands, not in hundreds — and it is bounded by the transfer's
+# own no-progress rule (an attempt that adds zero bytes ends the loop).
+_DENSE_FETCH_ATTEMPTS = 4000
 
 _SYNC_DL_TIMEOUT = 60      # opportunistic pull: fail fast, the loop must not hang
 _SYNC_MAX_FAILS = 3        # give up on a save after this; a NEWER save retries
@@ -5054,6 +5662,17 @@ def _run_payload(run) -> dict:
     family = _run_family(run)
     training_mode = _run_training_mode(run)
     full_transformer = training_mode == 'full_transformer'
+    # What ▶ Continue may offer. A LoRA resumes from the saves harvested on this
+    # disk; a full model resumes from its Hugging Face copy (see
+    # _dense_resume_candidates) — including from a run whose pod was kept, which
+    # is precisely the state a dense run ends in when something went wrong and
+    # the reason continuing it matters.
+    if full_transformer:
+        resume_pool = (_dense_resume_candidates(run)
+                       if run.status in ('done', 'error_pod_kept') else [])
+    else:
+        resume_pool = (_run_staging_checkpoints(run)
+                       if run.status == 'done' else [])
     variant = _run_param(run, 'variant')
     effective_base = _run_param(run, 'effective_base')
     training_adapter = _run_param(run, 'training_adapter')
@@ -5083,8 +5702,10 @@ def _run_payload(run) -> dict:
             'checkpoint_ready': bool(not full_transformer
                                      and run.checkpoint_local_path
                                      and os.path.isfile(run.checkpoint_local_path)),
-            # Dense artifacts are delivered pod -> private Hugging Face repo;
-            # there is intentionally no ~26 GB local proxy/download path.
+            # A dense artifact may well be on this disk now, but it is never
+            # offered as a browser download: re-serving 26 GB through the app
+            # would only write a second copy of a file the user already has.
+            # `local_artifact_dir` below says where it is instead.
             'checkpoint_local_path': (None if full_transformer else
                                       (os.path.basename(run.checkpoint_local_path)
                                        if run.checkpoint_local_path else None)),
@@ -5099,12 +5720,11 @@ def _run_payload(run) -> dict:
             # Distinct steps of the harvested checkpoints still on disk — the
             # ▶ Continue dialog offers them so a finished run can resume from an
             # EARLIER epoch, not only its last (empty when they are all gone).
-            'resume_steps': (sorted({c['step'] for c in _run_staging_checkpoints(run)})
-                             if run.status == 'done' else []),
-            'resume_checkpoints': (
-                [{'step': c['step'], 'resume_state': c['resume_state']}
-                 for c in _run_staging_checkpoints(run)]
-                if run.status == 'done' else []),
+            'resume_steps': sorted({c['step'] for c in resume_pool}),
+            'resume_checkpoints': [
+                {'step': c['step'], 'resume_state': c['resume_state'],
+                 'source': c.get('source') or 'local'}
+                for c in resume_pool],
             'train_type': family, 'variant': variant,
             'training_mode': training_mode,
             'artifact_kind': (_run_param(run, 'artifact_kind')
@@ -5137,9 +5757,32 @@ def _run_payload(run) -> dict:
                 run, 'delivery_last_checked_at'),
             'verified_at': (_run_param(run, 'verified_at')
                             or _run_param(run, 'artifact_verified_at')),
+            # Where THIS run's full model goes, and what actually landed there.
+            # Absent keys = a run from before the local delivery existed; every
+            # surface then reads it exactly as it always did (Hugging Face only).
+            **({'dense_delivery': _dense_delivery(run),
+                'local_artifact_status': _run_param(run, 'local_artifact_status'),
+                'local_artifact_detail': _run_param(run, 'local_artifact_detail'),
+                'local_artifact_dir': _run_param(run, 'local_artifact_dir'),
+                'local_weight_filename': _run_param(run, 'local_weight_filename'),
+                'local_weight_bytes': _run_param(run, 'local_weight_bytes'),
+                'local_fp8_filename': _run_param(run, 'local_fp8_filename'),
+                'local_fp8_bytes': _run_param(run, 'local_fp8_bytes'),
+                'local_verified_at': _run_param(run, 'local_verified_at'),
+                'hub_backup_status': _run_param(run, 'hub_backup_status'),
+                'hub_backup_detail': _run_param(run, 'hub_backup_detail'),
+                'hub_backup_warning': _run_param(run, 'hub_backup_warning'),
+                'dense_fetch_active': bool(_dense_fetch_threads.get(int(run.id))),
+                'can_fetch_local': _can_fetch_dense_locally(run),
+                'resume_source': _run_param(run, 'resume_source'),
+                } if full_transformer else {}),
             'artifact_delivery': (
-                'Private Hugging Face repository; no checkpoint_local_path is '
-                'created for full_transformer artifacts.'
+                ('Downloaded to this computer'
+                 + (' and backed up to a private Hugging Face repository'
+                    if _dense_delivers_hub(run) else '')
+                 if _dense_delivers_local(run) else
+                 'Private Hugging Face repository; no checkpoint_local_path is '
+                 'created for full_transformer artifacts.')
                 if full_transformer else 'Local LoRA checkpoint'),
             'effective_base': effective_base,
             'training_adapter': training_adapter,
@@ -6979,8 +7622,10 @@ def cloud_checkpoint_groups(dataset_id, train_type=None, variant=None) -> list:
     for run in (CloudTrainingRun.query.filter_by(dataset_id=dataset_id)
                 .order_by(CloudTrainingRun.id.desc()).all()):
         if _is_full_transformer_run(run):
-            # Dense outputs live exclusively in their private HF repository;
-            # never reinterpret a stray/stale staging file as a LoRA checkpoint.
+            # A dense run's saves may well be on this disk now, but they are
+            # 26 GB FULL models: this panel deploys LoRA adapters to ComfyUI,
+            # and a full checkpoint is not one. The Runs hub is where a full
+            # model is named, located and quantized.
             continue
         if fam and (_run_family(run) or fam) != fam:
             continue

@@ -172,6 +172,37 @@ export default function HfStorageCard({ config, setField, configDefaults }) {
       )}
 
       <div>
+        <label htmlFor="cloud-full-model-delivery" className="block text-sm font-medium text-content">
+          Full-model delivery
+        </label>
+        <select
+          id="cloud-full-model-delivery"
+          value={config.cloud?.full_transformer?.delivery ?? dflt('delivery')}
+          onChange={(e) => setField('cloud', 'full_transformer', {
+            ...(config.cloud?.full_transformer || {}),
+            delivery: e.target.value,
+          })}
+          className={INPUT_CLASS}
+        >
+          <option value="both">This computer, then a Hugging Face backup (recommended)</option>
+          <option value="local">This computer only</option>
+          <option value="hub">Hugging Face only (previous behaviour)</option>
+        </select>
+        <p className="mt-1 text-xs text-content-muted">
+          Where a finished full model goes. The default downloads it here first and only
+          then backs the 26 GB master up to the private repository — so a full Hugging Face
+          quota can no longer end a training the way it did at step 2750 of 3000. Nothing is
+          pushed while the run trains.
+          {' '}
+          <strong>The Hugging Face copy is what makes a run resumable</strong>: continuing a
+          full model means putting its checkpoint on a fresh pod, and a 26 GB file can only
+          get there from the Hub. “This computer only” saves your quota and gives that up.
+          Checkpoints land in the folder set by Settings ▸ Storage ▸ Checkpoints, and a launch
+          refuses (confirmably) when that drive plainly has no room.
+        </p>
+      </div>
+
+      <div>
         <label htmlFor="cloud-private-storage-limit" className="block text-sm font-medium text-content">
           Private storage allowance (GB, 0 = infer from plan)
         </label>

@@ -31,7 +31,10 @@ import { podBootFailureView, stopButtonLabel, uploadStallFailureView } from '../
 import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
+  canFetchDenseLocally,
   canRecheckFullTransformerDelivery,
+  denseHubBackupView,
+  denseLocalArtifactView,
   fullTransformerArtifactFiles,
   fullTransformerArtifactView,
   fullTransformerFp8Note,
@@ -164,50 +167,103 @@ const FULL_ARTIFACT_TONE = {
   info: 'border-sky-400/40 bg-sky-500/10 text-sky-100',
 };
 
-function FullArtifactStatus({ run, onRecheck, rechecking = false }) {
-  const view = fullTransformerArtifactView(run);
-  const canRecheck = canRecheckFullTransformerDelivery(run) && !!onRecheck;
+/* The copy on THIS computer — the first-class delivery since the Hugging Face
+   quota stopped being the only address a full model has. Rendered above the Hub
+   block on purpose: it is the one that decides whether the run is safe. */
+function DenseLocalStatus({ run, onFetch, fetching = false }) {
+  const view = denseLocalArtifactView(run);
+  if (!view) return null;
+  const canFetch = canFetchDenseLocally(run) && !!onFetch;
   return (
-    <div role={view.tone === 'error' || view.tone === 'warning' ? 'alert' : 'status'}
+    <div role={view.tone === 'warning' ? 'alert' : 'status'}
       className={`w-full rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${FULL_ARTIFACT_TONE[view.tone]}`}>
       <span className="font-semibold">{view.label}</span>
       <span className="block opacity-90">{view.detail}</span>
-      {/* Which of the delivered files to take. Without this the repository shows
-          two objects with nearly the same name, one of which is 26 GB. */}
-      {fullTransformerArtifactFiles(run).map((file) => (
+      {view.dir && (
+        <span className="block break-all opacity-80" title="Folder on this computer">
+          📁 <span className="font-mono">{view.dir}</span>
+        </span>
+      )}
+      {/* Which of the two files to take. They are not interchangeable: the fp8
+          one is what ComfyUI loads, the master is the only one that can be
+          trained again. */}
+      {view.available && fullTransformerArtifactFiles(run).map((file) => (
         <span key={file.kind} className="block opacity-90">
           {file.primary ? '★ ' : '· '}
           <span className="font-mono break-all">{file.name}</span> — {file.note}
         </span>
       ))}
-      {fullTransformerFp8Note(run) && (
-        <span className="block opacity-80">ℹ {fullTransformerFp8Note(run)}</span>
-      )}
       {view.available && run.inference_hint?.note && (
         <span className="block opacity-90">⚠ {run.inference_hint.note}</span>
       )}
-      {view.href && (
-        <a href={view.href} target="_blank" rel="noreferrer"
-          className="mt-1 inline-block font-semibold text-sky-200 underline hover:text-sky-100">
-          Open private model on Hugging Face ↗
-        </a>
-      )}
-      {!view.href && view.repositoryHref && (
-        <a href={view.repositoryHref} target="_blank" rel="noreferrer"
-          title="This link only opens the repository; the model weights have not been verified yet"
-          className="mt-1 inline-block font-semibold text-amber-100 underline hover:text-white">
-          Inspect Hugging Face repository (delivery not verified) ↗
-        </a>
-      )}
-      {canRecheck && (
-        <button type="button" onClick={() => onRecheck(run)} disabled={rechecking}
-          className="mt-1.5 block rounded-md border border-amber-300/50 bg-amber-400/10 px-2.5 py-1 text-amber-50 font-semibold hover:bg-amber-400/20 disabled:opacity-40">
-          {rechecking
-            ? (view.cleanupPending ? 'Cleaning up pod…' : 'Verifying Hugging Face delivery…')
-            : (view.cleanupPending ? 'Retry pod cleanup' : 'Verify Hugging Face delivery')}
+      {(canFetch || fetching) && (
+        <button type="button" onClick={() => onFetch(run, fetching)}
+          className="mt-1.5 block rounded-md border border-sky-300/50 bg-sky-400/10 px-2.5 py-1 font-semibold text-sky-50 hover:bg-sky-400/20">
+          {fetching ? 'Stop fetching (what landed is kept)' : 'Fetch to this computer'}
         </button>
       )}
     </div>
+  );
+}
+
+/* Exported for tests/dense-local-delivery-contract.test.mjs: this block now has
+   three shapes (a local copy, a Hub backup, the historical Hub-only delivery)
+   and the only way to prove a shape renders is to render it. */
+export function FullArtifactStatus({ run, onRecheck, rechecking = false,
+  onFetch, fetching = false }) {
+  const local = denseLocalArtifactView(run);
+  const backup = denseHubBackupView(run);
+  // A run delivered here keeps its Hugging Face block only as a BACKUP note:
+  // "Full model not found" would be a lie about a model sitting on the disk.
+  const view = backup || (local ? null : fullTransformerArtifactView(run));
+  const canRecheck = canRecheckFullTransformerDelivery(run) && !!onRecheck;
+  if (!view) {
+    return <DenseLocalStatus run={run} onFetch={onFetch} fetching={fetching} />;
+  }
+  return (
+    <>
+      <DenseLocalStatus run={run} onFetch={onFetch} fetching={fetching} />
+      <div role={view.tone === 'error' || view.tone === 'warning' ? 'alert' : 'status'}
+        className={`w-full rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${FULL_ARTIFACT_TONE[view.tone]}`}>
+        <span className="font-semibold">{view.label}</span>
+        <span className="block opacity-90">{view.detail}</span>
+        {/* Which of the delivered files to take. Without this the repository shows
+            two objects with nearly the same name, one of which is 26 GB. */}
+        {!local && fullTransformerArtifactFiles(run).map((file) => (
+          <span key={file.kind} className="block opacity-90">
+            {file.primary ? '★ ' : '· '}
+            <span className="font-mono break-all">{file.name}</span> — {file.note}
+          </span>
+        ))}
+        {fullTransformerFp8Note(run) && (
+          <span className="block opacity-80">ℹ {fullTransformerFp8Note(run)}</span>
+        )}
+        {!local && view.available && run.inference_hint?.note && (
+          <span className="block opacity-90">⚠ {run.inference_hint.note}</span>
+        )}
+        {view.href && (
+          <a href={view.href} target="_blank" rel="noreferrer"
+            className="mt-1 inline-block font-semibold text-sky-200 underline hover:text-sky-100">
+            Open private model on Hugging Face ↗
+          </a>
+        )}
+        {!view.href && view.repositoryHref && (
+          <a href={view.repositoryHref} target="_blank" rel="noreferrer"
+            title="This link only opens the repository; the model weights have not been verified yet"
+            className="mt-1 inline-block font-semibold text-amber-100 underline hover:text-white">
+            Inspect Hugging Face repository (delivery not verified) ↗
+          </a>
+        )}
+        {canRecheck && (
+          <button type="button" onClick={() => onRecheck(run)} disabled={rechecking}
+            className="mt-1.5 block rounded-md border border-amber-300/50 bg-amber-400/10 px-2.5 py-1 text-amber-50 font-semibold hover:bg-amber-400/20 disabled:opacity-40">
+            {rechecking
+              ? (view.cleanupPending ? 'Cleaning up pod…' : 'Verifying Hugging Face delivery…')
+              : (view.cleanupPending ? 'Retry pod cleanup' : 'Verify Hugging Face delivery')}
+          </button>
+        )}
+      </div>
+    </>
   );
 }
 
@@ -537,6 +593,26 @@ export default function CloudRunsPage() {
     }
   };
 
+  // Bring a kept pod's full model home — or stop a transfer in flight. The
+  // request returns immediately: 26 GB is tens of minutes, so the progress the
+  // user watches is the run's own phase line, which this page already polls.
+  const fetchFullModel = async (run, running) => {
+    try {
+      await postJson('/api/dataset/train/cloud/fetch-local', {
+        run_id: run.run_id, ...(running ? { cancel: true } : {}),
+      });
+      toast.info(running
+        ? 'Stopping the transfer — everything already downloaded is kept, and fetching again continues from there.'
+        : 'Downloading the full model to this computer. The pod is kept until the file here is verified.',
+      12000);
+      await poll();
+    } catch (error) {
+      toast.error(error?.message
+        ? `Could not fetch the full model: ${error.message}`
+        : 'Could not fetch the full model. The pod is kept — try again.');
+    }
+  };
+
   const stopLocal = async () => {
     const local = data?.local_active;
     if (!canStopLocalRun(local) || stoppingLocalRef.current) return;
@@ -739,11 +815,21 @@ export default function CloudRunsPage() {
   // ai-toolkit + the machine-wide single-flight training, cloud by the key, this
   // DATASET's own active run and the concurrency limit.
   const continueLanes = useMemo(
-    () => runsHubContinueLanes(continueRunTarget, {
-      aitoolkitValid: caps?.aitoolkit?.valid,
-      localActive: data?.local_active,
-      actives, configured, limit, familyLabel: famLabel,
-    }),
+    () => {
+      const lanes = runsHubContinueLanes(continueRunTarget, {
+        aitoolkitValid: caps?.aitoolkit?.valid,
+        localActive: data?.local_active,
+        actives, configured, limit, familyLabel: famLabel,
+      });
+      // Full-model training is cloud-only — 12B weights do not fit on a desktop
+      // card — so its local lane says that instead of offering a run that would
+      // be refused by the server a click later.
+      if (lanes && isFullTransformerRun(continueRunTarget || {})) {
+        lanes.local = { available: false,
+          reason: 'A full model can only be trained on a rented 80 GB card — continue it in the cloud.' };
+      }
+      return lanes;
+    },
     [continueRunTarget, caps, data, actives, configured, limit]);
 
   // ▶ Continue from a ◉ Graph checkpoint pill: open the Continue dialog on THAT
@@ -888,7 +974,8 @@ export default function CloudRunsPage() {
           })()}
           {fullModel && (
             <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
-              rechecking={!!recheckingDelivery[run.run_id]} />
+              rechecking={!!recheckingDelivery[run.run_id]}
+              onFetch={fetchFullModel} fetching={!!run.dense_fetch_active} />
           )}
           {line && (
             <p className="m-0 truncate text-content-subtle text-[0.625rem]"
@@ -911,12 +998,20 @@ export default function CloudRunsPage() {
                 {retrying[runRetryKey(run)] ? '↻ Retrying…' : '↻ Retry'}
               </button>
             )}
-            {!fullModel && run.source === 'cloud' && run.status === 'done' && run.checkpoint_ready && (
+            {/* A LoRA is continued from a checkpoint on this disk; a full model
+                is continued from its Hugging Face copy, which is what
+                `resume_steps` carries for a dense run (the 26 GB file here
+                cannot be handed to a pod). Both open the same dialog. */}
+            {run.source === 'cloud' && (fullModel
+              ? (run.resume_steps || []).length > 0
+              : (run.status === 'done' && run.checkpoint_ready)) && (
               <button type="button" onClick={() => continueRun(run)}
                 disabled={isTrainingRecipeReplayBlocked(run) || !!continuing[run.run_id]}
                 title={isTrainingRecipeReplayBlocked(run)
                   ? 'Disabled: this legacy/incompatible Z-Image checkpoint cannot be continued safely; start a fresh run'
-                  : "Resume from any of this run's checkpoints for more steps, on a fresh pod"}
+                  : fullModel
+                    ? "Resume this full model from its Hugging Face copy, on a fresh pod"
+                    : "Resume from any of this run's checkpoints for more steps, on a fresh pod"}
                 className="px-3 py-1.5 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-xs font-semibold disabled:opacity-40">
                 {continuing[run.run_id] ? '▶ Continuing…' : '▶ Continue…'}
               </button>
@@ -1157,7 +1252,8 @@ export default function CloudRunsPage() {
                 variant={run.variant} cloud showLaunch={false} />
               {isFullTransformerRun(run) && (
                 <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
-                  rechecking={!!recheckingDelivery[run.run_id]} />
+                  rechecking={!!recheckingDelivery[run.run_id]}
+                  onFetch={fetchFullModel} fetching={!!run.dense_fetch_active} />
               )}
 
               <div className="flex flex-wrap items-center gap-2">

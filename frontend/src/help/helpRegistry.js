@@ -1064,6 +1064,17 @@ const TOPICS = [
   // The Hugging Face allowance is a DISK question, so its card moved to
   // Settings › Storage with the rest of them. Ids stay put: they are stored in
   // the "seen" maps of existing installs.
+  setting('cloud.full_transformer.delivery', 'storage',
+    'cloud-full-model-delivery', 'Full-model delivery (this computer / Hugging Face)',
+    ['full model', 'dense', 'krea', 'delivery', 'download', 'local', 'disk',
+      'hugging face', 'huggingface', 'backup', 'quota', '403', 'storage limit',
+      'resume', 'continue', '26 gb', 'checkpoint', 'where'],
+    { trigger: 'full-model-delivery-local',
+      text: 'New: a finished full model is downloaded to this computer first and verified before the pod is released — the Hugging Face copy is a backup taken afterwards, so a full quota can no longer end a training. It is also what keeps a run resumable.' }),
+  action('cloud.dense_fetch_local', 'Fetch a full model to this computer',
+    ['fetch', 'download', 'full model', 'dense', 'pod', 'kept', 'recover',
+      'retry', 'transfer', 'resume', 'cancel', '26 gb'],
+    '/cloud', 'dataset-guide', '10-full-model-recipe-what-you-can-change'),
   setting('cloud.full_transformer.private_storage_limit_gb', 'storage',
     'cloud-private-storage-limit', 'Private storage allowance',
     ['hugging face', 'huggingface', 'storage', 'quota', 'private', 'limit', 'allowance',
