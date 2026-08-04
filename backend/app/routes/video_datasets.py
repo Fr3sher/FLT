@@ -135,6 +135,79 @@ def video_dataset_delete(dataset_id):
     return jsonify({'ok': True})
 
 
+@bp.post('/video-dataset/<int:dataset_id>/train')
+def video_dataset_train_local(dataset_id):
+    """Train a LoRA on this video dataset with the ai-toolkit installed here.
+
+    Its own endpoint, and not the face lane's `/dataset/<id>/train`, for the same
+    reason the cloud one is separate: that route's id means a `face_dataset`, and
+    the two tables share one integer space.
+
+    Three refusals get their own status because the UI has to say three different
+    things: an uncatalogued or unsupported target is a 400 (a choice the user can
+    change), no ai-toolkit and a card already taken are 409s (the request is fine,
+    the machine is not), and absent weights are a 409 carrying the repository and
+    the size so the panel can ask for a yes instead of just saying no."""
+    from ..services import video_training
+    from ..services import video_training_local as vtl
+    from ..gpu_window import GpuBusyError
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(vtl.start_video_training(
+            LOCAL_USER, dataset_id,
+            steps=body.get('steps') or 1000,
+            base_model=(body.get('base_model') or '').strip() or None,
+            low_vram=bool(body.get('low_vram', True)),
+            accept_download=bool(body.get('accept_download', False))))
+    except vtl.VideoWeightsMissing as e:
+        return jsonify({'error': str(e), 'needs_download': True,
+                        'repo': e.repo, 'gigabytes': e.gigabytes}), 409
+    except video_training.VideoTrainingUnsupported as e:
+        return jsonify({'error': str(e)}), 400
+    except GpuBusyError as e:
+        return jsonify({'error': str(e)}), 409
+    except ValueError as e:
+        if 'not found' in str(e):
+            return _missing(dataset_id)
+        # 'a training is already in progress' is a state refusal, not a malformed
+        # request — the same 409 the face lane's launch route returns for it.
+        if 'in progress' in str(e):
+            return jsonify({'error': str(e)}), 409
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 409
+
+
+@bp.get('/video-dataset/<int:dataset_id>/train/progress')
+def video_dataset_train_progress(dataset_id):
+    """The local run's live progress, for the card to poll.
+
+    Reports `active` only for a run whose fence names THIS dataset AND the video
+    table — a face training of the colliding id must not drive this bar."""
+    from ..services import video_training_local as vtl
+    try:
+        progress = vtl.video_training_progress(dataset_id, LOCAL_USER)
+    except ValueError:
+        return _missing(dataset_id)
+    progress['checkpoints'] = vtl.list_run_checkpoints(dataset_id, LOCAL_USER)
+    return jsonify(progress)
+
+
+@bp.post('/video-dataset/<int:dataset_id>/train/stop')
+def video_dataset_train_stop(dataset_id):
+    """Stop the local run of THIS video dataset.
+
+    Names the table alongside the id, which is what stops this button from
+    killing the face dataset of the same number. `ok: false` is the honest answer
+    when the fence names another run — the click was refused, not silently
+    ignored."""
+    from ..services import cloud_run_dataset as crd
+    from ..services import lora_training as lt
+    stopped = lt.stop_training(expected_dataset_id=dataset_id,
+                               expected_dataset_table=crd.VIDEO)
+    return jsonify({'ok': bool(stopped)})
+
+
 @bp.post('/video-dataset/<int:dataset_id>/train/cloud')
 def video_dataset_train_cloud(dataset_id):
     """Rent a pod and train a LoRA on this video dataset.
