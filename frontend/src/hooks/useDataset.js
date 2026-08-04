@@ -19,6 +19,7 @@ import { refreshDatasetIfActive } from '../utils/datasetRefresh';
 import { ENGINE_LABELS } from '../components/dataset/engineSelection.js';
 import { retryRequestForReferenceEdit } from '../components/dataset/referenceEdit.js';
 import { classifyResultMessage } from '../components/dataset/classifyFramingGate.js';
+import { captionResultSuffix } from '../utils/captionEngines.js';
 
 function post(url, body, isForm) {
   // Routes through the shared fetchWithCsrfRetry: a token that aged out mid-session
@@ -149,6 +150,14 @@ export function useDataset() {
   const [busy, setBusy] = useState(false);
   // Tracks an in-flight captioning pass so the UI can poll progressively.
   const [captioning, setCaptioning] = useState(false);
+  // WHO wrote the captions of the last pass: {datasetId, captioned, engines}. The
+  // default 'auto' backend chains JoyCaption and the Ollama vision model, which write
+  // in visibly different styles, and the app used to report only a count — so
+  // "these captions read nothing like yesterday's" had no answer anywhere. The
+  // dataset id rides along so the line can never describe another dataset's run; it
+  // is in-session only (deliberately NOT persisted — see the follow-up note in
+  // utils/captionEngines.js).
+  const [lastCaptionRun, setLastCaptionRun] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [watermarking, setWatermarking] = useState(false);
   // Per-image cache-bust versions (M1): only the cropped image reloads,
@@ -585,8 +594,9 @@ export function useDataset() {
         toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
         return;
       }
+      setLastCaptionRun({ datasetId: currentId, captioned: d.captioned, engines: d.engines });
       if (d.stopped) toast.info(`Stopped — ${d.captioned} captioned before you stopped; the rest stays uncaptioned.`);
-      else toast.success(`${d.captioned} captioned`);
+      else toast.success(`${d.captioned} captioned${captionResultSuffix(d.engines)}`);
       await refresh();
     } finally {
       setCaptioning(false);
@@ -604,8 +614,9 @@ export function useDataset() {
         toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
         return;
       }
+      setLastCaptionRun({ datasetId: currentId, captioned: d.captioned, engines: d.engines });
       if (d.stopped) toast.info(`Stopped — ${d.captioned} re-captioned before you stopped; the rest keeps its previous caption.`);
-      else toast.success(`${d.captioned} re-captioned`);
+      else toast.success(`${d.captioned} re-captioned${captionResultSuffix(d.engines)}`);
       await refresh();
     } finally {
       setCaptioning(false);
@@ -649,7 +660,8 @@ export function useDataset() {
         toast.error(d.detail ? `${d.error} — ${d.detail}` : (d.error || 'Could not re-caption'));
         return d;
       }
-      toast.success(`${d.captioned} re-captioned`);
+      setLastCaptionRun({ datasetId: currentId, captioned: d.captioned, engines: d.engines });
+      toast.success(`${d.captioned} re-captioned${captionResultSuffix(d.engines)}`);
       await refresh();  // re-pulls captions + the live leak flags (scan is server-side)
       return d;
     } finally {
@@ -1538,6 +1550,7 @@ export function useDataset() {
 
 
   return { datasets, currentId, data, busy: busyLive, localBusy: busy, captioning: captioningLive,
+           lastCaptionRun,
            analyzing: analyzingLive, watermarking: watermarkingLive, activity,
            nonces, mirroringIds, refNonce, scoringFaceIds, recaptioningIds, create, open,
            deleteDataset, updateSettings, setCurrentId, setRef, addExtraRef, removeExtraRef,

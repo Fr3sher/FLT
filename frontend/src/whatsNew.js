@@ -3196,6 +3196,22 @@ export const WHATS_NEW = [
       'Setup now repairs a mixed Pillow install on boot and keeps incompatible ML extras out of the Flask environment — fewer cryptic image errors the first time you run the app.',
     // No `to`: a reliability fix with nothing to click.
   },
+  {
+    id: '2026-08-04-setup-tells-a-broken-optional-file-from-a-dead-engine',
+    date: '2026-08-04',
+    title: 'Setup stops calling a damaged optional file a broken engine',
+    blurb:
+      'A corrupted Klein consistency LoRA lit up Setup in red with “⚠ On disk, unreadable”, exactly like a dead model file — while generation carried on working perfectly, because that LoRA has never been required. The alarm said the engine was down when the engine was fine. It now says what is true: an unreadable file that nothing waits on is flagged in amber as optional, with a line telling you Klein still generates without it and a button to download it again; only a file the engine really needs keeps the red badge. The same file also stopped hiding on the other screen — the download buttons used to print “✓ Installed” over it, because it was not on the required list, so the one place offering to fix it was the one place claiming nothing was wrong.',
+    to: '/setup?step=install',
+  },
+  {
+    id: '2026-08-04-captions-say-which-engine-wrote-them',
+    date: '2026-08-04',
+    title: 'See which engine actually wrote your captions',
+    blurb:
+      'The captioning engine is set to Auto by default, and Auto is a chain, not a choice: JoyCaption writes what it can, the Ollama vision model writes the rest, and on a Concept dataset Ollama rewrites JoyCaption’s drafts. Those engines do not write alike — so captions could come back in two different voices, or in a different voice than last week, with nothing anywhere to explain it. Every pass now reports who wrote what, in the toast and on a line under the caption buttons: “Written by JoyCaption.”, “Drafted by JoyCaption, rewritten by the Ollama vision model.”, or “8 by JoyCaption · 4 by Ollama” when the batch was shared. If you want one consistent voice, ⚙️ Options lets you name a single engine — and now you can tell whether it obeyed.',
+    to: '/datasets?section=captions&panel=generate',
+  },
 ];
 
 // ── Ordering ────────────────────────────────────────────────────────────────
