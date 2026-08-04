@@ -755,11 +755,39 @@ instead of ~50, and that compression lives in the very weights a dense run
 rewrites. So a dense run on Turbo does eat into the speed.
 
 **What that actually costs, where anyone has measured it.** Not a broken file.
-On the distilled models with published results — Z-Image-Turbo, FLUX.2 Klein —
-full fine-tuning leaves a structurally valid checkpoint that gradually **stops
-being fast**: it drifts from "8 steps, no guidance" back toward real CFG and
-25-30 steps. The erosion is progressive, not a cliff, and how far it goes
-depends on the run. "Slow again", not "corrupt".
+One distilled model has published results for this: **Z-Image-Turbo**. Training
+its weights directly — the plain SFT route, not a LoRA — leaves a model that
+still generates properly and simply **stops being fast**. Both published sources
+give the same replacement recipe: give up the acceleration settings and infer at
+**~30 steps, CFG ~2** instead of 8 steps and CFG 1.
+
+- [DiffSynth-Studio ▸ Z-Image](https://github.com/modelscope/DiffSynth-Studio/blob/main/docs/en/Model_Details/Z-Image.md)
+  — "Direct training will quickly cause the model to lose its acceleration
+  capability", and after it "the effect of inference with 'acceleration
+  configuration' becomes worse, while the effect of inference with 'no
+  acceleration configuration' becomes better".
+- [Training strategies of Z-Image-Turbo](https://huggingface.co/blog/kelseye/training-strategies-of-z-image-turbo)
+  (kelseye, 2025-12-16) — its Scheme 1, "the most general fine-tuning method",
+  degrades "significantly" at 8 steps / CFG 1 and is then run at
+  `num_inference_steps=30`, `cfg_scale=2`. It is offered to people "insensitive
+  to inference speed", which is the whole point: usable, not broken.
+
+Three things those sources do **not** say, and this page used to:
+
+- **They do not say the erosion is progressive.** DiffSynth says training
+  loses the acceleration "quickly"; the paper that studies the problem head-on
+  ([D-OPSD, arXiv 2605.05204](https://arxiv.org/abs/2605.05204), 2026-05-06)
+  treats it as something fine-tuning "would compromise" outright, and exists to
+  *prevent* it rather than to describe it fading. Expect to lose the few-step
+  mode, not to watch it drift.
+- **They do not say "full fine-tuning" in so many words.** They say direct /
+  standard SFT training of the weights. Close enough to matter, not close enough
+  to quote as measured full-model training.
+- **They say nothing about FLUX.2 Klein.** This page named it as a second model
+  with published results; no source we have does. Black Forest Labs' own
+  fine-tuning material for Klein is about LoRA, and points at the undistilled 9B
+  Base for post-training — consistent with the advice below, but it is not a
+  measurement of what dense training costs a distilled build.
 
 **Nobody has published that measurement for Krea 2 in particular.** Everything
 above is carried over from neighbouring models. So the honest word for
