@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-comfyui-unreachable-is-said-out-loud',
+    date: '2026-08-04',
+    title: 'When LDS cannot reach ComfyUI, the banner now says exactly that — instead of blaming a paused job',
+    blurb:
+      'On a brand-new install, the very first Generate could answer “A paused ComfyUI job is blocking new generations” — on a machine that had never generated anything, while ComfyUI logged no incoming connection at all. The pause was real, but it was the consequence, not the cause: LDS was knocking at an address nobody was behind, and nothing on screen said so. The banner now checks whether the two programs are in touch and leads with the answer: “LDS cannot reach ComfyUI at <your URL>”, followed by the three things that are actually wrong when that happens — the address of the ComfyUI window you really use, a ComfyUI started without --listen (it only answers on its own machine), and LDS in Docker needing host.docker.internal instead of 127.0.0.1. The paused job is still held, and still clears the same way; it just stops being the accusation. Reported by jerkyjunky (Discord).',
+    to: '/settings/local-tools',
+  },
+  {
     id: '2026-08-04-prompt-batch-grid-shows-every-prompt',
     date: '2026-08-04',
     title: 'A batch of prompts now shows all of its images — one labelled grid per prompt, instead of a grid with a single picture',
