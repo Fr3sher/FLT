@@ -431,6 +431,35 @@ def test_a_smaller_tile_tiles_sooner():
                            tile_px=512, tile_above=4096)['lane'] == 'full'
 
 
+def test_a_target_sitting_EXACTLY_on_the_crossover_stays_full_frame():
+    """The boundary, pinned as a DECISION rather than left as an accident.
+
+    The crossover is derived (1.5x the tile side) and both grids are round
+    numbers, so they collide on values people really type: 1536 at the default
+    1024 tile, 768 at a 512 one. Asking for exactly that runs whole, because
+    'above' is what `seedvr2.tile_threshold` promises and what an already-stored
+    value means — flipping to >= would redefine numbers users have saved.
+
+    What was wrong was that nothing SAID so; that is fixed in Settings, next to
+    the number being chosen (frontend `laneForTarget`), not by moving the
+    boundary here. Reported by SurpassHR (GitHub #32)."""
+    from app.services import seedvr2_helper as svr
+    at = dict(width=1024, height=1536, short_edge=svr.TILE_ABOVE_SHORT_EDGE)
+    assert svr.TILE_ABOVE_SHORT_EDGE == 1536
+    assert svr.choose_lane(**at, tiling_ok=True, ceiling_mp=BIG_CARD)['lane'] == 'full'
+    # ...and one pixel further is tiled, so the boundary really is the boundary
+    # and not a wider dead band.
+    over = dict(at, short_edge=svr.TILE_ABOVE_SHORT_EDGE + 2)
+    assert svr.choose_lane(**over, tiling_ok=True, ceiling_mp=BIG_CARD)['lane'] == 'tiled'
+    # The same holds on a halved tile, where the crossover lands on 768 — the
+    # small-card user is the one most likely to type its exact value.
+    small = dict(width=768, height=1024, short_edge=768)
+    assert svr.choose_lane(**small, tiling_ok=True, ceiling_mp=BIG_CARD,
+                           tile_px=512)['lane'] == 'full'
+    assert svr.choose_lane(**dict(small, short_edge=770), tiling_ok=True,
+                           ceiling_mp=BIG_CARD, tile_px=512)['lane'] == 'tiled'
+
+
 def test_the_shipped_defaults_change_nothing():
     """The whole promise of this settings wave: someone who touches nothing gets
     the exact graph the previous release built."""

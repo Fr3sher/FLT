@@ -933,6 +933,18 @@ def choose_lane(width, height, *, short_edge, tiling_ok, ceiling_mp=None,
         # Tile when it actually buys something: past the size the model is
         # comfortable at, or when the frame would not fit at all. Below that,
         # the model already runs at a good size and a grid is pure cost.
+        #
+        # THE COMPARISON IS STRICT, AND THAT IS A DECISION. A target sitting
+        # EXACTLY on the crossover runs full-frame — 1536 px at the default 1024
+        # tile, 768 px at a 512 one. That is not an edge case: the crossover is
+        # derived (1.5x the tile side) and both grids are round numbers, so they
+        # collide on values people really type, and someone who asks for exactly
+        # 1536 gets no tiles. It stays strict because 'above' is what the
+        # `seedvr2.tile_threshold` setting says and what an already-stored value
+        # means; moving it to >= would silently redefine numbers users have saved.
+        # What was wrong was the SILENCE around it, and that is fixed where the
+        # number is chosen: Settings ▸ Engines now names the lane the configured
+        # target will take (`laneForTarget`). Reported by SurpassHR (GitHub #32).
         wants_tiles = short_edge > crossover or over_budget
     plan = (tile_plan(width, height, short_edge, tile_px, overlap_rate)
             if (tiling_ok and wants_tiles) else None)

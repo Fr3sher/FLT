@@ -13,6 +13,7 @@ import {
   GLOBAL_PROMPT_PART_FIELDS, SUBJECT_PROMPT_PART_FIELDS, FRAMING_PROMPT_PART_FIELDS,
 } from '../common/promptOverride.js'
 import { SUBJECT_TYPE_LABELS } from '../dataset/subjectTypes.js'
+import { laneForTarget } from '../setup/seedvr2Tiling.js'
 
 const ENGINE_SECRETS = [
   { key: 'GEMINI_API_KEY', label: 'Gemini API key', testTarget: 'gemini', help: 'Powers the Nano Banana engine.' },
@@ -509,6 +510,11 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
   const tileAbove = Number(svr.tile_threshold ?? dflt('tile_threshold')) > 0
     ? Number(svr.tile_threshold ?? dflt('tile_threshold'))
     : Math.round(tilePx * SEEDVR2_TILE_ABOVE_FACTOR)
+  // ...and what that means for the target actually configured. The crossover is
+  // strict AND derived (1.5x the tile), so it lands exactly on round numbers
+  // people type — a target sitting on it ran whole with nothing said anywhere.
+  const laneLine = laneForTarget(svr.tiling ?? dflt('tiling'),
+    Number(svr.resolution ?? dflt('resolution')), tileAbove)
   return (
     <Card
       id="seedvr2-engine"
@@ -634,11 +640,14 @@ function SeedVr2Card({ config, setField, configDefaults, caps }) {
           effect. Tiling is not only about memory: a tile is upscaled at the size the
           model works well at, so a large frame keeps far more fine detail than one
           processed whole — contributed and measured by SurpassHR (GitHub&nbsp;#32).
-          On <b>Tile when it helps</b> nothing is tiled below {tileAbove} px on the short
-          edge: the model is already in its comfortable range there and a grid would only
-          add seams. <b>Always</b> tiles any frame bigger than one tile; pick{' '}
+          On <b>Tile when it helps</b> nothing is tiled at or below {tileAbove} px on the
+          short edge: the model is already in its comfortable range there and a grid would
+          only add seams. <b>Always</b> tiles any frame bigger than one tile; pick{' '}
           <b>never</b> if you ever see a seam.
         </p>
+        {laneLine && (
+          <p className="mt-1 text-[0.6875rem] text-sky-300">{laneLine}</p>
+        )}
         <ResetToDefault label="High-resolution tiling" section="seedvr2" field="tiling" {...reset} />
       </div>
 
