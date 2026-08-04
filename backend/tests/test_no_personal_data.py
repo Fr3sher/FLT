@@ -77,8 +77,26 @@ def _is_personal_email(found, before):
 
 
 def _tracked_files():
-    out = subprocess.run(['git', 'ls-files'], cwd=_REPO,
-                         capture_output=True, text=True, timeout=60)
+    """Every file this repo would publish — tracked OR merely written.
+
+    NOT `git ls-files`, which lists the tracked set only. A file that has been
+    written and not yet `git add`ed would be invisible, so the guard would scan
+    zero bytes of it and pass; it would become visible only once staged, which is
+    after the moment most people run their tests. That blind spot let a first
+    name reach a commit in August 2026, past a guard that was fully armed — see
+    the note above the tests at the foot of this file.
+
+    `--others --exclude-standard` adds the untracked files WITHOUT the ignored
+    ones, and that exclusion is load-bearing rather than tidy: `.privacy-names`
+    is gitignored and contains the very identifiers this guard forbids, so
+    reading it would make the check fail on the file that arms it.
+
+    The name is kept for its callers and its meaning widened on purpose — the
+    thing worth scanning was never "what git tracks", it was "what is here".
+    """
+    out = subprocess.run(
+        ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+        cwd=_REPO, capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         pytest.skip('not a git checkout')
     for rel in out.stdout.splitlines():
@@ -258,3 +276,90 @@ def test_no_forbidden_name_in_commits_that_have_not_been_pushed():
     assert not hits, (
         'a forbidden identifier is in a commit that has NOT been pushed yet — fix '
         'it now, while it is still free:\n  ' + '\n  '.join(sorted(set(hits))[:20]))
+
+
+# --- the FOURTH leak, and the blind spot behind it ------------------------------
+# The three leaks above were the name half skipping in silence. The fourth (a
+# first name in a test docstring, August 2026) had a different cause and got past
+# a guard that was fully armed: `_tracked_files()` enumerated with plain
+# `git ls-files`, which lists TRACKED files only.
+#
+# So a file that has just been WRITTEN and not yet `git add`ed is invisible: the
+# guard scans zero bytes of it and passes, honestly. It becomes visible only once
+# it is staged — which is after the moment most people run their tests. The guard
+# was therefore blind at exactly the point where new content enters the repo, and
+# every new file was invisible on its first run, the only run that matters.
+#
+# That also made "run the suite on the FINAL tree" necessary but NOT sufficient:
+# run it last and still before `git add`, and it passed. The workaround was an
+# ordering rule nobody could be relied on to remember — `git add` → guard →
+# commit — so the fix removes the need for it instead: the guard stops asking
+# git for the TRACKED set and asks for the WORKING set. Run it whenever you like;
+# it now sees what is on disk, staged or not.
+#
+# The cost of widening it, stated so it is not a surprise: a scratch file left in
+# the tree is scanned too. That is the correct trade — an unstaged scratch file
+# holding a machine path is one `git add .` away from being published, and this
+# is the only check standing between the two.
+
+def _init_repo(root, monkeypatch):
+    """A throwaway git repo with one tracked file, one untracked file and one
+    gitignored file — the three states whose treatment this pins."""
+    root.mkdir(parents=True, exist_ok=True)
+    run = lambda *a: subprocess.run(a, cwd=str(root), capture_output=True, text=True)
+    run('git', 'init', '-q')
+    (root / '.gitignore').write_text('secret.txt\n', encoding='utf-8')
+    (root / 'tracked.py').write_text('# nothing to see\n', encoding='utf-8')
+    run('git', 'add', '.gitignore', 'tracked.py')
+    run('git', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init')
+    # Written but NEVER staged — the state the fourth leak was in.
+    (root / 'brand_new.py').write_text('# Nemo wrote this\n', encoding='utf-8')
+    # Gitignored, and holding a forbidden name on purpose: `.privacy-names`
+    # itself lives like this, and scanning it would make the guard fail on the
+    # very file that arms it.
+    (root / 'secret.txt').write_text('Nemo\n', encoding='utf-8')
+    monkeypatch.setattr(tnpd, '_REPO', str(root))
+    return root
+
+
+def test_a_file_that_is_written_but_not_staged_is_still_scanned(tmp_path, monkeypatch):
+    """THE fourth leak, as a test. A brand-new file carrying a forbidden name has
+    to be seen BEFORE it is staged — otherwise the guard's green light means
+    "nothing wrong with what you committed last time"."""
+    _init_repo(tmp_path / 'repo', monkeypatch)
+
+    scanned = set(tnpd._tracked_files())
+
+    assert 'brand_new.py' in scanned, (
+        'a new, unstaged file is invisible to the guard — which is exactly when '
+        'new content enters the repo')
+    assert 'tracked.py' in scanned
+
+
+def test_a_gitignored_file_is_never_scanned(tmp_path, monkeypatch):
+    """The other half of the same change, and it is load-bearing: widening the
+    enumeration must NOT start reading ignored files. `.privacy-names` is
+    gitignored and holds the very names this guard forbids — scanning it would
+    make the guard fail on the file that arms it, on every machine that has one."""
+    _init_repo(tmp_path / 'repo', monkeypatch)
+
+    scanned = set(tnpd._tracked_files())
+
+    assert 'secret.txt' not in scanned
+
+
+def test_the_name_check_actually_flags_a_new_unstaged_file(tmp_path, monkeypatch):
+    """End to end over the seam, with a fake list: the mechanism above only
+    matters because it changes the VERDICT. Written as the fourth leak would have
+    been caught."""
+    _init_repo(tmp_path / 'repo', monkeypatch)
+    monkeypatch.setattr(tnpd, '_name_list', lambda: ['Nemo'])
+
+    hits = []
+    rx = re.compile(r'\b(Nemo)\b', re.I)
+    for rel in tnpd._tracked_files():
+        for m in rx.finditer(tnpd._read(rel)):
+            hits.append(f'{rel} — {m.group(0)}')
+
+    assert any(h.startswith('brand_new.py') for h in hits)
+    assert not any(h.startswith('secret.txt') for h in hits)
