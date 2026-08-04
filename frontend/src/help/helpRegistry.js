@@ -283,6 +283,14 @@ const TOPICS = [
       'caption', 'captions', 'search', 'find', 'tag', 'tags', 'describe',
       'launch all', 'pipeline', 'auto-reject', 'overnight', 'run everything',
       'one click', 'batch', 'chain',
+      // "auto-reject doesn't work" — what it really means, in the words people
+      // type: the button only touches UNDECIDED images, so a second run has
+      // nothing left to do, and a never-scanned image is invisible to every
+      // quality flag.
+      'auto reject does nothing', "auto-reject doesn't work", 'rejected 0',
+      '0 to reject', 'nothing rejected', 'count is wrong', 'wrong count',
+      'flagged but not rejected', 'never scanned', 'not scanned', 'unscanned',
+      'blind spot', 'run it twice', 'second pass',
       'framing', 'shot type', 'face', 'bust', 'body', 'back', 'full body',
       'close-up', 'back view', 'classify framing', 'composition',
       'coverage advice', 'balance', 'what to add', 'missing', 'thin', 'imbalance',

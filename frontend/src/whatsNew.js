@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-auto-reject-shows-the-number-it-will-actually-reject',
+    date: '2026-08-04',
+    title: 'Auto-reject stops promising more than it can do',
+    blurb:
+      '🧹 Auto-reject offered “5,930 flagged” for blurry shots, and rejecting them did nothing — because those 5,930 had already been rejected by an earlier run, and the pass deliberately never re-flips a decision. The count announced was not the count the button acted on, so the honest conclusion was that the feature was broken. It was not: the number was. Each checkbox now shows how many still-undecided images that exact click would reject, so a second run says “0 to reject” instead of advertising work it will not do — and running it really does reject that many. The filter chips keep counting every image carrying the flag, rejected ones included, which is what you want when you click one to look at them. Two things that used to hide behind an identical 0 now say which they are: a flag whose pass never ran tells you to run it first, and the panel names how many images have never been scanned at all — invisible to every quality flag until 🔎 Scan reaches them, which is very different from being clean. 🚀 Launch all shows the same numbers, and says plainly that the scan runs first so they will grow.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-04-the-merge-form-keeps-what-you-typed',
     date: '2026-08-04',
     title: 'The merge tool stops emptying itself when the window changes shape',

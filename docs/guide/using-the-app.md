@@ -507,9 +507,17 @@ touching the folder itself:
    🧇 Soft detail, 🎞 Black bars, ≈ Duplicates) to review the worst
    offenders first. **🧹 Auto-reject
    flagged…** clears whole categories in one click (your manual ✓/✕ are never
-   flipped). In the Duplicates view, resolve every group at once with **keep
-   best** (highest resolution, then sharpest) or **keep first**, or pick the
-   keeper by eye.
+   flipped). The number beside each checkbox is what *that click* would reject —
+   still-undecided images only, which is why it is usually smaller than the
+   count on the matching filter chip: the chip shows every image carrying the
+   flag, including the ones a previous auto-reject already threw away. Run it
+   twice and the second run legitimately says **0 to reject**: there is nothing
+   left it is allowed to touch. A flag also warns when its pass never ran, and
+   the panel says how many images have **never been scanned** — those are
+   invisible to every quality flag until 🔎 Scan measures them, which is not the
+   same thing as being clean. In the Duplicates view, resolve every group at
+   once with **keep best** (highest resolution, then sharpest) or **keep
+   first**, or pick the keeper by eye.
 4. **👥 Group by person** — the face pass (needs the Quality tools from Setup)
    detects the dominant face of every remaining image and clusters the bank by
    person, *no reference photo needed*. Click a person card to see only them,

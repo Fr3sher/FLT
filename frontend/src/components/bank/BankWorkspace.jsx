@@ -65,6 +65,11 @@ import {
   ANGLE_BUCKETS, MEDIUM_BUCKETS, angleBadge, angleReadiness, angleTitle,
   mediumLimits, mediumTitle, shownBuckets,
 } from './bankMedium.js'
+// 🧹 Auto-reject — the number next to a checkbox must be the number the click
+// moves, and a 0 has to say WHICH of its two meanings it carries.
+import {
+  flagCandidateLabel, flagPrereq, pickedCandidates, unscannedNotice,
+} from './autoRejectReadiness.js'
 
 const PAGE_SIZE = 120
 
@@ -1119,7 +1124,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     const d = await act(() => postJson(`/api/bank/${bankId}/apply-flags`, { flags }), null)
     if (d?.rejected) {
       const n = Object.values(d.rejected).reduce((a, b) => a + b, 0)
-      toast.success(`Auto-reject: ${n} image(s) rejected (${flags.join(', ')}). Manual ✓/✕ untouched.`)
+      // Zero is not a success. It used to be announced in green as "0 image(s)
+      // rejected", which on a second pass is the exact shape of a broken
+      // feature — the pass had nothing left to do because the first one had
+      // already rejected them all, and nothing said so.
+      if (n === 0) {
+        toast.info(`Auto-reject: nothing to do (${flags.join(', ')}) — every image carrying`
+          + ' these flags has already been decided. Manual ✓/✕ are never re-flipped.')
+      } else {
+        toast.success(`Auto-reject: ${n} image(s) rejected (${flags.join(', ')}). Manual ✓/✕ untouched.`)
+      }
     }
   }
 
@@ -1315,6 +1329,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const offer = undoOffer(payload)
   const undoBar = offer && offer.at !== undoDismissedAt ? offer : null
   const flags = payload?.flags || {}
+  // The OTHER question, kept as its own map: `flags` is "every image carrying
+  // this flag" (what the chip filters to, rejected ones included) and
+  // `flags_actionable` is "what 🧹 Auto-reject would flip" (undecided only).
+  // Overwriting the first with the second would have silently shrunk every
+  // chip's count to the undecided pile.
+  const flagsActionable = payload?.flags_actionable || {}
   const resBuckets = payload?.res_buckets || {}
   // Only surface tiers that actually hold scanned images (plus the active one,
   // so a tier you're filtering on never vanishes mid-review).
@@ -1367,6 +1387,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // Score flags only make sense once their pass ran; watermark is its own pass.
   const availableScoreFlags = SCORE_REJECT_FLAGS.filter(
     (f) => (f === 'watermark' ? watermarkScanned : scored) > 0)
+  // 🧹 Auto-reject readiness. The never-scanned pile is unreachable by EVERY
+  // quality flag (they are all gated on quality_state=='ok'), so the popover
+  // says so and names the gesture; the per-flag numbers below come from
+  // flags_actionable, which is what the click actually flips.
+  const autoRejectNotice = unscannedNotice(counts)
+  const autoRejectPicked = pickedCandidates(rejectFlags, flagsActionable)
   const canPromote = (counts?.keep || 0) > 0 || selected.size > 0
   // Is any facet narrowing the grid? Drives the "N shown of TOTAL" readout.
   const isFiltered = !!(filter.status || filter.flag || filter.cluster != null
@@ -2036,33 +2062,71 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           {showAutoReject && (
             <>
               <div className="fixed inset-0 z-40" onClick={() => setShowAutoReject(false)} aria-hidden />
-              <div className="absolute left-0 z-50 mt-1 w-72 rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2">
+              {/* Anchored under the button on a desktop, a bottom sheet on a
+                  phone. It used to be `absolute left-0` at every width: the
+                  button sits mid-toolbar, so at 400 px a 288-px panel ran off
+                  the right edge and clipped its own text — including, now, the
+                  counts this panel exists to show. Capped height + internal
+                  scroll so "Reject them" is reachable however long the caveats
+                  get. */}
+              <div className="fixed inset-x-3 bottom-3 z-50 max-h-[70vh] overflow-y-auto rounded-lg border border-border bg-surface-overlay p-3 shadow-xl space-y-2 sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-0 sm:mt-1 sm:w-72">
                 <p className="text-xs text-content-muted">
                   Rejects the UNDECIDED images with these flags. Your manual ✓/✕ are never changed;
                   everything stays reversible (nothing is deleted from disk).
                 </p>
+                {/* The pile no flag can reach. Every quality flag is gated on a
+                    completed scan, so a never-scanned image is invisible to all
+                    of them — and "0 blurry" would otherwise read as good news
+                    when it means nothing was ever measured. */}
+                {autoRejectNotice && (
+                  <p className="m-0 rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[0.6875rem] leading-snug text-amber-200">
+                    ⚠ {autoRejectNotice.text} {autoRejectNotice.action}
+                    {autoRejectNotice.caveat ? ` ${autoRejectNotice.caveat}` : ''}
+                  </p>
+                )}
                 {/* The caveat is printed, not left in a title= tooltip: soft_detail
                     and bars are provenance HINTS, not verdicts, and this is the one
                     screen that offers to act on them in bulk. A tooltip is invisible
                     on a phone and to anyone who does not hover. */}
-                {[...QUALITY_REJECT_FLAGS, ...availableScoreFlags].map((f) => (
-                  <label key={f} className="block text-sm text-content">
-                    <span className="flex items-center gap-2">
-                      <input type="checkbox" checked={rejectFlags.has(f)}
-                        onChange={(e) => setRejectFlags((prev) => {
-                          const next = new Set(prev)
-                          if (e.target.checked) next.add(f); else next.delete(f)
-                          return next
-                        })} />
-                      {FLAG_LABEL[f]} <span className="text-content-subtle">({flags[f] ?? 0} flagged)</span>
-                    </span>
-                    {FLAG_HINT[f] && (
-                      <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-amber-200/80">
-                        ⚠ {FLAG_HINT[f]}
+                {[...QUALITY_REJECT_FLAGS, ...availableScoreFlags].map((f) => {
+                  // A 0 has two opposite meanings and used to render identically:
+                  // "nothing left to reject" (clean) vs "this flag's pass never
+                  // ran, so it cannot catch anything" (a missing prerequisite).
+                  const prereq = flagPrereq(f, counts, originMeasured)
+                  return (
+                    <label key={f} className="block text-sm text-content">
+                      <span className="flex items-center gap-2">
+                        <input type="checkbox" checked={rejectFlags.has(f)}
+                          onChange={(e) => setRejectFlags((prev) => {
+                            const next = new Set(prev)
+                            if (e.target.checked) next.add(f); else next.delete(f)
+                            return next
+                          })} />
+                        {FLAG_LABEL[f]}{' '}
+                        <span className="text-content-subtle">({flagCandidateLabel(f, flagsActionable)})</span>
                       </span>
-                    )}
-                  </label>
-                ))}
+                      {prereq && (
+                        <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-sky-200/90">
+                          ⓘ {prereq}
+                        </span>
+                      )}
+                      {FLAG_HINT[f] && (
+                        <span className="mt-0.5 block pl-6 text-[0.6875rem] leading-snug text-amber-200/80">
+                          ⚠ {FLAG_HINT[f]}
+                        </span>
+                      )}
+                    </label>
+                  )
+                })}
+                {/* What the button is about to do, before it is pressed — the
+                    whole point of the fix. Amber when the answer is zero, so
+                    "nothing will happen" is visible rather than discovered. */}
+                {autoRejectPicked && (
+                  <p className={`m-0 text-[0.6875rem] leading-snug ${
+                    autoRejectPicked.sum ? 'text-content-muted' : 'text-amber-200'}`}>
+                    {autoRejectPicked.text}
+                  </p>
+                )}
                 <button type="button" onClick={applyAutoReject} disabled={!rejectFlags.size}
                   className="w-full rounded-md bg-gradient-primary px-3 py-1 text-xs font-semibold text-white disabled:opacity-50">
                   Reject them
@@ -2533,6 +2597,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
       {launchOpen && (
         <LaunchAllDialog caps={caps} visionReady={visionReady}
+          counts={counts} flagsActionable={flagsActionable}
           onClose={() => setLaunchOpen(false)} onLaunch={startPipeline} />
       )}
 
