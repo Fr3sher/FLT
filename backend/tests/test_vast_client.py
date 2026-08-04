@@ -213,6 +213,33 @@ def test_a_refusal_body_is_capped_not_pasted_whole(vc, monkeypatch):
     assert len(str(excinfo.value)) < 600
 
 
+def test_an_oversized_onstart_is_refused_without_a_request(vc, monkeypatch):
+    """vast caps the ask at 16384 characters and answers a plain 400 — which is
+    how two cloud quantization launches died. Refusing here costs no round trip,
+    and the sentence names the real problem instead of the status code."""
+    calls = []
+    monkeypatch.setattr(vc.requests, 'request',
+                        lambda m, u, **kw: calls.append(u) or FakeResp(200, {
+                            'success': True, 'new_contract': 1}))
+    with pytest.raises(vc.VastError, match='onstart script is'):
+        vc.create_instance(99, image='i', env={}, disk_gb=10, label='lds-x',
+                           onstart='x' * (vc.MAX_ONSTART_CHARS + 1))
+    assert calls == [], 'nothing may be sent — a rental could be created'
+    # One character under the limit is a normal launch.
+    assert vc.create_instance(99, image='i', env={}, disk_gb=10, label='lds-x',
+                              onstart='x' * vc.MAX_ONSTART_CHARS) == '1'
+
+
+def test_an_absurd_image_reference_is_refused_the_same_way(vc, monkeypatch):
+    calls = []
+    monkeypatch.setattr(vc.requests, 'request',
+                        lambda m, u, **kw: calls.append(u) or FakeResp(200, {}))
+    with pytest.raises(vc.VastError, match='image reference'):
+        vc.create_instance(99, image='i' * (vc.MAX_IMAGE_CHARS + 1), env={},
+                           disk_gb=10, label='lds-x')
+    assert calls == []
+
+
 # --- the disk floor: the difference between an offer and a rental ---------------
 
 def test_search_asks_for_the_disk_the_rental_will_claim(vc, monkeypatch):

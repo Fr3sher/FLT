@@ -64,6 +64,14 @@ DEFAULT_BUDGET_SECONDS = 1800          # 30 min: measured conversions are minute
 _POLL_SECONDS = 15
 _POLL_SLACK_SECONDS = 300              # queueing + upload after the conversion
 
+# What vast will carry. The sibling lane (cloud_quantize) has to fit its WHOLE
+# program into vast's 16384-character ask and was refused twice for exceeding it;
+# this path stays small for a structural reason — the exporter travels as an
+# uploaded FILE and the command only names it. This ceiling exists so that
+# structure cannot quietly change: it is a path-and-integers command, and
+# anything approaching a kilobyte means something got inlined into it.
+MAX_COMMAND_CHARS = 2048
+
 
 class Fp8DeliveryError(RuntimeError):
     """Internal signal. Never escapes ``run_pod_fp8_export``."""
@@ -104,7 +112,14 @@ def build_command(paths: dict, training_folder: str, repo_id: str, *,
         parts += ['--token-file', q(paths['token'])]
     if drop_bf16:
         parts.append('--drop-bf16')
-    return ' '.join(parts)
+    command = ' '.join(parts)
+    if len(command) > MAX_COMMAND_CHARS:
+        # Fail-open, like everything here: the run is already delivered, so a
+        # command we do not trust costs an fp8 twin, never the training.
+        raise Fp8DeliveryError(
+            f'the pod command grew to {len(command)} characters (ceiling '
+            f'{MAX_COMMAND_CHARS}) — refusing to send it')
+    return command
 
 
 def parse_result(output) -> dict | None:

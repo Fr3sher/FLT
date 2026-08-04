@@ -17,6 +17,15 @@ API_BASE = 'https://console.vast.ai/api/v0'
 API_BASE_V1 = 'https://console.vast.ai/api/v1'
 _TIMEOUT = 30
 
+# Hard limits vast enforces on the ask itself, quoted from its own refusal:
+# "error 400/3471: Invalid args: len(image) > 1024, or len(args) > 16384".
+# Learned the expensive way — the cloud quantization lane embeds its whole
+# program in `onstart`, exceeded this, and every launch was refused before a
+# machine existed. Checked HERE, before the request, so an ask that cannot be
+# accepted never becomes a round trip (and never a paid one).
+MAX_IMAGE_CHARS = 1024
+MAX_ONSTART_CHARS = 16384
+
 # How much of vast's own answer travels inside an exception. Long enough for a
 # sentence and a field name, short enough to stay a log line and to fit the
 # error column of the runs table.
@@ -187,6 +196,16 @@ def create_instance(offer_id, disk_gb: int, label: str, template_hash: str | Non
 
     ``disk_gb`` must be backed by an offer that HAS that much free disk: vast
     refuses the ask otherwise. See search_offers(min_disk_gb=…)."""
+    if image and len(str(image)) > MAX_IMAGE_CHARS:
+        raise VastError(f'image reference is {len(str(image))} characters; vast '
+                        f'refuses more than {MAX_IMAGE_CHARS} — nothing was sent')
+    if onstart and len(onstart) > MAX_ONSTART_CHARS:
+        # Caught before the request: vast answers this with a plain 400, which
+        # for months read as "the offer is gone" and cost two real launches.
+        raise VastError(
+            f'onstart script is {len(onstart)} characters; vast refuses more than '
+            f'{MAX_ONSTART_CHARS} ("Invalid args") — nothing was sent, so no '
+            'machine was rented. Shrink what the script embeds.')
     if template_hash:
         body = {'template_hash_id': template_hash, 'label': label, 'disk': int(disk_gb)}
         # The official template pins an OLD image tag (2026-05-20 — predates the

@@ -345,6 +345,29 @@ def test_the_shipped_script_is_the_module_the_tests_exercise():
     assert 'scale_weight' in source
 
 
+def test_the_exporter_travels_as_a_file_and_never_inside_the_command():
+    """Why this path is not the one that broke.
+
+    The sibling lane embeds the exporter IN its vast ask and was refused twice
+    for exceeding vast's 16384-character limit. Here the exporter is uploaded
+    and the command merely names it — a structural difference, pinned so a
+    future 'simplification' that inlines the source is caught by a test instead
+    of by a pod that answers HTTP 400.
+    """
+    command = dfd.build_command(dfd.pod_paths('/workspace/ai-toolkit/datasets'),
+                                '/workspace/ai-toolkit/output', 'me/krea-run-12')
+    assert len(command) < 400                       # paths and integers, nothing else
+    assert len(command) <= dfd.MAX_COMMAND_CHARS
+    assert 'export_scaled_fp8' not in command       # the SOURCE is not in here
+    assert 'base64' not in command
+
+
+def test_a_command_that_grew_out_of_shape_is_refused_rather_than_sent():
+    with pytest.raises(dfd.Fp8DeliveryError, match='ceiling'):
+        dfd.build_command(dfd.pod_paths('/d'), '/o' + 'x' * dfd.MAX_COMMAND_CHARS,
+                          'me/run')
+
+
 def test_result_parsing_ignores_the_surrounding_pod_chatter():
     output = ('Downloading torch...\nsome warning\n'
               'LDS_FP8_RESULT {"ok": true, "uploaded": true, "path": "/o/a_fp8.safetensors", '
