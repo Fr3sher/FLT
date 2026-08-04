@@ -243,8 +243,12 @@ def test_the_caption_pass_skips_an_image_deleted_under_it(bank_ctx, monkeypatch)
 
     bank_id, ids = bank_ctx
 
+    # **_over absorbs the per-run engine/model overrides the pass now forwards. This
+    # double is about SURVIVING A DELETION, not about the caption config, and pinning
+    # the real function's exact signature here would make every new option a false
+    # failure in a test that never looks at one.
     def fake_caption_paths(paths, extra_instructions=None, should_cancel=None,
-                           on_caption=None, progress=None):
+                           on_caption=None, progress=None, **_over):
         for i, p in enumerate(paths):
             if i == 1:
                 _delete_image(ids[1])
