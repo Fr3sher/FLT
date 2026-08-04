@@ -1,5 +1,7 @@
-// =====================================================================//  🎁 What's new — in-app changelog feed (source of truth)
-// =====================================================================//
+// =====================================================================
+//  🎁 What's new — in-app changelog feed (source of truth)
+// =====================================================================
+//
 //  WHY THIS FILE EXISTS
 //  --------------------
 //  The update banner only fires on TAGGED releases. Between releases, features
@@ -126,6 +128,8 @@ export const WHATS_NEW = [
     blurb:
       'Drop a video into an image bank and until today it was skipped without a word: no row, no warning, nothing to click. Videos now get their own bank. Point it at a folder of rushes and it cuts every file at its shot boundaries, so you triage SHOTS instead of files — a two-hour rush becomes three hundred things you can judge in an afternoon. Click any shot to watch exactly that moment; the grid stays thumbnails, so a bank of hundreds of shots stays as light as a page of photos. Nothing is copied and nothing is re-encoded while you triage: a bank stores where each shot starts and ends, and only the ones you keep are ever encoded. When you build the set, the length menu offers only the frame counts your target model can actually ingest — 29 frames is legal for Wan and illegal for LTX, and no trainer tells you, they just quietly round it down. Two things are written next to the target you pick, because they are what costs a wasted week: whether a LoRA trainer for it is known to exist at all (exactly one of the four), and MiniMax H3’s licence, which grants no rights in the EU, the UK, South Korea or the USA — outputs included. And if a piece is missing, the app names which one: with no ffmpeg you can still scan, cut, watch and triage everything — only the final encode waits.',
     to: '/video-bank',
+  },
+  {
     id: '2026-08-04-the-app-stops-claiming-a-full-model-it-has-not-checked',
     date: '2026-08-04',
     title: 'Your full models say where they really are, instead of where they were',
