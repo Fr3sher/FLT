@@ -686,8 +686,14 @@ now.
 A repository confirmed gone stops offering what can no longer work: the dead
 links disappear, *Quantize to fp8* is disabled on that card with its reason
 (downloading from that repository is the first thing it would do), and ▶ Continue
-is disabled **only when the run also left nothing on this computer** — with a
-local copy, the 💻 road above is exactly the way out.
+is disabled **only when neither road is open** — that is, when the repository is
+gone *and* this computer no longer holds a full-precision file. With one on the
+disk, the 💻 road above is exactly the way out, so the button stays.
+
+Both halves of that are read fresh, which is the whole point: the repository is
+asked over the network, and the local file is looked for on the disk every time
+the page is drawn. Neither is a note taken when the run finished — deleting
+either one by hand shows up immediately.
 
 ### The two files a finished run delivers
 

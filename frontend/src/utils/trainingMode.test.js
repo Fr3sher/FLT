@@ -253,6 +253,37 @@ function jsxAttr(source, name) {
   return source.slice(at, i + 1);
 }
 
+test('THE trap: a trashed master with a stale "available" stamp still disables Continue', () => {
+  // The scenario, one click away from any user: they empty 26 GB with the card's
+  // own "🧹 Clean" button, and the Hub copy is gone too.
+  //
+  // `local_artifact_status` is written in exactly three places, all at delivery
+  // time (cloud_training.py :2384 pending, :4310 available, :4431 cancelled), and
+  // `dense_artifacts.delete_artifact` — the trash path — does not touch it. So the
+  // payload below is REAL: the stamp says the file is here, and it is not.
+  //
+  // Read the stamp and this run offers ▶ Continue, which then answers "this full
+  // model has nothing left to continue from" — the exact defect this wave fixes
+  // on the Hub side, rebuilt on the local side. `resume_checkpoints` cannot lie
+  // the same way: _dense_resume_candidates stats every file and drops what OSError
+  // says is gone.
+  const trashedButStamped = {
+    local_artifact_status: 'available',
+    local_weight_filename: 'Krea_dense_000003000.safetensors',
+    local_artifact_dir: 'anywhere',
+    resume_checkpoints: [{ step: 3000, source: 'hub' }],   // the disk road is GONE
+  };
+  assert.match(denseContinueBlocker(trashedButStamped, { state: 'gone' }),
+    /neither road is open/,
+    'a delivery-time stamp must never keep this button alive');
+  // The same payload with the Hub still there keeps the button: one road is enough.
+  assert.equal(denseContinueBlocker(trashedButStamped, { state: 'present' }), null);
+  assert.equal(denseContinueBlocker(trashedButStamped, { state: 'unknown' }), null);
+  // And the mirror: the disk road alive, the stamp saying nothing at all.
+  assert.equal(denseContinueBlocker(
+    { resume_checkpoints: [{ step: 3000, source: 'local' }] }, { state: 'gone' }), null);
+});
+
 test('the Runs page reads the blocker for BOTH the disabled state and the reason', () => {
   // A greyed button with no explanation is the thing this replaces, and a
   // reason nobody is disabled by is decoration.
