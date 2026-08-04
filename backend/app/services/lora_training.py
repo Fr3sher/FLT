@@ -65,12 +65,12 @@ FULL_TRANSFORMER_MAX_STEP_SAVES = 1
 FULL_TRANSFORMER_BASE = 'krea/Krea-2-Raw'
 FULL_TRANSFORMER_VAE = 'Qwen/Qwen-Image-2512'
 
-# --- the four dense knobs that are NOT locked ---------------------------------
+# --- the dense knobs that are NOT locked --------------------------------------
 # The dense recipe stays server-owned because its geometry is what makes a 12B
 # transformer fit in 80 GB: optimizer (adafactor), batch 1, bf16 and gradient
 # checkpointing are load-bearing, and changing any one of them turns a working
-# run into an out-of-memory crash an hour in. These four are different — they
-# change what the run PRODUCES, not whether it fits:
+# run into an out-of-memory crash an hour in. The ones below are different —
+# they change what the run PRODUCES, not whether it fits:
 #
 #   * preview prompts  — the four generic defaults show nothing about the actual
 #     dataset, which makes the mid-run sample sheet useless for deciding whether
@@ -89,11 +89,84 @@ FULL_TRANSFORMER_RESOLUTION_CHOICES = (768, 1024)
 FULL_TRANSFORMER_SAVE_EVERY_MIN = 100
 FULL_TRANSFORMER_SAVE_EVERY_MAX = 5000
 FULL_TRANSFORMER_MAX_STEP_SAVES_MAX = 3
+
+# --- the three quality levers, and why the other two are NOT here -------------
+# Every value below was traced through the code path a `krea2` run actually
+# takes — `extensions_built_in/sd_trainer/SDTrainer.py` and
+# `jobs/process/BaseSDTrainProcess.py` — not merely found in ai-toolkit's
+# `toolkit/config_modules.py`. That distinction is the whole point: a key can
+# exist in the config dataclass, be parsed without complaint, and never be read
+# on this architecture. A setting that quietly does nothing is worse than no
+# setting, because it makes a run look tuned when it is not.
+#
+#   * gradient accumulation — READ. BaseSDTrainProcess pulls
+#     `train.gradient_accumulation` batches into one list per step (L2363) and
+#     SDTrainer runs a backward per batch before a single optimiser step
+#     (L2116-2149). With batch_size pinned at 1, this is the ONLY way to make
+#     the effective batch bigger than one image, and it costs no VRAM: the
+#     forwards are sequential, the gradient buffer already exists. It costs
+#     TIME — N accumulations means an N× longer run and an N× bigger pod bill,
+#     which is why `dense_time_multiplier` travels with the setting.
+#     NB the optimiser is adafactor, whose update is RMS-normalised
+#     (toolkit/optimizers/adafactor.py L343-345), so accumulating summed rather
+#     than averaged gradients does not inflate the step size the way it would
+#     under plain SGD. The LR bounds above stay valid.
+#   * LR schedule / warmup — READ. `train.lr_scheduler` (+ `lr_scheduler_params`)
+#     builds a torch scheduler (BaseSDTrainProcess L2043-2054) stepped every
+#     iteration (SDTrainer L2163). It reaches adafactor because ai-toolkit forces
+#     `relative_step=False` / `scale_parameter=False` (toolkit/optimizer.py
+#     L88-96), so adafactor reads `param_group['lr']` straight back
+#     (adafactor.py L193-203) — the value the scheduler rewrites.
+#     Warmup is wired for `constant_with_warmup` ONLY: the torch schedulers
+#     behind `cosine`/`constant` do not accept `num_warmup_steps` and would
+#     raise (toolkit/scheduler.py L6-40). Same rule as the LoRA lane.
+#   * timestep type — READ. flowmatch training re-draws the timestep schedule
+#     from `train.timestep_type` (BaseSDTrainProcess L1178-1207 →
+#     toolkit/samplers/custom_flowmatch_sampler.py L107-219), and `weighted`
+#     additionally re-weights the loss (SDTrainer L836-853). Krea 2 is a
+#     flow-matching model (krea2.py L149) so all of that applies.
+#     `shift`/`flux_shift` are deliberately NOT offered even though they parse:
+#     the trainer derives the shift from an image-token count that assumes
+#     `unet.config.patch_size` (BaseSDTrainProcess L1196-1201), and Krea 2's
+#     denoiser config names that field `patch` (krea2/src/mmdit.py L92-106), so
+#     patch_size silently falls back to 1 and the token count comes out 4× the
+#     value Krea 2's own scheduler was calibrated against (krea2.py L70-83).
+#     A mis-shifted noise schedule is exactly the "looks tuned, is not" trap.
+#
+# Refused, with the reason, so nobody re-litigates it from the key list alone:
+#   * EMA — supported, and fatal here. ExponentialMovingAverage clones every
+#     trained parameter on the training device (toolkit/ema.py L60-63), and each
+#     save/sample clones them a SECOND time (`eval()` → `store()`, ema.py
+#     L171-176, BaseSDTrainProcess L493-497). In dense mode the parameter set is
+#     the whole 12B transformer, so that is roughly +26 GB resident and +26 GB
+#     more at every checkpoint, on top of an unquantised bf16 model and its
+#     gradients. It would not survive its first save. (The LoRA lane offers EMA
+#     because there it averages a few hundred MB of adapter.)
+#   * min_snr_gamma — supported for epsilon models, crashes on this one.
+#     SDTrainer L920-922 calls `apply_snr_weight`, which needs `all_snr` or
+#     `alphas_cumprod` off the noise scheduler (toolkit/train_tools.py L642-654).
+#     Krea 2 trains on CustomFlowMatchEulerDiscreteScheduler (krea2.py L166-167,
+#     L385), which inherits diffusers' FlowMatchEulerDiscreteScheduler and
+#     defines neither — the first loss would raise AttributeError.
+FULL_TRANSFORMER_GRAD_ACCUM = 1
+# 8 is the ceiling because the ceiling is a bill, not a memory limit: at 8 a
+# 3000-step dense run takes eight times as long on a rented 80 GB GPU. Somebody
+# who needs more smoothing than that should be training on fewer, better images.
+FULL_TRANSFORMER_GRAD_ACCUM_CHOICES = (1, 2, 4, 8)
+FULL_TRANSFORMER_TIMESTEP_TYPE = 'linear'
+FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES = ('linear', 'sigmoid', 'weighted')
+FULL_TRANSFORMER_LR_SCHEDULE = 'constant'
+FULL_TRANSFORMER_LR_SCHEDULE_CHOICES = ('constant', 'constant_with_warmup', 'cosine')
+FULL_TRANSFORMER_WARMUP = 100
+FULL_TRANSFORMER_WARMUP_MIN = 10
+FULL_TRANSFORMER_WARMUP_MAX = 1000
 # train_settings keys. NEW names (never reused from the LoRA lane), so a dataset
 # that switches modes cannot inherit a value that meant something else.
 DENSE_SETTING_KEYS = ('dense_lr', 'dense_resolution', 'dense_save_every',
                       'dense_max_step_saves', 'dense_fp8_export',
-                      'dense_keep_bf16')
+                      'dense_keep_bf16', 'dense_grad_accum',
+                      'dense_lr_schedule', 'dense_warmup',
+                      'dense_timestep_type')
 
 
 def _dense_bool(ds, key, default=True) -> bool:
@@ -147,6 +220,72 @@ def _dense_max_step_saves(ds) -> int:
             and 1 <= v <= FULL_TRANSFORMER_MAX_STEP_SAVES_MAX:
         return v
     return FULL_TRANSFORMER_MAX_STEP_SAVES
+
+
+def _dense_grad_accum(ds) -> int:
+    v = _train_settings(ds).get('dense_grad_accum')
+    if isinstance(v, int) and not isinstance(v, bool) \
+            and v in FULL_TRANSFORMER_GRAD_ACCUM_CHOICES:
+        return v
+    return FULL_TRANSFORMER_GRAD_ACCUM
+
+
+def _dense_timestep_type(ds) -> str:
+    v = _train_settings(ds).get('dense_timestep_type')
+    return v if v in FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES \
+        else FULL_TRANSFORMER_TIMESTEP_TYPE
+
+
+def _dense_lr_schedule(ds) -> str:
+    v = _train_settings(ds).get('dense_lr_schedule')
+    return v if v in FULL_TRANSFORMER_LR_SCHEDULE_CHOICES \
+        else FULL_TRANSFORMER_LR_SCHEDULE
+
+
+def _dense_warmup(ds) -> int:
+    v = _train_settings(ds).get('dense_warmup')
+    if isinstance(v, int) and not isinstance(v, bool) \
+            and FULL_TRANSFORMER_WARMUP_MIN <= v <= FULL_TRANSFORMER_WARMUP_MAX:
+        return v
+    return FULL_TRANSFORMER_WARMUP
+
+
+def _dense_lr_schedule_fields(ds) -> dict:
+    """`{}` for the shipped `constant` schedule — and that emptiness is load-
+    bearing. ai-toolkit's TrainConfig already defaults `lr_scheduler` to
+    'constant' (config_modules.py L371), so omitting the key entirely keeps the
+    emitted job config byte-for-byte what it was before this lever existed.
+    `num_warmup_steps` travels ONLY with `constant_with_warmup`: the torch
+    schedulers behind the other choices reject it (toolkit/scheduler.py)."""
+    schedule = _dense_lr_schedule(ds)
+    if schedule == FULL_TRANSFORMER_LR_SCHEDULE:
+        return {}
+    out = {'lr_scheduler': schedule}
+    if schedule == 'constant_with_warmup':
+        out['lr_scheduler_params'] = {'num_warmup_steps': _dense_warmup(ds)}
+    return out
+
+
+def dense_time_multiplier(ds) -> int:
+    """How many times longer accumulation alone makes this run — which is also
+    how many times bigger the pod bill gets, since the pod is billed by the hour.
+
+    Accumulation-only on purpose: it is the one lever whose cost is exactly a
+    multiplication (N sequential forward/backward passes per optimiser step,
+    same steps, same checkpoints). Resolution also moves the clock, but not by a
+    factor anyone can state without measuring, so it is not folded in here — a
+    made-up second factor would poison the one number that IS exact.
+
+    Exported (not private) because it has to be sayable BEFORE a machine is
+    rented; the recipe card is the honest place to learn it, not the invoice."""
+    return _dense_grad_accum(ds)
+
+
+def dense_images_per_step(ds) -> int:
+    """The effective batch: `batch_size` (pinned at 1) × gradient accumulation.
+    This is what the lever is FOR — on a 6 000-image dataset, a gradient
+    computed from one image is a very noisy estimate of the right direction."""
+    return _dense_grad_accum(ds)
 
 
 # --- how to TEST what a dense run delivers -------------------------------------
@@ -2400,15 +2539,22 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
             'max_step_saves': _dense_max_step_saves(dense_ds),
             'save_dtype': 'bf16',
             'batch_size': 1,
-            'grad_accum': 1,
+            'grad_accum': _dense_grad_accum(dense_ds),
             'train_unet': True,
             'train_text_encoder': False,
             'unload_text_encoder': True,
             'gradient_checkpointing': True,
             'noise_scheduler': 'flowmatch',
-            'timestep_type': 'linear',
+            'timestep_type': _dense_timestep_type(dense_ds),
             'optimizer': 'adafactor',
             'lr': _dense_lr(dense_ds),
+            # Stamped EFFECTIVE, like every other value in this block: 'constant'
+            # is what the run uses even though the emitted config leaves the key
+            # out. Provenance answers "what did this run train with?", not "what
+            # bytes were in the file".
+            'lr_scheduler': _dense_lr_schedule(dense_ds),
+            **({'warmup': _dense_warmup(dense_ds)}
+               if _dense_lr_schedule(dense_ds) == 'constant_with_warmup' else {}),
             'dtype': 'bf16',
             'quantize': False,
             'quantize_te': False,
@@ -2709,11 +2855,12 @@ def effective_train_settings(ds, family=None) -> dict:
             'sample_prompts_default': _resolved_default_sample_prompts(ds, trig),
             'sample_every_choices': list(_SAMPLE_EVERY_CHOICES),
             'max_sample_prompts': _MAX_SAMPLE_PROMPTS,
-            # --- full-model (dense) recipe: the four unlocked values + the two
-            # delivery switches. Always present so the panel can render the
-            # locked card and its editable half from ONE payload; `*_stored` is
-            # the raw choice (None = "default", so the control re-checks Auto),
-            # the bare key is what the run will actually use.
+            # --- full-model (dense) recipe: every unlocked value, the two
+            # delivery switches, and what the choice costs. Always present so
+            # the panel can render the locked card and its editable half from
+            # ONE payload; `*_stored` is the raw choice (None = "default", so
+            # the control re-checks Auto), the bare key is what the run will
+            # actually use.
             **_dense_settings_payload(ds)}
 
 
@@ -2736,6 +2883,28 @@ def _dense_settings_payload(ds) -> dict:
         'dense_max_step_saves': _dense_max_step_saves(ds),
         'dense_max_step_saves_default': FULL_TRANSFORMER_MAX_STEP_SAVES,
         'dense_max_step_saves_max': FULL_TRANSFORMER_MAX_STEP_SAVES_MAX,
+        'dense_grad_accum': _dense_grad_accum(ds),
+        'dense_grad_accum_default': FULL_TRANSFORMER_GRAD_ACCUM,
+        'dense_grad_accum_choices': list(FULL_TRANSFORMER_GRAD_ACCUM_CHOICES),
+        # The price tag, next to the control that sets it. Accumulation is the
+        # only dense lever that spends money instead of memory, and the panel
+        # must be able to say "≈3× longer, ≈3× the pod bill" at the moment of
+        # choosing — not leave it to be discovered on the invoice.
+        'dense_time_multiplier': dense_time_multiplier(ds),
+        'dense_images_per_step': dense_images_per_step(ds),
+        'dense_lr_schedule': _dense_lr_schedule(ds),
+        'dense_lr_schedule_default': FULL_TRANSFORMER_LR_SCHEDULE,
+        'dense_lr_schedule_choices': list(FULL_TRANSFORMER_LR_SCHEDULE_CHOICES),
+        'dense_warmup': _dense_warmup(ds),
+        'dense_warmup_default': FULL_TRANSFORMER_WARMUP,
+        'dense_warmup_min': FULL_TRANSFORMER_WARMUP_MIN,
+        'dense_warmup_max': FULL_TRANSFORMER_WARMUP_MAX,
+        # Warmup steps only reach ai-toolkit on this one schedule; the panel
+        # gates its control on the same fact rather than re-deriving it.
+        'dense_warmup_applies': _dense_lr_schedule(ds) == 'constant_with_warmup',
+        'dense_timestep_type': _dense_timestep_type(ds),
+        'dense_timestep_type_default': FULL_TRANSFORMER_TIMESTEP_TYPE,
+        'dense_timestep_type_choices': list(FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES),
         'dense_fp8_export': dense_fp8_export_enabled(ds),
         'dense_keep_bf16': dense_keep_bf16_master(ds),
         # What the delivery will weigh, so the panel can say it BEFORE the pod is
@@ -2978,6 +3147,58 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
         else:
             raise ValueError('dense_max_step_saves must be between 1 and '
                              f'{FULL_TRANSFORMER_MAX_STEP_SAVES_MAX} (or auto)')
+    if 'dense_grad_accum' in patch:
+        v = patch['dense_grad_accum']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_grad_accum', None)
+        elif (isinstance(v, int) and not isinstance(v, bool)
+                and v in FULL_TRANSFORMER_GRAD_ACCUM_CHOICES):
+            cur['dense_grad_accum'] = v
+        else:
+            # The message says what the refusal protects: this is the one dense
+            # value whose upper bound is a budget, not a memory limit.
+            raise ValueError(
+                'dense_grad_accum must be one of '
+                f'{list(FULL_TRANSFORMER_GRAD_ACCUM_CHOICES)} (or auto) — each '
+                'step becomes that many images, so the run (and the rented GPU '
+                'it is billed on) takes that many times longer')
+    if 'dense_lr_schedule' in patch:
+        v = patch['dense_lr_schedule']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_lr_schedule', None)
+        elif v in FULL_TRANSFORMER_LR_SCHEDULE_CHOICES:
+            cur['dense_lr_schedule'] = v
+        else:
+            raise ValueError(
+                'dense_lr_schedule must be one of '
+                f'{list(FULL_TRANSFORMER_LR_SCHEDULE_CHOICES)} (or auto)')
+    if 'dense_warmup' in patch:
+        v = patch['dense_warmup']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_warmup', None)
+        elif (isinstance(v, int) and not isinstance(v, bool)
+                and FULL_TRANSFORMER_WARMUP_MIN <= v <= FULL_TRANSFORMER_WARMUP_MAX):
+            cur['dense_warmup'] = v
+        else:
+            raise ValueError(
+                f'dense_warmup must be between {FULL_TRANSFORMER_WARMUP_MIN} and '
+                f'{FULL_TRANSFORMER_WARMUP_MAX} steps (or auto), and it only '
+                "applies to the 'constant_with_warmup' schedule")
+    if 'dense_timestep_type' in patch:
+        v = patch['dense_timestep_type']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_timestep_type', None)
+        elif v in FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES:
+            cur['dense_timestep_type'] = v
+        else:
+            # 'shift' is the value people ask for and the one that lands here:
+            # say why it is missing instead of letting it read as an oversight.
+            raise ValueError(
+                'dense_timestep_type must be one of '
+                f'{list(FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES)} (or auto); '
+                "shift-based schedules are not offered for Krea 2 because the "
+                'trainer would compute their shift from a four-times-too-large '
+                'token count')
     for _flag in ('dense_fp8_export', 'dense_keep_bf16'):
         if _flag in patch:
             v = patch[_flag]
@@ -4902,15 +5123,21 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'train': {
                         'batch_size': 1,
                         'steps': steps,
-                        'gradient_accumulation': 1,
+                        # `steps` counts OPTIMISER steps, so accumulation does
+                        # not change how many checkpoints a run produces — it
+                        # changes how many images each step learned from, and
+                        # how long the run takes. Neither the save cadence nor
+                        # the storage forecast moves.
+                        'gradient_accumulation': _dense_grad_accum(ds),
                         'train_unet': True,
                         'train_text_encoder': False,
                         'unload_text_encoder': True,
                         'gradient_checkpointing': True,
                         'noise_scheduler': 'flowmatch',
-                        'timestep_type': 'linear',
+                        'timestep_type': _dense_timestep_type(ds),
                         'optimizer': 'adafactor',
                         'lr': _dense_lr(ds),
+                        **_dense_lr_schedule_fields(ds),
                         'dtype': 'bf16',
                     },
                     'model': {

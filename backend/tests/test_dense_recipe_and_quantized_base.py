@@ -104,6 +104,16 @@ def test_the_locked_geometry_is_not_reachable_through_settings():
     ({'dense_save_every': 10}, 'dense_save_every'),
     ({'dense_max_step_saves': 9}, 'dense_max_step_saves'),
     ({'dense_fp8_export': 'yes'}, 'dense_fp8_export'),
+    ({'dense_grad_accum': 3}, 'dense_grad_accum'),
+    ({'dense_grad_accum': 16}, 'dense_grad_accum'),
+    ({'dense_grad_accum': True}, 'dense_grad_accum'),
+    ({'dense_lr_schedule': 'linear'}, 'dense_lr_schedule'),
+    ({'dense_warmup': 5}, 'dense_warmup'),
+    ({'dense_warmup': 5000}, 'dense_warmup'),
+    # The value people actually try. It parses in ai-toolkit and is refused
+    # here on purpose — see the timestep note in lora_training.
+    ({'dense_timestep_type': 'shift'}, 'dense_timestep_type'),
+    ({'dense_timestep_type': 'lognorm_blend'}, 'dense_timestep_type'),
 ])
 def test_out_of_bounds_values_are_refused(patch, message, one_dataset):
     settings = {}
@@ -119,6 +129,147 @@ def test_auto_clears_a_stored_value_back_to_the_default(one_dataset):
                              _settings=settings)
     assert settings == {}
     assert lt._dense_lr(FakeDataset()) == lt.FULL_TRANSFORMER_LR
+
+
+# --- volet 2b: the quality levers (accumulation / LR schedule / timesteps) -------
+
+def test_the_shipped_defaults_change_nothing():
+    """The whole point of adding levers: a launch that touches none of them must
+    emit the recipe that ran before they existed, key for key. `lr_scheduler` is
+    absent on purpose — ai-toolkit already defaults it to 'constant', and adding
+    the key would be a diff in the config that reaches the pod."""
+    process = _job(FakeDataset(), steps=3000)
+    assert process['train'] == {
+        'batch_size': 1,
+        'steps': 3000,
+        'gradient_accumulation': 1,
+        'train_unet': True,
+        'train_text_encoder': False,
+        'unload_text_encoder': True,
+        'gradient_checkpointing': True,
+        'noise_scheduler': 'flowmatch',
+        'timestep_type': 'linear',
+        'optimizer': 'adafactor',
+        'lr': 1e-6,
+        'dtype': 'bf16',
+    }
+    assert lt.dense_time_multiplier(FakeDataset()) == 1
+    assert lt.dense_images_per_step(FakeDataset()) == 1
+
+
+def test_gradient_accumulation_reaches_the_job_config_and_costs_only_time():
+    """Accumulation is the batch-size lever a 12B dense run can afford: it buys
+    a less noisy gradient with wall clock, and touches nothing else in the
+    recipe — not the checkpoint cadence, not the storage forecast."""
+    ds = FakeDataset(dense_grad_accum=4)
+    process = _job(ds)
+    assert process['train']['gradient_accumulation'] == 4
+    assert process['train']['batch_size'] == 1        # still one image in VRAM
+    assert lt.dense_time_multiplier(ds) == 4
+    assert lt.dense_images_per_step(ds) == 4
+    # `steps` counts optimiser steps, so a 4× longer run still saves the same
+    # number of ~26 GB objects — the Hugging Face forecast must not move.
+    assert process['save']['save_every'] == _job(FakeDataset())['save']['save_every']
+    assert lt.dense_storage_plan(ds) == lt.dense_storage_plan(FakeDataset())
+
+
+def test_warmup_travels_only_with_the_schedule_that_accepts_it():
+    """`num_warmup_steps` on a cosine/constant schedule is not a no-op in
+    ai-toolkit — torch's schedulers reject the kwarg and the job dies at
+    startup. So the key is emitted for exactly one choice."""
+    warm = _job(FakeDataset(dense_lr_schedule='constant_with_warmup',
+                            dense_warmup=250))['train']
+    assert warm['lr_scheduler'] == 'constant_with_warmup'
+    assert warm['lr_scheduler_params'] == {'num_warmup_steps': 250}
+
+    cosine = _job(FakeDataset(dense_lr_schedule='cosine',
+                              dense_warmup=250))['train']
+    assert cosine['lr_scheduler'] == 'cosine'
+    assert 'lr_scheduler_params' not in cosine
+
+    constant = _job(FakeDataset(dense_warmup=250))['train']
+    assert 'lr_scheduler' not in constant
+    assert 'lr_scheduler_params' not in constant
+
+
+def test_timestep_type_reaches_the_job_config():
+    assert _job(FakeDataset(dense_timestep_type='sigmoid'))['train'][
+        'timestep_type'] == 'sigmoid'
+    assert _job(FakeDataset(dense_timestep_type='weighted'))['train'][
+        'timestep_type'] == 'weighted'
+    # An unknown/refused value stored by hand falls back to the shipped default
+    # rather than reaching the pod.
+    assert _job(FakeDataset(dense_timestep_type='shift'))['train'][
+        'timestep_type'] == 'linear'
+
+
+def test_the_levers_we_refused_never_appear_in_the_emitted_recipe():
+    """EMA would clone the whole 12B transformer twice on the training device,
+    and min_snr_gamma needs an `alphas_cumprod` a flow-matching scheduler does
+    not have. Neither is reachable — including through the LoRA lane's own keys
+    for the same ideas, which a dataset may still be carrying."""
+    ds = FakeDataset(ema=0.999, min_snr_gamma=5, timestep_type='shift',
+                     lr_scheduler='cosine', warmup=500)
+    train = _job(ds)['train']
+    assert 'ema_config' not in train
+    assert 'min_snr_gamma' not in train
+    assert 'snr_gamma' not in train
+    # The LoRA-lane keys are inert in dense mode: the defaults still stand.
+    assert train['timestep_type'] == 'linear'
+    assert 'lr_scheduler' not in train
+
+
+def test_the_provenance_snapshot_repeats_the_emitted_recipe_exactly():
+    """A stamped run must be re-launchable from its own record: every lever that
+    reached the config has to be readable back off the snapshot."""
+    ds = FakeDataset(dense_grad_accum=8, dense_timestep_type='weighted',
+                     dense_lr_schedule='constant_with_warmup', dense_warmup=200)
+    train = _job(ds)['train']
+    snapshot = lt.launch_settings_snapshot(ds, masked=False)
+    assert snapshot['grad_accum'] == train['gradient_accumulation'] == 8
+    assert snapshot['timestep_type'] == train['timestep_type'] == 'weighted'
+    assert snapshot['lr_scheduler'] == train['lr_scheduler'] == 'constant_with_warmup'
+    assert snapshot['warmup'] == train['lr_scheduler_params']['num_warmup_steps'] == 200
+    # 'constant' is the effective schedule even when the key is omitted, so
+    # provenance says so instead of leaving a hole.
+    plain = lt.launch_settings_snapshot(FakeDataset(), masked=False)
+    assert plain['lr_scheduler'] == 'constant'
+    assert 'warmup' not in plain
+
+
+def test_the_settings_payload_states_what_the_choice_costs():
+    """The panel must be able to say "≈4× longer, ≈4× the bill" at the moment of
+    choosing. That number is computed here, once, next to the value it scales."""
+    payload = lt.effective_train_settings(FakeDataset(dense_grad_accum=4))
+    assert payload['dense_grad_accum'] == 4
+    assert payload['dense_time_multiplier'] == 4
+    assert payload['dense_images_per_step'] == 4
+    assert payload['dense_grad_accum_choices'] == [1, 2, 4, 8]
+    assert payload['dense_timestep_type_choices'] == ['linear', 'sigmoid', 'weighted']
+    assert payload['dense_warmup_applies'] is False
+    assert lt.effective_train_settings(
+        FakeDataset(dense_lr_schedule='constant_with_warmup'))[
+            'dense_warmup_applies'] is True
+
+
+def test_auto_clears_every_new_lever_back_to_the_shipped_recipe(one_dataset):
+    settings = {'dense_grad_accum': 8, 'dense_lr_schedule': 'cosine',
+                'dense_warmup': 500, 'dense_timestep_type': 'sigmoid'}
+    lt.update_train_settings(1, 1, {'dense_grad_accum': 'auto',
+                                    'dense_lr_schedule': None,
+                                    'dense_warmup': '',
+                                    'dense_timestep_type': 'auto'},
+                             _settings=settings)
+    assert settings == {}
+
+
+def test_every_new_lever_is_a_preset_and_share_key(one_dataset):
+    """A dense recipe that cannot travel in a shared preset is a recipe nobody
+    else can reproduce."""
+    for key in ('dense_grad_accum', 'dense_lr_schedule', 'dense_warmup',
+                'dense_timestep_type'):
+        assert key in lt.DENSE_SETTING_KEYS
+        assert key in lt.TRAIN_SETTING_KEYS
 
 
 def test_storage_forecast_and_job_config_read_the_same_keep_count():
