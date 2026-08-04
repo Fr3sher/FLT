@@ -4182,6 +4182,7 @@ def _dense_fetch_worker(app, run_id):
         run = db.session.get(CloudTrainingRun, int(run_id))
         if run is None:
             _dense_fetch_threads.pop(int(run_id), None)
+            _monitor_threads.pop(int(run_id), None)
             return
         # The recovery window is anchored on finished_at, and a kept pod bills
         # until it closes. Retrying a transfer must never push that deadline
@@ -4206,6 +4207,7 @@ def _dense_fetch_worker(app, run_id):
                 logger.debug('could not restore the recovery deadline',
                              exc_info=True)
             _dense_fetch_threads.pop(int(run_id), None)
+            _monitor_threads.pop(int(run_id), None)
 
 
 def fetch_dense_locally(run_id, cancel=False) -> dict:
@@ -4242,6 +4244,14 @@ def fetch_dense_locally(run_id, cancel=False) -> dict:
         args=(current_app._get_current_object(), int(run.id)),
         daemon=True, name=f'dense-fetch-{run.id}')
     _dense_fetch_threads[int(run.id)] = thread
+    # Registered as THE thread of this run, not only as a fetch: the transfer
+    # flips the row to 'downloading', which makes it active again, and a Stop
+    # pressed during it asks _monitor_is_responsive who is in charge. With no
+    # thread registered the answer is "nobody", and a stop that finds nobody
+    # DESTROYS the pod — mid-transfer, with the model still on it. Registered,
+    # the stop takes the graceful path: the event is set, the transfer stops on
+    # the next chunk, every byte already written is kept and so is the pod.
+    _monitor_threads[int(run.id)] = thread
     thread.start()
     return {'ok': True, 'state': 'fetching', 'run': _run_payload(run)}
 

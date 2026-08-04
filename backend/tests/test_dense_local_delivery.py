@@ -356,9 +356,15 @@ def test_fetching_again_needs_a_kept_pod_and_runs_in_the_background(
         result = ct.fetch_dense_locally(run.id)
         assert result['state'] == 'fetching'
         thread = ct._dense_fetch_threads.get(run.id)
+        # The transfer makes the run ACTIVE again, so a Stop pressed during it
+        # asks who is in charge — and a stop that finds nobody destroys the pod
+        # mid-transfer. The fetch registers as this run's thread precisely so
+        # that question has an answer.
+        assert ct._monitor_threads.get(run.id) is thread
         if thread:
             thread.join(timeout=10)
         assert calls == [run.id]
+        assert ct._monitor_threads.get(run.id) is None
         # A hub-only run is not offered a local fetch at all.
         hub_run = _dense_run(ct, dataset_id, tmp_path, delivery='hub')
         hub_run.status = 'error_pod_kept'
