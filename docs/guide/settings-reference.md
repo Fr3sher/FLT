@@ -516,6 +516,15 @@ fixed sizes on purpose.
 | `ollama` | Ollama vision model only. |
 | `none` | No auto-captioning — you write them yourself. |
 
+`auto` is a **chain**, not a coin toss: JoyCaption captions the images it can in one
+batch, the Ollama vision model covers whatever is left, and on a **Concept** dataset
+Ollama rewrites JoyCaption's drafts. The two engines write in different styles, so one
+batch can come back in two voices. Every caption pass now reports which engine wrote
+what — in the toast, and on a line under the caption buttons (Captions ▸ Generate
+captions), e.g. *“8 by JoyCaption · 4 by Ollama”*. That line describes the last pass
+of the current session only; nothing is stored per image. Pick a single value above
+(or per dataset, in Captions ▸ ⚙️ Options) if you want one voice across a set.
+
 ### Watermark inpainting
 
 - **Processing device** → `watermark.device`. Where LaMa inpainting runs. Default **`auto`**. Options: `auto` (GPU when available, otherwise CPU), `cuda` (force GPU — pauses ComfyUI while cleaning), `cpu` (keep the GPU free). This only affects the **LaMa** engine.

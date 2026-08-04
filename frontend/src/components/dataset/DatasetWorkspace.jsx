@@ -23,6 +23,7 @@ import CropModal from './CropModal';
 import ReferenceEditModal from './ReferenceEditModal';
 import { defaultEditEngine } from './referenceEdit';
 import { localEngineUnavailableReason, hasComfyui } from '../../utils/localEngineReason.js';
+import { captionEnginesSummary, CAPTION_ENGINE_WHY } from '../../utils/captionEngines.js';
 import { extraRefCropSource } from './extraRefs';
 import DatasetLightbox from './DatasetLightbox';
 import DatasetSettingsModal from './DatasetSettingsModal';
@@ -793,6 +794,13 @@ export default function DatasetWorkspace({ ds, onBack }) {
 
   // ── Sidebar : pastilles par section — ambre quand une action attend l'utilisateur,
   //    indigo pulsé quand des générations tournent, neutre pour l'info « à faire ».
+  // The engine line for the caption pass that just ran — empty string (falsy) when
+  // no pass ran in this session, when the backend sent no counts, or when the run
+  // belongs to ANOTHER dataset: the id check is what stops this line from describing
+  // someone else's pass after a dataset switch.
+  const lastCaptionEngines = ds.lastCaptionRun && ds.lastCaptionRun.datasetId === d.id
+    ? captionEnginesSummary(ds.lastCaptionRun.engines) : '';
+
   const navBadges = {
     images: triage > 0
       ? { n: triage, tone: 'amber', srLabel: `${triage} image(s) awaiting keep/reject` } : null,
@@ -1480,6 +1488,18 @@ export default function DatasetWorkspace({ ds, onBack }) {
           <div className={sectionCls('captions')}>
             {heading('captions')}
             <div id="gf-captions" className="scroll-mt-20 flex flex-col gap-2">
+              {/* WHO wrote the captions of the pass that just ran. The default engine
+                  setting is "Auto", which silently chains JoyCaption and the Ollama
+                  vision model — two different writing styles — and the result used to
+                  be reported as a bare count. Shown HERE, under the buttons that
+                  produced it, not only in Settings. Wraps freely: it must stay
+                  readable at 400px. In-session only; it disappears on reload. */}
+              {lastCaptionEngines && (
+                <p title={CAPTION_ENGINE_WHY}
+                  className="break-words rounded-lg border border-border bg-surface px-3 py-1.5 text-[0.75rem] text-content-muted">
+                  ✍️ Last pass: {ds.lastCaptionRun.captioned} caption(s) — {lastCaptionEngines}
+                </p>
+              )}
               <div id="ds-captions-generate" tabIndex={-1}
                 className="flex items-center gap-2 flex-wrap rounded-lg border border-border bg-surface px-3 py-2 scroll-mt-20">
                 {!isConceptual && (

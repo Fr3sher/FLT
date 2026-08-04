@@ -12,6 +12,7 @@ import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
 import { comfyEnumUnavailableReason } from '../utils/comfyEnumSupport.js'
+import { kleinAssetBlocks } from '../utils/kleinAssets.js'
 
 const INPUT_CLASS =
   'mt-1 w-full rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-content ' +
@@ -452,15 +453,22 @@ export default function SetupPage() {
       // badge is what sent a user with a truncated 9.5 GB UNET to look for a file he
       // already had (zigzag4794, Discord). Three states, three actions — and the
       // word carries the state, not just the colour.
+      // EVERY unreadable Klein file, not just the required trio: the consistency
+      // LoRA is optional, so it was absent from step.kleinBroken — and a corrupted
+      // one therefore rendered "✓ Installed" right under a button offering to
+      // download it. Optional is a reason to say it QUIETLY, never a reason to hide
+      // it. Severity comes from the asset (kleinAssetBlocks), not from the list.
       const kleinBrokenBy = {}
-      ;(step.kleinBroken || []).forEach((i) => { kleinBrokenBy[i.asset] = i })
+      ;(step.kleinBrokenAll || step.kleinBroken || []).forEach((i) => { kleinBrokenBy[i.asset] = i })
       const installBtn = (action, label) => {
         const bad = kleinBrokenBy[action]
         if (bad) {
+          const gates = kleinAssetBlocks(action)
           return (
             <>
-              <p className="break-words text-xs text-rose-300">
-                ⚠ On disk, unreadable — {bad.filename}. Downloading again replaces it.
+              <p className={`break-words text-xs ${gates ? 'text-rose-300' : 'text-amber-400'}`}>
+                ⚠ On disk, unreadable — {bad.filename}.
+                {gates ? '' : ' Klein still generates without it.'} Downloading again replaces it.
               </p>
               <InstallRunner action={action} buttonLabel={`↻ Download ${label.replace(/^⬇ Download /, '')} again`}
                 onDone={() => refresh(true)} />

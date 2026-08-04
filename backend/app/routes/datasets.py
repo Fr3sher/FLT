@@ -1026,10 +1026,15 @@ def dataset_caption(dataset_id):
         return jsonify({'error': "'image_ids' must be a list"}), 400
     force = bool(data.get('force')) or image_ids is not None
     mode = data.get('mode')  # 'prose' | 'booru' | None (None → auto selon train_type)
+    # Who WROTE these captions. The default backend ('auto') chains JoyCaption and the
+    # Ollama vision model — two engines with visibly different styles — and the app
+    # never said which one produced what. Counted where each caption is stored, so it
+    # describes the run that actually happened rather than the setting that was read.
+    engines = {}
     try:
         with gpu_exclusive_vision_window(flag_ttl=1800):
             n = svc.caption_images(LOCAL_USER, dataset_id, force=force, mode=mode,
-                                   image_ids=image_ids)
+                                   image_ids=image_ids, report=engines)
             # Did the long pass end because the user hit Stop? If so, skip the short
             # pass entirely — the point of stopping is to run NO more inference.
             stopped = dataset_activity.cancel_requested(dataset_id)
@@ -1052,7 +1057,7 @@ def dataset_caption(dataset_id):
         # Consume the flag once the whole operation has unwound so a stop can never
         # bleed into a later run (begin() also disarms defensively).
         dataset_activity.clear_cancel(dataset_id)
-    return jsonify({'ok': True, 'captioned': n, 'stopped': stopped})
+    return jsonify({'ok': True, 'captioned': n, 'stopped': stopped, 'engines': engines})
 
 
 @bp.post('/dataset/<int:dataset_id>/caption/cancel')
