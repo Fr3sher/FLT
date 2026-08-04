@@ -1747,6 +1747,19 @@ shots each rule would flag, per rule, before anything is applied. If a draft
 would flag most of the bank, the preview says so in as many words instead of
 letting you apply it by accident.
 
+**One cut needs no measuring at all: Minimum length.** Shot detection keeps very
+short cuts on purpose — a real flash cut is a real shot, and a detector that
+refuses to emit one also hides genuine boundaries. The cost is a grid peppered
+with half-second shots you scroll past a hundred times. Type a value in seconds
+and every shorter shot wears the flag, immediately after detection, with no
+measuring pass — this cut reads the shot's own bounds rather than its pixels.
+
+Do not confuse it with the *too short* refusal you may see at promotion. That one
+is your target profile's arithmetic — so many frames at so many fps — and no
+setting on this panel moves it: those shots were never going to land. **Minimum
+length** only decides what gets flagged for your eyes, so you can see and sort
+them *before* spending triage time on them.
+
 Two touches you get for free once shots are measured: thumbnails move from the
 middle-of-shot guess to the **sharpest measured frame**, and the freeze detector
 catches the failure the averages never can — a shot that plays fine and then

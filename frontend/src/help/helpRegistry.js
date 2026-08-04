@@ -633,7 +633,13 @@ const TOPICS = [
      'still clip', 'barely moves', 'frozen', 'freeze', 'black frames',
      'too much motion', 'soft', 'blurry shots', 'thresholds', 'dry run',
      'preview cuts', 'how many would be flagged', 'motion floor',
-     'no default thresholds', 'sharpest frame thumbnail'],
+     'no default thresholds', 'sharpest frame thumbnail',
+     // The duration cut is searched for by the SYMPTOM, never by its name: what
+     // the user sees is a grid of shots that are barely a frame long.
+     'tiny clips', 'tiny shots', 'flash cut', 'flash cuts', '0.6 second shots',
+     'half second shots', 'very short clips', 'shots too short',
+     'minimum length', 'minimum duration', 'duration filter',
+     'hide short clips', 'too many clips'],
     '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
   // People search for the SYMPTOM ("the cut is one second too early", "half my
   // clip is frozen"), and — since it is the discovery this tool folds in — for

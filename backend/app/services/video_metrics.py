@@ -200,20 +200,42 @@ def summarise(frames, fps, audio=UNMEASURED):
 # the app at all. A cut that exists only in this file is not a feature.
 # Anything added here must gain a row in videoMetricsFilter.thresholdFields()
 # and a label in FLAG_LABELS; a test pins the two lists against each other.
-THRESHOLD_KEYS = ('motion_floor', 'motion_ceiling', 'luma_floor', 'freeze_max',
-                  'sharpness_floor', 'first_frame_floor', 'silence_max',
-                  'audio_floor')
+THRESHOLD_KEYS = ('min_duration_s', 'motion_floor', 'motion_ceiling',
+                  'luma_floor', 'freeze_max', 'sharpness_floor',
+                  'first_frame_floor', 'silence_max', 'audio_floor')
 
 
-def verdicts(scores, thresholds):
+def verdicts(scores, thresholds, duration_s=None):
     """The flags a clip carries RIGHT NOW, given the cuts in force. Computed at
     read time from the raw scores, so moving a cut re-sorts the bank instantly.
 
     An unmeasured score never produces a flag. Absence of measurement must not
     read as a defect — that is how a scan that failed quietly becomes a bank that
     appears to have filtered half its clips.
+
+    TWO SOURCES, DELIBERATELY SEPARATE. `scores` is what the metrics pass wrote
+    into metrics_json; `duration_s` comes off the clip ROW, derived from the
+    bounds the detector set. It is passed in rather than looked up here because
+    this module never touches the database — and it is a separate argument rather
+    than a key smuggled into `scores` because the two have different lifetimes:
+    re-cutting a clip changes its duration and INVALIDATES its scores.
     """
     flags = set()
+    scores = scores or {}
+
+    # Duration first, and it is the only rule here that can fire on a clip
+    # nobody has measured — see `min_duration_s` in THRESHOLD_KEYS.
+    min_duration = thresholds.get('min_duration_s')
+    if (duration_s is not None and min_duration is not None
+            and duration_s < min_duration):
+        # NOT `too_short`, which the promotion already uses for its own refusal.
+        # The two are different claims about the same clip and must not share a
+        # word: `too_short` says the TARGET PROFILE cannot be fed by this clip —
+        # an arithmetic fact about frames and fps that no setting in this panel
+        # moves — while `brief` says the USER decided shots this short are not
+        # worth their triage time. Collapsing them would suggest that lowering
+        # this field buys a clip its way into a dataset. It does not.
+        flags.add('brief')
 
     motion = scores.get('motion_mean')
     floor = thresholds.get('motion_floor')
@@ -270,9 +292,15 @@ def verdicts(scores, thresholds):
     return flags
 
 
-def dry_run(bank_scores, thresholds):
+def dry_run(bank_clips, thresholds):
     """How many clips EACH cut would remove, plus how many would be removed in
     total — before anything is committed.
+
+    Each item is either a scores dict, or a ``(scores, duration_s)`` pair when
+    the caller knows the bounds — the same two sources `verdicts()` keeps apart,
+    made visible at the call site. A bare dict is not a shortcut for "zero
+    seconds": it means the duration is unknown, and an unknown duration is never
+    brief.
 
     Never a silent filter, and the count is per RULE rather than a lump sum: a
     public dataset pipeline once kept 47 clips out of 1493 with one mis-set
@@ -284,8 +312,9 @@ def dry_run(bank_scores, thresholds):
     """
     counts = {}
     flagged_clips = 0
-    for scores in bank_scores:
-        flags = verdicts(scores, thresholds)
+    for item in bank_clips:
+        scores, duration_s = item if isinstance(item, tuple) else (item, None)
+        flags = verdicts(scores, thresholds, duration_s=duration_s)
         if flags:
             flagged_clips += 1
         for flag in flags:

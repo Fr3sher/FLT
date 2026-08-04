@@ -1177,6 +1177,7 @@ changing any of these re-sorts every bank instantly, without rescanning.
 
 | Key | Default | Role |
 |---|---|---|
+| `video_bank.min_duration_s` | *(empty)* | Flags shots shorter than this, in seconds (`brief`). The only cut here that needs no measuring pass — it reads the shot bounds, so it works straight after detection. Not the same thing as the promotion's `too short` refusal, which is your target profile's own arithmetic and no setting moves it; this one only decides what gets flagged for your eyes. |
 | `video_bank.motion_floor` | *(empty)* | Flags shots whose average motion falls below this (`still`). |
 | `video_bank.motion_ceiling` | *(empty)* | Flags shots whose busiest moments exceed this (`agitated`). |
 | `video_bank.luma_floor` | *(empty)* | Flags shots whose darkest frame falls below this brightness (`black`). |

@@ -412,7 +412,11 @@ DEFAULTS = {
     # dry-run endpoint exists precisely so a user picks cuts against their OWN
     # distribution. Raw scores persist; flags are recomputed at read time, so
     # changing any of these re-sorts every bank instantly, no rescan.
-    'video_bank': {'motion_floor': None, 'motion_ceiling': None,
+    # Quality cuts of the 🎬 video bank — all None, because published thresholds
+    # measurably do not transfer between corpora. See video_metrics.THRESHOLD_KEYS
+    # for the canonical list; anything missing here still reads as None.
+    'video_bank': {'min_duration_s': None,
+                   'motion_floor': None, 'motion_ceiling': None,
                    'luma_floor': None, 'freeze_max': None,
                    'sharpness_floor': None},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/

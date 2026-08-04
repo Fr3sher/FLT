@@ -16,6 +16,7 @@
  */
 
 export const FLAG_LABELS = {
+  brief: 'Very short',
   still: 'Barely moves',
   agitated: 'Too much motion',
   black: 'Black moment',
@@ -33,10 +34,12 @@ export const FLAG_LABELS = {
 export function flagCounts(clips) {
   const counts = { flagged: 0, unmeasured: 0 }
   for (const clip of clips) {
-    if (!clip.metrics) {
-      counts.unmeasured += 1
-      continue
-    }
+    // "Unmeasured" stays a state of its own — but it no longer swallows the
+    // clip's flags. It used to `continue` here, which was correct while every
+    // flag came out of the metrics pass. The duration cut reads the bounds
+    // instead, so an unmeasured clip CAN be flagged, and skipping it left a
+    // "Very short" chip in the grid next to a chip counter reading zero.
+    if (!clip.metrics) counts.unmeasured += 1
     const flags = clip.flags || []
     if (flags.length) counts.flagged += 1
     for (const f of flags) counts[f] = (counts[f] || 0) + 1
@@ -59,6 +62,16 @@ export function filterByFlag(clips, flag) {
  * because "0.001" alone does not tell a user whether raising it is stricter. */
 export function thresholdFields() {
   return [
+    // First, and the only cut here that fires with nothing measured — shot
+    // detection runs with a deliberately low frame minimum so real flash cuts
+    // are not hidden, which is right and leaves the grid full of half-second
+    // shots to scroll past.
+    { key: 'min_duration_s', flag: 'brief', direction: 'below',
+      label: 'Minimum length (s)',
+      hint: 'Flags shots shorter than this, in seconds. Works straight after '
+        + 'detection — no measuring pass needed. Shots too short for your '
+        + 'target profile are refused at promotion anyway; this is how you see '
+        + 'and sort them BEFORE spending triage time on them.' },
     { key: 'motion_floor', flag: 'still', direction: 'below',
       label: 'Motion floor',
       hint: 'Flags clips whose average motion falls below this.' },

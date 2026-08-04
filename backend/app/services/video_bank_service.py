@@ -517,16 +517,23 @@ def metric_thresholds() -> dict:
 
 def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
     metrics = json.loads(clip.metrics_json) if clip.metrics_json else None
+    measured = metrics if metrics and metrics.get('metrics_state') == 'ok' else None
+    duration_s = round(clip.end_s - clip.start_s, 3)
     # Flags are DERIVED here, at read time, from raw scores + the thresholds in
     # force — never stored. Sorted so the payload is deterministic.
-    flags = (sorted(video_metrics.verdicts(metrics, thresholds))
-             if metrics and thresholds is not None
-             and metrics.get('metrics_state') == 'ok' else [])
+    #
+    # The call happens even with nothing measured, which it did not use to: every
+    # cut needed the metrics pass, so skipping the unmeasured clips was free. The
+    # duration cut does not — its input is the bounds — and a bank straight out of
+    # detection is exactly where the flash-cut clutter is worst.
+    flags = (sorted(video_metrics.verdicts(measured, thresholds,
+                                           duration_s=duration_s))
+             if thresholds is not None else [])
     return {
         'id': clip.id, 'source_id': clip.source_id,
         'relpath': relpaths.get(clip.source_id),
         'start_s': clip.start_s, 'end_s': clip.end_s,
-        'duration_s': round(clip.end_s - clip.start_s, 3),
+        'duration_s': duration_s,
         'start_frame': clip.start_frame, 'end_frame': clip.end_frame,
         'detector': clip.detector, 'thumb_state': clip.thumb_state,
         'status': clip.status, 'reject_reason': clip.reject_reason,
@@ -574,11 +581,20 @@ def metrics_dry_run(user_id, bank_id, thresholds) -> dict:
     bank = get_bank(user_id, bank_id)
     if bank is None:
         return {'total_flagged': 0}
-    rows = (VideoClip.query.filter_by(bank_id=bank_id)
-            .filter(VideoClip.metrics_json.isnot(None)).all())
-    scores = [json.loads(r.metrics_json) for r in rows]
-    return video_metrics.dry_run(
-        [s for s in scores if s.get('metrics_state') == 'ok'], thresholds)
+    # EVERY clip, not only the measured ones. The population used to be "clips
+    # carrying scores", which was right while every cut needed the metrics pass
+    # and is wrong for the duration cut: the short shots a user wants counted are
+    # the ones they have not bothered measuring. A clip with no usable scores
+    # still contributes its bounds, and contributes nothing to the other rules —
+    # `verdicts` never flags an absent reading.
+    rows = VideoClip.query.filter_by(bank_id=bank_id).all()
+    clips = []
+    for row in rows:
+        scores = json.loads(row.metrics_json) if row.metrics_json else None
+        if scores is not None and scores.get('metrics_state') != 'ok':
+            scores = None
+        clips.append((scores, round(row.end_s - row.start_s, 3)))
+    return video_metrics.dry_run(clips, thresholds)
 
 
 def set_clip_status(user_id, bank_id, ids, status, reason=None) -> dict:
