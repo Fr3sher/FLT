@@ -52,7 +52,13 @@ def video_targets_list():
                                 if default_frames else None),
             'size_multiple': profile['size_multiple'],
             'recommended_sizes': [list(s) for s in profile['recommended_sizes']],
-            'keep_audio': profile['keep_audio'],
+            # Kept as a plain boolean because the picker only ever asks
+            # "does this target want sound?"; `audio` carries the format
+            # the exporter has to impose (32 kHz stereo for MiniMax H3).
+            'keep_audio': profile['audio'] is not None,
+            'audio': profile['audio'],
+            'aitk_arch': profile['aitk_arch'],
+            'max_pixels': profile['max_pixels'],
             'caption_style': profile['caption_style'],
             # Two vocabularies that must not be conflated: the app can know a
             # model's geometry perfectly and still have no way to train it.

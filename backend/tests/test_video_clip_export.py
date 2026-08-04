@@ -91,17 +91,47 @@ def test_audio_is_kept_for_a_joint_audio_video_target():
     """LTX-2.3 and MiniMax H3 train sound and picture together. A blanket -an
     teaches those models to be silent — a degradation with no error message
     anywhere, which is exactly why it cannot be a global flag."""
-    args = _cmd(keep_audio=True)
+    args = _cmd(audio={'muxed': True, 'sample_rate': None, 'channels': None})
     assert '-an' not in args
     assert 'aac' in args
 
 
+def test_a_target_that_pins_its_audio_format_gets_it_imposed():
+    """MiniMax H3 trains on 32 kHz stereo. "Keep the audio" is not enough: a
+    44.1 kHz mono source would ride through untouched, and whether the trainer
+    resamples it is not something the dataset should be gambling on."""
+    args = _cmd(audio={'muxed': True, 'sample_rate': 32000, 'channels': 2})
+    assert args[args.index('-ar') + 1] == '32000'
+    assert args[args.index('-ac') + 1] == '2'
+
+
+def test_a_target_with_no_pinned_format_does_not_resample():
+    """None means "keep the source's". Forcing a rate the model never asked for
+    is a lossy conversion bought for nothing."""
+    args = _cmd(audio={'muxed': True, 'sample_rate': None, 'channels': None})
+    assert '-ar' not in args
+    assert '-ac' not in args
+
+
 def test_the_profile_decides_the_audio_policy():
-    """The caller should not have to remember which targets are joint models."""
+    """The caller should not have to remember which targets are joint models, nor
+    at which sample rate each one wants its sound."""
     common = dict(ffmpeg='/f', src='/a.mp4', dst='/o.mp4', start_s=0.0, end_s=9.0,
                   frames=49)
     assert '-an' in ex.command_for_profile(profile_key='wan22_14b', **common)
     assert '-an' not in ex.command_for_profile(profile_key='ltx23', **common)
+
+    h3 = ex.command_for_profile(profile_key='minimax_h3', start_s=0.0, end_s=9.0,
+                                frames=39, ffmpeg='/f', src='/a.mp4', dst='/o.mp4')
+    assert h3[h3.index('-ar') + 1] == '32000'
+
+
+def test_an_unknown_profile_is_refused_rather_than_defaulted():
+    """Silently falling back to Wan's geometry for a key we do not know is how a
+    dataset ends up cut for the wrong model."""
+    with pytest.raises(ValueError):
+        ex.command_for_profile(profile_key='nope', ffmpeg='/f', src='/a.mp4',
+                               dst='/o.mp4', start_s=0.0, end_s=9.0, frames=49)
 
 
 # --- seeking and scaling ------------------------------------------------------

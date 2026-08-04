@@ -104,7 +104,7 @@ def write_sidecar(clip_path, caption):
 
 
 def clip_command(*, ffmpeg, src, dst, start_s, end_s, frames, fps, size=None,
-                 keep_audio=False):
+                 audio=None):
     """The argv that cuts ONE clip. Pure — nothing is executed or written here.
 
     `size` is (width, height) or None. None means "keep the source's size", which
@@ -138,11 +138,22 @@ def clip_command(*, ffmpeg, src, dst, start_s, end_s, frames, fps, size=None,
         # repeatedly; a long GOP makes every seek decode a chain of frames.
         '-g', str(fps),
     ]
-    if keep_audio:
-        # Only for joint audio-video targets. Trimmed to the video's length so the
-        # two tracks agree — LTX derives its audio length from frames/fps and will
-        # mis-trim a longer track.
-        args += ['-c:a', _AUDIO_CODEC, '-b:a', _AUDIO_BITRATE, '-shortest']
+    if audio:
+        # Only for joint audio-video targets, and the track is MUXED INTO the clip
+        # rather than written beside it: the loader reads it from the video file,
+        # so a sidecar .wav is simply invisible.
+        args += ['-c:a', _AUDIO_CODEC, '-b:a', _AUDIO_BITRATE]
+        # Pinned only when the target actually asks. "Keep the audio" is not
+        # enough for a model trained on 32 kHz stereo — a 44.1 kHz mono source
+        # would ride through untouched. And forcing a rate a model never asked
+        # for is a lossy conversion bought for nothing, hence None = leave alone.
+        if audio.get('sample_rate'):
+            args += ['-ar', str(audio['sample_rate'])]
+        if audio.get('channels'):
+            args += ['-ac', str(audio['channels'])]
+        # Trimmed to the video's length so the two tracks agree — the trainers
+        # derive audio length from frames/fps and mis-trim a longer track.
+        args += ['-shortest']
     else:
         args += ['-an']
     args += ['-movflags', '+faststart', dst]
@@ -154,13 +165,14 @@ def command_for_profile(*, ffmpeg, src, dst, start_s, end_s, profile_key, frames
     """`clip_command` with the fps AND the audio policy read from the target
     catalogue rather than passed in.
 
-    The form callers should prefer, because it removes the two places a caller
-    could get it wrong on their own: handing in the SOURCE's frame rate, and
-    stripping the audio of a joint audio-video model.
+    The form callers should prefer, because it removes the three places a caller
+    could get it wrong on their own: handing in the SOURCE's frame rate, stripping
+    the audio of a joint audio-video model, and keeping an audio track at a rate
+    the model was not trained on.
     """
     profile = video_targets.get(profile_key)
     if profile is None or not profile['fps']:
         raise ValueError(f'{profile_key} declares no fps to encode at')
     return clip_command(ffmpeg=ffmpeg, src=src, dst=dst, start_s=start_s,
                         end_s=end_s, frames=frames, fps=profile['fps'], size=size,
-                        keep_audio=profile['keep_audio'])
+                        audio=profile['audio'])

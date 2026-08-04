@@ -220,16 +220,22 @@ def test_a_missing_thumbnail_is_a_404_rather_than_a_broken_image(client, tmp_pat
 # --- the target catalogue -------------------------------------------------------
 
 def test_the_target_catalogue_is_served_with_its_caveats(client):
-    """The frontend cannot hard-code these. Two fields decide whether a user wastes
-    a week: `training_verified` (we know the geometry, nobody has trained it) and
-    `licence_note` (MiniMax H3 grants NO rights in the EU, UK, South Korea or the
-    USA, and the restriction reaches the outputs). Both must reach the picker."""
+    """The frontend cannot hard-code these. Three fields decide whether a user
+    wastes a week: `training_verified` (does the installed ai-toolkit have an
+    architecture for it), `aitk_arch` (the string the training config needs, which
+    is NOT our key — our wan22_ti2v5b is its wan22_5b), and `licence_note`.
+
+    This test used to assert `wan22_ti2v5b.training_verified is False`, on the
+    strength of web research about OTHER trainers. The installed ai-toolkit ships
+    the architecture. Asserting a wrong fact is worse than asserting none: it
+    defended the mistake."""
     body = client.get('/api/video/targets').get_json()
 
     by_key = {t['key']: t for t in body['targets']}
     assert by_key['wan22_14b']['fps'] == 16
     assert by_key['wan22_14b']['training_verified'] is True
-    assert by_key['wan22_ti2v5b']['training_verified'] is False
+    assert by_key['wan22_ti2v5b']['training_verified'] is True
+    assert by_key['wan22_ti2v5b']['aitk_arch'] == 'wan22_5b'
     assert 'EU' in by_key['minimax_h3']['licence_note']
     assert 81 in by_key['wan22_14b']['frame_choices']
 
