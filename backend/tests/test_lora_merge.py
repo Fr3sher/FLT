@@ -558,18 +558,11 @@ def test_a_worker_without_torch_is_a_plan_refusal_not_a_surprise(
     assert 'pip install torch' in str(ei.value)
 
 
-def test_an_environment_missing_only_safetensors_can_still_merge(
-        app, tmp_path, monkeypatch, base_and_lora):
-    """The merge reads and writes the format by hand and imports torch only, so
-    requiring safetensors would be inventing a dependency. The probe is shared
-    with the fp8 tool (one setting for 'the Python that has torch'); the
-    requirement is not."""
-    base, lora = base_and_lora
-    monkeypatch.setattr(job.fp8_quantize, 'interpreter',
-                        lambda: {'python': 'python', 'ready': False,
-                                 'missing': ['safetensors'], 'reason': 'no safetensors'})
-    with app.app_context():
-        assert job.plan(base, [{'path': lora, 'weight': 1.0}])['python'] == 'python'
+def test_the_probe_asks_for_torch_and_nothing_else():
+    """Both lanes that use this probe read and write safetensors by hand, so
+    torch is the only module either of them needs. A probe demanding more would
+    refuse an environment that works — and nobody re-reads a probe."""
+    assert job.fp8_quantize.DEP_MODULES == ('torch',)
 
 
 def test_describe_never_raises_so_the_button_can_carry_the_reason(app, tmp_path):

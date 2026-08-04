@@ -375,11 +375,10 @@ def plan(base, loras, *, destination=None, destination_dir=None,
 
     # Deliberately the same probe and the same setting as the fp8 tool: someone
     # who already told LDS which Python has torch should not have to say it
-    # twice. But the merge reads and writes safetensors by hand, so torch is the
-    # ONLY module it needs — an environment missing nothing but `safetensors`
-    # can run a merge, and refusing it would be inventing a requirement.
+    # twice. Both lanes read and write safetensors by hand, so both need exactly
+    # torch — the probe asks for that and nothing more.
     worker = fp8_quantize.interpreter()
-    if not worker['ready'] and set(worker.get('missing') or []) - {'safetensors'}:
+    if not worker['ready']:
         raise MergeJobError(
             (worker.get('reason') or 'the Python that would do the merge is missing '
                                      'torch')

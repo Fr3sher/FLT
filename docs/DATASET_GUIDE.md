@@ -677,11 +677,15 @@ existing output is never silently overwritten.
 - It runs on the **CPU**, not the GPU: the work is an elementwise cast plus one
   reduction per tensor (measured ~1.2 GB/s here, so a 26 GB file is bound by your
   disk, not by arithmetic). Nothing competes with ComfyUI or a training run.
-- It runs in a **separate Python** — the one that has `torch` and `safetensors`
-  (the app installs without them; torch is gigabytes). Whether that environment
-  can actually do the work is checked *while the plan is drawn*: one that cannot
-  disables the button and names what to install, rather than failing after the
-  click or, worse, after the download.
+- It runs in a **separate Python** — the one that has `torch` (the app installs
+  without it; torch is gigabytes). Whether that environment can actually do the
+  work is checked *while the plan is drawn*: one that cannot disables the button
+  and names what to install, rather than failing after the click or, worse,
+  after the download.
+- **The size of the model has no bearing on whether it opens.** It is read one
+  tensor at a time. Mapping the whole file used to reserve its entire size
+  up front, which is why a big checkpoint could fail with "the paging file is
+  too small" on a machine with plenty of free memory and disk.
 - One at a time, app-wide, and it checks free space before it reads a byte.
 - It **refuses a file that is already quantized** — quantizing twice only loses
   more precision — and refuses a LoRA or adapter, which has nothing large enough

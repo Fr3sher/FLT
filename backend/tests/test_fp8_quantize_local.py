@@ -197,20 +197,31 @@ def test_an_interpreter_without_torch_is_refused_by_the_PLAN_not_by_a_traceback(
                         lambda _p: {'torch': False, 'safetensors': False})
     described = fq.describe(str(src))
     assert described['ok'] is False
-    assert 'torch' in described['error'] and 'safetensors' in described['error']
+    assert 'torch' in described['error']
     assert 'pip install' in described['error']
     # ...and the start path refuses with the same sentence rather than running.
     with pytest.raises(fq.QuantizeError, match='missing'):
         fq.quantize(str(src))
 
 
-def test_a_half_equipped_interpreter_names_only_what_is_missing(tmp_path, monkeypatch):
+def test_an_environment_without_safetensors_is_no_longer_refused(tmp_path, monkeypatch):
+    """This test used to assert the opposite, and was right to at the time.
+
+    The worker opened checkpoints with ``safe_open`` back then, so safetensors
+    was genuinely required. It no longer is: fp8_export reads and writes the
+    format by hand so that nothing memory-maps a 26 GB file, and torch is the
+    only module left. Keeping the old demand would refuse an environment that
+    works — which is why the probe now asks for exactly what it uses, and why
+    this pins the new answer rather than being deleted.
+    """
     src = _model(tmp_path)
     fq.clear_probe_cache()
+    assert fq.DEP_MODULES == ('torch',)
     monkeypatch.setattr(fq, 'candidates', lambda: ['/nowhere/python'])
     monkeypatch.setattr(fq, '_probe', lambda _p: {'torch': True, 'safetensors': False})
-    error = fq.describe(str(src))['error']
-    assert 'safetensors' in error and 'torch' not in error.split('missing')[1][:40]
+    assert fq.describe(str(src))['ok'] is True
+    # and the probe does not even ask about it any more
+    assert 'safetensors' not in fq._PROBE_CODE
 
 
 def test_an_unanswerable_probe_never_invents_a_refusal(tmp_path, monkeypatch):

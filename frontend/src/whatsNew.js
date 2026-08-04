@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-quantizing-no-longer-fails-on-the-paging-file',
+    date: '2026-08-04',
+    title: 'Quantizing a big model no longer dies on a “paging file” error',
+    blurb:
+      'If you tried to turn a full-precision model into its fp8 file and got “the paging file is too small to complete this operation”, nothing was wrong with your disk, your memory or your model — and adding disk space would not have helped. Opening the checkpoint reserved its entire size, 26 GB of it, before reading a single number. The app now reads big checkpoints one tensor at a time instead, so the size of the file no longer has anything to do with whether it opens: a 25.6 GB model that could not be opened at all now quantizes in about a minute, and the read-back check at the end works the same way, so it can no longer fail on the last step after twenty minutes of work.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-08-04-merge-a-lora-into-a-base-checkpoint',
     date: '2026-08-04',
     title: 'Turn your LoRA into a full model you can publish',

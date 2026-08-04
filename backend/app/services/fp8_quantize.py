@@ -85,7 +85,15 @@ WRITE_HEADROOM_BYTES = 2 * 1000 ** 3
 _ACCEPTED_EXT = ('.safetensors', '.sft')
 
 # What the worker interpreter must be able to import.
-DEP_MODULES = ('torch', 'safetensors')
+#
+# torch, and ONLY torch. This used to also demand `safetensors`, which was true
+# while the worker opened checkpoints with `safe_open` — it no longer does:
+# fp8_export (and lora_merge, the other user of this probe) read and write the
+# format by hand, precisely so that nothing memory-maps a 26 GB file. Leaving
+# the old spelling here would refuse an environment that works, which is the
+# expensive kind of wrong: a check that describes a world that stopped existing
+# one commit ago, and that nobody thinks to re-read because it is "just a probe".
+DEP_MODULES = ('torch',)
 _PROBE_CODE = (
     'import importlib.util as u, json, sys\n'
     'print(json.dumps({m: u.find_spec(m) is not None for m in '
@@ -191,6 +199,10 @@ def interpreter() -> dict:
         python, missing = answered[0]
         return {
             'python': python, 'ready': False, 'missing': missing,
+            # "them" reads as "the missing modules" whether that is one or
+            # several, so the sentence survived DEP_MODULES shrinking to a single
+            # entry. lora_merge_job rewrites the first clause to say "Merging"
+            # instead of "Quantizing" — if this wording moves, move that too.
             'reason': (f'the Python that would do the conversion is missing '
                        f'{" and ".join(missing)}. Quantizing needs them, and this '
                        'app deliberately ships without torch (gigabytes). Pick an '
