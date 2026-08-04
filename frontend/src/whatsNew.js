@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-the-quality-scan-no-longer-takes-the-app-away-with-it',
+    date: '2026-08-04',
+    title: 'The 🔎 quality scan leaves the rest of the bank usable',
+    blurb:
+      'On a big bank, pressing 🔎 Scan quality could take the whole app away for a couple of minutes: the bar reached 100 %, said “grouping duplicates”, and nothing else answered — sorting, renaming, promoting, all of it waited. Three things were behind that, and all three are fixed. The duplicate grouping no longer re-runs over your whole bank at the end of a scan that had nothing to scan — it runs when the hashes actually changed, and when you ask for it with “↻ Re-group duplicates”, which still applies a new duplicate distance without decoding a single file. When it does run it now shows its own progress and stops when you press Stop, instead of leaving you in front of a frozen-looking bar with no way out. And it no longer holds the database while it works, so the rest of the bank keeps answering: on a 50 000-image bank the grouping went from up to two minutes of dead application to a phase you can watch and interrupt, and the worst wait a click had to sit through fell from over five seconds to a few dozen milliseconds.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-04-the-app-stops-claiming-a-full-model-it-has-not-checked',
     date: '2026-08-04',
     title: 'Your full models say where they really are, instead of where they were',
