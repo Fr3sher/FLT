@@ -13,10 +13,19 @@ and in both cases the pod is the only sane endpoint:
   most often) costs resumability, never the run.
 * **pull** — resuming a dense run means the checkpoint has to be sitting in the
   new pod's ``save_root`` before ai-toolkit starts, so its auto-resume finds it.
-  The LoRA lane seeds that file from disk through ``/api/datasets/upload``, but
-  that route's multipart body is built entirely in memory (fine for an 85 MB
-  LoRA, an OOM at 26 GB) with a 300 s timeout. A pod that fetches its own
-  checkpoint straight from the Hub sidesteps both.
+  A pod fetching it from the Hub is the FAST way to put it there: a datacenter
+  link makes ~26 GB a matter of minutes, against hours of a home uplink billed
+  at the pod's hourly rate the whole time.
+
+  This paragraph used to say something else — that sending the local file was
+  impossible, because the upload route built its whole request in memory "with
+  a 300 s timeout". Both halves were true of the code as it stood and neither
+  is true now (``pod_checkpoint_push``: the body is streamed, the file goes in
+  resumable slices, and the timeout was never a duration cap — requests' is an
+  inactivity timeout). It is corrected rather than deleted because this file's
+  own reasoning was built on it: the Hub road is still the one to prefer, and
+  it is now preferred for what it costs, not for what the other one could not
+  do.
 
 HOW THE CODE GETS THERE
 -----------------------

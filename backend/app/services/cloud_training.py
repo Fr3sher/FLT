@@ -3224,7 +3224,12 @@ def _write_upload_progress(run, files, files_total, sent, total) -> None:
 def _record_uplink(run, folder, seconds) -> None:
     """File one measured upload speed away for the next forecast. Never raises:
     a transfer that LANDED must not become an error because a statistic about
-    it could not be written."""
+    it could not be written.
+
+    Filed as BULK, not as the line's throughput. A dataset is thousands of small
+    files at eight per POST, so what this timed is dominated by per-request
+    latency; a checkpoint push is one continuous stream. Letting this number
+    forecast that one would describe neither."""
     try:
         total = 0
         for name in os.listdir(folder):
@@ -3232,7 +3237,8 @@ def _record_uplink(run, folder, seconds) -> None:
             if os.path.isfile(path):
                 total += os.path.getsize(path)
         from . import pod_transfer_plan
-        pod_transfer_plan.record_uplink_sample(total, seconds)
+        pod_transfer_plan.record_uplink_sample(
+            total, seconds, kind=pod_transfer_plan.KIND_BULK)
     except Exception:
         logger.debug('run %s: uplink sample not recorded',
                      getattr(run, 'id', '?'), exc_info=True)
@@ -5445,12 +5451,15 @@ def _push_resume_checkpoint(run, remote, pod_settings, src, dest_dir, remote_nam
         on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]),
         on_progress=lambda done, want: _write_upload_progress(run, 0, 1, done, want),
         should_cancel=_stop_event_for(run.id).is_set)
-    # The measurement that makes the NEXT forecast worth reading. Only the bytes
-    # this attempt actually SENT are timed: a resumed push that skipped 20 GB
-    # already on the pod would otherwise report an uplink several times faster
-    # than the line has ever been, and that number becomes a price.
-    pod_transfer_plan.record_uplink_sample(result.get('sent_bytes'),
-                                           time.monotonic() - started)
+    # The measurement that makes the NEXT forecast worth reading, and the only
+    # KIND of transfer that may feed it: one continuous file, which is what a
+    # checkpoint push forecasts. Only the bytes this attempt actually SENT are
+    # timed — a resumed push that skipped 20 GB already on the pod would
+    # otherwise report an uplink several times faster than the line has ever
+    # been, and that number becomes a price.
+    pod_transfer_plan.record_uplink_sample(
+        result.get('sent_bytes'), time.monotonic() - started,
+        kind=pod_transfer_plan.KIND_STREAM)
 
 
 def _fetched_label(num_bytes) -> str:

@@ -16,16 +16,29 @@ MEASURED, OR HONESTLY GUESSED — AND IT SAYS WHICH
 -------------------------------------------------
 Uplink speed is the one input that cannot be looked up: it belongs to the
 user's line, not to the app or to the pod. So it is MEASURED. Every transfer
-this app makes to a pod — the dataset upload, and now the checkpoint push —
-records how many bytes went out in how many seconds, and the estimate is the
-median of the recent ones. The median rather than the mean because one transfer
-throttled by a sick host would otherwise poison every forecast after it.
+this app makes to a pod records how many bytes went out in how many seconds,
+and the estimate is the median of the recent ones. The median rather than the
+mean because one transfer throttled by a sick host would otherwise poison every
+forecast after it.
+
+TWO KINDS OF TRANSFER, AND THEY ARE NOT THE SAME MEASUREMENT
+A dataset upload is thousands of small files, eight per POST: what it measures
+is dominated by per-request latency. A checkpoint push is one continuous stream:
+what it measures is raw throughput. Averaging them together produces a number
+that describes NEITHER — and it would describe the slower one while being used
+to forecast the faster. So each sample carries its ``kind`` and a forecast only
+ever reads its own.
+
+The honest cost of that separation, stated rather than hidden: ten dataset
+uploads still leave a checkpoint-push forecast labelled "estimated", because
+none of them measured the thing being forecast. That is the right side to be
+wrong on — the alternative is a number that looks measured and is not.
 
 With no history there is no pretending: the estimate says it is an assumption
 and names the number it assumed. A forecast labelled "measured" that was in
 fact a guess is worth less than no forecast, because it will be believed.
 
-The samples live in SystemState. They are three integers about the user's own
+The samples live in SystemState. They are a few integers about the user's own
 line, they never leave the machine, and they are worthless to anyone else.
 """
 import json
@@ -41,6 +54,18 @@ logger = logging.getLogger(__name__)
 
 _SAMPLES_KEY = 'cloud_uplink_samples'
 _MAX_SAMPLES = 12
+
+# One continuous file (a checkpoint push) — raw throughput, and the only kind a
+# checkpoint-push forecast may read.
+KIND_STREAM = 'stream'
+# Many small files, eight per request (a dataset upload) — dominated by
+# per-request latency. Recorded because it is a real observation of this line
+# and will serve another forecast; never mixed into this one.
+KIND_BULK = 'bulk'
+# A sample written before kinds existed. Its shape is unknown, so it is kept
+# (deleting a user's history to fix our own oversight would be worse) and read
+# by nothing: guessing which kind it was is exactly the mixing this avoids.
+KIND_LEGACY = 'unknown'
 
 # A sample has to be big enough and long enough to be about the LINE rather
 # than about a round-trip. A 2 KB token upload measures latency, and letting it
@@ -69,7 +94,9 @@ _HUB_OVERHEAD_SECONDS = 90
 _ASSEMBLE_BYTES_PER_SECOND = 700e6
 
 
-def _load_samples() -> list:
+def _load_samples(kind=None) -> list:
+    """Recorded samples, optionally of ONE kind. A sample with no kind predates
+    the distinction and is never returned for a specific one."""
     row = db.session.get(SystemState, _SAMPLES_KEY)
     if not row or not row.value:
         return []
@@ -79,12 +106,19 @@ def _load_samples() -> list:
         return []
     if not isinstance(parsed, list):
         return []
-    return [s for s in parsed
-            if isinstance(s, dict) and float(s.get('bps') or 0) > 0]
+    out = [s for s in parsed
+           if isinstance(s, dict) and float(s.get('bps') or 0) > 0]
+    if kind is None:
+        return out
+    return [s for s in out if (s.get('kind') or KIND_LEGACY) == kind]
 
 
-def record_uplink_sample(num_bytes, seconds) -> bool:
+def record_uplink_sample(num_bytes, seconds, kind=KIND_STREAM) -> bool:
     """Remember one measured upload speed. Returns whether it was kept.
+
+    ``kind`` says WHAT was measured (see the module docstring): a continuous
+    file or a heap of small ones. It is not decoration — a forecast reads only
+    its own kind, because the two numbers describe different bottlenecks.
 
     NEVER raises and never rolls anything back the caller cares about: this is
     bookkeeping about a transfer that already succeeded, and a failure to write
@@ -97,7 +131,8 @@ def record_uplink_sample(num_bytes, seconds) -> bool:
             return False
         samples = _load_samples()
         samples.append({'bytes': size, 'seconds': round(elapsed, 2),
-                        'bps': size / elapsed, 'at': int(time.time())})
+                        'bps': size / elapsed, 'at': int(time.time()),
+                        'kind': str(kind or KIND_STREAM)})
         samples = samples[-_MAX_SAMPLES:]
         row = db.session.get(SystemState, _SAMPLES_KEY)
         if row is None:
@@ -115,12 +150,16 @@ def record_uplink_sample(num_bytes, seconds) -> bool:
         return False
 
 
-def uplink_bytes_per_second() -> dict:
-    """``{'bps', 'source', 'samples', 'mbps'}``.
+def uplink_bytes_per_second(kind=KIND_STREAM) -> dict:
+    """``{'bps', 'source', 'samples', 'mbps'}`` for ONE kind of transfer.
 
-    ``source`` is 'measured' (this machine's own recent transfers), 'configured'
-    (the user told us their uplink) or 'assumed'. The caller SHOWS this word —
-    that is the whole point of returning it rather than a bare number.
+    ``source`` is 'measured' (this machine's own recent transfers OF THAT KIND),
+    'configured' (the user told us their uplink) or 'assumed'. The caller SHOWS
+    this word — that is the whole point of returning it rather than a bare
+    number.
+
+    Dataset uploads do not raise the sample count here, by design: they measured
+    a different bottleneck. See the module docstring.
     """
     configured = 0.0
     try:
@@ -128,7 +167,7 @@ def uplink_bytes_per_second() -> dict:
     except (TypeError, ValueError):
         configured = 0.0
     try:
-        samples = _load_samples()
+        samples = _load_samples(kind)
     except Exception:
         logger.debug('uplink samples unreadable', exc_info=True)
         samples = []

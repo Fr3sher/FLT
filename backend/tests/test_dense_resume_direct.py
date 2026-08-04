@@ -340,7 +340,7 @@ def test_a_resumed_push_does_not_record_a_fake_uplink_speed(
     monkeypatch.setattr(ct, '_SLICED_PUSH_THRESHOLD_BYTES', 1000)
     recorded = []
     monkeypatch.setattr(pod_transfer_plan, 'record_uplink_sample',
-                        lambda b, s: recorded.append((b, s)))
+                        lambda b, s, kind=None: recorded.append((b, s, kind)))
 
     class _Remote:
         pass
@@ -357,7 +357,22 @@ def test_a_resumed_push_does_not_record_a_fake_uplink_speed(
         ct.db.session.commit()
         ct._seed_resume_checkpoint(run, _Remote(), {
             'DATASETS_FOLDER': '/datasets', 'TRAINING_FOLDER': '/output'})
-    assert recorded == [(0, pytest.approx(0, abs=5))]
+    assert recorded == [(0, pytest.approx(0, abs=5), pod_transfer_plan.KIND_STREAM)]
+
+
+def test_a_dataset_upload_is_filed_as_bulk_not_as_line_throughput(ct, tmp_path,
+                                                                  monkeypatch):
+    """A dataset is thousands of small files at eight per POST: what that timed
+    is per-request latency, not the throughput a 26 GB push would see."""
+    recorded = []
+    monkeypatch.setattr(pod_transfer_plan, 'record_uplink_sample',
+                        lambda b, s, kind=None: recorded.append((b, s, kind)))
+    folder = tmp_path / 'dataset'
+    folder.mkdir()
+    for i in range(3):
+        (folder / f'{i}.png').write_bytes(b'x' * 1000)
+    ct._record_uplink(None, str(folder), 12.0)
+    assert recorded == [(3000, 12.0, pod_transfer_plan.KIND_BULK)]
 
 
 # --- the plan: the numbers shown before the click -------------------------------

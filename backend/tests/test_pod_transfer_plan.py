@@ -41,6 +41,50 @@ def test_the_median_survives_one_sick_host(app):
     assert rate['mbps'] == pytest.approx(100.0, rel=0.01)
 
 
+def test_a_dataset_upload_never_forecasts_a_checkpoint_push(app):
+    """The two measure different bottlenecks: eight small files per POST is
+    dominated by per-request latency, one continuous file by raw throughput.
+    Averaged together they describe NEITHER — and the mixed number would be
+    used to forecast the faster of the two."""
+    with app.app_context():
+        for _ in range(5):
+            ptp.record_uplink_sample(10 ** 9, 400.0, kind=ptp.KIND_BULK)
+        rate = ptp.uplink_bytes_per_second()
+    assert rate['source'] == 'assumed', (
+        'ten dataset uploads must still leave a checkpoint-push forecast '
+        'labelled an estimate — none of them measured the thing forecast')
+    assert rate['samples'] == 0
+
+
+def test_each_kind_reads_only_its_own_history(app):
+    with app.app_context():
+        ptp.record_uplink_sample(10 ** 9, 400.0, kind=ptp.KIND_BULK)   # 20 Mbit/s
+        ptp.record_uplink_sample(10 ** 9, 80.0, kind=ptp.KIND_STREAM)  # 100 Mbit/s
+        stream = ptp.uplink_bytes_per_second(ptp.KIND_STREAM)
+        bulk = ptp.uplink_bytes_per_second(ptp.KIND_BULK)
+    assert stream['samples'] == 1 and stream['mbps'] == pytest.approx(100.0, rel=0.01)
+    assert bulk['samples'] == 1 and bulk['mbps'] == pytest.approx(20.0, rel=0.01)
+
+
+def test_a_sample_recorded_before_kinds_existed_feeds_nothing(app):
+    """Kept — deleting a user's history to fix our own oversight would be worse
+    — but never read: guessing which kind it was is the mixing this avoids."""
+    import json
+    from app.models import SystemState
+    with app.app_context():
+        ptp.db.session.add(SystemState(key=ptp._SAMPLES_KEY, value=json.dumps(
+            [{'bytes': 10 ** 9, 'seconds': 80.0, 'bps': 1.25e7, 'at': 1}])))
+        ptp.db.session.commit()
+        assert ptp.uplink_bytes_per_second()['source'] == 'assumed'
+        assert len(ptp._load_samples()) == 1, 'the row is kept, not deleted'
+
+
+def test_a_checkpoint_push_is_recorded_as_a_stream_by_default(app):
+    with app.app_context():
+        ptp.record_uplink_sample(10 ** 9, 80.0)
+        assert ptp.uplink_bytes_per_second(ptp.KIND_STREAM)['samples'] == 1
+
+
 def test_a_tiny_or_instant_transfer_is_not_a_measurement_of_the_line(app):
     """A 2 kB token upload measures latency. Letting it into the median would
     forecast a 26 GB push from the speed of a handshake."""

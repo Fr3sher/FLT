@@ -657,11 +657,19 @@ $1.40/h is **$4.20 of graphics card computing nothing**. The dialog shows that
 figure for each road before you click, alongside the file size and how long it
 expects to take.
 
-That estimate is honest about where it comes from. The app times every transfer
-it makes to a pod, so after your first cloud run the forecast says *"measured at
-N Mbit/s on your last 3 transfers"*. Before that it says it is an estimate and
-names the speed it assumed. (If you already know your uplink, `cloud.uplink_mbps`
-seeds it — but a real measurement always wins over a typed one.)
+That estimate is honest about where it comes from. The app times the checkpoints
+it pushes to pods, so once you have sent one the forecast says *"measured at N
+Mbit/s on your last 3 transfers"*. Until then it says it is an estimate and names
+the speed it assumed. (If you already know your uplink, `cloud.uplink_mbps` seeds
+it — but a real measurement always wins over a typed one.)
+
+**Dataset uploads deliberately do not count towards that number**, even though
+they are also transfers to a pod. A dataset is thousands of small files sent
+eight per request, so what it measures is dominated by per-request latency; a
+checkpoint is one continuous stream. Mixing them would produce a figure that
+describes neither, and it would be used to forecast the faster of the two. The
+cost of that choice is stated rather than hidden: ten dataset uploads still leave
+this forecast labelled an estimate.
 
 **A long upload is interruptible without being lost.** The file is sent in
 slices, and every slice that reached the pod stays there: if the link drops, the
