@@ -240,7 +240,7 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {['pipeline', 'probe', 'detect', 'thumbs'].map((pass) => {
+        {['pipeline', 'probe', 'detect', 'thumbs', 'measure'].map((pass) => {
           const blocked = passBlockedBy(capability, pass)
           const primary = pass === 'pipeline'
           return (

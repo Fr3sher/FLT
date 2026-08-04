@@ -47,6 +47,7 @@ export const PASS_LABELS = {
   probe: 'Scan files',
   detect: 'Find shots',
   thumbs: 'Make thumbnails',
+  measure: 'Measure quality',
   pipeline: 'Run everything',
   promote: 'Build the dataset',
 }
@@ -56,6 +57,7 @@ export const PASS_RUNNING_LABELS = {
   probe: 'Scanning files',
   detect: 'Finding shots',
   thumbs: 'Making thumbnails',
+  measure: 'Measuring clips',
   pipeline: 'Running everything',
   promote: 'Building the dataset',
 }

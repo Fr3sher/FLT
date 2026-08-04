@@ -52,6 +52,7 @@ export const PASS_REQUIREMENTS = {
   probe: ['decode'],
   detect: ['detect'],
   thumbs: ['decode'],
+  measure: ['decode'],
   pipeline: ['decode', 'detect'],
   promote: ['encode'],
 }

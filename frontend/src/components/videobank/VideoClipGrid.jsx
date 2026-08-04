@@ -1,5 +1,6 @@
 import { videoClipThumbUrl } from './videoBankApi'
 import { clipLabel } from './videoClipFragment'
+import { FLAG_LABELS } from './videoMetricsFilter'
 
 /** 🎬 The shot gallery — JPEG thumbnails, and NOT ONE <video>.
  *
@@ -65,6 +66,16 @@ export default function VideoClipGrid({
                 <span aria-hidden title="Already promoted into a dataset"
                   className="pointer-events-none absolute right-1 top-1 rounded bg-indigo-600 px-1 text-[0.625rem] font-bold text-white">
                   ▶
+                </span>
+              )}
+              {/* Quality flags, derived at read time from the raw scores and the
+                  cuts in force. Amber, not red: a flag is a reason to LOOK, and
+                  the verdict stays the user's. */}
+              {(clip.flags || []).length > 0 && (
+                <span
+                  title={clip.flags.map((f) => FLAG_LABELS[f] || f).join(' · ')}
+                  className="pointer-events-none absolute bottom-1 left-1 rounded bg-amber-500/90 px-1 text-[0.625rem] font-bold text-black">
+                  ⚑ {clip.flags.length > 1 ? clip.flags.length : (FLAG_LABELS[clip.flags[0]] || clip.flags[0])}
                 </span>
               )}
             </button>
