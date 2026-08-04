@@ -770,7 +770,18 @@ def _thumbs_job(bank_id, rethumb):
                 if bank else None
             done = False
             if path:
+                # The middle of the shot is a GUESS made before any frame was
+                # measured; the metrics scan's sharpest frame is a MEASUREMENT,
+                # free once every frame had been read anyway — and it wins.
+                # Clips the scan has not reached keep the guess. Clamped inside
+                # the clip in case bounds were re-cut after measuring.
                 ts = video_probe.thumbnail_timestamp(clip.start_s, clip.end_s)
+                if clip.metrics_json:
+                    m = json.loads(clip.metrics_json)
+                    sharpest = m.get('sharpest_frame_s')
+                    if (m.get('metrics_state') == 'ok' and sharpest is not None
+                            and clip.start_s <= sharpest <= clip.end_s):
+                        ts = sharpest
                 done = _write_thumbnail(path, ts, str(thumb_path(bank_id, clip.id)))
             clip.thumb_state = 'ok' if done else 'error'
             ok += 1 if done else 0

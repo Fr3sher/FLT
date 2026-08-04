@@ -528,3 +528,56 @@ def test_deleting_a_dataset_leaves_the_banks_triage_alone(app, tmp_path, seams):
         assert VideoClip.query.filter_by(bank_id=bank_id).count() == 2
         assert VideoClip.query.filter(
             VideoClip.promoted_dataset_id.isnot(None)).count() == 0
+
+
+# --- wave 2: the thumbnail follows the sharpest frame ---------------------------
+
+def _measured_bank(app, tmp_path, sharpest=None):
+    """A bank with one detected clip, optionally carrying a measured sharpest
+    frame. Returns (bank_id, clip_id, expected_middle)."""
+    import json as _json
+    from app.services import bank_jobs
+    from app.models import VideoClip
+    with app.app_context():
+        bank_id, _ = _bank(app, tmp_path, ('a.mp4',))
+        svc.start_probe(app, LOCAL_USER, bank_id)
+        svc.start_detect(app, LOCAL_USER, bank_id)
+        clip = VideoClip.query.filter_by(bank_id=bank_id).first()
+        middle = clip.start_s + (clip.end_s - clip.start_s) / 2
+        if sharpest is not None:
+            clip.metrics_json = _json.dumps({'metrics_state': 'ok',
+                                             'sharpest_frame_s': sharpest})
+            from app.extensions import db
+            db.session.commit()
+        return bank_id, clip.id, middle
+
+
+def test_a_measured_clip_thumbnails_at_its_sharpest_frame(app, tmp_path, seams,
+                                                          monkeypatch):
+    """The middle-of-shot frame was a guess made before anything was measured; a
+    boundary is where a cut just happened. Once the metrics scan has read every
+    frame anyway, the sharpest one is a measurement — and it wins."""
+    grabbed = []
+    monkeypatch.setattr(svc, '_write_thumbnail',
+                        lambda path, ts, out: (grabbed.append(ts), True)[1])
+    bank_id, _clip_id, _middle = _measured_bank(app, tmp_path, sharpest=3.25)
+
+    with app.app_context():
+        svc.start_thumbs(app, LOCAL_USER, bank_id)
+
+    assert 3.25 in grabbed
+
+
+def test_an_unmeasured_clip_still_thumbnails_at_its_middle(app, tmp_path, seams,
+                                                           monkeypatch):
+    """The guess stays for clips the scan has not reached: a bank must be able to
+    make thumbnails before it has ever been measured."""
+    grabbed = []
+    monkeypatch.setattr(svc, '_write_thumbnail',
+                        lambda path, ts, out: (grabbed.append(ts), True)[1])
+    bank_id, _clip_id, middle = _measured_bank(app, tmp_path, sharpest=None)
+
+    with app.app_context():
+        svc.start_thumbs(app, LOCAL_USER, bank_id)
+
+    assert middle in grabbed
