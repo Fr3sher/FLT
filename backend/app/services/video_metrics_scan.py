@@ -106,6 +106,30 @@ def _read_clip_frames(path, start_s, end_s, fps):
     return frames
 
 
+def measure_one(bank, clip):
+    """Measure ONE clip and commit its summary — the unit the job loop drives.
+    Returns 'ok' or 'unreadable'. Never raises: a bank is scanned in bulk, and a
+    bitstream error in clip 200 must not throw away 199 summaries."""
+    from .video_bank_service import _abs_source_path
+    src = db.session.get(VideoSource, clip.source_id)
+    path = _abs_source_path(bank, src.relpath) if (bank and src) else None
+    fps = (src.fps_native if src else None) or 25.0
+    if not path:
+        summary = video_metrics.summarise([], fps)
+    else:
+        try:
+            frames = _read_clip_frames(path, clip.start_s, clip.end_s, fps)
+            summary = video_metrics.summarise(frames, fps)
+        except Exception as e:               # noqa: BLE001 — per-clip failure
+            logger.warning('metrics: clip %s unreadable: %s', clip.id, e)
+            summary = video_metrics.summarise([], fps)
+    if summary.get('sharpest_frame_s') is not None:
+        summary['sharpest_frame_s'] += clip.start_s
+    clip.metrics_json = json.dumps(summary)
+    db.session.commit()                      # the resume contract, per clip
+    return summary['metrics_state']
+
+
 def run_metrics(bank_id, remeasure=False):
     """Measure every clip of a bank that has not been measured yet.
 
@@ -126,34 +150,9 @@ def run_metrics(bank_id, remeasure=False):
     rows = q.order_by(VideoClip.id.asc()).all()
 
     measured = unreadable = 0
-    from .video_bank_service import _abs_source_path
     for clip in rows:
-        src = db.session.get(VideoSource, clip.source_id)
-        # The same containment-checked resolver every other reader uses: a
-        # relpath is data from a database, and resolving it unchecked is how
-        # `..` reads a file the bank was never pointed at.
-        path = _abs_source_path(bank, src.relpath)
-        fps = src.fps_native or 25.0
-        if not path:
-            summary = video_metrics.summarise([], fps)
-            clip.metrics_json = json.dumps(summary)
-            unreadable += 1
-            db.session.commit()
-            continue
-        try:
-            frames = _read_clip_frames(path, clip.start_s, clip.end_s, fps)
-            summary = video_metrics.summarise(frames, fps)
-        except Exception as e:               # noqa: BLE001 — per-clip failure
-            logger.warning('metrics: clip %s unreadable: %s', clip.id, e)
-            summary = video_metrics.summarise([], fps)
-        # sharpest_frame_s is relative to the segment's head; store it absolute
-        # so the thumbnail pass can seek straight to it.
-        if summary.get('sharpest_frame_s') is not None:
-            summary['sharpest_frame_s'] += clip.start_s
-        clip.metrics_json = json.dumps(summary)
-        if summary['metrics_state'] == 'ok':
+        if measure_one(bank, clip) == 'ok':
             measured += 1
         else:
             unreadable += 1
-        db.session.commit()                  # the resume contract, per clip
     return {'measured': measured, 'unreadable': unreadable}

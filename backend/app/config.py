@@ -365,6 +365,17 @@ DEFAULTS = {
     #   it leaves the GPU free for captioning and training.
     'shot_detect': {'python': '', 'threshold': 0.5, 'min_shot_frames': 5,
                     'device': 'auto'},
+    # 🎬 Video bank quality cuts (wave 2). ALL None by default — a cut that has
+    # not been chosen filters NOTHING. That is a decision, not an omission: the
+    # published thresholds measurably do not transfer between corpora (the public
+    # motion floor lands at the 7th percentile of this machine's own test bank),
+    # so shipping one as a default would silently gut some users' banks. The
+    # dry-run endpoint exists precisely so a user picks cuts against their OWN
+    # distribution. Raw scores persist; flags are recomputed at read time, so
+    # changing any of these re-sorts every bank instantly, no rescan.
+    'video_bank': {'motion_floor': None, 'motion_ceiling': None,
+                   'luma_floor': None, 'freeze_max': None,
+                   'sharpness_floor': None},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/
     # background), not the face — its own guide says start at 0.5 and that
     # 0.8-1.0 "can prevent edits from applying". 0.9 made every variation a

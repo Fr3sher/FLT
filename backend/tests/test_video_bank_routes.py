@@ -376,3 +376,97 @@ def test_deleting_a_dataset_removes_it_from_the_list(client, tmp_path, seams):
     assert client.delete(f'/api/video-dataset/{ds_id}').status_code == 200
 
     assert client.get('/api/video-datasets').get_json()['datasets'] == []
+
+
+# --- the metrics pass (wave 2) ---------------------------------------------------
+
+def test_the_measure_pass_launches_and_reports_busy_like_every_other(
+        client, tmp_path, seams, monkeypatch):
+    """Same envelope as probe/detect/thumbs: 202 to launch. A user must not sense
+    a seam between wave-1 passes and wave-2 ones."""
+    from app.services import video_metrics_scan
+    monkeypatch.setattr(video_metrics_scan, '_read_clip_frames',
+                        lambda path, start, end, fps: [
+                            {'luma': 0.5, 'sharp': 100.0, 'motion': 0.003}] * 10)
+    bank_id = _ready_bank(client, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/measure', json={})
+
+    assert r.status_code == 202
+
+
+def test_the_measure_pass_is_refused_while_the_extra_is_missing(
+        client, tmp_path, seams, monkeypatch):
+    """Measuring decodes, so without PyAV the pass cannot run — and the refusal
+    names the missing piece rather than failing inside a worker."""
+    bank_id = _ready_bank(client, tmp_path)
+    from app import capabilities
+    monkeypatch.setattr(capabilities, 'probe_video',
+                        lambda: {'ok': False, 'decode': False, 'detect': False,
+                                 'encode': True, 'detail': 'missing: av (video decoding)'})
+
+    r = client.post(f'/api/video-bank/{bank_id}/measure', json={})
+
+    assert r.status_code == 503
+    assert 'av' in r.get_json()['error']
+
+
+def test_clip_listings_carry_scores_and_flags(client, tmp_path, seams, app):
+    """The grid filters on flags and sorts on scores, so both ride the clip rows.
+    Flags are computed at read time — nothing verdict-like is stored."""
+    bank_id = _ready_bank(client, tmp_path)
+    import json as _json
+    from app.extensions import db
+    from app.models import VideoClip
+    with app.app_context():
+        clip = VideoClip.query.filter_by(bank_id=bank_id).first()
+        clip.metrics_json = _json.dumps({
+            'metrics_state': 'ok', 'motion_mean': 0.0001, 'motion_p95': 0.001,
+            'luma_min': 0.5, 'luma_mean': 0.6, 'sharpness_p90': 200.0,
+            'freeze_ratio': 0.0, 'sharpest_frame_s': 2.0})
+        db.session.commit()
+
+    # No cut is in force until the user chooses one — a default that filters
+    # nothing is the design, since published thresholds measurably do not
+    # transfer between corpora. So the flag appears only once a floor is set.
+    from app import config
+    config.save_config({'video_bank': {'motion_floor': 0.001}})
+
+    body = client.get(f'/api/video-bank/{bank_id}/clips').get_json()
+
+    row = body['clips'][0]
+    assert row['metrics']['motion_mean'] == pytest.approx(0.0001)
+    assert 'still' in row['flags']
+
+
+def test_an_unmeasured_clip_lists_with_no_flags_and_no_metrics(client, tmp_path, seams):
+    bank_id = _ready_bank(client, tmp_path)
+
+    row = client.get(f'/api/video-bank/{bank_id}/clips').get_json()['clips'][0]
+
+    assert row['metrics'] is None
+    assert row['flags'] == []
+
+
+def test_the_dry_run_endpoint_counts_per_rule_before_anything_is_cut(
+        client, tmp_path, seams, app):
+    """The mode that keeps a mis-set threshold from quietly keeping 3% of a bank:
+    per-rule counts, computed against the bank's stored raw scores."""
+    bank_id = _ready_bank(client, tmp_path)
+    import json as _json
+    from app.extensions import db
+    from app.models import VideoClip
+    with app.app_context():
+        clip = VideoClip.query.filter_by(bank_id=bank_id).first()
+        clip.metrics_json = _json.dumps({
+            'metrics_state': 'ok', 'motion_mean': 0.0001, 'motion_p95': 0.001,
+            'luma_min': 0.5, 'luma_mean': 0.6, 'sharpness_p90': 200.0,
+            'freeze_ratio': 0.0, 'sharpest_frame_s': 2.0})
+        db.session.commit()
+
+    r = client.post(f'/api/video-bank/{bank_id}/metrics-dry-run',
+                    json={'motion_floor': 0.001})
+
+    body = r.get_json()
+    assert body['still'] == 1
+    assert body['total_flagged'] == 1

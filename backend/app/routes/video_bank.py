@@ -249,6 +249,38 @@ def video_bank_thumbs(bank_id):
                   rethumb=bool(data.get('rethumb')))
 
 
+@bp.post('/video-bank/<int:bank_id>/measure')
+def video_bank_measure(bank_id):
+    """Wave 2: motion, exposure, sharpness and freezes, one decode per clip.
+    Body {remeasure?: bool}. Refused with the missing piece named when the
+    decode extra is absent — measuring is the one pass that cannot degrade."""
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_measure, _app(), LOCAL_USER, bank_id,
+                  remeasure=bool(data.get('remeasure')))
+
+
+@bp.post('/video-bank/<int:bank_id>/metrics-dry-run')
+def video_bank_metrics_dry_run(bank_id):
+    """How many clips EACH cut would flag, before anything is committed. Body =
+    the thresholds to try ({motion_floor?, motion_ceiling?, luma_floor?,
+    freeze_max?, sharpness_floor?}); answers per-rule counts plus total_flagged,
+    which counts CLIPS, so one clip caught by two rules is not counted twice."""
+    if svc.get_bank(LOCAL_USER, bank_id) is None:
+        return _missing(bank_id)
+    data = request.get_json(silent=True) or {}
+    allowed = ('motion_floor', 'motion_ceiling', 'luma_floor', 'freeze_max',
+               'sharpness_floor')
+    try:
+        thresholds = {k: float(data[k]) for k in allowed if data.get(k) is not None}
+    except (TypeError, ValueError):
+        return jsonify({'error': 'thresholds must be numbers'}), 400
+    return jsonify(svc.metrics_dry_run(LOCAL_USER, bank_id, thresholds))
+
+
 @bp.post('/video-bank/<int:bank_id>/pipeline')
 def video_bank_pipeline(bank_id):
     """Probe → detect → thumbnails, chained. Body {steps?: [...]} (canonical order

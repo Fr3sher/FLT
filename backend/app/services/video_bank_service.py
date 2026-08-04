@@ -38,7 +38,7 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import (VideoBank, VideoClip, VideoDataset, VideoDatasetClip,
                       VideoSource)
-from . import bank_jobs, ffmpeg_tools, path_guard, video_clip_export, video_targets
+from . import bank_jobs, video_metrics, ffmpeg_tools, path_guard, video_clip_export, video_targets
 
 logger = logging.getLogger(__name__)
 
@@ -463,7 +463,25 @@ def sources_payload(user_id, bank_id) -> list:
 
 # --- clips ---------------------------------------------------------------------
 
-def _clip_row(clip: VideoClip, relpaths: dict) -> dict:
+def metric_thresholds() -> dict:
+    """The cuts currently in force, read from config on every call so a Settings
+    save re-sorts the bank on the next poll. All default to None — a cut that has
+    not been chosen filters NOTHING, because the published defaults measurably do
+    not transfer between corpora (the public motion floor lands at the 7th
+    percentile of this machine's own test bank)."""
+    section = cfg.get('video_bank') or {}
+    return {k: section.get(k) for k in
+            ('motion_floor', 'motion_ceiling', 'luma_floor', 'freeze_max',
+             'sharpness_floor')}
+
+
+def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
+    metrics = json.loads(clip.metrics_json) if clip.metrics_json else None
+    # Flags are DERIVED here, at read time, from raw scores + the thresholds in
+    # force — never stored. Sorted so the payload is deterministic.
+    flags = (sorted(video_metrics.verdicts(metrics, thresholds))
+             if metrics and thresholds is not None
+             and metrics.get('metrics_state') == 'ok' else [])
     return {
         'id': clip.id, 'source_id': clip.source_id,
         'relpath': relpaths.get(clip.source_id),
@@ -473,6 +491,8 @@ def _clip_row(clip: VideoClip, relpaths: dict) -> dict:
         'detector': clip.detector, 'thumb_state': clip.thumb_state,
         'status': clip.status, 'reject_reason': clip.reject_reason,
         'promoted_dataset_id': clip.promoted_dataset_id,
+        'metrics': metrics if metrics and metrics.get('metrics_state') == 'ok' else None,
+        'flags': flags,
     }
 
 
@@ -499,8 +519,22 @@ def list_clips(user_id, bank_id, *, status=None, source_id=None, ids=None,
     rows = q.offset(max(0, int(offset))).limit(max(1, int(limit))).all()
     relpaths = dict(db.session.query(VideoSource.id, VideoSource.relpath)
                     .filter_by(bank_id=bank_id).all())
-    return {'clips': [_clip_row(c, relpaths) for c in rows], 'total': total,
-            'offset': int(offset), 'limit': int(limit)}
+    thresholds = metric_thresholds()
+    return {'clips': [_clip_row(c, relpaths, thresholds) for c in rows],
+            'total': total, 'offset': int(offset), 'limit': int(limit)}
+
+
+def metrics_dry_run(user_id, bank_id, thresholds) -> dict:
+    """Per-rule counts over the bank's stored raw scores — the preview that keeps
+    a mis-set threshold from quietly gutting a bank. Pure read; flags nothing."""
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        return {'total_flagged': 0}
+    rows = (VideoClip.query.filter_by(bank_id=bank_id)
+            .filter(VideoClip.metrics_json.isnot(None)).all())
+    scores = [json.loads(r.metrics_json) for r in rows]
+    return video_metrics.dry_run(
+        [s for s in scores if s.get('metrics_state') == 'ok'], thresholds)
 
 
 def set_clip_status(user_id, bank_id, ids, status, reason=None) -> dict:
@@ -666,6 +700,47 @@ def _insert_clips(bank_id, src: VideoSource, shots) -> int:
     for i0 in range(0, len(rows), _INSERT_CHUNK):
         db.session.execute(VideoClip.__table__.insert(), rows[i0:i0 + _INSERT_CHUNK])
     return len(rows)
+
+
+def start_measure(app, user_id, bank_id, remeasure=False):
+    """Wave 2's pass: one decode per clip, every metric out of it. The heavy
+    per-clip work lives in video_metrics_scan; this wrapper only gives it the
+    same job envelope (busy refusal, progress, cancel) as every other pass."""
+    _require_free_bank(user_id, bank_id)
+    return bank_jobs.start(app, job_key(bank_id), 'measure',
+                           _measure_job(bank_id, bool(remeasure)))
+
+
+def _measure_job(bank_id, remeasure):
+    def run(job):
+        from . import video_metrics_scan
+        q = (VideoClip.query.filter_by(bank_id=bank_id)
+             .join(VideoSource, VideoSource.id == VideoClip.source_id)
+             .filter(VideoSource.probe_state == 'ok'))
+        if not remeasure:
+            q = q.filter(VideoClip.metrics_json.is_(None))
+        total = q.count()
+        bank_jobs.progress(job, done=0, total=total, detail='measuring clips')
+        # Delegate per-clip work but keep cancel/progress here: the scan commits
+        # per clip (its resume contract), so cancelling between clips loses
+        # nothing and the next run picks up exactly where this one stopped.
+        measured = unreadable = 0
+        bank = db.session.get(VideoBank, bank_id)
+        for clip in q.order_by(VideoClip.id.asc()).all():
+            if bank_jobs.cancelled(job):
+                break
+            r = video_metrics_scan.measure_one(bank, clip)
+            if r == 'ok':
+                measured += 1
+            else:
+                unreadable += 1
+            bank_jobs.bump(job)
+        detail = f'done — {measured} measured'
+        if unreadable:
+            detail += f', {unreadable} unreadable'
+        bank_jobs.progress(job, detail=detail)
+        return {'measured': measured, 'unreadable': unreadable}
+    return run
 
 
 def start_thumbs(app, user_id, bank_id, rethumb=False):
