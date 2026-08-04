@@ -181,7 +181,11 @@ DEFAULTS = {
         # to a raw-image launch using `image`/`onstart` below.
         'template_hash': '471ed5903d8cdb8e63b0d0e50f6cd519',
         'ui_port': 18675,              # container port the UI is reachable on (Caddy proxy)
-        'image': 'vastai/ostris-ai-toolkit:4625406-2026-07-12-cuda-12.9',  # raw-image fallback only
+        # Raw-image fallback only — BUT the tag also names the ai-toolkit commit
+        # the dense (full-transformer) recipe's supported/refused verdicts were
+        # read against. Bumping it means a different trainer: re-read the lever
+        # comments in services/lora_training.py first (a test enforces the pin).
+        'image': 'vastai/ostris-ai-toolkit:4625406-2026-07-12-cuda-12.9',
         'max_price_per_hour': 0.80,    # background safety cap on offer price, $/h
         'offer_scan_limit': 100,       # offers fetched when listing GPU speed tiers
         'pod_overhead_minutes': 35,    # boot+model download+quantize (measured ~40 min live), in cost estimates

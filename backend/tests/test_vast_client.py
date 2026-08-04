@@ -149,6 +149,22 @@ def test_get_instance_exposes_jupyter_token(vc, monkeypatch):
     assert vc.derive_base_url(inst, 18675) == 'http://5.6.7.8:29739'
 
 
+def test_get_instance_reports_the_image_the_pod_really_booted(vc, monkeypatch):
+    """We ask for a machine by TEMPLATE, and a template is published by somebody
+    else: what booted is a different fact from what we requested, and it is the
+    only one that identifies the trainer that produced the weights. An instance
+    that does not report it simply records nothing."""
+    payload = {'instances': {'id': 778, 'actual_status': 'running',
+                             'image_uuid': 'vastai/ostris-ai-toolkit:abc1234-cuda-12.9'}}
+    monkeypatch.setattr(vc.requests, 'request', lambda m, u, **kw: FakeResp(200, payload))
+    assert vc.get_instance('778')['image_uuid'] == \
+        'vastai/ostris-ai-toolkit:abc1234-cuda-12.9'
+
+    silent = {'instances': {'id': 779, 'actual_status': 'running'}}
+    monkeypatch.setattr(vc.requests, 'request', lambda m, u, **kw: FakeResp(200, silent))
+    assert vc.get_instance('779')['image_uuid'] is None
+
+
 def test_get_instance_gone_returns_none(vc, monkeypatch):
     """vast answers 200 + {'instances': null} for a destroyed instance
     (observed live on 2026-07-12)."""

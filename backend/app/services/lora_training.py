@@ -90,6 +90,32 @@ FULL_TRANSFORMER_SAVE_EVERY_MIN = 100
 FULL_TRANSFORMER_SAVE_EVERY_MAX = 5000
 FULL_TRANSFORMER_MAX_STEP_SAVES_MAX = 3
 
+# --- WHICH ai-toolkit these verdicts describe ---------------------------------
+# Dense training and LoRA training do NOT run the same ai-toolkit, and reading
+# the wrong one is the easiest way to ship a setting that lies.
+#
+#   * LoRA (local lane) runs the ai-toolkit checkout on the USER'S machine. That
+#     one moves: it is whatever they last pulled. Nothing here describes it.
+#   * DENSE (this recipe) is cloud-only and runs the ai-toolkit baked into the
+#     vast.ai pod. The machine the user's dataset is actually trained on is a
+#     remote one nobody here can `git log`.
+#
+# So the line references below are against the ai-toolkit commit the dense pod
+# image carries, NOT against any local checkout:
+FULL_TRANSFORMER_AITOOLKIT_COMMIT = '4625406'      # ai-toolkit, dated 2026-07-12
+# `config.py` pins that same commit in `cloud.image`; the test suite fails if the
+# two ever drift, because a new image is a new trainer and every verdict below
+# has to be re-checked against it. Two honest caveats that a pin cannot fix:
+#   - the DEFAULT launch path is `cloud.template_hash` (vast.ai's own "Ostris AI
+#     Toolkit" template), and its contents are published by a third party — it
+#     can move without this repo changing. `cloud.image` is only the raw-image
+#     fallback. Nothing in a run record stamps which trainer actually ran, which
+#     is a real gap, flagged rather than silently patched here.
+#   - to bound that risk, every verdict below was ALSO re-checked against a
+#     three-weeks-newer ai-toolkit (2026-08-03). All six came out identical, so
+#     none of them hinges on one snapshot — but "identical at both ends of a
+#     three-week window" is evidence, not a guarantee.
+#
 # --- the three quality levers, and why the other two are NOT here -------------
 # Every value below was traced through the code path a `krea2` run actually
 # takes — `extensions_built_in/sd_trainer/SDTrainer.py` and
@@ -100,20 +126,21 @@ FULL_TRANSFORMER_MAX_STEP_SAVES_MAX = 3
 # setting, because it makes a run look tuned when it is not.
 #
 #   * gradient accumulation — READ. BaseSDTrainProcess pulls
-#     `train.gradient_accumulation` batches into one list per step (L2363) and
+#     `train.gradient_accumulation` batches into one list per step (L2380) and
 #     SDTrainer runs a backward per batch before a single optimiser step
-#     (L2116-2149). With batch_size pinned at 1, this is the ONLY way to make
+#     (L2122-2155). With batch_size pinned at 1, this is the ONLY way to make
 #     the effective batch bigger than one image, and it costs no VRAM: the
-#     forwards are sequential, the gradient buffer already exists. It costs
-#     TIME — N accumulations means an N× longer run and an N× bigger pod bill,
-#     which is why `dense_time_multiplier` travels with the setting.
+#     forwards are sequential, the gradient buffer already exists (batches wait
+#     on the CPU, a few hundred MB of host RAM at 8). It costs TIME — N
+#     accumulations means an N× longer run and an N× bigger pod bill, which is
+#     why `dense_time_multiplier` travels with the setting.
 #     NB the optimiser is adafactor, whose update is RMS-normalised
 #     (toolkit/optimizers/adafactor.py L343-345), so accumulating summed rather
 #     than averaged gradients does not inflate the step size the way it would
 #     under plain SGD. The LR bounds above stay valid.
 #   * LR schedule / warmup — READ. `train.lr_scheduler` (+ `lr_scheduler_params`)
-#     builds a torch scheduler (BaseSDTrainProcess L2043-2054) stepped every
-#     iteration (SDTrainer L2163). It reaches adafactor because ai-toolkit forces
+#     builds a torch scheduler (BaseSDTrainProcess L2054-2065) stepped every
+#     iteration (SDTrainer L2169). It reaches adafactor because ai-toolkit forces
 #     `relative_step=False` / `scale_parameter=False` (toolkit/optimizer.py
 #     L88-96), so adafactor reads `param_group['lr']` straight back
 #     (adafactor.py L193-203) — the value the scheduler rewrites.
@@ -124,30 +151,36 @@ FULL_TRANSFORMER_MAX_STEP_SAVES_MAX = 3
 #     from `train.timestep_type` (BaseSDTrainProcess L1178-1207 →
 #     toolkit/samplers/custom_flowmatch_sampler.py L107-219), and `weighted`
 #     additionally re-weights the loss (SDTrainer L836-853). Krea 2 is a
-#     flow-matching model (krea2.py L149) so all of that applies.
+#     flow-matching model (krea2.py L181) so all of that applies.
 #     `shift`/`flux_shift` are deliberately NOT offered even though they parse:
 #     the trainer derives the shift from an image-token count that assumes
-#     `unet.config.patch_size` (BaseSDTrainProcess L1196-1201), and Krea 2's
+#     `unet.config.patch_size` (BaseSDTrainProcess L1195-1200), and Krea 2's
 #     denoiser config names that field `patch` (krea2/src/mmdit.py L92-106), so
 #     patch_size silently falls back to 1 and the token count comes out 4× the
-#     value Krea 2's own scheduler was calibrated against (krea2.py L70-83).
+#     value Krea 2's own scheduler was calibrated against (krea2.py L86-89).
 #     A mis-shifted noise schedule is exactly the "looks tuned, is not" trap.
 #
 # Refused, with the reason, so nobody re-litigates it from the key list alone:
 #   * EMA — supported, and fatal here. ExponentialMovingAverage clones every
 #     trained parameter on the training device (toolkit/ema.py L60-63), and each
-#     save/sample clones them a SECOND time (`eval()` → `store()`, ema.py
-#     L171-176, BaseSDTrainProcess L493-497). In dense mode the parameter set is
-#     the whole 12B transformer, so that is roughly +26 GB resident and +26 GB
-#     more at every checkpoint, on top of an unquantised bf16 model and its
-#     gradients. It would not survive its first save. (The LoRA lane offers EMA
-#     because there it averages a few hundred MB of adapter.)
-#   * min_snr_gamma — supported for epsilon models, crashes on this one.
-#     SDTrainer L920-922 calls `apply_snr_weight`, which needs `all_snr` or
-#     `alphas_cumprod` off the noise scheduler (toolkit/train_tools.py L642-654).
-#     Krea 2 trains on CustomFlowMatchEulerDiscreteScheduler (krea2.py L166-167,
-#     L385), which inherits diffusers' FlowMatchEulerDiscreteScheduler and
-#     defines neither — the first loss would raise AttributeError.
+#     save/sample clones them a SECOND time (store() before copy_to(), ema.py
+#     L171-176, BaseSDTrainProcess L491-497). In dense mode the parameter set is
+#     the whole 12B transformer (no `network`, so the optimiser holds the
+#     transformer itself — BaseSDTrainProcess L777-789 reads exactly those param
+#     groups), so that is roughly +26 GB resident and +26 GB more at every
+#     checkpoint, on top of an unquantised bf16 model and its gradients. It would
+#     not survive its first save. (The LoRA lane offers EMA because there it
+#     averages a few hundred MB of adapter.)
+#   * min_snr_gamma — supported for epsilon models, crashes on this one, and
+#     crashes LATE. SDTrainer L920-922 calls `apply_snr_weight`, which needs
+#     `all_snr` or `alphas_cumprod` off the noise scheduler
+#     (toolkit/train_tools.py L642-654). Krea 2 trains on
+#     CustomFlowMatchEulerDiscreteScheduler (krea2.py L223-224, L450), which
+#     inherits diffusers' FlowMatchEulerDiscreteScheduler and defines neither.
+#     ai-toolkit does TRY to attach the table up front (SDTrainer L276 →
+#     train_tools L623-639) but that helper swallows its own exception, so the
+#     failure does not surface at startup: it surfaces as an uncaught
+#     AttributeError on the first loss, an hour into a paid pod.
 FULL_TRANSFORMER_GRAD_ACCUM = 1
 # 8 is the ceiling because the ceiling is a bill, not a memory limit: at 8 a
 # 3000-step dense run takes eight times as long on a rented 80 GB GPU. Somebody
@@ -1512,6 +1545,15 @@ _SAVE_CHOICES = (250, 500, 1000)
 _DROPOUT_CHOICES = (0.05, 0.1, 0.15, 0.2, 0.3)          # LoRA network dropout ; absent = off
 _ALPHA_CHOICES = (1, 2, 4, 8, 16, 24, 32, 48, 64)       # alpha découplé du rank ; absent = dérivé
 _TIMESTEP_TYPE_CHOICES = ('sigmoid', 'linear', 'weighted', 'shift')  # pondération flowmatch ; SDXL le désactive
+# ⚠️ `shift` sur Krea : l'entraîneur calcule le décalage depuis un nombre de
+# tokens qui suppose `unet.config.patch_size`, alors que le denoiser de Krea 2
+# nomme ce champ `patch` → patch_size retombe à 1 et le compte sort 4× trop
+# grand. Constaté dans l'ai-toolkit LOCAL (c'est bien lui qui exécute la voie
+# LoRA) ET dans l'image figée du pod : ça ne dépend pas de la version. Laissé
+# tel quel ici — le retirer changerait un réglage déjà stocké chez des gens —
+# mais la voie DENSE ne le propose pas (cf. FULL_TRANSFORMER_TIMESTEP_TYPE_CHOICES).
+# Les deux voies ne tournent PAS sur le même ai-toolkit : local (mouvant) pour
+# les LoRA, image du pod (épinglée) pour le dense.
 _DEFAULT_TIMESTEP = {'zimage': 'sigmoid', 'krea': 'linear', 'flux': 'sigmoid',
                      'flux2klein': 'weighted', 'anima': 'weighted'}   # ce que « Auto » résout (sdxl : aucun) ; flux subject → sigmoid (reco ai-toolkit) ; flux2klein → weighted (défaut canonique options.ts, PAS sigmoid) ; anima → weighted (défaut options.ts PR #860)
 # Batch 2 — optimiseur / planning du LR / batch effectif (valeurs VÉRIFIÉES dans

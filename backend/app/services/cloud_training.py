@@ -2373,6 +2373,33 @@ def _stamp_host_ip(run, ip):
         logger.debug('could not stamp the host address of run %s', run.id)
 
 
+def _stamp_pod_image(run, image):
+    """Record the image the rented pod is ACTUALLY running, once.
+
+    Not the same fact as the image we asked for. The default launch path is a
+    vast.ai template published by a third party: its contents can change without
+    a line of this repo changing, and `cloud.image` is only the raw-image
+    fallback. So until now nothing anywhere could answer "which trainer produced
+    these weights?" — the answer lived in a config we BELIEVED was in force.
+
+    That question is not academic for dense runs: which ai-toolkit ran decides
+    whether a setting in the recipe was honoured, ignored, or silently
+    mis-calibrated, and a run that goes wrong six months from now has to be able
+    to say it itself rather than have it re-derived from today's config. Same
+    principle as reading a checkpoint's own header instead of trusting its
+    filename.
+
+    Silent on failure, like `_stamp_host_ip`: bookkeeping never fails a boot."""
+    try:
+        parsed = json.loads(run.train_params or '{}')
+        if not isinstance(parsed, dict) or parsed.get('pod_image') == str(image):
+            return
+        parsed['pod_image'] = str(image)
+        _set(run, train_params=json.dumps(parsed))
+    except Exception:
+        logger.debug('could not stamp the pod image of run %s', run.id)
+
+
 def _blacklist_run_host(run, reason, ttl_seconds=None):
     """Blacklist the host a RUN was on, with every identity it left behind."""
     _blacklist_host(_run_machine_id(run), reason, ip=_run_host_ip(run),
@@ -3906,6 +3933,10 @@ def _monitor(app, run_id):
                 # host identity that a machine_id re-registration cannot shed.
                 if inst and inst.get('public_ipaddr'):
                     _stamp_host_ip(run, inst['public_ipaddr'])
+                # ...and WHICH TRAINER it booted, which a template launch can
+                # otherwise change under us without any local change.
+                if inst and inst.get('image_uuid'):
+                    _stamp_pod_image(run, inst['image_uuid'])
                 derived = vast_client.derive_base_url(inst, port) if inst else None
                 # The vast API is not the authority on whether the pod exists —
                 # the pod is. Its listing has gaps (an answer without our

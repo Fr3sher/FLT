@@ -133,6 +133,27 @@ def test_auto_clears_a_stored_value_back_to_the_default(one_dataset):
 
 # --- volet 2b: the quality levers (accumulation / LR schedule / timesteps) -------
 
+def test_the_quality_levers_name_the_trainer_they_were_verified_against():
+    """The dense levers are claims about ai-toolkit's behaviour, and ai-toolkit
+    is not one thing: the LoRA lane runs the user's local checkout, the dense
+    lane runs whatever the vast.ai pod image carries. Those are different
+    codebases at different dates, and a verdict read off the wrong one ships a
+    setting that lies.
+
+    So the commit the verdicts were read against is pinned next to them, and it
+    has to be the commit the pod image actually carries. When somebody bumps the
+    image, this fails — which is the point: a new trainer means every
+    supported/refused verdict in that comment block needs re-reading before the
+    settings it justifies stay on."""
+    from app import config as cfg
+
+    image = cfg.get('cloud.image', '')
+    assert lt.FULL_TRANSFORMER_AITOOLKIT_COMMIT in image, (
+        f'the dense pod image is now {image!r}, but the quality levers were '
+        f'verified against ai-toolkit {lt.FULL_TRANSFORMER_AITOOLKIT_COMMIT}. '
+        'Re-read the verdicts in lora_training.py before moving this pin.')
+
+
 def test_the_shipped_defaults_change_nothing():
     """The whole point of adding levers: a launch that touches none of them must
     emit the recipe that ran before they existed, key for key. `lr_scheduler` is
