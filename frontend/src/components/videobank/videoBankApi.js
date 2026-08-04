@@ -57,6 +57,23 @@ export function videoClipsUrl(bankId, {
   return `/api/video-bank/${bankId}/clips${qs ? `?${qs}` : ''}`
 }
 
+/** ✂ Retouching one shot. PATCH — it edits one field pair of an existing shot and
+ * is idempotent, which matters because a nudge-and-save is easy to double-fire. */
+export function videoClipBoundsUrl(bankId, clipId) {
+  return `/api/video-bank/${bankId}/clip/${clipId}/bounds`
+}
+
+/** Cut one shot in two at a playhead position. */
+export function videoClipSplitUrl(bankId, clipId) {
+  return `/api/video-bank/${bankId}/clip/${clipId}/split`
+}
+
+/** A shot the detector missed entirely — created under the SOURCE, not the clip,
+ * because there is no existing shot to hang it off. */
+export function videoSourceClipsUrl(bankId, sourceId) {
+  return `/api/video-bank/${bankId}/source/${sourceId}/clips`
+}
+
 /** Pass endpoints, so the four buttons cannot disagree about their own names. */
 export function videoPassUrl(bankId, pass) {
   return `/api/video-bank/${bankId}/${pass}`

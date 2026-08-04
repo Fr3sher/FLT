@@ -1,6 +1,7 @@
 import {
   formatDuration, formatFileSize, sourceGeometry, sourceState,
 } from './videoBankStatus'
+import { firstShotBounds } from './videoClipEdit'
 
 const TONE = {
   ok: 'bg-emerald-500/15 text-emerald-200',
@@ -18,8 +19,14 @@ const TONE = {
  * Clicking a file filters the shot grid to it — the question this list actually
  * gets asked is "what came out of THAT file", and answering it by scrolling a
  * grid of three hundred shots is not answering it.
+ *
+ * ✂ CUT A SHOT BY HAND lives here and not only in the lightbox, and that is the
+ * whole point of it: every other retouch gesture needs an open shot, and a file
+ * that detection missed entirely — or a bank on an install with no detector, which
+ * the app explicitly says can still "scan, cut, watch and triage" — has none. It
+ * makes the first shot, which the lightbox then trims and splits.
  */
-export default function VideoSourceList({ sources, activeSourceId, onFilter }) {
+export default function VideoSourceList({ sources, activeSourceId, onFilter, onCut }) {
   if (!sources?.length) {
     return (
       <p className="text-sm text-content-muted">
@@ -55,6 +62,13 @@ export default function VideoSourceList({ sources, activeSourceId, onFilter }) {
               {formatDuration(s.duration_s)} · {formatFileSize(s.file_size)}
               {sourceGeometry(s) ? ` · ${sourceGeometry(s)}` : ''}
             </p>
+            {onCut && firstShotBounds(s) && (
+              <button type="button" onClick={() => onCut(s, firstShotBounds(s))}
+                title="Add a 5 s shot at the start of this file, then trim or split it in the player"
+                className="self-start rounded border border-border bg-surface-raised px-1.5 py-0.5 text-[0.625rem] font-semibold text-content-muted hover:bg-surface">
+                ✂ Cut a shot by hand
+              </button>
+            )}
           </li>
         )
       })}

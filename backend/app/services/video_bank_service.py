@@ -60,6 +60,13 @@ PIPELINE_STEPS = ('probe', 'detect', 'thumbs')
 
 TRIAGE_STATUSES = ('pending', 'keep', 'reject')
 
+# The shortest span a hand-cut shot may hold. Not a UI nicety: the shortest target
+# in the catalogue still asks for a fraction of a second of real footage, and a
+# 0.1 s shot promotes to a file that is one frame padded out to the profile's
+# length — which trains on a still. Half a second is deliberately generous: this
+# is a floor against a mis-click, not an opinion about how long a shot should be.
+MIN_CLIP_S = 0.5
+
 _INSERT_CHUNK = 2000
 
 
@@ -564,6 +571,171 @@ def set_clip_status(user_id, bank_id, ids, status, reason=None) -> dict:
     return {'updated': len(rows), 'counts': _counts(bank_id)}
 
 
+# --- retouching the cuts -------------------------------------------------------
+#
+# The detector is good and it is not right. It misses a boundary on a slow
+# dissolve, and it happily hands back a shot whose last second is a frozen frame.
+# Before these three functions the only gesture available on either was ✕ Reject,
+# which throws away the eight good seconds with the bad one. `detector='manual'`
+# was in the schema from the first day of this lane precisely to make room for
+# them.
+#
+# THE INVARIANT THEY ALL SHARE: a thumbnail and a set of metrics are measurements
+# OF A SPAN. Move the span and they stop describing anything — the thumbnail shows
+# a frame the shot no longer contains and the freeze ratio was integrated over
+# footage that is now in another clip. So they are FORGOTTEN, not clamped. The
+# thumbs pass already clamps a stale sharpest-frame timestamp back inside the
+# bounds, and that is a crash guard; it would happily produce a plausible,
+# perfectly wrong thumbnail. Forgetting also makes `counts.thumbs` fall, which is
+# what makes the workspace's next-step line offer the thumbnails pass again with
+# no extra plumbing.
+
+def _clip_of_bank(bank_id, clip_id) -> VideoClip | None:
+    """The clip AND the pairing check. The bank id in the URL is not decoration:
+    without this, a clip id from bank A would be editable through bank B's path."""
+    return VideoClip.query.filter_by(id=int(clip_id), bank_id=bank_id).first()
+
+
+def _validate_span(src: VideoSource, start_s, end_s) -> tuple:
+    """Bounds a cut can actually be made at, or ValueError naming the limit.
+
+    The upper bound is checked against the PROBED duration when there is one.
+    ``ffmpeg -ss`` past the end of a file does not fail — it writes a zero-length
+    or single-frame clip — so a start beyond the source surfaces at promotion,
+    hours after the mistake, as a dataset with silent holes in it."""
+    try:
+        start = float(start_s)
+        end = float(end_s)
+    except (TypeError, ValueError):
+        raise ValueError('start and end must be numbers') from None
+    if start != start or end != end:            # NaN, which every comparison passes
+        raise ValueError('start and end must be numbers')
+    if start < 0:
+        raise ValueError('a shot cannot start before the file does')
+    if end - start < MIN_CLIP_S:
+        raise ValueError(
+            f'a shot must last at least {MIN_CLIP_S}s — this one would last '
+            f'{max(0.0, end - start):.2f}s')
+    duration = getattr(src, 'duration_s', None)
+    if duration and end > duration + 1e-6:
+        raise ValueError(f'this file is {duration:.2f}s long — the end must sit '
+                         f'inside it')
+    return round(start, 3), round(end, 3)
+
+
+def _forget_measurements(bank_id, clip: VideoClip):
+    """Drop everything that described the OLD span, file included.
+
+    The JPEG has to go and not merely be un-stamped: the grid points an <img> at
+    the thumb URL, which serves whatever is on disk, so a leftover file would keep
+    showing the old frame until the pass ran again — the exact lie this feature
+    exists to remove."""
+    clip.thumb_state = None
+    clip.metrics_json = None
+    # The detector's frame indices described the old boundary and nothing cuts from
+    # them; keeping them would make a later disagreement unreadable.
+    clip.start_frame = None
+    clip.end_frame = None
+    clip.detector = 'manual'
+    try:
+        thumb_path(bank_id, clip.id).unlink(missing_ok=True)
+    except OSError:         # noqa: BLE001 — a locked thumbnail is not worth a 500
+        logger.info('video bank %s: could not remove the thumbnail of clip %s',
+                    bank_id, clip.id)
+
+
+def set_clip_bounds(user_id, bank_id, clip_id, start_s, end_s) -> dict | None:
+    """Move one shot's boundaries. None when the bank or the clip is unknown.
+
+    A PROMOTED clip stays editable on purpose. ``VideoDatasetClip`` copies the
+    relpath and the bounds at encode time — the dataset's provenance is a SNAPSHOT,
+    not a pointer — so re-cutting here cannot retro-edit what is already on disk.
+    Refusing the edit would protect nothing and would forbid the second, better cut
+    exactly when someone wants it: having just watched the built dataset.
+    ``promoted_dataset_id`` is left alone for the same reason it exists — it also
+    shields the clip from a re-detect, and a hand-corrected cut is the last thing
+    that should be destroyed by one."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    clip = _clip_of_bank(bank_id, clip_id)
+    if clip is None:
+        return None
+    src = db.session.get(VideoSource, clip.source_id)
+    start, end = _validate_span(src, start_s, end_s)
+    clip.start_s, clip.end_s = start, end
+    _forget_measurements(bank_id, clip)
+    db.session.commit()
+    return {'clip': _clip_row_for(bank_id, clip), 'counts': _counts(bank_id)}
+
+
+def split_clip(user_id, bank_id, clip_id, at_s) -> dict | None:
+    """Cut one shot in two at ``at_s``. None when the bank or the clip is unknown.
+
+    The NEW half inherits the parent's triage status. Falling back to 'pending' on
+    both sides would undo the decision being made: you split a kept shot because
+    its tail is bad, and the half you are keeping must not silently leave the keep
+    pile — you would have to find it again among hundreds.
+
+    The new half does NOT inherit ``promoted_dataset_id``: those bounds have never
+    been encoded anywhere, and claiming otherwise would put a "already in a
+    dataset" badge on a span no dataset contains."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    clip = _clip_of_bank(bank_id, clip_id)
+    if clip is None:
+        return None
+    try:
+        at = float(at_s)
+    except (TypeError, ValueError):
+        raise ValueError('the split point must be a number') from None
+    # Both halves are validated as spans in their own right, which is what makes a
+    # split flush against a bound (an empty shot) and a split 0.2 s in (a shot no
+    # target can ingest) the same refusal, with the same sentence.
+    src = db.session.get(VideoSource, clip.source_id)
+    _validate_span(src, clip.start_s, at)
+    _validate_span(src, at, clip.end_s)
+    at = round(at, 3)
+    tail = VideoClip(bank_id=bank_id, source_id=clip.source_id,
+                     start_s=at, end_s=clip.end_s, detector='manual',
+                     status=clip.status, reject_reason=clip.reject_reason)
+    db.session.add(tail)
+    clip.end_s = at
+    _forget_measurements(bank_id, clip)
+    db.session.flush()
+    _forget_measurements(bank_id, tail)
+    db.session.commit()
+    return {'clip': _clip_row_for(bank_id, clip),
+            'new_clip': _clip_row_for(bank_id, tail),
+            'counts': _counts(bank_id)}
+
+
+def create_clip(user_id, bank_id, source_id, start_s, end_s) -> dict | None:
+    """A shot the detector never drew. None when the bank or the source is unknown.
+
+    'pending', because it has never been judged — and it sorts into the gallery by
+    its start like any other, so it appears where the user cut it rather than at
+    the end of the list."""
+    if get_bank(user_id, bank_id) is None:
+        return None
+    src = VideoSource.query.filter_by(id=int(source_id), bank_id=bank_id).first()
+    if src is None:
+        return None
+    start, end = _validate_span(src, start_s, end_s)
+    clip = VideoClip(bank_id=bank_id, source_id=src.id, start_s=start, end_s=end,
+                     detector='manual', status='pending')
+    db.session.add(clip)
+    db.session.commit()
+    return {'clip': _clip_row_for(bank_id, clip), 'counts': _counts(bank_id)}
+
+
+def _clip_row_for(bank_id, clip: VideoClip) -> dict:
+    """One clip in the SAME shape the gallery already reads, so a retouched shot
+    can be swapped into the list in place instead of forcing a page reload."""
+    relpaths = dict(db.session.query(VideoSource.id, VideoSource.relpath)
+                    .filter_by(bank_id=bank_id).all())
+    return _clip_row(clip, relpaths, metric_thresholds())
+
+
 # --- passes --------------------------------------------------------------------
 
 def _require_free_bank(user_id, bank_id) -> VideoBank:
@@ -662,9 +834,18 @@ def _detect_job(bank_id, redetect):
             if redetect:
                 # Only clips nobody has promoted: a re-detect must not silently
                 # revoke the provenance of a dataset already built.
+                #
+                # And never a HAND-MADE cut. A manual bound is the one thing in this
+                # bank the detector cannot reproduce — re-running it would wipe an
+                # afternoon of retouching behind a checkbox labelled "re-detect",
+                # with no warning and nothing to undo. The manual clips then sit
+                # alongside the freshly detected ones and may overlap them; that is
+                # the honest outcome, and the grid shows both.
                 (VideoClip.query
                  .filter_by(bank_id=bank_id, source_id=src.id)
                  .filter(VideoClip.promoted_dataset_id.is_(None))
+                 .filter(db.or_(VideoClip.detector.is_(None),
+                                VideoClip.detector != 'manual'))
                  .delete(synchronize_session=False))
             made += _insert_clips(bank_id, src, shots)
             src.detect_state = 'ok'

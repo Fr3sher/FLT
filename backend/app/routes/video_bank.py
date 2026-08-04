@@ -171,6 +171,73 @@ def video_bank_triage(bank_id):
     return jsonify({'ok': True, **out})
 
 
+# --- retouching the cuts --------------------------------------------------------
+#
+# Three routes, one envelope. They are the only writes in this lane that change
+# BOUNDS, and bounds are what every later pass and the encoder read — so they are
+# refused while a pass owns the bank, exactly like a second pass would be.
+#
+# That 409 is not symmetry for its own sake. The thumbnails pass reads a clip's
+# bounds, shells out to ffmpeg, and only then stamps `thumb_state='ok'`. An edit
+# landing between those two writes produces a thumbnail of the OLD span marked as
+# current — the precise failure this feature exists to remove, made invisible.
+
+def _edit(bank_id, fn, *args):
+    """404 unknown bank/clip/source · 409 a pass owns the bank · 400 bad range ·
+    200 with the retouched row and the fresh counters, so the gallery can swap the
+    tile in place instead of reloading a page of hundreds."""
+    if svc.get_bank(LOCAL_USER, bank_id) is None:
+        return _missing(bank_id)
+    job = bank_jobs.get(svc.job_key(bank_id))
+    if job and not job['finished']:
+        return _busy(bank_jobs.BankJobBusy(job['kind']))
+    try:
+        out = fn(*args)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if out is None:
+        return jsonify({'error': 'shot not found in this bank'}), 404
+    return jsonify({'ok': True, **out})
+
+
+@bp.patch('/video-bank/<int:bank_id>/clip/<int:clip_id>/bounds')
+def video_bank_clip_bounds(bank_id, clip_id):
+    """Body {start_s, end_s}. PATCH because it edits one field pair of an existing
+    shot and is idempotent.
+
+    Moving the START is more than a trim for image-to-video targets: ai-toolkit
+    conditions an i2v sample on the clip's FIRST frame, so choosing where a shot
+    begins IS choosing the conditioning image. The lightbox says so where the
+    gesture happens; the route only has to make the gesture possible.
+
+    Answers {'ok', 'clip', 'counts'}. The thumbnail and the measurements of the old
+    span are dropped — see `video_bank_service.set_clip_bounds`."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.set_clip_bounds, LOCAL_USER, bank_id, clip_id,
+                 data.get('start_s'), data.get('end_s'))
+
+
+@bp.post('/video-bank/<int:bank_id>/clip/<int:clip_id>/split')
+def video_bank_clip_split(bank_id, clip_id):
+    """Body {at_s}, strictly inside the shot with room for a real span either side.
+    Answers {'ok', 'clip', 'new_clip', 'counts'} — the shot now ends at `at_s` and
+    the new one carries the rest, both marked manual, both with their thumbnail
+    forgotten. The new half inherits the parent's triage status on purpose."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.split_clip, LOCAL_USER, bank_id, clip_id,
+                 data.get('at_s'))
+
+
+@bp.post('/video-bank/<int:bank_id>/source/<int:source_id>/clips')
+def video_bank_source_clip_create(bank_id, source_id):
+    """Body {start_s, end_s} — the cut the detector missed entirely. Answers
+    {'ok', 'clip', 'counts'}; the new shot is `pending`, because nobody has judged
+    it yet."""
+    data = request.get_json(silent=True) or {}
+    return _edit(bank_id, svc.create_clip, LOCAL_USER, bank_id, source_id,
+                 data.get('start_s'), data.get('end_s'))
+
+
 #: Container → MIME. `mimetypes.guess_type` is registry-driven on Windows and
 #: answers None for .mkv/.webm on plenty of installs; send_file RAISES on an
 #: unguessable name, which would turn "this player cannot decode Matroska" into

@@ -598,6 +598,22 @@ const TOPICS = [
      'preview cuts', 'how many would be flagged', 'motion floor',
      'no default thresholds', 'sharpest frame thumbnail'],
     '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // People search for the SYMPTOM ("the cut is one second too early", "half my
+  // clip is frozen"), and — since it is the discovery this tool folds in — for
+  // the i2v conditioning frame, which they will have read about in a trainer's
+  // README long before they connect it to a control called "trim".
+  action('video-trim-split', 'Trim, split and hand-cut a shot',
+    ['trim a shot', 'trim', 'adjust bounds', 'change start', 'change end',
+     'cut is wrong', 'cut too early', 'cut too late', 'bad cut', 'missed cut',
+     'detector missed a cut', 'shot is too long', 'frozen tail', 'freeze at the end',
+     'split a shot', 'split in two', 'cut a shot in half', 'new shot',
+     'add a shot by hand', 'manual cut', 'manual', 'nudge', 'one frame',
+     'frame by frame', 'playhead', 'set to playhead', 'edit a clip',
+     'first frame', 'conditioning frame', 'conditioning image', 'i2v',
+     'image to video', 'start frame', 'which frame is used',
+     'thumbnail disappeared', 'lost my thumbnail', 'thumbnail gone after trimming',
+     'redetect deleted my cuts', 're-detect', 'lost my manual cuts'],
+    '/video-bank', 'using-the-app', 'retouch-a-cut-trim-split-or-draw-a-shot-by-hand'),
   action('video-capability-pieces', 'What the video extra is missing',
     ['video extra', 'ffmpeg', 'ffmpeg missing', 'av', 'pyav', 'decode', 'decoder',
      'encoder', 'shot detection missing', 'transnetv2', 'partly installed',

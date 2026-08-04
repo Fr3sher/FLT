@@ -470,3 +470,270 @@ def test_the_dry_run_endpoint_counts_per_rule_before_anything_is_cut(
     body = r.get_json()
     assert body['still'] == 1
     assert body['total_flagged'] == 1
+
+
+# --- retouching the cuts: bounds, split, hand-made shots -------------------------
+#
+# Until these three routes existed, a detector that missed a boundary — or a shot
+# holding a frozen tail — cost the WHOLE shot: the only available gesture was
+# ✕ Reject. The schema already said `detector='manual'` and nothing could write it.
+#
+# Every test here is really about the same invariant, stated three ways: a
+# thumbnail and a set of measurements belong to the bounds they were taken on, and
+# the moment those bounds move they become claims about a shot that no longer
+# exists. They are forgotten rather than kept and clamped.
+
+def _cut_bank(client, tmp_path):
+    """A detected bank whose first shot is 0 → 8 s and second 41.25 → 50 s — the
+    state a user retouches from. The source is 120 s long (see `seams`)."""
+    bank_id = _make_bank(client, tmp_path)
+    assert client.post(f'/api/video-bank/{bank_id}/pipeline',
+                       json={}).status_code == 202
+    return bank_id
+
+
+def _clips(client, bank_id):
+    return client.get(f'/api/video-bank/{bank_id}/clips').get_json()['clips']
+
+
+def test_adjusting_the_bounds_moves_them_and_calls_the_cut_manual(client, tmp_path,
+                                                                  seams):
+    """`detector` is persisted per clip precisely so "why is this cut here?" stays
+    answerable on a bank worked on over days. Once a human has moved a boundary the
+    answer is no longer 'transnetv2', and leaving that string would credit the
+    detector for a decision it did not make."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+
+    r = client.patch(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/bounds',
+                     json={'start_s': 1.5, 'end_s': 6.25})
+
+    assert r.status_code == 200, r.get_json()
+    row = r.get_json()['clip']
+    assert (row['start_s'], row['end_s']) == (1.5, 6.25)
+    assert row['detector'] == 'manual'
+
+
+def test_adjusting_the_bounds_forgets_the_thumbnail_and_the_measurements(
+        client, tmp_path, seams, app):
+    """The point of the whole feature. A thumbnail taken at 4 s of a shot that now
+    starts at 6 s is not stale, it is WRONG — it shows a frame the shot no longer
+    contains. Same for the metrics: motion and freeze ratio were integrated over a
+    span that has changed. The thumbs pass clamps a periodic timestamp, which
+    protects against a crash, not against a lie; forgetting is the honest answer,
+    and it also makes `counts.thumbs` drop so the workspace's next-step line asks
+    for the thumbnails again on its own."""
+    import json as _json
+    from app.extensions import db
+    from app.models import VideoClip
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+    assert clip['thumb_state'] == 'ok'
+    # The seam does not write bytes; the file is what the grid actually reads, so
+    # this test puts a real one there to watch it go.
+    thumb = svc.thumb_path(bank_id, clip['id'])
+    thumb.parent.mkdir(parents=True, exist_ok=True)
+    thumb.write_bytes(b'\xff\xd8\xff')
+    with app.app_context():
+        row = db.session.get(VideoClip, clip['id'])
+        row.metrics_json = _json.dumps({'metrics_state': 'ok', 'motion_mean': 0.5,
+                                        'sharpest_frame_s': 4.0})
+        db.session.commit()
+
+    body = client.patch(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/bounds',
+                        json={'start_s': 6.0, 'end_s': 8.0}).get_json()
+
+    assert body['clip']['thumb_state'] is None
+    assert body['clip']['metrics'] is None
+    # The FILE goes too: the grid reads the thumb URL, not the column, so a leftover
+    # JPEG would keep showing the old frame until the pass ran again.
+    assert not thumb.is_file()
+    assert body['counts']['thumbs'] == 1
+
+
+def test_bounds_beyond_the_end_of_the_source_are_refused(client, tmp_path, seams):
+    """The source is 120 s. `ffmpeg -ss` past the end does not fail — it produces a
+    zero-length or one-frame file at promotion, hours after the mistake."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+
+    r = client.patch(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/bounds',
+                     json={'start_s': 100.0, 'end_s': 130.0})
+
+    assert r.status_code == 400
+    assert '120' in r.get_json()['error']
+
+
+@pytest.mark.parametrize('start_s,end_s', [
+    (5.0, 5.0),        # empty
+    (6.0, 5.0),        # inverted
+    (5.0, 5.2),        # 0.2 s — below the floor any target could ingest
+    (-1.0, 4.0),       # before the file starts
+])
+def test_a_range_that_cannot_be_trained_on_is_refused(client, tmp_path, seams,
+                                                      start_s, end_s):
+    """An inverted range is also what `clipFragmentSrc` refuses on the client, and
+    for the same reason: a malformed media fragment does not throw, the browser
+    ignores it and plays the whole two-hour rush."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+
+    r = client.patch(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/bounds',
+                     json={'start_s': start_s, 'end_s': end_s})
+
+    assert r.status_code == 400, r.get_json()
+
+
+def test_a_promoted_clip_stays_editable_and_the_dataset_keeps_its_own_bounds(
+        client, tmp_path, seams):
+    """Provenance is a SNAPSHOT: VideoDatasetClip copies relpath and bounds at
+    encode time, so re-cutting the bank clip afterwards cannot retro-edit what was
+    already encoded. Refusing the edit would therefore protect nothing and would
+    make the second, better cut impossible — which is exactly when someone wants
+    it, having just watched the built dataset."""
+    bank_id, ds_id = _promote(client, tmp_path)
+    clip = [c for c in _clips(client, bank_id) if c['start_s'] == 41.25][0]
+
+    r = client.patch(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/bounds',
+                     json={'start_s': 42.0, 'end_s': 47.0})
+
+    assert r.status_code == 200, r.get_json()
+    items = client.get(f'/api/video-dataset/{ds_id}').get_json()['items']
+    assert items[1]['start_s'] == 41.25
+
+
+def test_splitting_a_shot_makes_two_and_the_new_half_inherits_the_status(
+        client, tmp_path, seams):
+    """Falling back to `pending` on both halves would undo the decision the user was
+    in the middle of making: you split a KEPT shot because its tail is bad, and the
+    half you are keeping must not silently leave the keep pile."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+    client.post(f'/api/video-bank/{bank_id}/triage',
+                json={'ids': [clip['id']], 'status': 'keep'})
+
+    r = client.post(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/split',
+                    json={'at_s': 5.0})
+
+    assert r.status_code == 200, r.get_json()
+    body = r.get_json()
+    assert (body['clip']['start_s'], body['clip']['end_s']) == (0.0, 5.0)
+    assert (body['new_clip']['start_s'], body['new_clip']['end_s']) == (5.0, 8.0)
+    assert body['new_clip']['status'] == 'keep'
+    assert body['new_clip']['detector'] == body['clip']['detector'] == 'manual'
+    assert body['counts']['clips'] == 3
+
+
+def test_a_split_forgets_the_thumbnail_of_BOTH_halves(client, tmp_path, seams):
+    """The parent keeps its start, so it is tempting to let it keep its thumbnail —
+    but the frame was taken from the MIDDLE of the old span, which is now inside the
+    other half."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+
+    body = client.post(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/split',
+                       json={'at_s': 5.0}).get_json()
+
+    assert body['clip']['thumb_state'] is None
+    assert body['new_clip']['thumb_state'] is None
+
+
+@pytest.mark.parametrize('at_s', [0.0, 8.0, 9.0, 0.2, 7.9])
+def test_a_split_point_outside_or_flush_against_a_bound_is_refused(
+        client, tmp_path, seams, at_s):
+    """A split at the boundary makes an empty shot; a split 0.2 s in makes one no
+    target can ingest. Both are 400 rather than a silently clamped cut, because the
+    user is looking at a playhead and would not see the clamp."""
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+
+    r = client.post(f'/api/video-bank/{bank_id}/clip/{clip["id"]}/split',
+                    json={'at_s': at_s})
+
+    assert r.status_code == 400, r.get_json()
+
+
+def test_a_shot_the_detector_missed_can_be_cut_by_hand(client, tmp_path, seams):
+    """The other half of the same problem: a boundary the detector did not draw at
+    all. A hand-made shot is `pending` because it has never been judged, and it
+    lands in the gallery ordered by start like any other."""
+    bank_id = _cut_bank(client, tmp_path)
+    source_id = _clips(client, bank_id)[0]['source_id']
+
+    r = client.post(f'/api/video-bank/{bank_id}/source/{source_id}/clips',
+                    json={'start_s': 20.0, 'end_s': 24.0})
+
+    assert r.status_code == 200, r.get_json()
+    row = r.get_json()['clip']
+    assert row['detector'] == 'manual' and row['status'] == 'pending'
+    assert row['thumb_state'] is None
+    assert [c['start_s'] for c in _clips(client, bank_id)] == [0.0, 20.0, 41.25]
+
+
+def test_a_hand_made_shot_on_an_unknown_source_is_a_404(client, tmp_path, seams):
+    bank_id = _cut_bank(client, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/source/9999/clips',
+                    json={'start_s': 1.0, 'end_s': 4.0})
+
+    assert r.status_code == 404
+
+
+def test_a_clip_that_belongs_to_another_bank_is_a_404(client, tmp_path, seams):
+    """The bank id in the path is not decoration. Without the pairing check, a clip
+    id from bank A would be editable through bank B's URL — the same shape of hole
+    the media route closes by resolving the source THROUGH its bank."""
+    bank_a = _cut_bank(client, tmp_path)
+    bank_b = _make_bank(client, tmp_path / 'other')
+    clip = _clips(client, bank_a)[0]
+
+    r = client.patch(f'/api/video-bank/{bank_b}/clip/{clip["id"]}/bounds',
+                     json={'start_s': 1.0, 'end_s': 4.0})
+
+    assert r.status_code == 404
+
+
+@pytest.mark.parametrize('verb,path,body', [
+    ('patch', 'clip/{clip}/bounds', {'start_s': 1.0, 'end_s': 4.0}),
+    ('post', 'clip/{clip}/split', {'at_s': 4.0}),
+    ('post', 'source/{source}/clips', {'start_s': 20.0, 'end_s': 24.0}),
+])
+def test_retouching_is_refused_while_a_pass_owns_the_bank(client, tmp_path, seams,
+                                                          verb, path, body):
+    """409 with `busy_kind`, exactly like a second pass. Not pedantry: the thumbs
+    pass reads bounds and then stamps `thumb_state='ok'`, so an edit landing between
+    those two writes produces a thumbnail of the OLD span marked as current — the
+    one failure mode this whole feature exists to prevent, made invisible."""
+    import time
+    from app.services import bank_jobs
+    bank_id = _cut_bank(client, tmp_path)
+    clip = _clips(client, bank_id)[0]
+    bank_jobs._jobs[svc.job_key(bank_id)] = {
+        'kind': 'thumbs', 'done': 1, 'total': 9, 'error': None, 'cancelled': False,
+        'finished': False, 'detail': None, 'started_at': time.time(),
+        '_touched': time.time(), '_cancel_hook': None, 'pipeline': None}
+
+    url = (f'/api/video-bank/{bank_id}/'
+           + path.format(clip=clip['id'], source=clip['source_id']))
+    r = getattr(client, verb)(url, json=body)
+
+    assert r.status_code == 409, r.get_json()
+    assert r.get_json()['busy_kind'] == 'thumbs'
+
+
+def test_re_detecting_a_file_never_destroys_a_hand_made_cut(client, tmp_path, seams):
+    """A re-detect deletes the clips of the file it re-cuts, sparing only the ones
+    already promoted. Manual cuts were not spared by that rule and would have been
+    wiped by a checkbox — the single most expensive way to lose an afternoon of
+    triage. Detector-drawn clips still go, which is the point of re-detecting."""
+    bank_id = _cut_bank(client, tmp_path)
+    source_id = _clips(client, bank_id)[0]['source_id']
+    client.post(f'/api/video-bank/{bank_id}/source/{source_id}/clips',
+                json={'start_s': 20.0, 'end_s': 24.0})
+
+    assert client.post(f'/api/video-bank/{bank_id}/detect',
+                       json={'redetect': True}).status_code == 202
+
+    rows = _clips(client, bank_id)
+    assert [c for c in rows if c['detector'] == 'manual']
+    assert len([c for c in rows if c['detector'] == 'transnetv2']) == 2

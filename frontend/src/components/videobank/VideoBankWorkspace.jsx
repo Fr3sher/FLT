@@ -3,8 +3,9 @@ import { apiFetch, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { HelpBadge } from '../../help/HelpMode'
 import {
-  videoBankUrl, videoClipsUrl, videoPassUrl,
+  videoBankUrl, videoClipsUrl, videoPassUrl, videoSourceClipsUrl,
 } from './videoBankApi'
+import { retouchToast } from './videoClipEdit'
 import { passBlockedBy } from './videoCapability'
 import {
   countsSummary, countsProblems, activityLine, activityPercent, isBusy,
@@ -49,6 +50,10 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   const [openIndex, setOpenIndex] = useState(null)
   const [promoting, setPromoting] = useState(false)
   const [loadingClips, setLoadingClips] = useState(false)
+  // A retouch ADDED a shot (a split, or a hand-made cut). The gallery is reloaded
+  // when the player closes rather than under it: `openIndex` addresses the list by
+  // POSITION, so inserting a row mid-session moves the player onto another shot.
+  const [pendingRefresh, setPendingRefresh] = useState(false)
   // The last job we announced, so a finished pass is toasted ONCE instead of on
   // every poll for as long as the server keeps its snapshot.
   const announced = useRef(null)
@@ -201,6 +206,51 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
     setOpenIndex((i) => (i != null && i + 1 < clips.length ? i + 1 : i))
   }
 
+  /** A shot was re-cut, split, or drawn by hand.
+   *
+   * The retouched row is swapped IN PLACE rather than triggering a reload: the
+   * user is inside the lightbox, `openIndex` addresses the list by position, and
+   * a reload would either close the player or move it onto a different shot.
+   *
+   * A split's new half and a hand-made shot are NOT inserted into the open list.
+   * The list is one page of a filter they may not even satisfy (a 'pending' new
+   * shot under the 'keep' filter), and quietly inserting a row would shift every
+   * index under the player. The counters move immediately, so the grid says three
+   * where it said two the next time it is loaded, and the next-step line asks for
+   * the thumbnails pass on its own because `counts.thumbs` just fell.
+   */
+  const onRetouched = (payload, kind) => {
+    if (payload?.counts) {
+      setBank((b) => (b ? { ...b, counts: payload.counts } : b))
+    }
+    if (payload?.clip) {
+      setClips((list) => list.map((c) => (
+        c.id === payload.clip.id ? { ...c, ...payload.clip } : c)))
+    }
+    if (kind !== 'bounds') setPendingRefresh(true)
+  }
+
+  /** ✂ The FIRST shot of a file, from the Files list.
+   *
+   * Reloading the gallery here is right where swapping a row in place was right
+   * above: nothing is open, and the new shot has to appear — it is the thing the
+   * user is about to click on to trim it.
+   */
+  const cutByHand = async (src, bounds) => {
+    try {
+      const d = await postJson(videoSourceClipsUrl(bankId, src.id), bounds)
+      toast.success(retouchToast('create'))
+      setBank((b) => (b && d.counts ? { ...b, counts: d.counts } : b))
+      loadClips(false)
+    } catch (e) {
+      if (e?.status === 409) {
+        toast.warning('A pass is running on this bank — stop it before cutting.')
+      } else {
+        toast.error(e?.message || 'Could not add that shot.')
+      }
+    }
+  }
+
   if (!bank) return <p className="text-sm text-content-muted">Loading…</p>
   const problems = countsProblems(counts)
 
@@ -302,7 +352,7 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
         </summary>
         <div className="border-t border-border p-3">
           <VideoSourceList sources={bank.sources || []} activeSourceId={sourceId}
-            onFilter={setSourceId} />
+            onFilter={setSourceId} onCut={cutByHand} />
         </div>
       </details>
 
@@ -377,8 +427,17 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
 
       {openClip && (
         <VideoClipLightbox bankId={bankId} clip={openClip}
+          // The SOURCE's own facts, which the clip row does not carry: the file's
+          // duration is the wall a bound cannot cross, and `fps_native` is what
+          // "one frame" means for a nudge. Reading the TARGET's rate there is
+          // exactly the mistake that turns a 16 fps profile into fast motion.
+          source={bank.sources?.find((s) => s.id === openClip.source_id) || null}
+          onRetouched={onRetouched}
           hasPrev={openIndex > 0} hasNext={openIndex < clips.length - 1}
-          onClose={() => setOpenIndex(null)}
+          onClose={() => {
+            setOpenIndex(null)
+            if (pendingRefresh) { setPendingRefresh(false); loadClips(false) }
+          }}
           onPrev={() => setOpenIndex((i) => Math.max(0, i - 1))}
           onNext={() => setOpenIndex((i) => Math.min(clips.length - 1, i + 1))}
           onKeep={() => triageOpen('keep')}

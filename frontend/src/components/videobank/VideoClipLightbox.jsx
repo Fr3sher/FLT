@@ -4,6 +4,7 @@ import {
   MAX_MOUNTED_PLAYERS,
 } from './videoClipFragment'
 import { videoSourceMediaUrl } from './videoBankApi'
+import VideoClipTrimTools from './VideoClipTrimTools'
 
 /** 🎬 Watching ONE shot — the only <video> element this lane ever mounts.
  *
@@ -18,11 +19,25 @@ import { videoSourceMediaUrl } from './videoBankApi'
  * shot's range while the caption names a different one. `shouldRemountPlayer`
  * owns that decision, and the key is derived from it rather than from the clip
  * id, so "same source, same start" never restarts playback from the head.
+ *
+ * That rule pays for itself once the ✂ retouch tools land here: saving a new
+ * START swaps the clip row in place, the descriptor changes, and the player is
+ * recreated on the new `#t=` — so you immediately watch the range you just cut
+ * instead of the one you cut it from. Saving only the END deliberately does not
+ * remount: the range you are watching still opens at the same instant, and
+ * restarting playback there would be a punishment for trimming a tail.
  */
 export default function VideoClipLightbox({
-  bankId, clip, onClose, onPrev, onNext, onKeep, onReject, hasPrev, hasNext,
+  bankId, clip, source, onClose, onPrev, onNext, onKeep, onReject, onRetouched,
+  hasPrev, hasNext,
 }) {
   const [failed, setFailed] = useState(false)
+  // The playhead, in SOURCE seconds — the element's timeline IS the rush's,
+  // because the resource it loads is the whole file and the media fragment only
+  // moves the initial seek and the stop point. That single fact is what lets the
+  // retouch tools use `currentTime` as a bound with no conversion, and it is
+  // asserted rather than assumed in videoClipEdit.playheadToSourceTime.
+  const [playheadS, setPlayheadS] = useState(null)
   // What the mounted element was built for, plus the key that forces React to
   // recreate it. Adjusted DURING render on purpose (React's documented
   // derive-during-render pattern) — an effect would run after paint and leave
@@ -38,7 +53,8 @@ export default function VideoClipLightbox({
   }
   const playerKey = player.current.key
 
-  useEffect(() => { setFailed(false) }, [playerKey])
+  useEffect(() => { setFailed(false); setPlayheadS(clip?.start_s ?? null) },
+    [playerKey])                                        // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const onKey = (e) => {
@@ -86,6 +102,13 @@ export default function VideoClipLightbox({
               // whatever you clicked next.
               preload="metadata"
               onError={() => setFailed(true)}
+              // `timeupdate` fires about four times a second — enough to keep
+              // "✂ Split here" honest, cheap enough not to be worth throttling.
+              // `seeked` is what makes a paused scrub usable: dragging to a frame
+              // and splitting there is the whole gesture, and it emits no
+              // timeupdate while paused.
+              onTimeUpdate={(e) => setPlayheadS(e.currentTarget.currentTime)}
+              onSeeked={(e) => setPlayheadS(e.currentTarget.currentTime)}
               className="max-h-[60vh] w-full object-contain"
             >
               <track kind="captions" />
@@ -130,6 +153,11 @@ export default function VideoClipLightbox({
             </button>
           </div>
         </div>
+        {/* The retouch tools. Folded by default: triage is a K/R/→ rhythm over
+            hundreds of shots, and the mis-cut ones are the minority. */}
+        <VideoClipTrimTools bankId={bankId} clip={clip} source={source}
+          playheadS={playheadS} onChanged={onRetouched} />
+
         <p className="text-center text-[0.6875rem] text-white/50">
           ← → to move · K to keep · R to reject · Esc to close
           {/* Never rendered on a correct build; it is a tripwire for a future

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   videoClipThumbUrl, videoSourceMediaUrl, videoBankUrl, videoClipsUrl,
   videoPassUrl, videoDatasetUrl,
+  videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl,
 } from './videoBankApi.js'
 
 test('thumb and media URLs address a clip and its SOURCE', () => {
@@ -52,4 +53,12 @@ test('pass and dataset URLs', () => {
   assert.equal(videoPassUrl(2, 'pipeline'), '/api/video-bank/2/pipeline')
   assert.equal(videoPassUrl(2, 'cancel'), '/api/video-bank/2/cancel')
   assert.equal(videoDatasetUrl(5), '/api/video-dataset/5')
+})
+
+test('the retouch URLs hang off the right thing', () => {
+  // A new shot is created under the SOURCE and not under a clip: the whole point
+  // is that there is no existing shot to hang it off — the detector missed it.
+  assert.equal(videoClipBoundsUrl(3, 77), '/api/video-bank/3/clip/77/bounds')
+  assert.equal(videoClipSplitUrl(3, 77), '/api/video-bank/3/clip/77/split')
+  assert.equal(videoSourceClipsUrl(3, 12), '/api/video-bank/3/source/12/clips')
 })

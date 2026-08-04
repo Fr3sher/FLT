@@ -32,7 +32,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-import { render } from './support/mountJsx.mjs'
+import { createElement, render, renderToStaticMarkup } from './support/mountJsx.mjs'
 
 /* ⚠️ Dynamic, and it has to be: the hooks that teach Node to read .jsx are
    installed while mountJsx.mjs is EVALUATED, and a static import of a .jsx file
@@ -48,6 +48,15 @@ const { default: VideoSourceList } =
   await import('../src/components/videobank/VideoSourceList.jsx')
 const { default: VideoTargetPicker } =
   await import('../src/components/videobank/VideoTargetPicker.jsx')
+
+const { ToastProvider } = await import('../src/components/common/Toast.jsx')
+
+/* The lightbox now holds the ✂ retouch tools, which call `useToast` — a hook that
+   THROWS outside its provider rather than degrading, on purpose. Rendering the
+   host inside the provider is what the app does; stubbing the hook here would
+   have made this file green while the real lightbox threw on open. */
+const renderLightbox = (props) => renderToStaticMarkup(
+  createElement(ToastProvider, null, createElement(VideoClipLightbox, props)))
 
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8')
 const countTag = (html, tag) => (html.match(new RegExp(`<${tag}[\\s>]`, 'g')) || []).length
@@ -117,7 +126,7 @@ test('an empty grid renders its explanation, not an empty box', () => {
 // ---- (2) the lightbox: exactly one player, with the fragment ----------------
 
 test('the lightbox mounts EXACTLY ONE <video>, pointed at the source + fragment', () => {
-  const html = render(VideoClipLightbox, {
+  const html = renderLightbox({
     bankId: 4, clip: CLIPS[1], onClose: () => {}, onPrev: () => {}, onNext: () => {},
     onKeep: () => {}, onReject: () => {}, hasPrev: true, hasNext: true,
   })
@@ -128,7 +137,7 @@ test('the lightbox mounts EXACTLY ONE <video>, pointed at the source + fragment'
 
 test('the fragment carries sub-second bounds rather than rounded seconds', () => {
   // Rounding a bound to the nearest second moves a quarter of a two-second clip.
-  const html = render(VideoClipLightbox, {
+  const html = renderLightbox({
     bankId: 1, clip: { ...CLIPS[1], start_s: 41.25, end_s: 43.5 },
     onClose: () => {}, hasPrev: false, hasNext: false,
   })
@@ -138,7 +147,7 @@ test('the fragment carries sub-second bounds rather than rounded seconds', () =>
 test('a zero-length shot gets no player at all rather than a whole-file one', () => {
   // clipFragmentSrc answers null on an unplayable range; handing a malformed
   // fragment to a <video> makes it play the ENTIRE rush, silently.
-  const html = render(VideoClipLightbox, {
+  const html = renderLightbox({
     bankId: 1, clip: { ...CLIPS[0], start_s: 5, end_s: 5 },
     onClose: () => {}, hasPrev: false, hasNext: false,
   })
@@ -147,12 +156,93 @@ test('a zero-length shot gets no player at all rather than a whole-file one', ()
 })
 
 test('the lightbox renders its position and keeps its triage keys visible', () => {
-  const html = render(VideoClipLightbox, {
+  const html = renderLightbox({
     bankId: 4, clip: CLIPS[1], onClose: () => {}, hasPrev: false, hasNext: true,
   })
   assert.ok(html.includes('0:41 – 0:46 (5.3s)'), 'the shot’s position in its source')
   assert.match(html, /K to keep/)
   assert.match(html, /R to reject/)
+})
+
+// ---- (2b) the retouch tools live UNDER that one player ----------------------
+//
+// The tools are the reason the lightbox is now mounted inside a ToastProvider.
+// Two things are worth a render rather than a source regex: the panel must not
+// have added a second player (the ceiling is one, by construction), and the i2v
+// line must actually reach the screen — it is the piece of knowledge the feature
+// was built around, and it is exactly the kind of line a tidy-up deletes.
+
+test('the retouch tools add NO second player', () => {
+  const html = renderLightbox({
+    bankId: 4, clip: CLIPS[1], source: { id: 7, duration_s: 120, fps_native: 25 },
+    onClose: () => {}, hasPrev: false, hasNext: false,
+  })
+  assert.equal(countTag(html, 'video'), 1, 'the lane holds ONE player, tools included')
+  assert.match(html, /Trim &amp; split this shot/)
+})
+
+test('the trim panel says the first frame is the i2v conditioning image', () => {
+  // ai-toolkit conditions an image-to-video sample on the clip's FIRST frame, so
+  // moving a start IS choosing the conditioning image. Nothing else in the app
+  // says it and no user would guess it from a control called "trim".
+  const html = renderLightbox({
+    bankId: 4, clip: CLIPS[1], source: { id: 7, duration_s: 120, fps_native: 25 },
+    onClose: () => {}, hasPrev: false, hasNext: false,
+  })
+  assert.match(html, /first frame is the conditioning image/)
+})
+
+test('the nudge buttons name one frame at the SOURCE rate, not the target rate', () => {
+  // Reading the target's fps here is the same mistake that turns a 16 fps profile
+  // into accelerated motion: bounds are timestamps in the source file.
+  const html = renderLightbox({
+    bankId: 4, clip: CLIPS[1], source: { id: 7, duration_s: 120, fps_native: 25 },
+    onClose: () => {}, hasPrev: false, hasNext: false,
+  })
+  assert.match(html, /one frame = 0\.040s/)
+})
+
+test('a shot whose source was never probed still renders its tools', () => {
+  // duration_s and fps_native are both null before the probe pass. The panel has
+  // to degrade to a conservative frame step and let the server own the upper wall
+  // — throwing here would make the lightbox unopenable on a fresh bank.
+  const html = renderLightbox({
+    bankId: 4, clip: CLIPS[1], source: { id: 7, duration_s: null, fps_native: null },
+    onClose: () => {}, hasPrev: false, hasNext: false,
+  })
+  assert.match(html, /one frame = 0\.033s/)
+})
+
+test('with no playhead yet, splitting says what to do instead of failing quietly', () => {
+  // The very first render happens before any timeupdate has fired.
+  const html = renderLightbox({
+    bankId: 4, clip: CLIPS[1], source: null,
+    onClose: () => {}, hasPrev: false, hasNext: false,
+  })
+  assert.match(html, /Move the playhead inside this shot/)
+})
+
+test('a probed file offers a hand cut even when it has no shots at all', () => {
+  // The reachability hole this closes: every other retouch gesture needs an OPEN
+  // shot, and a file detection missed — or a bank on an install with no detector,
+  // which the app says can still "scan, cut, watch and triage" — has none.
+  const html = render(VideoSourceList, {
+    sources: [{ id: 7, relpath: 'day1/a.mp4', duration_s: 120, fps_native: 25,
+      file_size: 400, probe_state: 'ok', detect_state: null, clips: 0 }],
+    activeSourceId: null, onFilter: () => {}, onCut: () => {},
+  })
+  assert.match(html, /Cut a shot by hand/)
+})
+
+test('an UNPROBED file offers no hand cut — its length is not known yet', () => {
+  // A bound cannot be checked against a duration nobody has read, and offering the
+  // button there would produce a shot that only the server could refuse.
+  const html = render(VideoSourceList, {
+    sources: [{ id: 8, relpath: 'day1/b.mkv', duration_s: null, fps_native: null,
+      file_size: 400, probe_state: null, detect_state: null, clips: 0 }],
+    activeSourceId: null, onFilter: () => {}, onCut: () => {},
+  })
+  assert.ok(!html.includes('Cut a shot by hand'))
 })
 
 // ---- (3) the capability strip names PIECES, never one verdict ---------------

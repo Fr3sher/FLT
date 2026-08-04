@@ -1587,6 +1587,49 @@ catches the failure the averages never can — a shot that plays fine and then
 hangs on a still image for a second. On a real 4.5-hour test bank that turned
 out to be the most common defect of all.
 
+## Retouch a cut: trim, split, or draw a shot by hand
+
+Shot detection is good and it is not right. It cuts a slow dissolve a second
+early, and it happily hands back a shot whose last second is a frozen frame.
+Before this panel existed the only gesture available on either was **✕ Reject** —
+throwing away eight good seconds to be rid of one bad one.
+
+Open any shot and unfold **✂ Trim & split this shot**, under the player:
+
+- **Nudge either bound** by 1 s or by one frame. One frame means one frame *of
+  your source file*, at its own rate — a 25 fps rush steps by 0.040 s, a 59.94 fps
+  one by 0.017 s. The frame counts your target model wants are a different thing
+  entirely, decided at build time.
+- **⇤ playhead** snaps a bound to wherever the video is paused. Scrub to the frame
+  you want, click, save.
+- **✂ Split here** cuts the shot in two at the playhead. The half you were looking
+  at keeps its triage decision, and so does the new one: split a *kept* shot and
+  both halves stay kept, so you never have to find them again among hundreds.
+- **＋ New shot from here** draws a shot the detector missed entirely. The player
+  is pointed at the whole rush, so you can scrub anywhere in the file — not only
+  inside the shot you opened — and mark a boundary that was never found.
+
+**For image-to-video targets, the first frame is the conditioning image.** The
+trainer conditions an i2v sample on the clip's *first* frame, so moving a start is
+not trimming: it is choosing the exact picture the model learns to animate from.
+If the first second of a shot is a dissolve, an i2v LoRA trained on it learns to
+animate dissolves. The panel repeats this line where the buttons are.
+
+**A re-cut shot loses its thumbnail and its quality scores, on purpose.** They
+were measurements *of the old bounds* — a thumbnail showing a frame the shot no
+longer contains is not stale, it is wrong. The tile goes blank and the bank's
+next-step line offers **🖼 Make thumbnails** again; run it once when you are done
+cutting rather than after every edit.
+
+**Limits worth knowing.** A shot must last at least 0.5 s, and both halves of a
+split must too — the buttons say so rather than silently clamping. Retouching is
+refused while a pass is running on the bank (a thumbnail pass mid-edit would
+produce a picture of the old span marked as current), so stop the pass first.
+Re-detecting a file deletes the shots the detector drew and **never** the ones you
+cut by hand; those stay, and may overlap the fresh ones. And editing a shot that
+is already in a built dataset is allowed: the dataset stored its own copy of the
+bounds when it was encoded, so nothing already on disk changes.
+
 ## Video training sets (and the two things to check before you cut one)
 
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next
