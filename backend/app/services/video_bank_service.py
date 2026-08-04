@@ -936,7 +936,7 @@ def resolve_size(profile_key, size):
 
 
 def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
-                  frames=None, size=None):
+                  frames=None, size=None, max_per_source=None):
     """Encode the KEPT clips into a new video dataset.
 
     Everything that can be refused is refused HERE, synchronously, before a single
@@ -957,8 +957,35 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
     q = VideoClip.query.filter_by(bank_id=bank_id, status='keep')
     if ids:
         q = q.filter(VideoClip.id.in_([int(i) for i in ids]))
-    clip_ids = [c.id for c in
-                q.order_by(VideoClip.source_id.asc(), VideoClip.start_s.asc()).all()]
+    rows = q.order_by(VideoClip.source_id.asc(), VideoClip.start_s.asc()).all()
+    if max_per_source is not None:
+        # The cap trims DOMINANCE, it never punishes scarcity: each source keeps
+        # its EARLIEST clips (detector order — stable and explainable, unlike a
+        # random sample that changes on every promotion of the same bank).
+        per_cap = int(max_per_source)
+        if per_cap < 1:
+            raise ValueError('max_per_source must be at least 1')
+        taken = {}
+        kept = []
+        for clip in rows:
+            n = taken.get(clip.source_id, 0)
+            if n < per_cap:
+                taken[clip.source_id] = n + 1
+                kept.append(clip)
+        rows = kept
+    clip_ids = [c.id for c in rows]
+    # Composition, reported rather than judged: 60% of a dataset coming from one
+    # source is invisible on disk — the folder looks exactly like a diverse one —
+    # and it is the kind of imbalance that quietly overfits a source. Found by
+    # our own first end-to-end test, which picked "the first 50 that pass" and
+    # got three videos over-represented.
+    per_source = {}
+    for clip in rows:
+        per_source[clip.source_id] = per_source.get(clip.source_id, 0) + 1
+    composition = {
+        'sources': len(per_source),
+        'top_source_share': (max(per_source.values()) / len(rows)) if rows else 0.0,
+    }
     if not clip_ids:
         raise ValueError('nothing to promote — keep some clips first')
     # "Keep the source's size" quietly bypasses the explicit-size validation, and
@@ -1001,7 +1028,8 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                                  frames, size),
                     total=len(clip_ids))
     return {'id': dataset.id, 'name': dataset.name,
-            'output_dir': dataset.output_dir, 'clips': len(clip_ids)}
+            'output_dir': dataset.output_dir, 'clips': len(clip_ids),
+            'composition': composition}
 
 
 def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size):
