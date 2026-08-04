@@ -2155,10 +2155,30 @@ def dataset_train_cloud_continue():
                                     from_step=d.get('from_step'),
                                     overrides=d.get('overrides'),
                                     resume_mode=d.get('resume_mode', 'weights_only'),
-                                    state_bundle_id=d.get('state_bundle_id'))
+                                    state_bundle_id=d.get('state_bundle_id'),
+                                    transport=d.get('transport'))
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **res})
+
+
+@bp.post('/dataset/train/cloud/resume-plan')
+def dataset_train_cloud_resume_plan():
+    """The two roads a full model can take back to a pod, with their duration
+    and their GPU cost — answered BEFORE anything is rented, like every other
+    plan endpoint here. Always 200: a road that cannot be taken comes back
+    unavailable with the reason, because a disabled button that explains itself
+    is the whole point of this panel."""
+    gate = _require_cloud()
+    if gate:
+        return gate
+    d = request.get_json(silent=True) or {}
+    try:
+        return jsonify({'ok': True, **ct.dense_resume_plan(
+            LOCAL_USER, int(d.get('run_id') or 0),
+            from_step=d.get('from_step'))})
+    except Exception as e:
+        return _map_error(e)
 
 
 @bp.post('/dataset/train/cloud/recheck-delivery')

@@ -636,15 +636,42 @@ has no room for what is coming.
 
 ### Continuing a full model
 
-▶ Continue works on a full model, from **its Hugging Face copy**: the fresh pod
-downloads that checkpoint itself over a datacenter link, drops it into its job
-folder, and ai-toolkit resumes from the step written in the file — so a run that
-stopped at 3000 continues to 4000 instead of paying for the first 3000 again.
+▶ Continue works on a full model: a fresh pod is handed the checkpoint, drops it
+into its job folder, and ai-toolkit resumes from the step written in the file —
+so a run that stopped at 3000 continues to 4000 instead of paying for the first
+3000 again.
 
-The copy **on this computer** cannot be used for that, and the app says so rather
-than trying: the only channel that puts a file on a pod builds its whole request
-in memory, which a 26 GB file cannot survive. That is why the default delivery
-keeps a Hub copy — it is what makes a full model resumable at all.
+The interesting part is **how the 26 GB gets to the pod**, because there are two
+roads and they are not interchangeable. The dialog shows both, with numbers:
+
+- **☁ Hugging Face** — the pod downloads the checkpoint itself over a datacenter
+  link. Minutes. It needs a Hub copy of the run to exist, and the weights pass
+  through a third party on the way.
+- **💻 This computer** — the file goes straight up from here. Nothing outside
+  your machine is involved, and it costs your upload speed: usually hours.
+
+**The number that actually decides it is neither speed nor privacy — it is the
+GPU bill.** The pod is rented and charged from the moment it boots, including
+every minute it spends waiting for its checkpoint. Three hours of upload at
+$1.40/h is **$4.20 of graphics card computing nothing**. The dialog shows that
+figure for each road before you click, alongside the file size and how long it
+expects to take.
+
+That estimate is honest about where it comes from. The app times every transfer
+it makes to a pod, so after your first cloud run the forecast says *"measured at
+N Mbit/s on your last 3 transfers"*. Before that it says it is an estimate and
+names the speed it assumed. (If you already know your uplink, `cloud.uplink_mbps`
+seeds it — but a real measurement always wins over a typed one.)
+
+**A long upload is interruptible without being lost.** The file is sent in
+slices, and every slice that reached the pod stays there: if the link drops, the
+app is closed, or the machine reboots, continuing that run again picks up at the
+last whole slice instead of starting over.
+
+When a road is unavailable the dialog says which one and why — a run delivered
+to this computer only has no Hub copy to pull, and a run whose local file was
+deleted has only the Hub. Keeping the default **"This computer + Hugging Face"**
+delivery keeps the fast road open for every future run.
 
 ### The two files a finished run delivers
 

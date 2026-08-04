@@ -1534,7 +1534,12 @@ const TOPICS = [
   action('continue-training', 'Continue a training run',
     ['continue', 'resume', 'more steps', 'epoch', 'checkpoint', 'restart', 'undercook', 'overcook',
      'learning rate', 'lr', 'half', 'tenth', 'gentle finish', 'polish', 'timestep', 'cadence',
-     'lane', 'local', 'cloud', 'run it'],
+     'lane', 'local', 'cloud', 'run it',
+     // How a full model's 26 GB reaches the pod — the priced choice in this
+     // same dialog. Searchable from the words a user would actually type when
+     // they are staring at a GPU cost they did not expect.
+     'send it via', 'transport', 'upload', 'uplink', 'hugging face copy',
+     'gpu cost', 'how long', 'slice', 'resumable upload'],
     '/datasets?section=checkpoints', 'dataset-guide', '6-after-training-pick-the-right-checkpoint',
     { trigger: 'continue-any-epoch',
       text: 'Finished a run? ▶ Continue trains it further — for any number of steps, or resumed from an earlier, less-cooked epoch.' }),

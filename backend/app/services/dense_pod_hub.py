@@ -240,6 +240,15 @@ def _run(remote, *, instance_id, token, command, budget_seconds, tmp_dir,
     return parsed
 
 
+# The pod-side executor is not Hugging Face-specific: ship what the program
+# needs, run ONE command, read ONE result line. `pod_checkpoint_push` runs its
+# probe and assembly programs through this exact function rather than becoming a
+# second `execute_command` caller — two implementations of "what does a failure
+# on a rented pod look like" is the kind of divergence that only ever shows up
+# in production, on the machine nobody can attach a debugger to.
+run_program = _run
+
+
 def push_master(remote, *, instance_id, src_path, repo_id, path_in_repo,
                 hf_token, tmp_dir, budget_seconds=DEFAULT_PUSH_BUDGET_SECONDS,
                 vast=None, on_state=None, _sleep=time.sleep,

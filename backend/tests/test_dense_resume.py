@@ -1,11 +1,16 @@
-"""Continuing a FULL MODEL: from the Hub, by the pod, with the same guardrails.
+"""Continuing a FULL MODEL from the Hub: the pod fetches its own checkpoint.
 
 Run #146 proved the mechanism the hard way — relaunching its job by hand made
 ai-toolkit auto-resume from the checkpoint sitting in the job's save_root, twice.
-What was missing was a way to put that checkpoint on a FRESH pod. It cannot be
-uploaded from here (26 GB through a seam that builds its request in memory), so
-the pod fetches it from the Hugging Face copy itself. Everything else is the
-LoRA path, unchanged: one continue_cloud_run, one launch, one set of guards.
+What was missing was a way to put that checkpoint on a FRESH pod, and the Hub
+road was the first answer: the pod pulls the file itself, over a datacenter
+link, in minutes. Everything else is the LoRA path, unchanged: one
+continue_cloud_run, one launch, one set of guards.
+
+This road used to be the ONLY one, because a 26 GB upload could not survive a
+multipart body built in memory. The other road (pushing the local copy from
+this computer, in resumable slices) lives in test_dense_resume_direct.py; what
+is tested HERE is that offering it changed nothing about this one.
 """
 import json
 
@@ -48,7 +53,9 @@ def _delivered_run(ct, dataset_id, **params):
 
 # --- what a full model can be continued from ------------------------------------
 
-def test_the_hub_copy_is_the_only_offered_source(ct, app, dataset_id):
+def test_the_hub_copy_is_offered_when_it_is_the_only_one_left(ct, app, dataset_id):
+    """A run whose local files are gone (purged, or delivered to the Hub only)
+    still has the Hub road, and it is the one offered."""
     with app.app_context():
         run = _delivered_run(ct, dataset_id)
         [candidate] = ct._dense_resume_candidates(run)
@@ -167,8 +174,12 @@ def test_the_pod_fetches_its_own_resume_checkpoint(ct, app, dataset_id, monkeypa
 
     class _Remote:
         def seed_checkpoint(self, *a, **k):
-            raise AssertionError('a 26 GB seed must never go through the '
-                                 'in-memory upload seam')
+            raise AssertionError('the Hub road must not touch this uplink at '
+                                 'all — the pod fetches the file itself')
+
+        def upload_file_slice(self, *a, **k):
+            raise AssertionError('the Hub road must not touch this uplink at '
+                                 'all — the pod fetches the file itself')
 
     with app.app_context():
         run = ct.CloudTrainingRun(

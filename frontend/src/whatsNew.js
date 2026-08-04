@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-choose-how-a-full-model-reaches-the-pod',
+    date: '2026-08-04',
+    title: 'Continue a full model from your own copy — and see what each way costs',
+    blurb:
+      '☁ Continuing a 12B full model used to be possible from exactly one place: its Hugging Face copy. If a run had been delivered to this computer only, or its Hub copy had been deleted, there was nothing to do — the app refused, and the reason was a limit inside one upload route, not a fact about the world. ▶ Continue now offers both roads and prices them before you click. Hugging Face is minutes, because the pod downloads over a datacenter link; sending the copy from this computer is autonomous and costs your upload speed. The figure that actually decides it has never been shown anywhere until now: the pod is rented and billed the entire time it waits for its file, so three hours of upload at $1.40/h is $4.20 of GPU computing nothing. You see that number, the file size, and how long it should take — measured on your own past transfers once you have made one, and openly labelled an estimate before that. A long upload is no longer all-or-nothing either: the file goes up in slices, and every slice that landed stays on the pod, so a dropped link, a closed app or a reboot resumes where it stopped instead of starting over. When a road is closed the dialog says which one and why, and what would reopen it.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-04-auto-reject-shows-the-number-it-will-actually-reject',
     date: '2026-08-04',
     title: 'Auto-reject stops promising more than it can do',

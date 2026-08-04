@@ -1411,13 +1411,16 @@ def retry_cloud_run(user_id, run_id) -> dict:
     if not isinstance(p, dict):
         p = {}
     if (p.get('training_mode') == 'full_transformer'
-            and p.get('resume_ckpt_path')):
-        # A dense seed is never a local file (launch refuses that: the pod's
-        # upload seam cannot carry 26 GB), so a row carrying one is a legacy
-        # shape and retrying it would replay something we can no longer do.
-        raise ValueError('this full-model run resumes from a local file, which '
-                         'a pod cannot be handed; continue it from its Hugging '
-                         'Face copy instead')
+            and p.get('resume_ckpt_path')
+            and not os.path.isfile(p['resume_ckpt_path'])):
+        # A dense retry replays its seed verbatim, so the seed has to still be
+        # there. This used to refuse EVERY local dense seed, because the pod's
+        # upload seam could not carry 26 GB at all; now the only thing that
+        # stops a replay is the file being gone — and saying "gone" when it is
+        # merely large would be the same missing choice this lane just gained.
+        raise ValueError('the full model this run resumed from is no longer on '
+                         'this computer; continue it from its Hugging Face copy '
+                         'instead')
     _assert_recipe_replayable(p, 'retry')
     snapshot = p.get(_TRAIN_SETTINGS_SNAPSHOT, _UNSET)
     if p.get('resume_ckpt_path'):
@@ -1497,36 +1500,190 @@ def _run_staging_checkpoints(run) -> list:
 
 
 def _dense_resume_candidates(run) -> list:
-    """What a FULL-MODEL run can be continued from, and where that lives.
+    """What a FULL-MODEL run can be continued from, and BY WHICH ROAD.
 
-    The Hugging Face copy, and only it. A dense master is ~26 GB: the pod can
-    pull that from the Hub in minutes over a datacenter link, but it cannot be
-    handed the copy sitting on this computer — the pod's only upload seam builds
-    its whole request in memory. Offering a source we would have to refuse would
-    be worse than a short list, so the local copy is deliberately absent here
-    and the refusal that names the reason lives in launch_cloud_training.
+    TWO sources now, and the difference between them is the point:
+
+    * ``'hub'`` — the Hugging Face copy. The pod pulls it over a datacenter
+      link, so it is minutes; it needs that copy to exist, which means the run
+      was delivered with a Hub leg, and it means the weights travel through a
+      third party.
+    * ``'local'`` — the master sitting on this computer. Nothing outside the
+      machine is involved, and it costs the user's uplink: ~26 GB of upload
+      while a rented GPU is being billed for doing nothing.
+
+    The local road used to be absent from this list on purpose, because the
+    pod's only write seam built its whole request in memory and 26 GB could not
+    survive that. That is fixed (``pod_checkpoint_push``), so hiding the road is
+    no longer honesty, it is a missing choice — and it was the ONLY road for a
+    run delivered without a Hub leg.
 
     Same shape as _run_staging_checkpoints (step / filename / resume_state) so
-    the selection logic in continue_cloud_run stays ONE piece of code."""
+    the selection logic in continue_cloud_run stays ONE piece of code. Sorted
+    step-ascending with 'hub' last on a tie, which is what keeps the historical
+    default: continue_cloud_run's no-argument pick stays the Hub copy."""
     if not _is_full_transformer_run(run):
         return []
+    out = []
+    for name, path in (run_checkpoint_files(run) or {}).items():
+        if dld.is_fp8_name(name):
+            # A quantized twin cannot be trained further — its weights are fp8
+            # with per-tensor scales, not the bf16 the trainer loads.
+            continue
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue                     # vanished between listing and stat
+        out.append({'step': int(dld.step_of(
+                        name, default=int(_run_param(run, 'steps') or 0)) or 0),
+                    'filename': name, 'source': 'local', 'path': path,
+                    'size_bytes': size, 'repo_id': None, 'hf_filename': None,
+                    'resume_state': _cloud_resume_state()})
     repo_id = _run_param(run, 'hf_repo_id')
     filename = _run_param(run, 'hf_weight_filename')
-    if not repo_id or not filename:
-        return []
-    if _run_param(run, 'artifact_status') != 'available':
-        # Unverified is not a source: seeding a checkpoint that may be truncated
-        # would spend a fresh pod to train from garbage.
-        return []
-    name = os.path.basename(str(filename))
-    if dld.is_fp8_name(name):
-        # A quantized twin cannot be trained further — its weights are fp8 with
-        # per-tensor scales, not the bf16 the trainer loads.
-        return []
-    step = dld.step_of(name, default=int(_run_param(run, 'steps') or 0))
-    return [{'step': int(step or 0), 'filename': name, 'source': 'hub',
-             'repo_id': str(repo_id), 'hf_filename': str(filename),
-             'path': None, 'resume_state': _cloud_resume_state()}]
+    # Unverified is not a source: seeding a checkpoint that may be truncated
+    # would spend a fresh pod to train from garbage.
+    if repo_id and filename and _run_param(run, 'artifact_status') == 'available':
+        name = os.path.basename(str(filename))
+        if not dld.is_fp8_name(name):
+            step = dld.step_of(name, default=int(_run_param(run, 'steps') or 0))
+            # The size comes from the verification proof, which measured the
+            # file ON the Hub. A local twin of the same name would be a good
+            # guess and a bad fact — the two can differ, and this number ends
+            # up in a forecast the user is asked to trust.
+            proof = _run_param(run, 'hf_artifact_proof')
+            out.append({'step': int(step or 0), 'filename': name,
+                        'source': 'hub', 'repo_id': str(repo_id),
+                        'hf_filename': str(filename), 'path': None,
+                        'size_bytes': int((proof or {}).get('size_bytes') or 0)
+                        if isinstance(proof, dict) else 0,
+                        'resume_state': _cloud_resume_state()})
+    out.sort(key=lambda c: (c['step'], c['source'] == 'hub'))
+    return out
+
+
+def dense_resume_transport(candidates, transport=None) -> str:
+    """Which road a dense continue takes: ``'hub'`` or ``'local'``.
+
+    ``transport`` is what the user picked ('hub' / 'direct'), or None for "no
+    opinion". No opinion means the Hugging Face copy WHENEVER ONE EXISTS, at any
+    step — never "whichever checkpoint is newest". Those two rules differ when
+    the local disk holds a later save than the Hub does, and picking the newest
+    would silently switch the user onto a road that takes hours and bills a GPU
+    the whole time. A lane that expensive is a decision, not a default."""
+    want = {'hub': 'hub', 'direct': 'local', 'local': 'local'}.get(
+        str(transport or '').strip().lower())
+    if want:
+        return want
+    return 'hub' if any(c.get('source') == 'hub' for c in candidates) else 'local'
+
+
+def dense_resume_plan(user_id, run_id, from_step=None) -> dict:
+    """The two roads a full model can take back to a pod, PRICED — the answer
+    behind the ▶ Continue dialog's choice, before anything is rented.
+
+    Always returns; a road that cannot be taken comes back with
+    ``available: False`` and a ``reason`` that names what would make it
+    available. A greyed-out option with no explanation is how a user ends up
+    reading source code to find out that a trade-off exists at all.
+
+    The GPU cost is the number this whole panel exists for. A pod is rented and
+    billed while it is being handed its checkpoint, so the road that takes three
+    hours costs three hours of a graphics card doing nothing — and until this
+    existed, nothing in the app said so.
+    """
+    from . import pod_transfer_plan as ptp
+    run = db.session.get(CloudTrainingRun, int(run_id))
+    if not run:
+        raise ValueError('unknown cloud run')
+    candidates = _dense_resume_candidates(run)
+    if from_step is not None:
+        try:
+            want = int(from_step)
+        except (TypeError, ValueError):
+            raise ValueError('from_step must be an integer step')
+        candidates = [c for c in candidates if c['step'] == want]
+    # What the hour will cost. The source run's own rate is the best evidence
+    # there is — the child asks for the same GPU class — and the configured cap
+    # is the honest worst case when there is none.
+    price = float(run.price_per_hour or 0)
+    price_source = 'this run'
+    if not price:
+        price = float((cfg.get('cloud') or {}).get('max_price_per_hour') or 0.80)
+        price_source = 'the price cap in Settings'
+
+    def _lane(source):
+        picked = [c for c in candidates if c.get('source') == source]
+        return picked[-1] if picked else None
+
+    local = _lane('local')
+    hub = _lane('hub')
+    delivery = dld.run_mode(_run_params(run))
+    options = []
+
+    if hub:
+        est = ptp.estimate_hub(hub.get('size_bytes') or 0, price)
+        options.append({**est, 'transport': 'hub', 'available': True,
+                        'filename': hub['filename'], 'step': hub['step'],
+                        'repo_id': hub['repo_id'], 'reason': None})
+    else:
+        # Say WHICH of the three reasons it is, in the order that makes each
+        # answer TRUE rather than merely first. "Unavailable" alone sends the
+        # user to change a setting that was never the problem — and reporting
+        # "not verified" for a run that never had a copy at all sends them to
+        # re-verify something that does not exist.
+        status = _run_param(run, 'artifact_status')
+        has_copy = bool(_run_param(run, 'hf_repo_id')
+                        and _run_param(run, 'hf_weight_filename'))
+        if not dld.delivers_hub(delivery):
+            reason = ('this run was delivered to this computer only, so no '
+                      'Hugging Face copy of it was ever made. Set the delivery '
+                      'to "This computer + Hugging Face" (Settings ▸ Training) '
+                      'and future runs keep this road open.')
+        elif not has_copy:
+            reason = ('this run has no Hugging Face copy on record — it was '
+                      'never delivered there, or the copy is gone.')
+        elif status != 'available':
+            reason = ('the Hugging Face copy of this run is not verified '
+                      f"({status or 'unknown'}) — resuming from a file that may "
+                      'be truncated would spend a pod training from garbage.')
+        else:
+            reason = ('the Hugging Face copy of this run is gone — deleting it '
+                      'there closes this road.')
+        options.append({'transport': 'hub', 'available': False,
+                        'reason': reason, 'bytes': 0, 'seconds': 0,
+                        'gpu_cost': 0, 'price_per_hour': round(price, 4)})
+
+    if local:
+        est = ptp.estimate_direct(local.get('size_bytes') or 0, price)
+        options.append({**est, 'transport': 'direct', 'available': True,
+                        'filename': local['filename'], 'step': local['step'],
+                        'repo_id': None, 'reason': None})
+    else:
+        options.append({
+            'transport': 'direct', 'available': False, 'bytes': 0,
+            'seconds': 0, 'gpu_cost': 0, 'price_per_hour': round(price, 4),
+            'reason': ('this computer no longer holds a full-precision copy of '
+                       'this run. A quantized (fp8) twin cannot be trained '
+                       'further, so it does not count.')})
+
+    return {
+        'run_id': run.id,
+        'default_transport': ('hub' if dense_resume_transport(candidates) == 'hub'
+                              else 'direct'),
+        'price_per_hour': round(price, 4),
+        'price_source': price_source,
+        'delivery': delivery,
+        'options': options,
+    }
+
+
+def _run_params(run) -> dict:
+    try:
+        parsed = json.loads(run.train_params or '{}')
+    except (ValueError, TypeError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
 def _merge_resume_overrides(snapshot, patch):
@@ -1607,7 +1764,7 @@ def _require_cloud_weights_only(resume_mode='weights_only', state_bundle_id=None
 
 def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
                        overrides=None, resume_mode='weights_only',
-                       state_bundle_id=None) -> dict:
+                       state_bundle_id=None, transport=None) -> dict:
     """Reprend un run cloud TERMINAL (done OU en échec) depuis un checkpoint
     harvesté et vise step_de_reprise + extra_steps — le pendant cloud de
     lora_training.continue_training. C'est un VRAI launch_cloud_training (pod
@@ -1659,12 +1816,27 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     cks = _dense_resume_candidates(run) if dense else _run_staging_checkpoints(run)
     if not cks and dense:
         raise ValueError(
-            'this full model has no Hugging Face copy to continue from. A '
-            'dense checkpoint is ~26 GB: the pod can download it from the Hub '
-            'in minutes, but it cannot be handed the copy on this computer. '
-            'Give future runs the "This computer + Hugging Face" delivery '
-            '(Settings ▸ Training) so they stay resumable, and check that this '
-            "run's Hugging Face delivery is verified.")
+            'this full model has nothing left to continue from: no copy on this '
+            'computer, and no verified Hugging Face copy either. Give future '
+            'runs the "This computer + Hugging Face" delivery (Settings ▸ '
+            'Training) so a run stays resumable even after its local file is '
+            'deleted.')
+    if dense:
+        # Filter to the chosen ROAD before choosing the step: at the same step
+        # the same checkpoint can exist on both, and letting the step tie-break
+        # decide the lane would pick the price by accident.
+        want_source = dense_resume_transport(cks, transport)
+        on_road = [c for c in cks if c.get('source') == want_source]
+        if not on_road:
+            raise ValueError(
+                'this full model has no Hugging Face copy to continue from — '
+                'send the copy on this computer to the pod instead, or give '
+                'future runs the "This computer + Hugging Face" delivery '
+                '(Settings ▸ Training) so the fast road exists next time.'
+                if want_source == 'hub' else
+                'the copy of this full model on this computer is gone — '
+                'continue from its Hugging Face copy instead.')
+        cks = on_road
     if not cks:
         raise ValueError('no harvested checkpoint to continue from — this run '
                          'has none left on disk; relaunch a fresh cloud run instead')
@@ -1734,6 +1906,7 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     res['resumed_from'] = chosen['step']
     res['target_steps'] = chosen['step'] + extra
     res['resume_source'] = 'hub' if from_hub else 'local'
+    res['resume_transport'] = 'hub' if from_hub else 'direct'
     res['resume_from'] = (f"{chosen['repo_id']}/{chosen['filename']}" if from_hub
                           else chosen['filename'])
     return res
@@ -1774,13 +1947,16 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     if not ds:
         raise ValueError('dataset not found')
     if lt.normalize_training_mode(training_mode) == 'full_transformer':
-        # Not an MVP limit any more, a transport one: this lane seeds the pod
-        # from a file on this computer, and a ~26 GB dense master cannot go
-        # through the pod's upload seam. A full model continues from its
-        # Hugging Face copy, in the Runs hub.
-        raise ValueError('a full model cannot be sent to a pod from this '
-                         'computer — continue it from its Hugging Face copy '
-                         'in the Runs hub instead')
+        # Still refused, and the reason CHANGED. It used to say a 26 GB file
+        # could not reach a pod, which is no longer true (pod_checkpoint_push).
+        # The real and older reason is upstream of transport: full-model
+        # training is cloud-only (lora_training._assert_local_mode), so there
+        # is no local full-model run for this lane to continue in the first
+        # place. Leaving the transport wording here would have advertised a
+        # limit that no longer exists to explain one that does.
+        raise ValueError('full models are only trained in the cloud, so this '
+                         'computer has no full-model run to continue — continue '
+                         'the cloud run itself, in the Runs hub')
     fam = lt._train_type(ds, train_type)
     var = variant or getattr(ds, 'train_variant', None) or lt._default_variant_for(fam)
     # base_model _UNSET = the dataset's persisted base (the queue's behaviour);
@@ -1978,20 +2154,26 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         if base_model:
             raise ValueError('full_transformer cloud training requires the '
                              'official Krea-2-Raw base; custom weights are unsupported')
-        # Continuing a dense run IS supported now — but only from a checkpoint
-        # the POD can fetch itself. Seeding a local file goes through the pod's
-        # dataset-upload route, whose multipart body is built ENTIRELY in memory
-        # (an 85 MB LoRA is fine; 26 GB is an OOM) under a 300 s timeout. Saying
-        # so is the whole message: a refusal that names the fix is worth more
-        # than a transfer that dies at 2 GB.
+        # Continuing a dense run from the copy on THIS COMPUTER is supported.
+        # It used to be refused here, and the refusal was honest about its
+        # reason: the pod's dataset-upload route was driven with a multipart
+        # body built ENTIRELY in memory (an 85 MB LoRA is fine; 26 GB is an
+        # OOM) under a 300 s timeout. Both halves of that are gone —
+        # `upload_file_slice` produces the body as it sends it, and
+        # `pod_checkpoint_push` cuts the file into resumable slices with a
+        # per-slice timeout. What remains is a COST, not a wall: the user's
+        # uplink, billed at the pod's hourly rate the whole way up. That is a
+        # number to show (pod_transfer_plan), not a reason to refuse.
         if resume_ckpt_path:
-            raise ValueError(
-                'a full model cannot be resumed from the copy on this computer: '
-                'the pod is handed its checkpoint through an upload that builds '
-                'the whole request in memory, which a 26 GB file cannot survive. '
-                'Continue from the Hugging Face copy of the run instead — keep '
-                'the "This computer + Hugging Face" delivery so every full model '
-                'has one.')
+            if not os.path.isfile(resume_ckpt_path):
+                raise ValueError(
+                    'the full model to continue from is no longer on this '
+                    'computer — continue from its Hugging Face copy instead, '
+                    'or pick another checkpoint')
+            if os.path.getsize(resume_ckpt_path) <= 0:
+                raise ValueError(
+                    'the full model to continue from is an empty file on this '
+                    'computer — it cannot be trained further')
         slider_value = (getattr(ds, 'train_slider', None)
                         if train_slider_snapshot is _UNSET
                         else train_slider_snapshot)
@@ -2250,6 +2432,14 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         if resume_ckpt_path:
             params['resume_ckpt_path'] = str(resume_ckpt_path)
             params['resume_source'] = 'local'
+            # Frozen here because _disk_gb_for reads it when the pod is RENTED,
+            # and because it is what the run card quotes while the push runs. A
+            # file that vanishes between launch and seeding then fails on the
+            # missing file, not on a size nobody can recover.
+            try:
+                params['resume_ckpt_bytes'] = os.path.getsize(resume_ckpt_path)
+            except OSError:
+                params['resume_ckpt_bytes'] = 0
             if resume_step is not None:
                 params['resume_step'] = int(resume_step)
         elif resume_hf:
@@ -2761,6 +2951,24 @@ def _disk_gb_for(cloud_cfg, params) -> int:
             logger.info('custom base is %.1f GB — pod disk bumped %s -> %s GB',
                         base_bytes / 1e9, disk_gb, needed)
             disk_gb = needed
+    # A checkpoint pushed from this computer lands on the pod IN SLICES that are
+    # then assembled, so it briefly occupies itself plus one slice on top of
+    # everything above. Asked for at RENTAL time on purpose: discovering the
+    # shortfall when the file is already half sent means the money is spent and
+    # the pod has to be thrown away. The Hub road needs nothing extra here — the
+    # pod writes the file straight to its destination.
+    try:
+        seed_bytes = int(params.get('resume_ckpt_bytes') or 0)
+    except (TypeError, ValueError):
+        seed_bytes = 0
+    if seed_bytes:
+        from . import pod_checkpoint_push
+        needed = disk_gb + int(
+            (seed_bytes + min(pod_checkpoint_push.DEFAULT_SLICE_BYTES,
+                              seed_bytes)) / 1e9) + 1
+        logger.info('a %.1f GB checkpoint is being pushed to this pod — disk '
+                    'bumped %s -> %s GB', seed_bytes / 1e9, disk_gb, needed)
+        disk_gb = needed
     return disk_gb
 
 
@@ -3010,6 +3218,23 @@ def _write_upload_progress(run, files, files_total, sent, total) -> None:
                        'bytes': int(sent), 'bytes_total': int(total)}, fh)
     except (OSError, TypeError, ValueError):
         logger.debug('could not record upload progress for run %s',
+                     getattr(run, 'id', '?'), exc_info=True)
+
+
+def _record_uplink(run, folder, seconds) -> None:
+    """File one measured upload speed away for the next forecast. Never raises:
+    a transfer that LANDED must not become an error because a statistic about
+    it could not be written."""
+    try:
+        total = 0
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                total += os.path.getsize(path)
+        from . import pod_transfer_plan
+        pod_transfer_plan.record_uplink_sample(total, seconds)
+    except Exception:
+        logger.debug('run %s: uplink sample not recorded',
                      getattr(run, 'id', '?'), exc_info=True)
 
 
@@ -4655,9 +4880,17 @@ def _monitor(app, run_id):
                 # -- upload dataset (+ masks folder if present) --------------
                 _set(run, status='uploading', phase_detail='Uploading dataset')
                 staging_dataset = os.path.join(run.staging_dir, 'dataset')
+                # Timed, because this is the app's ONLY regular observation of
+                # how fast this machine can push bytes to a pod, and a
+                # checkpoint-push forecast built on a guess is a forecast the
+                # user is right not to believe. A dataset upload is the same
+                # link, the same protocol and the same route.
+                _upload_started = time.monotonic()
                 remote.upload_dataset(
                     run.job_name, staging_dataset,
                     on_progress=_upload_heartbeat(run, 'Uploading the dataset'))
+                _record_uplink(run, staging_dataset,
+                               time.monotonic() - _upload_started)
                 masks_dir = staging_dataset + '_masks'
                 if os.path.isdir(masks_dir) and os.listdir(masks_dir):
                     remote.upload_dataset(
@@ -5137,11 +5370,13 @@ def _seed_resume_checkpoint(run, remote, pod_settings):
     normal launch). A missing/failed seed RAISES: a 'continue' that cannot
     resume must fail loudly, never silently train from scratch.
 
-    TWO channels, one destination. A LoRA (tens to hundreds of MB) is uploaded
-    from this machine. A dense master (~26 GB) cannot be: the pod's upload route
-    builds its multipart body entirely in memory. So the POD fetches that one
-    itself, straight from the Hugging Face copy of the source run — same
-    directory, same name, same auto-resume."""
+    TWO ROADS, one destination, and which one is taken is the user's choice —
+    stamped at launch as a Hub repository (the pod pulls it itself, over a
+    datacenter link) or a local path (this machine pushes it, over the user's
+    uplink). A LoRA is small enough that the question never comes up: one
+    request and it is there. A ~26 GB dense master is where the two roads have
+    genuinely different prices, which is why they are both offered and both
+    costed before the click."""
     src = _run_param(run, 'resume_ckpt_path')
     repo_id = _run_param(run, 'resume_hf_repo_id')
     if not src and not repo_id:
@@ -5169,10 +5404,53 @@ def _seed_resume_checkpoint(run, remote, pod_settings):
     if not os.path.isfile(src):
         raise RuntimeError(f'resume checkpoint vanished before upload: {src}')
     _set(run, phase_detail='Seeding checkpoint for resume…')
-    remote.seed_checkpoint(pod_settings['DATASETS_FOLDER'], dest_dir,
-                           remote_name, src)
+    _push_resume_checkpoint(run, remote, pod_settings, src, dest_dir, remote_name)
     logger.info('run %s: seeded resume checkpoint %s -> %s',
                 run.id, os.path.basename(src), dest_dir)
+
+
+# Below this, one request is not the right shape any more. The threshold is not
+# about memory (the streamed body costs a megabyte whatever the file weighs) —
+# it is about what an interruption COSTS. Redoing a 200 MB LoRA is seconds;
+# redoing a 26 GB master is the evening, and a slice that already landed is
+# progress the next attempt can keep.
+_SLICED_PUSH_THRESHOLD_BYTES = 1024 * 1024 * 1024
+
+
+def _push_resume_checkpoint(run, remote, pod_settings, src, dest_dir, remote_name):
+    """Put a checkpoint from THIS COMPUTER into the pod's save_root.
+
+    Small file: one streamed request, as it always was. Big file: numbered
+    slices, a probe that skips whatever already landed, and a pod-side assembly
+    — see ``pod_checkpoint_push``. The byte counter is fed into the SAME
+    upload-progress file the dataset transfer writes, so the freeze watchdog
+    reads a multi-hour checkpoint push exactly the way it reads a multi-hour
+    dataset push, with no new watchdog input to teach it."""
+    total = os.path.getsize(src)
+    if total < _SLICED_PUSH_THRESHOLD_BYTES:
+        remote.seed_checkpoint(pod_settings['DATASETS_FOLDER'], dest_dir,
+                               remote_name, src)
+        return
+    from . import pod_checkpoint_push, pod_transfer_plan
+    dense = ((cfg.get('cloud') or {}).get('full_transformer') or {})
+    started = time.monotonic()
+    _write_upload_progress(run, 0, 1, 0, total)
+    result = pod_checkpoint_push.push_checkpoint(
+        remote, instance_id=run.vast_instance_id, local_path=src,
+        dest_dir=dest_dir, remote_name=remote_name,
+        datasets_folder=pod_settings['DATASETS_FOLDER'],
+        job_name=run.job_name, tmp_dir=run.staging_dir or _staging_root(),
+        slice_bytes=int(dense.get('push_slice_bytes')
+                        or pod_checkpoint_push.DEFAULT_SLICE_BYTES),
+        on_state=lambda detail: _set_soft(run, phase_detail=detail[:500]),
+        on_progress=lambda done, want: _write_upload_progress(run, 0, 1, done, want),
+        should_cancel=_stop_event_for(run.id).is_set)
+    # The measurement that makes the NEXT forecast worth reading. Only the bytes
+    # this attempt actually SENT are timed: a resumed push that skipped 20 GB
+    # already on the pod would otherwise report an uplink several times faster
+    # than the line has ever been, and that number becomes a price.
+    pod_transfer_plan.record_uplink_sample(result.get('sent_bytes'),
+                                           time.monotonic() - started)
 
 
 def _fetched_label(num_bytes) -> str:
