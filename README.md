@@ -74,6 +74,7 @@ the target model accepts.
 | **Sound measured, not assumed** | For the targets that keep an audio track (LTX, MiniMax H3), every shot is scored for **how much of it is silence** and its **level in dBFS** — because a dataset of silent clips teaches the model to be silent and the file on disk gives nothing away. "No track", "silent" and "not measured yet" stay three different answers |
 | **Cap one source's share** | Optional cap on how many clips a single file contributes, so a 50-clip set is not quietly three videos over-represented. Keeps each source's earliest clips (same bank, same dataset — not a random sample), and the result reports the share it ended up with |
 | **Trim the transition off both ends** | Optional per-export trim of both bounds (0 by default). A clip the trim makes too short for the target's frame count is **dropped, never exported short** — and counted separately from clips that were never long enough, since only one of the two is fixed by lowering the trim |
+| **Train it without leaving the app** | A promoted set gets a ▶ Train button that runs it through the ai-toolkit installed here — no export, no hand-written config. It queues behind the same GPU as everything else: a captioning pass, a ComfyUI render or an image training in flight refuses the launch instead of racing it |
 | **Shots described in words** | A pass writes what HAPPENS in each shot ("a woman turns and walks away"), which becomes the clip's `.txt` — the prompt it trains on. Captions are drafts: editable per shot, and a re-run never overwrites what you wrote |
 | **Find a scene by typing a word** | One pass looks at a few frames of every shot; after it, typing *a woman walking on a beach* ranks the bank instantly and tells you **which second** of each shot matched. Several frames per shot, so a subject that only appears at the end is still findable. It is a **ranking, not a filter** — every shot scores something against every phrase — and the model **ignores "without"**, so `-word` pushes something down instead |
 
@@ -91,11 +92,20 @@ the target model accepts.
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — and an empty one trains uncaptioned, which is why the build
   dialog counts them out loud before encoding.
-- **It does not train.** This builds the dataset; the training itself happens in
-  ai-toolkit — the eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V
-  variants, LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the
-  installed ai-toolkit ships. Nobody has yet published VRAM figures for a video
-  LoRA run at 24 GB; the shipped "24gb" example configs all train on stills.
+- **Training starts here, but only one target is proven here.** A promoted set
+  has a **▶ Train this dataset** button that hands the clips to the ai-toolkit
+  installed on your machine, and the cloud lane rents a pod for the same set. The
+  eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V variants, LTX-2 and
+  2.3, MiniMax H3) are exactly the video architectures that ai-toolkit ships, and
+  each one's settings were read in its code — but **Wan 2.2 14B is the only one a
+  finished run has been through here**, and the card says so on the others.
+  Measured on that run: 24 GB was full, at 170-185 s per step, with the CPU
+  offload that makes 24 GB possible at all. LTX-2 and 2.3 additionally need you to
+  name a base repository, because nothing installed locally states one.
+- **MiniMax H3 needs about 43 GB of weights, and will say so rather than fetch
+  them.** They come from `Comfy-Org/MiniMax-H3`. If they are not on your disk the
+  button names the repository and the size and waits for a yes — a first run that
+  quietly downloaded 43 GB would look like a training that had hung.
 - **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
   the EU, the UK, South Korea or the USA, and the restriction covers the model's
   outputs, not only the model. Check your own territory before using that profile.
@@ -176,7 +186,7 @@ The detailed journey, screenshots and operational notes now live in the [workflo
 Directions, not dates. These are discussed openly on the project's Discord, and the most-requested ideas move up the list.
 
 - **🧬 Merge Lab** *(partly shipped)* — baking your LoRAs into a standalone checkpoint has landed, and so has full-model training on Krea 2. What is left is the *lab* part: **model ↔ model** merges with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids), and full-model training beyond Krea 2 Raw and beyond the cloud lane.
-- **🎬 Video LoRAs** — *the dataset half now exists* (see **Video Bank** above): shot detection, quality measures (motion, exposure, freeze, audio), captions that describe the action, keyword search across shots, and target-aware cutting into a trainable folder. What remains is duplicate detection across clips, then training and testing in-app. Community-driven.
+- **🎬 Video LoRAs** — *the dataset half exists and training now launches from the app* (see **Video Bank** above): shot detection, quality measures (motion, exposure, freeze, audio), captions that describe the action, keyword search across shots, target-aware cutting into a trainable folder, and a ▶ Train button that runs the set through your local ai-toolkit or a rented pod. What remains is duplicate detection across clips, proving the targets beyond Wan 2.2 with a finished run each, and testing the resulting LoRAs in-app. Community-driven.
 - **🧠 Watermark cleaning during import** — cleaning that happens **during import** instead of as a separate errand, and automation you can trust unattended. *(Detection has caught up: a dedicated detector that needs no vision model now ships alongside the Ollama path, and manual two-pass cleaning already works in datasets and in the Image Bank.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
 
