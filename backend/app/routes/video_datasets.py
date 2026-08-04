@@ -133,3 +133,65 @@ def video_dataset_delete(dataset_id):
     if not svc.delete_video_dataset(LOCAL_USER, dataset_id):
         return _missing(dataset_id)
     return jsonify({'ok': True})
+
+
+@bp.post('/video-dataset/<int:dataset_id>/train/cloud')
+def video_dataset_train_cloud(dataset_id):
+    """Rent a pod and train a LoRA on this video dataset.
+
+    Deliberately its own endpoint rather than the face lane's
+    `/dataset/<id>/train/cloud`: that route's id means a `face_dataset`, and the
+    two tables share one integer space — the same URL shape for both would make
+    the id alone ambiguous at the outermost layer, which is precisely the
+    confusion the run's `dataset_table` column exists to end.
+
+    A target we have no verified base for is a 400, not a 500: the user picked a
+    model this build cannot train unattended, and that is a choice they can
+    correct — the message names what to do."""
+    from ..services import cloud_video_training as cvt
+    from ..services import video_training
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(cvt.launch_cloud_video_training(
+            LOCAL_USER, dataset_id,
+            steps=body.get('steps') or 1000,
+            base_model=(body.get('base_model') or '').strip() or None,
+            low_vram=bool(body.get('low_vram', False)),
+            gpu_name=body.get('gpu_name')))
+    except video_training.VideoTrainingUnsupported as e:
+        return jsonify({'error': str(e)}), 400
+    except ValueError as e:
+        # 'video dataset not found' is the only ValueError that is a 404; the
+        # rest ('no clips on disk') are things about THIS dataset the user can
+        # act on, and a 404 would tell them the dataset does not exist.
+        if 'not found' in str(e):
+            return _missing(dataset_id)
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        # The launch guard: already running, fleet limit, budget. 409 — the
+        # request was well-formed, the state refuses it.
+        return jsonify({'error': str(e)}), 409
+
+
+@bp.get('/video-dataset/<int:dataset_id>/train/cloud/progress')
+def video_dataset_train_cloud_progress(dataset_id):
+    """The newest cloud run OF THIS VIDEO DATASET, for the page to poll.
+
+    Scoped to the video table explicitly. Resolved by integer alone it would
+    return the face dataset of the same id's run — the same phase, cost and
+    progress bar, for a training the user is not watching."""
+    from ..services import cloud_run_dataset as crd
+    from ..services import cloud_training as ct
+    run = ct.latest_run_for(dataset_id, dataset_table=crd.VIDEO)
+    if run is None:
+        return jsonify({'run_id': None, 'status': None})
+    return jsonify({
+        'run_id': run.id, 'status': run.status,
+        'phase_detail': run.phase_detail or '',
+        'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
+        'error': run.error,
+        'steps': ct._run_param(run, 'steps'),
+        'saves': len(ct.run_checkpoint_files(run)),
+        'created_at': run.created_at.isoformat() if run.created_at else None,
+        'finished_at': run.finished_at.isoformat() if run.finished_at else None,
+    })

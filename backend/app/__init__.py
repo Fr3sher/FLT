@@ -223,6 +223,11 @@ _SCHEMA_ADDITIONS = (
     ('training_run_record', 'note', 'TEXT'),
     ('training_preset', 'dataset_kind', 'VARCHAR(16)'),
     ('training_preset', 'variants', 'TEXT'),
+    # Which table `cloud_training_run.dataset_id` points into. Deliberately
+    # NULLABLE with no server default: every historical run predates the column
+    # and must be READ as 'face_dataset' rather than rewritten by a migration —
+    # see services/cloud_run_dataset.table_of, the only reader of this value.
+    ('cloud_training_run', 'dataset_table', 'VARCHAR(32)'),
     ('lora_test_image', 'error', 'TEXT'),
     ('lora_test_image', 'resolution_multiplier', 'REAL'),
     # WHICH checkpoint produced this image, written at generation time instead of

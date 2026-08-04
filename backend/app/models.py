@@ -803,6 +803,13 @@ class CloudTrainingRun(db.Model):
     __tablename__ = 'cloud_training_run'
     id = db.Column(db.Integer, primary_key=True)
     dataset_id = db.Column(db.Integer, nullable=False)
+    # WHICH TABLE `dataset_id` points into: 'face_dataset' or 'video_dataset'.
+    # The two share one integer space, so without this a video run and a face
+    # dataset of the same id are indistinguishable and every consumer resolves
+    # the wrong row in silence. NULL on every row that predates the column, and
+    # read as 'face_dataset' — see services/cloud_run_dataset.table_of, which is
+    # the only place allowed to answer this question.
+    dataset_table = db.Column(db.String(32))
     run_name = db.Column(db.String(255))          # local run identity (lt._run_name)
     job_name = db.Column(db.String(255))          # unique remote job/dataset name
     status = db.Column(db.String(32), default='preparing')
