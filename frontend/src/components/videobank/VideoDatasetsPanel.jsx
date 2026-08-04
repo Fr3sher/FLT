@@ -3,6 +3,7 @@ import { apiFetch, del, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
 import { HelpBadge } from '../../help/HelpMode'
 import { clipLabel } from './videoClipFragment'
+import VideoDatasetCloudPanel from './VideoDatasetCloudPanel'
 
 /** 🎬 Video training sets, in the library, next to the image datasets.
  *
@@ -88,6 +89,7 @@ export default function VideoDatasetsPanel() {
             <p className="truncate font-mono text-[0.625rem] text-content-subtle" title={d.output_dir}>
               {d.output_dir}
             </p>
+            {openId === d.id && <VideoDatasetCloudPanel dataset={d} />}
             {openId === d.id && <VideoDatasetClips datasetId={d.id} />}
           </li>
         ))}

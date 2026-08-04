@@ -478,25 +478,37 @@ def test_a_face_datasets_checkpoint_panel_lists_none_of_a_video_runs_saves(
         assert {c['step'] for c in groups[0]['checkpoints']} == {50}
 
 
-def test_retry_and_continue_refuse_a_video_run_instead_of_relaunching_a_face_one(
+def test_retry_and_continue_never_relaunch_a_video_run_as_a_face_one(
         app, tmp_path, monkeypatch):
     """Both rebuild their arguments from a run's stamped params and call
     `launch_cloud_training`, which resolves `dataset_id` as a FACE dataset. On a
     colliding id that is not an error — it is a face training launched on someone
-    else's data, and billed. Refusing names what to do instead."""
+    else's data, and billed.
+
+    They used to REFUSE a video run for that reason. They now dispatch to the
+    video lane's own relaunchers instead, and this test keeps the half that was
+    never about the refusal: whatever the two entry points do with a video run,
+    the face launcher must not see it. `lt.assert_trainable` is the first thing
+    `launch_cloud_training` calls on a dataset, so a video run reaching it fails
+    here rather than on someone's bill."""
     from app.services import cloud_training as ct
+    from app.services import cloud_video_training as cvt
+    called = []
     with app.app_context():
         _face_dataset('portraits')
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='error')
         monkeypatch.setattr(ct.lt, 'assert_trainable', lambda *a, **k: pytest.fail(
             'a video run re-entered the face launcher'))
-        with pytest.raises(ValueError) as e:
-            ct.retry_cloud_run('local', run.id)
-        assert 'video' in str(e.value).lower()
+        monkeypatch.setattr(cvt, 'launch_cloud_video_training',
+                            lambda *a, **k: called.append(k) or {'run_id': 1})
+        ct.retry_cloud_run('local', run.id)
         run.status = 'done'
         from app.extensions import db
         db.session.commit()
+        # Nothing harvested: the video lane's own refusal, in its own words —
+        # which is the proof the call landed there and not in the face lane.
         with pytest.raises(ValueError) as e2:
             ct.continue_cloud_run('local', run.id)
-        assert 'video' in str(e2.value).lower()
+        assert 'checkpoint' in str(e2.value).lower()
+    assert len(called) == 1

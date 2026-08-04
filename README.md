@@ -91,11 +91,21 @@ the target model accepts.
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — and an empty one trains uncaptioned, which is why the build
   dialog counts them out loud before encoding.
-- **It does not train.** This builds the dataset; the training itself happens in
-  ai-toolkit — the eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V
-  variants, LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the
-  installed ai-toolkit ships. Nobody has yet published VRAM figures for a video
-  LoRA run at 24 GB; the shipped "24gb" example configs all train on stills.
+- **It trains in the cloud only — not on your own GPU.** A promoted video set has
+  a **☁ Train in the cloud** panel: it rents a pod, uploads the clips, runs the
+  training and lists the checkpoints for download, with the GPU and its hourly
+  price on screen. There is no local video training button; nobody has yet
+  published VRAM figures for a video LoRA run at 24 GB, and the shipped "24gb"
+  example configs all train on stills.
+  Two limits worth knowing before you spend: only targets marked
+  **training-verified** can be launched (for the others the geometry is known and
+  no LoRA trainer is), and a target with no verified base repository asks you to
+  name one rather than guessing a repo id that fails once the pod is paid for.
+  Wan 2.2 saves each checkpoint as a **pair** (high-noise and low-noise experts);
+  both files are offered together, because either one alone is a LoRA nothing can
+  load. The eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V variants,
+  LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the installed
+  ai-toolkit ships.
 - **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
   the EU, the UK, South Korea or the USA, and the restriction covers the model's
   outputs, not only the model. Check your own territory before using that profile.
