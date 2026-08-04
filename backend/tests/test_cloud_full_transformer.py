@@ -194,8 +194,11 @@ def test_full_launch_creates_private_per_run_repo_and_freezes_mode(
      'Krea-2-Raw'),
     ({'training_mode': 'full_transformer', 'train_type': 'krea',
       'base_model': 'custom.safetensors'}, 'official Krea-2-Raw'),
+    # A local seed is no longer refused for BEING one — it is sent to the pod in
+    # resumable slices now. What is still refused, and still before any
+    # reservation, is a seed that is not on this computer at all.
     ({'training_mode': 'full_transformer', 'train_type': 'krea',
-      'resume_ckpt_path': 'seed.safetensors'}, 'copy on this computer'),
+      'resume_ckpt_path': 'seed.safetensors'}, 'no longer on this computer'),
 ])
 def test_full_launch_validation_happens_before_reservation(
         ct, app, dataset_id, kwargs, message):
@@ -352,14 +355,25 @@ def test_full_launch_is_not_blocked_by_an_unmeasurable_account(
         assert result['run_id']
 
 
-def test_dense_continue_needs_a_hub_copy_and_never_a_local_seed(
+def test_dense_continue_refuses_only_what_is_genuinely_impossible(
         ct, app, dataset_id):
-    """Continuing a full model is supported — from the Hub, and only from it.
+    """Three refusals that SURVIVED the arrival of the direct road, each for its
+    own reason — and none of them for the old one.
 
-    A dense master is ~26 GB and the only seam that puts a file on a pod builds
-    its whole request in memory, so a local seed is refused with the reason and
-    the fix. A run with no verified Hub copy has no source at all, and says so
-    rather than pretending the option exists."""
+    This test used to be called "needs a hub copy and never a local seed", and
+    its docstring explained all three by the same dead fact: that the only seam
+    putting a file on a pod built its whole request in memory. That is no longer
+    true (pod_checkpoint_push), so a test that still asserted it would have been
+    guarding the absence of a feature that now exists. What is left is narrower
+    and still worth holding:
+
+    * a run with NO source at all — nothing on disk, no verified Hub copy —
+      cannot be continued, and says so instead of pretending the option exists;
+    * a retry replays its seed verbatim, so a seed that has since been deleted
+      is a refusal rather than a silent train-from-scratch;
+    * a full model still cannot be continued from the LOCAL lane, for a reason
+      that predates all of this: full-model training is cloud-only, so there is
+      no local full-model run to continue in the first place."""
     with app.app_context():
         done = ct.CloudTrainingRun(
             dataset_id=dataset_id, status='done', run_name='dense',
@@ -372,11 +386,11 @@ def test_dense_continue_needs_a_hub_copy_and_never_a_local_seed(
                 'variant': 'base', 'resume_ckpt_path': 'seed.safetensors'}))
         ct.db.session.add_all([done, retry])
         ct.db.session.commit()
-        with pytest.raises(ValueError, match='no Hugging Face copy'):
+        with pytest.raises(ValueError, match='nothing left to continue from'):
             ct.continue_cloud_run('local', done.id)
-        with pytest.raises(ValueError, match='local file'):
+        with pytest.raises(ValueError, match='no longer on this computer'):
             ct.retry_cloud_run('local', retry.id)
-        with pytest.raises(ValueError, match='cannot be sent to a pod'):
+        with pytest.raises(ValueError, match='only trained in the cloud'):
             ct.continue_local_run_in_cloud(
                 'local', dataset_id, training_mode='full_transformer')
 
