@@ -56,6 +56,14 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-08-04-image-grid-pages-big-datasets',
+    date: '2026-08-04',
+    title: 'A dataset of thousands of images no longer bogs the Images screen down',
+    blurb:
+      'The Images grid used to draw every photo of the dataset at once. On a 6 211-image dataset that is about 148 000 elements on one page — 6 211 thumbnails, 6 211 caption boxes, 60 000 buttons — and it showed: scrolling ran at roughly 20 frames a second on a desktop and 12 on a phone, and a single keystroke in a caption took a tenth of a second to appear. The grid now shows 500 images at a time with a ← Prev / Next → pager above and below it, the same way the Bank has always handled 24 000-image folders. Measured on that same 6 211-image dataset: scrolling back at full speed, typing in a caption instant again, switching a filter about seven times faster. Nothing about curation changed — “select all” still takes every image the current filters show across all pages (its tooltip now says so), a selection you started on one page is still there on the next, the counters, sort, filters and auto-triage all still read the whole dataset, and captions are still edited right on the tile. The pager only appears when there is more than one page.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
     date: '2026-08-04',
     title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',
