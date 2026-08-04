@@ -24,6 +24,8 @@ import subprocess
 
 import pytest
 
+import tests.test_no_personal_data as tnpd  # noqa: E402  (self-import for the seams below)
+
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Suffixes worth scanning. Binaries, lockfiles and the built bundle are excluded:
@@ -120,12 +122,69 @@ def test_no_machine_path_email_or_token_in_tracked_files():
         'personal data in a PUBLIC repo:\n  ' + '\n  '.join(hits[:20]))
 
 
+def _git_common_dir():
+    """The MAIN checkout's .git, seen from anywhere — including a linked worktree,
+    where `.git` is a file pointing back here. Seam, so the resolution below can
+    be tested without a real worktree."""
+    out = subprocess.run(['git', 'rev-parse', '--git-common-dir'], cwd=_REPO,
+                         capture_output=True, text=True, timeout=30)
+    return out.stdout.strip() if out.returncode == 0 else ''
+
+
 def _name_list():
-    path = os.environ.get('LDS_PRIVACY_NAMES') or os.path.join(_REPO, '.privacy-names')
-    if not os.path.isfile(path):
-        return None
-    with open(path, encoding='utf-8') as fh:
-        return [w.strip() for w in fh if w.strip() and not w.startswith('#')]
+    """The forbidden names, or None when no list can be found.
+
+    THE ORDER MATTERS, AND THE THIRD ENTRY IS THE ONE THAT WAS MISSING. The list
+    is gitignored on purpose — writing the names into the repository to forbid
+    them would publish them, which is the whole problem. But gitignored also means
+    ABSENT FROM EVERY WORKTREE, and worktrees are where the work happens. So this
+    check disabled itself precisely where it was needed, skipping in silence, and
+    three names reached the public repository in one week behind that skip.
+
+    git knows where the main checkout is from anywhere, so the guard can too.
+    """
+    candidates = [os.environ.get('LDS_PRIVACY_NAMES'),
+                  os.path.join(_REPO, '.privacy-names')]
+    common = _git_common_dir()
+    if common:
+        # `--git-common-dir` is the MAIN checkout's .git, even from a worktree.
+        candidates.append(os.path.join(os.path.dirname(os.path.abspath(common)),
+                                       '.privacy-names'))
+    for path in candidates:
+        if path and os.path.isfile(path):
+            with open(path, encoding='utf-8') as fh:
+                return [w.strip() for w in fh
+                        if w.strip() and not w.startswith('#')]
+    return None
+
+
+def _unpushed_range():
+    """`origin/main..HEAD`, or '' when there is nothing to check (no remote yet,
+    or everything already pushed). These commits are the last ones that can still
+    be fixed for free: once a name is on the public remote, removing it means
+    rewriting history, which breaks `pull --ff-only` for every install."""
+    out = subprocess.run(['git', 'rev-list', '--count', 'origin/main..HEAD'],
+                         cwd=_REPO, capture_output=True, text=True, timeout=60)
+    if out.returncode != 0 or out.stdout.strip() in ('', '0'):
+        return ''
+    return 'origin/main..HEAD'
+
+
+def _unpushed_text(rev_range):
+    """(kind, text) for everything a reviewer would never re-read: the commit
+    MESSAGES and the DIFFS. A name hides in either, and the message is the half
+    that no file-content scan will ever see."""
+    msgs = subprocess.run(['git', 'log', '--format=%B', rev_range], cwd=_REPO,
+                          capture_output=True, text=True, timeout=120,
+                          encoding='utf-8', errors='replace')
+    if msgs.returncode == 0 and msgs.stdout:
+        yield ('commit message', msgs.stdout)
+    diff = subprocess.run(['git', 'diff', rev_range, '--', '.',
+                           ':!frontend/dist'], cwd=_REPO, capture_output=True,
+                          text=True, timeout=180, encoding='utf-8',
+                          errors='replace')
+    if diff.returncode == 0 and diff.stdout:
+        yield ('diff', diff.stdout)
 
 
 def test_no_forbidden_name_in_tracked_files():
@@ -144,3 +203,58 @@ def test_no_forbidden_name_in_tracked_files():
             hits.append(f'{rel}:{line} — {m.group(0)}')
     assert not hits, (
         'a forbidden identifier is in the PUBLIC repo:\n  ' + '\n  '.join(hits[:20]))
+
+
+# --- the guard's own blind spots ----------------------------------------------
+# Three leaks reached the public repository in one week, and all three shared a
+# cause that is NOT carelessness: the name half of this file skips in SILENCE when
+# it cannot find its list, and the list is gitignored — so it is absent from every
+# worktree, which is where the work happens. A guard that disables itself where it
+# is needed protects only the places that never needed it.
+
+def test_the_name_list_is_found_from_a_linked_worktree(monkeypatch, tmp_path):
+    """A worktree has no `.privacy-names` of its own and never will: the file is
+    gitignored on purpose. But git knows where the main checkout is, so the guard
+    can too — `--git-common-dir` points at it from anywhere."""
+    main = tmp_path / 'main'
+    (main / '.git').mkdir(parents=True)
+    (main / '.privacy-names').write_text('Nemo\n', encoding='utf-8')
+    monkeypatch.delenv('LDS_PRIVACY_NAMES', raising=False)
+    monkeypatch.setattr(tnpd, '_REPO', str(tmp_path / 'worktree'))
+    monkeypatch.setattr(tnpd, '_git_common_dir', lambda: str(main / '.git'))
+
+    assert tnpd._name_list() == ['Nemo']
+
+
+def test_an_explicit_list_still_wins_over_the_discovered_one(monkeypatch, tmp_path):
+    explicit = tmp_path / 'names.txt'
+    explicit.write_text('Given\n', encoding='utf-8')
+    monkeypatch.setenv('LDS_PRIVACY_NAMES', str(explicit))
+
+    assert tnpd._name_list() == ['Given']
+
+
+def test_no_forbidden_name_in_commits_that_have_not_been_pushed():
+    """The last cheap moment. Correcting a name in the working tree does nothing
+    for the copy already in a commit — and once that commit is on the public
+    remote, removing it means rewriting history, which breaks `pull --ff-only` for
+    every install that clones this repository.
+
+    So the commits that are still LOCAL are the only ones that can still be fixed
+    for free, and they are exactly the ones this checks: their messages AND their
+    diffs, because a name can hide in either."""
+    names = tnpd._name_list()
+    if not names:
+        pytest.skip('no name list available — see _name_list')
+    unpushed = tnpd._unpushed_range()
+    if not unpushed:
+        pytest.skip('nothing unpushed to check')
+    rx = re.compile(r'\b(' + '|'.join(re.escape(n) for n in names) + r')\b', re.I)
+
+    hits = []
+    for kind, body in tnpd._unpushed_text(unpushed):
+        for m in rx.finditer(body):
+            hits.append(f'{kind}: {m.group(0)}')
+    assert not hits, (
+        'a forbidden identifier is in a commit that has NOT been pushed yet — fix '
+        'it now, while it is still free:\n  ' + '\n  '.join(sorted(set(hits))[:20]))
