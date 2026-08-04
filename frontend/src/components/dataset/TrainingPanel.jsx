@@ -8,6 +8,7 @@ import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
 import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
+import { loadMergeOpen, saveMergeOpen } from './loraMerge.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
 import DenseModelsPanel from './DenseModelsPanel';
@@ -603,6 +604,18 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const setCkView = (v) => {
     setCheckpointsView(v);
     try { localStorage.setItem('lds.checkpointsView', v); } catch { /* ignore */ }
+  };
+  // The merge disclosure is CONTROLLED, and persisted. `open` on a <details> is
+  // DOM state, and the block lives inside CheckpointPortal below — every swap
+  // between the portal host and the inline place unmounts it, which closed the
+  // tool on top of emptying it. Held here, above the portal, it also survives
+  // the remount itself and not only a reload.
+  const [mergeOpen, setMergeOpen] = useState(loadMergeOpen);
+  const toggleMerge = (event) => {
+    event.preventDefault();
+    const next = !mergeOpen;
+    setMergeOpen(next);
+    saveMergeOpen(next);
   };
   const [checkpoints, setCheckpoints] = useState([]);
   const [ckLoaded, setCkLoaded] = useState(false);
@@ -3737,8 +3750,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               model. So the tool also lives here, where it is always reachable,
               collapsed because most visits to this panel are not about it.
               (Inside a dense card it appears again with the base pre-filled.) */}
-          <details className="rounded-lg border border-border bg-surface-raised px-3 py-2">
-            <summary className="cursor-pointer text-content text-xs font-semibold">
+          <details open={mergeOpen}
+            className="rounded-lg border border-border bg-surface-raised px-3 py-2">
+            <summary onClick={toggleMerge}
+              className="cursor-pointer text-content text-xs font-semibold">
               🧬 Merge a LoRA into a base checkpoint
             </summary>
             <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-relaxed">

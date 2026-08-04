@@ -3,8 +3,9 @@ import { apiFetch } from '../../api/fetchClient';
 import { postJson } from '../../hooks/useDataset';
 import {
   HONESTY_NOTE, MERGE_RUNNING_STATES, PRECISION_NOTE, TURBO_NOTE, WEIGHT_MAX,
-  WEIGHT_MIN, canAskPlan, carriedOverNote, fmtDuration, fmtGB, loraPayload,
-  newLoraRow, pct, planHeadline, weightHint,
+  WEIGHT_MIN, canAskPlan, carriedOverNote, clearMergeDraft, emptyMergeDraft,
+  fmtDuration, fmtGB, initialMergeBase, loadMergeDraft, loraPayload,
+  newLoraRow, pct, planHeadline, saveMergeDraft, weightHint,
 } from './loraMerge';
 
 /** Bake one or more LoRAs into a base checkpoint and get a full model out.
@@ -149,15 +150,33 @@ export function LoraMergeOutcome({ state }) {
 export default function LoraMergeTool({
   base = '', baseLabel = '', family = null, disabled = false, framed = true,
 }) {
-  const [basePath, setBasePath] = useState(base);
-  const [rows, setRows] = useState([newLoraRow()]);
+  // WHO OWNS THE DRAFT. The instance that owns its base field — the one in
+  // Checkpoints & LoRAs, which is exactly the one the portal remount empties.
+  // A card instance is scoped to one model, is opened deliberately, and can be
+  // mounted at the SAME time as that one: letting it read the draft would show
+  // it another model's path, and letting it write would overwrite what somebody
+  // typed in the other tool — the very loss this exists to prevent.
+  const ownsDraft = !base;
+  const [draft] = useState(() => (ownsDraft ? loadMergeDraft() : emptyMergeDraft()));
+  const [basePath, setBasePath] = useState(() => initialMergeBase(base, draft));
+  const [rows, setRows] = useState(() => draft.rows);
   const [plan, setPlan] = useState(null);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState(null);
   const [known, setKnown] = useState([]);
   const pollRef = useRef(null);
 
-  useEffect(() => { setBasePath(base); }, [base]);
+  // Follow the card's model when it hands a new one in. Guarded on a non-empty
+  // value: this effect also runs on mount, and an empty `base` there would wipe
+  // the draft we have just restored.
+  useEffect(() => { if (base) setBasePath(base); }, [base]);
+
+  // Keep what was typed. The subtree this renders in is unmounted whenever the
+  // checkpoint manager moves between its portal host and its inline place, so
+  // React state alone does not survive a window resize.
+  useEffect(() => {
+    if (ownsDraft) saveMergeDraft({ base: basePath, rows });
+  }, [ownsDraft, basePath, rows]);
 
   const stop = () => { clearInterval(pollRef.current); pollRef.current = null; };
 
@@ -226,6 +245,9 @@ export default function LoraMergeTool({
       return;
     }
     setPlan(null);
+    // Submitted work is no longer a draft: keeping it would greet the next
+    // visit with a form that looks unsent while the merge is already running.
+    if (ownsDraft) clearMergeDraft();
     setState(res.status || { status: 'running' });
     stop();
     pollRef.current = setInterval(poll, 2000);

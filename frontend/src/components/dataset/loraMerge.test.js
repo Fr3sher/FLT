@@ -3,10 +3,21 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  HONESTY_NOTE, MERGE_RUNNING_STATES, PRECISION_NOTE, TURBO_NOTE, canAskPlan,
-  carriedOverNote, fmtDuration, fmtGB, loraPayload, newLoraRow, pct,
-  planHeadline, weightHint,
+  HONESTY_NOTE, MERGE_DRAFT_KEY, MERGE_OPEN_KEY, MERGE_RUNNING_STATES,
+  PRECISION_NOTE, TURBO_NOTE, canAskPlan, carriedOverNote, clearMergeDraft,
+  fmtDuration, fmtGB, initialMergeBase, loadMergeDraft, loadMergeOpen,
+  loraPayload, newLoraRow, pct, planHeadline, saveMergeDraft, saveMergeOpen,
+  weightHint,
 } from './loraMerge.js';
+
+/** A localStorage stand-in. `raise` makes every call throw, which is what a
+ *  browser with storage disabled actually does — it is not an absent object. */
+const fakeStore = (seed = {}, raise = false) => ({
+  data: { ...seed },
+  getItem(key) { if (raise) throw new Error('denied'); return key in this.data ? this.data[key] : null; },
+  setItem(key, value) { if (raise) throw new Error('denied'); this.data[key] = String(value); },
+  removeItem(key) { if (raise) throw new Error('denied'); delete this.data[key]; },
+});
 
 const plan = (over = {}) => ({
   ok: true,
@@ -175,6 +186,137 @@ test('only "running" keeps the poller alive', () => {
   }
 });
 
+// --- the draft: what a window resize used to eat ------------------------------
+//
+// The tool renders inside TrainingPanel's CheckpointPortal, whose host node
+// comes and goes with the layout. React swaps between a portal and a plain
+// subtree there, and that swap UNMOUNTS everything inside: a phone turned to
+// landscape lost the path just typed. These helpers are what survives it, so
+// they are held to the rule that they may degrade but never throw — they run
+// during state initialisation, where an exception costs the whole panel.
+
+test('the draft key and the disclosure key are the ones on user machines', () => {
+  // Stored on every user's browser: renaming either silently discards a draft
+  // and re-closes a tool somebody had left open. There is no alias path here.
+  assert.equal(MERGE_DRAFT_KEY, 'loraMergeDraft_v1');
+  assert.equal(MERGE_OPEN_KEY, 'loraMergeOpen_v1');
+});
+
+test('what was typed comes back after the remount', () => {
+  const store = fakeStore();
+  saveMergeDraft({
+    base: 'D:\\models\\krea2_raw_bf16.safetensors',
+    rows: [newLoraRow('mine.safetensors', '0.8'), newLoraRow('turbo.safetensors', 1)],
+  }, store);
+  const back = loadMergeDraft(store);
+  assert.equal(back.base, 'D:\\models\\krea2_raw_bf16.safetensors');
+  assert.deepEqual(back.rows.map((row) => row.path), ['mine.safetensors', 'turbo.safetensors']);
+  // and it still serialises to what the server accepts, weights included
+  assert.deepEqual(loraPayload(back.rows), [
+    { path: 'mine.safetensors', weight: 0.8 },
+    { path: 'turbo.safetensors', weight: 1 },
+  ]);
+});
+
+test('rows read back get FRESH ids, never the stored ones', () => {
+  // A stored id could collide with a row added later in the session, and then
+  // "Remove" on one would take its twin with it.
+  const store = fakeStore();
+  saveMergeDraft({ rows: [newLoraRow('a.safetensors')] }, store);
+  const [restored] = loadMergeDraft(store).rows;
+  assert.notEqual(restored.id, newLoraRow('b.safetensors').id);
+});
+
+test('no localStorage at all is a blank form, not a crash', () => {
+  assert.deepEqual(loadMergeDraft(null).rows.map((r) => r.path), ['']);
+  assert.equal(loadMergeDraft(null).base, '');
+  assert.equal(loadMergeOpen(null), false);
+  // and writing into nothing is a no-op, not a thrown keystroke
+  assert.doesNotThrow(() => saveMergeDraft({ base: 'x', rows: [] }, null));
+  assert.doesNotThrow(() => saveMergeOpen(true, null));
+  assert.doesNotThrow(() => clearMergeDraft(null));
+});
+
+test('a storage that REFUSES every call degrades quietly', () => {
+  // Private browsing and a full quota both throw on the call rather than
+  // leaving `localStorage` undefined — the case an `if (localStorage)` misses.
+  const store = fakeStore({}, true);
+  assert.equal(loadMergeDraft(store).base, '');
+  assert.equal(loadMergeOpen(store), false);
+  assert.doesNotThrow(() => saveMergeDraft({ base: 'x', rows: [] }, store));
+  assert.doesNotThrow(() => saveMergeOpen(true, store));
+  assert.doesNotThrow(() => clearMergeDraft(store));
+});
+
+test('corrupt JSON is a blank form', () => {
+  const store = fakeStore({ [MERGE_DRAFT_KEY]: '{"base":"a.safetensors",' });
+  const back = loadMergeDraft(store);
+  assert.equal(back.base, '');
+  assert.equal(back.rows.length, 1);
+});
+
+test('a shape from another era is a blank form, whatever it is', () => {
+  for (const stored of ['null', '"a string"', '42', '[1,2,3]', '{"rows":"nope"}',
+    '{"base":{"path":"x"}}', '{}']) {
+    const back = loadMergeDraft(fakeStore({ [MERGE_DRAFT_KEY]: stored }));
+    assert.equal(back.base, '', `base survived ${stored}`);
+    assert.equal(back.rows.length, 1, `rows survived ${stored}`);
+    assert.equal(back.rows[0].path, '');
+  }
+});
+
+test('junk rows are dropped one by one, the good ones are kept', () => {
+  const store = fakeStore({
+    [MERGE_DRAFT_KEY]: JSON.stringify({
+      base: 'base.safetensors',
+      rows: [null, 'a string', { weight: 1 }, { path: 'good.safetensors', weight: 0.5 },
+        { path: 'noweight.safetensors' }],
+    }),
+  });
+  const back = loadMergeDraft(store);
+  assert.deepEqual(back.rows.map((row) => row.path), ['good.safetensors', 'noweight.safetensors']);
+  assert.equal(back.rows[0].weight, 0.5);
+  assert.equal(back.rows[1].weight, 1, 'a row with no weight means "as trained"');
+});
+
+test('an absurd row count is capped rather than rendered', () => {
+  const rows = Array.from({ length: 500 }, (_v, i) => ({ path: `l${i}.safetensors`, weight: 1 }));
+  const store = fakeStore({ [MERGE_DRAFT_KEY]: JSON.stringify({ base: '', rows }) });
+  assert.equal(loadMergeDraft(store).rows.length, 24);
+});
+
+test('a base handed in by a full-model card WINS over the draft', () => {
+  // Opening the tool from a card must merge into THAT model. Restoring a path
+  // typed somewhere else there would write the wrong 26 GB file.
+  const draft = { base: 'D:\\other\\something_else.safetensors', rows: [] };
+  assert.equal(initialMergeBase('D:\\models\\this_run.safetensors', draft),
+    'D:\\models\\this_run.safetensors');
+  // …and with no card, the draft is exactly what the field starts on
+  assert.equal(initialMergeBase('', draft), 'D:\\other\\something_else.safetensors');
+  assert.equal(initialMergeBase(undefined, undefined), '');
+});
+
+test('starting a merge forgets the draft', () => {
+  const store = fakeStore();
+  saveMergeDraft({ base: 'a.safetensors', rows: [newLoraRow('b.safetensors')] }, store);
+  clearMergeDraft(store);
+  assert.equal(store.getItem(MERGE_DRAFT_KEY), null);
+  assert.equal(loadMergeDraft(store).base, '');
+});
+
+test('the disclosure remembers being open, and only "open" counts as open', () => {
+  const store = fakeStore();
+  assert.equal(loadMergeOpen(store), false, 'closed is the default');
+  saveMergeOpen(true, store);
+  assert.equal(loadMergeOpen(store), true);
+  saveMergeOpen(false, store);
+  assert.equal(loadMergeOpen(store), false);
+  for (const junk of ['true', 'yes', '', '{}']) {
+    assert.equal(loadMergeOpen(fakeStore({ [MERGE_OPEN_KEY]: junk })), false,
+      `"${junk}" must not read as open`);
+  }
+});
+
 // --- the component's own source: invariants worth pinning --------------------
 
 const tool = readFileSync(
@@ -222,4 +364,35 @@ test('every input carries a label a screen reader can read', () => {
 
 test('a refusal is shown inline as an alert, never swallowed', () => {
   assert.match(tool, /role="alert"[\s\S]{0,120}plan\.error/);
+});
+
+test('an instance opened from a card never writes the shared draft', () => {
+  // Both instances can be mounted at once: the card's tool would otherwise
+  // overwrite, on mount, the path somebody typed in the always-present one.
+  assert.match(tool, /const ownsDraft = !base;/);
+  assert.match(tool, /if \(ownsDraft\) saveMergeDraft\(/);
+  assert.match(tool, /if \(ownsDraft\) clearMergeDraft\(\)/);
+});
+
+test('the base prop only overwrites the field when it names something', () => {
+  // `useEffect(() => setBasePath(base), [base])` also runs on mount, where an
+  // empty prop would wipe the draft that had just been restored.
+  assert.match(tool, /useEffect\(\(\) => \{ if \(base\) setBasePath\(base\); \}, \[base\]\);/);
+});
+
+const panel = readFileSync(
+  fileURLToPath(new URL('./TrainingPanel.jsx', import.meta.url)), 'utf8');
+
+test('the merge disclosure is controlled, so a remount cannot close it', () => {
+  // `open` on a <details> is DOM state. The block sits inside CheckpointPortal,
+  // and every swap of that portal's host unmounts it — which is how rotating a
+  // phone closed the tool on top of emptying it.
+  const summary = panel.indexOf('🧬 Merge a LoRA into a base checkpoint');
+  assert.notEqual(summary, -1, 'the merge disclosure is gone');
+  const block = panel.slice(panel.lastIndexOf('<details', summary), summary);
+  assert.match(block, /open=\{mergeOpen\}/);
+  assert.match(block, /onClick=\{toggleMerge\}/);
+  // and the toggle persists, otherwise a reload still forgets it
+  assert.match(panel, /const \[mergeOpen, setMergeOpen\] = useState\(loadMergeOpen\)/);
+  assert.match(panel, /saveMergeOpen\(next\)/);
 });

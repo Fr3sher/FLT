@@ -108,3 +108,95 @@ export function weightHint(weight) {
   if (value < 0) return 'A negative weight subtracts the LoRA.';
   return '';
 }
+
+/* ── The draft, so a resize stops eating what somebody typed ──────────────────
+ *
+ * The tool in Checkpoints & LoRAs renders inside `TrainingPanel`'s
+ * `CheckpointPortal`, whose host node appears and disappears with the layout.
+ * React alternates between a portal and a plain subtree there, and that swap
+ * UNMOUNTS everything inside it. So turning a phone to landscape threw away the
+ * checkpoint path and the LoRA rows just typed, and closed the disclosure on
+ * top of it — `open` on a <details> is DOM state, which a remount also loses.
+ *
+ * The portal is what puts the manager in the right section, so the fix is not
+ * to remove it: the two things worth keeping simply outlive the remount in
+ * localStorage. Both keys are versioned and must NEVER be renamed without an
+ * alias — they live on user machines, not in this repo.
+ */
+export const MERGE_DRAFT_KEY = 'loraMergeDraft_v1';
+export const MERGE_OPEN_KEY = 'loraMergeOpen_v1';
+
+/* Ceiling on rows read back: a corrupt — or hand-edited — entry must not be
+   able to render an unbounded column of fields. Nobody stacks 24 LoRAs. */
+const MAX_DRAFT_ROWS = 24;
+
+const storeFor = (store) => {
+  if (store !== undefined) return store;
+  try { return globalThis.localStorage || null; } catch { return null; }
+};
+
+export const emptyMergeDraft = () => ({ base: '', rows: [newLoraRow()] });
+
+/** Read the draft. Nothing in here may throw: no localStorage (SSR, a locked-
+ *  down browser), a read that raises, invalid JSON or a shape from another era
+ *  all degrade to a blank form. A lost draft is an annoyance; an exception
+ *  during state initialisation takes the whole training panel down with it. */
+export function loadMergeDraft(store) {
+  try {
+    const raw = storeFor(store)?.getItem(MERGE_DRAFT_KEY);
+    if (!raw) return emptyMergeDraft();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return emptyMergeDraft();
+    }
+    const rows = (Array.isArray(parsed.rows) ? parsed.rows : [])
+      .filter((row) => row && typeof row === 'object' && typeof row.path === 'string')
+      .slice(0, MAX_DRAFT_ROWS)
+      // Ids are re-minted rather than trusted: a stored id could collide with a
+      // row added later in the session, and `dropRow` would then remove both.
+      .map((row) => newLoraRow(
+        row.path,
+        typeof row.weight === 'number' || typeof row.weight === 'string' ? row.weight : 1,
+      ));
+    return {
+      base: typeof parsed.base === 'string' ? parsed.base : '',
+      rows: rows.length ? rows : [newLoraRow()],
+    };
+  } catch { return emptyMergeDraft(); }
+}
+
+/** Remember the draft. A full quota must not break the keystroke that otherwise
+ *  worked, so a failed write just means a draft that is not kept. */
+export function saveMergeDraft(draft, store) {
+  try {
+    storeFor(store)?.setItem(MERGE_DRAFT_KEY, JSON.stringify({
+      base: String(draft?.base || ''),
+      rows: (draft?.rows || []).map((row) => ({
+        path: String(row?.path || ''), weight: row?.weight,
+      })),
+    }));
+  } catch { /* not kept */ }
+}
+
+/** Forget it. Called once a merge really starts: a form that was submitted must
+ *  not come back on the next visit looking like work that never left. */
+export function clearMergeDraft(store) {
+  try { storeFor(store)?.removeItem(MERGE_DRAFT_KEY); } catch { /* ignore */ }
+}
+
+/** Which base the field starts on. A base handed in by a full-model card ALWAYS
+ *  wins over the draft: that instance is scoped to one model, and showing it a
+ *  path left over from elsewhere would merge into the wrong checkpoint. */
+export function initialMergeBase(base, draft) {
+  return String(base || '') || String(draft?.base || '');
+}
+
+/** Was the merge disclosure left open? Anything unreadable means closed — the
+ *  panel's default, and the state that hides the least. */
+export function loadMergeOpen(store) {
+  try { return storeFor(store)?.getItem(MERGE_OPEN_KEY) === '1'; } catch { return false; }
+}
+
+export function saveMergeOpen(open, store) {
+  try { storeFor(store)?.setItem(MERGE_OPEN_KEY, open ? '1' : '0'); } catch { /* ignore */ }
+}

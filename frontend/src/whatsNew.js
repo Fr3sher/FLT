@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-the-merge-form-keeps-what-you-typed',
+    date: '2026-08-04',
+    title: 'The merge tool stops emptying itself when the window changes shape',
+    blurb:
+      'Turning a phone to landscape — or anything else that reshaped the page — folded “Merge a LoRA into a base checkpoint” shut and threw away the checkpoint path and the LoRA rows you had just typed, with nothing to undo. The panel it lives in is rebuilt when the layout moves, and it was taking the form down with it. What you type is now kept: the tool stays open where you left it and comes back filled in, after a resize, a rotation or a reload alike. It is cleared the moment a merge actually starts, so a form you already sent never comes back looking like unfinished work.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-08-04-quantizing-no-longer-fails-on-the-paging-file',
     date: '2026-08-04',
     title: 'Quantizing a big model no longer dies on a “paging file” error',
