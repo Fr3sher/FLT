@@ -80,10 +80,29 @@ export function hfCloudTokenReadiness(payload = {}) {
   };
 }
 
+/** `2026-08-04` out of an ISO stamp, or ''. Not localized on purpose: this date
+ * is evidence inside a sentence about what was true WHEN. */
+const isoDay = (value) => (/^\d{4}-\d{2}-\d{2}/.test(String(value || ''))
+  ? String(value).slice(0, 10) : '');
+
 /** A full model is useful only after the backend has verified the Hub contents.
  * The model CTA stays gated by `artifact_status`; `hf_url` alone may expose only
- * a clearly labelled repository-inspection link while delivery is unverified. */
-export function fullTransformerArtifactView(run = {}) {
+ * a clearly labelled repository-inspection link while delivery is unverified.
+ *
+ * ⚠️ `artifact_status` IS A MINUTE OF THE PAST. It is stamped once, at delivery,
+ * and nothing rewrites it — so `available` means "was delivered and verified
+ * then", never "is on Hugging Face now". This panel rendered it in the present
+ * tense for weeks: "Full model available · Dense checkpoint and compliance
+ * metadata verified", above an "Open private model on Hugging Face" link that
+ * answered 404 because the repository had been deleted overnight. The record is
+ * still worth showing; it is worth showing DATED.
+ *
+ * `presence` is an optional live answer from `hub_presence` (`{state, detail}`)
+ * — the only thing entitled to speak in the present tense. Its `unknown` state
+ * (no token, offline, refused token) is NOT an absence and never demotes the
+ * view; only a measured `gone` does. */
+export function fullTransformerArtifactView(run = {}, presence = null) {
+  const presenceState = String(presence?.state || '').trim().toLowerCase();
   const status = String(run.artifact_status || '').trim().toLowerCase();
   const detail = String(run.artifact_status_detail ?? run.artifact_detail ?? '').trim();
   const available = status === 'available';
@@ -101,21 +120,58 @@ export function fullTransformerArtifactView(run = {}) {
   const href = available ? repositoryHref : null;
 
   if (available) {
+    // Measured gone wins over the record: the delivery DID happen, and the
+    // repository is not there any more. Both links are dropped — there is
+    // nothing behind them but a 404, and "Inspect the repository (delivery
+    // unverified)" would misname what the user is about to see.
+    if (presenceState === 'gone') {
+      return {
+        status, available: false, presence: presenceState, cleanupPending,
+        href: null, repositoryHref: null, tone: 'error',
+        label: 'Full model no longer on Hugging Face',
+        detail: 'This run delivered a verified full model, and the repository no '
+          + 'longer answers: it was deleted or renamed, or the token can no longer '
+          + 'see it. Nothing here can fetch it any more — check the Checkpoints '
+          + 'panel for a copy on this computer before assuming it is lost.',
+      };
+    }
+    const when = isoDay(run.verified_at || run.delivery_last_checked_at);
+    const fresh = presenceState === 'present';
     return {
-      status, available, cleanupPending, href, repositoryHref,
+      status, available, presence: presenceState || null, cleanupPending,
+      href, repositoryHref,
       tone: cleanupPending ? 'warning' : 'success',
-      label: 'Full model available',
+      // Past tense unless something has actually asked the Hub just now. A
+      // delivery is a fact about a moment; presence is a fact about this one.
+      label: fresh ? 'Full model on Hugging Face' : 'Full model delivered',
       detail: cleanupPending
         ? (cleanupDetail
           || 'The model is verified, but pod cleanup has not been confirmed and the pod may still be billing.')
-        : detail || (href
-        ? 'The private Hugging Face repository contents have been verified.'
-        : 'The contents were verified, but this status does not include the repository link.'),
+        : (fresh
+          ? 'Checked just now: the private Hugging Face repository still holds this model.'
+          : `Delivered and verified${when ? ` on ${when}` : ' at the end of the run'}`
+            + ' — not re-checked since.'
+            + (href ? ' Open the repository to confirm it is still there.'
+              : ' This status does not include the repository link.')),
     };
   }
   if (status === 'missing') {
+    // "No weights were verified IN the repository" presumes a repository to
+    // look in. Once the Hub says there is none, the inspect link below is the
+    // same dead end this whole change exists to stop offering.
+    if (presenceState === 'gone') {
+      return {
+        status, available: false, presence: presenceState,
+        href: null, repositoryHref: null, tone: 'error',
+        label: 'Full model no longer on Hugging Face',
+        detail: 'This run never delivered verified weights, and the repository '
+          + 'itself no longer answers — it was deleted or renamed, or the token '
+          + 'can no longer see it. There is nothing left here to inspect.',
+      };
+    }
     return {
-      status, available: false, href: null, repositoryHref, tone: 'error',
+      status, available: false, presence: presenceState || null,
+      href: null, repositoryHref, tone: 'error',
       label: 'Full model not found',
       detail: detail || 'No full-model weights were verified in the repository. Check the run logs and Hugging Face repository before deleting any recovery copy.',
     };
@@ -330,13 +386,26 @@ export function denseLocalArtifactView(run = {}) {
  * about being able to continue this run later, and a failed backup must not
  * read as a lost model. Returns null for a hub-only run — that one keeps the
  * original view, unchanged. */
-export function denseHubBackupView(run = {}) {
+export function denseHubBackupView(run = {}, presence = null) {
   if (!denseDeliversLocally(run) || !denseDeliversToHub(run)) return null;
   const state = String(run.hub_backup_status || '').trim().toLowerCase();
   const detail = String(run.hub_backup_detail || '').trim();
   const href = /^https:\/\/huggingface\.co\//i.test(String(run.hf_url || '').trim())
     ? String(run.hf_url).trim() : null;
   if (state === 'done') {
+    // A backup that WAS made and is no longer there is not a lost model — this
+    // branch only runs for a run whose weights are on this computer — but it is
+    // a lost ability to continue it, and that is worth saying before someone
+    // finds out on the launch that needs it.
+    if (String(presence?.state || '').toLowerCase() === 'gone') {
+      return {
+        state, tone: 'warning', href: null, presence: 'gone',
+        label: 'Hugging Face backup is gone',
+        detail: 'The backup was uploaded, and the repository no longer answers. '
+          + 'The model itself is on this computer; without a Hub copy this run '
+          + 'cannot be continued on a rented GPU.',
+      };
+    }
     return {
       state, tone: 'success', href,
       label: 'Hugging Face backup made',
@@ -367,11 +436,48 @@ export function denseResumeBlocker(run = {}) {
   if (!isFullTransformerRun(run)) return null;
   if ((run.resume_steps || []).length) return null;
   if (!denseDeliversToHub(run)) {
-    return 'This full model has no Hugging Face copy, so it cannot be continued: '
-      + 'a pod cannot be handed the 26 GB file on this computer. Choose the '
-      + '“This computer + Hugging Face” delivery to keep future runs resumable.';
+    // The reason changed under this sentence when the pod transport choice
+    // landed: a 26 GB file on this computer CAN now reach a pod, straight up
+    // from here. What a missing Hub copy costs is the fast road, not the road.
+    return 'This full model has no Hugging Face copy, so continuing it means '
+      + 'uploading the whole 26 GB from this computer — hours, billed on the pod '
+      + 'the whole time. Choose the “This computer + Hugging Face” delivery to '
+      + 'keep the fast road open for future runs.';
   }
   return 'This run has no verified Hugging Face copy to continue from yet.';
+}
+
+/** Why ▶ Continue cannot work for a full model RIGHT NOW, or null.
+ *
+ * WHY IT COUNTS ROADS AND NOT STATUSES
+ * ------------------------------------
+ * Since the pod transport choice landed there are TWO ways a checkpoint reaches
+ * a pod: the Hugging Face copy it downloads itself, and a direct upload of the
+ * master sitting on this computer. So "no Hub copy" stopped being a reason to
+ * disable anything — it closes the fast road, not the road. The button may only
+ * go away when BOTH are shut.
+ *
+ * ⚠️ And both halves must be read from something ALIVE, which is the whole point
+ * of this wave. `resume_checkpoints[].source` is rebuilt on every payload by
+ * `_dense_resume_candidates`, which lists the checkpoint store and stats each
+ * file — so a `'local'` road means a bf16 master is on the disk right now (fp8
+ * twins are excluded there: they cannot be trained further). `presence` is the
+ * live Hub probe. Gating on `local_artifact_status` instead would have been the
+ * same bug as `artifact_status`, mirrored: a delivery-time stamp offering a
+ * button for a file the user deleted by hand months later.
+ *
+ * Only a MEASURED `gone` closes the Hub road. A check that failed leaves it
+ * open, exactly as everywhere else here.
+ */
+export function denseContinueBlocker(run = {}, presence = null) {
+  const roads = new Set((run?.resume_checkpoints || [])
+    .map((c) => c?.source || 'local'));
+  if (String(presence?.state || '').trim().toLowerCase() === 'gone') {
+    roads.delete('hub');
+  }
+  if (roads.size) return null;
+  return 'Disabled: neither road is open — the Hugging Face copy is gone, and this '
+    + 'computer no longer holds a full-precision file to upload instead.';
 }
 
 /** Fetching to this computer is the recovery twin of “Verify Hugging Face

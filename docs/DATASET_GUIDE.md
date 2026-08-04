@@ -673,6 +673,22 @@ to this computer only has no Hub copy to pull, and a run whose local file was
 deleted has only the Hub. Keeping the default **"This computer + Hugging Face"**
 delivery keeps the fast road open for every future run.
 
+**And the Hub copy is yours to delete — Hugging Face will not tell the app when
+you do.** Deleting one to free space is normal; being told weeks later that a
+model is "available" when the link answers 404 is not. So the Checkpoints panel
+and the Runs page **ask** whether the repository still answers when you open
+them, and say which of three things they found: it is still there, it is not
+there any more, or the check itself failed (no token, offline, an outage) —
+which is never reported as a loss. Until an answer comes back they describe the
+delivery in the past tense, dated, rather than claiming the model is there right
+now.
+
+A repository confirmed gone stops offering what can no longer work: the dead
+links disappear, *Quantize to fp8* is disabled on that card with its reason
+(downloading from that repository is the first thing it would do), and ▶ Continue
+is disabled **only when the run also left nothing on this computer** — with a
+local copy, the 💻 road above is exactly the way out.
+
 ### The two files a finished run delivers
 
 A dense run produces a ~26 GB **bf16 master**. Nobody generates with a file that

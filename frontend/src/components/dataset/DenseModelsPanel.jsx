@@ -3,10 +3,11 @@ import { Link } from 'react-router';
 import { apiFetch } from '../../api/fetchClient';
 import { HelpBadge } from '../../help/HelpMode';
 import { postJson } from '../../hooks/useDataset';
+import useHubPresence from '../../hooks/useHubPresence';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
 import LoraMergeTool from './LoraMergeTool';
 import {
-  denseActions, denseFileRows, denseGuidanceLine, denseModelTitle,
+  denseActions, denseFileRows, denseGuidanceLine, denseHubLine, denseModelTitle,
   denseStudioTarget, denseWhereChip, fmtBytes, STUDIO_NEEDS_A_LORA,
 } from './denseModels';
 
@@ -28,7 +29,14 @@ import {
 const TONE = {
   ok: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200',
   info: 'border-sky-400/40 bg-sky-500/10 text-sky-200',
+  error: 'border-rose-400/45 bg-rose-500/10 text-rose-200',
   muted: 'border-border text-content-subtle',
+};
+
+const LINE_TONE = {
+  ok: 'text-emerald-200',
+  error: 'text-rose-200',
+  muted: 'text-content-subtle',
 };
 
 function Chip({ tone = 'muted', title = '', children }) {
@@ -37,6 +45,37 @@ function Chip({ tone = 'muted', title = '', children }) {
       className={`inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[0.625rem] font-medium ${TONE[tone] || TONE.muted}`}>
       {children}
     </span>
+  );
+}
+
+/** The Hugging Face line of a card: the repository, and ONE sentence chosen
+ *  from what is actually known about it.
+ *
+ *  Exported so a test can render it in every state. The bug it replaces was
+ *  invisible to a payload test and to a source-text test alike: the status came
+ *  from `entry.hub.status` and the sentence came from `rows.length`, so the DB
+ *  could say "missing" while the paragraph next to it said "the model is there"
+ *  — two assertions, one screen, and nothing that ever compared them.
+ *
+ *  Wraps and breaks at 400 px: a repository id is long, and a card that scrolls
+ *  sideways on a phone hides the very sentence this exists to show. */
+export function HubLine({ entry, presence = null }) {
+  const line = denseHubLine(entry, presence);
+  if (!line) return null;
+  return (
+    // `status`, not `alert`: the sentence appears when the check lands, and a
+    // panel with seven gone repositories would otherwise interrupt a screen
+    // reader seven times over something nobody has to act on this second.
+    <p className={`m-0 mt-1.5 text-[0.625rem] leading-snug ${LINE_TONE[line.tone] || LINE_TONE.muted}`}
+      role={line.state === 'gone' ? 'status' : undefined}>
+      <span className="text-content-subtle">Backup: </span>
+      {line.url ? (
+        <a href={line.url} target="_blank" rel="noreferrer"
+          className="break-all text-primary underline">{line.repoId}</a>
+      ) : <span className="break-all font-mono">{line.repoId}</span>}
+      <span className="text-content-subtle"> · {line.stateLabel}</span>
+      <span className="block">{line.text}</span>
+    </p>
   );
 }
 
@@ -116,7 +155,15 @@ function SendPlan({ plan, busy, onSend, onCancel }) {
   );
 }
 
-export default function DenseModelsPanel({ datasetId, models = [], onChanged = null }) {
+export default function DenseModelsPanel({ datasetId, models = [], onChanged = null,
+  hubPresenceOverride = null }) {
+  // Asked once, after this panel has already painted. Until it answers, every
+  // card reads from the RECORD and says so — no sentence below depends on this
+  // arriving. `hubPresenceOverride` is the seam the render tests use: effects
+  // never run under renderToStaticMarkup, so the states that matter most (a
+  // repository verified gone) would otherwise be unreachable from a test.
+  const fetched = useHubPresence(models.map((m) => m.run_id));
+  const hubPresence = hubPresenceOverride || fetched;
   const [plans, setPlans] = useState({});          // run_id -> send plan
   const [quantizeFor, setQuantizeFor] = useState(null);
   const [mergeFor, setMergeFor] = useState(null);
@@ -208,9 +255,10 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
 
       <ul className="m-0 mt-2 flex list-none flex-col gap-2 p-0">
         {models.map((entry) => {
-          const where = denseWhereChip(entry);
+          const presence = hubPresence[entry.run_id] || null;
+          const where = denseWhereChip(entry, presence);
           const rows = denseFileRows(entry);
-          const actions = denseActions(entry);
+          const actions = denseActions(entry, presence);
           const guidance = denseGuidanceLine(entry.inference_hint);
           const studio = denseStudioTarget(entry);
           const plan = plans[entry.run_id];
@@ -270,19 +318,7 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                 </ul>
               )}
 
-              {entry.hub?.repo_id && (
-                <p className="m-0 mt-1.5 text-content-subtle text-[0.625rem] leading-snug">
-                  Backup:{' '}
-                  {entry.hub.url ? (
-                    <a href={entry.hub.url} target="_blank" rel="noreferrer"
-                      className="break-all text-primary underline">{entry.hub.repo_id}</a>
-                  ) : <span className="break-all font-mono">{entry.hub.repo_id}</span>}
-                  {entry.hub.status ? ` · ${entry.hub.status}` : ''}
-                  {rows.length === 0
-                    ? ' — the model is there, not on this computer. Quantizing fetches it first.'
-                    : ''}
-                </p>
-              )}
+              <HubLine entry={entry} presence={presence} />
 
               {entry.trainer && (
                 <p className="m-0 mt-0.5 break-all text-content-subtle text-[0.5625rem] leading-snug">
@@ -299,7 +335,12 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                   <button type="button"
                     onClick={() => setQuantizeFor(
                       quantizeFor?.run_id === entry.run_id ? null : entry)}
-                    disabled={busy}
+                    // A button whose own promise is "quantizing fetches it
+                    // first" cannot be offered once the repository it would
+                    // fetch from has been measured gone: clicking it can only
+                    // fail, and the reason belongs here, before the click.
+                    disabled={busy || !actions.quantize.enabled}
+                    title={actions.quantize.reason || undefined}
                     className="rounded-md border border-sky-300/40 bg-sky-400/15 px-2.5 py-1 text-[0.6875rem] font-semibold text-sky-50 hover:bg-sky-400/25 disabled:opacity-40">
                     {quantizeFor?.run_id === entry.run_id ? 'Hide' : actions.quantize.label}
                   </button>
@@ -319,6 +360,12 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                   </button>
                 )}
               </div>
+
+              {actions.quantize?.reason && (
+                <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-snug">
+                  {actions.quantize.reason}
+                </p>
+              )}
 
               {mergeFor?.run_id === entry.run_id && (
                 <div className="mt-1.5 rounded-md border border-sky-300/30 bg-app/50 px-2 py-1.5">

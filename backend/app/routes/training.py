@@ -2194,6 +2194,48 @@ def dataset_train_cloud_recheck_delivery():
     return jsonify(result)
 
 
+@bp.post('/dataset/train/cloud/hub-presence')
+def dataset_train_cloud_hub_presence():
+    """Are these runs' Hugging Face repositories still there — asked NOW.
+
+    Deliberately its own endpoint, and deliberately not a field of the
+    checkpoints listing: the panel must paint before anything touches the
+    network, and a Hub outage must never delay a page that is mostly about
+    local files. The panel calls this after it has rendered, and only ever
+    replaces "not re-checked since delivery" with something it measured.
+
+    Cheap by construction — one metadata request per repository, cached with a
+    short TTL in ``hub_presence`` — and never destructive: it reads, and does
+    not rewrite ``artifact_status`` (that record is the delivery's minute, and
+    ``recheck-delivery`` above is the one operation allowed to restate it).
+    """
+    from ..models import CloudTrainingRun
+    from ..services import hub_presence
+
+    body = request.get_json(silent=True) or {}
+    wanted = body.get('run_ids')
+    if not isinstance(wanted, list) or not wanted:
+        return jsonify({'error': 'run_ids is required'}), 400
+    ids = []
+    for value in wanted:
+        try:
+            ids.append(int(value))
+        except (TypeError, ValueError):
+            continue
+    repo_of = {}
+    for run in CloudTrainingRun.query.filter(CloudTrainingRun.id.in_(ids)).all():
+        if not ct._is_full_transformer_run(run):
+            continue
+        repo = str(ct._run_param(run, 'hf_repo_id') or '').strip()
+        if repo:
+            repo_of[run.id] = repo
+    checked = hub_presence.check_many(repo_of.values(),
+                                      force=body.get('force') is True)
+    return jsonify({'ok': True, 'results': {
+        str(run_id): {**checked[repo], 'run_id': run_id}
+        for run_id, repo in repo_of.items() if repo in checked}})
+
+
 @bp.post('/dataset/train/cloud/fetch-local')
 def dataset_train_cloud_fetch_local():
     """Bring ONE kept dense run's files home (or stop doing it).

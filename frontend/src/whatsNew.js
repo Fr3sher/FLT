@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-the-app-stops-claiming-a-full-model-it-has-not-checked',
+    date: '2026-08-04',
+    title: 'Your full models say where they really are, instead of where they were',
+    blurb:
+      'A delivered full model was announced as “available” on Hugging Face for ever after, because that status is written once, when the run ends, and was never asked again — so a repository you deleted last night still offered a link that answered 404, and one card managed to print “missing — the model is there” in the same sentence. The Checkpoints panel and the Runs page now ask Hugging Face when you open them, and say one of three things: it is still there, it is gone, or the check itself failed (no token, offline, an outage) — which is never reported as a loss. Until an answer arrives they date the delivery instead of claiming the present. When a repository really is gone they tell you what is left — the master on your disk, the fp8 twin, or nothing — and the buttons that could only have failed stop being offered: the dead links go, “Quantize to fp8” is disabled with its reason, and ▶ Continue is disabled only when the run left nothing on this computer to send to a pod instead.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-08-04-choose-how-a-full-model-reaches-the-pod',
     date: '2026-08-04',
     title: 'Continue a full model from your own copy — and see what each way costs',

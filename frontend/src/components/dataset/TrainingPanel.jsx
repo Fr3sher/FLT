@@ -5,6 +5,7 @@ import { Link } from 'react-router';
 import { apiFetch, getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
+import useHubPresence from '../../hooks/useHubPresence';
 import { animeFamilyNote } from './animeFamilyNote.js';
 import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
@@ -159,7 +160,14 @@ const FULL_ARTIFACT_TONE = {
 };
 
 function FullTransformerArtifactNotice({ run }) {
-  const view = fullTransformerArtifactView(run);
+  // Is the repository still there? `artifact_status` cannot say — it is stamped
+  // at delivery and never revisited, which is how this notice came to read
+  // "Full model available … verified" above a link answering 404. Asked after
+  // this block has already rendered; until it answers, the view speaks about
+  // the delivery in the past tense, which is all it ever knew. At most one of
+  // this panel's two notices exists at a time, so this is one question, once.
+  const presence = useHubPresence(run?.hf_repo_id ? [run.run_id] : []);
+  const view = fullTransformerArtifactView(run, presence[run?.run_id] || null);
   const files = fullTransformerArtifactFiles(run);
   const fp8Note = fullTransformerFp8Note(run);
   const hint = run?.inference_hint || null;

@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router';
 import { postJson } from '../api/fetchClient';
 import { useToast } from '../components/common/Toast';
 import { useCapabilities } from '../context/CapabilitiesContext';
+import useHubPresence from '../hooks/useHubPresence';
 import TrainingProgress from '../components/dataset/TrainingProgress';
 import LaunchProgress from '../components/dataset/LaunchProgress';
 import ContinueDialog from '../components/dataset/ContinueDialog';
@@ -33,6 +34,7 @@ import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
   canFetchDenseLocally,
   canRecheckFullTransformerDelivery,
+  denseContinueBlocker,
   denseHubBackupView,
   denseLocalArtifactView,
   fullTransformerArtifactFiles,
@@ -210,12 +212,12 @@ function DenseLocalStatus({ run, onFetch, fetching = false }) {
    three shapes (a local copy, a Hub backup, the historical Hub-only delivery)
    and the only way to prove a shape renders is to render it. */
 export function FullArtifactStatus({ run, onRecheck, rechecking = false,
-  onFetch, fetching = false }) {
+  onFetch, fetching = false, presence = null }) {
   const local = denseLocalArtifactView(run);
-  const backup = denseHubBackupView(run);
+  const backup = denseHubBackupView(run, presence);
   // A run delivered here keeps its Hugging Face block only as a BACKUP note:
   // "Full model not found" would be a lie about a model sitting on the disk.
-  const view = backup || (local ? null : fullTransformerArtifactView(run));
+  const view = backup || (local ? null : fullTransformerArtifactView(run, presence));
   const canRecheck = canRecheckFullTransformerDelivery(run) && !!onRecheck;
   if (!view) {
     return <DenseLocalStatus run={run} onFetch={onFetch} fetching={fetching} />;
@@ -479,6 +481,17 @@ export default function CloudRunsPage() {
     tick();
     return () => { alive = false; clearTimeout(t); };
   }, [poll]);
+
+  // Is each delivered full model STILL on Hugging Face? `artifact_status` is
+  // stamped at delivery and never revisited, so this page happily offered "Open
+  // private model on Hugging Face ↗" on a repository its owner had deleted.
+  // Asked once, after the page has painted, for the dense runs that recorded a
+  // repository — every card renders from the record (dated, past tense) until
+  // and unless this answers.
+  const hubPresence = useHubPresence(
+    [...(data?.actives || []), ...(data?.recent || [])]
+      .filter((r) => isFullTransformerRun(r) && r.hf_repo_id)
+      .map((r) => r.run_id));
 
   // Nudge, once, that a finished run can be continued — resuming from an earlier,
   // less-cooked epoch is the flagship of the Continue dialog and easy to miss.
@@ -1002,6 +1015,7 @@ export default function CloudRunsPage() {
           {fullModel && (
             <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
               rechecking={!!recheckingDelivery[run.run_id]}
+              presence={hubPresence[run.run_id] || null}
               onFetch={fetchFullModel} fetching={!!run.dense_fetch_active} />
           )}
           {line && (
@@ -1034,11 +1048,13 @@ export default function CloudRunsPage() {
               ? (run.resume_steps || []).length > 0
               : (run.status === 'done' && run.checkpoint_ready)) && (
               <button type="button" onClick={() => continueRun(run)}
-                disabled={isTrainingRecipeReplayBlocked(run) || !!continuing[run.run_id]}
+                disabled={isTrainingRecipeReplayBlocked(run) || !!continuing[run.run_id]
+                  || !!(fullModel && denseContinueBlocker(run, hubPresence[run.run_id]))}
                 title={isTrainingRecipeReplayBlocked(run)
                   ? 'Disabled: this legacy/incompatible Z-Image checkpoint cannot be continued safely; start a fresh run'
                   : fullModel
-                    ? "Resume this full model on a fresh pod — pick how its 26 GB gets there"
+                    ? (denseContinueBlocker(run, hubPresence[run.run_id])
+                      || "Resume this full model on a fresh pod — pick how its 26 GB gets there")
                     : "Resume from any of this run's checkpoints for more steps, on a fresh pod"}
                 className="px-3 py-1.5 rounded-lg bg-sky-600/80 hover:bg-sky-600 text-white text-xs font-semibold disabled:opacity-40">
                 {continuing[run.run_id] ? '▶ Continuing…' : '▶ Continue…'}
@@ -1281,6 +1297,7 @@ export default function CloudRunsPage() {
               {isFullTransformerRun(run) && (
                 <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
                   rechecking={!!recheckingDelivery[run.run_id]}
+                  presence={hubPresence[run.run_id] || null}
                   onFetch={fetchFullModel} fetching={!!run.dense_fetch_active} />
               )}
 

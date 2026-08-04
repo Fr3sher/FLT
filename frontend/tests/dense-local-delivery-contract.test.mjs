@@ -144,11 +144,26 @@ test('a transfer in flight offers to stop it, and says what stopping keeps', () 
   assert.match(html, /what landed is kept/)
 })
 
-test('an old Hugging-Face-only run renders exactly as before', () => {
+test('an old Hugging-Face-only run still renders its Hub block, and only that', () => {
   const html = renderToStaticMarkup(createElement(FullArtifactStatus, {
     run: legacyRun(), onRecheck: () => {},
   }))
-  assert.match(html, /Full model available/)
+  // "delivered", not "available": nothing has asked the Hub, and this block
+  // used to offer the link below over a repository that had been deleted.
+  assert.match(html, /Full model delivered/)
+  assert.match(html, /not re-checked since/)
   assert.match(html, /Open private model on Hugging Face/)
-  assert.doesNotMatch(html, /this computer/)
+  assert.doesNotMatch(html, /on this computer/)
+})
+
+test('the Hub block of a legacy run collapses to the truth once the repo is gone', () => {
+  const html = renderToStaticMarkup(createElement(FullArtifactStatus, {
+    run: legacyRun(), onRecheck: () => {}, presence: { state: 'gone' },
+  }))
+  assert.match(html, /Full model no longer on Hugging Face/)
+  // The dead link is the thing a user actually clicked. It must be gone from
+  // the markup, not merely relabelled.
+  assert.doesNotMatch(html, /Open private model on Hugging Face/)
+  assert.doesNotMatch(html, /Inspect Hugging Face repository/)
+  assert.doesNotMatch(html, /huggingface\.co/)
 })

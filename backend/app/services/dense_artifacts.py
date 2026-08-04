@@ -207,7 +207,14 @@ def _same_file(a, b) -> bool:
 
 
 def _hub_of(run) -> dict | None:
-    """The Hugging Face copy of this run, or None when it never had one."""
+    """The Hugging Face copy of this run AS RECORDED, or None when it never had one.
+
+    Every field here is a fact about the PAST — ``status`` is stamped once, at
+    delivery, and nothing rewrites it. Whether the repository is still there is
+    a different question, answered live by ``hub_presence`` and never from these
+    values. ``checked_at`` is what makes the difference sayable on screen: the
+    panel can date the record instead of rendering it in the present tense.
+    """
     from . import cloud_training as ct
 
     repo = ct._run_param(run, 'hf_repo_id')
@@ -218,6 +225,9 @@ def _hub_of(run) -> dict | None:
         'url': ct._run_param(run, 'hf_url'),
         'weight_filename': ct._run_param(run, 'hf_weight_filename'),
         'status': ct._run_param(run, 'artifact_status'),
+        'checked_at': (ct._run_param(run, 'delivery_last_checked_at')
+                       or ct._run_param(run, 'artifact_verified_at')
+                       or ct._run_param(run, 'verified_at')),
         'backup_status': ct._run_param(run, 'hub_backup_status'),
         'backup_detail': ct._run_param(run, 'hub_backup_detail'),
     }

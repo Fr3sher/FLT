@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
-  denseActions, denseFileRows, denseGuidanceLine, denseModelTitle,
+  denseActions, denseFileRows, denseGuidanceLine, denseHubLine, denseModelTitle,
   denseStudioTarget, denseWhereChip, fmtBytes, STUDIO_NEEDS_A_LORA,
 } from './denseModels.js';
 
@@ -43,10 +43,24 @@ test('the title names the family AND the variant — Raw and Turbo want differen
 
 test('the where-chip mirrors the canvas vocabulary, never "missing" for a Hub model', () => {
   assert.equal(denseWhereChip(local()).label, 'On this computer');
-  assert.equal(denseWhereChip(hubOnly()).label, 'On Hugging Face');
   assert.equal(denseWhereChip({}).label, 'Not found');
   // A run holding only the twin is still "on this computer".
   assert.equal(denseWhereChip({ fp8: { filename: 'a' } }).label, 'On this computer');
+  // A Hub model is still never "missing" — but "On Hugging Face" is a claim
+  // about NOW, and nothing has asked. What the run did is what may be stated.
+  assert.equal(denseWhereChip(hubOnly()).label, 'Delivered to Hugging Face');
+  assert.match(denseWhereChip(hubOnly()).title, /has not been checked/);
+});
+
+test('the where-chip speaks in the present tense only once something has asked', () => {
+  assert.equal(denseWhereChip(hubOnly(), { state: 'present' }).label, 'On Hugging Face');
+  assert.equal(denseWhereChip(hubOnly(), { state: 'gone' }).label, 'No copy left');
+  // "Could not check" is our failure, not the repository's. It must read like
+  // the unchecked state, never like the absent one.
+  assert.equal(denseWhereChip(hubOnly(), { state: 'unknown' }).label,
+    'Delivered to Hugging Face');
+  // A model on disk answers before the Hub is consulted at all.
+  assert.equal(denseWhereChip(local(), { state: 'gone' }).label, 'On this computer');
 });
 
 // --- the distinction this panel exists to make -------------------------------
@@ -120,11 +134,110 @@ test('an active run offers nothing and says why', () => {
 });
 
 test('a Hub-only master can still be quantized — the job downloads it first', () => {
-  assert.ok(denseActions(hubOnly()).quantize);
+  assert.ok(denseActions(hubOnly()).quantize.enabled);
+  // "Could not check" must not take the button away: the repository is very
+  // probably fine and the user is merely offline.
+  assert.equal(denseActions(hubOnly(), { state: 'unknown' }).quantize.enabled, true);
+});
+
+test('quantizing is refused, with its reason, once the repository is measured gone', () => {
+  const gone = denseActions(hubOnly(), { state: 'gone' }).quantize;
+  // Still offered as a control, so the reason has somewhere to live — the click
+  // is what is refused. "Quantizing fetches it first" cannot be honoured here.
+  assert.equal(gone.enabled, false);
+  assert.match(gone.reason, /repository it would be downloaded from is gone/);
+  // A master on THIS computer never depended on the Hub.
+  assert.equal(denseActions(local({ fp8: null, can_quantize: true }),
+    { state: 'gone' }).quantize.enabled, true);
 });
 
 test('a run with a twin already is not offered a second quantization', () => {
   assert.equal(denseActions(local()).quantize, null);
+});
+
+// --- the Hugging Face line: one sentence, chosen from the state --------------
+//
+// The bug this section pins down shipped for weeks and was green the whole
+// time: the status came from `entry.hub.status` and the sentence came from
+// `rows.length`, so a run whose repository the backend had VERIFIED empty
+// printed "· missing — the model is there, not on this computer". Two
+// assertions on one line, and nothing that ever compared them. Every test here
+// therefore asserts the SENTENCE against the state, never one or the other.
+
+test('a verified-missing repository can never be followed by "the model is there"', () => {
+  for (const status of ['missing', 'verification_pending', 'pending', 'not_requested', '']) {
+    for (const presence of [null, { state: 'unknown' }, { state: 'gone' }]) {
+      const line = denseHubLine(hubOnly({ hub: { repo_id: 'acme/x', status } }), presence);
+      assert.doesNotMatch(line.text, /the model is there|still holds/,
+        `status=${status} presence=${presence?.state || 'unchecked'} asserted a presence`);
+    }
+  }
+});
+
+test('with nothing asked yet, the line dates the record instead of stating the present', () => {
+  const line = denseHubLine(hubOnly({
+    hub: { repo_id: 'acme/dense-90', status: 'available', checked_at: '2026-07-11T09:12:33' },
+  }));
+  assert.equal(line.state, 'unchecked');
+  assert.equal(line.stateLabel, 'not re-checked');
+  assert.match(line.text, /Delivered and verified on 2026-07-11 — not re-checked since\./);
+  assert.match(line.text, /Nothing from this run is on this computer\./);
+  // Undated delivery still reads as a past event, never as a current fact.
+  assert.match(denseHubLine(hubOnly()).text, /at the end of the run — not re-checked since/);
+});
+
+test('only a live answer earns the present tense', () => {
+  const present = denseHubLine(hubOnly(), { state: 'present' });
+  assert.equal(present.stateLabel, 'checked just now');
+  assert.match(present.text, /still holds this model/);
+  assert.match(present.text, /quantizing downloads it from there first/);
+  assert.equal(present.tone, 'ok');
+});
+
+test('"could not check" says so first, and is never an absence', () => {
+  const line = denseHubLine(hubOnly(), {
+    state: 'unknown',
+    detail: 'Hugging Face could not be reached, so the repository was not checked.',
+  });
+  assert.equal(line.stateLabel, 'could not check');
+  assert.match(line.text, /^Hugging Face could not be reached/);
+  assert.doesNotMatch(line.text, /deleted|gone|no longer/);
+  // The record still appears — dated, and behind the failure, so it cannot be
+  // misread as the answer we failed to get.
+  assert.match(line.text, /not re-checked since/);
+});
+
+test('a repository verified gone names what is LEFT, which is the whole question', () => {
+  const nothing = denseHubLine(hubOnly(), { state: 'gone' });
+  assert.equal(nothing.tone, 'error');
+  assert.equal(nothing.stateLabel, 'not found');
+  assert.match(nothing.text, /no longer returns this repository/);
+  assert.match(nothing.text, /no recoverable model left/);
+  assert.match(nothing.text, /training it again is the only way back/i);
+
+  // The master is here: this is an inconvenience, not a loss, and saying
+  // otherwise would send someone re-renting a GPU they do not need.
+  const safe = denseHubLine(local(), { state: 'gone' });
+  assert.match(safe.text, /full-precision master is still on this computer, so nothing is lost/);
+
+  // Only the twin: still generates, can never be continued. The difference
+  // costs eight hours of GPU to rediscover.
+  const twinOnly = denseHubLine(local({ master: null }), { state: 'gone' });
+  assert.match(twinOnly.text, /fp8 twin is still on this computer/);
+  assert.match(twinOnly.text, /no longer be trained again, merged or re-quantized/);
+});
+
+test('a run still working has not failed to deliver — it has not got there yet', () => {
+  const line = denseHubLine(hubOnly({
+    active: true, hub: { repo_id: 'acme/x', status: 'pending' },
+  }));
+  assert.match(line.text, /still working — nothing has reached this repository yet/);
+  assert.doesNotMatch(line.text, /never confirmed/);
+});
+
+test('a run that never had a repository has no line at all', () => {
+  assert.equal(denseHubLine(local({ hub: null })), null);
+  assert.equal(denseHubLine({}, { state: 'gone' }), null);
 });
 
 // --- the Raw sampler settings ------------------------------------------------
