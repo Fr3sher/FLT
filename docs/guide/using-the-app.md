@@ -1698,6 +1698,15 @@ ranking computed over one bucket has nothing to say about another.
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next
 to each one, and lists it in your library under **🎬 Video training sets**.
 
+**You can cap how many clips one source contributes.** A 50-clip set that is
+three videos over-represented looks exactly like a diverse one on disk, and that
+imbalance is the kind that quietly overfits a source. **Max clips per source**
+caps it; leave it empty for no cap. The cap trims dominance without punishing
+scarcity — a file with fewer clips than the cap keeps all of them — and it is
+**not a random sample**: each source keeps its earliest clips, so promoting the
+same bank twice gives you the same dataset. When a finished set leans on one file
+anyway, the result tells you the real share.
+
 **You can trim the edges of every clip.** A shot boundary is where a cut just
 happened, so the first and last frames of a shot are disproportionately
 dissolves, fades and leftovers of a transition — and a dataset whose clips all

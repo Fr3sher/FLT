@@ -158,7 +158,8 @@ export function promoteProblem({ name, target, frames }) {
  * `width`/`height` ride together or not at all: the server treats "both present"
  * as a resize and anything else as "keep the source's size", so sending a lone
  * width would silently be ignored. */
-export function promotePayload({ name, targetKey, frames, size, ids, edgeInsetS }) {
+export function promotePayload({ name, targetKey, frames, size, ids, edgeInsetS,
+                                 maxPerSource }) {
   const body = {
     name: (name || '').trim(),
     target_profile: targetKey,
@@ -175,7 +176,65 @@ export function promotePayload({ name, targetKey, frames, size, ids, edgeInsetS 
   // change what every existing recipe exports.
   const inset = Number(edgeInsetS)
   if (Number.isFinite(inset) && inset > 0) body.edge_inset_s = inset
+  // Same rule as the inset: omitted when there is no cap, never sent as 0 —
+  // which the server would refuse anyway, and which reads as "cap of zero".
+  const cap = Number(maxPerSource)
+  if (Number.isFinite(cap) && cap >= 1) body.max_per_source = Math.trunc(cap)
   return body
+}
+
+// ── 🎚 Capping one source's share ─────────────────────────────────────────────
+// Found by this project's own first end-to-end test: it promoted "the first 50
+// clips that pass", which meant id order, which meant three videos
+// over-represented in a 50-clip dataset. The folder on disk looks exactly like a
+// diverse one, so the imbalance is invisible without being told.
+//
+// Above this share of one source, the result is lopsided enough to be worth a
+// sentence. 0.5 rather than the 0.6 that was actually measured: the point is to
+// speak before it gets that bad.
+export const LOPSIDED_SHARE = 0.5
+
+/** Why this cap cannot be used, or '' when it can. */
+export function capProblem(value) {
+  if (value === '' || value === null || value === undefined) return ''
+  const cap = Number(value)
+  if (!Number.isFinite(cap)) return 'Enter a number of clips.'
+  if (cap !== Math.trunc(cap)) {
+    return 'A cap is a whole number of clips.'
+  }
+  if (cap < 1) return 'A cap of at least 1 — leave it empty for no cap.'
+  return ''
+}
+
+/** What the cap DOES, in the words that matter: which clips survive it.
+ *
+ * It is not a sample. Each source keeps its EARLIEST clips, in detector order —
+ * stable and explainable, and deliberately not random, so promoting the same
+ * bank twice gives the same dataset. A user who assumes "a representative pick"
+ * gets something other than what they think, and the difference is invisible. */
+export function capHint() {
+  return 'Caps how many clips ONE source may contribute. Each source keeps its '
+    + 'earliest clips, so promoting the same bank twice gives the same dataset. '
+    + 'Sources with fewer clips than the cap keep all of theirs.'
+}
+
+/** What the finished promotion says about its own balance, or '' when there is
+ * nothing worth saying.
+ *
+ * Deliberately AFTER the fact rather than as a pre-flight suggestion: the
+ * composition is computed on the selection the server resolved, and it comes
+ * back with the response. Guessing it in the dialog would mean re-deriving the
+ * selection in the browser, and a suggestion built on a different view of the pool
+ * than the server's is worse than none. */
+export function capBalanceNote(composition, appliedCap) {
+  if (appliedCap) return ''                     // the user already made the call
+  const sources = Number(composition?.sources) || 0
+  const share = Number(composition?.top_source_share) || 0
+  // One source is not an imbalance, it is the whole bank — there is nothing to
+  // spread it across and the advice would be impossible to follow.
+  if (sources < 2 || share <= LOPSIDED_SHARE) return ''
+  return `${Math.round(share * 100)}% of this set comes from a single source. `
+    + 'Set “Max clips per source” to spread it across the other files.'
 }
 
 // ── ✂ Trimming the edges of every clip ────────────────────────────────────────

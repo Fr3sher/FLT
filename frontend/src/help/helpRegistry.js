@@ -624,6 +624,16 @@ const TOPICS = [
      'audio cut flags nothing', 'no sound reading', 'remeasure for audio',
      'ltx audio', 'minimax audio', 'wan has no audio'],
     '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  // Nobody searches "max_per_source". They search the SYMPTOM: a set that came
+  // out dominated by one file, or the question of whether the cap picks at
+  // random (it does not — earliest first, so the same bank gives the same set).
+  action('video-source-cap', 'Cap how many clips one source contributes',
+    ['max clips per source', 'per source cap', 'cap', 'one video dominates',
+     'unbalanced dataset', 'imbalance', 'overfit one source', 'top source share',
+     'spread the dataset', 'too many clips from one file', 'which clips the cap keeps',
+     'earliest clips', 'is the cap random'],
+    '/video-bank', 'using-the-app',
+    'video-training-sets-and-the-two-things-to-check-before-you-cut-one'),
   action('video-edge-trim', 'Trim the edges of every clip',
     ['trim edges', 'edge trim', 'trim each end', 'inset', 'dissolve', 'fade',
      'transition at the start', 'first frames are a fade', 'crossfade',

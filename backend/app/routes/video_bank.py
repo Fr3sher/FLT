@@ -435,7 +435,10 @@ def video_bank_promote(bank_id):
     Body {name, target_profile, frames?, width?, height?, ids?, edge_inset_s?}.
     `frames` defaults to the profile's own default length; width+height are
     optional and mean "cut at this size" (omitted = keep the source's). `ids`
-    empty/absent = every kept clip. `edge_inset_s` trims that many seconds off
+    empty/absent = every kept clip. `max_per_source` caps how many clips ONE
+    source may contribute (absent/null = no cap), which is what keeps a 50-clip
+    dataset from quietly being three videos over-represented. `edge_inset_s`
+    trims that many seconds off
     BOTH bounds of every clip (default 0 — a shot boundary is where a cut just
     happened, but turning that on by default would silently change what every
     existing recipe exports).
@@ -456,6 +459,7 @@ def video_bank_promote(bank_id):
                                 ids=data.get('ids'), name=data.get('name'),
                                 target_profile=data.get('target_profile'),
                                 frames=data.get('frames'), size=size,
+                                max_per_source=data.get('max_per_source'),
                                 edge_inset_s=data.get('edge_inset_s'))
     except bank_jobs.BankJobBusy as e:
         return _busy(e)

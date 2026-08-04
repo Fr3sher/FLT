@@ -5,6 +5,7 @@ import {
   frameOptions, defaultFrames, needsManualFrames, sizeOptions,
   promoteProblem, promotePayload, promoteScopeLabel,
   insetProblem, insetHint, insetOutcome,
+  capProblem, capHint, capBalanceNote,
 } from './videoTargetChoice'
 import { passBlockedBy } from './videoCapability'
 import VideoTargetPicker from './VideoTargetPicker'
@@ -40,6 +41,9 @@ export default function PromoteVideoDialog({
   // "0." and "" are states a number input passes through, and coercing them
   // early wipes the field under the user's cursor.
   const [edgeInset, setEdgeInset] = useState('')
+  // 🎚 Per-source cap. Text for the same reason as the trim: "" and mid-typing
+  // states are values a number input passes through.
+  const [maxPerSource, setMaxPerSource] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -67,8 +71,9 @@ export default function PromoteVideoDialog({
   const manualFrames = needsManualFrames(target)
   const blocked = passBlockedBy(capability, 'promote')
   const insetIssue = insetProblem(edgeInset)
+  const capIssue = capProblem(maxPerSource)
   const problem = blocked ? blocked.why
-    : (promoteProblem({ name, target, frames }) || insetIssue)
+    : (promoteProblem({ name, target, frames }) || insetIssue || capIssue)
   const size = sizes.find((s) => s.key === sizeKey) || sizes[0]
 
   const pick = (key) => {
@@ -86,12 +91,17 @@ export default function PromoteVideoDialog({
     try {
       const d = await postJson(`/api/video-bank/${bankId}/promote`,
         promotePayload({ name, targetKey, frames, size, ids: selectedIds,
-          edgeInsetS: edgeInset }))
+          edgeInsetS: edgeInset, maxPerSource }))
       toast.success(`Building “${d.name}” — ${d.clips} clip(s) being encoded.`)
       // Said out loud rather than left in the job line: these clips were removed
       // by the user's OWN setting, and it is the only limit here they can undo.
       const cost = insetOutcome(d.composition)
       if (cost) toast.warning(cost)
+      // What the set turned out to be MADE OF. 60% from one source is invisible
+      // on disk — the folder looks exactly like a diverse one — so the only
+      // place it can be seen is here, right after it happened.
+      const balance = capBalanceNote(d.composition, maxPerSource)
+      if (balance) toast.warning(balance)
       onDone?.(d)
       onClose?.()
     } catch (err) {
@@ -183,6 +193,21 @@ export default function PromoteVideoDialog({
               </p>
             )}
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="video-ds-cap" className="block text-sm font-medium text-content">
+            Max clips per source <span className="text-content-subtle">(optional)</span>
+          </label>
+          <input id="video-ds-cap" type="number" min="1" step="1"
+            value={maxPerSource} onChange={(e) => setMaxPerSource(e.target.value)}
+            placeholder="no cap"
+            className="mt-1 w-full rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content sm:w-40" />
+          {capIssue ? (
+            <p className="mt-1 text-xs text-rose-300">⚠ {capIssue}</p>
+          ) : (
+            <p className="mt-1 text-xs text-content-muted">{capHint()}</p>
+          )}
         </div>
 
         {/* ✂ The edge trim. Below the target grid because it is a refinement of

@@ -6,6 +6,7 @@ import {
   sizeOptions, targetWarnings, targetBadge, promoteProblem, promotePayload,
   promoteScopeLabel,
   insetProblem, insetHint, insetOutcome,
+  capProblem, capHint, capBalanceNote,
 } from './videoTargetChoice.js'
 
 // Verbatim shapes of GET /api/video/targets — kept as fixtures rather than
@@ -237,4 +238,52 @@ test('the promotion report names the clips the inset itself removed', () => {
   assert.match(note, /0\.25/);
   assert.equal(insetOutcome({ edge_inset_s: 0.25, inset_would_drop: 0 }), '');
   assert.equal(insetOutcome({ edge_inset_s: 0, inset_would_drop: 0 }), '');
+});
+
+// --- the per-source cap (wave 4 finishing) ------------------------------------
+
+test('no cap means the payload does not mention one', () => {
+  const body = promotePayload({ name: 'a', targetKey: 'wan22_14b', frames: 81 });
+  assert.ok(!('max_per_source' in body));
+  assert.ok(!('max_per_source' in promotePayload({
+    name: 'a', targetKey: 'wan22_14b', frames: 81, maxPerSource: '' })));
+});
+
+test('a cap rides in the payload as a whole number', () => {
+  const body = promotePayload({ name: 'a', targetKey: 'wan22_14b', frames: 81,
+    maxPerSource: '4' });
+  assert.equal(body.max_per_source, 4);
+});
+
+test('a cap that is not a whole number of clips is refused with a reason', () => {
+  // Refused here as well as on the server, so the reason sits next to the field
+  // rather than arriving as a banner after a round trip.
+  assert.match(capProblem(0), /at least 1|empty/i);
+  assert.match(capProblem(-2), /at least 1|empty/i);
+  assert.match(capProblem(2.5), /whole/i);
+  assert.match(capProblem('lots'), /number/i);
+  assert.equal(capProblem(''), '');
+  assert.equal(capProblem(3), '');
+});
+
+test('the cap hint says which clips it keeps, because it is not a sample', () => {
+  // The service keeps each source's EARLIEST clips — stable and explainable.
+  // A user who assumes "a random pick" gets a different dataset than they think.
+  assert.match(capHint(), /earliest|first/i);
+});
+
+test('a lopsided result suggests the cap, with the real share', () => {
+  // The composition comes back AFTER the job starts, so this cannot be a
+  // pre-flight suggestion — it is what the result says about what just happened.
+  const note = capBalanceNote({ sources: 3, top_source_share: 0.6 }, null);
+  assert.match(note, /60%/);
+  assert.match(note, /cap|max/i);
+});
+
+test('a balanced result says nothing, and neither does an already capped one', () => {
+  assert.equal(capBalanceNote({ sources: 5, top_source_share: 0.25 }, null), '');
+  // Already capped: the user made the call, repeating the advice is nagging.
+  assert.equal(capBalanceNote({ sources: 3, top_source_share: 0.6 }, 2), '');
+  // One source is not an imbalance, it is the whole bank.
+  assert.equal(capBalanceNote({ sources: 1, top_source_share: 1 }, null), '');
 });

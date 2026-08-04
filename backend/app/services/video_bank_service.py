@@ -1217,6 +1217,34 @@ def resolve_size(profile_key, size):
 MAX_EDGE_INSET_S = 5.0
 
 
+def _resolve_max_per_source(value):
+    """The per-source cap, validated. None means no cap.
+
+    Named refusals rather than an `int()` that escapes as a traceback: the route
+    turns any ValueError into the 400 the user reads, and "invalid literal for
+    int() with base 10: 'lots'" is not a sentence about clips per source.
+
+    2.5 is refused rather than rounded. "Two and a half clips per source" is not
+    a precision question, it is a request nobody can mean — and silently taking
+    2 would apply a cap the user never chose to a dataset they cannot re-derive.
+    """
+    if value is None or value == '':
+        return None
+    if isinstance(value, bool):              # True is 1 to int(), and means nothing here
+        raise ValueError('max clips per source must be a whole number of clips')
+    try:
+        cap = float(value)
+    except (TypeError, ValueError):
+        raise ValueError('max clips per source must be a whole number of clips')             from None
+    if cap != cap or cap != int(cap):        # NaN, or 2.5
+        raise ValueError('max clips per source must be a whole number of clips')
+    cap = int(cap)
+    if cap < 1:
+        raise ValueError('max clips per source must be at least 1 — leave it '
+                         'empty for no cap')
+    return cap
+
+
 def _resolve_edge_inset(value):
     """The trim to apply at each bound, validated. Refuses rather than clamps:
     a negative inset would EXTEND every clip past its own bounds into the
@@ -1262,13 +1290,11 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
     if ids:
         q = q.filter(VideoClip.id.in_([int(i) for i in ids]))
     rows = q.order_by(VideoClip.source_id.asc(), VideoClip.start_s.asc()).all()
-    if max_per_source is not None:
+    per_cap = _resolve_max_per_source(max_per_source)
+    if per_cap is not None:
         # The cap trims DOMINANCE, it never punishes scarcity: each source keeps
         # its EARLIEST clips (detector order — stable and explainable, unlike a
         # random sample that changes on every promotion of the same bank).
-        per_cap = int(max_per_source)
-        if per_cap < 1:
-            raise ValueError('max_per_source must be at least 1')
         taken = {}
         kept = []
         for clip in rows:

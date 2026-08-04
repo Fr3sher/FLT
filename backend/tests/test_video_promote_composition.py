@@ -122,3 +122,79 @@ def test_a_nonsense_cap_is_refused(app, tmp_path, seams):
             svc.start_promote(app, LOCAL_USER, bank_id, name='Set',
                               target_profile='wan22_14b', frames=81,
                               max_per_source=0)
+
+
+# --- the cap has to be REACHABLE (wave 4 finishing) ---------------------------
+# Everything above was true and untestable from the app: `max_per_source` was
+# honoured by the service and passed by neither the route nor the dialog, so the
+# cap existed only in this file. A parameter no caller can send is not a feature,
+# and it is the same shape of gap as `first_frame_floor` (a threshold the backend
+# honoured and no reader named). These pin the whole path instead of the service.
+
+def _bank_over_http(client, app, tmp_path, per_source=(6, 3, 1)):
+    bank_id = _bank_with_kept_clips(app, tmp_path, per_source=per_source)
+    return bank_id
+
+
+def test_the_route_carries_the_cap_to_the_service(client, app, tmp_path, seams):
+    bank_id = _bank_over_http(client, app, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/promote',
+                    json={'name': 'Set', 'target_profile': 'wan22_14b',
+                          'frames': 81, 'max_per_source': 2})
+
+    assert r.status_code == 202
+    assert r.get_json()['clips'] == 5                       # 2 + 2 + 1
+
+
+def test_no_cap_over_http_still_takes_everything(client, app, tmp_path, seams):
+    """The default must not change: an existing recipe posts no cap and gets the
+    whole selection, exactly as before."""
+    bank_id = _bank_over_http(client, app, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/promote',
+                    json={'name': 'Set', 'target_profile': 'wan22_14b',
+                          'frames': 81})
+
+    assert r.get_json()['clips'] == 10
+
+
+def test_a_null_cap_is_read_as_no_cap_and_not_as_zero(client, app, tmp_path, seams):
+    """A form that clears the field sends null, and `int(None)` would be a 500."""
+    bank_id = _bank_over_http(client, app, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/promote',
+                    json={'name': 'Set', 'target_profile': 'wan22_14b',
+                          'frames': 81, 'max_per_source': None})
+
+    assert r.status_code == 202
+    assert r.get_json()['clips'] == 10
+
+
+@pytest.mark.parametrize('bad', [0, -3, 'lots', 2.5])
+def test_a_cap_that_is_not_a_whole_number_of_clips_is_a_named_400(
+        client, app, tmp_path, seams, bad):
+    """Named, not an `int()` traceback rendered as a message. 2.5 is in the list
+    on purpose: "two and a half clips per source" is not a rounding question, it
+    is a request nobody can mean."""
+    bank_id = _bank_over_http(client, app, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/promote',
+                    json={'name': 'Set', 'target_profile': 'wan22_14b',
+                          'frames': 81, 'max_per_source': bad})
+
+    assert r.status_code == 400
+    assert 'per source' in r.get_json()['error']
+
+
+def test_a_capped_promotion_reports_the_composition_it_achieved(client, app,
+                                                                tmp_path, seams):
+    """The cap and the report are two halves of one answer: the share is what
+    tells you whether the cap you chose was the right one."""
+    bank_id = _bank_over_http(client, app, tmp_path)
+
+    r = client.post(f'/api/video-bank/{bank_id}/promote',
+                    json={'name': 'Set', 'target_profile': 'wan22_14b',
+                          'frames': 81, 'max_per_source': 2})
+
+    assert r.get_json()['composition']['top_source_share'] == pytest.approx(2 / 5)
