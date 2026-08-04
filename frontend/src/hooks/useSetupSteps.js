@@ -9,7 +9,8 @@ import { SETTINGS_SECTIONS } from '../components/settings/registry.js'
 // the model is exactly how ✓ and ⚠ ended up on the same install.
 import { localEngineReadiness } from '../utils/localEngineReason.js'
 import { blockingInvalid, integrityCause } from '../utils/modelIntegrityWords.js'
-import { KLEIN_REQUIRED_ASSETS, KLEIN_ASSET_LABELS, kleinMissingLabels } from '../utils/kleinAssets.js'
+import { KLEIN_REQUIRED_ASSETS, KLEIN_ASSET_LABELS, kleinMissingLabels, kleinAssetBlocks }
+  from '../utils/kleinAssets.js'
 
 // Re-exported from their leaf module (utils/kleinAssets.js) so existing importers
 // keep working; they moved down there to let this file import the readiness
@@ -72,6 +73,13 @@ function comfyuiStep(caps, runtimeReadiness) {
   // Only *blocking* invalids gate readiness; the advisory too_small does not.
   const kleinInvalid = Array.isArray(c.klein_invalid) ? c.klein_invalid : []
   const kleinBroken = blockingInvalid(kleinInvalid, KLEIN_REQUIRED_ASSETS)
+  // EVERY blocking-invalid Klein asset, gating or not. `kleinBroken` above is the
+  // GATING subset and must stay that way — it is what decides readiness. But the
+  // DOWNLOAD buttons read it too, and that is how a corrupted consistency LoRA came
+  // out as "✓ Installed": not required, so not in kleinBroken, so never mentioned
+  // anywhere on the screen that offers to download it. Two lists, two jobs — one
+  // gates the step, one is what the screen has to SHOW.
+  const kleinBrokenAll = blockingInvalid(kleinInvalid)
   // Widget values the graph pins that THIS ComfyUI doesn't offer. Every file can be
   // in place and every node class present, and the first generation still dies on a
   // raw ComfyUI 400 — that was the `beta57` scheduler, which the RES4LYF pack adds
@@ -123,6 +131,9 @@ function comfyuiStep(caps, runtimeReadiness) {
     // is delete-then-download, not download — a different action from "missing",
     // which is why they get their own field instead of being folded into it.
     kleinBroken,
+    // Same list WITHOUT the required-only filter, for the buttons (see above). The
+    // consumer decides the tone from the asset, never from membership here.
+    kleinBrokenAll,
     // Every required file is on disk and readable. Told apart from hasKlein because
     // "the files are fine but ComfyUI is down" and "a file is broken" are different
     // sentences with different fixes.
@@ -666,9 +677,18 @@ export function installCatalog(caps) {
   // truncated 9.5 GB UNET certified itself on the very screen the user opened to
   // check (zigzag4794, Discord). Presence is not readability, and the validator
   // that tells them apart already ran; this screen simply never asked it.
+  // `gates` = does this unreadable file actually STOP its engine? Klein's required
+  // trio does; Klein's recommended consistency LoRA does NOT — the backend never
+  // counted it (klein_engine_ready reads KLEIN_REQUIRED only), so generation keeps
+  // working. Every Krea asset is required (KREA_REQUIRED = all four). Without this
+  // split the LoRA row wore the exact red badge of a dead UNET, so the install
+  // screen read as blocked while nothing was blocked: a badge that overstates the
+  // damage is the same class of lie as one that hides it.
   const brokenBy = {}
-  blockingInvalid(cu.klein_invalid).forEach((i) => { brokenBy[i.asset] = i })
-  blockingInvalid(cu.krea_invalid).forEach((i) => { brokenBy[i.asset] = i })
+  blockingInvalid(cu.klein_invalid).forEach((i) => {
+    brokenBy[i.asset] = { ...i, gates: kleinAssetBlocks(i.asset) }
+  })
+  blockingInvalid(cu.krea_invalid).forEach((i) => { brokenBy[i.asset] = { ...i, gates: true } })
   // Present = the folder is there, OR a REACHABLE ComfyUI reports the nodes (a
   // pack installed under another folder name). An unreachable ComfyUI proves
   // nothing — its node probe fails open — so it must not read as installed.
@@ -683,12 +703,23 @@ export function installCatalog(caps) {
     // fault and the action — and `present: false` is what puts it back into the
     // install plans so the button has something to do.
     if (bad) {
+      // Two severities, because there are two different situations. A REQUIRED
+      // weight that cannot load means the engine is down (red, "fix this"). An
+      // optional one means a feature is degraded and everything else still runs
+      // (amber, "worth fixing") — it stays fully VISIBLE and re-installable, it
+      // just stops claiming the engine is broken. `present: false` in both cases,
+      // which is what keeps the file in the install plans so the button has
+      // something to do.
+      const gates = bad.gates !== false
       return {
         action, label: INSTALL_ALL_ACTION_LABELS[action] || action,
         present: false, available: !!available, hint: available ? '' : hint,
-        state: 'broken', stateLabel: '⚠ On disk, unreadable',
+        state: gates ? 'broken' : 'broken_optional',
+        stateLabel: gates ? '⚠ On disk, unreadable' : '⚠ On disk, unreadable — optional',
+        blocking: gates,
         brokenReason: `${bad.filename}: ${integrityCause(bad.verdict)}. `
-          + 'Reinstall replaces it.',
+          + (gates ? 'Reinstall replaces it.'
+            : 'Generation still works without it — reinstall replaces it.'),
       }
     }
     return {
