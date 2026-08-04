@@ -693,8 +693,9 @@ Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token
 
 Full-model training keeps a **locked** recipe — batch 1, bf16, Adafactor and
 gradient checkpointing are what make a 12B model fit on one 80 GB card, and the
-panel now names each lock and its reason instead of just greying it out. Five
-values are editable because they change the *result*, not whether the run fits.
+panel now names each lock and its reason instead of just greying it out. The
+values below are editable because they change the *result*, not whether the run
+fits.
 
 | Setting | Key | Default | Notes |
 |---|---|---|---|
@@ -705,6 +706,41 @@ values are editable because they change the *result*, not whether the run fits.
 | **Checkpoint every / keep** | `dense_save_every` / `dense_max_step_saves` | `250` / `1` | ≥ 100 steps; keep 1–3. Each kept checkpoint is ~26 GB of **private** Hugging Face storage — the panel states the total before launch and the pre-check uses the same number, never the shipped default. |
 | **Keep the bf16 master** | `dense_keep_bf16` | on | Keeps the ~26 GB master next to the fp8 export. fp8 is a lossy, one-way export: without the master the model can never be continued, merged or re-quantized. |
 | **fp8 export** | `dense_fp8_export` | on | Quantize the finished checkpoint on the pod and upload the ~10 GB ComfyUI file. A failed export never fails the run. |
+| **Images per step** | `dense_grad_accum` | `1` | 1, 2, 4 or 8. Gradient accumulation: how many images are averaged into each optimizer step. Batch size stays 1, so this costs **no extra VRAM** — it costs time. 4 images per step ≈ a run 4× longer on a GPU billed by the hour. Checkpoint count, cadence and storage are unchanged. |
+| **Learning-rate schedule** | `dense_lr_schedule` | `constant` | `constant`, `constant_with_warmup` or `cosine`. Warmup eases the first steps instead of hitting a 12B model at full rate from step 1; cosine fades the rate to zero by the last step. |
+| **Warm up over** | `dense_warmup` | `100` | 10 – 1000 steps. Only applies to `constant_with_warmup` — the schedulers behind the other choices reject the value outright, so it is not sent with them. |
+| **Noise schedule** | `dense_timestep_type` | `linear` | `linear`, `sigmoid` or `weighted`. Which noise levels the run trains on; `weighted` keeps the linear draw but weights the loss on a bell curve. |
+
+**Two knobs are deliberately missing, and that is not an oversight.** Both exist
+in AI Toolkit and both are *harmful on this specific model*, so the full-model
+card does not offer them:
+
+- **EMA** (weight averaging) keeps a second copy of every trained parameter on
+  the GPU, and a third one whenever it saves. For a LoRA that is a few hundred
+  MB; for a 12B full model it is roughly +26 GB, then +26 GB again at the first
+  checkpoint, on top of an unquantized model and its gradients. The run would
+  die at its first save. EMA remains available for **LoRA** training, where it
+  is cheap.
+- **min-SNR weighting** needs a signal-to-noise table that only diffusion models
+  of the older kind carry. Krea 2 is flow-matching and has none, and the
+  trainer's attempt to build one fails silently at startup — so the run does not
+  refuse at launch, it crashes in the middle of the loss computation an hour
+  into a paid pod. Refusing it up front is the cheaper failure.
+
+`shift`-style noise schedules are absent for the same class of reason: AI Toolkit
+computes their shift from an image-token count that assumes a field Krea 2's
+denoiser names differently, so the value silently comes out four times too large.
+It is offered for LoRA training (where the same flaw applies to Krea and is
+documented in the code) but never for full-model runs.
+
+**Which AI Toolkit these statements describe.** LoRA training runs the AI Toolkit
+installed on *your* machine, which moves whenever you update it. Full-model
+training is cloud-only and runs the AI Toolkit baked into the rented pod's image,
+which is pinned (`cloud.image`). The two are different codebases at different
+dates; everything above was verified against the pinned one, and a test fails if
+that pin moves without the verdicts being re-checked. Each run now also records
+the image the pod actually booted, so a run can say for itself which trainer
+produced its weights.
 
 **Quantizing a model you already have.** The same conversion is available by
 hand from the same card — *Quantize an existing model to fp8* — and, for a model

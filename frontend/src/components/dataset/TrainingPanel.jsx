@@ -203,11 +203,17 @@ function FullTransformerArtifactNotice({ run }) {
 // FULL_TRANSFORMER_ADVANCED_RECIPE_START
 /** The dense Krea recipe stays server-owned, but not all of it is a constraint.
  *
- * Four values changed the OUTPUT rather than whether the run fits in 80 GB, and
- * they are editable here: preview prompts (the generic defaults showed nothing
- * about the actual dataset), learning rate, resolution, and the
- * checkpoint-every / keep pair — which is also what the Hugging Face storage
- * forecast multiplies, so it states the delivery size right next to the control.
+ * The values that changed the OUTPUT rather than whether the run fits in 80 GB
+ * are editable here: preview prompts (the generic defaults showed nothing about
+ * the actual dataset), learning rate, resolution, the checkpoint-every / keep
+ * pair — which is also what the Hugging Face storage forecast multiplies, so it
+ * states the delivery size right next to the control — and the three quality
+ * levers (images per step, learning-rate schedule, noise schedule).
+ *
+ * "Images per step" is gradient accumulation in the user's words. It is the only
+ * lever here whose cost is money rather than memory, so the multiplier it
+ * implies is printed next to it and turns amber once it is above 1: a rented
+ * 80 GB GPU is billed by the hour, and nobody should learn that from an invoice.
  *
  * Everything else is locked and SAYS SO: optimizer, batch size, dtype and
  * gradient checkpointing are the geometry that makes a 12B transformer trainable
@@ -219,13 +225,35 @@ const DENSE_BOUNDS_FALLBACK = {
   resolution: 1024, resolutionChoices: [768, 1024],
   saveEvery: 250, saveEveryMin: 100, saveEveryMax: 5000,
   keeps: 1, keepsMax: 3,
+  gradAccum: 1, gradAccumChoices: [1, 2, 4, 8],
+  lrSchedule: 'constant',
+  lrScheduleChoices: ['constant', 'constant_with_warmup', 'cosine'],
+  warmup: 100, warmupMin: 10, warmupMax: 1000,
+  timestepType: 'linear', timestepTypeChoices: ['linear', 'sigmoid', 'weighted'],
+};
+
+// User-facing wording for ai-toolkit's own value names. The STORED value stays
+// ai-toolkit's (no alias to maintain, cf. CLAUDE.md rule 7) — only the label is
+// translated, and each one says what it does rather than what it is called.
+const DENSE_LR_SCHEDULE_LABELS = {
+  constant: 'Constant (default)',
+  constant_with_warmup: 'Warm up, then constant',
+  cosine: 'Cosine decay to zero',
+};
+const DENSE_TIMESTEP_LABELS = {
+  linear: 'Linear (default)',
+  sigmoid: 'Sigmoid — favours mid noise levels',
+  weighted: 'Weighted — same draw, bell-curve loss weighting',
 };
 
 const fmtGB = (bytes) => (
   typeof bytes === 'number' && bytes > 0 ? `${(bytes / 1e9).toFixed(1)} GB` : null
 );
 
-function FullTransformerAdvancedRecipe({
+// Exported for the render contract test. Nothing else imports it: a settings
+// card whose JSX is never executed by a test is a card that can ship with a
+// crash in it, and source-text assertions do not execute anything.
+export function FullTransformerAdvancedRecipe({
   stepsOverride, setStepsOverride, disabled = false,
   adv = null, saveAdv = null,
   samplePromptsText = '', setSamplePromptsText = null, saveSamplePrompts = null,
@@ -248,10 +276,23 @@ function FullTransformerAdvancedRecipe({
   const hint = adv?.dense_inference_hint || null;
   const fp8 = adv?.dense_fp8_export !== false;
   const keepMaster = adv?.dense_keep_bf16 !== false;
+  const gradAccum = adv?.dense_grad_accum ?? b.gradAccum;
+  const gradAccumChoices = adv?.dense_grad_accum_choices ?? b.gradAccumChoices;
+  const timeMultiplier = adv?.dense_time_multiplier ?? gradAccum;
+  const lrSchedule = adv?.dense_lr_schedule ?? b.lrSchedule;
+  const lrScheduleChoices = adv?.dense_lr_schedule_choices ?? b.lrScheduleChoices;
+  const warmup = adv?.dense_warmup ?? b.warmup;
+  const warmupMin = adv?.dense_warmup_min ?? b.warmupMin;
+  const warmupMax = adv?.dense_warmup_max ?? b.warmupMax;
+  const warmupApplies = adv?.dense_warmup_applies ?? (lrSchedule === 'constant_with_warmup');
+  const timestepType = adv?.dense_timestep_type ?? b.timestepType;
+  const timestepTypeChoices = adv?.dense_timestep_type_choices ?? b.timestepTypeChoices;
   const [lrDraft, setLrDraft] = useState(String(lr));
   const [saveDraft, setSaveDraft] = useState(String(saveEvery));
+  const [warmupDraft, setWarmupDraft] = useState(String(warmup));
   useEffect(() => { setLrDraft(String(lr)); }, [lr]);
   useEffect(() => { setSaveDraft(String(saveEvery)); }, [saveEvery]);
+  useEffect(() => { setWarmupDraft(String(warmup)); }, [warmup]);
   const patch = (values) => { if (saveAdv) saveAdv(values); };
   const commitLr = () => {
     const value = Number(lrDraft);
@@ -268,6 +309,14 @@ function FullTransformerAdvancedRecipe({
       return;
     }
     if (value !== saveEvery) patch({ dense_save_every: value });
+  };
+  const commitWarmup = () => {
+    const value = Number(warmupDraft);
+    if (!Number.isInteger(value) || value < warmupMin || value > warmupMax) {
+      setWarmupDraft(String(warmup));
+      return;
+    }
+    if (value !== warmup) patch({ dense_warmup: value });
   };
   const controlClass = 'rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
 
@@ -361,6 +410,80 @@ function FullTransformerAdvancedRecipe({
           <span className="basis-full text-sky-200/70 text-[0.6875rem]">
             {lrMin.toExponential(0)}–{lrMax.toExponential(0)} · default 1e-6. 768 px trains faster
             and cheaper than the 1024 px default, at lower fidelity.
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Images per step</span>
+            <select value={String(gradAccum)} disabled={disabled}
+              onChange={(event) => patch({ dense_grad_accum: Number(event.target.value) })}
+              aria-label="How many images each optimizer step learns from"
+              className={controlClass}>
+              {gradAccumChoices.map((value) => (
+                <option key={value} value={String(value)}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Noise schedule</span>
+            <select value={timestepType} disabled={disabled}
+              onChange={(event) => patch({ dense_timestep_type: event.target.value })}
+              aria-label="Full-model timestep distribution"
+              className={controlClass}>
+              {timestepTypeChoices.map((value) => (
+                <option key={value} value={value}>
+                  {DENSE_TIMESTEP_LABELS[value] || value}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* The bill, next to the control that sets it. Gradient accumulation
+              is the one lever here that buys quality with money rather than
+              memory, and a rented GPU is billed by the hour. */}
+          <span className={`basis-full text-[0.6875rem] ${
+            timeMultiplier > 1 ? 'text-amber-100/90' : 'text-sky-200/70'}`}>
+            {timeMultiplier > 1
+              ? `Each step learns from ${gradAccum} images instead of 1 — steadier training on a `
+                + `big dataset, but the run takes about ${timeMultiplier}× as long, so the rented `
+                + `GPU costs about ${timeMultiplier}× as much. Same checkpoints, same storage.`
+              : 'One image per step is the default. Raising it averages several images into each '
+                + 'update — steadier on a large dataset, but it multiplies the run time and the '
+                + 'pod bill by the same number.'}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Learning-rate schedule</span>
+            <select value={lrSchedule} disabled={disabled}
+              onChange={(event) => patch({ dense_lr_schedule: event.target.value })}
+              aria-label="Full-model learning-rate schedule"
+              className={controlClass}>
+              {lrScheduleChoices.map((value) => (
+                <option key={value} value={value}>
+                  {DENSE_LR_SCHEDULE_LABELS[value] || value}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Warmup steps only reach the trainer on the one schedule that
+              accepts them; the server gates it the same way. */}
+          {warmupApplies && (
+            <label className="flex items-center gap-2">
+              <span className="font-semibold">Warm up over</span>
+              <input type="number" min={warmupMin} max={warmupMax} step={10} value={warmupDraft}
+                onChange={(event) => setWarmupDraft(event.target.value)}
+                onBlur={commitWarmup} disabled={disabled}
+                aria-label="Full-model warmup length in steps"
+                className={`w-[5.5rem] ${controlClass}`} />
+              <span className="text-sky-100/80">steps</span>
+            </label>
+          )}
+          <span className="basis-full text-sky-200/70 text-[0.6875rem]">
+            Constant is what shipped. Warming up eases the first steps instead of hitting a 12B
+            model at full rate from step 1; cosine decay fades the rate to zero by the last step,
+            which settles detail late in the run. Neither changes what the run delivers or costs.
           </span>
         </div>
 

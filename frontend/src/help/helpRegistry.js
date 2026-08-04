@@ -1100,6 +1100,26 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'full-model-recipe-unlocked',
       text: 'New: the full-model recipe now lets you edit the preview prompts, learning rate, resolution and checkpoint cadence — the rest stays locked because it is what makes a 12B model fit on one 80 GB card.' } },
+  // The three quality levers get their OWN topic rather than more keywords on
+  // the one above, because the question behind them is different: not "what may
+  // I change here?" but "what should I change, and what does it cost me?". The
+  // cost half is the reason — images-per-step is the only dense setting billed
+  // by the hour — and the absences (EMA, min-SNR) need somewhere to be
+  // explained, or they read as things we forgot rather than things that break.
+  { id: 'training.full_model_quality', kind: 'setting',
+    title: 'Images per step, LR schedule and noise schedule (full-model)',
+    keywords: ['images per step', 'gradient accumulation', 'grad accum', 'effective batch',
+      'batch size', 'warmup', 'warm up', 'lr schedule', 'learning rate schedule',
+      'cosine', 'constant', 'noise schedule', 'timestep', 'timestep type', 'sigmoid',
+      'weighted', 'linear', 'shift', 'ema', 'min snr', 'min_snr_gamma', 'snr',
+      'full model', 'dense', 'krea', 'slower', 'cost', 'longer', 'bill'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    // Deliberately no one-time `tip`: the two dense topics above already declare
+    // tips that nothing in src ever requests, so a third would be dead config
+    // AND would move the tip count this file's contract test pins. What's-new
+    // already announces this; the topic exists to be FOUND when searching help.
+  },
   { id: 'training.full_model_fp8_export', kind: 'setting',
     title: 'fp8 export for ComfyUI (and the bf16 master)',
     keywords: ['fp8', 'quantized', 'quantised', 'export', 'comfyui', 'comfy', '10 gb',

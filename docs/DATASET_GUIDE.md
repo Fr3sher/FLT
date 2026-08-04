@@ -557,6 +557,48 @@ now says which parts and why.
 | Learning rate | 1e-6 | 1e-7 – 5e-6 | Lower if the model drifts off the base too fast; higher only with evidence. |
 | Resolution | 1024 px | 768 or 1024 | 768 trains faster and cheaper, at lower fidelity. |
 | Checkpoint every / keep | 250 steps / keep 1 | ≥ 100 steps / keep 1-3 | More kept checkpoints means more sweet-spot candidates — and each one is about 26 GB of PRIVATE Hugging Face storage. The panel states the total before you launch; the launch itself refuses (confirmably) when it plainly will not fit. |
+| Images per step | 1 | 1, 2, 4, 8 | Batch size is locked at 1, so by default each step learns from a **single image** — over a set of several thousand, that is a very noisy estimate of the right direction. This averages several images into one update instead. It needs no extra VRAM (the images go through one at a time); it needs TIME. |
+| Learning-rate schedule | constant | constant · warmup · cosine | Constant is what shipped. Warming up eases the first steps rather than hitting a 12B model at full rate from step 1. Cosine fades the rate to zero by the last step, which settles fine detail late instead of still shoving the weights around at the end. |
+| Warm up over | 100 steps | 10 - 1000 | Only used by the warmup schedule. |
+| Noise schedule | linear | linear · sigmoid · weighted | Which noise levels the run trains on. `sigmoid` concentrates on the middle of the range; `weighted` keeps the linear draw but weights the loss on a bell curve. There is no settled consensus for Krea 2 — linear is what every validated run so far used, so it stays the default. |
+
+**"Images per step" is the one setting here that spends money.** Everything else
+changes what the run produces at the same price. This one multiplies the run:
+4 images per step means about 4× the wall-clock and about 4× the bill on a GPU
+rented by the hour. The card prints the multiplier next to the control and turns
+it amber above 1, so the number is visible *before* you launch rather than on an
+invoice. What it does **not** change: the number of checkpoints, their cadence,
+or the Hugging Face storage the run needs — `steps` counts optimizer steps, so
+raising this changes how much each step learned from, not how many files land.
+
+**Two settings you may expect, and why they are not offered**
+
+Both exist in AI Toolkit. Both would break *this* model, so the card does not
+show them:
+
+- **EMA** (averaging the weights as training goes) keeps a second copy of every
+  trained parameter on the GPU, plus a third whenever it saves. On a LoRA that is
+  a few hundred megabytes. On a 12B full model it is roughly +26 GB, then +26 GB
+  again at the first checkpoint, on top of an unquantized model and its
+  gradients — the run would die at its first save. EMA is still available for
+  **LoRA** training, where it costs almost nothing.
+- **min-SNR weighting** needs a signal-to-noise table that flow-matching models
+  like Krea 2 simply do not have. Worse, the trainer's attempt to build that
+  table fails *silently* at startup, so the job does not refuse when you launch
+  it — it crashes inside the loss computation an hour later, on a pod you are
+  paying for. Refusing it up front is the cheaper failure.
+
+The same reasoning removes `shift`-style noise schedules from the full-model
+list: the trainer derives their shift from a token count that assumes a field
+Krea 2's denoiser names differently, so the value silently comes out four times
+too big. A mis-shifted schedule looks like a tuned run and is not one.
+
+> **Which AI Toolkit is this about?** LoRA training uses the AI Toolkit installed
+> on *your* machine — it changes whenever you update it. Full-model training is
+> cloud-only and uses the AI Toolkit baked into the rented pod's image, which is
+> pinned. They are different codebases at different dates. Every statement above
+> was checked against the pinned one, and each run now records the image the pod
+> actually booted, so a run can say for itself which trainer produced its weights.
 
 ### The two files a finished run delivers
 

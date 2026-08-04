@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-dense-quality-levers',
+    date: '2026-08-04',
+    title: 'Full-model training: choose how many images each step learns from, and how the learning rate moves',
+    blurb:
+      'A full-model Krea 2 run was training on ONE image per step — over a dataset of thousands, that is a very noisy idea of the right direction — at a flat learning rate from the first step to the last. Three settings in the recipe card change that. “Images per step” averages several images into each update, which steadies training on a big set; it needs no extra VRAM, only time, so the card tells you straight out that 4 images per step means a run about 4× longer and a rented GPU that costs about 4× as much. The learning-rate schedule can now warm up over the first steps instead of hitting a 12B model at full rate immediately, or fade to zero by the end to settle fine detail. The noise schedule picks which noise levels the run trains on. Leave all three alone and your run is byte-for-byte the recipe that shipped before — the defaults did not move. Two settings people ask for are deliberately absent, and the guide says why: on this model EMA would run the pod out of memory at its first checkpoint, and min-SNR weighting would crash the job an hour in, because a flow-matching model has none of the numbers it needs.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
     date: '2026-08-04',
     title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',
