@@ -106,6 +106,75 @@ def _read_clip_frames(path, start_s, end_s, fps):
     return frames
 
 
+# Length of one audio measurement window. Half a second is short enough to see a
+# dropout (the defect the SHARE exists to catch) and long enough that a single
+# quiet syllable does not read as silence. It also keeps the reading list small:
+# a 30-second shot yields 60 numbers, not 1.3 million samples.
+AUDIO_WINDOW_S = 0.5
+
+
+def _read_clip_audio(path, start_s, end_s):
+    """Per-window RMS amplitudes (0..1) for ONE clip's audio, [] when the track
+    could not be decoded, or None when the file HAS NO audio track.
+
+    The second seam that touches PyAV, kept separate from `_read_clip_frames` on
+    purpose. Folding it into that loop would mean decoding two interleaved
+    streams inside the function that owns the motion-vector trap, for a saving
+    that is not there: audio is a rounding error next to video (a stereo AAC
+    track is ~1% of the bitrate and the decoder is trivial), while the video
+    decode is ~85% of this lane's cost. One clear seam that can be monkeypatched
+    and can fail on its own is worth more than the microseconds.
+
+    Raises on a broken track — the caller turns that into 'unreadable' FOR THE
+    AUDIO ONLY and keeps every video measurement, which are the expensive ones.
+    """
+    import av
+    import numpy as np
+
+    windows = []
+    with av.open(str(path)) as container:
+        if not container.streams.audio:
+            return None                      # no track: a state, never a zero
+        stream = container.streams.audio[0]
+        rate = float(stream.rate or 48000)
+        try:
+            container.seek(int(start_s / (stream.time_base or 1)), stream=stream)
+        except Exception:                    # noqa: BLE001 — some streams refuse
+            pass                             # seeking; decoding from 0 still works
+        window_samples = max(1, int(rate * AUDIO_WINDOW_S))
+        acc = []
+        acc_len = 0
+        for frame in container.decode(stream):
+            t = float(frame.pts * stream.time_base) if frame.pts is not None else 0.0
+            if t < start_s:
+                continue
+            if t > end_s:
+                break
+            arr = frame.to_ndarray().astype(np.float32)
+            # Integer sample formats arrive at their own full scale; normalising
+            # by the dtype's range is what makes dBFS mean the same thing for a
+            # 16-bit WAV and a float AAC. Channels are averaged: this measures
+            # whether there is SOUND, not which side it came from.
+            peak = float(np.max(np.abs(arr))) if arr.size else 0.0
+            if peak > 1.5:                   # not a float format
+                arr = arr / 32768.0
+            if arr.ndim > 1:
+                arr = arr.mean(axis=0)
+            acc.append(arr)
+            acc_len += arr.size
+            while acc_len >= window_samples:
+                block = np.concatenate(acc)
+                windows.append(float(np.sqrt(np.mean(
+                    np.square(block[:window_samples])))))
+                rest = block[window_samples:]
+                acc = [rest] if rest.size else []
+                acc_len = rest.size
+        if acc_len:
+            block = np.concatenate(acc)
+            windows.append(float(np.sqrt(np.mean(np.square(block)))))
+    return windows
+
+
 def measure_one(bank, clip):
     """Measure ONE clip and commit its summary — the unit the job loop drives.
     Returns 'ok' or 'unreadable'. Never raises: a bank is scanned in bulk, and a
@@ -119,7 +188,8 @@ def measure_one(bank, clip):
     else:
         try:
             frames = _read_clip_frames(path, clip.start_s, clip.end_s, fps)
-            summary = video_metrics.summarise(frames, fps)
+            summary = video_metrics.summarise(frames, fps,
+                                              audio=_audio_of(path, clip))
         except Exception as e:               # noqa: BLE001 — per-clip failure
             logger.warning('metrics: clip %s unreadable: %s', clip.id, e)
             summary = video_metrics.summarise([], fps)
@@ -128,6 +198,22 @@ def measure_one(bank, clip):
     clip.metrics_json = json.dumps(summary)
     db.session.commit()                      # the resume contract, per clip
     return summary['metrics_state']
+
+
+def _audio_of(path, clip):
+    """The clip's audio readings, or [] when the track defeated the decoder.
+
+    Its own try/except, ABOVE the one that owns the video: a codec the audio
+    decoder cannot handle must cost the audio measurement and nothing else. The
+    video numbers are the expensive ones and the reason this pass exists —
+    throwing away a full frame-by-frame decode because a track was odd would be
+    paying the largest cost in the lane for the smallest metric in it.
+    """
+    try:
+        return _read_clip_audio(path, clip.start_s, clip.end_s)
+    except Exception as e:                   # noqa: BLE001 — audio only
+        logger.info('metrics: clip %s audio unreadable: %s', clip.id, e)
+        return []
 
 
 def run_metrics(bank_id, remeasure=False):

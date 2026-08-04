@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   FLAG_LABELS, cutSummary, draftThresholds, editThreshold, filterByFlag,
-  flagCounts, payloadFromDraft, thresholdFields,
+  flagCounts, payloadFromDraft, thresholdFields, audioState, audioNote,
+  audioSummary,
 } from './videoMetricsFilter.js';
 
 const CLIPS = [
@@ -47,12 +48,16 @@ test('no filter returns everything', () => {
 
 // --- the threshold panel -----------------------------------------------------
 
-test('every threshold field is described for the panel', () => {
+test('every threshold field is described for the panel, exactly once', () => {
   // The panel renders from this table; a cut the backend supports but the table
-  // omits would be configurable only by editing config.json, invisibly.
+  // omits would be configurable only by editing config.json, invisibly. The
+  // list itself is no longer hard-coded HERE — it is checked against the
+  // backend's own THRESHOLD_KEYS in tests/video-thresholds-contract.test.mjs,
+  // because a copy of the list in the test is what let the two drift in the
+  // first place while every test stayed green.
   const keys = thresholdFields().map(f => f.key);
-  assert.deepEqual(keys, ['motion_floor', 'motion_ceiling', 'luma_floor',
-                          'freeze_max', 'sharpness_floor']);
+  assert.equal(new Set(keys).size, keys.length, 'a cut is listed twice');
+  assert.ok(keys.length >= 5);
 });
 
 test('each field says which flag it feeds and which way the cut points', () => {
@@ -116,4 +121,52 @@ test('only the fields the backend knows ever leave the draft', () => {
 
 test('a draft with no active cut yields an empty payload and no dry run', () => {
   assert.deepEqual(payloadFromDraft(draftThresholds({})), {});
+});
+
+// --- audio (wave 4) -----------------------------------------------------------
+
+test('the audio cuts have a row in the panel, or they are invisible', () => {
+  // The exact failure this table was written to prevent, and which happened
+  // anyway to `first_frame_floor`: a cut the backend honours, named nowhere the
+  // user can reach, configurable only by hand-editing config.json.
+  const keys = thresholdFields().map((f) => f.key);
+  assert.ok(keys.includes('silence_max'), 'silence_max has no panel row');
+  assert.ok(keys.includes('audio_floor'), 'audio_floor has no panel row');
+});
+
+test('silent and quiet are different flags with different labels', () => {
+  // A quiet clip can be normalised; a silent one cannot be rescued. Same split
+  // as freeze vs still, and the labels have to carry it.
+  assert.ok(FLAG_LABELS.silent);
+  assert.ok(FLAG_LABELS.quiet);
+  assert.notEqual(FLAG_LABELS.silent, FLAG_LABELS.quiet);
+});
+
+test('audio has THREE states and none of them is the others', () => {
+  // "No track", "silent" and "nobody measured it" are three different facts
+  // with three different remedies. Any two collapsed produce a bank that lies.
+  assert.equal(audioState({ metrics: { audio_state: 'ok', silence_ratio: 0 } }), 'ok');
+  assert.equal(audioState({ metrics: { audio_state: 'none' } }), 'none');
+  // Measured before the metric existed: the summary carries NO audio keys.
+  assert.equal(audioState({ metrics: { metrics_state: 'ok', motion_mean: 0.1 } }),
+    'unmeasured');
+  // Not measured at all.
+  assert.equal(audioState({}), 'unmeasured');
+});
+
+test('the audio note tells the user what to DO about each state', () => {
+  assert.match(audioNote({ metrics: { metrics_state: 'ok' } }), /re-?measure/i);
+  assert.match(audioNote({ metrics: { audio_state: 'none' } }), /no (sound|audio)/i);
+  assert.equal(audioNote({ metrics: { audio_state: 'ok', silence_ratio: 0.0,
+    rms_dbfs: -14 } }), '');
+});
+
+test('a level is shown in dBFS and a share as a percentage', () => {
+  // Raw floats are not readable: "-14.2 dBFS" is a level an audio person knows,
+  // "0.42" is not a share anybody reads as 42%.
+  assert.match(audioSummary({ audio_state: 'ok', rms_dbfs: -14.23,
+    silence_ratio: 0.42 }), /-14\.2 dBFS/);
+  assert.match(audioSummary({ audio_state: 'ok', rms_dbfs: -14.23,
+    silence_ratio: 0.42 }), /42%/);
+  assert.equal(audioSummary({ audio_state: 'none' }), '');
 });

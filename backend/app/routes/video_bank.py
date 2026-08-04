@@ -20,6 +20,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from ..config import LOCAL_USER
 from ..services import bank_jobs
 from ..services import video_bank_service as svc
+from ..services import video_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -397,8 +398,10 @@ def video_bank_metrics_dry_run(bank_id):
     if svc.get_bank(LOCAL_USER, bank_id) is None:
         return _missing(bank_id)
     data = request.get_json(silent=True) or {}
-    allowed = ('motion_floor', 'motion_ceiling', 'luma_floor', 'freeze_max',
-               'sharpness_floor')
+    # Same single source as the config reader: an allow-list written out by hand
+    # here is how a cut the backend honours gets silently dropped from the very
+    # preview meant to make it visible.
+    allowed = video_metrics.THRESHOLD_KEYS
     try:
         thresholds = {k: float(data[k]) for k in allowed if data.get(k) is not None}
     except (TypeError, ValueError):
@@ -429,9 +432,13 @@ def video_bank_cancel(bank_id):
 def video_bank_promote(bank_id):
     """Encode the KEPT clips into a new video dataset.
 
-    Body {name, target_profile, frames?, width?, height?, ids?}. `frames` defaults
-    to the profile's own default length; width+height are optional and mean "cut at
-    this size" (omitted = keep the source's). `ids` empty/absent = every kept clip.
+    Body {name, target_profile, frames?, width?, height?, ids?, edge_inset_s?}.
+    `frames` defaults to the profile's own default length; width+height are
+    optional and mean "cut at this size" (omitted = keep the source's). `ids`
+    empty/absent = every kept clip. `edge_inset_s` trims that many seconds off
+    BOTH bounds of every clip (default 0 — a shot boundary is where a cut just
+    happened, but turning that on by default would silently change what every
+    existing recipe exports).
 
     202 {'ok', 'id', 'name', 'output_dir', 'clips'} — the id rides back so the UI
     can navigate straight to the dataset being filled. 400 names a legal frame
@@ -448,7 +455,8 @@ def video_bank_promote(bank_id):
         out = svc.start_promote(_app(), LOCAL_USER, bank_id,
                                 ids=data.get('ids'), name=data.get('name'),
                                 target_profile=data.get('target_profile'),
-                                frames=data.get('frames'), size=size)
+                                frames=data.get('frames'), size=size,
+                                edge_inset_s=data.get('edge_inset_s'))
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
     except ValueError as e:

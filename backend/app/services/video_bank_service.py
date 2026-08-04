@@ -485,9 +485,9 @@ def metric_thresholds() -> dict:
     not transfer between corpora (the public motion floor lands at the 7th
     percentile of this machine's own test bank)."""
     section = cfg.get('video_bank') or {}
-    return {k: section.get(k) for k in
-            ('motion_floor', 'motion_ceiling', 'luma_floor', 'freeze_max',
-             'sharpness_floor')}
+    # The key list is NOT repeated here — see video_metrics.THRESHOLD_KEYS for
+    # why a second copy of it is how a supported cut becomes unreachable.
+    return {k: section.get(k) for k in video_metrics.THRESHOLD_KEYS}
 
 
 def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
@@ -1210,8 +1210,36 @@ def resolve_size(profile_key, size):
     return (width, height)
 
 
+# The largest edge trim a promotion will accept. Not a judgement about how much
+# of a shot is transition — 0.25 s is the researched figure and this is twenty
+# times it — but a guard against a typo (2.5 for 0.25) silently emptying a
+# dataset, since every clip it removes is removed for a reason the user set.
+MAX_EDGE_INSET_S = 5.0
+
+
+def _resolve_edge_inset(value):
+    """The trim to apply at each bound, validated. Refuses rather than clamps:
+    a negative inset would EXTEND every clip past its own bounds into the
+    neighbouring shot — the exact frames the detector decided did not belong to
+    it — and silently honouring "-0.1" as 0 would hide the mistake."""
+    if value is None or value == '':
+        return 0.0
+    try:
+        inset = float(value)
+    except (TypeError, ValueError):
+        raise ValueError('edge inset must be a number of seconds') from None
+    if inset != inset or inset < 0:                  # NaN or negative
+        raise ValueError('edge inset cannot be negative — it would extend every '
+                         'clip into the shot next to it')
+    if inset > MAX_EDGE_INSET_S:
+        raise ValueError(f'edge inset is capped at {MAX_EDGE_INSET_S:g}s — '
+                         f'{inset:g}s would remove more than any transition is')
+    return inset
+
+
 def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
-                  frames=None, size=None, max_per_source=None):
+                  frames=None, size=None, max_per_source=None,
+                  edge_inset_s=None):
     """Encode the KEPT clips into a new video dataset.
 
     Everything that can be refused is refused HERE, synchronously, before a single
@@ -1227,6 +1255,7 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
         raise ValueError('name is required')
     frames = resolve_frames(target_profile, frames)
     size = resolve_size(target_profile, size)
+    inset = _resolve_edge_inset(edge_inset_s)
     profile = video_targets.get(target_profile)
 
     q = VideoClip.query.filter_by(bank_id=bank_id, status='keep')
@@ -1257,9 +1286,25 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
     per_source = {}
     for clip in rows:
         per_source[clip.source_id] = per_source.get(clip.source_id, 0) + 1
+    # What the inset will COST, counted before a single file is written. The
+    # arithmetic is free (bounds we already hold, plus the profile's own rule)
+    # and it is the difference between choosing an inset and discovering it —
+    # every limit stays visible.
+    would_drop = 0
+    if inset and profile.get('fps'):
+        for clip in rows:
+            span = clip.end_s - clip.start_s
+            if (video_clip_export.fits_frames(span, frames, profile['fps'])
+                    and not video_clip_export.fits_frames(span - 2 * inset, frames,
+                                                          profile['fps'])):
+                would_drop += 1
     composition = {
         'sources': len(per_source),
         'top_source_share': (max(per_source.values()) / len(rows)) if rows else 0.0,
+        'edge_inset_s': inset,
+        # Clips the INSET removes — not clips that were never long enough. Those
+        # keep their own count, because only the first is fixed by lowering it.
+        'inset_would_drop': would_drop,
     }
     if not clip_ids:
         raise ValueError('nothing to promote — keep some clips first')
@@ -1300,14 +1345,15 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
 
     bank_jobs.start(app, job_key(bank_id), 'promote',
                     _promote_job(bank.id, dataset.id, clip_ids, target_profile,
-                                 frames, size),
+                                 frames, size, inset),
                     total=len(clip_ids))
     return {'id': dataset.id, 'name': dataset.name,
             'output_dir': dataset.output_dir, 'clips': len(clip_ids),
             'composition': composition}
 
 
-def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size):
+def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
+                 edge_inset_s=0.0):
     """One ffmpeg per kept clip, straight into a FLAT folder.
 
     NOT ONE SUBFOLDER, EVER. ai-toolkit's dataset scan is os.walk — recursive —
@@ -1335,8 +1381,13 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size):
             VideoClip.id.in_(clip_ids)).all()}
         bank_jobs.progress(job, done=0, total=len(clip_ids), detail='encoding clips')
 
+        # The profile's own fps, for telling "never long enough" apart from
+        # "too short once the inset was taken off". None only for a profile that
+        # declares no fps, which start_promote already refused.
+        profile_fps = (video_targets.get(profile_key) or {}).get('fps')
+
         index = 0
-        encoded = too_short = failed = 0
+        encoded = too_short = failed = dropped_by_inset = 0
         for clip_id in clip_ids:
             if bank_jobs.cancelled(job):
                 break
@@ -1354,15 +1405,31 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size):
             # a dataset someone edited by hand.
             candidate = index + 1
             dst = out_dir / video_clip_export.clip_filename(candidate)
+            # Both bounds pulled inwards: a shot boundary is where a cut just
+            # happened, so the frames around BOTH ends are disproportionately
+            # dissolves and fades. Zero by default — see _resolve_edge_inset.
+            start_s = clip.start_s + edge_inset_s
+            end_s = clip.end_s - edge_inset_s
             try:
                 args = video_clip_export.command_for_profile(
                     ffmpeg=ffmpeg, src=src, dst=str(dst),
-                    start_s=clip.start_s, end_s=clip.end_s,
+                    start_s=start_s, end_s=end_s,
                     profile_key=profile_key, frames=frames, size=size)
             except video_clip_export.ClipTooShort:
                 # Loud, and it leaves NOTHING behind: a short clip encoded anyway
                 # is a file ai-toolkit trains as repeated stills without a word.
-                too_short += 1
+                #
+                # WHICH refusal it is decides what the user should do about it. A
+                # clip that could never supply the frames is not fixable by
+                # lowering a knob; one the inset just cost them is. Reporting
+                # them as one number is how a setting quietly halves a dataset
+                # and looks like the material was at fault.
+                if (edge_inset_s and profile_fps
+                        and video_clip_export.fits_frames(
+                            clip.end_s - clip.start_s, frames, profile_fps)):
+                    dropped_by_inset += 1
+                else:
+                    too_short += 1
                 bank_jobs.bump(job)
                 continue
             except ValueError as e:
@@ -1394,10 +1461,17 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size):
         detail = f'done — {encoded} clips encoded'
         if too_short:
             detail += f', {too_short} too short for {frames} frames'
+        if dropped_by_inset:
+            # Named separately in the sentence for the same reason it is counted
+            # separately: this one is the user's own setting, and it is the only
+            # one they can undo.
+            detail += (f', {dropped_by_inset} dropped by the '
+                       f'{edge_inset_s:g}s edge trim')
         if failed:
             detail += f', {failed} failed'
         bank_jobs.progress(job, detail=detail)
-        return {'encoded': encoded, 'too_short': too_short, 'failed': failed}
+        return {'encoded': encoded, 'too_short': too_short,
+                'dropped_by_inset': dropped_by_inset, 'failed': failed}
     return run
 
 

@@ -21,6 +21,9 @@ export const FLAG_LABELS = {
   black: 'Black moment',
   freeze: 'Frozen stretch',
   soft: 'No sharp frames',
+  soft_start: 'Soft first frame',
+  silent: 'Mostly silent',
+  quiet: 'Very quiet',
   unmeasured: 'Not measured yet',
 }
 
@@ -71,7 +74,67 @@ export function thresholdFields() {
     { key: 'sharpness_floor', flag: 'soft', direction: 'below',
       label: 'Sharpness floor',
       hint: 'Flags clips whose sharpest stretch stays below this.' },
+    // Supported by the backend since the quality wave and named nowhere until
+    // now, which made it settable only by hand-editing config.json — the exact
+    // failure the comment above this table warns about.
+    { key: 'first_frame_floor', flag: 'soft_start', direction: 'below',
+      label: 'First-frame sharpness',
+      hint: 'Flags clips whose FIRST frame is soft. Mostly matters for '
+        + 'image-to-video targets, where that frame is the conditioning image.' },
+    // Audio. Only meaningful for the targets that keep a track (LTX, MiniMax H3
+    // — Wan datasets have no audio by design), and a clip with no track is never
+    // flagged by either.
+    { key: 'silence_max', flag: 'silent', direction: 'above',
+      label: 'Silent share',
+      hint: 'Flags clips where more than this share of the sound is silence. '
+        + '0.5 means half the clip. Clips measured before sound was looked at '
+        + 'carry no reading and are never flagged — re-measure to include them.' },
+    { key: 'audio_floor', flag: 'quiet', direction: 'below',
+      label: 'Loudness floor (dBFS)',
+      hint: 'Flags clips quieter than this overall. dBFS is negative: -40 is '
+        + 'very quiet, -12 is a healthy level. A clip with no sound track is '
+        + 'never flagged — that is not a defect, it is the file.' },
   ]
+}
+
+/** Which of the THREE audio states a clip is in: 'ok' | 'none' | 'unmeasured'.
+ *
+ * They must not collapse. "No track" is a property of the file and there is
+ * nothing to do about it; "silent" is a defect in a clip that has a track; and
+ * "nobody measured it" is fixed by re-running the pass. A bank measured before
+ * the audio metric shipped carries NO audio keys at all — that absence is the
+ * signature of an earlier pass, and reading it as "no sound" would tell the user
+ * their footage is mute when nothing has listened to it yet. */
+export function audioState(clip) {
+  const m = clip?.metrics
+  if (!m || !m.audio_state) return 'unmeasured'
+  return m.audio_state === 'ok' ? 'ok' : m.audio_state
+}
+
+/** What to DO about this clip's audio state, or '' when there is nothing to say.
+ * A state with no remedy attached is trivia. */
+export function audioNote(clip) {
+  const state = audioState(clip)
+  if (state === 'unmeasured') {
+    return 'Sound was not measured on this clip — re-measure the bank to include it.'
+  }
+  if (state === 'none') return 'This file carries no sound track.'
+  if (state === 'unreadable') return 'This clip’s sound track could not be read.'
+  return ''
+}
+
+/** "-14.2 dBFS · 42% silent" — the two audio numbers, in units people read.
+ * Empty for anything not measured: a blank is honest, a "0.00" is not. */
+export function audioSummary(metrics) {
+  if (!metrics || metrics.audio_state !== 'ok') return ''
+  const parts = []
+  if (Number.isFinite(Number(metrics.rms_dbfs))) {
+    parts.push(`${Number(metrics.rms_dbfs).toFixed(1)} dBFS`)
+  }
+  if (Number.isFinite(Number(metrics.silence_ratio))) {
+    parts.push(`${Math.round(Number(metrics.silence_ratio) * 100)}% silent`)
+  }
+  return parts.join(' · ')
 }
 
 /** One sentence for the dry-run result. Real numbers, per-rule detail, and a
