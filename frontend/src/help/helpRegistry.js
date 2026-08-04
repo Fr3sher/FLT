@@ -614,6 +614,18 @@ const TOPICS = [
      'thumbnail disappeared', 'lost my thumbnail', 'thumbnail gone after trimming',
      'redetect deleted my cuts', 're-detect', 'lost my manual cuts'],
     '/video-bank', 'using-the-app', 'retouch-a-cut-trim-split-or-draw-a-shot-by-hand'),
+  // People arrive here from the SYMPTOM ("I can't find the shot with the car")
+  // and from the two failures that look like bugs: a search that returns nothing
+  // because the pass never ran, and a "without" that returns exactly what was
+  // excluded — which is CLIP ignoring the word, not the app ignoring the user.
+  action('video-bank-search', 'Find scenes by typing a word',
+    ['find scenes', 'search shots', 'search clips', 'search by words',
+     'text search video', 'find a shot', 'find the scene', 'where is the shot with',
+     'keyword search', 'search my rushes', 'embed shots', 'shots searchable',
+     'no shots searchable', 'search returns nothing', 'run find scenes first',
+     'without is ignored', 'push down', '-word', 'minus word', 'exclude a word',
+     'which second matched', 'matched at', 'ranking not a filter'],
+    '/video-bank', 'using-the-app', 'find-scenes-in-a-video-bank-by-typing-a-word'),
   action('video-capability-pieces', 'What the video extra is missing',
     ['video extra', 'ffmpeg', 'ffmpeg missing', 'av', 'pyav', 'decode', 'decoder',
      'encoder', 'shot detection missing', 'transnetv2', 'partly installed',

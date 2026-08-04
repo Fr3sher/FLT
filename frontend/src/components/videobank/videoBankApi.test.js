@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   videoClipThumbUrl, videoSourceMediaUrl, videoBankUrl, videoClipsUrl,
   videoPassUrl, videoDatasetUrl,
-  videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl,
+  videoClipBoundsUrl, videoClipSplitUrl, videoSourceClipsUrl, videoSearchUrl,
 } from './videoBankApi.js'
 
 test('thumb and media URLs address a clip and its SOURCE', () => {
@@ -53,6 +53,20 @@ test('pass and dataset URLs', () => {
   assert.equal(videoPassUrl(2, 'pipeline'), '/api/video-bank/2/pipeline')
   assert.equal(videoPassUrl(2, 'cancel'), '/api/video-bank/2/cancel')
   assert.equal(videoDatasetUrl(5), '/api/video-dataset/5')
+})
+
+test('a search carries its phrase encoded, punctuation and all', () => {
+  // "-hat" and "&" are part of the query grammar and of ordinary English; a
+  // hand-built query string mangles both.
+  assert.equal(videoSearchUrl(3, { q: 'a red car -hat' }),
+    '/api/video-bank/3/search?q=a+red+car+-hat&n=60')
+  assert.ok(videoSearchUrl(3, { q: 'rock & roll' }).includes('rock+%26+roll'))
+})
+
+test('a search inside one triage bucket sends the bucket, and "all" sends none', () => {
+  assert.ok(videoSearchUrl(3, { q: 'car', status: 'keep' }).includes('status=keep'))
+  assert.ok(!videoSearchUrl(3, { q: 'car', status: 'all' }).includes('status'))
+  assert.ok(!videoSearchUrl(3, { q: 'car', status: null }).includes('status'))
 })
 
 test('the retouch URLs hang off the right thing', () => {

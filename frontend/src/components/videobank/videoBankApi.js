@@ -74,6 +74,25 @@ export function videoSourceClipsUrl(bankId, sourceId) {
   return `/api/video-bank/${bankId}/source/${sourceId}/clips`
 }
 
+/** 🔎 Rank this bank's shots against a typed phrase.
+ *
+ * A GET because it is a read and nothing else — re-runnable, bookmarkable, and
+ * cheap to retry. Built with URLSearchParams rather than by interpolation for a
+ * concrete reason: the query grammar uses a leading `-` for "push this down",
+ * and ordinary phrases carry `&`, `#` and accents. Every one of those breaks a
+ * hand-built query string, and the failure looks like a search that found the
+ * wrong thing rather than like a bug. */
+export function videoSearchUrl(bankId, { q, n = 60, status = null, pushDown = null } = {}) {
+  const p = new URLSearchParams()
+  p.set('q', String(q ?? ''))
+  p.set('n', String(n))
+  // Same rule as the clip list: a falsy status (or 'all') means every bucket and
+  // MUST be left out, or the server filters on a string it does not know.
+  if (status && status !== 'all') p.set('status', status)
+  if (pushDown) p.set('push_down', pushDown)
+  return `/api/video-bank/${bankId}/search?${p.toString()}`
+}
+
 /** Pass endpoints, so the four buttons cannot disagree about their own names. */
 export function videoPassUrl(bankId, pass) {
   return `/api/video-bank/${bankId}/${pass}`

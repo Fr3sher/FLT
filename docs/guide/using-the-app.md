@@ -1630,6 +1630,50 @@ cut by hand; those stay, and may overlap the fresh ones. And editing a shot that
 is already in a built dataset is allowed: the dataset stored its own copy of the
 bounds when it was encoded, so nothing already on disk changes.
 
+## Find scenes in a video bank by typing a word
+
+A folder of rushes is a haystack whose needles have no names. The quality cuts
+tell you which shots are sharp and which move; they cannot tell you which one has
+the red car in it. **🔎 Find scenes** does: type *a woman walking on a beach* and
+the gallery is replaced by the shots that look most like it, best first.
+
+**Run the pass once, search as often as you like.** The 🔎 Find scenes button
+looks at a few frames of every shot and remembers what they look like. It is the
+slow part — it needs the same environment as the image bank's ✨ Score (Setup ▸
+Quality tools, or a Python you already have with torch and open_clip), and on a
+CPU it is minutes rather than seconds. Every search afterwards is instant and
+costs nothing.
+
+**Several frames per shot, not one.** A shot is a span of time, and a thumbnail is
+one instant of it. If a car only drives into view in the last second, a search
+that had looked at the opening frame would never find that shot — and would give
+you no hint that it had missed it. So each shot contributes a frame near its
+start, its sharpest frame, and one near its end, and a shot's score is the best of
+the three. Every result tells you **which second matched**, and opening it starts
+the player right there.
+
+**It is a ranking, not a filter.** Every shot scores something against every
+phrase, so the results always come back full, however wrong the query. The line
+above the gallery says how strong the top and bottom of the ranking are, and how
+many shots could not be searched at all — a shot the pass has not reached cannot
+be found by any phrase, and it would be easy to conclude the scene simply is not
+in the bank.
+
+**What it cannot do**, measured on the model this app uses:
+
+- **“Without” is ignored, not honoured.** Ask for *a street without cars* and you
+  get cars. Type `-cars` instead: that subtracts the unwanted thing from the score
+  and pushes those shots down the ranking. It cannot promise their absence, and
+  the panel says so rather than pretending otherwise.
+- **It cannot count.** *Two people* barely outranks a picture of one.
+- **It cannot hear, and it cannot see motion.** Only still frames are looked at,
+  so *a door slamming* or *panning left* describe nothing it can use.
+- **Left and right carry almost no meaning.**
+
+Searching respects the triage filter you are on, so *keep only* plus a phrase
+ranks what you already decided to keep. Changing the filter clears the search: a
+ranking computed over one bucket has nothing to say about another.
+
 ## Video training sets (and the two things to check before you cut one)
 
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next

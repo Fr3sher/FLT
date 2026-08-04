@@ -3,6 +3,7 @@ import {
   clipFragmentSrc, clipLabel, shouldRemountPlayer, playerBudgetWarning,
   MAX_MOUNTED_PLAYERS,
 } from './videoClipFragment'
+import { playFromSecond } from './videoClipSearch'
 import { videoSourceMediaUrl } from './videoBankApi'
 import VideoClipTrimTools from './VideoClipTrimTools'
 
@@ -29,7 +30,7 @@ import VideoClipTrimTools from './VideoClipTrimTools'
  */
 export default function VideoClipLightbox({
   bankId, clip, source, onClose, onPrev, onNext, onKeep, onReject, onRetouched,
-  hasPrev, hasNext,
+  hasPrev, hasNext, playFrom,
 }) {
   const [failed, setFailed] = useState(false)
   // The playhead, in SOURCE seconds — the element's timeline IS the rush's,
@@ -47,13 +48,18 @@ export default function VideoClipLightbox({
   // FIELDS, so a second render with an equal descriptor answers false and the
   // key stops moving. StrictMode's double render therefore bumps it once.
   const player = useRef({ desc: null, key: 0 })
-  const next = clip ? { sourceId: clip.source_id, start: clip.start_s } : null
+  // `playFrom` is in the descriptor because it changes the media fragment, and a
+  // fragment reassigned to a LIVE element is ignored by several browsers — the
+  // viewer would silently watch the shot from its start while the caption said
+  // it opened on the matched second.
+  const openAt = playFromSecond(clip, playFrom)
+  const next = clip ? { sourceId: clip.source_id, start: openAt } : null
   if (shouldRemountPlayer(player.current.desc, next)) {
     player.current = { desc: next, key: player.current.key + 1 }
   }
   const playerKey = player.current.key
 
-  useEffect(() => { setFailed(false); setPlayheadS(clip?.start_s ?? null) },
+  useEffect(() => { setFailed(false); setPlayheadS(clip ? openAt : null) },
     [playerKey])                                        // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -69,8 +75,11 @@ export default function VideoClipLightbox({
   }, [onClose, onPrev, onNext, onKeep, onReject])
 
   if (!clip) return null
+  // Opens ON the matched second when a search sent us here, on the shot's own
+  // start otherwise. The END is always the shot's — a search result is a place
+  // to look, never a re-cut of the shot.
   const src = clipFragmentSrc(videoSourceMediaUrl(bankId, clip.source_id),
-    clip.start_s, clip.end_s)
+    openAt, clip.end_s)
   // Defensive, and cheap: a malformed fragment does not throw — the browser
   // ignores it and plays the WHOLE file, which on a two-hour rush is the worst
   // available outcome. clipFragmentSrc answers null rather than hand that over.

@@ -44,6 +44,7 @@ export const VIDEO_PIECES = [
  *   detect  → transnetv2 (services/shot_detect)
  *   thumbs  → av + PIL. NOT ffmpeg — thumbnails are decoded in-process, which is
  *             why a missing encoder still leaves you a browsable grid.
+ *   embed   → av + PIL, plus the ✨ Score interpreter (checked server-side).
  *   promote → ffmpeg, the only pass that writes media.
  * `pipeline` chains probe → detect → thumbs, so it needs both of theirs: with no
  * detector it would probe, find no shots and make no thumbnails, and report
@@ -53,6 +54,11 @@ export const PASS_REQUIREMENTS = {
   detect: ['detect'],
   thumbs: ['decode'],
   measure: ['decode'],
+  // Embedding decodes frames like every other reading pass. It ALSO needs an
+  // interpreter that can run CLIP, which is not one of the three video pieces —
+  // that one is checked server-side and refused with its own sentence, because
+  // it is the ✨ Score environment and belongs to a different install step.
+  embed: ['decode'],
   pipeline: ['decode', 'detect'],
   promote: ['encode'],
 }

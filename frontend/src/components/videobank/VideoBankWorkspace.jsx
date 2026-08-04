@@ -22,6 +22,8 @@ import VideoThresholdsPanel from './VideoThresholdsPanel'
 import VideoSourceList from './VideoSourceList'
 import VideoClipGrid from './VideoClipGrid'
 import VideoClipLightbox from './VideoClipLightbox'
+import VideoClipSearchBox from './VideoClipSearchBox'
+import { matchLine } from './videoClipSearch'
 import PromoteVideoDialog from './PromoteVideoDialog'
 
 const PAGE = 120
@@ -54,6 +56,14 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   // when the player closes rather than under it: `openIndex` addresses the list by
   // POSITION, so inserting a row mid-session moves the player onto another shot.
   const [pendingRefresh, setPendingRefresh] = useState(false)
+  // 🔎 A search REPLACES what the grid shows, and does not touch the filters.
+  // Two reasons it is held here rather than inside the box: the grid and the
+  // lightbox both read it (the ranking is an order, and the matched second is
+  // where the player opens), and a triage action has to be able to update the
+  // ranked rows in place — a search result that stops reflecting a Keep the user
+  // just pressed is worse than no search at all.
+  const [search, setSearch] = useState(null)
+  const [searching, setSearching] = useState(false)
   // The last job we announced, so a finished pass is toasted ONCE instead of on
   // every poll for as long as the server keeps its snapshot.
   const announced = useRef(null)
@@ -91,8 +101,13 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   // Open: one refreshing read (the folder is LIVE — people keep dropping files
   // into it) plus the first page of shots.
   useEffect(() => { loadBank(true) }, [bankId])          // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { setSelected([]); setAnchor(null); loadClips(false) },
-    [bankId, status, sourceId])                           // eslint-disable-line react-hooks/exhaustive-deps
+  // Changing the filter clears the search. A ranking computed over one bucket
+  // has nothing to say about another, and leaving it on screen while the chips
+  // moved would show "keep only" over shots the search found in every bucket.
+  useEffect(() => {
+    setSelected([]); setAnchor(null); setSearch(null); setOpenIndex(null)
+    loadClips(false)
+  }, [bankId, status, sourceId])                          // eslint-disable-line react-hooks/exhaustive-deps
 
   // The 2 s poll. Never sends refresh=1: that re-walks the whole source tree
   // server-side, and doing it every two seconds on a folder of rushes is a
@@ -115,6 +130,14 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
     loadClips(false)
   }, [activity])                                          // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The grid draws the ranking while a search is on, the filtered page
+  // otherwise. Paging is hidden under a search on purpose: the ranking is a
+  // fixed top-N, and a "Load more" that re-ran the filter would silently replace
+  // the ranking with something ordered by file and start time.
+  const shownClips = search ? (search.clips || []) : clips
+  const matchLines = search
+    ? Object.fromEntries((search.results || []).map((r) => [r.clip_id, matchLine(r)]))
+    : null
   const counts = bank?.counts || {}
   const capability = bank?.capability || null
   const busy = isBusy(activity)
@@ -180,8 +203,13 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
       const d = await postJson(videoPassUrl(bankId, 'triage'), body)
       setBank((b) => (b ? { ...b, counts: d.counts || b.counts } : b))
       const touched = new Set(body.ids?.length ? body.ids : null)
-      setClips((list) => list.map((c) => (
-        !body.ids?.length || touched.has(c.id) ? { ...c, status: body.status } : c)))
+      const retag = (list) => list.map((c) => (
+        !body.ids?.length || touched.has(c.id) ? { ...c, status: body.status } : c))
+      setClips(retag)
+      // The ranked rows are a SEPARATE list; leaving them stale would show a
+      // shot the user just kept still wearing its old badge, under a search that
+      // is still on screen.
+      setSearch((r) => (r ? { ...r, clips: retag(r.clips || []) } : r))
       setSelected([])
       toast.success(`${d.updated ?? howMany} shot(s) → ${body.status}.`)
     } catch (e) {
@@ -191,19 +219,24 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
 
   const onToggle = (id, e) => {
     if (e?.shiftKey && anchor != null) {
-      setSelected((s) => selectRange(s, clips.map((c) => c.id), anchor, id))
+      setSelected((s) => selectRange(s, shownClips.map((c) => c.id), anchor, id))
     } else {
       setSelected((s) => toggleSelection(s, id))
     }
     setAnchor(id)
   }
 
-  const openAt = (clip) => setOpenIndex(clips.findIndex((c) => c.id === clip.id))
-  const openClip = openIndex != null ? clips[openIndex] : null
+  const openAt = (clip) => setOpenIndex(shownClips.findIndex((c) => c.id === clip.id))
+  const openClip = openIndex != null ? shownClips[openIndex] : null
+  // The second the search matched inside the OPEN shot, so the player lands on
+  // it instead of on the shot's first frame. Null outside a search.
+  const openAtSecond = openClip
+    ? (search?.results || []).find((r) => r.clip_id === openClip.id)?.frame_s ?? null
+    : null
   const triageOpen = async (next) => {
     if (!openClip) return
     await triage([openClip.id], next)
-    setOpenIndex((i) => (i != null && i + 1 < clips.length ? i + 1 : i))
+    setOpenIndex((i) => (i != null && i + 1 < shownClips.length ? i + 1 : i))
   }
 
   /** A shot was re-cut, split, or drawn by hand.
@@ -224,8 +257,18 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
       setBank((b) => (b ? { ...b, counts: payload.counts } : b))
     }
     if (payload?.clip) {
-      setClips((list) => list.map((c) => (
-        c.id === payload.clip.id ? { ...c, ...payload.clip } : c)))
+      const patch = (list) => list.map((c) => (
+        c.id === payload.clip.id ? { ...c, ...payload.clip } : c))
+      setClips(patch)
+      // The row is patched, its MATCH is dropped. A re-cut shot loses its search
+      // vectors server-side (they described three instants of the old span), so
+      // "matched at 12.5 s" under the new bounds would be a claim nothing backs
+      // — and the second could now sit outside the shot entirely.
+      setSearch((r) => (r ? {
+        ...r,
+        clips: patch(r.clips || []),
+        results: (r.results || []).filter((x) => x.clip_id !== payload.clip.id),
+      } : r))
     }
     if (kind !== 'bounds') setPendingRefresh(true)
   }
@@ -291,7 +334,7 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {['pipeline', 'probe', 'detect', 'thumbs', 'measure'].map((pass) => {
+        {['pipeline', 'probe', 'detect', 'thumbs', 'measure', 'embed'].map((pass) => {
           const blocked = passBlockedBy(capability, pass)
           const primary = pass === 'pipeline'
           return (
@@ -356,6 +399,19 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
         </div>
       </details>
 
+      {/* 🔎 Above the gallery, below the passes: it is a way of LOOKING at the
+          shots, not a pass — and what it changes is the grid underneath it. */}
+      {(counts.clips || 0) > 0 && (
+        <VideoClipSearchBox bankId={bankId} counts={counts} busy={busy}
+          result={search} searching={searching}
+          onRunPass={() => startPass('embed')}
+          onResult={(r, pending) => {
+            setSearching(!!pending)
+            if (!pending) { setSearch(r); setOpenIndex(null); setSelected([]) }
+          }}
+          onClear={() => { setSearch(null); setOpenIndex(null) }} />
+      )}
+
       {/* --- the gallery ------------------------------------------------- */}
       <div className="flex flex-wrap items-center gap-1.5">
         {STATUS_FILTERS.map((f) => (
@@ -378,7 +434,9 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-content-muted">
-          {selected.length ? `${selected.length} selected` : `${clips.length} of ${total} shown`}
+          {selected.length
+            ? `${selected.length} selected`
+            : (search ? `${shownClips.length} found` : `${clips.length} of ${total} shown`)}
         </span>
         <button type="button" onClick={() => triage(selected, 'keep')} disabled={!selected.length}
           className="rounded-md bg-emerald-600/80 px-2.5 py-1 font-semibold text-white hover:bg-emerald-600 disabled:opacity-30">
@@ -388,8 +446,8 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
           className="rounded-md bg-rose-600/80 px-2.5 py-1 font-semibold text-white hover:bg-rose-600 disabled:opacity-30">
           ✕ Reject
         </button>
-        <button type="button" onClick={() => setSelected(clips.map((c) => c.id))}
-          disabled={!clips.length}
+        <button type="button" onClick={() => setSelected(shownClips.map((c) => c.id))}
+          disabled={!shownClips.length}
           className="rounded-md border border-border bg-surface-raised px-2.5 py-1 text-content hover:bg-surface disabled:opacity-30">
           Select page
         </button>
@@ -408,15 +466,17 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
         </button>
       </div>
 
-      <VideoClipGrid bankId={bankId} clips={clips} selected={selected}
-        onToggle={onToggle} onOpen={openAt}
-        emptyMessage={emptyGridMessage({
-          status,
-          sourceName: bank.sources?.find((s) => s.id === sourceId)?.relpath,
-          counts,
-        })} />
+      <VideoClipGrid bankId={bankId} clips={shownClips} selected={selected}
+        onToggle={onToggle} onOpen={openAt} matchLines={matchLines}
+        emptyMessage={search
+          ? `Nothing came back for “${search.query}”.`
+          : emptyGridMessage({
+            status,
+            sourceName: bank.sources?.find((s) => s.id === sourceId)?.relpath,
+            counts,
+          })} />
 
-      {hasMore({ loaded: clips.length, total }) && (
+      {!search && hasMore({ loaded: clips.length, total }) && (
         <div className="flex justify-center">
           <button type="button" onClick={() => loadClips(true)} disabled={loadingClips}
             className="rounded-md border border-border bg-surface-raised px-4 py-1.5 text-sm font-semibold text-content hover:bg-surface disabled:opacity-40">
@@ -433,13 +493,14 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
           // exactly the mistake that turns a 16 fps profile into fast motion.
           source={bank.sources?.find((s) => s.id === openClip.source_id) || null}
           onRetouched={onRetouched}
-          hasPrev={openIndex > 0} hasNext={openIndex < clips.length - 1}
+          playFrom={openAtSecond}
+          hasPrev={openIndex > 0} hasNext={openIndex < shownClips.length - 1}
           onClose={() => {
             setOpenIndex(null)
             if (pendingRefresh) { setPendingRefresh(false); loadClips(false) }
           }}
           onPrev={() => setOpenIndex((i) => Math.max(0, i - 1))}
-          onNext={() => setOpenIndex((i) => Math.min(clips.length - 1, i + 1))}
+          onNext={() => setOpenIndex((i) => Math.min(shownClips.length - 1, i + 1))}
           onKeep={() => triageOpen('keep')}
           onReject={() => triageOpen('reject')} />
       )}

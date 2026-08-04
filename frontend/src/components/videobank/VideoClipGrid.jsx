@@ -18,7 +18,7 @@ import { FLAG_LABELS } from './videoMetricsFilter'
  * `loading="lazy"` on every tile: an off-screen thumbnail costs nothing.
  */
 export default function VideoClipGrid({
-  bankId, clips, selected, onToggle, onOpen, emptyMessage,
+  bankId, clips, selected, onToggle, onOpen, emptyMessage, matchLines,
 }) {
   if (!clips.length) {
     return (
@@ -89,6 +89,17 @@ export default function VideoClipGrid({
                 {clipLabel(clip.start_s, clip.end_s)}
               </span>
             </div>
+            {/* Which SECOND of the shot matched a search, when there was one.
+                A shot is a span and the phrase usually describes a moment of it;
+                showing the tile without the moment sells the whole span as the
+                answer. Absent outside a search — this is not a permanent
+                property of a shot. */}
+            {matchLines?.[clip.id] && (
+              <p className="truncate px-1.5 pb-1 text-[0.625rem] text-indigo-300"
+                title={matchLines[clip.id]}>
+                🔎 {matchLines[clip.id]}
+              </p>
+            )}
           </li>
         )
       })}

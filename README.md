@@ -71,12 +71,14 @@ the target model accepts.
 | **Fix a bad cut instead of rejecting it** | Trim either bound (by 1 s or one frame *of your source*), split a shot at the playhead, or draw a shot the detector missed. Bounds only — there is no scrubbable timeline. For image-to-video targets the first frame is the conditioning image, so moving a start picks what the model animates from, and the panel says so |
 
 | **Measure every shot, choose your own cuts** | One pass reads every frame and scores stillness, blur, black moments and frozen stretches. Flags mark shots to *look at* — nothing is auto-rejected — and there are **no default thresholds**: a preview shows how many shots each cut would flag against *your* bank's own distribution before you apply it |
+| **Find a scene by typing a word** | One pass looks at a few frames of every shot; after it, typing *a woman walking on a beach* ranks the bank instantly and tells you **which second** of each shot matched. Several frames per shot, so a subject that only appears at the end is still findable. It is a **ranking, not a filter** — every shot scores something against every phrase — and the model **ignores "without"**, so `-word` pushes something down instead |
 
 **What it does NOT do yet**, plainly:
 
 - **No aesthetic scoring or duplicate detection.** The technical measures above
-  say what is broken, not what is beautiful — ranking, "most varied", and
-  cross-clip dedup are still to come.
+  say what is broken, not what is beautiful — quality ranking, "most varied", and
+  cross-clip dedup are still to come. Searching by words ranks shots by what they
+  LOOK like, which is a different question from whether they are any good.
 - **No captioning.** Every promoted clip gets an **empty** `.txt`. The file is
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — but a dataset shipped as-is trains uncaptioned.

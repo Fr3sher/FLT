@@ -33,6 +33,17 @@ test('thumbnails need the DECODER, never the encoder', () => {
   assert.equal(passBlockedBy(caps({ decode: false, encode: true }), 'thumbs').key, 'decode')
 })
 
+test('finding scenes needs the decoder, and is not blocked by a missing encoder', () => {
+  // The pass reads frames; it writes no media. Its OTHER requirement — an
+  // interpreter that can run CLIP — is not a video piece and is deliberately not
+  // modelled here: it belongs to the ✨ Score install step and is refused
+  // server-side with its own sentence, so a machine with the video extra and no
+  // torch gets told about torch rather than about ffmpeg.
+  assert.deepEqual(PASS_REQUIREMENTS.embed, ['decode'])
+  assert.equal(passBlockedBy(caps({ decode: true, encode: false }), 'embed'), null)
+  assert.equal(passBlockedBy(caps({ decode: false }), 'embed').key, 'decode')
+})
+
 test('the chained pipeline needs both of its passes, and names the first gap', () => {
   // With no detector it would probe, find no shots, make no thumbnails, and
   // report success — the shape of a bug that reads as "my videos have no cuts".
