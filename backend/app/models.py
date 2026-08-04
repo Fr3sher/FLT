@@ -1182,6 +1182,17 @@ class VideoClip(db.Model):
     # per-clip preview file to hover, because that would mean encoding every clip
     # including the ones about to be rejected.
     thumb_state = db.Column(String(12), nullable=True)
+    # Quality metrics (wave 2): the RAW per-clip summary the metrics scan wrote,
+    # as JSON — motion_mean/motion_p95, luma_min/luma_mean, sharpness_p90,
+    # freeze_ratio, sharpest_frame_s, metrics_state. RAW scores only, never
+    # verdicts: flags are recomputed at read time against the bank's thresholds
+    # (services/video_metrics.verdicts), so retuning a cut re-sorts the bank with
+    # no rescan — the same philosophy as the image lane's quality columns, and it
+    # matters more here because decoding is ~85 % of this lane's cost. One JSON
+    # column rather than eight scalar ones: the summary is written and read as a
+    # unit, and adding a metric to the scan must not need a migration.
+    # NULL = the scan has not reached this clip. Additive — see _SCHEMA_ADDITIONS.
+    metrics_json = db.Column(Text, nullable=True)
     # Triage decision — the same three words as the image lane.
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)

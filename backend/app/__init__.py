@@ -302,6 +302,9 @@ _SCHEMA_ADDITIONS = (
     # no groups on it, and every pinned picture keeps the geometry it had.
     ('canvas_image_node', 'group_id', 'VARCHAR(40)'),
     ('canvas_image_node', 'group_pos', 'INTEGER'),
+    # 🎬 Video wave 2: the metrics scan's raw per-clip summary. Additive so a
+    # video bank cut by wave 1 keeps every clip and simply reads "not measured".
+    ('video_clip', 'metrics_json', 'TEXT'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is
