@@ -1708,29 +1708,18 @@ def random_kept_caption(user_id, dataset_id) -> str | None:
     return (caption or '').strip() or None
 
 
-# Value of FaceDataset.internal for the ⚖ LoRA bench sandbox. STORED — never
-# rename it without an alias path (cf. models.FaceDataset.internal).
-INTERNAL_BENCH = 'bench'
-
-
 def list_datasets(user_id):
-    """Every dataset the USER made, newest touched first.
+    """Every dataset of this user, newest touched first.
 
-    This is the choke-point for "the datasets that exist", and that is why the
-    internal filter lives here rather than at each caller: this one query feeds
-    the library page, `full_backup.build_full_backup` (its `datasets_total`, its
-    per-dataset zips AND its manifest), the name de-duplication of
+    The choke-point for "the datasets that exist": it feeds the library page,
+    `full_backup.build_full_backup` (its `datasets_total`, its per-dataset zips
+    AND its manifest), the name de-duplication of
     `full_backup.restore_full_backup`, the canvas dataset index, the canvas
-    positions and the HF base-model index. Eight surfaces, one gate.
-
-    A scratch row (FaceDataset.internal not NULL) is app-owned bookkeeping, not
-    something the user made — it must never appear in any of them, and it must
-    never ride inside a backup the user restores months later. Callers that
-    legitimately need one resolve it by id via `get_dataset`, which does NOT
-    filter (serving and rating a bench image are id-scoped).
+    positions, the HF base-model index and `lora_training.find_run_collision`.
+    Eight surfaces, one query — so a rule about which datasets count belongs
+    HERE, never copied into a caller.
     """
     return (FaceDataset.query.filter_by(user_id=str(user_id))
-            .filter(FaceDataset.internal.is_(None))
             .order_by(FaceDataset.updated_at.desc()).all())
 
 
@@ -1741,12 +1730,10 @@ def dataset_list_stats(user_id):
     'trained_families': [str]}}; datasets absent from a map just have zeros."""
     from sqlalchemy import case, func
     from ..models import TrainingRunRecord
-    # Same gate as list_datasets: the counts shown next to the library must add
-    # up to the library, and a scratch row's cells must not be aggregated into
-    # anything the user reads. One subquery, reused by BOTH grouped queries.
+    # Same scope as list_datasets: the counts shown next to the library must add
+    # up to the library. One subquery, reused by BOTH grouped queries.
     owned = (db.session.query(FaceDataset.id)
-             .filter_by(user_id=str(user_id))
-             .filter(FaceDataset.internal.is_(None))).subquery()
+             .filter_by(user_id=str(user_id))).subquery()
     stats = {}
     img_rows = (db.session.query(
         FaceDatasetImage.dataset_id,

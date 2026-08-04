@@ -4480,19 +4480,15 @@ def find_run_collision(user_id, dataset_id, base_model=_PERSISTED,
         return None
     target = _run_name(ds, variant=variant) if base_model is _PERSISTED \
         else _run_name(ds, base_model, variant=variant)
-    # Internal scratch rows excluded: they never train, so they cannot own an
-    # ai-toolkit run folder to collide WITH — but the ⚖ LoRA bench sandbox
-    # borrows the trigger of whatever LoRA is under test, so benching a file
-    # named after one of your own datasets would otherwise raise a phantom
-    # collision and block that dataset's training, naming a dataset the user
-    # cannot even see.
-    others = (FaceDataset.query
-              .filter(FaceDataset.user_id == str(ds.user_id),
-                      FaceDataset.id != int(ds.id),
-                      FaceDataset.internal.is_(None))
-              .all())
-    for o in others:
-        if _run_name(o) == target:
+    # Enumerated through `fds.list_datasets` — the library's own definition of
+    # "the datasets that exist" — rather than a raw FaceDataset query. A refusal
+    # is only actionable if the user can OPEN the dataset it names: colliding
+    # with a row that is not in the library blocks a training run with an error
+    # nobody can act on. Today the two sets are identical; keeping the single
+    # source means a future listing rule (hidden/archived rows) is honoured here
+    # for free instead of being a second place someone must remember.
+    for o in fds.list_datasets(ds.user_id):
+        if int(o.id) != int(ds.id) and _run_name(o) == target:
             return o
     return None
 

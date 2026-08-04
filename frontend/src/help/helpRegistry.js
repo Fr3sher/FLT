@@ -542,18 +542,6 @@ const TOPICS = [
       'z-image base', 'base vs turbo', 'cfg 1', '8 steps', 'blurry base model'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
     app: { route: '/studio' } },
-  // ⚖ LoRA bench — the sibling page for a LoRA you did NOT train here. The
-  // keywords are what someone types when they have just downloaded one and the
-  // Test Studio refuses to list it: the picker only offers files whose name
-  // matches a dataset's trigger, which a downloaded LoRA never does.
-  { id: 'page-bench', kind: 'page', title: 'LoRA bench',
-    keywords: ['bench', 'lora bench', 'downloaded lora', 'civitai lora', 'external lora',
-      'test a lora', 'test downloaded lora', 'no dataset', 'without a dataset',
-      'my lora is not listed', 'lora not in the picker', 'strength', 'strength sweep',
-      'what strength', 'best strength', 'activation word', 'trigger word', 'trigger not found',
-      'ss_output_name', 'safetensors metadata', 'style lora', 'utility lora'],
-    guide: { chapter: 'using-the-app', anchor: 'test-a-lora-you-downloaded' },
-    app: { route: '/bench' } },
   // The topic ID keeps the word `combine`: it is referenced from JSX and from the
   // guide, and the mode was CALLED Combine until 2026-08-03 — the keywords keep it
   // too, so anyone who read the older What's-new entry still finds this.

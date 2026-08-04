@@ -15,7 +15,6 @@ import PinokioUpdateInstructions from './components/common/PinokioUpdateInstruct
 import DatasetPage from './pages/DatasetPage'
 import BankPage from './pages/BankPage'
 import StudioPage from './pages/StudioPage'
-import BenchPage from './pages/BenchPage'
 import SettingsPage from './pages/SettingsPage'
 import SetupPage from './pages/SetupPage'
 import GuidePage from './pages/GuidePage'
@@ -213,17 +212,6 @@ function NavBar() {
       {caps.studio_visible && (
         <NavLink to="/studio" className={navItemClass} onClick={() => setOpen(false)}>Test Studio</NavLink>
       )}
-      {/* ⚖ Bench — the Test Studio's sibling, for a LoRA you did NOT train here.
-          Short label on purpose: measured at 768 px, five workspaces already
-          filled this row to the pixel (that is also why the Beta chip above
-          hides between md and lg), so a long sixth label costs height on every
-          phone-width desktop. The page's own H1 says "LoRA bench" in full. */}
-      {caps.studio_visible && (
-        <NavLink to="/bench" className={navItemClass} title="LoRA bench — test a LoRA you downloaded"
-          onClick={() => setOpen(false)}>
-          <span className="inline-flex items-center gap-1 whitespace-nowrap"><span aria-hidden>⚖</span> Bench</span>
-        </NavLink>
-      )}
     </>
   )
 
@@ -254,14 +242,15 @@ function NavBar() {
         {/* Desktop: workspaces on the left, utilities grouped into icon menus
             on the right (Guide/Help under ?, Setup/Settings under ⚙). */}
         {/* The workspace row is its own flex-wrap box, not a run of direct nav
-            children. Measured at 768 px: the row was ALREADY saturated to the
-            pixel with five workspaces, so the sixth (⚖ Bench) pushed the whole
-            header to 838 px and the PAGE scrolled sideways — the one thing a
-            layout must never do. Wrapping keeps the overflow inside this box (a
-            taller header) instead of widening the document, and it cannot clip
-            the ? / ⚙ popovers the way `overflow-x-auto` here would, because
-            those live in the sibling below. Above lg everything still fits on
-            one line, so nothing changes on a normal desktop. */}
+            children. Measured at 768 px, the row is saturated to the PIXEL with
+            the five workspaces it has today: as direct children they cannot
+            wrap, so the smallest growth — one more link, one longer label —
+            widened the header past the viewport and the whole PAGE scrolled
+            sideways, which is the one thing a layout must never do. Wrapping
+            keeps any overflow inside this box (a taller header) instead of
+            widening the document, and unlike `overflow-x-auto` here it cannot
+            clip the ? / ⚙ popovers, which live in the sibling below. Above lg
+            everything fits on one line, so a normal desktop is unchanged. */}
         <nav className="hidden md:flex flex-1 min-w-0 items-center gap-1" aria-label="Main navigation">
           <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
             {workspaceLinks}
@@ -498,7 +487,6 @@ function AppInner() {
             <Route path="/guide/:section" element={<GuidePage />} />
             <Route path="/help" element={<GuidePage helpOnly />} />
             <Route path="/studio" element={<StudioPage />} />
-            <Route path="/bench" element={<BenchPage />} />
             <Route path="/dataset/studio/:id" element={<StudioPage />} />
             <Route path="/cloud" element={<CloudRunsPage />} />
             <Route path="/canvas" element={<CanvasPage />} />

@@ -112,14 +112,6 @@ export const WHATS_NEW = [
     to: '/studio',
   },
   {
-    id: '2026-08-04-lora-bench-test-a-downloaded-lora',
-    date: '2026-08-04',
-    title: 'Test a LoRA you downloaded, without building a dataset',
-    blurb:
-      'You grab a LoRA off a model site and you want to know two things: is it any good, and at what strength should you load it. Until now LDS made you create a whole dataset first — which made no sense, since you are not training anything. The new ⚖ Bench page skips all of it: drop the file into ComfyUI’s loras folder, pick it from the list, and get one image per strength with the same prompt and the same seed everywhere, so the only thing changing between two pictures is the strength. Vote 👍/👎 and the best strength gets a ★. The part that decides whether the test means anything is the activation word, so the bench reads it out of the file’s own metadata when the file says, shows it in a field you can correct — and when the file does NOT say, leaves it empty and tells you, instead of quietly generating without one: a subject LoRA tested without its trigger renders pictures it never touched, which reads exactly like a bad LoRA. If it genuinely has none, tick the box and run. And the grid says what it is not: one prompt and one seed show how strength changes the result, not whether the LoRA is good. Bench history stays out of your library and out of Back up everything.',
-    to: '/bench',
-  },
-  {
     id: '2026-08-04-merge-a-lora-into-a-base-checkpoint',
     date: '2026-08-04',
     title: 'Turn your LoRA into a full model you can publish',
@@ -3290,7 +3282,7 @@ export function markAllSeen(storage, entries = WHATS_NEW) {
 
 // Param-less top-level routes (mirror App.jsx <Routes>).
 const TOP_LEVEL_ROUTES = new Set([
-  '/datasets', '/bank', '/studio', '/bench', '/cloud', '/canvas', '/guide', '/help', '/setup',
+  '/datasets', '/bank', '/studio', '/cloud', '/canvas', '/guide', '/help', '/setup',
 ]);
 
 const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id));

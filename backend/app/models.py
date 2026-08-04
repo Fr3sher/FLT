@@ -122,23 +122,6 @@ class FaceDataset(db.Model):
     # cannot wipe it, and because it is not a training setting at all. Additive
     # migration in create_app.
     klein_model = db.Column(String(255), nullable=True)
-    # NOT a dataset the user made — a SCRATCH row the app owns for itself.
-    # NULL (every row that ever existed) = an ordinary dataset. 'bench' = the
-    # sandbox that owns ⚖ LoRA bench runs, so an externally downloaded LoRA can
-    # be tested without inventing a dataset for it (LoraTestImage.dataset_id is
-    # NOT NULL and appears ~101 times in lora_test_studio — making it nullable
-    # would have meant auditing every one of them).
-    #
-    # ⚠️ This value is STORED. 'bench' is a permanent handle: renaming it needs
-    # an alias path, exactly like a catalog label or a What's-new id.
-    #
-    # Anything internal must stay out of every user-facing listing. The gate
-    # lives at ONE place — face_dataset_service.list_datasets — which is what
-    # the library, the full backup, the canvas index and the HF base index all
-    # read; see also dataset_list_stats. `get_dataset(user_id, id)` deliberately
-    # does NOT filter: serving a bench image and rating it are id-scoped and
-    # must keep working. Additive migration in create_app.
-    internal = db.Column(String(16), nullable=True, index=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
     updated_at = db.Column(DateTime, default=db.func.current_timestamp(), onupdate=db.func.current_timestamp())
 

@@ -91,41 +91,6 @@ there is no need to return to the library and find the dataset first. The button
 is also available on a folded Recent dataset group, so you can start comparing
 checkpoints without expanding its run history.
 
-## Test a LoRA you downloaded
-
-**⚖ LoRA bench** answers the two questions you have about a LoRA someone else
-trained: **is it any good, and at what strength should I load it?** It needs no
-dataset and trains nothing.
-
-Drop the `.safetensors` into ComfyUI's `models/loras/z image`,
-`models/loras/sdxl` or `models/loras/krea` — the folder of the model family it
-was made for — then open **⚖ Bench**. It lists what is on disk; there is no
-upload and no download-by-URL.
-
-**The activation word is the part that decides whether the test is worth
-anything.** The bench reads it from the file's own metadata when the file says
-(`ss_output_name`) and shows it in a field you can correct. When the file does
-*not* say, the field is left **empty** and told to you plainly, because a subject
-LoRA tested without its trigger renders pictures it never touched — and that
-reads exactly like a bad LoRA. Copy the word from the page you downloaded it
-from. If it genuinely has none (most style and utility LoRAs), tick *this LoRA
-has no activation word* and run.
-
-The grid renders one image per strength, with the **same prompt and the same
-seed** everywhere, so the only thing that changes between two images is the
-strength. Vote 👍/👎 and the best strength gets a ★ — with a ⚠ while fewer than
-three votes back it.
-
-**What the grid does not tell you.** One prompt and one seed show how strength
-changes the result, not whether the LoRA is good. A LoRA that only falls apart
-on *your* kind of prompt will still look fine here — try a second prompt before
-concluding. The bench also holds the GPU: it will not start while a Test Studio
-run is going, and a Test Studio run will not start while a bench is going.
-
-Bench history lives outside your datasets: it never shows up in the library, and
-it is deliberately left out of **Back up everything** (it is test data). Clearing
-it removes the images, not your datasets.
-
 ## Using a full model you trained
 
 Training the **whole model** (rather than a LoRA adapter) produces something

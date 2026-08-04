@@ -188,10 +188,12 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset', 'prompt_suffixes', 'TEXT'),
     ('face_dataset', 'caption_options', 'TEXT'),
     ('face_dataset', 'klein_model', 'VARCHAR(255)'),
-    # Scratch rows the app owns for itself (⚖ LoRA bench). NULL = an ordinary
-    # dataset, which is every row that predates this column — so the ALTER is a
-    # no-op semantically and nothing existing changes visibility.
-    ('face_dataset', 'internal', 'VARCHAR(16)'),
+    # NOTE — `face_dataset.internal` was added here for a feature that was
+    # removed before it ever shipped in a release. Databases created while it
+    # existed still carry the column; it is nullable, nothing reads or writes it,
+    # and it is deliberately NOT dropped: SQLite's DROP COLUMN is unavailable on
+    # older engines and would rewrite the table for no gain. Do not reuse the
+    # name for anything else — an old database would hand you stale values.
     ('face_dataset_image', 'caption_short', 'TEXT'),
     ('face_dataset_image', 'fail_reason', 'TEXT'),
     # Nature de l'échec ('refused' | 'empty' | 'error') pour compter les refus
@@ -316,7 +318,6 @@ _SCHEMA_ADDITIONS = (
 # index=True in models.py, under SQLAlchemy's own default name (ix_<table>_<col>),
 # so a fresh database finds them already there and does nothing.
 _INDEX_ADDITIONS = (
-    ('face_dataset', 'internal'),
     ('face_dataset_image', 'bank_image_id'),
     ('bank_image', 'semantic_dup_group'),
     ('bank_image', 'style_cluster'),
