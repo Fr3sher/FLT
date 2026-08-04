@@ -91,6 +91,49 @@ there is no need to return to the library and find the dataset first. The button
 is also available on a folded Recent dataset group, so you can start comparing
 checkpoints without expanding its run history.
 
+## Using a full model you trained
+
+Training the **whole model** (rather than a LoRA adapter) produces something
+different from a checkpoint, and **📦 Checkpoints & LoRAs** lists it in its own
+**🧱 Full models** block for exactly that reason.
+
+A delivered run leaves up to two files, and they are not interchangeable:
+
+- the **full-precision master** (~26 GB). This is the only file you can train
+  again or resume from. It is **never** sent to ComfyUI — 26 GB of a model folder
+  to do a job the smaller file does better;
+- the **fp8 twin** (~13 GB). This is the inference format: the file ComfyUI loads
+  with **Load Diffusion Model**.
+
+If the run has a master but no twin, **✨ Quantize to fp8** makes one. It works
+whether the master is on this computer or only in the run's private Hugging Face
+repository — in the second case it is downloaded first, with progress, and the
+transfer can be stopped and resumed. Once the twin exists, **→ Send to ComfyUI**
+puts it where ComfyUI looks. On the same drive that is a hard link: instant, and
+it costs no extra disk space.
+
+**🗑 Trash** moves one of those files to the app trash, so a mis-click on a file
+that cost hours of GPU is recoverable.
+
+**A run whose model is only on Hugging Face is not a lost run.** It shows
+**☁ on Hugging Face** on the board and in its card, and the app refuses to remove
+it: doing so would discard the only record of where that model is.
+
+### Testing a full model
+
+Once the fp8 twin is in ComfyUI, the **Test Studio** lists it as a base and
+**🧪 Test in Studio** opens straight onto it, with its own sample settings filled
+in. That matters: a full model trained here is **undistilled**, so it wants a
+real CFG and a real step count (CFG 4 / 25 steps for Krea 2). The family's
+few-step Turbo defaults render a blurry sketch on it that reads as a failed
+training.
+
+One limit worth knowing before you go looking for a button that is not there:
+**the Test Studio is entered through a LoRA of the dataset.** A dataset trained
+only as a full model has none, so it cannot open the Studio at all. If you have
+any LoRA of that dataset deployed, pick it and set its **strength to 0** — no
+LoRA node is added at 0, so you generate with the bare model.
+
 ## Recover a paused Test Studio batch
 
 If ComfyUI drops while Test Studio is processing a batch, the affected tile says

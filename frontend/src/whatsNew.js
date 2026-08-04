@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-full-models-appear-in-the-checkpoints-panel',
+    date: '2026-08-04',
+    title: 'A full model you trained now appears in 📦 Checkpoints & LoRAs, with the two files it leaves and what each one is for',
+    blurb:
+      'Until now a full-model run existed in the app as a banner and a Hugging Face link. It was in none of the places a trained thing lives, so testing one meant going into ComfyUI and finding the file yourself. There is now a 🧱 Full models block in the same panel, and it keeps apart the two files a run leaves — because they are not interchangeable. The full-precision master (~26 GB) is the only one you can train again or resume from, and it is never sent to ComfyUI: it would fill a model folder to do a job the smaller file does better. The fp8 twin (~13 GB) is the inference format, and → Send to ComfyUI puts it where ComfyUI looks — on the same drive that is a hard link, so it is instant and costs no extra disk space. Each card names the exact file it chose when a run left several 26 GB saves, the sampler settings the model wants, the machine it trained on, and where the Hugging Face backup is. ✨ Quantize works whether the master is on this computer or still only in the repository, and 🗑 Trash is the app trash, so a mis-click on hours of GPU is recoverable.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-08-04-comfyui-unreachable-is-said-out-loud',
     date: '2026-08-04',
     title: 'When LDS cannot reach ComfyUI, the banner now says exactly that — instead of blaming a paused job',

@@ -10,6 +10,7 @@ import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
+import DenseModelsPanel from './DenseModelsPanel';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
 import {
   checkpointSelectionMatchesTraining,
@@ -605,6 +606,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // renders one identity header per run so look-alike epoch sets are no longer
   // ambiguous. Falls back to a single synthetic group if the server is older.
   const [cloudGroups, setCloudGroups] = useState([]);
+  // FULL MODELS of this dataset — a separate lane on purpose (see
+  // DenseModelsPanel): those are 26 GB transformers, not LoRA adapters, and
+  // they must never inherit the adapter verbs the two lists above carry.
+  // Empty on an older server and for every LoRA-only dataset → renders nothing.
+  const [denseModels, setDenseModels] = useState([]);
   // {run_dir_bytes, cloud_staging_bytes, deployed_bytes, total_bytes}
   const [diskUsage, setDiskUsage] = useState(null);
   // {steps, kind, n_images, rationale} renvoyé par /train/checkpoints — le POURQUOI
@@ -1662,6 +1668,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     // Prefer the per-run grouped payload; fall back to grouping the flat list
     // by run_id so an older server still renders (single group per run).
     setCloudGroups(cloudGroupsFrom(data));
+    setDenseModels(Array.isArray(data.dense_models) ? data.dense_models : []);
     setDiskUsage(data.disk_usage || null);
     setCkLoaded(true);
     onCheckpointsChange?.(
@@ -3668,6 +3675,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               Dataset version: <span className="text-content font-semibold">v{datasetState.version}</span> — unchanged since the last training.
             </p>
           ))}
+          {/* FULL MODELS first, above the LoRA lanes: when a dataset has one it
+              is the biggest thing it produced, and until now it appeared in this
+              panel not at all — the only way to try it was to open ComfyUI by
+              hand and find the file. Renders nothing when there is none. */}
+          <DenseModelsPanel datasetId={ds.currentId} models={denseModels}
+            onChanged={() => loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant)} />
           <div className="flex items-center gap-2 flex-wrap">
             {/* () => … sinon React passe l'event en 1er arg → forBase = PointerEvent
                 → base_model=[object Object] → run inexistant → liste vide. */}

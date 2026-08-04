@@ -219,6 +219,16 @@ const TOPICS = [
       'graph', 'lineage', 'runs graph', 'continue', 'download'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
     app: { route: '/datasets?section=checkpoints' } },
+  // A full model is not an adapter, and the panel gives it its own block and its
+  // own verbs (quantize / send the fp8 twin / trash). It therefore needs its own
+  // topic: searching "26 GB", "master" or "send to ComfyUI" must not land on the
+  // LoRA deploy instructions, which say the opposite of what a full model needs.
+  { id: 'workspace-dense-models', kind: 'section', title: 'Full models',
+    keywords: ['full model', 'dense', 'full transformer', 'master', 'fp8', 'twin',
+      'quantize', 'send to comfyui', '26 gb', 'diffusion_models', 'raw', 'undistilled',
+      'hugging face', 'checkpoint store'],
+    guide: { chapter: 'using-the-app', anchor: 'using-a-full-model-you-trained' },
+    app: { route: '/datasets?section=checkpoints' } },
   { id: 'workspace-studio', kind: 'section', title: 'Studio',
     keywords: ['studio', 'test', 'lora', 'checkpoint', 'winning settings'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },

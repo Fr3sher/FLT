@@ -428,7 +428,7 @@ def dataset_train_checkpoints(dataset_id):
     if variant:
         kw['variant'] = variant
     from ..models import CloudTrainingRun
-    from ..services import checkpoint_registry
+    from ..services import checkpoint_registry, dense_artifacts
     ds = svc.get_dataset(LOCAL_USER, dataset_id)
     fam_resolved = lt._train_type(ds, fam)
     # Retrofit for datasets trained BEFORE the provenance registry existed:
@@ -470,6 +470,14 @@ def dataset_train_checkpoints(dataset_id):
                         dataset_id, train_type=fam_resolved, variant=variant),
                     'recommended_steps_info': lt.recommended_steps_info(
                         dataset_id, train_type=fam_resolved, variant=variant),
+                    # FULL MODELS — a second lane in the same panel, deliberately
+                    # not folded into the two above. Those deploy LoRA adapters
+                    # into loras/<family>; a 26 GB transformer is not an adapter
+                    # and must not inherit the adapter's verbs (see
+                    # cloud_checkpoint_groups' guard, which stays). Additive: an
+                    # older frontend simply ignores the key.
+                    'dense_models': dense_artifacts.list_dense_models(
+                        dataset_id, fam_resolved),
                     'imported': lt.list_imported_checkpoints(LOCAL_USER, dataset_id, family=fam),
                     'disk_usage': lt.dataset_disk_usage(LOCAL_USER, dataset_id, **kw),
                     # provenance: latest registered dataset version vs the
@@ -1816,6 +1824,60 @@ def tools_fp8_deliver_cancel():
     from ..services import fp8_local_delivery
     return jsonify({'ok': True, 'cancelled': fp8_local_delivery.cancel(),
                     **(fp8_local_delivery.status() or {})})
+
+
+# --- full models: the fp8 twin's last mile, and the trash -------------------------
+# The master is NEVER sent to ComfyUI. It is 26 GB of a model folder to do a job
+# the ~13 GB twin does better, and it is the only file that can be trained again.
+# That asymmetry is the whole point of this lane, so it lives in the routes too:
+# there is no endpoint here that could deploy a master, not even by mistake.
+
+@bp.post('/dataset/<int:dataset_id>/train/dense/send-plan')
+def dataset_dense_send_plan(dataset_id):
+    """What "Send to ComfyUI" would do — link or copy, where, at what cost.
+    Always 200: a refusal is a disabled button carrying its reason."""
+    from ..services import dense_artifacts
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    d = request.get_json(silent=True) or {}
+    return jsonify(dense_artifacts.send_plan(dataset_id, d.get('run_id')))
+
+
+@bp.post('/dataset/<int:dataset_id>/train/dense/send')
+def dataset_dense_send(dataset_id):
+    from ..services import dense_artifacts
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    d = request.get_json(silent=True) or {}
+    try:
+        info = dense_artifacts.send_to_comfyui(
+            current_app._get_current_object(), dataset_id, d.get('run_id'))
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **info, 'job': dense_artifacts.status()})
+
+
+@bp.get('/tools/dense-send/status')
+def tools_dense_send_status():
+    """Global, like the fp8 job's: one send at a time, and it outlives the tab."""
+    from ..services import dense_artifacts
+    return jsonify({'ok': True, **(dense_artifacts.status() or {})})
+
+
+@bp.post('/dataset/<int:dataset_id>/train/dense/delete')
+def dataset_dense_delete(dataset_id):
+    """Move ONE of a full model's files to the app trash — recoverable on
+    purpose: these cost hours of GPU, and a mis-click must not be final."""
+    from ..services import dense_artifacts
+    if not svc.get_dataset(LOCAL_USER, dataset_id):
+        return jsonify({'error': 'not found'}), 404
+    d = request.get_json(silent=True) or {}
+    try:
+        out = dense_artifacts.delete_artifact(
+            dataset_id, d.get('run_id'), d.get('filename'))
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **out})
 
 
 @bp.post('/cloud/quantize/plan')

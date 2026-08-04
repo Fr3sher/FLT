@@ -208,6 +208,7 @@ export function Fp8DeliverOutcome({ state }) {
 
 export default function Fp8QuantizeTool({
   target = null, suggestedPath = '', disabled = false, framed = true,
+  manualPath = true,
 }) {
   const [path, setPath] = useState(suggestedPath);
   const [plan, setPlan] = useState(null);
@@ -265,9 +266,13 @@ export default function Fp8QuantizeTool({
     setBusy(false);
   };
 
-  const askForTarget = () => askPlan({
-    repo_id: target?.repoId || null, filename: target?.filename || null,
-  });
+  // A target now comes in two shapes, because a full model now has two homes.
+  // `path` (the master already harvested to this computer — nothing to download)
+  // wins over the repository, and the backend's `plan` branches on exactly that
+  // key, so one button covers both without the panel knowing which chain runs.
+  const askForTarget = () => askPlan(target?.path
+    ? { path: target.path }
+    : { repo_id: target?.repoId || null, filename: target?.filename || null });
   const askForPath = () => askPlan({ path: path.trim() });
   const replan = () => askPlan(lastAsk.current || {});
 
@@ -319,8 +324,10 @@ export default function Fp8QuantizeTool({
             {target.name ? <> — <span className="font-mono break-all">{target.name}</span></> : null}
             {target.sizeBytes ? <> · {fmtGB(target.sizeBytes)}</> : null}
             <span className="block opacity-80">
-              In your private Hugging Face repository, not on this machine — it is fetched first,
-              with progress, and the transfer can be stopped and resumed.
+              {target.path
+                ? 'Already on this computer — nothing to download; the conversion starts straight away.'
+                : 'In your private Hugging Face repository, not on this machine — it is fetched first, '
+                  + 'with progress, and the transfer can be stopped and resumed.'}
             </span>
           </p>
           <button type="button" onClick={askForTarget}
@@ -332,7 +339,11 @@ export default function Fp8QuantizeTool({
         </div>
       )}
 
-      {/* The exception, not the way in: a path nothing in the app points at. */}
+      {/* The exception, not the way in: a path nothing in the app points at.
+          Hidden where the app already holds every candidate it could name (the
+          full-model lane lists them), because an empty path field next to a
+          named file reads as "the real way in is to type something". */}
+      {manualPath && (
       <div className={framed || target ? 'mt-2' : ''}>
         {target && (
           <p className="m-0 mb-1 text-sky-200/75 text-[0.625rem] uppercase tracking-wide">
@@ -355,6 +366,7 @@ export default function Fp8QuantizeTool({
           </button>
         </div>
       </div>
+      )}
 
       {plan && !plan.ok && !running && (
         <p className="m-0 mt-1 text-amber-200 text-[0.6875rem]" role="alert">⚠ {plan.error}</p>
