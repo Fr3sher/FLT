@@ -1871,19 +1871,26 @@ _krea_models_cache = {"data": None, "timestamp": 0}
 
 
 def _krea_root_candidate(name) -> bool:
-    """Is this ROOT-level file a Krea 2 base? Same rule as the Generate resolver.
+    """Is this ROOT-level file CLAIMED by the Krea family? A `diffusion_models`
+    root also holds Z-Image, FLUX and Klein weights, so at a root the filename is
+    the only claim there is.
 
-    The wired workflow default is named explicitly (it carries 'krea' anyway, but
-    stating it keeps the two facts independent); everything else must carry
-    'krea' in its filename and must not be one of the checkpoints that carry the
-    word without being a Krea base — `KREA_INCOMPATIBLE_TOKENS`, borrowed rather
-    than re-declared so the two surfaces cannot drift.
+    Only the claim. Whether the file is a Krea base the pipeline can actually use
+    is `_krea_base_usable`, which applies at EVERY depth — that separation is the
+    fix for a checkpoint being refused here and accepted one folder down.
+
+    The wired workflow default used to be named explicitly on this line. It was
+    dead code (the name carries 'krea' and matches no exclusion) and it was the
+    last hardcoded filename in the lister, so it is gone.
     """
+    return 'krea' in str(name or '').lower()
+
+
+def _krea_base_usable(name) -> bool:
+    """False for the checkpoints that carry 'krea' without being a Krea 2 base —
+    `KREA_INCOMPATIBLE_TOKENS`, borrowed from the Generate resolver rather than
+    re-declared so the two surfaces cannot drift."""
     low = str(name or '').lower()
-    if low == 'krea2_turbo_fp8.safetensors':
-        return True
-    if 'krea' not in low:
-        return False
     try:
         from ..services.krea_edit_helper import KREA_INCOMPATIBLE_TOKENS
     except Exception:                               # noqa: BLE001 — never fatal
@@ -1930,7 +1937,8 @@ def get_krea_models():
             from ..services import comfy_model_paths
             out = comfy_model_paths.scan_family_tree(
                 _model_scan_roots(out_dir), ("krea",),
-                root_file_accept=_krea_root_candidate)
+                root_file_accept=_krea_root_candidate,
+                accept=_krea_base_usable)
         except Exception as e:
             logger.error(f"get_krea_models error: {e}")
     _krea_models_cache["data"] = out

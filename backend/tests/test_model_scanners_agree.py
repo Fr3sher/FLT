@@ -18,19 +18,16 @@ failure mode, and a membership test would sail straight past it.
 
 WHERE THE FOUR STILL DISAGREE, ON PURPOSE OR NOT
 ------------------------------------------------
-Two differences are pinned here rather than fixed, because removing them would be
-a behaviour change and this pass is a refactor:
+One difference is pinned here rather than fixed, because removing it would be a
+behaviour change and that pass was a refactor:
 
   * DEPTH. `get_*_models` walk the tree (`os.walk`), so a model two folders deep
     is listed. `_*_unet_folders` read ONE level, so the same file is invisible to
-    the Generate resolvers.
-  * THE INCOMPATIBLE-BASE EXCLUSION. `BigLove*` carries 'krea' and renders pure
-    noise under the Krea pipeline. `_krea_unet_folders` refuses it everywhere.
-    `get_krea_models` refuses it only at a ROOT, because the check lives inside
-    `_krea_root_candidate`, which by construction never runs on a subfolder — so
-    a BigLove inside `Krea/` is still offered as a Test Studio base. That
-    asymmetry is not a decision anybody wrote down; it is where the check
-    happened to sit. Pinned so a fix is a deliberate, visible change.
+    the Generate resolvers. Not levelled blind: which of the two matches what
+    ComfyUI itself lists is a question that deserves its own measurement.
+
+The other one was levelled, in its own commit and on purpose — see
+`test_the_studio_no_longer_offers_a_base_generate_refuses` below.
 """
 import importlib
 import os
@@ -99,7 +96,6 @@ def _j(*parts):
 def test_get_krea_models_is_pinned_file_by_file(tree):
     from app.utils.comfyui import get_krea_models
     assert get_krea_models() == [
-        _j('Krea', 'BigLoveKreaEdit1_fp8mixed.safetensors'),
         _j('Krea', 'krea2_turbo_fp8.safetensors'),
         _j('Krea', 'nested', 'deep_krea.safetensors'),
         _j('Krea', 'quant.gguf'),
@@ -108,13 +104,25 @@ def test_get_krea_models_is_pinned_file_by_file(tree):
     ]
 
 
-def test_the_studio_list_drops_the_noise_base_only_at_a_root(tree):
-    """The asymmetry, stated as an assertion so a fix cannot be silent: the same
-    filename is refused at a root and accepted one folder down."""
+def test_the_studio_no_longer_offers_a_base_generate_refuses(tree):
+    """THE ONE BEHAVIOUR CHANGE, and the reason for it.
+
+    `BigLove*` carries 'krea' and renders PURE NOISE under the Krea pipeline —
+    measured, and already in `KREA_INCOMPATIBLE_TOKENS`. The Generate resolver
+    refuses it everywhere. The Studio's lister refused it only at a ROOT, because
+    the check lived inside `_krea_root_candidate`, which by construction never
+    runs on a subfolder. So the same file was refused at a root and offered as a
+    Test Studio base one folder down — an accident of placement, not a decision.
+
+    Someone picking it got noise and concluded the model, or the app, was broken.
+    The exclusion now applies at every depth, on both surfaces."""
     from app.utils.comfyui import get_krea_models
+    from app.services import krea_edit_helper as keh
+    importlib.reload(keh)
     listed = get_krea_models()
-    assert 'BigLoveKreaEdit1_fp8mixed.safetensors' not in listed
-    assert _j('Krea', 'BigLoveKreaEdit1_fp8mixed.safetensors') in listed
+    assert not any('biglove' in m.lower() for m in listed)
+    resolver = [n for _sub, group in keh._krea_unet_folders() for n in group]
+    assert not any('biglove' in n.lower() for n in resolver)
 
 
 # --- Z-Image, the Studio's list ----------------------------------------------

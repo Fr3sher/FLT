@@ -136,7 +136,7 @@ MODEL_FILE_SUFFIXES = ('.safetensors', '.gguf', '.sft')
 # Those are the arguments below, so a difference between two families is now
 # something you can read in one call rather than diff across four loops.
 
-def scan_family_tree(roots, dir_tokens, *, root_file_accept=None,
+def scan_family_tree(roots, dir_tokens, *, root_file_accept=None, accept=None,
                      suffixes=MODEL_FILE_SUFFIXES):
     """Model files under `roots` whose RELATIVE DIRECTORY carries one of
     `dir_tokens` (case-insensitive, at any depth), as names relative to their
@@ -148,6 +148,13 @@ def scan_family_tree(roots, dir_tokens, *, root_file_accept=None,
     a root file is never listed: that is a real difference between families (a
     `diffusion_models` root also holds Z-Image, FLUX and Klein weights), not an
     oversight, so it is an argument rather than a hardcoded rule.
+
+    `accept(filename) -> bool` is the family's exclusion list, and it applies
+    EVERYWHERE — root and subfolder alike. It is separate from
+    `root_file_accept` on purpose: one answers "does this file at a root belong
+    to the family at all", the other "is this file, wherever it sits, one the
+    family knows is unusable". Folding the second into the first is what made
+    the same checkpoint refused at a root and accepted one folder down.
     """
     out = []
     for base_dir in roots or []:
@@ -165,6 +172,8 @@ def scan_family_tree(roots, dir_tokens, *, root_file_accept=None,
                 if not f.lower().endswith(suffixes):
                     continue
                 if at_root and not root_file_accept(f):
+                    continue
+                if accept is not None and not accept(f):
                     continue
                 out.append(f if at_root else os.path.join(rel_dir, f))
     return sorted(set(out))
