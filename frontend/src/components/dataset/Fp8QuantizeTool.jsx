@@ -13,12 +13,24 @@ import { postJson } from '../../hooks/useDataset';
  * next to it. Everything the server refuses is refused BEFORE the click — the
  * plan call answers with a reason and the button stays disabled carrying it,
  * because the alternative is an error toast after the user committed.
+ *
+ * TWO DOORS, ONE COMPONENT. It also lives in Settings ▸ Storage, because the
+ * person who most needs it — someone who downloaded a 26 GB full model from
+ * Hugging Face — has no dense dataset and never opens the recipe card this was
+ * born in. Nothing here knows about a dataset: both props are optional and the
+ * tool talks only to /api/tools/fp8-quantize. `framed` is the ONLY difference
+ * between the two hosts, and it is chrome: the recipe card wants the accent box
+ * and its own title, Settings wraps it in a Card that already carries both. The
+ * refusals, the overwrite guard and the read-back verification have exactly one
+ * implementation, so the two doors cannot drift.
  */
 const fmtGB = (bytes) => (
   typeof bytes === 'number' && bytes > 0 ? `${(bytes / 1e9).toFixed(1)} GB` : '—'
 );
 
-export default function Fp8QuantizeTool({ suggestedPath = '', disabled = false }) {
+export default function Fp8QuantizeTool({
+  suggestedPath = '', disabled = false, framed = true,
+}) {
   const [path, setPath] = useState(suggestedPath);
   const [plan, setPlan] = useState(null);
   const [status, setStatus] = useState(null);
@@ -71,22 +83,31 @@ export default function Fp8QuantizeTool({ suggestedPath = '', disabled = false }
   const result = status?.result || null;
 
   return (
-    <div className="rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-      <span className="font-semibold">Quantize an existing model to fp8</span>
-      <p className="m-0 mt-1 text-sky-200/75 text-[0.6875rem] leading-relaxed">
-        Turns a full-precision checkpoint on this machine into the ~10 GB fp8 file ComfyUI
-        loads with the standard Load Diffusion Model node. The source file is never modified —
-        the result is written next to it. This is not the same thing as the “quantize” training
-        option, which only shrinks the model in memory while it trains and writes no file.
-      </p>
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+    <div className={framed
+      ? 'rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50'
+      : 'text-sky-50'}>
+      {framed && (
+        <>
+          <span className="font-semibold">Quantize an existing model to fp8</span>
+          <p className="m-0 mt-1 text-sky-200/75 text-[0.6875rem] leading-relaxed">
+            Turns a full-precision checkpoint on this machine into the ~10 GB fp8 file ComfyUI
+            loads with the standard Load Diffusion Model node. The source file is never modified —
+            the result is written next to it. This is not the same thing as the “quantize” training
+            option, which only shrinks the model in memory while it trains and writes no file.
+          </p>
+        </>
+      )}
+      {/* Column on a phone, row from sm up: a full Windows path and a button
+          sharing 400 px leaves the field showing about 28 characters, which is
+          not enough to see which file you pointed at. */}
+      <div className={`flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center ${framed ? 'mt-1.5' : ''}`}>
         <input type="text" value={path} onChange={(event) => setPath(event.target.value)}
           disabled={running || disabled}
           placeholder="Full path to a .safetensors model"
           aria-label="Path of the model file to quantize to fp8"
-          className="flex-1 min-w-[12rem] rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content text-[0.75rem] font-mono disabled:opacity-50" />
+          className="w-full sm:flex-1 sm:min-w-[12rem] rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content text-[0.75rem] font-mono disabled:opacity-50" />
         <button type="button" onClick={start} disabled={!canStart}
-          className="px-2.5 py-1 rounded-lg bg-primary/20 border border-primary/40 text-white text-[0.75rem] font-semibold disabled:opacity-40">
+          className="shrink-0 self-start px-2.5 py-1 rounded-lg bg-primary/20 border border-primary/40 text-white text-[0.75rem] font-semibold disabled:opacity-40">
           {running ? 'Quantizing…' : 'Quantize to fp8'}
         </button>
       </div>

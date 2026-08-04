@@ -60,6 +60,41 @@ test('summary states the gap, the caches and that the ceiling is a guess', () =>
   assert.match(text, /no quota endpoint/)
 })
 
+test('the breakdown adds up to the total it explains, fp8 export included', () => {
+  // The shipped default: 26 GB checkpoint + a 14.3 GB fp8 twin + 20 GB margin.
+  // The card used to say "26.0 GB checkpoint × 1 kept + 20.0 GB margin" under a
+  // 60.3 GB total, and the missing 14 GB read as a mistake in the card.
+  const s = storageSummary({
+    ok: true,
+    namespace: 'tester',
+    used_bytes: 10 * GB,
+    private_repo_count: 1,
+    forecast: {
+      needed_bytes: 60.3 * GB, checkpoint_bytes: 26 * GB, keeps: 1,
+      fp8_bytes: 14.3 * GB, fp8_export: true, margin_bytes: 20 * GB,
+      limit_bytes: 100 * GB, fits: true, free_bytes: 90 * GB,
+    },
+  })
+  const text = s.lines.join(' ')
+  assert.match(text, /14\.3 GB fp8 export/)
+  const [, total, checkpoint, fp8, margin] = text
+    .match(/needs about ([\d.]+) GB \(one ([\d.]+) GB checkpoint × 1 kept \+ a ([\d.]+) GB fp8 export \+ ([\d.]+) GB margin\)/)
+  assert.equal(Number(checkpoint) + Number(fp8) + Number(margin), Number(total))
+})
+
+test('a run that exports no fp8 twin omits the term rather than showing 0 GB', () => {
+  const s = storageSummary({
+    ok: true, namespace: 'n', used_bytes: 0, private_repo_count: 0,
+    forecast: {
+      needed_bytes: 46 * GB, checkpoint_bytes: 26 * GB, keeps: 1, fp8_bytes: 0,
+      margin_bytes: 20 * GB, limit_bytes: 100 * GB, fits: true, free_bytes: 100 * GB,
+    },
+  })
+  const text = s.lines.join(' ')
+  assert.doesNotMatch(text, /fp8/)
+  assert.match(text, /one 26\.0 GB checkpoint × 1 kept \+ 20\.0 GB margin/)
+})
+
 test('an unmeasurable account says so instead of showing a reassuring zero', () => {
   const s = storageSummary({ ok: false })
   assert.equal(s.measured, false)

@@ -76,13 +76,21 @@ export function storageSummary(payload) {
     };
   }
   const f = payload.forecast || {};
+  // The breakdown must ADD UP to the total, and since the fp8 export shipped it
+  // stopped doing so: `needed_bytes` silently gained a ~14 GB fp8 term while
+  // this sentence still said "checkpoint × kept + margin", so a 60 GB forecast
+  // explained itself as 46 GB and the 14 GB gap looked like a bug in the card.
+  // Same terms, same order as the server's own refusal sentence
+  // (hf_storage.storage_refusal_message) — one story about one number. The term
+  // is omitted, not zeroed, when the run does not export fp8.
+  const terms = [`one ${formatBytes(f.checkpoint_bytes)} checkpoint × ${f.keeps || 1} kept`];
+  if (f.fp8_bytes) terms.push(`a ${formatBytes(f.fp8_bytes)} fp8 export`);
+  terms.push(`${formatBytes(f.margin_bytes)} margin`);
   const lines = [
     `${payload.namespace} uses ${formatBytes(payload.used_bytes)} across ${
       payload.private_repo_count || 0
     } private repo(s).`,
-    `A full-model run needs about ${formatBytes(f.needed_bytes)} (one ${formatBytes(
-      f.checkpoint_bytes,
-    )} checkpoint × ${f.keeps || 1} kept + ${formatBytes(f.margin_bytes)} margin).`,
+    `A full-model run needs about ${formatBytes(f.needed_bytes)} (${terms.join(' + ')}).`,
   ];
   let tone = 'ok';
   if (f.fits === false) {

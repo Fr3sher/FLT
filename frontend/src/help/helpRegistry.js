@@ -1072,6 +1072,19 @@ const TOPICS = [
     ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
       'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
     '/settings/storage', 'settings-reference', 'storage'),
+  // The fp8 tool's SECOND door, and the findable one. Its first
+  // (training.fp8_quantize_local, below) sits inside a dense dataset's recipe
+  // card — which the person this helps most, someone who downloaded a 26 GB
+  // full model from Hugging Face and has no dataset, never opens. Same
+  // component, same refusals; only the address differs, so it gets its own
+  // topic rather than stealing the other one's.
+  { id: 'storage.fp8_quantize', kind: 'action',
+    title: 'Quantize a model to fp8 (no dataset or training run needed)',
+    keywords: ['quantize', 'quantise', 'fp8', 'shrink', 'smaller', 'convert', 'comfyui',
+      'comfy', 'safetensors', 'hugging face', 'downloaded', 'disk', 'space', 'storage',
+      '26 gb', '10 gb', 'checkpoint', 'full model', 'load diffusion model', 'cpu'],
+    guide: { chapter: 'settings-reference', anchor: 'storage' },
+    app: { route: '/settings/storage', focus: 'storage-fp8-quantize' } },
   // The unlocked half of the full-model (dense) recipe. Per-dataset Advanced
   // controls, not global Settings — they point at the dataset guide's
   // full-model section. Grouped as one topic on purpose: they are one card, and
@@ -1104,7 +1117,7 @@ const TOPICS = [
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'fp8-quantize-local',
-      text: 'New: point “Quantize an existing model to fp8” at any full-precision checkpoint on this machine and it writes the ~10 GB ComfyUI version next to it — the original is never touched.' } },
+      text: 'New: point “Quantize an existing model to fp8” at any full-precision checkpoint on this machine and it writes the ~10 GB ComfyUI version next to it — the original is never touched. The same tool is in Settings ▸ Storage, so a model you simply downloaded needs no dataset to reach it.' } },
   { id: 'training.fp8_quantize_cloud', kind: 'action',
     title: 'Quantize to fp8 in the cloud',
     keywords: ['quantize', 'quantise', 'fp8', 'cloud', 'vast', 'rent', 'hugging face',

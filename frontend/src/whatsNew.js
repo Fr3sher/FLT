@@ -55,6 +55,14 @@ export const WHATS_NEW = [
       '☁ Quantize to fp8 in the cloud used to give up one second after the click with “create_instance failed: HTTP 400 {}” — no machine, no money spent, and no reason. Two things were wrong. It rented the cheapest offer on the market, and cheap is exactly where free disk runs out: a 26 GB model needs about 86 GB on the pod for the master, its fp8 twin and the download cache, while the top offer of a live search had 57 GB — an ask vast refuses outright. And a single refusal ended the job, even though the next machine would have taken it. Now the search only considers machines with the disk this job will claim, the offer is chosen by the same rule a training launch uses (bad hosts skipped, suspiciously cheap listings ignored), and a refusal moves to the next candidate instead of ending everything. When a rental really is impossible, the error quotes what vast said rather than an empty “{}”. The estimate stays an estimate — but if the market moved and the only machine left costs materially more than the price you agreed to, it tells you and rents nothing.',
   },
   {
+    id: '2026-08-04-quantize-to-fp8-from-settings-storage',
+    date: '2026-08-04',
+    title: 'Shrink a model to fp8 from Settings ▸ Storage — no dataset, no training run',
+    blurb:
+      'The fp8 quantizer that shipped yesterday had exactly one door: the full-model recipe card, which only exists inside a dense dataset. So the person it was written for — someone who downloaded a 26 GB full-precision model from Hugging Face and cannot load it — had no dataset, and never found it. It is now also in Settings ▸ Storage, beside the folder sizes and the trash, because “this file is too big” is a disk question. It is the same tool, not a second copy: point it at any full-precision .safetensors on this machine and it writes the ~10 GB version ComfyUI loads directly, next to the original. Same refusals before you click (a file that is already quantized, a LoRA/adapter), same promise that your source file is never modified and never overwritten, same read-back of the result before it reports success. It runs on the CPU, one at a time, so it never takes VRAM from ComfyUI or a training run. One correction landed on the same tab: the Hugging Face storage card counts the fp8 export in what a full-model run needs, but did not name it, so a ~60 GB forecast explained itself as 46 GB — the breakdown now lists every term it adds up.',
+    to: '/settings/storage',
+  },
+  {
     id: '2026-08-04-gallery-lightbox-upscale-improve',
     date: '2026-08-04',
     title: 'Upscale & improve is now in the checkpoint gallery — the screen the result lands on',

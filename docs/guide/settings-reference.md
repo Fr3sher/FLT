@@ -707,7 +707,9 @@ values are editable because they change the *result*, not whether the run fits.
 | **fp8 export** | `dense_fp8_export` | on | Quantize the finished checkpoint on the pod and upload the ~10 GB ComfyUI file. A failed export never fails the run. |
 
 **Quantizing a model you already have.** The same conversion is available by
-hand from the same card — *Quantize an existing model to fp8*. Point it at any
+hand from the same card — *Quantize an existing model to fp8* — and, for a model
+that has nothing to do with a dataset, from **Settings ▸ Storage**, where it is
+documented in full. Point it at any
 full-precision `.safetensors` on this machine and it writes
 `<name>_fp8.safetensors` next to it; the source is never modified, an existing
 output is never silently overwritten, and the result is re-opened and verified
@@ -855,6 +857,40 @@ re-runs that sweep on demand and is safe to press at any time.
 - **Run image archive** — its size, its ceiling, and **Clear archive**. When a training run is launched, a **deduplicated** copy of the images it trains on is kept so that comparing two runs can still *show* an image you have since deleted from its dataset. Copies are **content-addressed**: relaunching an unchanged dataset stores nothing the second time, and only images that were added or re-edited cost anything. Clearing it keeps your runs, their settings and their caption text — you only lose the ability to look at images that are no longer in their dataset. The ceiling is `provenance.archive_max_gb` (see *Config-file-only settings*); past it, nothing more is stored and the compare panel says the picture is unavailable instead of showing a wrong one.
 - **Back up everything** — not on this page but on the **Datasets library**: one button archives every dataset, its **training history** and your settings into a single file (⬇ download or 📂 open folder), and the library's **Import backup** restores it — datasets come back under **Trained**, not "Not trained yet". Tick **Include trained LoRAs** to bundle the (large) trained `.safetensors` too. **API keys and tokens are never included** — re-enter them on the new install. See *Using the app → Back up everything*.
 
+### Quantize an existing model to fp8
+
+A full-precision `.safetensors` is roughly **2.5× the size ComfyUI needs** to
+generate with it. **Quantize an existing model to fp8** takes any full-precision
+model already on this machine — a ~26 GB one downloaded from Hugging Face, a
+checkpoint an earlier full-model run delivered, a large finetune someone shared —
+and writes `<name>_fp8.safetensors` next to it, loadable with the standard *Load
+Diffusion Model* node.
+
+This is the **same tool** as the one on the full-model recipe card (*Training →
+Full-model (dense) recipe*), reachable here **without a dataset**: it was only in
+that card at first, which nobody who simply downloaded a model ever opens.
+
+- **The source is never modified**, and an existing output is never silently
+  overwritten. The result is re-opened and its scaled tensors counted before it
+  reports success — a file that cannot be read back is reported as a failure, not
+  as a smaller model.
+- **It refuses before you click, not after.** Type a path and the plan appears
+  under the field: the source size, the name it will write, the expected size and
+  how many matrices are quantized. A file that is **already quantized** and a
+  **LoRA/adapter** are refused there, with the reason, and the button stays
+  disabled. Reading the plan costs a few kilobytes of file header.
+- **It runs on the CPU**, one conversion at a time app-wide, so it never competes
+  with ComfyUI or a training run for VRAM. It is disk-bound (measured ~1.2 GB/s).
+- **fp8 is a one-way, inference-only export.** A quantized file is refused as a
+  training base, so keep the full-precision one if you may ever want to continue,
+  merge or re-quantize that model. And this is **not** the `quantize` training
+  option, which only shrinks a model in memory while it trains and writes no file.
+
+Move or copy the result into your ComfyUI `models/diffusion_models` folder to use
+it. A model already delivered to a private Hugging Face repo has a third door
+that avoids the round trip entirely — see *☁ Quantize to fp8 in the cloud* on the
+Runs page.
+
 ### Hugging Face storage
 
 Full-model (dense) cloud training does not download its result: each ~26 GB
@@ -872,7 +908,9 @@ page load; **Check storage** is an explicit click.
   repos (models and datasets) — the same number you can read on
   huggingface.co — and compares it with what one dense run needs: one checkpoint
   (sized from what your **past runs actually delivered**, else ~26 GB) × the
-  saves kept, plus a margin.
+  saves kept, plus the **fp8 twin** the run also uploads, plus a margin. The card
+  spells that sum out term by term, in the same words as the launch refusal, so
+  the total and its breakdown can never tell two different stories.
 - **What it cannot know.** The **ceiling**. The published plan table says 100 GB
   of private storage for a free account and 1 TB for PRO, but a real refusal has
   been observed well below the free figure. Everything the card says about
