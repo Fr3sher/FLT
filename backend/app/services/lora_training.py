@@ -917,14 +917,29 @@ def _is_custom_weights(value) -> bool:
 
 
 def assert_trainable_base_file(path) -> dict:
-    """Refuse a pre-quantized inference export as a TRAINING base, at selection.
+    """Refuse a base the trainer CANNOT LOAD — and only that one — at selection.
 
     The community publishes fp8/int8 repacks of every popular base (~10 GB
-    instead of ~26 GB) and they are the files most people already have on disk —
-    they are also the ones that cannot be trained on: ai-toolkit loads them, then
-    dies deep in the first optimizer step, after the dataset has been exported
-    and (in the cloud lane) after a GPU has been rented. Catching it when the
-    file is PICKED costs a few kilobytes of header.
+    instead of ~26 GB) and they are the files most people already have on disk.
+    What makes one unusable is its FORMAT, not its bit width, and the two forms
+    behave differently (measured — see model_integrity's block comment):
+
+    * a STRUCTURED export (ComfyUI scaled fp8 / comfy_quant, int8 repacks, this
+      app's own fp8 twin) ships extra dequantization tensors, and ai-toolkit
+      loads a base with ``load_state_dict(..., strict=True)`` — the load itself
+      raises, immediately. Refused here, so the failure lands when the file is
+      PICKED rather than after the dataset export and (in the cloud lane) after
+      a GPU has been rented, for a few kilobytes of header.
+    * a BARE cast adds no key of its own; the loader up-casts it to the training
+      dtype and nothing in the PACKING stands in the way. Allowed —
+      `model_integrity.base_precision_warning` states what it costs instead. It
+      can still be refused at load for an unrelated reason (a tensor the
+      architecture does not declare); this guard reads the packing only, and its
+      wording is careful not to promise otherwise.
+
+    An earlier version of this docstring claimed the trainer "dies deep in the
+    first optimizer step". It does not, for either form, and that sentence was
+    used to justify scoping decisions elsewhere — hence the detail here.
 
     Returns the report (``checked=False`` = unreadable header → deliberately
     permissive: the integrity validator owns "this file is broken", and refusing
@@ -932,7 +947,7 @@ def assert_trainable_base_file(path) -> dict:
     """
     from . import model_integrity
     report = model_integrity.quantization_report(path)
-    if report.get('quantized'):
+    if not report.get('trainable_as_base', True):
         raise ValueError(model_integrity.QUANT_REFUSAL)
     return report
 

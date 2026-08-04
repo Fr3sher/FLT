@@ -19,12 +19,20 @@ before you caption anything.
 |---|---|---|---|---|---|
 | **Caption style** | Prose sentences | Booru tags | Prose sentences | Prose sentences | Prose sentences |
 | **Images (min → good)** | 12 → 20+ | 20 → 30+ | 15 → 20+ | 15 → 20+ | 15 → 20+ |
-| **Training base** | Z-Image-Turbo (or a converted custom merge) | Your ComfyUI checkpoint (e.g. bigLove) | Krea-2-Raw (default) or Turbo | FLUX.1-dev (gated HF) | FLUX.2-klein-base 4B (default) or 9B (gated HF) |
+| **Training base** | Z-Image-Turbo (or a converted custom merge) | Your ComfyUI checkpoint (e.g. bigLove) | Krea-2-Raw (default), Turbo, or a Krea 2 checkpoint on your disk | FLUX.1-dev (gated HF) | FLUX.2-klein-base 4B (default) or 9B (gated HF) |
 | **Preview quality** | Fast, distilled | Depends on checkpoint | Raw: slow but faithful | High, ~20 steps | Non-distilled, real CFG (~25 steps) |
 | **Best for** | Fast iteration, prose-driven prompting | Booru-native checkpoints, NSFW ecosystems | Highest realism ceiling | The largest LoRA ecosystem, strong prompt fidelity | Modern FLUX.2 stack; 4B trains on mid-range GPUs |
 
 **Krea note:** the default trains on **Krea-2-Raw** — the official recommendation is
 *"train on Raw, validate on Turbo"*. Raw runs are long (hours); that's normal, not stuck.
+The **Base** selector also lists every Krea 2 checkpoint sitting in your ComfyUI
+`unet` / `diffusion_models` folders — a model one of your own full-model runs
+delivered, or a community Krea 2 build — so you can keep training on top of one
+instead of starting from the official weights every time. Entries carry a tag when
+the file is quantized: `· fp8 cast` trains but starts from degraded weights,
+`· packed export` cannot be loaded at all (see *Which quantized checkpoints can be
+trained on* in section 10). Local runs use the file directly; a cloud run first
+pushes it to your private Hugging Face repo, which the panel offers to do.
 
 **FLUX.1 note:** trains on **FLUX.1-dev**, a *gated* Hugging Face model — accept its
 license and set a HF token before the first run (the initial download is ~24 GB). It's
@@ -777,16 +785,53 @@ failed" when nothing failed at all. Use the same settings the run previewed
 with: **CFG ~4 (3.5-5) and 20-30 steps**. The Test Studio now pre-fills those
 automatically when the selected base looks like a Raw / full / fp8 checkpoint.
 
-### Why a quantized checkpoint is refused as a training base
+### Which quantized checkpoints can be trained on, and which cannot
 
-Picking a community fp8/int8 export as **Custom weights** is refused with
-*"This is an inference-only quantized export — training needs the bf16/fp16
-version of this model."* Those files (about 10 GB instead of 26 GB) are repacks
-made for generation: the weights no longer carry the precision a gradient step
-needs. The check reads a few kilobytes of file header — the quantization
-markers and the tensor dtypes — so it costs nothing and fires the moment you
-pick the file, not an hour into a paid run. A file whose header cannot be read
-is let through: the app refuses what it can prove, never what it merely suspects.
+**The format decides, not the number of bits.** "Quantized" covers two different
+files, and only one of them is a wall:
+
+- a **packed export** — ComfyUI's scaled fp8 and its newer `comfy_quant` form,
+  every int8 repack, and the fp8 twin this app itself writes — stores its
+  decompression tables as *extra tensors* (`scaled_fp8`, `<layer>.scale_weight`,
+  `<layer>.comfy_quant`). A trainer loads a base strictly: those tensors are keys
+  it does not know, so **the load fails immediately** — not mid-run, not at the
+  first optimizer step. This one is refused, and the message names both the
+  obstacle and the way out;
+- a **plain fp8 cast** stores the weights in fp8 under the tensor names the
+  full-precision file already had, adding nothing. There is no unknown key for the
+  strict load to trip on: the trainer up-casts it to bf16 as it loads. This one is
+  **allowed**. Several widely used Krea 2 checkpoints — including the Turbo file
+  most people already have — are of this kind, and refusing them closed a path
+  that works.
+
+Allowed is not recommended. Picking a cast base shows a warning with the actual
+numbers (how many of the file's tensors are stored in fp8, and how many
+significand bits that leaves against bf16's 8): the precision the cast dropped
+does not come back, so the run starts from an already-degraded base and the LoRA
+it produces is worse than the same run on the full-precision file, for the same
+GPU time. Train on it if that is the file you have — the point is that you know
+what it costs, not that you should not.
+
+**What this check does not answer.** It reads how the file is *packed*, not
+whether the model family can accept its tensors. A checkpoint can pass here and
+still be refused at load for carrying a tensor the architecture does not declare.
+Real case, found while building this: a widely circulated fp8 conversion of Krea 2
+Turbo carries two extra 6144×6144 tensors under weight-shaped names — its own
+metadata describes them as an embedded image, not weights — and a strict load
+rejects them. That failure also happens in the first seconds, before any GPU time
+is spent, and it comes with the trainer's own message naming the keys.
+
+**The way out of a refusal is a click, not a download.** A full-model run keeps
+its bf16 master next to the fp8 twin, and the Checkpoints panel lists that master
+by name — pick it there. If the only copy you have is a packed export, the
+full-precision version has to come from wherever the model was published; there
+is no way back from a packed file, which is why *Keep the bf16 master* is on by
+default.
+
+The check reads a few kilobytes of file header — the quantization markers and the
+tensor dtypes — so it costs nothing and fires the moment you pick the file, not
+an hour into a paid run. A file whose header cannot be read is let through: the
+app refuses what it can prove, never what it merely suspects.
 
 ---
 

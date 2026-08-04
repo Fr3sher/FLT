@@ -23,7 +23,7 @@ from ..services import face_mask_preview as fmp
 from ..models import FaceDatasetImage
 from ..services import lora_training as lt
 from ..services import zimage_convert as zc
-from ..utils.comfyui import get_zimage_models, get_checkpoint_models
+from ..utils.comfyui import get_zimage_models, get_checkpoint_models, get_krea_models
 from ._common import _map_error
 
 bp = Blueprint('training', __name__, url_prefix='/api')
@@ -728,6 +728,53 @@ def dataset_face_mask_preview_status(dataset_id):
                     **fmp.snapshot(dataset_id, fp)})
 
 
+def _krea_installed_bases():
+    """Every Krea 2 checkpoint on this machine, as TRAINING base entries.
+
+    The Studio and the trainer address a model with two different — and both
+    legitimate — vocabularies, so this is a translation, not a shortcut:
+
+    * the Studio picker speaks ComfyUI-relative loader names (``Krea\\x.safetensors``)
+      because it hands them to a ComfyUI running on this machine;
+    * the trainer reads a base value through ``lt._is_custom_weights`` — an
+      ABSOLUTE path means "custom weights, load this file", a RELATIVE name means
+      "a catalog entry the app installed" (Z-Image merges, the SDXL whitelist,
+      both of which have their own resolver), and ``''`` means the official base.
+      Krea has no relative-name resolver: ``foreign_base_reason`` classifies a
+      relative value on Krea as another family's base and the run silently falls
+      back to the official weights. The trainer can also run on a REMOTE pod that
+      must RECEIVE the file, which is why an absolute local path is the right
+      currency there and a ComfyUI folder name is not.
+
+    So: scan with the Studio's scanner (`get_krea_models` — no fifth scanner),
+    then resolve each name to the concrete file through the same search roots
+    ComfyUI itself uses. A name that resolves to nothing is DROPPED rather than
+    emitted relative: offering a value the trainer would quietly ignore is worse
+    than a shorter list.
+
+    Each entry also carries what the picker must say about the file before it is
+    chosen (`model_integrity.training_base_advisory`): a packed inference export
+    is not trainable and says why, a bare fp8 cast is trainable and says what it
+    costs. Header-only and cached per (path, mtime, size).
+    """
+    from ..services import comfy_model_paths
+    from ..services import model_integrity
+    out = []
+    for rel in (get_krea_models() or []):
+        path = comfy_model_paths.resolve_model_file('diffusion_models', rel)
+        if not path:
+            continue
+        advisory = model_integrity.training_base_advisory(path)
+        out.append({
+            'value': path,
+            'label': os.path.basename(str(rel).replace('\\', '/')).rsplit('.', 1)[0],
+            'trainable': advisory['trainable'],
+            'quantization': advisory['form'],
+            'note': advisory['note'],
+        })
+    return out
+
+
 @bp.get('/dataset/<int:dataset_id>/train/base-info')
 def dataset_train_base_info(dataset_id):
     """Bases entraînables (officielle + merges Z-Image), base/variante choisies du
@@ -751,9 +798,12 @@ def dataset_train_base_info(dataset_id):
         name = c['name'] if isinstance(c, dict) else c
         sdxl_bases.append({'value': name,
                            'label': name.replace('\\', '/').split('/')[-1].rsplit('.', 1)[0]})
-    # Krea 2 : base officielle fixe (pas de checkpoint custom, pas de conversion) ; le
-    # choix Raw/Turbo se fait via le sélecteur `variant`, pas ici → label neutre.
-    krea_bases = [{'value': '', 'label': 'Official - Krea 2'}]
+    # Krea 2 : la base officielle (le choix Raw/Turbo se fait via le sélecteur
+    # `variant`, pas ici → label neutre) PUIS tout checkpoint Krea 2 installé sur
+    # cette machine — un modèle que l'utilisateur vient d'entraîner, un build
+    # communautaire. Même scanner que le Studio (get_krea_models), pas un
+    # cinquième : leur divergence a déjà produit un bug.
+    krea_bases = [{'value': '', 'label': 'Official - Krea 2'}] + _krea_installed_bases()
     # Flux : base officielle fixe (FLUX.1-dev, gated HF) — pas de checkpoint custom ni
     # de conversion. Entrée explicite pour que l'UI n'aille PAS retomber sur les bases
     # Z-Image (fallback `bases_by_type[type] || bases`) quand la famille est Flux.

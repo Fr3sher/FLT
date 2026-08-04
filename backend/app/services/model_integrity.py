@@ -73,13 +73,15 @@ _open = open
 
 _lock = threading.Lock()
 _cache: dict = {}   # (abspath, mtime_ns, size) -> (verdict_code, reason_or_None)
+_quant_cache: dict = {}   # same key -> quantization_report() payload
 
 
 def clear_cache() -> None:
-    """Drop the structural-verdict cache (test hygiene; production self-invalidates
-    on the (path, mtime, size) key)."""
+    """Drop the structural-verdict and quantization caches (test hygiene;
+    production self-invalidates on the (path, mtime, size) key)."""
     with _lock:
         _cache.clear()
+        _quant_cache.clear()
 
 
 def _human_size(n: int) -> str:
@@ -189,15 +191,54 @@ def _structural(path: str, size: int):
 # --- pre-quantized inference exports ------------------------------------------
 # A second question the same header answers: is this file an INFERENCE-ONLY
 # quantized export? Community fp8/int8 repacks of a base model (~10 GB instead of
-# ~26 GB) are what people download to generate with — and they are unusable as a
-# TRAINING base: the gradients have nowhere to go, and ai-toolkit fails deep
-# inside the run, after the dataset upload and the GPU rental. The signals below
-# are all header-level, so the check costs the same few KB as the integrity one.
+# ~26 GB) are what people download to generate with. The signals below are all
+# header-level, so the check costs the same few KB as the integrity one.
+#
+# "Quantized" hides TWO different files, and only one of them is a wall. What
+# decides is the FORMAT — the set of tensor NAMES — never the bit width:
+#
+#   * a STRUCTURED export (ComfyUI's scaled fp8 and its modern `comfy_quant`
+#     form, every int8 repack, this app's own fp8 export) carries its
+#     dequantization tables as EXTRA TENSORS: a top-level `scaled_fp8` marker,
+#     a `<layer>.scale_weight` / `.weight_scale` / `.comfy_quant` sibling per
+#     quantized matrix. A trainer loads a base with
+#     ``load_state_dict(state_dict, strict=True)``, so those unknown keys make
+#     the LOAD fail — immediately, before a step runs, not "deep in the first
+#     optimizer step". Verified against the installed ai-toolkit Krea 2 loader
+#     (``extensions_built_in/diffusion_models/krea2``), which casts the state
+#     dict and then loads it strictly.
+#   * a BARE cast stores the payload as float8/int8 under the tensor names the
+#     full-precision file already had, adding nothing. There is no unknown key
+#     for the strict load to trip on, and the loader's cast step up-casts every
+#     floating-point tensor to the training dtype. Measured on a real Krea 2
+#     Turbo fp8 build: 266 F8_E4M3 out of 432 tensors, no marker, no scale
+#     sibling, and 430 of its keys are the bf16 checkpoint's own keys with only
+#     the dtype changed on 264 of them.
+#
+# Same conclusion outside this repo: musubi-tuner trains from an `fp8_e4m3fn`
+# base (``--fp8_base`` without ``--fp8_scaled``) and documents that a scaled fp8
+# checkpoint cannot be re-used by a trainer without converting it back.
+#
+# So the refusal is scoped to the structured form. The bare form is ALLOWED and
+# WARNED about, with numbers (see `base_precision_warning`): the precision the
+# cast dropped never comes back, and that is a cost to state, not a reason to
+# forbid.
+#
+# SCOPE, stated because it was overclaimed once: this answers "is the file
+# packed?", not "will this architecture accept these tensors?". The same measured
+# Turbo conversion carries two extra 6144x6144 tensors under weight-shaped names
+# (`last.down.weight`, `last.up.weight`) which its OWN metadata describes as an
+# embedded image, not weights; ai-toolkit's Krea 2 final layer (norm / linear /
+# modulation) declares nothing of the sort, so a strict load rejects them for a
+# reason that has nothing to do with quantization. Nothing here can decide that:
+# it would mean modelling every architecture's key set. The messages therefore
+# say what was checked (the packing) and never promise that the run will start.
 
-# Decisive marker keys. `_quantization_metadata` (ComfyUI's modern per-layer JSON)
-# and `.comfy_quant` (its tensor form) exist for no other reason; `scaled_fp8` is
-# the legacy marker; a `.scale_weight` / `.weight_scale` sibling is the per-tensor
-# dequantization scale. Any ONE of them is proof.
+# Decisive marker keys — the STRUCTURED form. `_quantization_metadata` (ComfyUI's
+# modern per-layer JSON) and `.comfy_quant` (its tensor form) exist for no other
+# reason; `scaled_fp8` is the legacy marker; a `.scale_weight` / `.weight_scale`
+# sibling is the per-tensor dequantization scale. Any ONE of them is proof, and
+# every one of them is a KEY the trainer's strict load does not know.
 _QUANT_METADATA_KEY = '_quantization_metadata'
 _QUANT_MARKER_KEYS = ('scaled_fp8',)
 _QUANT_KEY_SUFFIXES = ('.comfy_quant', '.scale_weight', '.weight_scale',
@@ -207,8 +248,24 @@ _QUANT_KEY_SUFFIXES = ('.comfy_quant', '.scale_weight', '.weight_scale',
 _QUANT_DTYPES = ('F8_E4M3', 'F8_E5M2', 'F8_E4M3FN', 'I8', 'U8', 'F4', 'I4')
 _TRAINABLE_DTYPES = ('BF16', 'F16', 'F32', 'F64')
 
-QUANT_REFUSAL = ('This is an inference-only quantized export — training needs '
-                 'the bf16/fp16 version of this model.')
+# The `form` values of a quantization report. '' = not quantized at all (or the
+# header could not be read, which is reported separately by `checked`).
+FORM_STRUCTURED = 'structured'
+FORM_BARE_CAST = 'bare_cast'
+
+# Significand bits, implicit leading bit included — how much of each weight
+# survived the cast. Only used to put a NUMBER on the warning; a dtype absent
+# from this table simply loses that half of the sentence.
+_SIGNIFICAND_BITS = {'BF16': 8, 'F16': 11, 'F32': 24,
+                     'F8_E4M3': 4, 'F8_E4M3FN': 4, 'F8_E5M2': 3, 'F4': 2}
+
+QUANT_REFUSAL = (
+    'This is a packed inference export: it stores its dequantization tables as '
+    'extra tensors (scaled_fp8 / .scale_weight / .comfy_quant) that a trainer '
+    'cannot load, so the load fails before the first step — the format is the '
+    'obstacle, not the file size. Training needs the bf16/fp16 version of this '
+    'model: a full-model run keeps that master next to its fp8 twin, and the '
+    'Checkpoints panel lists it by name.')
 
 
 def _header_index(path: str):
@@ -241,13 +298,53 @@ def _header_index(path: str):
 
 
 def quantization_report(path) -> dict:
-    """``{quantized, signals, dtype_counts, checked}`` for one weights file.
+    """``{quantized, form, trainable_as_base, signals, dtype_counts, checked}``
+    for one weights file.
+
+    ``quantized`` stays the broad "this file is not full precision" answer — it
+    is what the fp8 exporter reads to refuse quantizing something twice.
+    ``form`` and ``trainable_as_base`` are the training question, which is a
+    different one: ``FORM_STRUCTURED`` carries loader-breaking extra keys and is
+    NOT trainable, ``FORM_BARE_CAST`` is a plain low-precision payload the
+    trainer up-casts, so it IS trainable (degraded — see
+    `base_precision_warning`). See the block comment above for the measurements.
 
     ``checked=False`` means the header could not be read as a tensor index — the
     caller must treat that as "unknown" and let the file through: refusing a base
     nobody could inspect would be worse than the failure it prevents.
+
+    Cached on (abspath, mtime_ns, size) like the structural verdict: a deployed
+    model never mutates in place, and the training-base picker asks this of every
+    listed checkpoint each time the panel opens.
     """
-    out = {'quantized': False, 'signals': [], 'dtype_counts': {},
+    key = None
+    try:
+        st = os.stat(str(path))
+        key = (os.path.abspath(str(path)), st.st_mtime_ns, st.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        with _lock:
+            hit = _quant_cache.get(key)
+        if hit is not None:
+            return _copy_report(hit)
+    out = _quantization_report_uncached(path)
+    if key is not None:
+        with _lock:
+            _quant_cache[key] = out
+    return _copy_report(out)
+
+
+def _copy_report(report: dict) -> dict:
+    """A caller-owned copy: the report is cached, and its list/dict members would
+    otherwise be shared with whoever mutated the previous one."""
+    return {**report, 'signals': list(report['signals']),
+            'dtype_counts': dict(report['dtype_counts'])}
+
+
+def _quantization_report_uncached(path) -> dict:
+    out = {'quantized': False, 'form': '', 'trainable_as_base': True,
+           'signals': [], 'dtype_counts': {},
            'checked': False, 'filename': os.path.basename(str(path))}
     parsed = _header_index(str(path))
     if parsed is None:
@@ -264,6 +361,10 @@ def quantization_report(path) -> dict:
             suffix = '.' + name.rsplit('.', 1)[-1]
             if suffix not in signals:
                 signals.append(suffix)
+    # Every signal collected so far is an EXTRA KEY (or the metadata that
+    # announces them): that, and only that, is what a strict state-dict load
+    # cannot survive.
+    structured = bool(signals)
     counts = {}
     for dtype in index.values():
         counts[dtype] = counts.get(dtype, 0) + 1
@@ -277,7 +378,61 @@ def quantization_report(path) -> dict:
     if quant_tensors and quant_tensors > trainable_tensors:
         signals.append('majority_quantized_dtypes')
     out['quantized'] = bool(signals)
+    if structured:
+        out['form'] = FORM_STRUCTURED
+        out['trainable_as_base'] = False
+    elif out['quantized']:
+        out['form'] = FORM_BARE_CAST
     return out
+
+
+def base_precision_warning(report) -> str | None:
+    """The quantified caution for a base that trains but starts degraded, or None.
+
+    Returned for the BARE form only: a structured export is refused outright, and
+    a bf16/fp16 file has nothing to warn about. It is deliberately a COUNT and a
+    bit width rather than an adjective — "266 of 432 tensors, 4 significand bits
+    against bf16's 8" is checkable against the file; "lower quality" is not.
+    """
+    if not report or report.get('form') != FORM_BARE_CAST:
+        return None
+    counts = report.get('dtype_counts') or {}
+    total = sum(counts.values())
+    quantized = {d: n for d, n in counts.items() if d in _QUANT_DTYPES}
+    n_quant = sum(quantized.values())
+    if not total or not n_quant:
+        return None
+    dominant = max(quantized, key=lambda d: quantized[d])
+    share = round(100 * n_quant / total)
+    bits = _SIGNIFICAND_BITS.get(dominant)
+    precision = f", {bits} significand bits per weight against bf16's 8" if bits else ''
+    name = report.get('filename') or 'This file'
+    return (f'{name} is a quantized cast: {n_quant} of its {total} tensors '
+            f'({share}%) are stored as {dominant}{precision}. This kind of file '
+            'is trainable — the trainer up-casts it as it loads, and it carries '
+            'none of the decompression tensors that make a packed export '
+            'unloadable — but the precision the cast dropped never comes back, '
+            'so the run starts from an already-degraded base. Train on it if '
+            'that is the file you have; the bf16/fp16 version of the same model '
+            'gives a better LoRA for the same GPU time. (This check reads the '
+            'packing, not the architecture: a checkpoint can still be refused '
+            'at load for carrying tensors this model family does not have.)')
+
+
+def training_base_advisory(path) -> dict:
+    """``{trainable, level, note, form}`` for a weights file offered as a base.
+
+    One place decides, so the picker's badge, the selection refusal and the
+    pre-launch guard can never drift apart: ``level`` is ``'error'`` (refused,
+    ``note`` is `QUANT_REFUSAL`), ``'warning'`` (allowed, ``note`` is the
+    quantified caution) or ``''`` (nothing to say)."""
+    report = quantization_report(path)
+    if not report.get('trainable_as_base', True):
+        return {'trainable': False, 'level': 'error', 'note': QUANT_REFUSAL,
+                'form': report.get('form') or ''}
+    note = base_precision_warning(report)
+    return {'trainable': True, 'level': 'warning' if note else '', 'note': note,
+            'form': report.get('form') or ''}
 
 
 def _cached_structural(path: str, st: os.stat_result):

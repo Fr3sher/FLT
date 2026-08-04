@@ -55,6 +55,14 @@ export const WHATS_NEW = [
       'The Guide and the app both told you that training a full model on Krea 2 Turbo was mechanically impossible and would deliver a broken file. That was overstated, and we are correcting it. On the distilled models anyone has actually measured, full training leaves a perfectly valid checkpoint that simply stops being fast — and for Krea 2 nobody has published that measurement at all. Full-model runs still target Raw, and nothing about how they behave has changed; the refusal now says what it really is — a lane we have not tested — and the Guide explains what is known, including the published route people use to get the speed back afterwards.',
   },
   {
+    id: '2026-08-04-train-krea-on-a-checkpoint-you-already-have',
+    date: '2026-08-04',
+    title: 'Train Krea 2 on a model you already have — including the one your last run delivered',
+    blurb:
+      'The Krea 2 base selector offered exactly one thing: the official base. So a full model you had just trained, or any Krea 2 build sitting in your ComfyUI folders, could not be used as the starting point of the next run — while a Z-Image merge could. It now lists every Krea 2 checkpoint on your disk, the yaml-declared folders included, and hands the real file to the trainer (local runs load it directly; a cloud run offers to push it to your private repo first). Each entry also states its format before you pick it: an ordinary fp8 file trains — the trainer up-casts it as it loads — and now says with numbers how much precision the cast dropped, instead of being refused outright as it used to be. Only a packed ComfyUI export is still refused, because it carries decompression tables a trainer literally cannot load; the message says that, and points at the bf16 master your run kept next to it.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-08-04-canvas-says-which-run-trained-a-full-model',
     date: '2026-08-04',
     title: 'On the board, a run that trained the whole model now says so',

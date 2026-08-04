@@ -1186,11 +1186,28 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'fp8-deliver-one-click',
       text: 'New: “✨ Quantize to fp8” on a delivered full model does the whole thing — it fetches the master from your private Hugging Face repo, converts it, and leaves the fp8 file in ComfyUI’s own models folder. It tells you which checkpoint it takes and where the file lands before it starts, refuses if the disk is too small, and can be stopped and resumed.' } },
+  // Two questions behind one word. The refusal topic keeps its id (in-app help
+  // badges and bookmarked links resolve against it), but the title and keywords
+  // now cover BOTH answers: a packed export is refused, a plain fp8 cast is
+  // allowed and merely costly.
   { id: 'training.quantized_base_refused', kind: 'setting',
-    title: 'Why a quantized checkpoint is refused as a training base',
+    title: 'Which quantized checkpoints can be trained on, and which cannot',
     keywords: ['quantized', 'quantised', 'fp8', 'int8', 'gguf', 'custom weights',
-      'base', 'refused', 'inference only', 'training', 'bf16', 'fp16', 'error'],
+      'base', 'refused', 'inference only', 'training', 'bf16', 'fp16', 'error',
+      'scaled fp8', 'scale_weight', 'comfy_quant', 'packed export', 'fp8 cast',
+      'cannot be loaded', 'strict', 'state dict', 'degraded', 'precision'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' } },
+  // The Krea base LIST is a different question from the quantization verdict a
+  // listed entry may carry ("where are my models?" vs "why is this one greyed
+  // out?"), and it is searched with the family name, so it gets its own topic.
+  { id: 'training.krea_installed_bases', kind: 'setting',
+    title: 'Training Krea 2 on a checkpoint you already have',
+    keywords: ['krea', 'krea 2', 'base', 'base model', 'checkpoint', 'unet',
+      'diffusion_models', 'my model', 'installed', 'continue training', 'merge',
+      'community model', 'full model', 'not listed', 'missing from the list',
+      'custom weights', 'absolute path'],
+    guide: { chapter: 'dataset-guide', anchor: '1-pick-your-model-family-first' },
     app: { route: '/datasets?section=training' } },
   // Dual captions is a per-run Advanced training option (not a global Setting),
   // so it points at the dataset guide's dedicated section rather than

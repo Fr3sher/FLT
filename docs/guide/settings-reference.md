@@ -622,6 +622,39 @@ A base that provably belongs to another family (found on datasets created before
 this change) is reported as such in the panel, is not used, and is not offered for
 upload to Hugging Face by the cloud dialog.
 
+### Krea 2: the checkpoints on your disk are listed as bases
+
+The **Base** dropdown under *LoRA type = Krea 2* offers the official base **and**
+every Krea 2 checkpoint found in your ComfyUI `unet` / `diffusion_models` folders,
+including the roots declared in `extra_model_paths.yaml` — the same scan the Test
+Studio uses. That is how a full model one of your own runs delivered, or a
+community Krea 2 build, becomes something you can keep training on.
+
+The value stored is the **absolute path** of the file, not the ComfyUI folder name
+the Studio uses, because the trainer identifies a custom base by its being an
+absolute path and a cloud pod has to receive the actual file. A checkpoint the app
+can list but cannot resolve to a file on disk is left out of the dropdown rather
+than offered as a name a run would ignore.
+
+Each entry says what its format costs before you pick it:
+
+- **no tag** — full precision, nothing to report;
+- **`· fp8 cast`** — the weights are stored in fp8 under the tensor names a
+  full-precision file already had, with nothing extra. The trainer up-casts it as
+  it loads, and selecting it shows how many of the file's tensors are quantized
+  and how many significand bits that leaves. The lost precision does not come
+  back. The tag reads the *packing*, not the architecture: a file can be tagged
+  this way and still be refused at load for carrying a tensor the model family
+  does not declare;
+- **`· packed export`** — a ComfyUI scaled-fp8 / `comfy_quant` / int8 repack. It
+  carries decompression tables as extra tensors that a trainer's strict load
+  rejects, so the load fails outright. Selecting it is refused, and training is
+  blocked until another base is picked. Use the bf16/fp16 master instead — a
+  full-model run keeps it next to its fp8 twin and the Checkpoints panel lists it.
+
+With no ComfyUI folder configured the list falls back to the official base alone,
+and says so.
+
 ### Concept face masking
 
 Used **only** by Concept datasets that switched **Mask faces** on in *Advanced
