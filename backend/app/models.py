@@ -1233,6 +1233,12 @@ class VideoClip(db.Model):
     # JSON field would make "show me what the old model wrote" a full-table
     # parse instead of a filter.
     caption_model = db.Column(String(120), nullable=True)
+    # And WHICH prompt style produced it. Same reasoning as the model, and the
+    # measurement says it matters more: the prompt turned out to dominate how
+    # plainly a caption describes its footage, so two styles do not write
+    # comparable captions any more than two checkpoints do. NULL for a human's
+    # caption and for a failed one.
+    caption_style = db.Column(String(16), nullable=True)
     # Triage decision — the same three words as the image lane.
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)

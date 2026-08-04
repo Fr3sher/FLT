@@ -365,7 +365,11 @@ def video_bank_caption(bank_id):
     data = request.get_json(silent=True) or {}
     return _start(bank_id, svc.start_caption, _app(), LOCAL_USER, bank_id,
                   recaption=bool(data.get('recaption')),
-                  include_edited=bool(data.get('include_edited')))
+                  include_edited=bool(data.get('include_edited')),
+                  # Per-run prompt style; absent = the configured default. An
+                  # unknown value falls back rather than failing — and falls back
+                  # to `standard`, never to the permissive one.
+                  style=data.get('style'))
 
 
 @bp.patch('/video-bank/<int:bank_id>/clip/<int:clip_id>/caption')

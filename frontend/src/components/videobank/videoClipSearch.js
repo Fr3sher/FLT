@@ -239,6 +239,17 @@ export function captionModelNote(info) {
   return `Captions are written by ${model}.`
 }
 
+/** "Plain — also names explicit content", for the style currently chosen.
+ *
+ * The key alone ("plain") is not a choice anyone can weigh, and the server ships
+ * the label and the hint precisely so the two sides cannot describe the same
+ * option differently. '' for a key the server does not offer. */
+export function captionStyleLabel(styles, key) {
+  const found = (styles || []).find((s) => s.key === key)
+  if (!found) return ''
+  return found.hint ? `${found.label} — ${found.hint}` : found.label
+}
+
 /** The promotion's load-bearing warning. An empty sidecar is not a neutral
  * default: ai-toolkit trains it as an EMPTY PROMPT and says nothing anywhere. */
 export function uncaptionedWarning(composition) {

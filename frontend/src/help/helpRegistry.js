@@ -624,6 +624,14 @@ const TOPICS = [
      'qwen', 'vlm', 'caption model'],
     '/video-bank', 'using-the-app',
     'describe-your-shots-and-search-what-happens-in-them'),
+  // The symptom is "my captions are vague" — nobody searches for "prompt style".
+  action('video-caption-wording', 'Caption wording: standard or plain',
+    ['caption wording', 'caption style', 'plain captions', 'vague captions',
+     'captions are evasive', 'captions describe around', 'euphemism',
+     'explicit captions', 'name what is shown', 'video_caption.style',
+     'which prompt', 'caption prompt'],
+    '/video-bank', 'using-the-app',
+    'describe-your-shots-and-search-what-happens-in-them'),
   // Two symptoms bring people here and neither mentions "audio metrics": a
   // trained model that came out silent, and an audio cut that flags nothing.
   // The second is almost always a bank measured before sound was looked at.

@@ -322,7 +322,13 @@ DEFAULTS = {
     # away too — with nothing in the output to reveal it. Empty = the shipped
     # default, so an install that sets nothing captions exactly as before.
     # Any checkpoint of the same architecture works; see settings-reference.
-    'video_caption': {'model': ''},
+    # style: which PROMPT writes the captions — 'standard' (default, the shipped
+    #   wording) or 'plain', which grants explicit permission to name what is on
+    #   screen. Measured to matter MORE than the checkpoint: asked the standard
+    #   way, even an uncensored model describes around explicit footage, and the
+    #   base model asked plainly outperformed it. A caption that talks around its
+    #   subject teaches the trained model to look away. Empty = 'standard'.
+    'video_caption': {'model': '', 'style': ''},
     # Watermark inpainting (simple-lama-inpainting, extra ML). Dedicated key so a
     # user can override it, but defaults empty -> reuse the same ML interpreter as
     # rembg/insightface (masks.python) then sys.executable. Never imported in-process.

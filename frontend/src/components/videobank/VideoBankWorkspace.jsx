@@ -23,7 +23,7 @@ import VideoSourceList from './VideoSourceList'
 import VideoClipGrid from './VideoClipGrid'
 import VideoClipLightbox from './VideoClipLightbox'
 import VideoClipSearchBox from './VideoClipSearchBox'
-import { matchLine } from './videoClipSearch'
+import { matchLine, captionStyleLabel } from './videoClipSearch'
 import PromoteVideoDialog from './PromoteVideoDialog'
 
 const PAGE = 120
@@ -62,6 +62,11 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   // where the player opens), and a triage action has to be able to update the
   // ranked rows in place — a search result that stops reflecting a Keep the user
   // just pressed is worse than no search at all.
+  // 🗣 Which prompt the NEXT caption run uses. Per-run, seeded from the config
+  // default the server reports: captioning one bank plainly must not silently
+  // re-point every other bank, and the measurement says the prompt matters more
+  // than the checkpoint.
+  const [captionStyle, setCaptionStyle] = useState(null)
   const [search, setSearch] = useState(null)
   const [searching, setSearching] = useState(false)
   // The last job we announced, so a finished pass is toasted ONCE instead of on
@@ -147,7 +152,8 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
     const blocked = passBlockedBy(capability, pass)
     if (blocked) { toast.warning(blocked.why); return }
     try {
-      await postJson(videoPassUrl(bankId, pass), body)
+      await postJson(videoPassUrl(bankId, pass),
+        pass === 'caption' ? { ...body, style: captionStyle || undefined } : body)
       loadBank(false)
     } catch (e) {
       // 409 carries busy_kind — name the pass that owns the bank rather than
@@ -399,6 +405,29 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
             onFilter={setSourceId} onCut={cutByHand} />
         </div>
       </details>
+
+      {/* 🗣 The caption pass's own option, next to the button that runs it.
+          The prompt decides how plainly a caption describes its footage — more
+          than the checkpoint does — so it is a choice, not a constant. */}
+      {(counts.clips || 0) > 0 && (bank?.caption_model?.styles || []).length > 1 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <label htmlFor="video-caption-style" className="font-medium text-content">
+            Caption wording
+          </label>
+          <select id="video-caption-style"
+            value={captionStyle || bank?.caption_model?.style || 'standard'}
+            onChange={(e) => setCaptionStyle(e.target.value)}
+            className="rounded-md border border-border bg-surface-raised px-2 py-1 text-content">
+            {(bank?.caption_model?.styles || []).map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
+          </select>
+          <span className="min-w-0 flex-1 text-content-subtle">
+            {captionStyleLabel(bank?.caption_model?.styles,
+              captionStyle || bank?.caption_model?.style || 'standard')}
+          </span>
+        </div>
+      )}
 
       {/* 🔎 Above the gallery, below the passes: it is a way of LOOKING at the
           shots, not a pass — and what it changes is the grid underneath it. */}

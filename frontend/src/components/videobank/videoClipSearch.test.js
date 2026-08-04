@@ -6,7 +6,7 @@ import {
   frameLabelPhrase, matchLine, seekFragment, playFromSecond,
   VIDEO_CLIP_LIMITS, limitsSentence,
   searchBasisNote, captionMatchNote, captionStateNote, uncaptionedWarning,
-  captionModelNote,
+  captionModelNote, captionStyleLabel,
 } from './videoClipSearch.js'
 
 // ---- what stops a search before it starts ------------------------------------
@@ -219,4 +219,17 @@ test('a non-default model is flagged as a choice someone made', () => {
 test('no info means no invented sentence', () => {
   assert.equal(captionModelNote(null), '')
   assert.equal(captionModelNote({}), '')
+})
+
+test('the caption style is named in words a user can weigh', () => {
+  // "plain" alone is not a choice anybody can make. The label has to say what
+  // changes, without the panel becoming explicit itself.
+  const styles = [
+    { key: 'standard', label: 'Standard', hint: 'Describes the action.' },
+    { key: 'plain', label: 'Plain', hint: 'Also names explicit content.' },
+  ]
+  assert.match(captionStyleLabel(styles, 'plain'), /Plain/)
+  assert.match(captionStyleLabel(styles, 'plain'), /explicit/i)
+  assert.equal(captionStyleLabel(styles, 'nope'), '')
+  assert.equal(captionStyleLabel(null, 'plain'), '')
 })

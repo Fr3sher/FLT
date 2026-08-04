@@ -188,12 +188,83 @@ _PROMPT = (
     'the frames or the video itself. Write it as a caption, not as a report.'
 )
 
+# ── The second prompt, and the measurement that produced it ──────────────────
+# The model was made configurable first, on the theory that the checkpoint
+# decided how plainly a caption described its footage. An A/B on real material
+# said otherwise:
+#
+#   base model    + this standard prompt           -> evasive, circled the subject
+#   uncensored 8B + this standard prompt           -> barely better, hid behind
+#                                                     the camera
+#   uncensored 8B + the permission prompt below    -> named things precisely
+#   BASE model    + the permission prompt below    -> named things precisely too,
+#                                                     with the best action writing
+#
+# The dominant lock is the PROMPT. A captioner describes what it has been given
+# permission to describe, and the prompt above never granted it — so the base
+# model, asked properly, outperformed an uncensored one asked the old way.
+#
+# TWO CLAUSES CARRY THE DIFFERENCE and both are pinned by tests: name what is
+# visible and what occurs, and do NOT substitute the two words the measurement
+# caught it hiding behind. A later tidy-up of this wording would quietly restore
+# the euphemism, which is a dataset defect rather than a style regression: a
+# caption that talks around its footage teaches the trained model to look away,
+# and the output reads perfectly well either way.
+_PROMPT_PLAIN = (
+    'Describe what happens in this video clip, in one or two plain sentences. '
+    'Lead with the ACTION and how it unfolds — who or what moves, and how — then '
+    'the setting and the look. Include camera movement when there is any (pans, '
+    'tilts, push in, handheld). When nudity or sexual content is present, name it '
+    'plainly and specifically — state what body parts are visible and what acts '
+    'occur; never euphemize, never write "intimate" or "sensual" in place of what '
+    'is actually shown. Do not begin with any preamble, do not list objects as an '
+    'inventory, and do not mention the frames or the video itself.'
+)
 
-def caption_prompt():
-    """The instruction handed to the model. A function rather than a constant so
-    a per-bank or per-target variant can arrive later without every caller
-    changing."""
-    return _PROMPT
+# The styles a caption run can be asked for. `standard` is first and is the
+# default: an install that sets nothing captions exactly as it did before.
+# Labels are what the UI shows, so they live here rather than being invented
+# twice on two sides of the API.
+CAPTION_STYLES = {
+    'standard': {
+        'label': 'Standard',
+        'hint': 'Describes the action, the setting and the camera.',
+        'prompt': _PROMPT,
+    },
+    'plain': {
+        'label': 'Plain',
+        'hint': 'Also names explicit content instead of describing around it. '
+                'Measurably better on adult footage, where the standard prompt '
+                'produces captions that are about something other than the shot.',
+        'prompt': _PROMPT_PLAIN,
+    },
+}
+
+DEFAULT_STYLE = 'standard'
+
+
+def configured_style():
+    """The caption style to use unless a run asks for another. Anything unknown
+    or blank lands on the default — a typo in a config file must not take the
+    pass down, and must certainly not grant a permission nobody asked for."""
+    from .. import config as cfg
+    style = (cfg.get('video_caption.style') or '').strip().lower()
+    return style if style in CAPTION_STYLES else DEFAULT_STYLE
+
+
+def style_choices():
+    """[{key, label, hint}] for the picker, in declared order — default first."""
+    return [{'key': k, 'label': v['label'], 'hint': v['hint']}
+            for k, v in CAPTION_STYLES.items()]
+
+
+def caption_prompt(style=None):
+    """The instruction handed to the model, for `style` (default when unknown).
+
+    A function rather than a constant, as it always was — the per-variant future
+    it was written for is this one."""
+    key = (style or DEFAULT_STYLE)
+    return CAPTION_STYLES.get(key, CAPTION_STYLES[DEFAULT_STYLE])['prompt']
 
 
 # Preambles a VLM reaches for even when told not to. Anchored at the start and
@@ -263,7 +334,8 @@ def pending_clips(bank_id, recaption=False, include_edited=False):
     return q.order_by(VideoClip.id.asc())
 
 
-def caption_one(bank, clip, *, worker, scratch, relpaths, model=None):
+def caption_one(bank, clip, *, worker, scratch, relpaths, model=None,
+                style=None):
     """Caption ONE shot and commit it. Returns 'ok' or 'error'.
 
     Never raises: a bank is captioned in bulk and a model that refuses clip 200
@@ -277,7 +349,7 @@ def caption_one(bank, clip, *, worker, scratch, relpaths, model=None):
         if path:
             times = caption_frame_times(clip.start_s, clip.end_s)
             frames = _write_caption_frames(path, times, scratch, f'clip_{clip.id}')
-            caption = clean_caption(_caption_frames(frames, caption_prompt(),
+            caption = clean_caption(_caption_frames(frames, caption_prompt(style),
                                                     worker=worker))
     except Exception as e:  # noqa: BLE001 — one shot never sinks the pass
         logger.warning('caption: clip %s failed: %s', clip.id, e)
@@ -294,15 +366,19 @@ def caption_one(bank, clip, *, worker, scratch, relpaths, model=None):
         # Stamped with the caption it belongs to, in the same transaction. A
         # bank captioned across a setting change stays readable row by row.
         clip.caption_model = model or None
+        clip.caption_style = style or None
     else:
+        # Nothing wrote it, so nothing is claimed — neither a checkpoint nor a
+        # style produced that emptiness.
         clip.caption_state = 'error'
-        clip.caption_model = None      # nothing wrote it, so nothing is claimed
+        clip.caption_model = None
+        clip.caption_style = None
     db.session.commit()
     return 'ok' if caption else 'error'
 
 
 def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None,
-                 should_stop=None, use_gpu=False, model=None):
+                 should_stop=None, use_gpu=False, model=None, style=None):
     """Caption every shot of a bank that has none yet.
 
     `should_stop` is polled at each clip BOUNDARY — a graceful cancel, the same
@@ -311,11 +387,13 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
     from .video_caption_worker import CaptionWorker
     bank = db.session.get(VideoBank, bank_id)
     if bank is None:
-        return {'captioned': 0, 'failed': 0, 'model': model or configured_model()}
+        return {'captioned': 0, 'failed': 0, 'model': model or configured_model(),
+                'style': style or configured_style()}
     model = model or configured_model()
+    style = style if style in CAPTION_STYLES else configured_style()
     rows = pending_clips(bank_id, recaption, include_edited).all()
     if not rows:
-        return {'captioned': 0, 'failed': 0, 'model': model}
+        return {'captioned': 0, 'failed': 0, 'model': model, 'style': style}
     relpaths = dict(db.session.query(VideoSource.id, VideoSource.relpath)
                     .filter_by(bank_id=bank_id).all())
     scratch = tempfile.mkdtemp(prefix=f'lds-vcap-{bank_id}-')
@@ -326,7 +404,8 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
                 if should_stop is not None and should_stop():
                     break
                 if caption_one(bank, clip, worker=worker, scratch=scratch,
-                               relpaths=relpaths, model=model) == 'ok':
+                               relpaths=relpaths, model=model,
+                               style=style) == 'ok':
                     captioned += 1
                 else:
                     failed += 1
@@ -336,7 +415,8 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
         shutil.rmtree(scratch, ignore_errors=True)
     # The model rides back with the counts: two checkpoints do not write
     # comparable captions, so "470 captioned" is only half an answer.
-    return {'captioned': captioned, 'failed': failed, 'model': model}
+    return {'captioned': captioned, 'failed': failed, 'model': model,
+            'style': style}
 
 
 def set_caption(user_id, bank_id, clip_id, text):
@@ -354,7 +434,8 @@ def set_caption(user_id, bank_id, clip_id, text):
     caption = str(text or '').strip()
     clip.caption = caption or None
     clip.caption_state = 'edited' if caption else None
-    # A human wrote it, so no checkpoint is credited with it.
+    # A human wrote it, so neither a checkpoint nor a prompt style is credited.
     clip.caption_model = None
+    clip.caption_style = None
     db.session.commit()
     return _clip_row_for(bank_id, clip)

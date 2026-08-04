@@ -1716,6 +1716,17 @@ bulk re-run will never overwrite one you wrote. Clearing it puts the shot back i
 the queue. Regenerating over your own words is possible, but you have to ask for
 it by name.
 
+**You can change how plainly they are written.** Next to the button there is a
+**Caption wording** choice: *Standard* (the shipped wording) or *Plain*, which
+gives the model explicit permission to name what is on screen instead of
+describing around it. On adult footage that difference is not cosmetic — a
+captioner asked the standard way produces captions that are *about something
+other than the shot*, and a LoRA trained on those learns the evasion. It was
+measured rather than assumed: the wording turned out to matter **more than the
+model**, and the stock model asked plainly beat an uncensored one asked the old
+way. Every caption records which wording produced it, and the choice is
+remembered as `video_caption.style` if you set it in your config.
+
 **You can change which model writes them.** The pass ships with one checkpoint
 and uses it unless you say otherwise (`video_caption.model` — see *Settings
 reference*). It is worth changing when the default **talks around** what your

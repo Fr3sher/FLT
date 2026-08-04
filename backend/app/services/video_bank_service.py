@@ -466,7 +466,11 @@ def caption_model_info() -> dict:
     from . import video_caption
     model = video_caption.configured_model()
     return {'model': model, 'cached': video_caption.model_is_cached(model),
-            'is_default': model == video_caption.DEFAULT_MODEL}
+            'is_default': model == video_caption.DEFAULT_MODEL,
+            # The prompt style matters MORE than the checkpoint on real footage
+            # (see video_caption's measurement), so the picker rides here too.
+            'style': video_caption.configured_style(),
+            'styles': video_caption.style_choices()}
 
 
 def _capability() -> dict:
@@ -1053,7 +1057,8 @@ def _caption_available():
     return unavailable_reason()
 
 
-def start_caption(app, user_id, bank_id, recaption=False, include_edited=False):
+def start_caption(app, user_id, bank_id, recaption=False, include_edited=False,
+                  style=None):
     """🗣 Wave 5's pass: what HAPPENS in each shot, in prose.
 
     The caption is the text the hybrid search matches AND the training prompt the
@@ -1077,10 +1082,10 @@ def start_caption(app, user_id, bank_id, recaption=False, include_edited=False):
             raise RuntimeError(busy)
     return bank_jobs.start(app, job_key(bank_id), 'caption',
                            _caption_job(bank_id, bool(recaption),
-                                        bool(include_edited), use_gpu))
+                                        bool(include_edited), use_gpu, style))
 
 
-def _caption_job(bank_id, recaption, include_edited, use_gpu):
+def _caption_job(bank_id, recaption, include_edited, use_gpu, style=None):
     def run(job):
         from contextlib import nullcontext
 
@@ -1089,10 +1094,15 @@ def _caption_job(bank_id, recaption, include_edited, use_gpu):
         total = video_caption.pending_clips(bank_id, recaption,
                                             include_edited).count()
         model = video_caption.configured_model()
+        # A per-run choice with the config key as its default: captioning ONE
+        # bank plainly must not silently re-point every other bank.
+        chosen_style = (style if style in video_caption.CAPTION_STYLES
+                        else video_caption.configured_style())
         # WHICH model, in the line the user is already watching: two checkpoints
         # do not write comparable captions, so "captioning shots" alone leaves a
         # bank nobody can reason about after the setting changes.
-        detail = f'captioning shots with {model} ({"GPU" if use_gpu else "CPU"})'
+        detail = (f'captioning shots with {model} / {chosen_style} prompt '
+                  f'({"GPU" if use_gpu else "CPU"})')
         # And whether it is even here yet. The download is allowed — blocking it
         # would ship a model setting that cannot point anywhere new — but never
         # in silence: a pass sitting at 0/470 while gigabytes cross someone's
@@ -1106,10 +1116,11 @@ def _caption_job(bank_id, recaption, include_edited, use_gpu):
         with window:
             out = video_caption.run_captions(
                 bank_id, recaption, include_edited=include_edited,
-                use_gpu=use_gpu, model=model,
+                use_gpu=use_gpu, model=model, style=chosen_style,
                 on_clip=lambda: bank_jobs.bump(job),
                 should_stop=lambda: bank_jobs.cancelled(job))
-        detail = f'done — {out["captioned"]} shot(s) captioned by {out["model"]}'
+        detail = (f'done — {out["captioned"]} shot(s) captioned by '
+                  f'{out["model"]} ({out["style"]} prompt)')
         if out['failed']:
             detail += f', {out["failed"]} failed'
         bank_jobs.progress(job, detail=detail)

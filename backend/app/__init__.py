@@ -322,6 +322,7 @@ _SCHEMA_ADDITIONS = (
     # Which checkpoint wrote the caption. Additive: rows captioned before the
     # model became configurable read NULL, which is honest — nobody recorded it.
     ('video_clip', 'caption_model', 'VARCHAR(120)'),
+    ('video_clip', 'caption_style', 'VARCHAR(16)'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is
