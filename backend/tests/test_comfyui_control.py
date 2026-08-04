@@ -229,7 +229,7 @@ def test_start_route_rejects_client_options_before_the_service(client, monkeypat
 
 @pytest.mark.parametrize('address', [
     '127.0.0.1', '::1', '::ffff:127.0.0.1',
-    '192.168.1.20', '100.102.48.85',
+    '192.0.2.20', '100.64.0.1',
 ])
 def test_start_route_accepts_clients_allowed_by_the_global_access_guard(
         client, monkeypatch, address):

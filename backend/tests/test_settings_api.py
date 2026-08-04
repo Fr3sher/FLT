@@ -919,12 +919,12 @@ def test_is_cgnat_classifies_tailscale_range():
     """Only 100.64.0.0/10 (Tailscale's CGNAT block) counts — a real LAN IP or a
     100.x address outside the block must not be mistaken for a tailnet address."""
     from app.routes import settings as sroutes
-    assert sroutes._is_cgnat('100.87.119.32') is True     # in-block (real tailnet IP)
+    assert sroutes._is_cgnat('100.100.100.100') is True   # in-block (Tailscale's own)
     assert sroutes._is_cgnat('100.64.0.1') is True        # lower edge
     assert sroutes._is_cgnat('100.127.255.254') is True   # upper edge
     assert sroutes._is_cgnat('100.63.255.255') is False   # just below the block
     assert sroutes._is_cgnat('100.128.0.1') is False      # just above the block
-    assert sroutes._is_cgnat('192.168.1.162') is False    # a real LAN IP
+    assert sroutes._is_cgnat('192.0.2.10') is False       # outside the block
     assert sroutes._is_cgnat('') is False
     assert sroutes._is_cgnat(None) is False
 

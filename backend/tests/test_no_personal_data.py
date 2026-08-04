@@ -39,7 +39,16 @@ _PATTERNS = {
     'an email address': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'),
     'an OpenAI-shaped key': re.compile(r'\bsk-[A-Za-z0-9]{20,}'),
     'a bearer token': re.compile(r'\bBearer\s+[A-Za-z0-9._-]{20,}'),
+    # CLAUDE.md forbids IPs, but nothing enforced it: two addresses from a real
+    # tailnet reached main and fifteen published releases, one of them under a
+    # comment that said "real tailnet IP" out loud. A tailnet address is a stable
+    # node identity, which is exactly what makes it worth catching — ordinary
+    # RFC1918 LAN addresses stay allowed, they identify nobody.
+    'a tailnet address': re.compile(r'\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b'),
 }
+# The block's edges and Tailscale's own documented service address are the only
+# in-block literals a test may name. Anything else is somebody's machine.
+_ALLOWED_TAILNET = ('100.64.0.0', '100.64.0.1', '100.127.255.254', '100.100.100.100')
 # Windows paths are only personal when the account name is one. A documented
 # placeholder is what we WANT contributors to write.
 _PLACEHOLDER_USERS = ('user', 'users', 'username', 'youruser', 'yourname',
@@ -134,6 +143,8 @@ def test_no_machine_path_email_or_token_in_tracked_files():
                     account = re.split(r'[\\/]+', found)[-1]
                     if account.lower() in _PLACEHOLDER_USERS:
                         continue
+                if label == 'a tailnet address' and found in _ALLOWED_TAILNET:
+                    continue
                 line = body[:m.start()].count('\n') + 1
                 hits.append(f'{rel}:{line} — {label}: {found[:60]}')
     assert not hits, (
