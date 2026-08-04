@@ -199,3 +199,57 @@ def test_a_dry_run_on_an_empty_bank_reports_zero_not_an_error():
 
 def _frame(luma=0.5, sharp=100.0, motion=0.003):
     return {'luma': luma, 'sharp': sharp, 'motion': motion}
+
+
+# --- the ambassador frame is chosen under constraints --------------------------
+
+def test_a_flash_frame_cannot_become_the_ambassador():
+    """The sharpness SCORE uses p90 so one lucky frame cannot vouch for a clip —
+    but the frame CHOICE used a raw argmax, and a single overexposed flash frame
+    (huge local contrast, useless as a thumbnail or an embedding) would win it.
+    The sharpest frame is now picked among frames with sane exposure."""
+    frames = [_frame(luma=0.5, sharp=100.0)] * 20
+    frames[7] = {'luma': 0.99, 'sharp': 900.0, 'motion': 0.003}   # flash
+    frames[12] = {'luma': 0.5, 'sharp': 400.0, 'motion': 0.003}   # real winner
+
+    assert vm.summarise(frames, fps=10)['sharpest_frame_s'] == pytest.approx(1.2)
+
+
+def test_a_near_black_frame_cannot_become_the_ambassador():
+    """Dissolves to black have violent local contrast on their edges; the frame is
+    still useless to look at. Same constraint, dark side."""
+    frames = [_frame(luma=0.5, sharp=100.0)] * 20
+    frames[3] = {'luma': 0.02, 'sharp': 900.0, 'motion': 0.003}
+    frames[15] = {'luma': 0.5, 'sharp': 300.0, 'motion': 0.003}
+
+    assert vm.summarise(frames, fps=10)['sharpest_frame_s'] == pytest.approx(1.5)
+
+
+def test_an_all_bad_clip_still_gets_an_ambassador():
+    """When every frame violates the constraints (a clip that is all flash, or all
+    black), the plain argmax returns rather than nothing: a bad thumbnail beats no
+    thumbnail, and the quality flags already tell the story."""
+    frames = [{'luma': 0.99, 'sharp': float(i), 'motion': 0.003} for i in range(10)]
+
+    assert vm.summarise(frames, fps=10)['sharpest_frame_s'] == pytest.approx(0.9)
+
+
+# --- the first frame is measured on its own ------------------------------------
+
+def test_the_first_frame_sharpness_is_stored_separately():
+    """For image-to-video targets the FIRST frame is the conditioning image, and
+    nobody chooses it — it is whatever the cut starts on. A gorgeous clip whose
+    first frame is blurred is a BAD i2v clip: the model would learn to animate
+    from a degraded image, the opposite of real use. The measure is free — the
+    Laplacian of frame 0 was already computed."""
+    frames = [_frame(sharp=12.5)] + [_frame(sharp=500.0)] * 20
+
+    assert vm.summarise(frames, fps=25)['first_frame_sharpness'] == pytest.approx(12.5)
+
+
+def test_a_soft_start_is_flagged_only_when_a_floor_is_set():
+    scores = {'motion_mean': 0.004, 'luma_min': 0.4, 'sharpness_p90': 500.0,
+              'freeze_ratio': 0.0, 'first_frame_sharpness': 10.0}
+
+    assert 'soft_start' in vm.verdicts(scores, {'first_frame_floor': 50.0})
+    assert vm.verdicts(scores, {}) == set()

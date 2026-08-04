@@ -36,6 +36,13 @@ A cut belongs to the bank being worked on, not to a constant.
 # The value is a floor on numerical noise, not a judgement about movement.
 _STILL_EPSILON = 1e-5
 
+# Exposure band a frame must sit in to represent its clip (thumbnail, embedding).
+# Outside it, violent local contrast comes from a flash or a dissolve edge, not
+# from real detail. Deliberately loose — this guards against degenerate frames,
+# it does not judge the clip (luma_min does that).
+_LUMA_SANE_LOW = 0.06
+_LUMA_SANE_HIGH = 0.97
+
 
 def percentile(values, p):
     """Linear-interpolation percentile. None for an empty list — never 0.0, which
@@ -64,12 +71,21 @@ def summarise(frames, fps):
         return {'metrics_state': 'unreadable', 'motion_mean': None,
                 'motion_p95': None, 'luma_min': None, 'luma_mean': None,
                 'sharpness_p90': None, 'freeze_ratio': None,
-                'sharpest_frame_s': None}
+                'sharpest_frame_s': None, 'first_frame_sharpness': None}
 
     lumas = [f['luma'] for f in frames]
     sharps = [f['sharp'] for f in frames]
     motions = [f['motion'] for f in frames]
-    sharpest = max(range(len(sharps)), key=sharps.__getitem__)
+    # The ambassador frame: sharpest AMONG frames with sane exposure. The score
+    # uses p90 so one lucky frame cannot vouch for the clip, but the frame CHOICE
+    # is an argmax — and an overexposed flash or a dissolve-to-black edge carries
+    # huge local contrast while being useless to look at or to embed. When every
+    # frame violates the constraint (a clip that is all flash), the plain argmax
+    # returns: a bad thumbnail beats no thumbnail, and the flags tell the story.
+    candidates = [i for i in range(len(frames))
+                  if _LUMA_SANE_LOW <= lumas[i] <= _LUMA_SANE_HIGH]
+    pool = candidates or range(len(frames))
+    sharpest = max(pool, key=sharps.__getitem__)
 
     return {
         'metrics_state': 'ok',
@@ -82,6 +98,11 @@ def summarise(frames, fps):
         # "Is there real sharpness anywhere", not "is it sharp on average".
         'sharpness_p90': percentile(sharps, 0.90),
         'freeze_ratio': sum(1 for m in motions if m <= _STILL_EPSILON) / len(motions),
+        # Frame 0 measured on its own: for image-to-video targets it IS the
+        # conditioning image, and nobody chooses it — it is whatever the cut
+        # starts on. A gorgeous clip with a blurred first frame is a bad i2v
+        # clip; the number was already computed, storing it is free.
+        'first_frame_sharpness': sharps[0],
         # Free, since every frame was measured anyway, and a better thumbnail than
         # the middle frame — a shot boundary is where a cut just happened, so the
         # middle is a guess while this is a measurement.
@@ -126,6 +147,13 @@ def verdicts(scores, thresholds):
     sharp_floor = thresholds.get('sharpness_floor')
     if sharp is not None and sharp_floor is not None and sharp < sharp_floor:
         flags.add('soft')
+
+    first = scores.get('first_frame_sharpness')
+    first_floor = thresholds.get('first_frame_floor')
+    if first is not None and first_floor is not None and first < first_floor:
+        # Advisory like every flag, and mostly meaningful when the target is
+        # image-to-video — the first frame is that lane's conditioning image.
+        flags.add('soft_start')
 
     return flags
 
