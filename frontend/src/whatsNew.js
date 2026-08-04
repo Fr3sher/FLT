@@ -3196,6 +3196,25 @@ export const WHATS_NEW = [
       'Setup now repairs a mixed Pillow install on boot and keeps incompatible ML extras out of the Flask environment — fewer cryptic image errors the first time you run the app.',
     // No `to`: a reliability fix with nothing to click.
   },
+  // Appended rather than prepended ON PURPOSE: several waves are editing the
+  // head of this array at the same time and ordering is by date desc then id
+  // desc, so position here changes nothing and a tail entry is a conflict less.
+  {
+    id: '2026-08-04-seedvr2-settings-say-which-lane-your-target-takes',
+    date: '2026-08-04',
+    title: 'SeedVR2 settings tell you whether your target will be tiled',
+    blurb:
+      'Tiling starts strictly above the crossover, and the crossover is 1.5× your tile size — so it lands exactly on the round numbers people type. Ask for 1536 px with the default 1024 px tile (or 768 px with a 512 px tile) and the upscale ran whole, with nothing anywhere saying why: no tiles, no warning, no line in the panel. The SeedVR2 card now names the lane your configured target will actually take, and when it sits on the crossover it says so and gives you the three ways to change it.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-04-fp8-delivery-names-the-running-job-before-the-disk',
+    date: '2026-08-04',
+    title: 'A busy fp8 conversion says so, instead of blaming your disk',
+    blurb:
+      'Starting a second fp8 conversion while one was already running could answer “not enough disk space” — true, but not the reason it refused, and it sent you deleting gigabytes for a job the disk was never blocking. The refusal now names what is actually in the way: something is already being prepared, wait for it or stop it. It also answers instantly, because it no longer reads the Hugging Face repository just to say no.',
+    to: '/datasets?section=checkpoints',
+  },
 ];
 
 // ── Ordering ────────────────────────────────────────────────────────────────

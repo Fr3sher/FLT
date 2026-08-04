@@ -414,23 +414,47 @@ def cancel() -> bool:
 
 # --- the job ----------------------------------------------------------------------
 
+def _refuse_if_busy():
+    """Raise when this machine is already converting something.
+
+    One sentence, one place: ``start`` asks it twice (once before planning for
+    the message the user should get, once under the lock for the exclusion) and
+    two copies of the wording would drift apart."""
+    if status().get('status') in ('downloading', 'quantizing'):
+        raise DeliveryError('a model is already being prepared — wait for it to finish')
+    if fp8_quantize.status().get('status') == 'running':
+        raise DeliveryError('a quantization is already running — wait for it to finish')
+
+
 def start(app, *, repo_id=None, filename=None, path=None, family=None,
           keep_master=True, destination_dir=None, _files=None, _download=None) -> dict:
     """Validate, then run the chain in a daemon thread. Refuses on the click.
 
     Nothing is refused here that ``plan`` would have accepted — the panel's
     button is disabled by the very same verdict it shows.
+
+    ORDER MATTERS, and this is why "a job is already running" is asked FIRST. It
+    is a condition that is true RIGHT NOW and that the user can act on in one
+    gesture (wait, or stop it), while "not enough disk space" is a FORECAST about
+    work that could not have started anyway. Announcing the forecast first sent
+    people off to free gigabytes for a run that was never blocked on disk.
+    Cheaper too: ``plan`` lists a Hugging Face repository and probes interpreters,
+    and none of that has to be paid for to say "something else is already
+    running". ``plan`` is read-only, so nothing downstream depends on having
+    called it before the refusal.
     """
+    _refuse_if_busy()
     info = plan(repo_id=repo_id, filename=filename, path=path, family=family,
                 keep_master=keep_master, destination_dir=destination_dir,
                 _files=_files)
     if not info['enough_space']:
         raise DeliveryError(info['space_error'])
     with _lock:
-        if status().get('status') in ('downloading', 'quantizing'):
-            raise DeliveryError('a model is already being prepared — wait for it to finish')
-        if fp8_quantize.status().get('status') == 'running':
-            raise DeliveryError('a quantization is already running — wait for it to finish')
+        # Asked AGAIN, and this one is the real mutual exclusion: ``plan`` above
+        # can spend seconds on the network, so the answer from before it is a
+        # message-ordering courtesy, not a guarantee. Only a check that shares
+        # the lock with ``_set`` below can keep two clicks from both starting.
+        _refuse_if_busy()
         _cancel.clear()
         _set('downloading' if info['download_bytes'] else 'quantizing', info,
              downloaded_bytes=0, download_total_bytes=info['download_bytes'],
