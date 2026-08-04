@@ -261,6 +261,9 @@ _WATERMARK_PKG = 'simple-lama-inpainting'
 # These are NOT in requirements-ml.txt (which the monolithic ml_extras installs
 # into the Flask venv); they live here and install only through the bank_scoring
 # action, same isolation as the watermark torch install.
+# These are NOT all in requirements-ml.txt, so most install unpinned; the ones that
+# ARE (transformers, for Qwen3-VL) get their floor from there via _requirement_spec
+# — see _bank_scoring_specs().
 _BANK_SCORING_PKGS = ('open_clip_torch', 'transformers', 'timm', 'safetensors',
                       'huggingface_hub')
 
@@ -323,6 +326,12 @@ _CAPABILITY_PACKAGES = {
     #               here so the anti-orphan test sees its package covered.
     'video': ('imageio-ffmpeg', 'av'),
     'shot_detect': ('transnetv2-pytorch',),
+    #   bank_scoring  has its own worker and its own package tuple
+    #                 (_BANK_SCORING_PKGS); only the ONE package whose version
+    #                 floor matters is declared in requirements-ml.txt, so it is
+    #                 named here too — otherwise the anti-orphan test below sees
+    #                 an unowned line. Same bookkeeping-only role as shot_detect.
+    'bank_scoring': ('transformers',),
 }
 # The capabilities served by the GENERIC per-capability pip worker
 # (_run_ml_capability). watermark_inpaint keeps its own worker, so it's excluded.
@@ -496,6 +505,17 @@ def _ml_requirement_specs(*, exclude=frozenset(), requirements=_ML_REQUIREMENTS)
     return out
 
 
+def _bank_scoring_specs() -> list:
+    """_BANK_SCORING_PKGS with every version floor requirements-ml.txt knows about
+    applied (bare name for the rest). The floor is what makes re-clicking ✨ Score a
+    REPAIR: `pip install transformers` is a no-op against an already-installed older
+    transformers, while `pip install "transformers>=4.57"` upgrades it — and 4.57 is
+    where `Qwen3VLForConditionalGeneration` (infer/video_caption_infer.py:103, the
+    video-caption worker) first exists. Callers building a SHELL string must quote
+    each spec; '>=' unquoted is redirection."""
+    return [_requirement_spec(p) for p in _BANK_SCORING_PKGS]
+
+
 def _app_pillow_spec() -> str:
     """The Pillow pin from requirements.txt (e.g. 'Pillow==12.2.0') — the version the
     Flask venv MUST keep. Appended as an explicit requirement to any install that
@@ -588,7 +608,7 @@ def manual_command(action) -> str:
     if action == 'bank_scoring':
         # The dedicated managed venv (auto-built) + CPU torch + the CLIP/NSFW stack.
         python = cfg.get('bank_scoring.python') or _bank_scoring_env_python()
-        pkgs = ' '.join(_BANK_SCORING_PKGS)
+        pkgs = ' '.join(f'"{s}"' for s in _bank_scoring_specs())
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
     if action == 'shot_detect':
@@ -1505,7 +1525,8 @@ def _run_bank_scoring(action) -> int:
             'bank_scoring.python points at an environment this app did not create,',
             'so nothing was installed into it — borrowed environments are checked,',
             'never changed. To add the scoring packages there yourself, run:',
-            f'  "{python}" -m pip install {" ".join(_BANK_SCORING_PKGS)}',
+            f'  "{python}" -m pip install '
+            + ' '.join(f'"{s}"' for s in _bank_scoring_specs()),
             'Or clear bank_scoring.python (⚡ picker ▸ "Back to the app default")',
             'and click Install again — the app then builds its own environment.',
         ):
@@ -1519,8 +1540,9 @@ def _run_bank_scoring(action) -> int:
     if rc != 0:
         _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
-    _append(action, f"installing {', '.join(_BANK_SCORING_PKGS)}")
-    rc = _run_pip(action, [python, '-m', 'pip', 'install', *_BANK_SCORING_PKGS])
+    specs = _bank_scoring_specs()
+    _append(action, f"installing {', '.join(specs)}")
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', *specs])
     if rc == 0 and not _verify_bank_scoring_import(action, python):
         return 1
     return rc

@@ -1582,3 +1582,71 @@ def test_run_bank_scoring_still_installs_into_the_managed_venv(app, monkeypatch)
     clip_cmd = next(c for c in seen if any('open_clip' in str(p) for p in c))
     assert clip_cmd[0] == managed
     assert saved == managed
+
+
+# --- The transformers floor the video-caption worker depends on ------------------
+# infer/video_caption_infer.py:103 imports Qwen3VLForConditionalGeneration, a class
+# transformers only grew in 4.57.0 (huggingface/transformers PR #40795, shipped in
+# the v4.57.0 release; the Qwen/Qwen3-VL-4B-Instruct card says `transformers==4.57.0`).
+# Installing the bank-scoring step with a BARE `pip install transformers` is a no-op
+# on a machine that already carries an older transformers ("already satisfied"), so
+# the caption worker dies on ImportError and re-clicking the step never repairs it.
+# Carrying the floor in the pip command is what turns that click into a repair.
+
+def test_requirements_ml_floors_transformers_for_qwen3vl():
+    """The floor lives in requirements-ml.txt (one place for every version), and it
+    is at least 4.57 — below that `Qwen3VLForConditionalGeneration` does not exist."""
+    from app import setup_installer
+    spec = setup_installer._requirement_spec('transformers')
+    assert spec != 'transformers', 'no floor in requirements-ml.txt — bare name fallback'
+    floor = spec.split('>=', 1)[1].split(',')[0].strip()
+    major, minor = (int(p) for p in floor.split('.')[:2])
+    assert (major, minor) >= (4, 57), f'floor {floor} predates Qwen3-VL support'
+
+
+def test_bank_scoring_manual_command_carries_the_transformers_floor(app):
+    """The copy-paste command shows the floor, QUOTED — an unquoted '>=' is shell
+    redirection and would write a file named '=4.57' instead of installing."""
+    from app import setup_installer
+    with app.app_context():
+        cmd = setup_installer.manual_command('bank_scoring')
+        spec = setup_installer._requirement_spec('transformers')
+    assert f'"{spec}"' in cmd
+    assert ' transformers ' not in cmd      # never the bare, no-op name
+
+
+def test_run_bank_scoring_installs_the_floored_transformers(app, monkeypatch):
+    """The REAL pip call carries the floor too, so re-clicking the step UPGRADES an
+    old transformers instead of reporting 'already satisfied' and changing nothing."""
+    from app import setup_installer, config
+    seen = []
+    monkeypatch.setattr(setup_installer, '_find_base_python', lambda a: r'C:\pybase\python.exe')
+    monkeypatch.setattr(setup_installer.subprocess, 'Popen', _fake_venv_popen(seen))
+    with app.app_context():
+        config.save_config({})
+        setup_installer._runs['bank_scoring'] = setup_installer._new_run()
+        rc = setup_installer._run_bank_scoring('bank_scoring')
+        spec = setup_installer._requirement_spec('transformers')
+    assert rc == 0
+    pkg_cmd = next(c for c in seen if any('open_clip' in str(p) for p in c))
+    assert spec in pkg_cmd
+    assert 'transformers' not in pkg_cmd     # the bare name must be GONE, not added to
+
+
+def test_borrowed_env_refusal_hands_over_the_floored_command(app, monkeypatch, tmp_path):
+    """The install-it-yourself line for a borrowed interpreter must carry the floor
+    as well — a user pasting it would otherwise reproduce the silent no-op."""
+    from app import setup_installer, config
+    borrowed = tmp_path / 'someone-elses-venv' / 'python.exe'
+    borrowed.parent.mkdir(parents=True)
+    borrowed.write_text('', encoding='utf-8')
+    with app.app_context():
+        config.save_config({'bank_scoring': {'python': str(borrowed)}})
+        setup_installer._runs['bank_scoring'] = setup_installer._new_run()
+        rc = setup_installer._run_bank_scoring('bank_scoring')
+        spec = setup_installer._requirement_spec('transformers')
+    assert rc == 1
+    log = setup_installer._runs['bank_scoring']['log']
+    # QUOTED, like every other hand-over command: pasted into a shell, a bare
+    # transformers>=4.57 would redirect into a file named '=4.57'.
+    assert any(f'"{spec}"' in l for l in log)
