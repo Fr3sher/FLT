@@ -775,6 +775,48 @@ def _krea_installed_bases():
     return out
 
 
+@bp.get('/train/base-file-advisory')
+def train_base_file_advisory():
+    """The verdict a LISTED base already carries, for a path the user TYPED.
+
+    « Custom weights… » is a free text field, and until now the only thing that
+    ever read the file was the save and the launch. So the one base nobody can
+    pick from a list — a checkpoint downloaded five minutes ago, the exact case
+    the field exists for — was also the only one whose "this is a packed export,
+    the trainer cannot load it" arrived after the dataset had been exported and,
+    on the cloud lane, after a GPU had been rented. Same answer, same wording,
+    same `model_integrity.training_base_advisory` — just at typing time.
+
+    Read-only and header-only, and it never echoes the path back: the reply
+    carries the BASENAME, because these payloads end up in pasted diagnostics.
+    `status` is `ok` / `missing` / `not_a_model`; a file it cannot inspect is
+    reported as such and never as a refusal — refusing a base nobody could read
+    would be worse than the failure it prevents.
+    """
+    from ..services import model_integrity
+    raw = (request.args.get('path') or '').strip().strip('"')
+    if not raw:
+        return jsonify({'status': 'missing', 'trainable': True, 'note': None}), 200
+    name = os.path.basename(raw.replace('\\', '/'))
+    if not name.lower().endswith(('.safetensors', '.sft')):
+        # .gguf is loadable by ComfyUI and NOT by a trainer; anything else is not
+        # a single-file checkpoint at all. Both are "not a base", said the same way.
+        return jsonify({'status': 'not_a_model', 'filename': name,
+                        'trainable': False, 'level': 'error', 'quantization': '',
+                        'note': f'{name} is not a .safetensors checkpoint — training '
+                                f'needs a single-file model in that format.'}), 200
+    if not os.path.isfile(raw):
+        return jsonify({'status': 'missing', 'filename': name, 'trainable': False,
+                        'level': 'error', 'quantization': '',
+                        'note': f'{name} is not at that path.'}), 200
+    advisory = model_integrity.training_base_advisory(raw)
+    return jsonify({'status': 'ok', 'filename': name,
+                    'trainable': advisory['trainable'],
+                    'level': advisory['level'],
+                    'quantization': advisory['form'],
+                    'note': advisory['note']}), 200
+
+
 @bp.get('/dataset/<int:dataset_id>/train/base-info')
 def dataset_train_base_info(dataset_id):
     """Bases entraînables (officielle + merges Z-Image), base/variante choisies du

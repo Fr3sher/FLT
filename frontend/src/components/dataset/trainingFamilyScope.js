@@ -55,12 +55,26 @@ export function isCustomWeightsBase(base, bases) {
  * no round trip. `level: 'error'` is a base the trainer cannot load — the same
  * refusal the save and the launch raise, shown BEFORE either is attempted;
  * `level: 'warning'` is a base that trains from degraded weights. */
-export function baseSelectionNote(bases, base) {
+export function baseSelectionNote(bases, base, typed = null) {
   const value = String(base || '');
   if (!value) return null;
   const hit = (bases || []).find((b) => String(b?.value ?? '') === value);
-  if (!hit || !hit.note) return null;
-  return { level: hit.trainable === false ? 'error' : 'warning', text: hit.note };
+  if (hit) return hit.note ? { level: hit.trainable === false ? 'error' : 'warning', text: hit.note } : null;
+  return typedBaseNote(typed, value);
+}
+
+/** The same verdict for a path TYPED into « Custom weights… », or null.
+ *
+ * `typed.for` is the path the server was ASKED about, and it is compared here
+ * rather than trusted. A field like this fires a request per keystroke-pause:
+ * without that comparison a slow answer for `C:\a.safetensors` lands while the
+ * box already reads `C:\b.safetensors`, and the panel confidently refuses a file
+ * nobody ever asked it about. The freshest answer for THIS path, or nothing. */
+export function typedBaseNote(typed, base) {
+  const value = String(base || '');
+  if (!typed || !value || String(typed.for || '') !== value) return null;
+  if (!typed.note) return null;
+  return { level: typed.trainable === false ? 'error' : 'warning', text: typed.note };
 }
 
 /** The short tag appended to a base option, so the dropdown itself says which

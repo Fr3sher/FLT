@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
   cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
+  typedBaseNote,
 } from './trainingFamilyScope.js';
 
 const panel = fs.readFileSync(new URL('./TrainingPanel.jsx', import.meta.url), 'utf8');
@@ -120,6 +121,51 @@ test('a packed export is an error, an fp8 cast a warning, a clean file nothing',
   // A typed path the server never annotated says nothing rather than guessing.
   assert.equal(baseSelectionNote(KREA_CATALOG, 'D:\\downloads\\x.safetensors'), null);
   assert.equal(baseSelectionNote(null, 'anything'), null);
+});
+
+// --- a path TYPED into « Custom weights… » gets the same verdict --------------
+// It is the one base that cannot be picked from a list — a checkpoint downloaded
+// five minutes ago — and it was the only one whose "the trainer cannot load
+// this" arrived after the dataset export and, on the cloud lane, after a GPU had
+// been rented.
+
+const TYPED = 'D:\\downloads\\fresh_krea.safetensors';
+const PACKED_ANSWER = {
+  for: TYPED, status: 'ok', filename: 'fresh_krea.safetensors',
+  trainable: false, level: 'error', quantization: 'structured',
+  note: 'This is a packed inference export…',
+};
+
+test('a typed path shows the same verdict a listed one would', () => {
+  const note = baseSelectionNote(KREA_CATALOG, TYPED, PACKED_ANSWER);
+  assert.equal(note.level, 'error');
+  assert.equal(note.text, PACKED_ANSWER.note);
+  // …and a clean typed file still says nothing, like a clean listed one.
+  assert.equal(baseSelectionNote(KREA_CATALOG, TYPED,
+    { ...PACKED_ANSWER, trainable: true, level: '', note: null }), null);
+});
+
+test('an answer about ANOTHER path never annotates this one', () => {
+  // The mechanism, asserted rather than assumed: the field fires one request per
+  // typing pause, so a slow answer for the previous path lands while the box
+  // already reads the next one. Without the `for` comparison the panel refuses a
+  // file nobody asked it about — and `baseBlocksTrain` disables the Train button
+  // on the strength of it.
+  const stale = { ...PACKED_ANSWER, for: 'D:\\downloads\\OTHER.safetensors' };
+  assert.equal(baseSelectionNote(KREA_CATALOG, TYPED, stale), null);
+  assert.equal(typedBaseNote(stale, TYPED), null);
+  assert.equal(typedBaseNote(PACKED_ANSWER, TYPED).level, 'error');
+  assert.equal(typedBaseNote(null, TYPED), null);
+  assert.equal(typedBaseNote(PACKED_ANSWER, ''), null);
+});
+
+test('a listed base is never overruled by a typed answer', () => {
+  // The catalog is authoritative for what it lists; the typed lookup only fills
+  // the gap. An answer that happens to carry a listed value must not turn a
+  // clean catalog entry into a refusal.
+  const clean = KREA_CATALOG[1].value;
+  const hostile = { for: clean, trainable: false, note: 'nonsense' };
+  assert.equal(baseSelectionNote(KREA_CATALOG, clean, hostile), null);
 });
 
 test('the note carries the server sentence, not a client-side paraphrase', () => {

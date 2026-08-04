@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
-import { getCsrfToken } from '../../api/fetchClient';
+import { apiFetch, getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
 import { animeFamilyNote } from './animeFamilyNote.js';
@@ -61,6 +61,7 @@ import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
   cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
 } from './trainingFamilyScope.js';
+
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
@@ -837,7 +838,28 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // export the trainer cannot load ('error'), or a low-precision cast that
   // trains from degraded weights ('warning'). Computed from the list the server
   // already annotated, so switching entries answers with no round trip.
-  const baseNote = baseSelectionNote(currentBases, base);
+  //
+  // A path TYPED into « Custom weights… » is in no list, so it had no verdict
+  // until the save or the launch read it — the one base you cannot pick from a
+  // dropdown was also the only one whose refusal arrived after the dataset had
+  // been exported and, on the cloud lane, after a GPU had been rented. It is
+  // asked for here instead, once the typing settles.
+  const [typedBaseAdvisory, setTypedBaseAdvisory] = useState(null);
+  useEffect(() => {
+    const value = String(base || '');
+    if (!customBase || !looksAbsoluteBase(value)) { setTypedBaseAdvisory(null); return undefined; }
+    let alive = true;
+    // 500 ms: long enough that a typed path is not one request per character,
+    // short enough to land before the hand reaches the Train button.
+    const timer = setTimeout(() => {
+      apiFetch(`/api/train/base-file-advisory?path=${encodeURIComponent(value)}`)
+        // `for` is what makes a late answer harmless — see typedBaseNote.
+        .then((d) => { if (alive) setTypedBaseAdvisory({ ...d, for: value }); })
+        .catch(() => { if (alive) setTypedBaseAdvisory(null); });
+    }, 500);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [base, customBase]);
+  const baseNote = baseSelectionNote(currentBases, base, typedBaseAdvisory);
   const baseNotTrainable = baseNote?.level === 'error';
   // Bloque l'entraînement si la base custom Z-Image n'est pas encore convertie,
   // si la base choisie ne peut pas être chargée du tout, ou si SDXL sans base

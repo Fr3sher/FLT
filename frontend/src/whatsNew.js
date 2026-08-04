@@ -54,6 +54,12 @@ export const WHATS_NEW = [
     blurb:
       'Turning a phone to landscape — or anything else that reshaped the page — folded “Merge a LoRA into a base checkpoint” shut and threw away the checkpoint path and the LoRA rows you had just typed, with nothing to undo. The panel it lives in is rebuilt when the layout moves, and it was taking the form down with it. What you type is now kept: the tool stays open where you left it and comes back filled in, after a resize, a rotation or a reload alike. It is cleared the moment a merge actually starts, so a form you already sent never comes back looking like unfinished work.',
     to: '/datasets?section=checkpoints',
+    id: '2026-08-04-typed-base-path-is-checked-while-you-type',
+    date: '2026-08-04',
+    title: 'A base you type by hand is checked before you launch, not after',
+    blurb:
+      'Pick a base from the dropdown and the panel tells you immediately if it is a packed export the trainer cannot load, or an fp8 cast that trains from already-degraded weights. Type the path yourself under “Custom weights…” and, until now, you got that same verdict only when you saved or launched — which on the cloud lane meant after the dataset had been exported and a GPU had been rented. The typed path is now read the moment you stop typing: same check, same sentence, same red box, and the Train button stays disabled if the file cannot be loaded at all. A path that is not there, or that is not a .safetensors, says so instead of letting the run find out.',
+    to: '/datasets?section=training',
   },
   {
     id: '2026-08-04-quantizing-no-longer-fails-on-the-paging-file',

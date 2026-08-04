@@ -319,3 +319,70 @@ def test_selecting_a_listed_scaled_fp8_base_is_refused_with_the_reason(
     from app.services import face_dataset_service as svc
     with app.app_context():
         assert not svc.get_dataset(LOCAL_USER, krea_ds).train_base_model
+
+
+# --- 5) a path TYPED into « Custom weights… » ----------------------------------
+# The one base that cannot be picked from a list — a checkpoint downloaded five
+# minutes ago, which is the whole reason the field exists — was also the only one
+# whose "the trainer cannot load this" arrived after the dataset had been
+# exported and, on the cloud lane, after a GPU had been rented.
+
+def _advisory(client, path):
+    return client.get('/api/train/base-file-advisory',
+                      query_string={'path': str(path)}).get_json()
+
+
+def test_a_typed_packed_export_is_refused_before_the_launch(client, tmp_path):
+    body = _advisory(client, _scaled_fp8(tmp_path / 'downloads' / 'packed.safetensors'))
+    assert body['status'] == 'ok'
+    assert body['trainable'] is False
+    assert body['level'] == 'error'
+    assert body['quantization'] == 'structured'
+    # Same sentence the picker shows for a LISTED base — one source, so the two
+    # surfaces cannot come to disagree about the same file.
+    from app.services import model_integrity
+    assert body['note'] == model_integrity.QUANT_REFUSAL
+
+
+def test_a_typed_bare_cast_trains_and_says_what_it_costs(client, tmp_path):
+    body = _advisory(client, _bare_fp8(tmp_path / 'downloads' / 'cast.safetensors'))
+    assert body['trainable'] is True
+    assert body['level'] == 'warning'
+    assert body['note'] and 'tensors' in body['note']
+
+
+def test_a_typed_clean_base_says_nothing(client, tmp_path):
+    body = _advisory(client, _bf16(tmp_path / 'downloads' / 'clean.safetensors'))
+    assert body['trainable'] is True
+    assert body['level'] == ''
+    assert body['note'] is None
+
+
+def test_a_path_that_is_not_there_says_so_instead_of_guessing(client, tmp_path):
+    body = _advisory(client, tmp_path / 'downloads' / 'absent.safetensors')
+    assert body['status'] == 'missing'
+    assert body['trainable'] is False
+    assert 'absent.safetensors' in body['note']
+
+
+def test_a_file_that_is_not_a_single_file_checkpoint_is_named_as_such(client, tmp_path):
+    body = _advisory(client, tmp_path / 'downloads' / 'model.gguf')
+    assert body['status'] == 'not_a_model'
+    assert body['trainable'] is False
+
+
+def test_the_reply_never_carries_the_path_it_was_given(client, tmp_path):
+    """These payloads end up in pasted diagnostics, and a Windows path is a
+    username. The BASENAME is what identifies the file to its owner; the folder
+    it sits in is the caller's own input and it comes back to nobody."""
+    path = _bf16(tmp_path / 'downloads' / 'private' / 'clean.safetensors')
+    body = _advisory(client, path)
+    blob = json.dumps(body)
+    assert 'clean.safetensors' in blob
+    assert str(tmp_path) not in blob
+    assert 'private' not in blob
+
+
+def test_an_empty_path_is_a_question_with_no_answer_not_a_refusal(client):
+    body = _advisory(client, '')
+    assert body['trainable'] is True and body['note'] is None
