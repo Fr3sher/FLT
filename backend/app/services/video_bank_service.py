@@ -449,7 +449,24 @@ def bank_payload(user_id, bank_id) -> dict | None:
     # in force — a panel that opens blank while cuts are active would invite the
     # user to "apply" an accidental clear.
     payload['thresholds'] = metric_thresholds()
+    # Which checkpoint writes the captions, so nobody has to wonder what wrote
+    # theirs — and so a machine that does not have it yet learns that before
+    # pressing the button rather than twenty minutes into a download.
+    payload['caption_model'] = caption_model_info()
     return payload
+
+
+def caption_model_info() -> dict:
+    """Which checkpoint will caption, and whether this machine already has it.
+
+    On the bank payload rather than behind its own route: the workspace already
+    polls this every two seconds, and a second request for one string would be a
+    request per bank per poll for an answer that changes when a config file is
+    edited by hand."""
+    from . import video_caption
+    model = video_caption.configured_model()
+    return {'model': model, 'cached': video_caption.model_is_cached(model),
+            'is_default': model == video_caption.DEFAULT_MODEL}
 
 
 def _capability() -> dict:
@@ -1071,17 +1088,28 @@ def _caption_job(bank_id, recaption, include_edited, use_gpu):
         from . import video_caption
         total = video_caption.pending_clips(bank_id, recaption,
                                             include_edited).count()
-        bank_jobs.progress(job, done=0, total=total,
-                           detail=f'captioning shots ({"GPU" if use_gpu else "CPU"})')
+        model = video_caption.configured_model()
+        # WHICH model, in the line the user is already watching: two checkpoints
+        # do not write comparable captions, so "captioning shots" alone leaves a
+        # bank nobody can reason about after the setting changes.
+        detail = f'captioning shots with {model} ({"GPU" if use_gpu else "CPU"})'
+        # And whether it is even here yet. The download is allowed — blocking it
+        # would ship a model setting that cannot point anywhere new — but never
+        # in silence: a pass sitting at 0/470 while gigabytes cross someone's
+        # connection is indistinguishable from a hang.
+        notice = video_caption.download_notice(model)
+        if notice:
+            detail = f'{detail} — {notice}'
+        bank_jobs.progress(job, done=0, total=total, detail=detail)
         window = (gpu_exclusive_vision_window(flag_ttl=3600) if use_gpu
                   else nullcontext())
         with window:
             out = video_caption.run_captions(
                 bank_id, recaption, include_edited=include_edited,
-                use_gpu=use_gpu,
+                use_gpu=use_gpu, model=model,
                 on_clip=lambda: bank_jobs.bump(job),
                 should_stop=lambda: bank_jobs.cancelled(job))
-        detail = f'done — {out["captioned"]} shot(s) captioned'
+        detail = f'done — {out["captioned"]} shot(s) captioned by {out["model"]}'
         if out['failed']:
             detail += f', {out["failed"]} failed'
         bank_jobs.progress(job, detail=detail)

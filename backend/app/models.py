@@ -1222,6 +1222,17 @@ class VideoClip(db.Model):
     # generated caption is a draft, and losing a correction to the next pass is
     # the one thing that would stop anyone from ever editing one.
     caption_state = db.Column(String(12), nullable=True)
+    # WHICH checkpoint wrote this caption. NULL for a caption a human typed and
+    # for a clip that has none — nothing wrote those, so nothing is claimed.
+    #
+    # A column rather than a key inside a JSON blob because the question it
+    # answers is per-ROW and asked at read time: two checkpoints do not produce
+    # comparable captions, and changing the setting mid-corpus is exactly what
+    # making it configurable invites. A bank captioned half by one and half by
+    # another has to stay readable, which means every row saying which — and a
+    # JSON field would make "show me what the old model wrote" a full-table
+    # parse instead of a filter.
+    caption_model = db.Column(String(120), nullable=True)
     # Triage decision — the same three words as the image lane.
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)

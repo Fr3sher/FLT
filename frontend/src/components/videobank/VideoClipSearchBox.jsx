@@ -5,6 +5,7 @@ import { videoSearchUrl } from './videoBankApi'
 import {
   searchUnavailableReason, summarize, readinessHint, pendingLabel,
   suggestPushDown, limitsSentence, VIDEO_CLIP_LIMITS, searchBasisNote,
+  captionModelNote,
 } from './videoClipSearch'
 
 /** 🔎 Find scenes — type a word, get the shots that look like it.
@@ -26,6 +27,7 @@ import {
  */
 export default function VideoClipSearchBox({
   bankId, counts, busy, onResult, onClear, onRunPass, result, searching,
+  captionModel,
 }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState(null)
@@ -132,6 +134,15 @@ export default function VideoClipSearchBox({
               are running cannot read an empty result correctly. */}
           {searchBasisNote(counts) && (
             <p className="text-xs text-content-muted">{searchBasisNote(counts)}</p>
+          )}
+          {/* WHICH checkpoint wrote them. A caption that talks around what it
+              shows is a dataset defect, and the remedy is a different model —
+              so the model has to be visible, not implied. */}
+          {captionModelNote(captionModel) && (
+            <p className={`text-xs ${captionModel?.cached === false
+              ? 'text-amber-300' : 'text-content-subtle'}`}>
+              {captionModelNote(captionModel)}
+            </p>
           )}
           <p className="text-xs text-content-subtle">{readinessHint(status)}</p>
 

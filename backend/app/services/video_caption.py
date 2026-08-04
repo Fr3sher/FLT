@@ -58,6 +58,89 @@ EDGE_MARGIN_S = 0.25
 COMMIT_EVERY = 1
 
 
+# The checkpoint that shipped with this pass, and the value the setting falls
+# back to. Named here rather than only in the worker because the parent has to
+# answer "which model will run" WITHOUT starting one — for the job line, for the
+# download warning, and for the row it writes next to every caption.
+DEFAULT_MODEL = 'Qwen/Qwen3-VL-4B-Instruct'
+
+
+def configured_model():
+    """The checkpoint to caption with. Blank setting = the shipped default, so an
+    install that sets nothing captions exactly as it did before — an empty string
+    reaching the worker would fail on a model id of nothing."""
+    from .. import config as cfg
+    return (cfg.get('video_caption.model') or '').strip() or DEFAULT_MODEL
+
+
+def _hf_cache_dirs():
+    """Every `hub` directory a Hugging Face download could have landed in, in
+    resolution order. Read from the environment rather than by importing
+    huggingface_hub, which is not in the Flask venv — this has to answer before
+    any model process exists."""
+    import os
+    roots = []
+    for var in ('HUGGINGFACE_HUB_CACHE', 'HF_HUB_CACHE'):
+        if os.environ.get(var):
+            roots.append(os.environ[var])
+    if os.environ.get('HF_HOME'):
+        roots.append(os.path.join(os.environ['HF_HOME'], 'hub'))
+    from .. import config as cfg
+    root = (cfg.get('bank_scoring.models_root') or '').strip()
+    if root:
+        roots.append(os.path.join(root, 'hub'))
+    roots.append(os.path.join(os.path.expanduser('~'), '.cache', 'huggingface', 'hub'))
+    return roots
+
+
+def model_is_cached(model_id):
+    """Is this checkpoint already on this machine?
+
+    The hub layout is `models--<org>--<name>/snapshots/<rev>/`, and the SNAPSHOT
+    is what makes it usable: an interrupted download leaves the directory behind,
+    and calling that "present" would skip the warning for precisely the case that
+    needs it.
+
+    Returns True when it cannot tell — a cache we could not inspect is not
+    evidence of absence, and crying wolf about a layout we could not read trains
+    people to ignore the one warning that matters (the same rule
+    clip_text_encoder.weights_warning() follows)."""
+    import os
+    folder = 'models--' + str(model_id or '').replace('/', '--')
+    try:
+        for root in _hf_cache_dirs():
+            snap = os.path.join(root, folder, 'snapshots')
+            if os.path.isdir(snap) and any(os.scandir(snap)):
+                return True
+    except OSError:
+        return True
+    except Exception:  # noqa: BLE001 — an unreadable cache is not an absent model
+        return True
+    return False
+
+
+def download_notice(model_id):
+    """A sentence to put in the JOB LINE when this checkpoint is not here yet,
+    else ''.
+
+    THE DOWNLOAD ITSELF IS ALLOWED — transformers fetches on first use and
+    blocking that would mean shipping a model picker that cannot pick anything
+    new. What is not allowed is doing it in SILENCE: a pass sitting at 0/470 for
+    twenty minutes while gigabytes cross someone's connection is
+    indistinguishable from a hang, and they are the one paying for it. So the
+    warning rides in the detail the user is already watching, before the first
+    clip.
+
+    No size is quoted. We cannot know how big an arbitrary checkpoint is without
+    asking the network, and an invented figure is one somebody would plan
+    around."""
+    if model_is_cached(model_id):
+        return ''
+    return (f'{model_id} is not on this machine yet — the first run downloads it '
+            f'before captioning anything. Leave it running, or stop and set '
+            f'video_caption.model back.')
+
+
 def caption_frame_times(start_s, end_s):
     """The timestamps the captioner is shown, ascending, inside the shot.
 
@@ -180,7 +263,7 @@ def pending_clips(bank_id, recaption=False, include_edited=False):
     return q.order_by(VideoClip.id.asc())
 
 
-def caption_one(bank, clip, *, worker, scratch, relpaths):
+def caption_one(bank, clip, *, worker, scratch, relpaths, model=None):
     """Caption ONE shot and commit it. Returns 'ok' or 'error'.
 
     Never raises: a bank is captioned in bulk and a model that refuses clip 200
@@ -208,14 +291,18 @@ def caption_one(bank, clip, *, worker, scratch, relpaths):
     if caption:
         clip.caption = caption
         clip.caption_state = 'ok'
+        # Stamped with the caption it belongs to, in the same transaction. A
+        # bank captioned across a setting change stays readable row by row.
+        clip.caption_model = model or None
     else:
         clip.caption_state = 'error'
+        clip.caption_model = None      # nothing wrote it, so nothing is claimed
     db.session.commit()
     return 'ok' if caption else 'error'
 
 
 def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None,
-                 should_stop=None, use_gpu=False):
+                 should_stop=None, use_gpu=False, model=None):
     """Caption every shot of a bank that has none yet.
 
     `should_stop` is polled at each clip BOUNDARY — a graceful cancel, the same
@@ -224,21 +311,22 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
     from .video_caption_worker import CaptionWorker
     bank = db.session.get(VideoBank, bank_id)
     if bank is None:
-        return {'captioned': 0, 'failed': 0}
+        return {'captioned': 0, 'failed': 0, 'model': model or configured_model()}
+    model = model or configured_model()
     rows = pending_clips(bank_id, recaption, include_edited).all()
     if not rows:
-        return {'captioned': 0, 'failed': 0}
+        return {'captioned': 0, 'failed': 0, 'model': model}
     relpaths = dict(db.session.query(VideoSource.id, VideoSource.relpath)
                     .filter_by(bank_id=bank_id).all())
     scratch = tempfile.mkdtemp(prefix=f'lds-vcap-{bank_id}-')
     captioned = failed = 0
     try:
-        with CaptionWorker(use_gpu=use_gpu) as worker:
+        with CaptionWorker(use_gpu=use_gpu, model=model) as worker:
             for clip in rows:
                 if should_stop is not None and should_stop():
                     break
                 if caption_one(bank, clip, worker=worker, scratch=scratch,
-                               relpaths=relpaths) == 'ok':
+                               relpaths=relpaths, model=model) == 'ok':
                     captioned += 1
                 else:
                     failed += 1
@@ -246,7 +334,9 @@ def run_captions(bank_id, recaption=False, *, include_edited=False, on_clip=None
                     on_clip()
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
-    return {'captioned': captioned, 'failed': failed}
+    # The model rides back with the counts: two checkpoints do not write
+    # comparable captions, so "470 captioned" is only half an answer.
+    return {'captioned': captioned, 'failed': failed, 'model': model}
 
 
 def set_caption(user_id, bank_id, clip_id, text):
@@ -264,5 +354,7 @@ def set_caption(user_id, bank_id, clip_id, text):
     caption = str(text or '').strip()
     clip.caption = caption or None
     clip.caption_state = 'edited' if caption else None
+    # A human wrote it, so no checkpoint is credited with it.
+    clip.caption_model = None
     db.session.commit()
     return _clip_row_for(bank_id, clip)

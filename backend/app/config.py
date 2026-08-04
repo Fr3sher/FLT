@@ -315,6 +315,14 @@ DEFAULTS = {
     #   "never stay warm": every distinct query pays the ~8 s load, which is the
     #   right trade on a memory-tight machine.
     'bank_scoring': {'python': '', 'text_search_idle_minutes': 10},
+    # 🗣 Which checkpoint writes the video captions. A SETTING rather than a
+    # constant because the choice is not a preference: a model that describes
+    # what it sees in evasive terms produces captions that are about something
+    # slightly other than the footage, and a LoRA trained on those learns to look
+    # away too — with nothing in the output to reveal it. Empty = the shipped
+    # default, so an install that sets nothing captions exactly as before.
+    # Any checkpoint of the same architecture works; see settings-reference.
+    'video_caption': {'model': ''},
     # Watermark inpainting (simple-lama-inpainting, extra ML). Dedicated key so a
     # user can override it, but defaults empty -> reuse the same ML interpreter as
     # rembg/insightface (masks.python) then sys.executable. Never imported in-process.

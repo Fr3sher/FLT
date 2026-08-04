@@ -6,6 +6,7 @@ import {
   frameLabelPhrase, matchLine, seekFragment, playFromSecond,
   VIDEO_CLIP_LIMITS, limitsSentence,
   searchBasisNote, captionMatchNote, captionStateNote, uncaptionedWarning,
+  captionModelNote,
 } from './videoClipSearch.js'
 
 // ---- what stops a search before it starts ------------------------------------
@@ -187,4 +188,35 @@ test('the promotion warns about clips that would ship with an empty prompt', () 
   assert.match(note, /12/)
   assert.match(note, /empty|no caption|without/i)
   assert.equal(uncaptionedWarning({ captioned: 20, uncaptioned: 0 }), '')
+})
+
+// ---- which model wrote the captions (wave 5b) --------------------------------
+
+test('the caption pass names the model it will use', () => {
+  // Two checkpoints do not write comparable captions, so "Describe shots" alone
+  // leaves nobody able to say what wrote theirs.
+  const note = captionModelNote({ model: 'Qwen/Qwen3-VL-4B-Instruct',
+    cached: true, is_default: true })
+  assert.match(note, /Qwen3-VL-4B-Instruct/)
+})
+
+test('a model this machine does not have warns BEFORE the click', () => {
+  // Gigabytes over someone's connection, from a button that otherwise looks
+  // like every other pass.
+  const note = captionModelNote({ model: 'someone/other-vlm', cached: false,
+    is_default: false })
+  assert.match(note, /download/i)
+  assert.match(note, /someone\/other-vlm/)
+})
+
+test('a non-default model is flagged as a choice someone made', () => {
+  const note = captionModelNote({ model: 'someone/other-vlm', cached: true,
+    is_default: false })
+  assert.doesNotMatch(note, /download/i)
+  assert.match(note, /someone\/other-vlm/)
+})
+
+test('no info means no invented sentence', () => {
+  assert.equal(captionModelNote(null), '')
+  assert.equal(captionModelNote({}), '')
 })

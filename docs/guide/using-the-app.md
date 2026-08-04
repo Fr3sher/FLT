@@ -1716,6 +1716,17 @@ bulk re-run will never overwrite one you wrote. Clearing it puts the shot back i
 the queue. Regenerating over your own words is possible, but you have to ask for
 it by name.
 
+**You can change which model writes them.** The pass ships with one checkpoint
+and uses it unless you say otherwise (`video_caption.model` — see *Settings
+reference*). It is worth changing when the default **talks around** what your
+footage shows: a caption that names things evasively is not a style choice, it
+teaches the trained model to look away too, and the captions read perfectly well
+while being about something slightly other than the shot. Any checkpoint of the
+same architecture is a drop-in. If it is not on your machine, the first run
+downloads it — and the pass says so in its progress line before captioning
+anything, rather than sitting at 0 % while gigabytes arrive. Every caption
+records which model wrote it, so a bank captioned across a change stays readable.
+
 **It needs the same environment as ✨ Score** (torch + transformers) and it uses
 the GPU when there is one — a 4B vision model on a CPU is minutes per shot. It
 will not start while a training run owns the card, and stopping is safe: what is

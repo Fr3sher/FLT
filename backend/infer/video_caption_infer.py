@@ -56,8 +56,16 @@ import json
 import os
 import sys
 
-# Verified present in the local HF cache — see the module docstring. Changing it
-# is a decision about what users must download, and a test pins it.
+# The DEFAULT checkpoint — verified present in the local HF cache, see the module
+# docstring. The parent normally sends an explicit `model` in the handshake (from
+# the config key `video_caption.model`); this is what a bare invocation falls back
+# to, and it is what keeps an install that configures nothing captioning exactly
+# as it did before the setting existed.
+#
+# Any checkpoint of the SAME architecture is a drop-in: nothing below names a
+# Qwen-specific behaviour beyond the class, and the class is what transformers
+# resolves from the repo's own config. A different architecture fails loudly at
+# load, which is the correct outcome rather than a silent wrong answer.
 MODEL_ID = 'Qwen/Qwen3-VL-4B-Instruct'
 
 
@@ -84,6 +92,7 @@ def main() -> int:
     # free — and "captioning is impossible here" is a worse answer than "slower
     # and half the memory". Unset keeps the safe default below.
     want_dtype = str(req.get('dtype') or '').lower()
+    model_id = str(req.get('model') or '').strip() or MODEL_ID
 
     if want == 'cpu':
         os.environ['CUDA_VISIBLE_DEVICES'] = ''
@@ -98,12 +107,12 @@ def main() -> int:
         return 1
 
     device = 'cuda' if (want != 'cpu' and torch.cuda.is_available()) else 'cpu'
-    _log(f'[caption] loading {MODEL_ID} ({device})…')
+    _log(f'[caption] loading {model_id} ({device})…')
     try:
         kwargs = {'cache_dir': models_root} if models_root else {}
-        processor = AutoProcessor.from_pretrained(MODEL_ID, **kwargs)
+        processor = AutoProcessor.from_pretrained(model_id, **kwargs)
         model = Qwen3VLForConditionalGeneration.from_pretrained(
-            MODEL_ID,
+            model_id,
             dtype=({'bfloat16': torch.bfloat16, 'float16': torch.float16,
                     'float32': torch.float32}.get(want_dtype)
                    or (torch.bfloat16 if device == 'cuda' else torch.float32)),
@@ -141,7 +150,9 @@ def main() -> int:
                 except Exception:  # noqa: BLE001
                     pass
 
-    _emit({'ok': True, 'ready': True, 'device': device})
+    # The id is echoed so the parent records what REALLY loaded rather than what
+    # it asked for — the two differ the moment any fallback creeps in.
+    _emit({'ok': True, 'ready': True, 'device': device, 'model': model_id})
     _log('[caption] ready')
 
     for line in sys.stdin:

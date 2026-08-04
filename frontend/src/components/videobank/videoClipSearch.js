@@ -218,6 +218,27 @@ export function captionStateNote(clip) {
   return 'No caption yet. It is what this clip trains on, and what a word search reads.'
 }
 
+/** Which checkpoint writes this bank's captions, and whether it is here yet.
+ *
+ * Named rather than assumed. Two checkpoints do not produce comparable captions
+ * — one may describe plainly what another talks around — so a bank captioned
+ * across a settings change is only readable if the model is visible somewhere.
+ * And a checkpoint this machine does not have yet means gigabytes over the
+ * user's connection from a button that looks like every other pass, so that is
+ * said BEFORE the click rather than discovered at 0/470. */
+export function captionModelNote(info) {
+  const model = (info?.model || '').trim()
+  if (!model) return ''
+  if (info.cached === false) {
+    return `Captions will be written by ${model}, which is not on this machine `
+      + 'yet — the first run downloads it before captioning anything.'
+  }
+  if (info.is_default === false) {
+    return `Captions will be written by ${model} (set in your config, not the default).`
+  }
+  return `Captions are written by ${model}.`
+}
+
 /** The promotion's load-bearing warning. An empty sidecar is not a neutral
  * default: ai-toolkit trains it as an EMPTY PROMPT and says nothing anywhere. */
 export function uncaptionedWarning(composition) {

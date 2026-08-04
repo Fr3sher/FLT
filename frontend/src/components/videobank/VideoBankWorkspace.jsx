@@ -410,6 +410,7 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
             setSearching(!!pending)
             if (!pending) { setSearch(r); setOpenIndex(null); setSelected([]) }
           }}
+          captionModel={bank?.caption_model}
           onClear={() => { setSearch(null); setOpenIndex(null) }} />
       )}
 

@@ -57,12 +57,19 @@ def unavailable_reason():
 class CaptionWorker:
     """A warm Qwen3-VL, alive for as long as the ``with`` block."""
 
-    def __init__(self, *, use_gpu=False, models_root=None, max_new_tokens=96):
+    def __init__(self, *, use_gpu=False, models_root=None, max_new_tokens=96,
+                 model=None):
+        # None = let the child fall back to its own default. The parent normally
+        # passes the configured id explicitly, so the two halves cannot disagree
+        # about which checkpoint a caption came from.
+        self.model = (model or '').strip() or None
         self.use_gpu = bool(use_gpu)
         self.models_root = models_root if models_root is not None else (
             cfg.get('bank_scoring.models_root') or None)
         self.max_new_tokens = int(max_new_tokens)
         self.device = None
+        # What the child reports having ACTUALLY loaded, once it is up.
+        self.loaded_model = None
         self._proc = None
         self._lock = threading.RLock()
 
@@ -114,7 +121,8 @@ class CaptionWorker:
             proc.stdin.write(json.dumps({
                 'models_root': self.models_root,
                 'device': 'auto' if self.use_gpu else 'cpu',
-                'max_new_tokens': self.max_new_tokens}) + '\n')
+                'max_new_tokens': self.max_new_tokens,
+                'model': self.model}) + '\n')
             proc.stdin.flush()
             data = json.loads(_readline_with_timeout(proc, START_TIMEOUT))
         except TextEncodeError:
@@ -128,6 +136,9 @@ class CaptionWorker:
             _kill(proc)
             raise CaptionError(str(data.get('error') or 'unknown caption error'))
         self.device = data.get('device') or 'cpu'
+        # What the child ACTUALLY loaded, echoed back — the authority on which
+        # checkpoint wrote this run's captions, rather than what we asked for.
+        self.loaded_model = data.get('model') or self.model
         self._proc = proc
         return proc
 
