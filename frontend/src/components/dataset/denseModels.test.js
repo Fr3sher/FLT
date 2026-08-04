@@ -78,21 +78,36 @@ test('one file only means one row, and no rows at all for a Hub-only run', () =>
   assert.equal(denseFileRows(hubOnly()).length, 0);
 });
 
-test('the fp8 row states whether ComfyUI can already see it', () => {
+test('the fp8 row has THREE states, because "delivered" is not "loadable"', () => {
   const off = denseFileRows(local())[0];
   const on = denseFileRows(local({
-    fp8: { filename: 'f', size_bytes: 1, in_comfyui: true, comfyui_name: 'krea\\f' },
+    fp8: { filename: 'f', size_bytes: 1, in_comfyui: true, delivered: true,
+      comfyui_name: 'krea\\f' },
+  }))[0];
+  // The install with no ComfyUI configured: the app put the file in its OWN
+  // models folder and said so. Calling that "not there yet" would offer a Send
+  // that has already happened, and the click would answer "already there".
+  const fallback = denseFileRows(local({
+    fp8: { filename: 'f', size_bytes: 1, in_comfyui: false, delivered: true,
+      comfyui_name: null },
   }))[0];
   assert.equal(off.stateLabel, 'Not in ComfyUI yet');
   assert.equal(on.stateLabel, '✓ In ComfyUI');
+  assert.equal(fallback.stateLabel, 'Delivered — move it into ComfyUI');
+  assert.equal(fallback.state, 'delivered');
 });
 
 // --- what the buttons may do -------------------------------------------------
 
-test('sending is offered only for a twin ComfyUI cannot see yet', () => {
+test('sending is offered only for a twin that has not been delivered yet', () => {
   assert.ok(denseActions(local()).send);
   assert.equal(denseActions(local({
-    fp8: { filename: 'f', in_comfyui: true, comfyui_name: 'k\\f' },
+    fp8: { filename: 'f', in_comfyui: true, delivered: true, comfyui_name: 'k\\f' },
+  })).send, null);
+  // Delivered to the app's own folder counts: otherwise the button never clears
+  // on an install with no ComfyUI configured.
+  assert.equal(denseActions(local({
+    fp8: { filename: 'f', in_comfyui: false, delivered: true, comfyui_name: null },
   })).send, null);
   assert.equal(denseActions(local({ fp8: null })).send, null);
 });

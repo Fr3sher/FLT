@@ -147,7 +147,22 @@ def comfy_index(folder_type) -> dict:
 
 
 def _twin_of(twins, family, index=None) -> dict | None:
-    """The run's fp8 twin (newest wins), and whether ComfyUI can already see it."""
+    """The run's fp8 twin (newest wins), and the TWO facts about where it is.
+
+    They are two facts and not one, and conflating them breaks one of the two
+    things that read them:
+
+    * ``in_comfyui`` — ComfyUI's own resolver can find it. This is what makes
+      the Test Studio able to load it, so it alone may light the "test this"
+      link. A name ComfyUI cannot resolve is a link to a screen where the model
+      is absent.
+    * ``delivered`` — it already sits where "Send to ComfyUI" would put it. When
+      ComfyUI is not configured at all, that destination is the app's OWN models
+      folder (``fp8_local_delivery.destination_folder`` says so out loud), which
+      no ComfyUI scanner will ever list. Reading the button off ``in_comfyui``
+      there would leave it offered for ever, and clicking it would answer "that
+      file is already there" — a loop the panel would never leave.
+    """
     from . import fp8_local_delivery
 
     if not twins:
@@ -161,21 +176,34 @@ def _twin_of(twins, family, index=None) -> dict | None:
     # A file that resolves back to the store itself is NOT "in ComfyUI": that
     # happens when the checkpoint store sits inside a declared model root, and
     # reporting it as deployed would hide the one action that matters.
-    if deployed and os.path.normcase(os.path.realpath(deployed)) == \
-            os.path.normcase(os.path.realpath(path)):
+    if deployed and _same_file(deployed, path):
         deployed = None
+    destination = os.path.join(fp8_local_delivery.destination_folder(family)['path'],
+                               os.path.basename(name))
+    delivered = bool(deployed) or (os.path.isfile(destination)
+                                   and not _same_file(destination, path))
     return {
         'filename': name,
         'path': path,
         'folder': os.path.dirname(path),
         'size_bytes': size,
         'in_comfyui': bool(deployed),
+        'delivered': delivered,
         'comfyui_path': deployed,
         # The loader-relative name the Test Studio's base picker publishes, so the
         # card can deep-link straight at it. None until it is really in a root.
         'comfyui_name': hit[0] if deployed else None,
         'folder_type': folder_type,
     }
+
+
+def _same_file(a, b) -> bool:
+    """Do these two paths name the same file on disk (junctions resolved)?"""
+    try:
+        return os.path.normcase(os.path.realpath(a)) == \
+            os.path.normcase(os.path.realpath(b))
+    except Exception:                               # noqa: BLE001
+        return False
 
 
 def _hub_of(run) -> dict | None:
@@ -240,8 +268,10 @@ def describe_run(run, index=None) -> dict:
         # offering it while the run is still writing files is not.
         'can_quantize': bool(master and not fp8 and not active),
         # Only ever the twin. The master is never sent to ComfyUI — that is the
-        # distinction this lane exists to make.
-        'can_send_to_comfyui': bool(fp8 and not fp8['in_comfyui'] and not active),
+        # distinction this lane exists to make. Read off `delivered`, not
+        # `in_comfyui`: on an install with no ComfyUI configured the file lands
+        # in the app's own models folder, which no ComfyUI scan will ever list.
+        'can_send_to_comfyui': bool(fp8 and not fp8['delivered'] and not active),
         'can_delete': bool((master or fp8) and not active),
     }
 
@@ -332,9 +362,9 @@ def _send_info(run) -> dict:
         raise DenseArtifactError(
             'this run has no fp8 file on this computer yet. Quantize the full '
             'model first — the fp8 twin is what ComfyUI loads.')
-    if fp8['in_comfyui']:
+    if fp8['delivered']:
         raise DenseArtifactError(
-            f"{fp8['filename']} is already where ComfyUI looks for it")
+            f"{fp8['filename']} is already where this app puts it for ComfyUI")
     if entry['active']:
         raise DenseArtifactError('this run is still working — wait for it to finish')
     dest = entry['comfyui']

@@ -50,7 +50,8 @@ function FileRow({ row, children }) {
         {row.bytes ? (
           <span className="text-content-subtle text-[0.625rem]">{fmtBytes(row.bytes)}</span>
         ) : null}
-        <Chip tone={row.state === 'in-comfyui' ? 'ok' : 'muted'}>{row.stateLabel}</Chip>
+        <Chip tone={row.state === 'in-comfyui' ? 'ok'
+          : (row.state === 'delivered' ? 'info' : 'muted')}>{row.stateLabel}</Chip>
       </div>
       <p className="m-0 mt-0.5 break-all font-mono text-content-muted text-[0.625rem]">
         {row.filename}

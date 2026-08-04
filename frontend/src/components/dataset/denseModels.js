@@ -65,14 +65,21 @@ export function denseWhereChip(entry) {
 export function denseFileRows(entry) {
   const rows = [];
   if (entry?.fp8) {
+    // Three states, not two. "Delivered but not listed by ComfyUI" is the real
+    // state of an install with no ComfyUI configured: the app put the file in
+    // its OWN models folder and said so, and calling that "not there yet" would
+    // offer a Send that has already happened.
+    const { in_comfyui: loaded, delivered } = entry.fp8;
     rows.push({
       kind: 'fp8',
       label: 'fp8 twin',
       filename: entry.fp8.filename,
       bytes: entry.fp8.size_bytes,
       role: 'The inference format — this is the file ComfyUI loads.',
-      state: entry.fp8.in_comfyui ? 'in-comfyui' : 'not-in-comfyui',
-      stateLabel: entry.fp8.in_comfyui ? '✓ In ComfyUI' : 'Not in ComfyUI yet',
+      state: loaded ? 'in-comfyui' : (delivered ? 'delivered' : 'not-in-comfyui'),
+      stateLabel: loaded
+        ? '✓ In ComfyUI'
+        : (delivered ? 'Delivered — move it into ComfyUI' : 'Not in ComfyUI yet'),
     });
   }
   if (entry?.master) {
@@ -116,7 +123,7 @@ export function denseActions(entry) {
     // exactly what the shared fp8 block is for.
     out.quantize = { label: '✨ Quantize to fp8', enabled: true, reason: '' };
   }
-  if (fp8 && !fp8.in_comfyui) {
+  if (fp8 && !fp8.delivered) {
     out.send = { label: '→ Send to ComfyUI', enabled: Boolean(entry?.can_send_to_comfyui),
       reason: '' };
   }

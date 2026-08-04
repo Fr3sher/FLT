@@ -195,10 +195,18 @@ def test_sending_lands_the_twin_and_says_how(app, tmp_path):
         assert out['status'] == 'done'          # same volume -> hard link, instant
         assert out['method'] == da.LINKED
         assert os.path.isfile(out['destination'])
-        # and it is now visible as "already there", so the button disappears
+        # …and the button is gone, because the file is where the app puts it.
         [entry] = da.list_dense_models(12)
-        assert entry['fp8']['in_comfyui'] is True
+        assert entry['fp8']['delivered'] is True
         assert entry['can_send_to_comfyui'] is False
+        # No ComfyUI is configured in tests, so the destination is the app's OWN
+        # models folder (fp8_local_delivery says so out loud) and no ComfyUI scan
+        # will ever list it. `in_comfyui` must NOT claim otherwise: it is what
+        # lights the "test this in the Studio" link, and a base ComfyUI cannot
+        # resolve is a link to a screen where the model is absent.
+        assert entry['fp8']['in_comfyui'] is False
+        assert entry['fp8']['comfyui_name'] is None
+        assert entry['comfyui']['kind'] == 'fallback'
 
 
 def test_sending_never_overwrites_a_file_already_there(app, tmp_path):
@@ -209,6 +217,41 @@ def test_sending_never_overwrites_a_file_already_there(app, tmp_path):
         plan = da.send_plan(13, run.id)
         assert plan['ok'] is False
         assert 'already' in plan['error']
+
+
+def test_a_twin_ComfyUI_really_lists_is_testable_in_the_studio(app, tmp_path, monkeypatch):
+    """The other half of the pair: when the destination IS a ComfyUI folder, the
+    twin gets a loader-relative name and the Studio link may appear."""
+    from app.services import comfy_model_paths, dense_artifacts as da
+    comfy = tmp_path / 'ComfyUI' / 'models' / 'diffusion_models'
+    comfy.mkdir(parents=True)
+    monkeypatch.setattr(comfy_model_paths, 'search_roots',
+                        lambda folder_type: [str(comfy)])
+    with app.app_context():
+        run = _dense_run(19, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
+        da.send_to_comfyui(app, 19, run.id)
+        [entry] = da.list_dense_models(19)
+        assert entry['fp8']['in_comfyui'] is True
+        assert entry['fp8']['comfyui_name'] == 'Krea_full_x_fp8.safetensors'
+        assert entry['can_send_to_comfyui'] is False
+
+
+def test_the_store_sitting_inside_a_model_root_is_not_a_deployment(app, tmp_path, monkeypatch):
+    """A checkpoint store declared as a model root would make every twin look
+    deployed — and hide the one action that matters."""
+    from app import config as cfg
+    from app.services import comfy_model_paths, dense_artifacts as da
+    with app.app_context():
+        store = str(cfg.checkpoints_root(create=True))
+        monkeypatch.setattr(comfy_model_paths, 'search_roots',
+                            lambda folder_type: [store])
+        run = _dense_run(20, tmp_path, files=(('Krea_full_x_fp8.safetensors', 20),))
+        # the twin lives in <store>/run_<id>, i.e. under that very root
+        import os as _os
+        _os.makedirs(_os.path.join(store, 'run_%d' % run.id), exist_ok=True)
+        [entry] = da.list_dense_models(20)
+        if entry['fp8'] and entry['fp8']['path'].startswith(store):
+            assert entry['fp8']['in_comfyui'] is False
 
 
 def test_a_run_of_another_dataset_is_refused(app, tmp_path):
