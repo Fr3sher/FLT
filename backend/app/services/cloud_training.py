@@ -27,6 +27,7 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import CloudTrainingRun, SystemState
 from . import dense_local_delivery as dld
+from . import dense_weights
 from . import face_dataset_service as fds
 from . import gpu_speed
 from . import lora_training as lt
@@ -970,6 +971,11 @@ def _verify_full_transformer_artifact(run, _api=None) -> str:
             matching.append((path, _full_transformer_weight_proof(sibling)))
     valid = sorted((path, proof) for path, proof in matching if proof is not None)
     checked_at = datetime.utcnow().isoformat()
+    # Which of them is "the model" is dense_weights' single rule, shared with
+    # every lane that acts on this file. Sorting and taking the last one used to
+    # land on `…_000002750.safetensors` (`.` sorts before `_`), i.e. a step
+    # snapshot, while the quantizer offered on the same card took the final —
+    # the card named one file and the button next to it would have taken another.
     if not valid:
         reason = ('has no matching dense checkpoint' if not matching else
                   'has only empty, truncated, or unverifiable matching checkpoints')
@@ -979,7 +985,11 @@ def _verify_full_transformer_artifact(run, _api=None) -> str:
                 f'Repository {reason} ({expected_prefix}*.safetensors)'),
             delivery_last_checked_at=checked_at)
         return 'missing'
-    weight_path, proof = valid[-1]
+    proofs = dict(valid)
+    chosen = dense_weights.pick_master(
+        [(path, (proof or {}).get('size_bytes') or 0) for path, proof in valid])
+    weight_path = chosen or valid[-1][0]
+    proof = proofs[weight_path]
     try:
         # ai-toolkit writes its own README while pushing. Reapply and read back
         # every compliance file before the result can become available.

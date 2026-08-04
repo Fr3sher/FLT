@@ -54,12 +54,21 @@ const SRC_FILES = walk(new URL('../src/', import.meta.url))
 
 // ---- one implementation ----------------------------------------------------
 
-test('exactly one component talks to /api/tools/fp8-quantize', () => {
+test('exactly one component talks to the quantize endpoints', () => {
+  // The endpoints moved: `/api/tools/fp8-deliver` is the one that can also FETCH
+  // a master that is not on this machine, and place the result in ComfyUI's own
+  // folder. `/api/tools/fp8-quantize` stays server-side (its guards and its
+  // read-back verification are what the new lane calls) but no screen drives it
+  // directly any more — two client lanes would be two sets of refusals.
   const callers = SRC_FILES
-    .filter(([, src]) => src.includes('/api/tools/fp8-quantize'))
+    .filter(([, src]) => src.includes('/api/tools/fp8-deliver'))
     .map(([path]) => path.replace(/\\/g, '/').split('/src/')[1])
   assert.deepEqual(callers, ['components/dataset/Fp8QuantizeTool.jsx'],
     'a second file calling the quantize endpoints means the tool was copied, not reused')
+  const legacy = SRC_FILES
+    .filter(([, src]) => src.includes('/api/tools/fp8-quantize'))
+    .map(([path]) => path.replace(/\\/g, '/').split('/src/')[1])
+  assert.deepEqual(legacy, [])
 })
 
 test('both hosts render the shared component instead of their own controls', () => {
@@ -81,7 +90,11 @@ const CONTROLS = [
 test('the recipe-card door keeps its accent frame and its own title', () => {
   const html = renderToStaticMarkup(createElement(Fp8QuantizeTool, {}))
   assert.match(html, /bg-sky-400\/10/)
-  assert.match(html, /Quantize an existing model to fp8/)
+  // "an EXISTING model" was dropped from the title with the words "on this
+  // machine" from the blurb: the block now also reaches a master that only
+  // exists in a private Hugging Face repo, which is the whole point.
+  assert.match(html, /Quantize a model to fp8/)
+  assert.doesNotMatch(html, /on this machine into/)
   for (const re of CONTROLS) assert.match(html, re)
 })
 

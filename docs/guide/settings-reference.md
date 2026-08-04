@@ -742,12 +742,41 @@ that pin moves without the verdicts being re-checked. Each run now also records
 the image the pod actually booted, so a run can say for itself which trainer
 produced its weights.
 
-**Quantizing a model you already have.** The same conversion is available by
-hand from the same card — *Quantize an existing model to fp8* — and, for a model
-that has nothing to do with a dataset, from **Settings ▸ Storage**, where it is
-documented in full. Point it at any
-full-precision `.safetensors` on this machine and it writes
-`<name>_fp8.safetensors` next to it; the source is never modified, an existing
+**Getting the fp8 file in one click.** When a run has delivered its model, the
+recipe card's *Quantize a model to fp8* block is already aimed at it: **✨
+Quantize to fp8** does the whole chain with nothing to type — it fetches the
+master out of your private Hugging Face repo, converts it, and leaves the fp8
+file in ComfyUI's own models folder
+(`models/diffusion_models` for a dense transformer, `models/checkpoints` for an
+SDXL-style full checkpoint; with ComfyUI unconfigured it falls back to the app's
+`data/models/…` and **says so**). Before it starts it states:
+
+- **which checkpoint it takes.** A dense repo usually holds the final save *and*
+  several ~26 GB step snapshots with nearly the same name. One rule decides —
+  the final save wins, otherwise the highest step — and it is the same rule that
+  stamped the file the card lists, so the two can never disagree;
+- **where the file lands**, spelled out, before and after;
+- **what it costs in disk.** What is still to download, the fp8 file's own
+  ceiling and 2 GB of working headroom, compared with the free space of the
+  volume that *really* holds that folder — `realpath` first, because a ComfyUI
+  models folder is very often a junction onto another drive. Too little is a
+  refusal that writes out every term and offers another folder, not a failure at
+  90 %. **What this forecast accepts, the conversion does not then refuse**: the
+  threshold used to be applied only when starting, so the button stayed enabled
+  and the refusal arrived after the click.
+
+The download is the long part (~26 GB) and it is a real job: progress in bytes,
+a **Stop** button, and resumption from where it stopped — stopping never throws
+away what already came down. Afterwards the master is **kept** by default (it is
+the only file you can train from again, merge or re-quantize); deleting it is one
+radio button away, with its size on it.
+
+**The path field, for everything else.** The same block still takes a full path
+to any full-precision `.safetensors` — a file nothing in the app points at — and
+it pre-fills with your **custom training base** when there is one. The same tool
+is in **Settings ▸ Storage** for a model that has nothing to do with a dataset,
+where it is documented in full. It writes `<name>_fp8.safetensors` into the same
+ComfyUI folder as the one-click path; the source is never modified, an existing
 output is never silently overwritten, and the result is re-opened and verified
 before it reports success. It runs on the **CPU** (one elementwise cast per
 tensor — disk-bound, not GPU-bound), one at a time app-wide. It refuses a file
@@ -896,11 +925,11 @@ re-runs that sweep on demand and is safe to press at any time.
 ### Quantize an existing model to fp8
 
 A full-precision `.safetensors` is roughly **2.5× the size ComfyUI needs** to
-generate with it. **Quantize an existing model to fp8** takes any full-precision
-model already on this machine — a ~26 GB one downloaded from Hugging Face, a
-checkpoint an earlier full-model run delivered, a large finetune someone shared —
-and writes `<name>_fp8.safetensors` next to it, loadable with the standard *Load
-Diffusion Model* node.
+generate with it. **Quantize a model to fp8** takes any full-precision model — a
+~26 GB one downloaded from Hugging Face, a checkpoint an earlier full-model run
+delivered, a large finetune someone shared — and writes `<name>_fp8.safetensors`
+into ComfyUI's own models folder, loadable with the standard *Load Diffusion
+Model* node without moving anything by hand.
 
 This is the **same tool** as the one on the full-model recipe card (*Training →
 Full-model (dense) recipe*), reachable here **without a dataset**: it was only in
@@ -910,22 +939,37 @@ that card at first, which nobody who simply downloaded a model ever opens.
   overwritten. The result is re-opened and its scaled tensors counted before it
   reports success — a file that cannot be read back is reported as a failure, not
   as a smaller model.
-- **It refuses before you click, not after.** Type a path and the plan appears
-  under the field: the source size, the name it will write, the expected size and
-  how many matrices are quantized. A file that is **already quantized** and a
-  **LoRA/adapter** are refused there, with the reason, and the button stays
-  disabled. Reading the plan costs a few kilobytes of file header.
+- **It refuses before you click, not after.** The plan states the source size,
+  the name and folder it will write, the expected size and how many matrices are
+  quantized. A file that is **already quantized**, a **LoRA/adapter**, an output
+  that already exists and a drive without room are refused *there*, with the
+  reason, and the button stays dead. Reading the plan costs a few kilobytes of
+  file header. Every condition that would stop the conversion is evaluated here:
+  a refusal that only existed at start time left the button enabled and landed
+  after the user had committed.
+- **The disk budget is derived, not a flat number.** What is still to download +
+  the fp8 file's own ceiling + 2 GB of working headroom, against the free space
+  of the volume that really holds the destination (`realpath` first — model
+  folders are often junctions onto another drive). A flat 30 GB floor used to
+  refuse a 12.8 GB conversion on a drive with 17.6 GB free. When a drive really
+  is too full, the refusal offers to write the file to another folder.
 - **It runs on the CPU**, one conversion at a time app-wide, so it never competes
   with ComfyUI or a training run for VRAM. It is disk-bound (measured ~1.2 GB/s).
+- **It runs in a separate Python**, the one that has `torch` and `safetensors` —
+  this app installs without them on purpose. See `quantize.python` in
+  *Config-file-only settings*. An environment that cannot do the work is a
+  refusal in the plan, naming what to install.
 - **fp8 is a one-way, inference-only export.** A quantized file is refused as a
   training base, so keep the full-precision one if you may ever want to continue,
   merge or re-quantize that model. And this is **not** the `quantize` training
   option, which only shrinks a model in memory while it trains and writes no file.
 
-Move or copy the result into your ComfyUI `models/diffusion_models` folder to use
-it. A model already delivered to a private Hugging Face repo has a third door
-that avoids the round trip entirely — see *☁ Quantize to fp8 in the cloud* on the
-Runs page.
+The result lands in ComfyUI's own folder (`models/diffusion_models`, or
+`models/checkpoints` for an SDXL-style bundle), so there is nothing to move.
+With ComfyUI not configured it falls back to the app's `data/models/…` and
+**says so** rather than pretending. **A model a full-model run delivered needs no
+path at all**: inside a dataset, the same block is already aimed at it — see
+*Training → Full-model (dense) recipe*.
 
 ### Hugging Face storage
 
@@ -1201,6 +1245,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `face_scoring.green` | Similarity score threshold (0–1) above which an image is flagged "green" (strong match). |
 | `face_scoring.orange` | Similarity score threshold (0–1) above which an image is flagged "orange" (borderline match). |
 | `masks.python` | Python interpreter used to run the rembg subprocess (empty = current interpreter). |
+| `quantize.python` | Python interpreter that runs the **fp8 conversion** (empty = the one ✨ Score uses, then ai-toolkit's, then the app's own). The conversion needs `torch` and `safetensors`, which this app deliberately does **not** install — torch is gigabytes and nothing else here needs it — so it runs in a subprocess, like the scoring and masking passes. The chosen interpreter is probed while the *plan* is drawn: one that lacks the packages disables the button with the reason and the `pip install` line, instead of failing after the click (or after a 26 GB download). |
 | `bank_scoring.python` | Python interpreter that runs the ✨ Score pass (empty = the app's own). Auto-filled by Setup with a CPU-only environment; repointable at any CUDA interpreter already on the machine via the bank's **⚡ Use a GPU Python I already have** picker, which verifies every dependency first and never installs into an environment it did not create. |
 | `watermark.python` | Python interpreter used to run the LaMa watermark-inpainting subprocess (empty = reuse `masks.python`, then the current interpreter). |
 | `watermark.device` | LaMa processing device: `auto` (CUDA when available, otherwise CPU), `cuda`, or `cpu`. |

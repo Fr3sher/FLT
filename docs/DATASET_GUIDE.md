@@ -669,6 +669,11 @@ existing output is never silently overwritten.
 - It runs on the **CPU**, not the GPU: the work is an elementwise cast plus one
   reduction per tensor (measured ~1.2 GB/s here, so a 26 GB file is bound by your
   disk, not by arithmetic). Nothing competes with ComfyUI or a training run.
+- It runs in a **separate Python** — the one that has `torch` and `safetensors`
+  (the app installs without them; torch is gigabytes). Whether that environment
+  can actually do the work is checked *while the plan is drawn*: one that cannot
+  disables the button and names what to install, rather than failing after the
+  click or, worse, after the download.
 - One at a time, app-wide, and it checks free space before it reads a byte.
 - It **refuses a file that is already quantized** — quantizing twice only loses
   more precision — and refuses a LoRA or adapter, which has nothing large enough
@@ -682,40 +687,51 @@ existing output is never silently overwritten.
 > card can train something that would not otherwise fit. They write nothing: the
 > saved checkpoint is still full precision. This feature produces the **file**.
 
-### Quantizing a model that is already on Hugging Face
+### ✨ Quantize to fp8 — one click, no path to find
 
-A full model delivered before the automatic export existed is a 26 GB file in
-your private repo, and building its fp8 twin at home means pulling 26 GB down
-and pushing 10 GB back — an hour of your bandwidth for under a minute of
-arithmetic. **☁ Quantize to fp8 in the cloud**, on the delivered artifact,
-rents one cheap machine to do that round trip on a datacentre link and writes
-the fp8 file straight into the same repository. You then download only the small
-one.
+A run delivered before the automatic export existed leaves you with a 26 GB file
+in a private repo and no fp8 twin, and until now this block could not help: it
+asked for a path on your disk, and that master has none — the dense lane never
+downloads it. So the block now aims at the model **your run delivered**, and
+does the whole chain with nothing to type: fetch the master, convert it, and
+leave the fp8 file in ComfyUI's own models folder, ready to load.
 
-- **The cost is quoted before anything is rented** — price per hour, estimated
-  minutes, estimated total — exactly like a training run, plus the hard cap.
-- **The machine is destroyed on every path out**: on success, on failure, and at
-  a hard deadline (`cloud.quantize.max_minutes`, default 60) even if it reported
-  nothing. A sweep also reaps any machine of this lane left behind by an app
-  restart, and it runs every time the status is polled.
-- The GPU is irrelevant here — the job is network-bound — so the selection asks
-  for the cheapest card and filters on **downlink bandwidth** and on **free
-  disk** instead. The disk one decides whether the rental happens at all: the
-  pod holds the master, its fp8 twin and the download cache (~86 GB for a 26 GB
-  model), and vast refuses outright an offer that has less. The cheapest listing
-  on the market is precisely where free disk runs out, which is why "cheapest"
-  alone is not the rule — hosts blacklisted for failing to boot and
-  suspiciously-underpriced listings are skipped too, exactly as on a training
-  launch.
-- **One machine refusing is not the end.** The market listing can be stale, so a
-  refusal moves to the next candidate (a few tries) instead of failing the job,
-  and when a rental really is impossible the error quotes what vast said.
-- The quote is an estimate, and renting re-checks the market. If the machines at
-  that price are gone and the only ones left cost materially more, it says so
-  and rents **nothing** — ask for a new estimate to see the real price.
-- It refuses if the fp8 file already exists in the repository, and it warns
-  before renting when your private Hugging Face storage looks too small for the
-  new file.
+Click **✨ Quantize to fp8** once and it tells you what it is about to do; the
+conversion only starts on the second click.
+
+- **Which checkpoint it takes, by name.** A dense repo usually holds the final
+  save *and* several ~26 GB step snapshots whose names differ by a number. One
+  rule decides — the **final save** wins, and without one the **highest step**
+  does — and it is the same rule that stamped the file this card lists, so what
+  you read and what runs can never be two different files.
+- **Where the file lands, spelled out.** `models/diffusion_models` for a dense
+  transformer, `models/checkpoints` for an SDXL-style full checkpoint, honouring
+  an `extra_model_paths.yaml` root exactly as a LoRA deploy does. With ComfyUI
+  not configured it falls back to the app's own `data/models/…` and **says so** —
+  it never pretends to have put the file where ComfyUI looks.
+- **What it costs in disk, before it starts.** What is still to download, the
+  fp8 file's own ceiling, and 2 GB of working headroom — compared against the
+  free space of the volume that *really* holds that folder (a ComfyUI models
+  folder is very often a junction onto another drive). Not enough is a refusal
+  that writes out every term, and offers to write the file to another folder
+  rather than ending there. Whatever this forecast accepts, the conversion does
+  not then refuse.
+- **It is a real job.** Progress in gigabytes while the master comes down, then
+  per-tensor while it converts, a **Stop** button, and resumption from where it
+  stopped — stopping keeps what already arrived. The job also survives leaving
+  the page: come back and the card shows the same run.
+- **Afterwards, the master is kept by default.** It is the only file you can
+  train from again, merge, or re-quantize. Deleting it is one radio button away,
+  with its size written on it, and it only ever happens *after* the fp8 file has
+  been re-opened and verified.
+- It refuses a file that is **already quantized**, refuses a LoRA/adapter, and
+  **never overwrites** an existing output.
+
+**The path field is still there, as the exception.** A file nothing in the app
+points at — a checkpoint someone shared, a model you downloaded yourself — is
+typed in as before, and takes the same route: same refusals, same disk check,
+same destination, stated. When you have set **Custom weights…**, that path
+pre-fills it, so there is nothing to type there either.
 
 ### Testing a full model: it is a RAW checkpoint
 

@@ -10,7 +10,6 @@ import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
-import CloudQuantizeButton from './CloudQuantizeButton';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
 import {
   checkpointSelectionMatchesTraining,
@@ -71,6 +70,7 @@ import {
   TRAINING_MODE_FULL_TRANSFORMER,
   TRAINING_MODE_LORA,
   cloudTierEstimateView,
+  denseQuantizeTarget,
   fullTransformerArtifactFiles,
   fullTransformerArtifactView,
   fullTransformerFp8Note,
@@ -179,13 +179,10 @@ function FullTransformerArtifactNotice({ run }) {
       {fp8Note && (
         <p className="m-0 mt-1 opacity-85">ℹ {fp8Note}</p>
       )}
-      {/* A delivered master with no fp8 twin — an older run, or one whose pod
-          export failed. Building it in the cloud avoids pulling 26 GB home just
-          to push 10 GB back. */}
-      {view.available && !files.some((f) => f.kind === 'fp8') && (
-        <CloudQuantizeButton repoId={run?.hf_repo_id}
-          filename={run?.hf_weight_filename || null} />
-      )}
+      {/* No button here on purpose. The conversion has ONE surface — the recipe
+          card's "Quantize a model to fp8" block, which now targets this very
+          model on its own. Two doors doing the same thing on the same screen is
+          what the cloud button already was. */}
       {view.available && hint?.note && (
         <p className="m-0 mt-1 opacity-90">⚠ {hint.note}</p>
       )}
@@ -258,6 +255,7 @@ export function FullTransformerAdvancedRecipe({
   adv = null, saveAdv = null,
   samplePromptsText = '', setSamplePromptsText = null, saveSamplePrompts = null,
   samplePromptsDefault = [], maxSamplePrompts = 8,
+  quantizeTarget = null, suggestedQuantizePath = '',
 }) {
   const explicitSteps = String(stepsOverride || '').trim();
   const factClass = 'rounded-lg border border-sky-400/20 bg-app/45 px-2.5 py-2';
@@ -545,10 +543,15 @@ export function FullTransformerAdvancedRecipe({
           </span>
         </label>
 
-        {/* The manual door to the SAME conversion: a full-precision model already
-            on this machine — downloaded from Hugging Face, or delivered by an
-            earlier run — turned into the fp8 file ComfyUI loads. */}
-        <Fp8QuantizeTool disabled={disabled} />
+        {/* THE surface for the conversion. `target` is what turns it from "paste
+            a path" into one click: the model this dataset's run delivered, named
+            by the same `hf_weight_filename` the artifact card above lists — so
+            the card and the operation can never designate different checkpoints
+            out of a repository that holds several 26 GB files. `suggestedPath`
+            pre-fills the manual field with the custom base already on screen,
+            when there is one. */}
+        <Fp8QuantizeTool disabled={disabled} target={quantizeTarget}
+          suggestedPath={suggestedQuantizePath} />
       </div>
     </section>
   );
@@ -2677,6 +2680,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               saveSamplePrompts={saveSamplePrompts}
               samplePromptsDefault={advSampleDefault}
               maxSamplePrompts={advMaxPrompts}
+              quantizeTarget={denseQuantizeTarget(cloudLastHere || {})}
+              suggestedQuantizePath={looksAbsolute(base) ? String(base).trim() : ''}
               disabled={trainingModeBusy || cloudActiveHere} />
           ) : (<>
           {/* LORA_ADVANCED_CONTROLS_START */}

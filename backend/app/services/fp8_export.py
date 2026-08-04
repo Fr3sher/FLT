@@ -462,16 +462,69 @@ def _newest_checkpoint(folder, prefix='Krea'):
     return best[1] if best else None
 
 
-def main(argv=None) -> int:
-    """CLI executed ON THE POD. Prints exactly one JSON line on stdout.
+def verify_export(path) -> dict:
+    """Re-open the file we just wrote and prove it is what we claimed.
 
-    Fail-open by contract: a non-zero exit means "no fp8 export", never "the run
-    failed" — the bf16 master was pushed by the trainer before this ever ran.
+    Same checks as the unit test, run on the REAL output: the fp8 marker, one
+    per-tensor scale, and the payload dtype. A conversion that produced an
+    unloadable file must say so here rather than at generation time, days later.
+
+    It lives HERE, next to the writer, because both need torch and safetensors —
+    and the app server is not allowed to (see fp8_quantize's module note). One
+    implementation, run wherever the conversion runs.
+    """
+    out = {'verified': False, 'verify_error': None}
+    try:
+        from safetensors import safe_open
+        with safe_open(str(path), framework='pt') as fh:
+            keys = list(fh.keys())
+            if MARKER_KEY not in keys:
+                raise ValueError('the scaled-fp8 marker is missing')
+            marker = fh.get_tensor(MARKER_KEY)
+            scales = [k for k in keys if k.endswith(SCALE_SUFFIX)]
+            if not scales:
+                raise ValueError('no per-tensor scale was written')
+            weight = scales[0][:-len(SCALE_SUFFIX)] + '.weight'
+            payload = fh.get_tensor(weight)
+            scale = fh.get_tensor(scales[0])
+        import torch
+        if marker.dtype is not torch.float8_e4m3fn or marker.nelement() != 2:
+            raise ValueError('the marker does not describe float8_e4m3fn weights')
+        if payload.dtype is not torch.float8_e4m3fn:
+            raise ValueError(f'{weight} was not written as float8_e4m3fn')
+        if scale.dtype is not torch.float32 or scale.ndim != 0:
+            raise ValueError('the per-tensor scale is not a float32 scalar')
+        out.update(verified=True, scaled_tensors=len(scales))
+    except Exception as e:                       # noqa: BLE001 — reported
+        out['verify_error'] = str(e)[:300]
+    return out
+
+
+# One line per converted tensor, read by the parent process to drive a progress
+# bar. Deliberately not JSON: it is parsed off a stream that also carries torch's
+# own chatter, so it has to be recognisable at a glance and cheap to emit.
+PROGRESS_PREFIX = 'LDS_FP8_PROGRESS'
+
+# The single line this CLI ends on, whichever machine runs it. `dense_fp8_delivery`
+# declares the same string for the pod lane it parses; defining it HERE too keeps
+# the local worker from importing that module just to read a constant.
+RESULT_PREFIX = 'LDS_FP8_RESULT'
+
+
+def main(argv=None) -> int:
+    """CLI, executed on the pod AND — with ``--dst`` — as this app's own worker.
+
+    Prints exactly one ``LDS_FP8_RESULT`` JSON line on stdout, plus progress
+    lines when asked. Fail-open by contract on the pod: a non-zero exit means
+    "no fp8 export", never "the run failed" — the bf16 master was pushed by the
+    trainer before this ever ran.
     """
     import argparse
     parser = argparse.ArgumentParser(prog='lds-fp8-export')
     parser.add_argument('--src', default='')
     parser.add_argument('--src-dir', default='')
+    parser.add_argument('--dst', default='')
+    parser.add_argument('--progress', action='store_true')
     parser.add_argument('--prefix', default='Krea')
     parser.add_argument('--repo-id', default='')
     parser.add_argument('--budget-seconds', type=int, default=1800)
@@ -493,9 +546,15 @@ def main(argv=None) -> int:
         src = args.src or _newest_checkpoint(args.src_dir, args.prefix)
         if not src:
             raise Fp8ExportError('no dense checkpoint found to quantize')
-        dst = os.path.join(os.path.dirname(src), fp8_name_for(src))
-        summary = export_scaled_fp8(src, dst, budget_seconds=args.budget_seconds)
-        result.update(ok=True, **summary)
+        dst = args.dst or os.path.join(os.path.dirname(src), fp8_name_for(src))
+
+        def report(done, total):
+            print(f'{PROGRESS_PREFIX} {done} {total}', flush=True)
+
+        summary = export_scaled_fp8(src, dst, budget_seconds=args.budget_seconds,
+                                    progress=report if args.progress else None,
+                                    metadata={'lds_quantized_from': os.path.basename(src)})
+        result.update(ok=True, **summary, **verify_export(dst))
         if args.repo_id:
             from huggingface_hub import HfApi
             api = HfApi(token=os.environ.get('HF_TOKEN') or None)
@@ -510,7 +569,7 @@ def main(argv=None) -> int:
                 result['dropped_bf16'] = True
     except Exception as e:                       # noqa: BLE001 — reported, not raised
         result['error'] = str(e)[:500]
-    print('LDS_FP8_RESULT ' + json.dumps(result))
+    print(RESULT_PREFIX + ' ' + json.dumps(result))
     return 0 if result['ok'] else 1
 
 

@@ -1767,6 +1767,57 @@ def tools_fp8_quantize_status():
     return jsonify({'ok': True, **(fp8_quantize.status() or {})})
 
 
+# --- One-click fp8 delivery ------------------------------------------------------
+# The normal path: no path to paste, no machine to rent. It resolves the master
+# (a Hugging Face repository, or a full-precision file the app already knows
+# about), downloads it if it is not here, quantizes it and leaves the fp8 in the
+# ComfyUI folder that loads it. NOT behind _require_cloud: nothing is rented, and
+# the person who most needs this has no vast key at all.
+
+@bp.post('/tools/fp8-deliver/plan')
+def tools_fp8_deliver_plan():
+    """Where the file will land, what it will weigh, and whether the disk can
+    take it — answered BEFORE the click. Always 200: a refusal is a disabled
+    button carrying its reason, not a toast after the user committed."""
+    from ..services import fp8_local_delivery
+    d = request.get_json(silent=True) or {}
+    return jsonify(fp8_local_delivery.describe(
+        repo_id=d.get('repo_id'), filename=d.get('filename'), path=d.get('path'),
+        family=d.get('family'), keep_master=d.get('keep_master', True),
+        destination_dir=d.get('destination_dir')))
+
+
+@bp.post('/tools/fp8-deliver')
+def tools_fp8_deliver_start():
+    from ..services import fp8_local_delivery
+    d = request.get_json(silent=True) or {}
+    try:
+        info = fp8_local_delivery.start(
+            current_app._get_current_object(),
+            repo_id=d.get('repo_id'), filename=d.get('filename'),
+            path=d.get('path'), family=d.get('family'),
+            keep_master=d.get('keep_master', True),
+            destination_dir=d.get('destination_dir'))
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **info, 'status': fp8_local_delivery.status()})
+
+
+@bp.get('/tools/fp8-deliver/status')
+def tools_fp8_deliver_status():
+    from ..services import fp8_local_delivery
+    return jsonify({'ok': True, **(fp8_local_delivery.status() or {})})
+
+
+@bp.post('/tools/fp8-deliver/cancel')
+def tools_fp8_deliver_cancel():
+    """Stop the job. The bytes already downloaded stay on disk, so starting
+    again resumes rather than restarts."""
+    from ..services import fp8_local_delivery
+    return jsonify({'ok': True, 'cancelled': fp8_local_delivery.cancel(),
+                    **(fp8_local_delivery.status() or {})})
+
+
 @bp.post('/cloud/quantize/plan')
 def cloud_quantize_plan():
     """Cost, duration cap and storage impact of quantizing a delivered artifact

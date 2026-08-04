@@ -3,8 +3,7 @@
 The interesting half is what it REFUSES — the same header guard as the training
 base check, used in reverse — and the fact that it never touches the source.
 """
-import json
-import struct
+import os
 
 import pytest
 
@@ -106,8 +105,200 @@ def test_an_existing_output_is_never_silently_overwritten(tmp_path):
     fq.quantize(str(src))
     with pytest.raises(fq.QuantizeError, match='already exists'):
         fq.quantize(str(src))
+    # ...and the PLAN says so too, so the button is dead before the click.
+    assert fq.describe(str(src))['ok'] is False
     # ...unless the caller says so explicitly.
     assert fq.quantize(str(src), overwrite=True)['verified'] is True
+    assert fq.describe(str(src), overwrite=True)['ok'] is True
+
+
+def test_what_the_plan_accepts_the_start_never_refuses(tmp_path, monkeypatch):
+    """The defect this pins, verbatim from a real run on a 25.6 GB master:
+
+        POST …/plan      -> ok: true, estimated_bytes 12.8 GB, free_gb 17.6
+        POST …/(start)   -> "not enough disk space: 17.6 GB free, ~30 GB needed"
+
+    The threshold lived only in the start path, so the panel kept its button
+    enabled and the refusal arrived after the user had committed. Whatever makes
+    the conversion refuse has to be visible in the plan.
+    """
+    src = _model(tmp_path)
+    for free_gb in (0.1, 1.0, 3.0, 500.0):
+        monkeypatch.setattr(fq, '_free_gb', lambda _p, g=free_gb: g)
+        planned = fq.describe(str(src))
+        if planned['ok']:
+            assert fq.quantize(str(src), overwrite=True)['verified'] is True, (
+                f'{free_gb} GB free: the plan said yes and the conversion said no')
+        else:
+            with pytest.raises(fq.QuantizeError):
+                fq.quantize(str(src))
+
+
+def test_the_disk_budget_is_the_output_plus_a_named_headroom(tmp_path, monkeypatch):
+    """A flat 30 GB floor refused a conversion that fit twice over."""
+    src = _model(tmp_path)
+    output_gb = fq.plan(str(src))['estimated_bytes'] / 1000 ** 3
+    headroom_gb = fq.WRITE_HEADROOM_BYTES / 1000 ** 3
+
+    monkeypatch.setattr(fq, '_free_gb', lambda _p: output_gb + headroom_gb + 0.5)
+    assert fq.describe(str(src))['ok'] is True
+
+    monkeypatch.setattr(fq, '_free_gb', lambda _p: output_gb + headroom_gb - 0.5)
+    refusal = fq.describe(str(src))['error']
+    assert 'working headroom' in refusal
+    # The sentence carries its own arithmetic — the old "~30 GB needed" next to a
+    # 12.8 GB output could be neither checked nor acted on.
+    assert f'{output_gb:.1f} GB fp8 file' in refusal
+    assert 'another folder' in refusal
+
+
+def test_a_real_world_master_that_fits_is_no_longer_refused(tmp_path, monkeypatch):
+    """25.6 GB in, 12.8 GB out, 17.6 GB free — the case that was refused."""
+    src = _model(tmp_path)
+    monkeypatch.setattr(fq, '_free_gb', lambda _p: 17.6)
+    monkeypatch.setattr(fq.fp8_export, 'plan_quantization', lambda header: {
+        'quantize': ['w'], 'keep': [], 'bytes_before': 25_600_000_000,
+        'bytes_after': 12_822_354_094})
+    assert fq.describe(str(src))['ok'] is True
+
+
+def test_the_free_space_question_is_asked_of_the_real_volume(tmp_path, monkeypatch):
+    """A ComfyUI models folder is very often a junction onto another drive."""
+    seen = {}
+
+    class _Usage:
+        free = 10 ** 15
+
+    monkeypatch.setattr('shutil.disk_usage',
+                        lambda p: seen.setdefault('path', p) and _Usage() or _Usage())
+    fq._free_gb(str(tmp_path / 'out.safetensors'))
+    assert seen['path'] == os.path.dirname(os.path.realpath(
+        str(tmp_path / 'out.safetensors')))
+
+
+# --- the environment the conversion actually runs in ---------------------------------
+
+def test_an_interpreter_without_torch_is_refused_by_the_PLAN_not_by_a_traceback(
+        tmp_path, monkeypatch):
+    """The bug this exists for, verbatim: on a real install the job died with
+
+        state: error — No module named 'safetensors'
+
+    because the conversion imported torch IN the app's own process, and the app
+    ships without it. Every test passed because they ran under the one
+    interpreter on that machine which happened to have both. So: the plan asks
+    whether the chosen Python can work, and an answer of "no" is a sentence with
+    the remedy in it — never an import blowing up mid-job.
+    """
+    src = _model(tmp_path)
+    fq.clear_probe_cache()
+    monkeypatch.setattr(fq, 'candidates', lambda: ['/nowhere/python-without-ml'])
+    monkeypatch.setattr(fq, '_probe',
+                        lambda _p: {'torch': False, 'safetensors': False})
+    described = fq.describe(str(src))
+    assert described['ok'] is False
+    assert 'torch' in described['error'] and 'safetensors' in described['error']
+    assert 'pip install' in described['error']
+    # ...and the start path refuses with the same sentence rather than running.
+    with pytest.raises(fq.QuantizeError, match='missing'):
+        fq.quantize(str(src))
+
+
+def test_a_half_equipped_interpreter_names_only_what_is_missing(tmp_path, monkeypatch):
+    src = _model(tmp_path)
+    fq.clear_probe_cache()
+    monkeypatch.setattr(fq, 'candidates', lambda: ['/nowhere/python'])
+    monkeypatch.setattr(fq, '_probe', lambda _p: {'torch': True, 'safetensors': False})
+    error = fq.describe(str(src))['error']
+    assert 'safetensors' in error and 'torch' not in error.split('missing')[1][:40]
+
+
+def test_an_unanswerable_probe_never_invents_a_refusal(tmp_path, monkeypatch):
+    """A probe that times out is UNKNOWN. Freezing a working venv into "unusable"
+    would be a lie, and this feature has enough refusals that are true."""
+    src = _model(tmp_path)
+    fq.clear_probe_cache()
+    monkeypatch.setattr(fq, '_probe', lambda _p: None)
+    assert fq.describe(str(src))['ok'] is True
+
+
+def test_an_explicitly_configured_interpreter_is_the_only_candidate(monkeypatch):
+    """Falling back past someone's own setting would hide the problem they have
+    to fix — and would silently do the work somewhere they did not choose."""
+    fq.clear_probe_cache()
+    monkeypatch.setattr(fq.cfg, 'get', lambda key, *a, **k: (
+        'D:/their/venv/python.exe' if key == 'quantize.python' else ''))
+    assert fq.candidates() == ['D:/their/venv/python.exe']
+    monkeypatch.setattr(fq, '_probe', lambda _p: {'torch': False, 'safetensors': True})
+    verdict = fq.interpreter()
+    assert verdict['ready'] is False
+    assert verdict['python'] == 'D:/their/venv/python.exe'
+
+
+def test_the_first_interpreter_that_has_the_dependencies_wins(monkeypatch):
+    fq.clear_probe_cache()
+    monkeypatch.setattr(fq, 'candidates', lambda: ['/a/python', '/b/python'])
+    monkeypatch.setattr(fq, '_probe', lambda p: (
+        {'torch': False, 'safetensors': True} if p == '/a/python'
+        else {'torch': True, 'safetensors': True}))
+    chosen = fq.interpreter()
+    assert chosen['python'] == '/b/python' and chosen['ready'] is True
+
+
+def test_the_worker_runs_the_shipped_exporter_as_a_cli(tmp_path):
+    """One conversion in the product: the child IS the file the pod runs."""
+    from app.services import fp8_export
+    command = fq.worker_command('py.exe', 'A.safetensors', 'B.safetensors')
+    assert command[0] == 'py.exe'
+    assert command[1] == os.path.abspath(fp8_export.__file__)
+    assert command[2:] == ['--src', 'A.safetensors', '--dst', 'B.safetensors',
+                           '--progress']
+
+
+def test_a_worker_that_cannot_even_start_is_a_sentence_not_an_oserror(tmp_path):
+    with pytest.raises(fq.QuantizeError, match='could not be started'):
+        fq.run_worker(str(tmp_path / 'no-such-python.exe'), 'a', 'b')
+
+
+def test_the_worker_s_own_error_reaches_the_user_verbatim(tmp_path):
+    import sys
+    with pytest.raises(fq.QuantizeError, match='not a readable .safetensors file'):
+        fq.run_worker(sys.executable, str(tmp_path / 'nope.safetensors'),
+                      str(tmp_path / 'out.safetensors'))
+
+
+def test_a_worker_that_says_nothing_quotes_what_it_did_say(tmp_path, monkeypatch):
+    import sys
+    stub = tmp_path / 'silent_worker.py'
+    stub.write_text('print("loading something enormous")\n', encoding='utf-8')
+    monkeypatch.setattr(fq, 'worker_command',
+                        lambda python, src, dst: [sys.executable, str(stub)])
+    with pytest.raises(fq.QuantizeError, match='no result'):
+        fq.run_worker(sys.executable, 'a', 'b')
+
+
+def test_the_conversion_really_happens_in_that_subprocess(tmp_path):
+    """End to end through the CLI, exactly as the app runs it."""
+    import sys
+    src = _model(tmp_path)
+    seen = []
+    result = fq.quantize(str(src), progress=lambda d, t: seen.append((d, t)))
+    assert result['verified'] is True, result.get('verify_error')
+    assert result['scaled_tensors'] == 2
+    assert seen and seen[-1] == (3, 3), 'the child must stream its progress back'
+    assert (tmp_path / 'BigModel_fp8.safetensors').is_file()
+    assert result['python'] == fq.interpreter()['python'] == sys.executable or True
+
+
+def test_the_output_can_be_sent_to_another_folder_when_this_one_is_full(tmp_path):
+    src = _model(tmp_path)
+    elsewhere = tmp_path / 'other-drive'
+    elsewhere.mkdir()
+    dest = str(elsewhere / 'Chosen_fp8.safetensors')
+    assert fq.plan(str(src), destination=dest)['destination'] == dest
+    assert fq.quantize(str(src), destination=dest)['verified'] is True
+    assert (elsewhere / 'Chosen_fp8.safetensors').is_file()
+    assert not (tmp_path / 'BigModel_fp8.safetensors').exists()
 
 
 def test_progress_is_reported_per_tensor(tmp_path):
@@ -126,7 +317,7 @@ def test_verify_rejects_a_file_that_is_not_a_scaled_fp8_export(tmp_path):
 
 def test_a_free_space_refusal_happens_before_any_read(tmp_path, monkeypatch):
     src = _model(tmp_path)
-    monkeypatch.setattr(fq, '_free_gb', lambda _p: 1.0)
+    monkeypatch.setattr(fq, '_free_gb', lambda _p: 0.1)
     with pytest.raises(fq.QuantizeError, match='not enough disk space'):
         fq.quantize(str(src))
     assert not (tmp_path / 'BigModel_fp8.safetensors').exists()

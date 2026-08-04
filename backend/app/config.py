@@ -333,6 +333,12 @@ DEFAULTS = {
     #   "never stay warm": every distinct query pays the ~8 s load, which is the
     #   right trade on a memory-tight machine.
     'bank_scoring': {'python': '', 'text_search_idle_minutes': 10},
+    # fp8 quantization runs `fp8_export.py` in a SUBPROCESS, because it needs
+    # torch + safetensors and this app deliberately installs without them
+    # (gigabytes). Empty -> the same interpreter ✨ Score uses, then ai-toolkit's,
+    # then the app's own. Never imported in-process: doing so shipped a feature
+    # that could not run at all on a real install.
+    'quantize': {'python': ''},
     # Watermark inpainting (simple-lama-inpainting, extra ML). Dedicated key so a
     # user can override it, but defaults empty -> reuse the same ML interpreter as
     # rembg/insightface (masks.python) then sys.executable. Never imported in-process.

@@ -48,6 +48,30 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-fp8-quantize-runs-where-torch-lives',
+    date: '2026-08-04',
+    title: 'Quantizing to fp8 now actually runs — it uses an environment that has torch, and says so before you click if none does',
+    blurb:
+      'On a real install the conversion could not run at all: it ended on “No module named ‘safetensors’”, because it tried to do the work inside the app’s own Python — which ships without torch on purpose, since torch is gigabytes and nothing else here needs it. It now runs the conversion in a separate interpreter that has the dependencies, exactly like ✨ Score and the masking passes already do: the one ✨ Score uses, ai-toolkit’s, or whichever you set as `quantize.python`. And because “can this machine do it at all” is something you should learn before committing, it is checked while the plan is drawn: an environment without torch disables the button and tells you which environments would work and what to install, instead of failing thirty seconds in — or, worse, after a 26 GB download.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-fp8-disk-guard-says-yes-when-it-fits',
+    date: '2026-08-04',
+    title: 'The fp8 quantizer no longer refuses a conversion that fits — and a refusal now shows its arithmetic',
+    blurb:
+      'Two things were wrong with the disk check, and both showed up on a real 25.6 GB model. The panel said the conversion was fine, and the click that followed refused it: the threshold was only applied when starting, never when planning, so the button stayed enabled right up to the moment it was too late. And that threshold was a flat 30 GB, while the file being written was 12.8 GB and the drive had 17.6 GB free — an operation that fit twice over, refused by a number of our own. The budget is now derived from the job itself (what is left to download, the fp8 file’s own ceiling, and 2 GB of working headroom), every term is named in the refusal so you can check it, and whatever the plan accepts the start no longer rejects. Free space is also measured on the volume that really holds the folder, which matters because a ComfyUI models folder is very often a junction onto another drive. And when a drive genuinely is too full, the refusal offers to write the file to another folder instead of ending there.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-quantize-to-fp8-in-one-click',
+    date: '2026-08-04',
+    title: 'One click turns your full model into the fp8 file ComfyUI loads — nothing to type, and it works on a model that is only on Hugging Face',
+    blurb:
+      'The fp8 quantizer asked for an absolute path to a file on this machine, and the model most people want to shrink has no such path: a full-model run delivers its 26 GB master into your private Hugging Face repository and never downloads it. So the one full model you own was the one thing the tool could not touch. Now “✨ Quantize to fp8” sits right there in the full-model recipe, already aimed at the model your run delivered, and does the whole chain: fetches the master, converts it, and leaves the fp8 file in ComfyUI’s own models folder, ready to load. Before it starts it tells you which checkpoint it takes (a repository often holds the final save AND several 26 GB step snapshots whose names differ by a number — one rule now decides, and it is the same one that names the file on the card), which folder the file lands in, and what it costs in disk. The download reports its gigabytes, can be stopped, and resumes where it left off. Afterwards the master is kept by default, because it is the only copy you can train from again; deleting it is one radio button away with its size on it. The path field is still there for a file nothing in the app points at — and it now pre-fills itself with your custom training base.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-08-04-dense-quality-levers',
     date: '2026-08-04',
     title: 'Full-model training: choose how many images each step learns from, and how the learning rate moves',

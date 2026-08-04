@@ -234,6 +234,33 @@ export function fullTransformerArtifactFiles(run = {}) {
   return files;
 }
 
+/** The model the fp8 tool should aim at on its own, or null.
+ *
+ * This is what turns "paste an absolute path" into one click, and it is
+ * deliberately derived from the SAME `hf_weight_filename` the artifact card
+ * lists above it: a dense repository holds the final save and several ~26 GB
+ * step snapshots whose names differ by a number, and the card naming one while
+ * the operation took another is exactly the bug this closes. One value, read
+ * once, handed to both.
+ *
+ * Null when there is nothing to aim at: no delivered master, or an fp8 twin the
+ * run already produced (converting it again would only lose precision).
+ */
+export function denseQuantizeTarget(run = {}) {
+  const files = fullTransformerArtifactFiles(run);
+  if (!files.length || files.some((file) => file.kind === 'fp8')) return null;
+  const master = files.find((file) => file.kind === 'bf16');
+  if (!master || !run.hf_repo_id) return null;
+  return {
+    repoId: run.hf_repo_id,
+    filename: String(run.hf_weight_filename || '').split('/').pop() || null,
+    family: run.train_type || null,
+    name: master.name,
+    sizeBytes: master.sizeBytes,
+    label: 'The full model this dataset’s run delivered',
+  };
+}
+
 /** Why an expected fp8 export is not in the list. Never an error state: the
  * bf16 master is delivered either way, so this is a missing convenience. */
 export function fullTransformerFp8Note(run = {}) {
