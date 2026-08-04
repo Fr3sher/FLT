@@ -88,11 +88,133 @@ export default function VideoDatasetsPanel() {
             <p className="truncate font-mono text-[0.625rem] text-content-subtle" title={d.output_dir}>
               {d.output_dir}
             </p>
+            <VideoTrainingSection ds={d} />
             {openId === d.id && <VideoDatasetClips datasetId={d.id} />}
           </li>
         ))}
       </ul>
     </section>
+  )
+}
+
+/** Wan 2.2 14B is the only video target a finished local run has been through.
+ * Every other one is wired from the installed ai-toolkit's own code and preset —
+ * correct as far as reading goes, never yet trained here end to end. The card
+ * says which of the two it is, because "it started" and "it works" are different
+ * claims and only the user can decide whether to spend a night on the second. */
+const PROVEN_PROFILES = new Set(['wan22_14b'])
+
+/** ▶ Train this dataset — the local run, its progress, and its refusals.
+ *
+ * The button is deliberately quiet until it has something to say. What it must
+ * never do is start silently: MiniMax H3 pulls about 43 GB of weights on its
+ * first run, so the server refuses with the repository and the size and this
+ * asks, once, before that becomes a night of downloading behind a progress bar
+ * that reads "Starting up…".
+ *
+ * Polling only runs while this dataset's own run is live (or just launched):
+ * `active` is answered by the server from the training fence, which names the
+ * TABLE as well as the id — a face training of the colliding id must not drive
+ * this bar.
+ */
+function VideoTrainingSection({ ds }) {
+  const toast = useToast()
+  const [progress, setProgress] = useState(null)
+  const [busy, setBusy] = useState(false)
+
+  const poll = useCallback(async () => {
+    try {
+      setProgress(await apiFetch(`/api/video-dataset/${ds.id}/train/progress`,
+        { background: true }))
+    } catch { /* the card stays useful without its progress line */ }
+  }, [ds.id])
+  useEffect(() => { poll() }, [poll])
+
+  const active = !!progress?.active
+  useEffect(() => {
+    if (!active) return undefined
+    const t = setInterval(poll, 3000)
+    return () => clearInterval(t)
+  }, [active, poll])
+
+  const start = async (acceptDownload = false) => {
+    setBusy(true)
+    try {
+      const r = await postJson(`/api/video-dataset/${ds.id}/train`,
+        { steps: 2000, accept_download: acceptDownload })
+      toast.success(`Training started — ${r.clips} clips, ${r.steps} steps.`)
+      poll()
+    } catch (e) {
+      const body = e?.body
+      if (body?.needs_download) {
+        // eslint-disable-next-line no-alert
+        if (window.confirm(`${body.error}\n\nDownload about ${body.gigabytes} GB from ${body.repo} and start training?`)) {
+          setBusy(false)
+          return start(true)
+        }
+      } else {
+        toast.error(e?.message || 'Could not start training.')
+      }
+    } finally {
+      setBusy(false)
+    }
+    return undefined
+  }
+
+  const stop = async () => {
+    try {
+      const r = await postJson(`/api/video-dataset/${ds.id}/train/stop`, {})
+      // `ok: false` means the fence names another run. Saying "stopped" there
+      // would tell the user a GPU was released while ai-toolkit still owns it.
+      if (r.ok) toast.success('Training stopped.')
+      else toast.warning('That run is not this dataset’s — nothing was stopped.')
+      poll()
+    } catch (e) {
+      toast.error(e?.message || 'Could not stop training.')
+    }
+  }
+
+  if (!ds.training_verified) return null
+
+  const dl = progress?.download
+  return (
+    <div className="flex flex-col gap-1 border-t border-border pt-1.5">
+      <div className="flex flex-wrap items-center gap-1.5">
+        {active ? (
+          <button type="button" onClick={stop}
+            className="rounded border border-rose-500/60 bg-rose-500/10 px-2 py-1 text-[0.6875rem] font-semibold text-rose-100 hover:bg-rose-500/20">
+            ⏹ Stop training
+          </button>
+        ) : (
+          <button type="button" onClick={() => start(false)} disabled={busy}
+            className="rounded border border-border bg-surface-raised px-2 py-1 text-[0.6875rem] font-semibold text-content hover:bg-surface disabled:opacity-50">
+            {busy ? 'Starting…' : '▶ Train this dataset'}
+          </button>
+        )}
+        <HelpBadge topic="video-train-local" />
+      </div>
+      {active && (
+        <p className="text-[0.6875rem] text-content-muted">
+          {dl
+            ? `Downloading weights — ${dl.percent ?? 0}%`
+            : progress.step != null
+              ? `Step ${progress.step}${progress.total ? ` / ${progress.total}` : ''}${progress.loss != null ? ` · loss ${progress.loss}` : ''}${progress.eta ? ` · ${progress.eta} left` : ''}`
+              : 'Starting up…'}
+        </p>
+      )}
+      {!active && !PROVEN_PROFILES.has(ds.target_profile) && (
+        <p className="text-[0.6875rem] text-content-subtle">
+          {ds.target_label} is wired from ai-toolkit’s own settings but has not been
+          trained end to end here yet.
+        </p>
+      )}
+      {!!progress?.checkpoints?.length && (
+        <p className="text-[0.6875rem] text-content-muted">
+          {progress.checkpoints.length} saved checkpoint
+          {progress.checkpoints.length === 1 ? '' : 's'} in {progress.run_name}
+        </p>
+      )}
+    </div>
   )
 }
 

@@ -39,6 +39,7 @@ from PIL import Image, ImageOps
 from .. import config as cfg
 from ..models import FaceDataset, FaceDatasetImage
 from ..job_queue import GPU_ARBITER_LOCK, queue_manager
+from . import cloud_run_dataset as _crd
 from . import face_dataset_service as fds, face_mask, trash
 from .person_mask import generate_person_masks
 
@@ -8984,19 +8985,29 @@ def continue_training(user_id, dataset_id, extra_steps: int = 1000,
     return res
 
 
-def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
+def stop_training(expected_dataset_id=None, expected_run_token=None,
+                  expected_dataset_table=None) -> bool:
     """Kill the local training process, then release its GPU ownership fence.
 
     The final state transition is deliberately fail-closed: a non-zero
     taskkill result, a missing PID, or an unavailable PID probe leaves the
     training fence in place. Releasing it without proof would let Vision or
     ComfyUI allocate the GPU while ai-toolkit may still be running.
+
+    `expected_dataset_table` completes `expected_dataset_id`, which is an integer
+    two tables now share. Omitted, it means `face_dataset` — so the image lane's
+    Stop button keeps refusing, rather than killing, a video run of the same id.
+    An unconditional stop (no expected id at all) is unchanged and still stops
+    whatever is running: it is the "get off my GPU" button, and it is not asked
+    to know what it is stopping.
     """
     # Keep the launch lock order: training ownership first, then shared GPU
     # admission. This makes the final clear atomic with Vision/ComfyUI admission.
     with _queue_lock, GPU_ARBITER_LOCK:
         current_id = queue_manager._get_system_state('training_dataset_id', None)
         current_token = queue_manager._get_system_state('training_run_token', None)
+        current_table = (queue_manager._get_system_state(
+            'training_dataset_table', None) or _crd.FACE)
         in_progress = bool(queue_manager._get_system_state(
             'training_in_progress', False))
         if expected_dataset_id is not None:
@@ -9004,6 +9015,8 @@ def stop_training(expected_dataset_id=None, expected_run_token=None) -> bool:
                 same_run = int(current_id) == int(expected_dataset_id)
             except (TypeError, ValueError):
                 same_run = False
+            if same_run:
+                same_run = current_table == (expected_dataset_table or _crd.FACE)
             if not in_progress or not same_run:
                 return False
         if expected_run_token is not None:
@@ -9264,8 +9277,34 @@ def is_local_run_active(dataset_id) -> bool:
 def training_status(user_id=None) -> dict:
     cur_id = queue_manager._get_system_state('training_dataset_id', None)
     in_progress = bool(queue_manager._get_system_state('training_in_progress', False))
+    cur_table = (queue_manager._get_system_state('training_dataset_table', None)
+                 or _crd.FACE)
     current = None
-    if in_progress and cur_id is not None:
+    if in_progress and cur_id is not None and cur_table == _crd.VIDEO:
+        # A video run. Resolved here rather than below because every line of the
+        # face branch — the family, the variant, the base model, the Z-Image
+        # recipe diagnostic — is a question about a `face_dataset` row that this
+        # id does not name. Answering them from the colliding face row is how the
+        # run ends up on the wrong page under the wrong name.
+        from ..models import VideoDataset
+        vds = VideoDataset.query.get(int(cur_id))
+        current = {
+            'dataset_id': cur_id,
+            'dataset_table': cur_table,
+            'name': vds.name if vds else f'video dataset {cur_id}',
+            'run_token': queue_manager._get_system_state('training_run_token', None),
+            'train_type': 'video',
+            'target_profile': vds.target_profile if vds else None,
+            'slider_mode': False,
+            'variant': None,
+            'base_model': None,
+            'effective_base': None,
+            'training_adapter': None,
+            'recipe_version': None,
+            'recipe_status': None,
+            'recipe_warning': None,
+        }
+    elif in_progress and cur_id is not None:
         ds = FaceDataset.query.get(int(cur_id))
         fam = (queue_manager._get_system_state('training_train_type', None)
                or (_train_type(ds) if ds else None))
@@ -9283,6 +9322,7 @@ def training_status(user_id=None) -> dict:
             fam, variant, effective_base, adapter, recipe_version)
         current = {
             'dataset_id': cur_id,
+            'dataset_table': cur_table,
             'name': ds.name if ds else _dataset_name(cur_id),
             'run_token': queue_manager._get_system_state(
                 'training_run_token', None),
@@ -9698,6 +9738,12 @@ _queue_lock = threading.RLock()
 
 _TRAIN_IDENTITY_KEYS = (
     'training_pid', 'training_pid_create_time', 'training_dataset_id',
+    # WHICH TABLE `training_dataset_id` POINTS INTO. Absent means `face_dataset`,
+    # the only meaning it could have had before the video lane existed. Without
+    # it the fence is one integer shared by two tables: face dataset #3 and video
+    # dataset #3 both exist, so a video run would show up under a face dataset's
+    # name and be killed by that dataset's Stop button.
+    'training_dataset_table',
     'training_target_step',
     'training_run_token', 'training_train_type', 'training_variant',
     'training_base_model', 'training_effective_base', 'training_slider_mode',
