@@ -30,6 +30,11 @@ from . import face_dataset_service as fds
 from . import gpu_speed
 from . import lora_training as lt
 from . import vast_client
+# Imported for its checkpoint-name parser, which is not video-specific: it is the
+# one place that knows a save may carry a multistage suffix, and every family's
+# step is read through it so the single-file and the paired case cannot drift.
+# The module is pure (no torch, no ffmpeg, no database), so this costs nothing.
+from . import video_training
 from .aitoolkit_remote import RemoteAiToolkit
 
 logger = logging.getLogger(__name__)
@@ -1380,14 +1385,16 @@ def _run_staging_checkpoints(run) -> list:
     target = int(_run_param(run, 'steps') or 0)
     out = []
     for name, path in saves.items():
-        m = re.search(r'_(\d{6,})\.safetensors$', name)
+        step, _stage = video_training.split_checkpoint_name(name)
         out.append({'filename': name,
-                    'step': int(m.group(1)) if m else target,
+                    'step': step if step is not None else target,
                     'path': path,
                     'resume_state': _cloud_resume_state()})
     # step asc; a suffixed save wins ties over the unsuffixed final (deterministic).
-    out.sort(key=lambda e: (e['step'], bool(re.search(r'_(\d{6,})\.safetensors$',
-                                                       e['filename']))))
+    out.sort(key=lambda e: (
+        e['step'],
+        video_training.split_checkpoint_name(e['filename'])[0] is not None,
+        e['filename']))
     return out
 
 
@@ -1540,8 +1547,9 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
             raise ValueError(
                 f'no harvested checkpoint at step {want} for this run (available: {avail})')
         # Prefer a suffixed save over the unsuffixed final when steps tie.
-        chosen = min(matches, key=lambda c: not re.search(
-            r'_(\d{6,})\.safetensors$', c['filename']))
+        chosen = min(matches, key=lambda c: (
+            video_training.split_checkpoint_name(c['filename'])[0] is None,
+            c['filename']))
     try:
         extra = max(100, int(extra_steps))
     except (TypeError, ValueError):
@@ -4780,8 +4788,11 @@ def _mirror_into_local_run(run):
 def _mirror_one(run, run_dir, base, src_path):
     try:
         src_name = os.path.basename(src_path)
-        m = re.search(r'_(\d{6,})\.safetensors$', src_name)
-        dest_name = f'{base}_{m.group(1)}.safetensors' if m else f'{base}.safetensors'
+        # Step AND stage: a Wan 2.2 checkpoint is a high-noise/low-noise pair, and
+        # a name rebuilt from the step alone is identical for both halves — the
+        # second copy would then be refused as a collision with the first.
+        step, stage = video_training.split_checkpoint_name(src_name)
+        dest_name = video_training.restage_checkpoint_name(base, step, stage)
         dest = os.path.join(run_dir, dest_name)
         if os.path.exists(dest):
             # A LOCAL run of the same dataset+family already produced this
@@ -5280,7 +5291,7 @@ def _node_checkpoints(rec, crun):
     out = []
     if crun is not None:
         for c in _run_staging_checkpoints(crun):
-            final = not re.search(r'_(\d{6,})\.safetensors$', c['filename'])
+            final = video_training.split_checkpoint_name(c['filename'])[0] is None
             out.append({
                 'step': c['step'], 'filename': c['filename'],
                 'final': bool(final and crun.status == 'done'), 'present': True,
@@ -6916,13 +6927,14 @@ def cloud_checkpoint_groups(dataset_id, train_type=None, variant=None) -> list:
         run_variant = _run_param(run, 'variant')
         entries = []
         for name in saves:
-            m = re.search(r'_(\d{6,})\.safetensors$', name)
-            step = int(m.group(1)) if m else int(_run_param(run, 'steps') or 0)
+            saved_step, _stage = video_training.split_checkpoint_name(name)
+            step = (saved_step if saved_step is not None
+                    else int(_run_param(run, 'steps') or 0))
             entries.append({'filename': name, 'step': step, 'cloud': True,
                             'run_id': run.id, 'version': _run_param(run, 'version'),
                             'variant': run_variant,
                             'resume_state': _cloud_resume_state(),
-                            'final': bool(not m and run.status == 'done'),
+                            'final': bool(m is None and run.status == 'done'),
                             'active': run.status in ACTIVE_STATES,
                             'trained_at': run.created_at.isoformat()
                                           if run.created_at else None})
