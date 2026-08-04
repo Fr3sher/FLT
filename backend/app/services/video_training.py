@@ -51,7 +51,56 @@ class VideoTrainingUnsupported(ValueError):
 _VERIFIED_BASES = {
     'wan21': 'Wan-AI/Wan2.1-T2V-14B-Diffusers',
     'wan22_14b': 'ai-toolkit/Wan2.2-T2V-A14B-Diffusers-bf16',
+    # NOT `MiniMaxAI/MiniMax-H3`. The trainer resolves every weight file from the
+    # Comfy-Org repack — `COMFY_REPO` in its own minimax_h3.py — and touches the
+    # original repository only for the tokenizer's tiny config files. This is the
+    # one field where naming the "obvious" upstream repo costs a 43 GB download
+    # before anything says a word.
+    'minimax_h3': 'Comfy-Org/MiniMax-H3',
 }
+
+# What one architecture's weights are ALREADY stored as. `qfloat8` is the value
+# every image family here carries and it is the wrong one for a pre-quantised
+# checkpoint: ai-toolkit does not refuse a mismatched qtype, it re-quantises the
+# tensors layer by layer into that format on every load. For MiniMax H3 that is a
+# 21 GB int8-ConvRot transformer and a 16 GB nvfp4 text encoder converted into
+# something they were not saved as, for nothing. Both strings are real backends
+# (`CONVROT_QTYPES` / `NVFP4_QTYPES` in ai-toolkit's ostris quantizer registry).
+_DEFAULT_QTYPE_TE = 'qfloat8'
+_QTYPES = {
+    'minimax_h3': {'qtype': 'convrot8', 'qtype_te': 'nvfp4'},
+}
+
+# The noise schedule each architecture was distilled on, from ai-toolkit's own job
+# presets. Three arches, three answers — `linear` is Wan's, and it is only the
+# default here because that is the one this app has a finished run behind. Getting
+# this wrong does not crash; it trains against the wrong schedule and the loss
+# curve looks fine.
+_DEFAULT_TIMESTEP_TYPE = 'linear'
+_TIMESTEP_TYPES = {
+    'minimax_h3': 'shift',
+    'ltx2': 'weighted',
+    'ltx2.3': 'weighted',
+}
+
+# Arches whose ai-toolkit preset caches encoded clips to disk. It matters most
+# where the transformer is largest: H3 leaves roughly two gigabytes of a 24 GB
+# card free, and encoding on the fly keeps the video VAE resident beside it for
+# the whole run. Wan's proven run did not cache, so Wan is left as it trained.
+_CACHE_LATENTS_ARCHES = ('minimax_h3', 'ltx2.3')
+
+# Preview sampler settings, keyed by arch. H3 is GUIDANCE-DISTILLED: its released
+# pipeline applies no CFG at all, so Wan's 3.5 is not a harmless default here —
+# above 1 it degrades the very preview a caller would judge the LoRA by.
+_DEFAULT_SAMPLE_GUIDANCE = (3.5, 4)
+_SAMPLE_GUIDANCE = {
+    'minimax_h3': (1, 28),
+}
+
+# The multiplier ai-toolkit's presets give the audio branch of a joint model.
+# Which arches HAVE one is not decided here — `video_targets.wants_audio` owns
+# that, from the same source the exporter reads when it decides to mux.
+_AUDIO_LOSS_MULTIPLIER = 1.0
 
 # Accuracy-recovery adapters, keyed by arch. The 4-bit path is only usable WITH
 # one: `quantize: true` + `qtype: uint4` alone is a measurably worse run, so the
@@ -138,7 +187,7 @@ def restage_checkpoint_name(base: str, step, stage) -> str:
     return '_'.join(parts) + '.safetensors'
 
 
-def _resolution_for(width, height, size_multiple):
+def _resolution_for(width, height, size_multiple, max_pixels=None):
     """The single scalar that asks ai-toolkit for exactly this clip's pixels.
 
     `resolution` is not a width. `toolkit/buckets.get_bucket_for_image_size` reads
@@ -150,9 +199,17 @@ def _resolution_for(width, height, size_multiple):
 
     Floored to the target's size multiple, never rounded up: the multiple is the
     VAE's spatial stride, and rounding up would ask for more pixels than the clips
-    contain and upscale data that does not exist."""
-    side = math.sqrt(width * height)
+    contain and upscale data that does not exist.
+
+    `max_pixels` is the target's own canvas cap, where it has one — MiniMax H3
+    caps the AREA at 768*1344, which no step can express (1920x1088 is a clean
+    multiple of 32 and still out of spec). Since the scalar IS a pixel cap once
+    squared, it is floored under the model's too. Only a clamp DOWN ever happens
+    here, which is a downscale of real data rather than an invention of pixels."""
     step = size_multiple or 1
+    side = math.sqrt(width * height)
+    if max_pixels:
+        side = min(side, math.sqrt(max_pixels))
     return max(step, int(side // step) * step)
 
 
@@ -218,15 +275,18 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
             'base repository to train it (nothing installed here states one, and '
             'a guessed repository id only fails once the pod is paid for)')
 
+    qtypes = _QTYPES.get(arch, {})
     model = {
         'arch': arch,
         'name_or_path': name_or_path,
         'quantize': True,
         'quantize_te': True,
-        'qtype_te': 'qfloat8',
+        'qtype_te': qtypes.get('qtype_te', _DEFAULT_QTYPE_TE),
         'low_vram': bool(low_vram),
     }
-    qtype = _RECOVERY_ADAPTERS.get(arch)
+    # An accuracy-recovery adapter, where one exists, wins: it is a 4-bit path
+    # chosen deliberately, not a description of how the file on disk is stored.
+    qtype = _RECOVERY_ADAPTERS.get(arch) or qtypes.get('qtype')
     if qtype:
         model['qtype'] = qtype
     if is_multistage_arch(arch):
@@ -243,7 +303,7 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
         'train_text_encoder': False,
         'gradient_checkpointing': True,
         'noise_scheduler': 'flowmatch',
-        'timestep_type': 'linear',
+        'timestep_type': _TIMESTEP_TYPES.get(arch, _DEFAULT_TIMESTEP_TYPE),
         'optimizer': 'adamw8bit',
         'lr': 1e-4,
         'optimizer_params': {'weight_decay': 1e-4},
@@ -260,6 +320,33 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
         train['switch_boundary_every'] = _SWITCH_BOUNDARY_EVERY
 
     fps = getattr(video_ds, 'fps', None) or profile['fps'] or 16
+    dataset_block = {
+        'folder_path': dataset_folder,
+        'caption_ext': 'txt',
+        'caption_dropout_rate': 0.05,
+        'num_frames': int(frames),
+        # The rate the clips were CUT to, and not decoration. On a joint
+        # audio/video model the waveform is stretched to
+        # `num_frames / dataset fps`; with no fps stated it is fitted to the
+        # SOURCE duration instead and drifts against the frames it accompanies.
+        'fps': int(fps),
+        # Explicitly off, even though it is ai-toolkit's default and even though
+        # its own H3 preset turns it ON. This lane cuts clips to an exact legal
+        # count and states it; letting the loader recount off the file would put a
+        # length nobody validated back in charge — and it also forbids any batch
+        # size above 1.
+        'auto_frame_count': False,
+        'resolution': [_resolution_for(width, height, profile['size_multiple'],
+                                       profile['max_pixels'])],
+    }
+    if video_targets.wants_audio(key):
+        # Opt-in per dataset, and defaulting to False: omitted, the audio branch
+        # of a joint model trains on nothing while the config still looks whole.
+        dataset_block['do_audio'] = True
+        train['audio_loss_multiplier'] = _AUDIO_LOSS_MULTIPLIER
+    if arch in _CACHE_LATENTS_ARCHES:
+        dataset_block['cache_latents_to_disk'] = True
+
     proc = {
         'type': 'sd_trainer',
         # 'output' is ai-toolkit's own default, relative to its root, and is what
@@ -273,18 +360,13 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
             'save_every': int(save_every or max(1, int(steps) // 2)),
             'max_step_saves_to_keep': int(max_step_saves_to_keep),
         },
-        'datasets': [{
-            'folder_path': dataset_folder,
-            'caption_ext': 'txt',
-            'caption_dropout_rate': 0.05,
-            'num_frames': int(frames),
-            'resolution': [_resolution_for(width, height,
-                                           profile['size_multiple'])],
-        }],
+        'datasets': [dataset_block],
         'train': train,
         'model': model,
     }
     if sample_prompts:
+        guidance, sample_steps = _SAMPLE_GUIDANCE.get(arch,
+                                                      _DEFAULT_SAMPLE_GUIDANCE)
         proc['sample'] = {
             'sampler': 'flowmatch',
             'sample_every': proc['save']['save_every'],
@@ -295,8 +377,8 @@ def build_job_config(video_ds, dataset_folder: str, steps: int,
             'prompts': list(sample_prompts),
             'neg': '',
             'seed': 42,
-            'guidance_scale': 3.5,
-            'sample_steps': 4,
+            'guidance_scale': guidance,
+            'sample_steps': sample_steps,
         }
     return {
         'job': 'extension',

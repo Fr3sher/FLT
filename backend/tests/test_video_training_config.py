@@ -253,6 +253,180 @@ def test_low_vram_can_be_turned_off_for_a_big_cloud_gpu():
     assert _proc(cfg)['model']['low_vram'] is False
 
 
+# --- MiniMax H3: a second architecture, not a second set of Wan values ---------
+#
+# Everything asserted below was read in the ai-toolkit INSTALLED on this machine
+# (HEAD 18f5810). It ships no example YAML for H3; its own job UI carries the
+# preset, at ui/src/app/jobs/new/options.tsx:701-773. That file is the source for
+# the repo id, the two qtypes, the timestep schedule, the audio flags and the
+# guidance scale, and each is cross-checked against the trainer code where one
+# exists. The point of this section is that NONE of these values is Wan's.
+
+def test_minimax_h3_loads_the_repack_ai_toolkit_actually_reads():
+    """`Comfy-Org/MiniMax-H3`, not `MiniMaxAI/MiniMax-H3`. The trainer resolves
+    every weight file from the Comfy-Org repack (`COMFY_REPO`, minimax_h3.py:93)
+    and uses the original repo only for the tokenizer's tiny config files. Naming
+    the original as the base is the exact shape of a guess that builds fine and
+    fails after the download — of tens of gigabytes."""
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24), '/pod/ds', 100)
+    assert _proc(cfg)['model']['name_or_path'] == 'Comfy-Org/MiniMax-H3'
+
+
+def test_minimax_h3_keeps_the_quantisation_its_checkpoints_already_carry():
+    """The repack's files are ALREADY quantised: an int8-ConvRot DiT and an nvfp4
+    AWQ text encoder. Asking for `qfloat8` — the value every other family here
+    carries — does not fail and does not warn. It re-quantises a 21 GB transformer
+    and a 16 GB encoder layer by layer, into a format the files were not saved in,
+    on every single load. The qtypes must match the checkpoints exactly."""
+    model = _proc(vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24),
+        '/pod/ds', 100))['model']
+    assert model['qtype'] == 'convrot8'
+    assert model['qtype_te'] == 'nvfp4'
+
+
+def test_wan_keeps_the_text_encoder_quantisation_that_trained():
+    """The regression guard for the test above: making the qtypes per-arch must not
+    move Wan off the values the smoke run carried."""
+    model = _proc(vtrain.build_job_config(_VideoDS(), '/pod/ds', 100))['model']
+    assert model['qtype_te'] == 'qfloat8'
+    assert model['qtype'] == ('uint4|ostris/accuracy_recovery_adapters/'
+                              'wan22_14b_t2i_torchao_uint4.safetensors')
+
+
+def test_the_timestep_schedule_is_a_property_of_the_architecture():
+    """Three arches, three different schedules in ai-toolkit's own presets: Wan 2.2
+    `linear` (options.tsx:291 — which is where our proven value comes from), LTX
+    `weighted` (:792, :818), MiniMax H3 `shift` (:729). A single literal is right
+    for one of them and silently wrong for the other two — wrong here does not
+    crash, it just trains against a noise schedule the model was not distilled on."""
+    def sched(key, **kw):
+        return _proc(vtrain.build_job_config(
+            _VideoDS(target_profile=key, **kw), '/pod/ds', 100,
+            base_model='org/repo'))['train']['timestep_type']
+    assert sched('wan22_14b', frames=81, fps=16) == 'linear'
+    assert sched('minimax_h3', frames=107, fps=24) == 'shift'
+    assert sched('ltx23', frames=121, fps=24) == 'weighted'
+
+
+def test_a_target_that_trains_on_audio_says_so_where_the_loader_looks():
+    """H3 is a JOINT video+audio model and the audio is opt-in per dataset:
+    `do_audio` defaults to False (config_modules.py:1072), so omitting it trains
+    the audio branch on nothing while the config still looks complete. The loader
+    then reads the track off the video file itself (dataloader_mixins.py:722) —
+    which is why the exporter muxes rather than writing a sidecar."""
+    proc = _proc(vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24), '/pod/ds', 100))
+    assert proc['datasets'][0]['do_audio'] is True
+    assert proc['train']['audio_loss_multiplier'] == 1.0
+    assert vt.wants_audio('minimax_h3') is True
+
+
+def test_a_silent_target_carries_no_audio_keys_at_all():
+    """Not "do_audio: False" — absent. Wan has no audio branch, and an audio loss
+    multiplier on a model with no audio stream is a setting a reader has to go and
+    disprove."""
+    proc = _proc(vtrain.build_job_config(_VideoDS(), '/pod/ds', 100))
+    assert 'do_audio' not in proc['datasets'][0]
+    assert 'audio_loss_multiplier' not in proc['train']
+
+
+def test_the_dataset_block_states_the_rate_the_clips_were_cut_to():
+    """Every video preset ai-toolkit ships sets `datasets[].fps` (Wan 16, LTX 24,
+    H3 24). It is not decoration on the audio lane: the clip's waveform is stretched
+    to `num_frames / dataset_config.fps` (dataloader_mixins.py:709-712), so with no
+    fps the audio is fitted to the SOURCE duration instead of the training duration
+    and drifts out of sync with the frames it is supposed to accompany."""
+    for key, frames, fps in (('wan22_14b', 81, 16), ('minimax_h3', 107, 24)):
+        proc = _proc(vtrain.build_job_config(
+            _VideoDS(target_profile=key, frames=frames, fps=fps), '/pod/ds', 100))
+        assert proc['datasets'][0]['fps'] == fps
+
+
+def test_the_frame_count_is_never_re_read_off_the_clips():
+    """`auto_frame_count` pulls as many frames as the video happens to have — and
+    ai-toolkit's own H3 preset turns it ON (options.tsx:735). This lane exists to
+    cut clips to an exact legal count and to state it; letting the loader recount
+    would put a length nobody validated back in charge, and it also forbids any
+    batch size above 1 (config_modules.py:1497)."""
+    for key, frames, fps in (('wan22_14b', 81, 16), ('minimax_h3', 107, 24)):
+        proc = _proc(vtrain.build_job_config(
+            _VideoDS(target_profile=key, frames=frames, fps=fps), '/pod/ds', 100))
+        assert proc['datasets'][0]['auto_frame_count'] is False
+
+
+def test_h3_caches_its_latents_to_disk():
+    """The 33B DiT leaves about two gigabytes of a 24 GB card unused. Encoding
+    clips on the fly means the video VAE is resident alongside it for the whole
+    run; ai-toolkit's own H3 preset caches instead (options.tsx:732), and so does
+    LTX-2.3. Wan's proven run did not, and is left alone."""
+    h3 = _proc(vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24), '/pod/ds', 100))
+    assert h3['datasets'][0]['cache_latents_to_disk'] is True
+    wan = _proc(vtrain.build_job_config(_VideoDS(), '/pod/ds', 100))
+    assert 'cache_latents_to_disk' not in wan['datasets'][0]
+
+
+def test_h3_previews_are_rendered_without_guidance():
+    """H3 is guidance-distilled — its released sampler applies no CFG at all
+    (pipeline.py, and the preset pins guidance_scale 1 / 28 steps at
+    options.tsx:726-727). Wan's 3.5 is not a neutral default here: on a distilled
+    model a guidance scale above 1 degrades the preview, so a caller comparing
+    previews would be reading an artefact of the wrong sampler setting."""
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24), '/pod/ds', 100,
+        sample_prompts=['a person walking'])
+    assert _proc(cfg)['sample']['guidance_scale'] == 1
+    assert _proc(cfg)['sample']['sample_steps'] == 28
+    wan = vtrain.build_job_config(_VideoDS(), '/pod/ds', 100,
+                                  sample_prompts=['a person walking'])
+    assert _proc(wan)['sample']['guidance_scale'] == 3.5
+    assert _proc(wan)['sample']['sample_steps'] == 4
+
+
+def test_frames_off_the_17n_plus_5_grid_are_refused_for_h3():
+    """Wan's own default length, 81, is illegal for H3 — and this is the one arch
+    where the refusal saves a crash rather than a silent misread: H3's packing
+    RAISES on a count that is not 17n+5 (packing.py:87), where Wan's encoder would
+    have sliced the tail off in silence. 107 is on the grid and goes through."""
+    with pytest.raises(vtrain.VideoTrainingUnsupported):
+        vtrain.build_job_config(
+            _VideoDS(target_profile='minimax_h3', frames=81, fps=24),
+            '/pod/ds', 100)
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24), '/pod/ds', 100)
+    assert _proc(cfg)['datasets'][0]['num_frames'] == 107
+
+
+def test_h3_resolution_is_held_under_the_canvas_the_packer_accepts():
+    """H3 caps the canvas AREA at 768*1344 (packing.py:34), which no multiple-of-32
+    step can express: 1920x1088 is a clean multiple and still out of spec. The
+    emitted `resolution` scalar IS a pixel cap (it is squared), so it has to be
+    floored under the model's own — a legacy dataset promoted before the canvas
+    guard existed would otherwise ask the packer for a canvas it refuses.
+    sqrt(768*1344) = 1015.9, floored to a multiple of 32, is 992."""
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24,
+                 width=1920, height=1088), '/pod/ds', 100)
+    assert _proc(cfg)['datasets'][0]['resolution'] == [992]
+    # A dataset already under the cap is untouched: 768x1344 is exactly the cap and
+    # must not be clamped down a step by an off-by-one in the comparison.
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='minimax_h3', frames=107, fps=24,
+                 width=768, height=1344), '/pod/ds', 100)
+    assert _proc(cfg)['datasets'][0]['resolution'] == [992]
+
+
+def test_an_uncapped_target_is_not_clamped_by_the_h3_cap():
+    """`max_pixels` is None for every Wan profile. The clamp must read the profile,
+    not a constant — a 1280x704 Wan dataset is legal at its own size."""
+    cfg = vtrain.build_job_config(
+        _VideoDS(target_profile='wan22_ti2v5b', frames=121, fps=24,
+                 width=1280, height=704), '/pod/ds', 100, base_model='org/repo')
+    assert _proc(cfg)['datasets'][0]['resolution'] == [928]
+
+
 # --- the checkpoint pair ------------------------------------------------------
 
 def test_a_multistage_save_yields_its_step_and_its_stage():
