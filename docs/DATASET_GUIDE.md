@@ -678,7 +678,17 @@ last whole slice instead of starting over.
 
 When a road is unavailable the dialog says which one and why — a run delivered
 to this computer only has no Hub copy to pull, and a run whose local file was
-deleted has only the Hub. Keeping the default **"This computer + Hugging Face"**
+deleted has only the Hub.
+
+**The Hugging Face road is checked, not remembered.** The app records that a
+delivery succeeded, but that record is a minute of the past: a repository you
+deleted last night still reads "delivered". So opening the dialog asks whether
+the repository still answers, and a confirmed deletion closes that road with a
+price of nothing rather than an ETA — renting a pod to fetch a file that is not
+there would spend money on a download that cannot succeed. A check that could
+not be made (offline, no token, an outage) is **not** treated as a deletion: the
+road stays open, because refusing your fast road over a dropped Wi-Fi connection
+would be worse than the problem being avoided. Keeping the default **"This computer + Hugging Face"**
 delivery keeps the fast road open for every future run.
 
 **And the Hub copy is yours to delete — Hugging Face will not tell the app when

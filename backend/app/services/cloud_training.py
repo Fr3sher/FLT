@@ -1621,20 +1621,40 @@ def dense_resume_plan(user_id, run_id, from_step=None) -> dict:
     delivery = dld.run_mode(_run_params(run))
     options = []
 
+    # Does the repository still ANSWER? `_dense_resume_candidates` can only read
+    # the registry, and the registry's `artifact_status` is stamped once at
+    # delivery and never revisited. A repository its owner deleted last night
+    # therefore still reads 'available' — so this lane was offered, priced, and
+    # given an ETA, and choosing it RENTED A POD that then took a 404. The road
+    # has to be measured here, not remembered.
+    #
+    # Only a proven 'gone' closes it. `unknown` — no token, offline, a 5xx —
+    # leaves it OPEN: refusing someone's fast road because their Wi-Fi dropped
+    # would be a worse failure than the one being fixed, and hub_presence is
+    # built to never say 'gone' without proof.
+    presence = None
+    if hub:
+        from . import hub_presence
+        presence = hub_presence.check(hub['repo_id'])
+        if presence.get('state') == hub_presence.GONE:
+            hub = None
+
     if hub:
         est = ptp.estimate_hub(hub.get('size_bytes') or 0, price)
         options.append({**est, 'transport': 'hub', 'available': True,
                         'filename': hub['filename'], 'step': hub['step'],
-                        'repo_id': hub['repo_id'], 'reason': None})
+                        'repo_id': hub['repo_id'], 'reason': None,
+                        'presence': (presence or {}).get('state')})
     else:
-        # Say WHICH of the three reasons it is, in the order that makes each
-        # answer TRUE rather than merely first. "Unavailable" alone sends the
-        # user to change a setting that was never the problem — and reporting
-        # "not verified" for a run that never had a copy at all sends them to
-        # re-verify something that does not exist.
+        # Say WHICH reason it is, in the order that makes each answer TRUE
+        # rather than merely first. "Unavailable" alone sends the user to change
+        # a setting that was never the problem; "not verified" for a run that
+        # never had a copy sends them to re-verify something that does not
+        # exist; and "gone" for a run whose only Hub file is an fp8 twin blames
+        # a deletion that never happened.
         status = _run_param(run, 'artifact_status')
-        has_copy = bool(_run_param(run, 'hf_repo_id')
-                        and _run_param(run, 'hf_weight_filename'))
+        name = os.path.basename(str(_run_param(run, 'hf_weight_filename') or ''))
+        has_copy = bool(_run_param(run, 'hf_repo_id') and name)
         if not dld.delivers_hub(delivery):
             reason = ('this run was delivered to this computer only, so no '
                       'Hugging Face copy of it was ever made. Set the delivery '
@@ -1647,12 +1667,24 @@ def dense_resume_plan(user_id, run_id, from_step=None) -> dict:
             reason = ('the Hugging Face copy of this run is not verified '
                       f"({status or 'unknown'}) — resuming from a file that may "
                       'be truncated would spend a pod training from garbage.')
+        elif presence is not None:
+            # Measured gone, just now. This is the ONLY branch entitled to say
+            # a deletion happened, because it is the only one that looked.
+            reason = ('the Hugging Face copy of this run is gone — checked just '
+                      'now, the repository does not answer. Send the copy on '
+                      'this computer instead, if there is one.')
+        elif dld.is_fp8_name(name):
+            reason = ('the only Hugging Face file of this run is its quantized '
+                      'fp8 twin, which cannot be trained further — its weights '
+                      'are fp8 with per-tensor scales, not the bf16 the trainer '
+                      'loads.')
         else:
-            reason = ('the Hugging Face copy of this run is gone — deleting it '
-                      'there closes this road.')
+            reason = ('this run has no full-precision Hugging Face checkpoint '
+                      'to resume from.')
         options.append({'transport': 'hub', 'available': False,
                         'reason': reason, 'bytes': 0, 'seconds': 0,
-                        'gpu_cost': 0, 'price_per_hour': round(price, 4)})
+                        'gpu_cost': 0, 'price_per_hour': round(price, 4),
+                        'presence': (presence or {}).get('state')})
 
     if local:
         est = ptp.estimate_direct(local.get('size_bytes') or 0, price)
@@ -1836,6 +1868,24 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
                 if want_source == 'hub' else
                 'the copy of this full model on this computer is gone — '
                 'continue from its Hugging Face copy instead.')
+        if want_source == 'hub':
+            # The plan showed a price for this road; THIS is where the money is
+            # actually committed, so the repository is checked again here rather
+            # than trusted from a forecast that may be minutes old. Without it a
+            # deleted repository still reads 'available' in the registry and the
+            # pod is rented before anyone discovers the 404.
+            #
+            # Only a proven 'gone' refuses. `unknown` (offline, no token, a 5xx)
+            # proceeds: blocking a resume because a check could not be made would
+            # be a worse failure than the one this prevents.
+            from . import hub_presence
+            probe = hub_presence.check(on_road[-1]['repo_id'])
+            if probe.get('state') == hub_presence.GONE:
+                raise ValueError(
+                    'the Hugging Face copy of this run is gone — the repository '
+                    'does not answer, checked just now. Renting a pod to fetch '
+                    'it would spend money on a download that cannot succeed. '
+                    'Send the copy on this computer instead, if there is one.')
         cks = on_road
     if not cks:
         raise ValueError('no harvested checkpoint to continue from — this run '

@@ -450,6 +450,74 @@ def test_a_closed_hub_road_names_the_reason_it_is_closed(
     assert fragment in hub['reason']
 
 
+def test_a_deleted_repository_closes_the_hub_road_before_a_pod_is_rented(
+        ct, app, dataset_id, tmp_path, monkeypatch):
+    """The registry cannot answer this. `artifact_status` is stamped once at
+    delivery and never revisited, so a repository deleted last night still reads
+    'available' — the road was offered, PRICED, given an ETA, and choosing it
+    rented a pod that took a 404. The plan and the launch both measure."""
+    from app.services import hub_presence
+    monkeypatch.setattr(hub_presence, 'check', lambda repo_id, **k: {
+        'repo_id': repo_id, 'state': hub_presence.GONE, 'detail': 'deleted',
+        'checked_at': 'now', 'cached': False})
+    with app.app_context():
+        run, _ = _run_with_local_master(ct, dataset_id, tmp_path)
+        _with_hub(ct, run)                      # registry still says 'available'
+        assert any(c['source'] == 'hub' for c in ct._dense_resume_candidates(run)), (
+            'the registry still believes in the copy — that is the whole trap')
+
+        hub = [o for o in ct.dense_resume_plan('local', run.id)['options']
+               if o['transport'] == 'hub'][0]
+        assert hub['available'] is False
+        assert hub['gpu_cost'] == 0, 'a dead road must never carry a price'
+        assert 'gone' in hub['reason'] and 'checked just now' in hub['reason']
+
+        # ...and the launch refuses too. The plan is advice; this is the spend.
+        with pytest.raises(ValueError, match='does not answer'):
+            ct.continue_cloud_run('local', run.id, transport='hub')
+
+
+def test_a_repository_that_could_not_be_checked_keeps_its_road_open(
+        ct, app, dataset_id, tmp_path, monkeypatch):
+    """Offline, no token, a 5xx. Closing the fast road because someone's Wi-Fi
+    dropped would be a worse failure than the one being prevented."""
+    from app.services import hub_presence
+    monkeypatch.setattr(hub_presence, 'check', lambda repo_id, **k: {
+        'repo_id': repo_id, 'state': hub_presence.UNKNOWN,
+        'detail': 'could not check', 'checked_at': 'now', 'cached': False})
+    seen = {}
+    monkeypatch.setattr(ct, 'launch_cloud_training',
+                        lambda u, d, **kw: (seen.update(kw), {'run_id': 9})[1])
+    with app.app_context():
+        run, _ = _run_with_local_master(ct, dataset_id, tmp_path)
+        _with_hub(ct, run)
+        hub = [o for o in ct.dense_resume_plan('local', run.id)['options']
+               if o['transport'] == 'hub'][0]
+        assert hub['available'] is True
+        ct.continue_cloud_run('local', run.id, transport='hub')
+    assert seen['resume_hf']['repo_id'] == 'tester/Krea-2-full-7-dense'
+
+
+def test_an_fp8_only_hub_copy_is_not_reported_as_deleted(ct, app, dataset_id,
+                                                          tmp_path):
+    """The branch that said "gone" used to be reachable ONLY through this case,
+    which is not a deletion at all — the file is right there and simply cannot
+    be trained. Blaming a deletion that never happened would send someone
+    looking for a repository that is fine."""
+    with app.app_context():
+        run, _ = _run_with_local_master(ct, dataset_id, tmp_path)
+        _with_hub(ct, run)
+        params = json.loads(run.train_params)
+        params['hf_weight_filename'] = 'Krea_lds7_dense_000003000_fp8.safetensors'
+        run.train_params = json.dumps(params)
+        ct.db.session.commit()
+        hub = [o for o in ct.dense_resume_plan('local', run.id)['options']
+               if o['transport'] == 'hub'][0]
+    assert hub['available'] is False
+    assert 'fp8' in hub['reason']
+    assert 'gone' not in hub['reason'] and 'deleted' not in hub['reason']
+
+
 def test_a_closed_local_road_explains_the_fp8_twin(ct, app, dataset_id, tmp_path):
     with app.app_context():
         run, path = _run_with_local_master(ct, dataset_id, tmp_path)
