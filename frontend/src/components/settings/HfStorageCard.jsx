@@ -79,7 +79,7 @@ export default function HfStorageCard({ config, setField, configDefaults }) {
   return (
     <Card
       title="Hugging Face storage"
-      help="Full-model (dense) cloud runs deliver each ~26 GB checkpoint straight into a private Hugging Face repo, and custom bases are cached there too. When that private allowance fills up, the push is refused mid-run — after the GPU is paid for. Check it here before a long run, and delete the caches you no longer need."
+      help="A full-model (dense) run now lands on this computer first and only backs its ~26 GB master up to a private Hugging Face repo afterwards, so a full allowance can no longer end a training — it costs the backup, and with it the ability to continue that model later. Custom training bases are cached here too. Check the space before a long run, and delete the caches you no longer need."
     >
       <div className="flex flex-wrap items-center gap-2">
         <button
