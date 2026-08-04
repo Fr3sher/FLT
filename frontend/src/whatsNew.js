@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
+    date: '2026-08-04',
+    title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',
+    blurb:
+      '☁ Quantize to fp8 in the cloud used to give up one second after the click with “create_instance failed: HTTP 400 {}” — no machine, no money spent, and no reason. Two things were wrong. It rented the cheapest offer on the market, and cheap is exactly where free disk runs out: a 26 GB model needs about 86 GB on the pod for the master, its fp8 twin and the download cache, while the top offer of a live search had 57 GB — an ask vast refuses outright. And a single refusal ended the job, even though the next machine would have taken it. Now the search only considers machines with the disk this job will claim, the offer is chosen by the same rule a training launch uses (bad hosts skipped, suspiciously cheap listings ignored), and a refusal moves to the next candidate instead of ending everything. When a rental really is impossible, the error quotes what vast said rather than an empty “{}”. The estimate stays an estimate — but if the market moved and the only machine left costs materially more than the price you agreed to, it tells you and rents nothing.',
+  },
+  {
     id: '2026-08-04-gallery-lightbox-upscale-improve',
     date: '2026-08-04',
     title: 'Upscale & improve is now in the checkpoint gallery — the screen the result lands on',

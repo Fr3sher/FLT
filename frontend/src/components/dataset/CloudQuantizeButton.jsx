@@ -43,7 +43,12 @@ export default function CloudQuantizeButton({ repoId, filename = null, disabled 
   };
 
   const start = async () => {
-    const res = await postJson('/api/cloud/quantize', { repo_id: repoId, filename });
+    // The price shown above is what the user agreed to. Renting re-searches the
+    // market, so it travels with the request: a machine that costs materially
+    // more than the estimate is reported, never rented behind the user's back.
+    const res = await postJson('/api/cloud/quantize', {
+      repo_id: repoId, filename, quoted_price_per_hour: plan?.price_per_hour,
+    });
     if (!res?.ok) {
       setState({ status: 'error', error: res?.error || 'Could not start.' });
       return;
@@ -54,6 +59,10 @@ export default function CloudQuantizeButton({ repoId, filename = null, disabled 
   };
 
   const running = state?.status === 'running' || state?.status === 'provisioning';
+  // What was actually rented — not necessarily the machine that was quoted, since
+  // renting re-searches the market.
+  const rented = [state?.gpu_name, state?.price_per_hour ? `$${state.price_per_hour}/h` : null]
+    .filter(Boolean).join(', ');
   if (!repoId) return null;
 
   return (
@@ -91,7 +100,9 @@ export default function CloudQuantizeButton({ repoId, filename = null, disabled 
       )}
       {running && (
         <p className="m-0" role="status">
-          ☁ {state.status === 'provisioning' ? 'Renting a machine…' : 'Converting on the rented machine…'}
+          ☁ {state.status === 'provisioning'
+            ? 'Renting a machine…'
+            : `Converting on the rented machine${rented ? ` (${rented})` : ''}…`}
           {' '}It is destroyed automatically, at the latest after {plan?.max_minutes || 60} min.
         </p>
       )}

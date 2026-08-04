@@ -617,7 +617,20 @@ one.
   nothing. A sweep also reaps any machine of this lane left behind by an app
   restart, and it runs every time the status is polled.
 - The GPU is irrelevant here — the job is network-bound — so the selection asks
-  for the cheapest card and filters on **downlink bandwidth** instead.
+  for the cheapest card and filters on **downlink bandwidth** and on **free
+  disk** instead. The disk one decides whether the rental happens at all: the
+  pod holds the master, its fp8 twin and the download cache (~86 GB for a 26 GB
+  model), and vast refuses outright an offer that has less. The cheapest listing
+  on the market is precisely where free disk runs out, which is why "cheapest"
+  alone is not the rule — hosts blacklisted for failing to boot and
+  suspiciously-underpriced listings are skipped too, exactly as on a training
+  launch.
+- **One machine refusing is not the end.** The market listing can be stale, so a
+  refusal moves to the next candidate (a few tries) instead of failing the job,
+  and when a rental really is impossible the error quotes what vast said.
+- The quote is an estimate, and renting re-checks the market. If the machines at
+  that price are gone and the only ones left cost materially more, it says so
+  and rents **nothing** — ask for a new estimate to see the real price.
 - It refuses if the fp8 file already exists in the repository, and it warns
   before renting when your private Hugging Face storage looks too small for the
   new file.

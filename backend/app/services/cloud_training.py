@@ -2499,6 +2499,57 @@ def _disk_gb_for(cloud_cfg, params) -> int:
     return disk_gb
 
 
+def rent_with_fresh_offers(*, search, create, pick=None, on_offer=None,
+                           no_offer_message=None, attempts=None, sleep=None):
+    """Rent the first offer vast actually accepts, re-searching between tries.
+
+    Vast's offer index is a CACHE. An offer it hands back can already be sold,
+    or sit on a host that refuses the ask for a reason the listing does not
+    carry, and the refusal arrives as a bare ``HTTP 400`` at create time — run
+    #80 died there, and so did the first cloud quantization. One shot at one
+    offer therefore loses a launch that a second offer would have won. Each
+    attempt re-searches live, skips what it already tried, and re-picks.
+
+    Shared with the quantization lane on purpose: a second copy of this loop
+    would drift, and the blacklist and bait-price filter must cover both.
+
+    ``search`` returns live offers (the caller owns the resource predicates),
+    ``pick`` chooses among the already-filtered survivors — it may raise its own
+    refusal, which is final and never retried — and ``create`` rents the chosen
+    one. ``on_offer`` sees the offer just before it is rented (host stamping).
+    Returns ``(instance_id, offer)``.
+    """
+    attempts = int(attempts or _CREATE_INSTANCE_ATTEMPTS)
+    sleep = sleep or _sleep
+    pick = pick or (lambda offers: _pick_offer(offers, None))
+    tried = set()
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        pool = [o for o in (search() or []) if o.get('offer_id') not in tried]
+        if not pool:
+            if tried:
+                # Carry vast's own words out: a marketplace that refuses every
+                # machine is diagnosable only through the last refusal, and
+                # dropping it here is how 'HTTP 400 {}' became an hour of guessing.
+                raise RuntimeError(
+                    f'no vast.ai offer left after {len(tried)} refused attempt(s) — '
+                    f'last refusal: {last_error}')
+            raise RuntimeError(no_offer_message or 'no vast.ai offer matches right now')
+        offer = pick(_filter_offers(pool))
+        tried.add(offer['offer_id'])
+        if on_offer:
+            on_offer(offer)
+        try:
+            return create(offer), offer
+        except vast_client.VastError as e:
+            if attempt >= attempts or not _is_transient_create_error(e):
+                raise
+            last_error = e
+            logger.warning('create_instance attempt %s/%s failed (%s) — retrying '
+                           'with a fresh offer', attempt, attempts, e)
+            sleep(_CREATE_INSTANCE_BACKOFF)
+
+
 def _provision(run):
     """Search offers and create the instance, honoring the launch-time GPU
     choice when the picked class is still available.
@@ -2515,36 +2566,29 @@ def _provision(run):
     template_hash = (c.get('template_hash') or '').strip()
     # A transient create refusal (offer just taken -> HTTP 400/409, rate limit,
     # vast 5xx — run #80's 'HTTP 400 {}' died here with no retry) gets a bounded
-    # re-search: the failed offer is likely gone, so each attempt excludes the
-    # offers already tried and picks a fresh one. A non-transient refusal (auth,
-    # 404) or an exhausted budget raises immediately.
-    tried_offers = set()
-    offer = instance_id = None
+    # re-search; a non-transient one (auth, 404) raises immediately. The loop
+    # itself is rent_with_fresh_offers, shared with the quantization lane.
+    # `token` is set by _create below and read after the rental — the raw-image
+    # branch mints the UI bearer, the template branch has none.
     token = ''
     # The offer search runs under the 'preparing' status and used to keep the
     # staging sentence, so a search that found nothing looked like a dataset
     # export that had hung. It is a distinct launch step and now says so.
     _set(run, phase_detail=_OFFER_SEARCH_DETAIL)
-    for attempt in range(1, _CREATE_INSTANCE_ATTEMPTS + 1):
-        offers = vast_client.search_offers(
+
+    def _search():
+        return vast_client.search_offers(
             min_vram_gb=min_vram, max_dph=c.get('max_price_per_hour', 0.80),
             min_inet_down_mbps=int(c.get('min_inet_down_mbps') or 0),
             min_reliability=float(c.get('min_reliability') or 0.98),
             min_disk_bw_mbps=int(c.get('min_disk_bw_mbps') or 0),
             verified_only=bool(c.get('verified_only', True)),
-            secure_cloud_only=bool(c.get('secure_cloud_only', False)))
-        pool = [o for o in offers if o.get('offer_id') not in tried_offers]
-        if not pool:
-            if tried_offers:
-                raise RuntimeError(
-                    'no fresh vast.ai offer left after a transient create refusal '
-                    f'(tried {len(tried_offers)})')
-            raise RuntimeError(
-                f'no vast.ai offer matches (>= {min_vram} GB VRAM, '
-                f'<= ${c.get("max_price_per_hour", 0.80)}/h) — raise the price cap in Settings')
-        offer = _pick_offer(_filter_offers(pool), params.get('requested_gpu'),
-                            strict=bool(params.get('strict_gpu')))
-        tried_offers.add(offer['offer_id'])
+            secure_cloud_only=bool(c.get('secure_cloud_only', False)),
+            # Ask only machines that HAVE the disk this pod is about to claim —
+            # a dense run asks for 200 GB and the market is full of 60 GB boxes.
+            min_disk_gb=disk_gb)
+
+    def _stamp(offer):
         # Stamp the host identity so a boot failure can blacklist THIS machine —
         # by its id AND by the address it answers on, since the id alone was
         # re-minted around a ban (see _blacklist_host). offer_ip is whatever the
@@ -2558,38 +2602,40 @@ def _provision(run):
             if _offer_ip(offer):
                 params['offer_ip'] = _offer_ip(offer)
             _set(run, train_params=json.dumps(params))
-        try:
-            if template_hash:
-                # Preferred path (smoke-validated 2026-07-12): the official
-                # template publishes the UI behind the pod's Caddy proxy on
-                # ui_port and vast generates the per-instance auth token (picked
-                # up from the instance record during boot-wait). HF_TOKEN reaches
-                # the pod later via ensure_settings(), not env.
-                token = ''
-                instance_id = vast_client.create_instance(
-                    offer['offer_id'], disk_gb=disk_gb,
-                    label=run.vast_label, template_hash=template_hash,
-                    image=(c.get('image') or None))
-            else:
-                # Raw-image fallback (config escape hatch): direct port publish +
-                # our own bearer token on the UI itself.
-                token = pysecrets.token_urlsafe(24)
-                port = int(c.get('ui_port') or 18675)
-                env = {'AI_TOOLKIT_AUTH': token, f'-p {port}:{port}': '1'}
-                hf = _hf_token_for_mode(params.get('training_mode') or 'lora')
-                if hf:
-                    env['HF_TOKEN'] = hf
-                instance_id = vast_client.create_instance(
-                    offer['offer_id'], disk_gb=disk_gb,
-                    label=run.vast_label, image=c.get('image'), env=env,
-                    onstart=(c.get('onstart') or None))
-            break
-        except vast_client.VastError as e:
-            if attempt >= _CREATE_INSTANCE_ATTEMPTS or not _is_transient_create_error(e):
-                raise
-            logger.warning('create_instance attempt %s/%s failed (%s) — retrying '
-                           'with a fresh offer', attempt, _CREATE_INSTANCE_ATTEMPTS, e)
-            _sleep(_CREATE_INSTANCE_BACKOFF)
+
+    def _create(offer):
+        nonlocal token
+        if template_hash:
+            # Preferred path (smoke-validated 2026-07-12): the official
+            # template publishes the UI behind the pod's Caddy proxy on
+            # ui_port and vast generates the per-instance auth token (picked
+            # up from the instance record during boot-wait). HF_TOKEN reaches
+            # the pod later via ensure_settings(), not env.
+            token = ''
+            return vast_client.create_instance(
+                offer['offer_id'], disk_gb=disk_gb,
+                label=run.vast_label, template_hash=template_hash,
+                image=(c.get('image') or None))
+        # Raw-image fallback (config escape hatch): direct port publish +
+        # our own bearer token on the UI itself.
+        token = pysecrets.token_urlsafe(24)
+        port = int(c.get('ui_port') or 18675)
+        env = {'AI_TOOLKIT_AUTH': token, f'-p {port}:{port}': '1'}
+        hf = _hf_token_for_mode(params.get('training_mode') or 'lora')
+        if hf:
+            env['HF_TOKEN'] = hf
+        return vast_client.create_instance(
+            offer['offer_id'], disk_gb=disk_gb,
+            label=run.vast_label, image=c.get('image'), env=env,
+            onstart=(c.get('onstart') or None))
+
+    instance_id, offer = rent_with_fresh_offers(
+        search=_search, create=_create, on_offer=_stamp,
+        pick=lambda offers: _pick_offer(offers, params.get('requested_gpu'),
+                                        strict=bool(params.get('strict_gpu'))),
+        no_offer_message=(
+            f'no vast.ai offer matches (>= {min_vram} GB VRAM, >= {disk_gb} GB disk, '
+            f'<= ${c.get("max_price_per_hour", 0.80)}/h) — raise the price cap in Settings'))
     try:
         _register_instance(run, instance_id, offer, token)
     except Exception:
@@ -6838,7 +6884,10 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
         min_reliability=float(c.get('min_reliability') or 0.98),
         min_disk_bw_mbps=int(c.get('min_disk_bw_mbps') or 0),
         verified_only=bool(c.get('verified_only', True)),
-        secure_cloud_only=bool(c.get('secure_cloud_only', False))))
+        secure_cloud_only=bool(c.get('secure_cloud_only', False)),
+        # …including the disk floor, or the picker prices tiers that the launch
+        # cannot rent (a custom base can push the real ask higher still).
+        min_disk_gb=_disk_gb_for(c, {'training_mode': mode})))
     cheapest_by_gpu = {}
     for o in offers:
         name = o.get('gpu_name') or 'GPU'

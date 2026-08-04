@@ -1777,7 +1777,10 @@ def cloud_quantize_start():
     try:
         planned = cloud_quantize.start(
             current_app._get_current_object(), d.get('repo_id'),
-            filename=d.get('filename'), keep_bf16=d.get('keep_bf16', True))
+            filename=d.get('filename'), keep_bf16=d.get('keep_bf16', True),
+            # The price the user read on screen: the rental re-searches offers,
+            # and must not silently land on a dearer machine than the one quoted.
+            quoted_price=d.get('quoted_price_per_hour'))
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **planned, 'status': cloud_quantize.status()})

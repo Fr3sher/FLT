@@ -1096,6 +1096,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `cloud.quantize.max_minutes` | Hard ceiling on a cloud quantization rental (default `60`, floor 5). The machine is destroyed when it is reached, whatever it reported. |
 | `cloud.quantize.max_price_per_hour` | Price cap for that rental (default: the general `cloud.max_price_per_hour`). |
 | `cloud.quantize.min_inet_down_mbps` | Downlink floor for the host (default `200`). The job is network-bound — this is the setting that decides the bill. |
+| *(not a setting)* free-disk floor | Derived, never configurable: the pod must hold the master, its fp8 twin and the download cache (~86 GB for a 26 GB model). Offers with less free disk are excluded from the search, because vast refuses an ask larger than the machine's disk — and the cheapest listing is exactly where free disk runs out. |
 | `cloud.quantize.export_budget_seconds` | Time budget for the conversion inside the pod (default `1800`). |
 | `cloud.full_transformer.fp8_export_budget_seconds` | Time budget for that conversion on the pod (default `1800`). Exceeding it abandons the export; the bf16 master is already delivered, so the run stays a success. |
 | `face_scoring.python` | Python interpreter used to run the InsightFace subprocess (empty = current interpreter). |
