@@ -697,11 +697,15 @@ panel now names each lock and its reason instead of just greying it out. The
 values below are editable because they change the *result*, not whether the run
 fits.
 
-**Krea 2 Raw only, never Turbo.** Turbo's speed comes from a de-distillation
-adapter that LoRA training subtracts back out at extraction time; a dense save
-has no such step, so it would bake that adapter permanently into the delivered
-weights instead of learning your subject — train dense on Raw (see the dataset
-guide, §10).
+**Krea 2 Raw only — Turbo is out of scope, not proven impossible.** Turbo is
+speed-distilled, and a dense run rewrites the weights that distillation lives
+in. On the distilled models where this *has* been measured, the result stays a
+valid checkpoint and simply stops being fast (back toward real CFG and 25-30
+steps); for Krea 2 specifically nobody has published the measurement, so for now
+the lane stays shut on missing evidence, not on a known defect. Train dense on
+Raw — the undistilled checkpoint Krea publishes for exactly this — and see the
+dataset guide, §10, for what is known and for the published trick to get the
+speed back afterwards.
 
 | Setting | Key | Default | Notes |
 |---|---|---|---|

@@ -733,18 +733,41 @@ typed in as before, and takes the same route: same refusals, same disk check,
 same destination, stated. When you have set **Custom weights…**, that path
 pre-fills it, so there is nothing to type there either.
 
-### Why there is no full-model training on Turbo
+### Why full-model training targets Raw, not Turbo
 
-Dense (full model) training is offered on Krea 2 Raw only. Turbo is a
-speed-distilled model: it was compressed so it can draw an image in about 8
-steps instead of ~50, and that compression is stored in the very same weights
-a dense run rewrites — so training over it erases the speed, and the model
-drifts back to needing many steps with no way to restore it. LoRA training can
-target Turbo because a temporary de-distillation adapter is added during
-training and subtracted afterwards, leaving only the small LoRA file; a dense
-run has nothing to subtract from, because that adapter gets baked into the
-exact weights you are saving. Train dense on Raw instead — Raw is the
-undistilled checkpoint Krea publishes for precisely this purpose.
+Dense (full model) training is offered on **Krea 2 Raw only**. That is a scope
+decision, and it has numbers behind it — but it is a choice, not a defect we hit.
+
+**What Turbo is.** A speed-distilled build: it draws an image in about 8 steps
+instead of ~50, and that compression lives in the very weights a dense run
+rewrites. So a dense run on Turbo does eat into the speed.
+
+**What that actually costs, where anyone has measured it.** Not a broken file.
+On the distilled models with published results — Z-Image-Turbo, FLUX.2 Klein —
+full fine-tuning leaves a structurally valid checkpoint that gradually **stops
+being fast**: it drifts from "8 steps, no guidance" back toward real CFG and
+25-30 steps. The erosion is progressive, not a cliff, and how far it goes
+depends on the run. "Slow again", not "corrupt".
+
+**Nobody has published that measurement for Krea 2 in particular.** Everything
+above is carried over from neighbouring models. So the honest word for
+dense-on-Turbo here is **untested**, not impossible. For now the app declines it
+rather than letting a rented 80 GB GPU be the first experiment — that is where
+the line sits today, drawn by missing evidence rather than by a known defect,
+and it is the kind of line a measurement moves.
+
+**Krea's own recommendation is train on Raw** — the undistilled checkpoint they
+publish for exactly this — then validate on Turbo. musubi-tuner, the other
+public trainer with Krea 2 support, recommends the same. Nothing here changes
+that advice.
+
+**If you want the speed back afterwards, the published route is a transplant.**
+Fine-tune on Raw, then merge the Turbo re-distillation LoRA published in the
+`Comfy-Org/Krea-2` repo onto your result; authors report doing this around
+strength 0.8-1.0 to get an 8-step build out of a Raw fine-tune. The same trick
+exists for neighbouring models (Z-Image-Turbo distill patches, LCM-LoRA).
+**We have not tested it ourselves** — treat it as a lead, not a supported
+feature.
 
 ### Testing a full model: it is a RAW checkpoint
 

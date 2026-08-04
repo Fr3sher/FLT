@@ -48,6 +48,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-turbo-dense-untested-not-impossible',
+    date: '2026-08-04',
+    title: 'Correction: full-model training on Turbo is untested, not impossible',
+    blurb:
+      'The Guide and the app both told you that training a full model on Krea 2 Turbo was mechanically impossible and would deliver a broken file. That was overstated, and we are correcting it. On the distilled models anyone has actually measured, full training leaves a perfectly valid checkpoint that simply stops being fast — and for Krea 2 nobody has published that measurement at all. Full-model runs still target Raw, and nothing about how they behave has changed; the refusal now says what it really is — a lane we have not tested — and the Guide explains what is known, including the published route people use to get the speed back afterwards.',
+  },
+  {
     id: '2026-08-04-canvas-says-which-run-trained-a-full-model',
     date: '2026-08-04',
     title: 'On the board, a run that trained the whole model now says so',

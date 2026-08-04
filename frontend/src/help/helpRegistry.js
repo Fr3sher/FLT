@@ -1125,10 +1125,13 @@ const TOPICS = [
       'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
       'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
       'gradient checkpointing', '80 gb',
-      // Why Turbo is refused as a dense base — searched as "why can't I train
-      // dense on turbo", not just "what can I edit here".
+      // Why dense training targets Raw and not Turbo — searched as "why can't
+      // I train dense on turbo", not just "what can I edit here". Turbo is out
+      // of SCOPE (untested for dense runs), not mechanically impossible; the
+      // guide section spells out what is actually known.
       'turbo', 'distilled', 'speed distilled', 'speed-distilled', 'distillation',
-      'de-distillation', 'de-distilled', 'assistant lora', 'not supported', 'refused'],
+      'de-distillation', 'de-distilled', 'assistant lora', 'not supported', 'refused',
+      'untested', 'out of scope', 'scope'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'full-model-recipe-unlocked',

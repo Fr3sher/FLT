@@ -1972,7 +1972,8 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                              'for Krea 2')
         if variant and variant != 'base':
             raise ValueError('full_transformer cloud training requires '
-                             'Krea-2-Raw (variant "base"); Turbo is unsupported')
+                             'Krea-2-Raw (variant "base"); Turbo not tested yet '
+                             'for dense runs')
         variant = 'base'
         if base_model:
             raise ValueError('full_transformer cloud training requires the '
@@ -7641,7 +7642,8 @@ def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
                              'for Krea 2')
         if selected_variant != 'base':
             raise ValueError('full_transformer cloud training requires '
-                             'Krea-2-Raw (variant "base")')
+                             'Krea-2-Raw (variant "base"); Turbo not tested yet '
+                             'for dense runs')
         if lt.slider_mode_enabled(ds):
             raise ValueError('full_transformer cloud training is incompatible '
                              'with Slider LoRA mode')
