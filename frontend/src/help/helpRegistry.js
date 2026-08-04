@@ -614,6 +614,23 @@ const TOPICS = [
      'thumbnail disappeared', 'lost my thumbnail', 'thumbnail gone after trimming',
      'redetect deleted my cuts', 're-detect', 'lost my manual cuts'],
     '/video-bank', 'using-the-app', 'retouch-a-cut-trim-split-or-draw-a-shot-by-hand'),
+  // Two symptoms bring people here and neither mentions "audio metrics": a
+  // trained model that came out silent, and an audio cut that flags nothing.
+  // The second is almost always a bank measured before sound was looked at.
+  action('video-audio-cuts', 'Silence and loudness cuts',
+    ['audio', 'sound', 'silent clips', 'silence', 'no sound', 'mute', 'muted',
+     'volume', 'loudness', 'dbfs', 'rms', 'quiet clips', 'audio floor',
+     'silent share', 'my dataset is silent', 'model trained silent',
+     'audio cut flags nothing', 'no sound reading', 'remeasure for audio',
+     'ltx audio', 'minimax audio', 'wan has no audio'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  action('video-edge-trim', 'Trim the edges of every clip',
+    ['trim edges', 'edge trim', 'trim each end', 'inset', 'dissolve', 'fade',
+     'transition at the start', 'first frames are a fade', 'crossfade',
+     'clips dropped by the trim', 'fewer clips than expected',
+     'dropped by the edge trim', 'too short after trimming'],
+    '/video-bank', 'using-the-app',
+    'video-training-sets-and-the-two-things-to-check-before-you-cut-one'),
   // People arrive here from the SYMPTOM ("I can't find the shot with the car")
   // and from the two failures that look like bugs: a search that returns nothing
   // because the pass never ran, and a "without" that returns exactly what was

@@ -73,6 +73,21 @@ def clip_duration_s(frames, fps):
     return (frames - 1) / float(fps)
 
 
+def fits_frames(span_s, frames, fps):
+    """Can a segment of `span_s` seconds supply `frames` frames at `fps`?
+
+    The same test `clip_command` performs before raising ClipTooShort, exposed so
+    a caller can ask the question WITHOUT building a command — which is what lets
+    the promotion tell "this clip was never long enough" apart from "your edge
+    inset made it too short". Those read identically and are fixed differently.
+
+    Deliberately the same expression and the same `_EPSILON`, not a second
+    implementation of the rule: a predictor that disagrees with the refusal it
+    predicts is worse than no explanation at all, and a test pins them together.
+    """
+    return (float(span_s) + _EPSILON) >= clip_duration_s(frames, fps)
+
+
 def clip_filename(index):
     """`clip_0001.mp4`. Zero-padded because trainers walk the folder in filename
     order, and clip_10 sorting before clip_2 is a reordered dataset. Lowercase

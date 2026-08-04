@@ -5,6 +5,7 @@ import {
   frameOptions, clipSeconds, frameOptionLabel, defaultFrames, needsManualFrames,
   sizeOptions, targetWarnings, targetBadge, promoteProblem, promotePayload,
   promoteScopeLabel,
+  insetProblem, insetHint, insetOutcome,
 } from './videoTargetChoice.js'
 
 // Verbatim shapes of GET /api/video/targets — kept as fixtures rather than
@@ -191,3 +192,49 @@ test('no canvas cap, no hint on the source-size option', () => {
   const source = sizeOptions(WAN14B).find((o) => o.key === 'source')
   assert.equal(source.hint, undefined)
 })
+
+// --- the edge inset (wave 4) --------------------------------------------------
+
+test('no inset means the payload does not mention one', () => {
+  // Default zero is the whole point: an existing recipe must export exactly what
+  // it exported yesterday, and a body carrying edge_inset_s: 0 invites a future
+  // reader to "clean it up" to a non-zero default.
+  const body = promotePayload({ name: 'a', targetKey: 'wan22_14b', frames: 81 });
+  assert.ok(!('edge_inset_s' in body));
+  assert.ok(!('edge_inset_s' in promotePayload({
+    name: 'a', targetKey: 'wan22_14b', frames: 81, edgeInsetS: 0 })));
+});
+
+test('an inset rides in the payload in seconds', () => {
+  const body = promotePayload({ name: 'a', targetKey: 'wan22_14b', frames: 81,
+    edgeInsetS: 0.25 });
+  assert.equal(body.edge_inset_s, 0.25);
+});
+
+test('a nonsense inset is refused before the request, with a reason', () => {
+  // A negative inset would EXTEND every clip into the neighbouring shot. The
+  // server refuses it too; catching it here is what puts the reason next to the
+  // field instead of in a red banner after a round trip.
+  assert.match(insetProblem(-0.1), /negative|extend/i);
+  assert.match(insetProblem(60), /too (long|much)|cap/i);
+  assert.equal(insetProblem(0), '');
+  assert.equal(insetProblem(0.25), '');
+  assert.equal(insetProblem(''), '');
+});
+
+test('the inset explains what it costs before the click', () => {
+  assert.equal(insetHint(0), '');
+  assert.match(insetHint(0.25), /0\.5\s*s/);       // 0.25 off EACH end
+  assert.match(insetHint(0.25), /drop|short/i);
+});
+
+test('the promotion report names the clips the inset itself removed', () => {
+  // "Too short for 81 frames" and "too short once your trim was applied" are the
+  // same sentence to a user and two different problems — only the second is
+  // fixed by lowering the knob.
+  const note = insetOutcome({ edge_inset_s: 0.25, inset_would_drop: 7 });
+  assert.match(note, /7/);
+  assert.match(note, /0\.25/);
+  assert.equal(insetOutcome({ edge_inset_s: 0.25, inset_would_drop: 0 }), '');
+  assert.equal(insetOutcome({ edge_inset_s: 0, inset_would_drop: 0 }), '');
+});

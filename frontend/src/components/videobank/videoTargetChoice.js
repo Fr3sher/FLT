@@ -158,7 +158,7 @@ export function promoteProblem({ name, target, frames }) {
  * `width`/`height` ride together or not at all: the server treats "both present"
  * as a resize and anything else as "keep the source's size", so sending a lone
  * width would silently be ignored. */
-export function promotePayload({ name, targetKey, frames, size, ids }) {
+export function promotePayload({ name, targetKey, frames, size, ids, edgeInsetS }) {
   const body = {
     name: (name || '').trim(),
     target_profile: targetKey,
@@ -169,7 +169,63 @@ export function promotePayload({ name, targetKey, frames, size, ids }) {
     body.height = size.height
   }
   if (Array.isArray(ids) && ids.length > 0) body.ids = ids
+  // Omitted when it is zero, not sent as 0. The server's default IS zero, and a
+  // body that always carries the key invites a later reader to give it a
+  // non-zero default "since it is always sent anyway" — which would silently
+  // change what every existing recipe exports.
+  const inset = Number(edgeInsetS)
+  if (Number.isFinite(inset) && inset > 0) body.edge_inset_s = inset
   return body
+}
+
+// ── ✂ Trimming the edges of every clip ────────────────────────────────────────
+// A shot boundary is where a cut just happened, so the frames around both ends
+// are disproportionately dissolves and fades — the embedding pass already
+// refuses to look at them, and it matters far more for what gets TRAINED on.
+// The researched figure is ~0.25 s per end. The cap mirrors the server's
+// (video_bank_service.MAX_EDGE_INSET_S): not a claim about how long a transition
+// is, but a guard against a typo emptying a dataset.
+export const MAX_EDGE_INSET_S = 5
+
+/** Why this inset cannot be used, or '' when it can. Checked here as well as on
+ * the server so the reason sits next to the field instead of arriving as a red
+ * banner after a round trip. */
+export function insetProblem(value) {
+  if (value === '' || value === null || value === undefined) return ''
+  const inset = Number(value)
+  if (!Number.isFinite(inset)) return 'Enter a number of seconds.'
+  if (inset < 0) {
+    return 'A negative trim would extend every clip into the shot next to it.'
+  }
+  if (inset > MAX_EDGE_INSET_S) {
+    return `That is more than any transition is — the cap is ${MAX_EDGE_INSET_S}s per end.`
+  }
+  return ''
+}
+
+/** What the setting is about to do, in the units the user did NOT type: they
+ * enter a per-end trim, and what decides whether a clip still fits is twice it.
+ * That doubling is exactly where a surprising drop count comes from. */
+export function insetHint(value) {
+  const inset = Number(value)
+  if (!Number.isFinite(inset) || inset <= 0) return ''
+  // Trailing zeros stripped: "0.50s" reads like a precision we do not have.
+  const total = Number((inset * 2).toFixed(3))
+  return `Trims ${inset}s off each end, so every clip is ${total}s `
+    + 'shorter. Clips that no longer supply the frame count are dropped rather '
+    + 'than exported short.'
+}
+
+/** The line the result shows about what the trim COST, or '' when it cost
+ * nothing. Kept apart from the "too short" count on purpose: a clip that was
+ * never long enough is not fixed by lowering this. */
+export function insetOutcome(composition) {
+  const inset = Number(composition?.edge_inset_s) || 0
+  const dropped = Number(composition?.inset_would_drop) || 0
+  if (!inset || !dropped) return ''
+  return `${dropped} clip${dropped === 1 ? '' : 's'} will be dropped by the `
+    + `${inset}s edge trim — they fit the frame count, but not once trimmed. `
+    + 'Lower the trim to keep them.'
 }
 
 /** What the confirm button is about to do, spelled out. "Promote" alone hides

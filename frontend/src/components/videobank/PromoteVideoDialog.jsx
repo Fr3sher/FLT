@@ -4,6 +4,7 @@ import { useToast } from '../common/Toast'
 import {
   frameOptions, defaultFrames, needsManualFrames, sizeOptions,
   promoteProblem, promotePayload, promoteScopeLabel,
+  insetProblem, insetHint, insetOutcome,
 } from './videoTargetChoice'
 import { passBlockedBy } from './videoCapability'
 import VideoTargetPicker from './VideoTargetPicker'
@@ -35,6 +36,10 @@ export default function PromoteVideoDialog({
   const [name, setName] = useState('')
   const [frames, setFrames] = useState(null)
   const [sizeKey, setSizeKey] = useState('source')
+  // ✂ Per-end trim, in seconds. Zero by default and kept as TEXT while typing:
+  // "0." and "" are states a number input passes through, and coercing them
+  // early wipes the field under the user's cursor.
+  const [edgeInset, setEdgeInset] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
 
@@ -61,7 +66,9 @@ export default function PromoteVideoDialog({
   const sizes = sizeOptions(target)
   const manualFrames = needsManualFrames(target)
   const blocked = passBlockedBy(capability, 'promote')
-  const problem = blocked ? blocked.why : promoteProblem({ name, target, frames })
+  const insetIssue = insetProblem(edgeInset)
+  const problem = blocked ? blocked.why
+    : (promoteProblem({ name, target, frames }) || insetIssue)
   const size = sizes.find((s) => s.key === sizeKey) || sizes[0]
 
   const pick = (key) => {
@@ -78,8 +85,13 @@ export default function PromoteVideoDialog({
     setError(null)
     try {
       const d = await postJson(`/api/video-bank/${bankId}/promote`,
-        promotePayload({ name, targetKey, frames, size, ids: selectedIds }))
+        promotePayload({ name, targetKey, frames, size, ids: selectedIds,
+          edgeInsetS: edgeInset }))
       toast.success(`Building “${d.name}” — ${d.clips} clip(s) being encoded.`)
+      // Said out loud rather than left in the job line: these clips were removed
+      // by the user's OWN setting, and it is the only limit here they can undo.
+      const cost = insetOutcome(d.composition)
+      if (cost) toast.warning(cost)
       onDone?.(d)
       onClose?.()
     } catch (err) {
@@ -171,6 +183,28 @@ export default function PromoteVideoDialog({
               </p>
             )}
           </div>
+        </div>
+
+        {/* ✂ The edge trim. Below the target grid because it is a refinement of
+            WHAT gets cut, not of which model it is cut for. */}
+        <div>
+          <label htmlFor="video-ds-inset" className="block text-sm font-medium text-content">
+            Trim each end (seconds)
+          </label>
+          <input id="video-ds-inset" type="number" min="0" step="0.05"
+            value={edgeInset} onChange={(e) => setEdgeInset(e.target.value)}
+            placeholder="0"
+            className="mt-1 w-full rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content sm:w-40" />
+          {insetIssue ? (
+            <p className="mt-1 text-xs text-rose-300">⚠ {insetIssue}</p>
+          ) : (
+            <p className="mt-1 text-xs text-content-muted">
+              {insetHint(edgeInset)
+                || 'A shot boundary is where a cut just happened, so the first and '
+                 + 'last frames are often dissolves. 0.25 is a common trim. Leave '
+                 + 'empty to cut exactly on the detected bounds.'}
+            </p>
+          )}
         </div>
 
         {error && (

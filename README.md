@@ -71,6 +71,8 @@ the target model accepts.
 | **Fix a bad cut instead of rejecting it** | Trim either bound (by 1 s or one frame *of your source*), split a shot at the playhead, or draw a shot the detector missed. Bounds only — there is no scrubbable timeline. For image-to-video targets the first frame is the conditioning image, so moving a start picks what the model animates from, and the panel says so |
 
 | **Measure every shot, choose your own cuts** | One pass reads every frame and scores stillness, blur, black moments and frozen stretches. Flags mark shots to *look at* — nothing is auto-rejected — and there are **no default thresholds**: a preview shows how many shots each cut would flag against *your* bank's own distribution before you apply it |
+| **Sound measured, not assumed** | For the targets that keep an audio track (LTX, MiniMax H3), every shot is scored for **how much of it is silence** and its **level in dBFS** — because a dataset of silent clips teaches the model to be silent and the file on disk gives nothing away. "No track", "silent" and "not measured yet" stay three different answers |
+| **Trim the transition off both ends** | Optional per-export trim of both bounds (0 by default). A clip the trim makes too short for the target's frame count is **dropped, never exported short** — and counted separately from clips that were never long enough, since only one of the two is fixed by lowering the trim |
 | **Find a scene by typing a word** | One pass looks at a few frames of every shot; after it, typing *a woman walking on a beach* ranks the bank instantly and tells you **which second** of each shot matched. Several frames per shot, so a subject that only appears at the end is still findable. It is a **ranking, not a filter** — every shot scores something against every phrase — and the model **ignores "without"**, so `-word` pushes something down instead |
 
 **What it does NOT do yet**, plainly:
@@ -79,6 +81,9 @@ the target model accepts.
   say what is broken, not what is beautiful — quality ranking, "most varied", and
   cross-clip dedup are still to come. Searching by words ranks shots by what they
   LOOK like, which is a different question from whether they are any good.
+- **No audio captioning, and no audio in the search.** The sound is measured
+  (silence and level) but never described, and 🔎 Find scenes reads frames only —
+  "a door slamming" describes nothing it can see.
 - **No captioning.** Every promoted clip gets an **empty** `.txt`. The file is
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — but a dataset shipped as-is trains uncaptioned.

@@ -1587,6 +1587,25 @@ catches the failure the averages never can — a shot that plays fine and then
 hangs on a still image for a second. On a real 4.5-hour test bank that turned
 out to be the most common defect of all.
 
+**The sound is measured too, for the targets that keep it.** LTX and MiniMax H3
+mux the source's audio into every clip; Wan has no audio at all and forces the
+track off. So the pass also reports, per shot, **how much of it is silence** and
+**its overall level in dBFS** — because a dataset of silent clips teaches the
+model to be silent, and nothing about the file on disk reveals it: it is the
+right length, the right sample rate, and mute. Two cuts go with them, **Silent
+share** and **Loudness floor**, and they raise two different flags on purpose —
+a quiet clip can be normalised, a silent one cannot be rescued.
+
+Three states are kept apart here, and it matters:
+
+- **no sound track** — a property of the file. Never flagged; a Wan dataset is
+  supposed to look like this.
+- **silent** — a track that is there and carries nothing. That is the defect.
+- **not measured** — nobody has listened yet. Shots measured before this shipped
+  carry no sound reading at all, and an audio cut will never flag them. **Run
+  Measure again with re-measure** to fill them in; the pass otherwise skips
+  everything it has already done.
+
 ## Retouch a cut: trim, split, or draw a shot by hand
 
 Shot detection is good and it is not right. It cuts a slow dissolve a second
@@ -1678,6 +1697,20 @@ ranking computed over one bucket has nothing to say about another.
 
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next
 to each one, and lists it in your library under **🎬 Video training sets**.
+
+**You can trim the edges of every clip.** A shot boundary is where a cut just
+happened, so the first and last frames of a shot are disproportionately
+dissolves, fades and leftovers of a transition — and a dataset whose clips all
+open on half a dissolve teaches the model to open on half a dissolve. **Trim each
+end** takes a number of seconds off *both* bounds; 0.25 is the common figure, and
+the default is 0 so an existing recipe exports exactly what it exported before.
+
+The trim never shortens a clip. Frame counts are a property of the target's VAE,
+so a clip that no longer supplies the count is **dropped, not exported short** —
+ffmpeg would write the short file and exit 0, and ai-toolkit would train it as
+repeated stills without a word. The dialog says how many clips the trim will cost
+*before* you press the button, and those are counted separately from clips that
+were never long enough: only the first kind is fixed by lowering the trim.
 
 **The clip length is chosen in FRAMES, from a menu.** That is not pedantry: the
 legal frame counts are a property of each model's VAE, not of video. 29 frames is
