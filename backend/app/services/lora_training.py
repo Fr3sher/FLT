@@ -4480,9 +4480,16 @@ def find_run_collision(user_id, dataset_id, base_model=_PERSISTED,
         return None
     target = _run_name(ds, variant=variant) if base_model is _PERSISTED \
         else _run_name(ds, base_model, variant=variant)
+    # Internal scratch rows excluded: they never train, so they cannot own an
+    # ai-toolkit run folder to collide WITH — but the ⚖ LoRA bench sandbox
+    # borrows the trigger of whatever LoRA is under test, so benching a file
+    # named after one of your own datasets would otherwise raise a phantom
+    # collision and block that dataset's training, naming a dataset the user
+    # cannot even see.
     others = (FaceDataset.query
               .filter(FaceDataset.user_id == str(ds.user_id),
-                      FaceDataset.id != int(ds.id))
+                      FaceDataset.id != int(ds.id),
+                      FaceDataset.internal.is_(None))
               .all())
     for o in others:
         if _run_name(o) == target:

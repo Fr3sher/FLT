@@ -562,7 +562,12 @@ def list_all_testable_checkpoints(user_id) -> list[dict]:
     [{dataset_id, dataset_name, lora_label, trigger_word, family, family_label,
       train_type (= family, pour le badge front), checkpoints:[{filename,label}]}]."""
     out = []
+    # The picker groups its entries BY DATASET NAME, so an internal scratch row
+    # would show up as a group of its own — the most visible leak of the whole
+    # bench feature, and the one guaranteed to happen (the bench is exactly what
+    # puts checkpoints on that row).
     datasets = (FaceDataset.query.filter_by(user_id=str(user_id))
+                .filter(FaceDataset.internal.is_(None))
                 .order_by(FaceDataset.id.asc()).all())
     for ds in datasets:
         for fam in available_families(ds):   # {'family','label','count'} par famille présente
@@ -647,6 +652,23 @@ def _active_run_count(dataset_id=None) -> int:
     if dataset_id is not None:
         q = q.filter_by(dataset_id=dataset_id)
     return q.count()
+
+
+def _internal_run_count() -> int:
+    """In-flight cells living on an INTERNAL dataset (the ⚖ LoRA bench sandbox).
+
+    The historical guard of `create_run` is keyed on `dataset_id`, so a dataset
+    run cannot see a bench run: they would both start and fight for the same GPU.
+    The design spec called out the other direction (the bench must use the global
+    guard); this is its mirror, and it is the one nobody would have noticed
+    failing — two runs on one GPU just look slow.
+    """
+    return (_cells()
+            .filter_by(status='pending')
+            .filter(LoraTestImage.filename.is_(None))
+            .join(FaceDataset, FaceDataset.id == LoraTestImage.dataset_id)
+            .filter(FaceDataset.internal.isnot(None))
+            .count())
 
 
 def _queue_activity(rows) -> dict:
@@ -2229,12 +2251,34 @@ def stack_variants(run_id, rows, limit=8) -> list:
     return out
 
 
-def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None, prompts=None) -> dict:
+def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=None, z_model=None, z_models=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None, count=1, family=None, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None, negative=None, sampler=None, scheduler=None, weight_dtype=None, enhancer=None, enhancer_strength=None, detail_amount=None, resolution_tier=None, resolution_multiplier=None, init_image=None, denoise=None, origins=None, prompts=None, *, bench_lora=None) -> dict:
     """Validate + materialize the grid and enqueue every cell.
 
     `prompts` (📝 lot) est un AXE : chaque configuration est rendue une fois par
     prompt coché dans l'historique. Absent/vide → un seul prompt, `prompt`, comme
     avant.
+
+    `bench_lora` (⚖ LoRA bench, keyword-only) is the ONE relaxation this engine
+    grants an externally downloaded LoRA, and it carries all three parts of it at
+    once — deliberately ONE flag rather than three, so no caller can enable half
+    of the bench contract by accident:
+
+      * the file is added to the checkpoint allow-list. Nothing else changes: the
+        caller has already proved it is a real entry of its family's pool (see
+        services.lora_bench.resolve_bench_lora), which is the same list the
+        picker shows, so this opens no new path-injection surface;
+      * the in-flight guard becomes GLOBAL instead of per-dataset — a bench run
+        competes for the GPU with every dataset's run, not just its sandbox's;
+      * an empty trigger word is allowed, because a style/utility LoRA genuinely
+        has none. The bench asks the user to confirm that explicitly; it never
+        guesses one.
+
+    ⚠️ The bench is a strict SUBSET of this engine (one checkpoint, one strength
+    axis, one prompt, one seed — no base axis, no CFG/steps axis, no combine, no
+    batch, no always-on). That is on purpose: a strict subset cannot drift from
+    the Test Studio or the Canvas the way a second pipeline would. If a "bench
+    this LoRA" shortcut is ever wanted from the Canvas, it is a navigation link
+    to the bench page — never a second generation path.
 
     Each cell's row and its queue job land in ONE commit (`_persist_and_enqueue_cell`);
     an enqueue failure marks that row 'failed' and re-raises - already-enqueued cells
@@ -2243,14 +2287,22 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
     ds = fds.get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
-    if not (ds.trigger_word or '').strip():
+    if not (ds.trigger_word or '').strip() and not bench_lora:
         raise ValueError('trigger word is required')
 
     reason = gpu_busy_reason()
     if reason:
         raise GpuBusyError(reason)
-    if _active_run_count(dataset_id):
-        raise ValueError('a test run is already in progress on this dataset - '
+    if _active_run_count(None if bench_lora else dataset_id):
+        raise ValueError('a test run is already in progress - '
+                         'wait for it to finish or cancel'
+                         if bench_lora else
+                         'a test run is already in progress on this dataset - '
+                         'wait for it to finish or cancel')
+    if not bench_lora and _internal_run_count():
+        # A bench run is invisible to the per-dataset guard above but holds the
+        # same GPU. Name it, so the message is actionable.
+        raise ValueError('a LoRA bench run is already in progress - '
                          'wait for it to finish or cancel')
 
     # La FAMILLE (pipeline) du run est dérivée des checkpoints sélectionnés : ils
@@ -2268,6 +2320,11 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
     run_family = (next(iter(fams), None) or family or getattr(ds, 'train_type', None) or 'zimage').lower()
 
     allowed = {c['filename'] for c in list_test_checkpoints(ds, run_family)}
+    if bench_lora:
+        # An externally downloaded LoRA carries someone else's trigger, so the
+        # trigger match above can never select it — that is the whole reason the
+        # bench exists. Already validated against its family's pool by the caller.
+        allowed.add(bench_lora)
     unknown = [c for c in cps_in if c not in allowed]
     if unknown:
         raise ValueError(f'unknown checkpoint(s) for this dataset: {unknown}')
@@ -3941,6 +3998,9 @@ def studio_payload_run(user_id, run_id) -> dict | None:
     if not rows:
         return None
     ds_ids = {r.dataset_id for r in rows}
+    # lds-allow-internal-datasets: id-scoped ownership check. It MUST see the
+    # scratch row — a ⚖ bench run is polled through this very payload, and
+    # filtering internal here would make every bench run report "not found".
     owned = {d.id for d in FaceDataset.query.filter(FaceDataset.user_id == str(user_id),
              FaceDataset.id.in_(ds_ids)).all()}
     if ds_ids - owned:
@@ -4021,7 +4081,13 @@ def user_recent_prompts(user_id, limit=None) -> list[dict]:
     la demande de l'utilisateur). La seule borne restante est le scan des 1500
     dernières cellules (perf) ; chaque entrée porte `thumb_dataset_id` pour que
     le front construise l'URL de vignette du BON dataset."""
-    ds_ids = [d.id for d in FaceDataset.query.filter_by(user_id=str(user_id)).all()]
+    # READ side: internal scratch rows excluded. A ⚖ bench prompt is not a Studio
+    # prompt, and its thumbnail would point at a dataset the user cannot open.
+    # (The WRITE side — delete_prompt_everywhere — deliberately does the opposite;
+    # see the note there. An exclusion that is right for display is almost never
+    # right for cleanup.)
+    ds_ids = [d.id for d in FaceDataset.query.filter_by(user_id=str(user_id))
+              .filter(FaceDataset.internal.is_(None)).all()]
     if not ds_ids:
         return []
     rows = (_cells().filter(LoraTestImage.dataset_id.in_(ds_ids))
@@ -4031,11 +4097,21 @@ def user_recent_prompts(user_id, limit=None) -> list[dict]:
 
 def delete_prompt_everywhere(user_id, prompt) -> int:
     """Supprime un prompt récent (et ses cellules/images de test) sur TOUS les
-    datasets de l'utilisateur - pendant « suppression » de la liste globale."""
+    datasets de l'utilisateur - pendant « suppression » de la liste globale.
+
+    ⚠️ « TOUS » inclut ICI les datasets INTERNES (le bac à sable ⚖ LoRA bench),
+    contrairement à `user_recent_prompts` juste au-dessus. Ce n'est pas une
+    incohérence, c'est la seule paire correcte : masquer à la LECTURE cache un
+    prompt de bench dans le menu du Studio (souhaité), mais masquer à la
+    SUPPRESSION laisserait ses cellules et ses fichiers derrière — « supprimer
+    partout » doit vouloir dire partout. Une exclusion d'affichage ne se propage
+    jamais d'office au nettoyage.
+    """
     p = (prompt or '').strip()
     if not p:
         return 0
     n = 0
+    # lds-allow-internal-datasets: cleanup must reach the scratch rows too.
     for d in FaceDataset.query.filter_by(user_id=str(user_id)).all():
         try:
             n += delete_prompt(user_id, d.id, p)

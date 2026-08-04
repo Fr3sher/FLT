@@ -82,6 +82,7 @@ API generation follows each provider's billing and content policy. Read the dire
 | **LoRA Canvas** | Put every dataset's lineage on one pan/zoom board, rearrange cards, compare runs across datasets, generate from same-family checkpoints — including 🧬 blending several checkpoints into one image, with purple provenance edges joining a blended picture to every pill it came from (blends made before this feature show a badge instead) — pin/fuse outputs and continue training from a pill; each generation run keeps its own strip in training-step order, with the character dataset's reference face on its lane |
 | **Test Studio** | Fixed-seed checkpoint × strength grids, multi-LoRA comparisons or 🧬 combined stacks (several of your LoRAs in one image, each at its own weight, weight variants compared side by side), a ✨ Enhance button that enriches your prompt through your local Ollama, votes, Wilson ranking, face ranking and shareable exports |
 | **Studio shortcuts and recovery** | Open Studio directly from a run, draw prompts from kept dataset captions, and pause safely when ComfyUI drops instead of launching later cells against changed state |
+| **⚖ LoRA bench** | Judge a LoRA you *downloaded* — no dataset, no training: pick a file already sitting in ComfyUI's loras folder and sweep its strength on one fixed prompt and seed, with votes and the same Wilson ranking. The activation word is read from the file's own metadata when it says so, shown editable, and left **empty with a warning** when it does not — a subject LoRA tested without its trigger renders images it never touched, which reads as a bad LoRA. One prompt and one seed show how strength changes the result, not whether the LoRA is good; the grid says so. No upload and no URL download: it lists what is on disk |
 
 ### Keep control of the files
 
@@ -182,6 +183,7 @@ Missing dependencies are shown in Setup/Settings and gated features stay unavail
 | Merging a LoRA into a base checkpoint (produces a full model) | A Python with `torch` (the same one fp8 quantization uses) and room for a second copy of the base — a 26 GB Krea 2 base takes about two minutes and writes 26 GB. Refused on an already-quantized base: merge into the full-precision file, then quantize. LoRAs must name their modules the way the base names its weights (the ai-toolkit/diffusion-model convention); kohya's flattened `lora_unet_…` SDXL exports do not, and are refused by name before anything is written. The result is a **merged** model, not a trained one, and its metadata says so |
 | LoRA Canvas browsing, layout, notes and diffs | No external service; generating needs ComfyUI and same-family checkpoints, continuing needs the chosen local/cloud training lane |
 | Test Studio | ComfyUI reachable + assets for a supported Studio family |
+| ⚖ LoRA bench | Same as Test Studio, plus the LoRA file already in `models/loras/{z image,sdxl,krea}` — those three folders are the whole picker, and a file outside them cannot be benched |
 | Backup/restore and ZIP/folder merge | No external service |
 | Hugging Face publishing | Write-enabled `HF_TOKEN`; repositories are private by default |
 
