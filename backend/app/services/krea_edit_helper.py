@@ -206,31 +206,17 @@ def _krea_unet_folders():
     'Krea', 'krea2') or '' for a file dropped straight into the root of a search
     folder — flat / Stability-Matrix installs have no subfolder, and
     os.path.join('', name) == name is exactly what UNETLoader loads. Mirrors
-    klein_edit_helper._klein_unet_folders so anything listed is loadable."""
-    out = []
-    for base_dir in comfy_model_paths.search_roots('diffusion_models'):
-        try:
-            entries = os.listdir(base_dir)
-        except OSError:
-            continue
-        subs = sorted(d for d in entries
-                      if 'krea' in d.lower() and os.path.isdir(os.path.join(base_dir, d)))
-        for sub in subs:
-            try:
-                names = sorted(n for n in os.listdir(os.path.join(base_dir, sub))
-                               if n.lower().endswith(_MODEL_SUFFIXES))
-            except OSError:
-                continue
-            names = [n for n in names if _krea_base_compatible(n)]
-            if names:
-                out.append((sub, names))
-        root_names = sorted(n for n in entries
-                            if 'krea' in n.lower() and n.lower().endswith(_MODEL_SUFFIXES)
-                            and _krea_base_compatible(n)
-                            and os.path.isfile(os.path.join(base_dir, n)))
-        if root_names:
-            out.append(('', root_names))
-    return out
+    klein_edit_helper._klein_unet_folders so anything listed is loadable.
+
+    `accept=_krea_base_compatible` is applied EVERYWHERE here, root and subfolder
+    alike. The Studio's own lister applies the same exclusion only at a root (the
+    check lives inside `_krea_root_candidate`), so a BigLove inside `Krea/` is
+    offered there and refused here. That asymmetry is pinned by
+    `test_model_scanners_agree` rather than silently levelled: it is a behaviour
+    change, not a refactor."""
+    return comfy_model_paths.scan_family_folders(
+        comfy_model_paths.search_roots('diffusion_models'), ('krea',),
+        accept=_krea_base_compatible, suffixes=_MODEL_SUFFIXES)
 
 
 def _krea_base_compatible(name):

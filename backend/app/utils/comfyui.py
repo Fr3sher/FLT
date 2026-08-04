@@ -1813,6 +1813,27 @@ def resolve_checkpoint_ckpt_name(name):
     return name
 
 
+def _model_scan_roots(out_dir):
+    """The diffusion-model folders the Studio listers walk: `<ComfyUI>/models/unet`
+    and `.../diffusion_models`, plus any diffusion_models root declared in
+    extra_model_paths.yaml (the `unet` key folds into the same canonical type).
+
+    Derived from the OUTPUT dir rather than from `comfy_model_paths.search_roots`
+    — deliberately, for now: they are two config routes to the same folders, and
+    swapping one for the other here would be a behaviour change on any install
+    where they disagree, not a refactor. Extracted so the two listers cannot drift
+    on the question of WHERE to look, which is half of how four scanners diverge.
+    Additive: no yaml -> nothing appended, list unchanged."""
+    models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
+    roots = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
+    try:
+        from ..services import comfy_model_paths
+        roots += comfy_model_paths.extra_roots("diffusion_models")
+    except Exception:                       # noqa: BLE001 — an absent yaml is normal
+        pass
+    return roots
+
+
 _zimage_models_cache = {"data": None, "timestamp": 0}
 
 
@@ -1832,30 +1853,13 @@ def get_zimage_models():
     out_dir = _out_dir()
     if out_dir:
         try:
-            models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
-            base_dirs = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
-            # Plus any diffusion_models root declared in extra_model_paths.yaml (the
-            # `unet` key folds into the same canonical type). Without this, a Z-Image
-            # merge kept outside <base>/models was absent from the training base
-            # picker — and therefore unconvertible, whatever zimage_convert resolves.
-            # Additive: no yaml -> nothing appended, list unchanged.
-            try:
-                from ..services import comfy_model_paths
-                base_dirs += comfy_model_paths.extra_roots("diffusion_models")
-            except Exception:
-                pass
-            for base_dir in base_dirs:
-                if not os.path.isdir(base_dir):
-                    continue
-                for root, _dirs, files in os.walk(base_dir):
-                    rel_dir = os.path.relpath(root, base_dir)
-                    low = rel_dir.lower()
-                    if "z image" not in low and "zimage" not in low:
-                        continue
-                    for f in files:
-                        if f.lower().endswith((".safetensors", ".gguf", ".sft")):
-                            out.append(f if rel_dir == "." else os.path.join(rel_dir, f))
-            out = sorted(set(out))
+            from ..services import comfy_model_paths
+            # No `root_file_accept`: this family has no root-filename rule. A
+            # `diffusion_models` root also holds Krea, FLUX and Klein weights, and
+            # nothing in a Z-Image filename separates them reliably — the folder
+            # IS the claim here. (Krea does have such a rule; see get_krea_models.)
+            out = comfy_model_paths.scan_family_tree(
+                _model_scan_roots(out_dir), ("z image", "zimage"))
         except Exception as e:
             logger.error(f"get_zimage_models error: {e}")
     _zimage_models_cache["data"] = out
@@ -1923,33 +1927,10 @@ def get_krea_models():
     out_dir = _out_dir()
     if out_dir:
         try:
-            models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
-            base_dirs = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
-            # Plus any diffusion_models root declared in extra_model_paths.yaml —
-            # the Z-Image lister has read those for a while and this one did not,
-            # so a Krea checkpoint kept outside <base>/models was absent from the
-            # Studio while ComfyUI itself loaded it fine. Additive: no yaml ->
-            # nothing appended, list unchanged.
-            try:
-                from ..services import comfy_model_paths
-                base_dirs += comfy_model_paths.extra_roots("diffusion_models")
-            except Exception:
-                pass
-            for base_dir in base_dirs:
-                if not os.path.isdir(base_dir):
-                    continue
-                for root, _dirs, files in os.walk(base_dir):
-                    rel_dir = os.path.relpath(root, base_dir)
-                    at_root = rel_dir == "."
-                    if not at_root and "krea" not in rel_dir.lower():
-                        continue
-                    for f in files:
-                        if not f.lower().endswith((".safetensors", ".gguf", ".sft")):
-                            continue
-                        if at_root and not _krea_root_candidate(f):
-                            continue
-                        out.append(f if at_root else os.path.join(rel_dir, f))
-            out = sorted(set(out))
+            from ..services import comfy_model_paths
+            out = comfy_model_paths.scan_family_tree(
+                _model_scan_roots(out_dir), ("krea",),
+                root_file_accept=_krea_root_candidate)
         except Exception as e:
             logger.error(f"get_krea_models error: {e}")
     _krea_models_cache["data"] = out
