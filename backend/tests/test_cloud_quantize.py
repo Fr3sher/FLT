@@ -148,6 +148,20 @@ def test_the_onstart_downloads_quantizes_uploads_and_reports_back():
     assert 'upload_file' in script
 
 
+def test_the_pod_installs_only_what_it_actually_imports():
+    # `safetensors` was installed here until the exporter stopped memory-mapping
+    # the checkpoint; it now reads and writes the format with plain file I/O, so
+    # nothing the pod runs imports the package any more. What executes there is
+    # fp8_export.py (json, os, struct, time, torch — plus huggingface_hub behind
+    # --repo-id) and two heredocs that import huggingface_hub. An install nobody
+    # imports is boot time on a machine billed by the hour.
+    lines = [line for line in cq.build_onstart(_plan()).splitlines()
+             if line.startswith('python -m pip install')]
+    assert len(lines) == 1
+    assert 'huggingface_hub>=0.30' in lines[0]
+    assert 'safetensors' not in lines[0]
+
+
 def test_the_master_is_only_dropped_when_explicitly_asked():
     assert '--drop-bf16' not in cq.build_onstart(_plan())
     assert '--drop-bf16' in cq.build_onstart(_plan(keep_bf16=False))

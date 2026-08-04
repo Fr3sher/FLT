@@ -288,7 +288,13 @@ def build_onstart(planned: dict, *, export_budget_seconds=None) -> str:
         'set -o pipefail',
         'mkdir -p /workspace/lds && cd /workspace/lds',
         f"echo '{payload}' | base64 -d > fp8_export.py",
-        'python -m pip install -q --upgrade "huggingface_hub>=0.30" safetensors || true',
+        # `huggingface_hub` and nothing else, because that is all the pod
+        # imports: the exporter below reads and writes the safetensors format
+        # with plain file I/O — deliberately NOT `safe_open`, which memory-maps
+        # the whole 26 GB checkpoint — and the two heredocs here import only
+        # huggingface_hub. The package rode along from before that change; on a
+        # machine billed by the hour an install nothing imports is pure boot.
+        'python -m pip install -q --upgrade "huggingface_hub>=0.30" || true',
         'python - <<\'PY\'',
         'import os',
         'from huggingface_hub import hf_hub_download',
