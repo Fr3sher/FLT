@@ -3746,7 +3746,14 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'cells': [{'id': r.id, 'checkpoint': r.checkpoint,
                    'label': format_trained_lora_label(r.checkpoint) or _basename(r.checkpoint).rsplit('.', 1)[0],
                    'strength': r.strength, 'aspect': r.aspect, 'filename': r.filename,
-                   'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed, 'status': r.status,
+                   'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed,
+                   # WHICH launch this cell belongs to. The column has always been
+                   # written (`create_run`), but it was never served, so the grid
+                   # had to guess a run from `run_seed` + prompt — and a batch of N
+                   # prompts then looked like N separate runs, of which it showed
+                   # one. Null on rows predating the column; the frontend keeps the
+                   # old grouping for those.
+                   'run_id': r.run_id, 'status': r.status,
                    'queue_status': activity['queue_status'].get(r.job_id),
                    'queue_error': activity['queue_error'].get(r.job_id),
                    'prompt': r.prompt, 'z_model': r.z_model,

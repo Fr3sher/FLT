@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-prompt-batch-grid-shows-every-prompt',
+    date: '2026-08-04',
+    title: 'A batch of prompts now shows all of its images — one labelled grid per prompt, instead of a grid with a single picture',
+    blurb:
+      'Ticking several saved prompts generated every one of them, but the results view only ever showed one: it identified a run by its seed AND its prompt, so a single launch of five prompts arrived as five separate “runs” in the run picker, and you were looking at one of them. Nothing was lost — the images were all there, behind a dropdown that should never have had them. A run is now identified by the launch itself, so the batch stays whole, and each prompt gets its own grid under the prompt that produced it (shortened to fit, in full when you hover). Runs from before this change are grouped exactly as they were.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-04-fp8-quantize-runs-where-torch-lives',
     date: '2026-08-04',
     title: 'Quantizing to fp8 now actually runs — it uses an environment that has torch, and says so before you click if none does',
