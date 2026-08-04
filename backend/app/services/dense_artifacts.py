@@ -124,18 +124,40 @@ def _master_of(masters) -> dict | None:
     }
 
 
-def _twin_of(twins, family) -> dict | None:
+def comfy_index(folder_type) -> dict:
+    """``{lower basename: (loader-relative name, absolute path)}`` of everything
+    ComfyUI can load from one folder type.
+
+    Built ONCE per listing and handed to every run. The obvious spelling —
+    ``resolve_model_file`` per twin — walks every search root recursively on a
+    MISS, and a miss is the normal state here (the whole point of the panel is
+    the twin that is not in ComfyUI yet). A dataset with five full-model runs
+    would therefore have walked those roots five times on every poll of a panel
+    that refreshes itself. One walk, one dict, same answer.
+    """
+    from . import comfy_model_paths
+
+    out = {}
+    try:
+        for rel, ab in comfy_model_paths.list_models(folder_type):
+            out.setdefault(os.path.basename(rel).lower(), (rel, ab))
+    except Exception:                               # noqa: BLE001 — never fatal
+        logger.debug('ComfyUI model listing failed', exc_info=True)
+    return out
+
+
+def _twin_of(twins, family, index=None) -> dict | None:
     """The run's fp8 twin (newest wins), and whether ComfyUI can already see it."""
-    from . import comfy_model_paths, fp8_local_delivery
+    from . import fp8_local_delivery
 
     if not twins:
         return None
     name, path, size = sorted(twins, key=lambda t: t[0])[-1]
     folder_type = fp8_local_delivery.folder_type_for(family)
-    try:
-        deployed = comfy_model_paths.resolve_model_file(folder_type, name)
-    except Exception:                               # noqa: BLE001 — never fatal
-        deployed = None
+    if index is None:
+        index = comfy_index(folder_type)
+    hit = index.get(os.path.basename(name).lower())
+    deployed = hit[1] if hit else None
     # A file that resolves back to the store itself is NOT "in ComfyUI": that
     # happens when the checkpoint store sits inside a declared model root, and
     # reporting it as deployed would hide the one action that matters.
@@ -151,27 +173,9 @@ def _twin_of(twins, family) -> dict | None:
         'comfyui_path': deployed,
         # The loader-relative name the Test Studio's base picker publishes, so the
         # card can deep-link straight at it. None until it is really in a root.
-        'comfyui_name': (os.path.relpath(deployed, _root_of(deployed, folder_type))
-                         if deployed else None),
+        'comfyui_name': hit[0] if deployed else None,
         'folder_type': folder_type,
     }
-
-
-def _root_of(abs_path, folder_type) -> str:
-    """The search root ``abs_path`` was found under, for a loader-relative name."""
-    from . import comfy_model_paths
-
-    try:
-        roots = comfy_model_paths.search_roots(folder_type) or []
-    except Exception:                               # noqa: BLE001
-        roots = []
-    target = os.path.normcase(os.path.realpath(abs_path))
-    best = ''
-    for root in roots:
-        real = os.path.normcase(os.path.realpath(root))
-        if target.startswith(real + os.sep) and len(real) > len(best):
-            best = root
-    return best or os.path.dirname(abs_path)
 
 
 def _hub_of(run) -> dict | None:
@@ -191,16 +195,19 @@ def _hub_of(run) -> dict | None:
     }
 
 
-def describe_run(run) -> dict:
+def describe_run(run, index=None) -> dict:
     """One dense run as the Checkpoints panel needs it. Never raises on a run
-    whose folders are gone — that run simply reports no local artifact."""
+    whose folders are gone — that run simply reports no local artifact.
+
+    ``index`` is ``comfy_index(folder_type)``, shared across a listing so the
+    ComfyUI folders are walked once rather than once per run."""
     from . import cloud_training as ct
     from . import fp8_local_delivery, lora_training as lt
 
     family = ct._run_family(run) or 'krea'
     masters, twins = _artifact_files(run)
     master = _master_of(masters)
-    fp8 = _twin_of(twins, family)
+    fp8 = _twin_of(twins, family, index)
     record = ct._cloud_run_record(run)
     active = run.status in ct.ACTIVE_STATES
     return {
@@ -251,8 +258,10 @@ def list_dense_models(dataset_id, train_type=None) -> list:
     from ..models import CloudTrainingRun
     from . import cloud_training as ct
     from . import face_dataset_service as fds
+    from . import fp8_local_delivery
 
     fam = fds.normalize_train_type(train_type) if train_type else None
+    index, indexed_type = None, None
     out = []
     for run in (CloudTrainingRun.query.filter_by(dataset_id=int(dataset_id))
                 .order_by(CloudTrainingRun.id.desc()).all()):
@@ -260,8 +269,13 @@ def list_dense_models(dataset_id, train_type=None) -> list:
             continue
         if fam and (ct._run_family(run) or fam) != fam:
             continue
+        # Built lazily and only once — a dataset with no dense run must not pay
+        # for a model-folder walk, and five dense runs must not pay five times.
+        folder_type = fp8_local_delivery.folder_type_for(ct._run_family(run) or 'krea')
+        if index is None or folder_type != indexed_type:
+            index, indexed_type = comfy_index(folder_type), folder_type
         try:
-            entry = describe_run(run)
+            entry = describe_run(run, index)
         except Exception:                           # noqa: BLE001 — one bad row never 500s the panel
             logger.warning('dense artifact listing skipped run %s', run.id, exc_info=True)
             continue
