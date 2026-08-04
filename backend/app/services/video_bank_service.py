@@ -401,6 +401,10 @@ def _counts(bank_id) -> dict:
         # derived in the UI because "0 results" and "0 searchable shots" are two
         # different answers and only this number tells them apart.
         'embedded': clips.filter_by(embed_state='ok').count(),
+        # Shots that carry a caption at all — generated or hand-written. What the
+        # search's readiness line and the promotion's pre-flight both read.
+        'captioned': clips.filter(VideoClip.caption.isnot(None),
+                                  VideoClip.caption != '').count(),
     }
 
 
@@ -505,6 +509,10 @@ def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
         'start_frame': clip.start_frame, 'end_frame': clip.end_frame,
         'detector': clip.detector, 'thumb_state': clip.thumb_state,
         'status': clip.status, 'reject_reason': clip.reject_reason,
+        # The caption rides on every clip row: the lightbox edits it, the grid
+        # shows why a hybrid search moved a shot up, and the promotion dialog
+        # counts what has none. One field, three readers, no second request.
+        'caption': clip.caption, 'caption_state': clip.caption_state,
         'promoted_dataset_id': clip.promoted_dataset_id,
         'metrics': metrics if metrics and metrics.get('metrics_state') == 'ok' else None,
         'flags': flags,
@@ -1022,6 +1030,65 @@ def _embed_job(bank_id, reembed, use_gpu):
     return run
 
 
+def _caption_available():
+    """None when this install can caption, else the sentence saying why not."""
+    from .video_caption_worker import unavailable_reason
+    return unavailable_reason()
+
+
+def start_caption(app, user_id, bank_id, recaption=False, include_edited=False):
+    """🗣 Wave 5's pass: what HAPPENS in each shot, in prose.
+
+    The caption is the text the hybrid search matches AND the training prompt the
+    promotion writes into each `.txt`. Refused up front with the Setup sentence
+    when no interpreter here can run the model — a 202 followed by a job that
+    dies on an import is the same news, ten minutes later and harder to read.
+
+    Unlike the embedding pass this one is worth the GPU on any machine that has
+    one (a 4B VLM on a CPU is minutes per shot), so it takes the exclusive window
+    whenever the card is usable — and is refused outright while a training run
+    owns it, rather than competing with it."""
+    from ..capabilities import bank_scoring_gpu_available
+    _require_free_bank(user_id, bank_id)
+    reason = _caption_available()
+    if reason:
+        raise RuntimeError(reason)
+    use_gpu = bank_scoring_gpu_available()
+    if use_gpu:
+        busy = _gpu_busy_reason()
+        if busy:
+            raise RuntimeError(busy)
+    return bank_jobs.start(app, job_key(bank_id), 'caption',
+                           _caption_job(bank_id, bool(recaption),
+                                        bool(include_edited), use_gpu))
+
+
+def _caption_job(bank_id, recaption, include_edited, use_gpu):
+    def run(job):
+        from contextlib import nullcontext
+
+        from ..gpu_window import gpu_exclusive_vision_window
+        from . import video_caption
+        total = video_caption.pending_clips(bank_id, recaption,
+                                            include_edited).count()
+        bank_jobs.progress(job, done=0, total=total,
+                           detail=f'captioning shots ({"GPU" if use_gpu else "CPU"})')
+        window = (gpu_exclusive_vision_window(flag_ttl=3600) if use_gpu
+                  else nullcontext())
+        with window:
+            out = video_caption.run_captions(
+                bank_id, recaption, include_edited=include_edited,
+                use_gpu=use_gpu,
+                on_clip=lambda: bank_jobs.bump(job),
+                should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["captioned"]} shot(s) captioned'
+        if out['failed']:
+            detail += f', {out["failed"]} failed'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
 def start_thumbs(app, user_id, bank_id, rethumb=False):
     """One frame per shot, taken from the shot's MIDDLE — a boundary is where a cut
     just happened, so the opening frames are disproportionately dissolves and black."""
@@ -1324,8 +1391,14 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                     and not video_clip_export.fits_frames(span - 2 * inset, frames,
                                                           profile['fps'])):
                 would_drop += 1
+    # An empty sidecar trains as an EMPTY PROMPT and ai-toolkit says nothing about
+    # it, so how many clips are about to ship without one is a limit that has to
+    # be visible BEFORE the encode rather than discovered in a training run.
+    captioned = sum(1 for c in rows if (c.caption or '').strip())
     composition = {
         'sources': len(per_source),
+        'captioned': captioned,
+        'uncaptioned': len(rows) - captioned,
         'top_source_share': (max(per_source.values()) / len(rows)) if rows else 0.0,
         'edge_inset_s': inset,
         # Clips the INSET removes — not clips that were never long enough. Those
@@ -1473,11 +1546,17 @@ def _promote_job(bank_id, dataset_id, clip_ids, profile_key, frames, size,
                     pass
                 bank_jobs.bump(job)
                 continue
-            video_clip_export.write_sidecar(str(dst), None)
+            # THE SIDECAR IS THE PROMPT. Written for every clip that lands, with
+            # the caption when there is one — and still written, empty, when
+            # there is not: musubi-tuner raises FileNotFoundError out of a worker
+            # future on a missing one, and diffusion-pipe drops the clip. An
+            # EMPTY sidecar is not neutral either, it trains as an empty prompt
+            # in silence, which is what the pre-flight count exists to surface.
+            video_clip_export.write_sidecar(str(dst), clip.caption)
             index = candidate
             encoded += 1
             db.session.add(VideoDatasetClip(
-                dataset_id=dataset_id, filename=dst.name, caption=None,
+                dataset_id=dataset_id, filename=dst.name, caption=clip.caption,
                 source_bank_id=bank_id, source_clip_id=clip.id,
                 src_relpath=relpath, start_s=clip.start_s, end_s=clip.end_s))
             clip.promoted_dataset_id = dataset_id

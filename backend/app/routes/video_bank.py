@@ -349,6 +349,41 @@ def video_bank_embed(bank_id):
                   reembed=bool(data.get('reembed')))
 
 
+@bp.post('/video-bank/<int:bank_id>/caption')
+def video_bank_caption(bank_id):
+    """🗣 Wave 5: describe what happens in each shot. Body {recaption?,
+    include_edited?}.
+
+    Two 503s that are NOT the same sentence: the decode extra is missing (no
+    frames to show a model), or no interpreter here can run the caption model.
+    `include_edited` is the explicit opt-in to overwrite captions a human wrote —
+    a bulk re-run never does that on its own."""
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_caption, _app(), LOCAL_USER, bank_id,
+                  recaption=bool(data.get('recaption')),
+                  include_edited=bool(data.get('include_edited')))
+
+
+@bp.patch('/video-bank/<int:bank_id>/clip/<int:clip_id>/caption')
+def video_bank_clip_caption(bank_id, clip_id):
+    """Store the caption a HUMAN wrote for one shot. Body {caption}.
+
+    Marked 'edited' so a bulk re-run leaves it alone; an empty string clears it
+    and puts the shot back in the pass's queue, which is the only way back from
+    a caption someone regrets."""
+    from ..services import video_caption
+    data = request.get_json(silent=True) or {}
+    row = video_caption.set_caption(LOCAL_USER, bank_id, clip_id,
+                                    data.get('caption'))
+    if row is None:
+        return _missing(bank_id)
+    return jsonify({'ok': True, 'clip': row})
+
+
 @bp.get('/video-bank/<int:bank_id>/search')
 def video_bank_search(bank_id):
     """Rank a bank's shots by CLIP similarity to `q`, best first.

@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import tempfile
 
@@ -138,12 +139,18 @@ def _clip_frame_times(clip):
 
 
 # --- the two heavy seams --------------------------------------------------------
-def _write_frames(src_path, times, dest_dir, stem):
+def _write_frames(src_path, times, dest_dir, stem, long_side=None):
     """[(label, seconds, jpeg path)] — decode ONE shot's frames to disk.
 
     The single seam that touches PyAV, monkeypatched in tests so the suite runs
     with no video extra. Raises on a segment that cannot be decoded — the caller
     turns that into 'unreadable' for THIS shot and moves on.
+
+    `long_side` overrides EMBED_LONG_SIDE for a caller that needs a bigger frame
+    — the caption pass reads faces and signage where an embedder needs a
+    thumbnail. One decode loop for both passes rather than two copies of the
+    seek-and-decode-forward contract, which is the part that is easy to get
+    subtly wrong.
 
     One `av.open` for all three timestamps rather than three: opening a
     multi-gigabyte rush is not free, and the frames wanted are seconds apart in
@@ -172,7 +179,8 @@ def _write_frames(src_path, times, dest_dir, stem):
                 continue
             path = os.path.join(dest_dir, f'{stem}_{label}.jpg')
             img = picked.to_image()
-            img.thumbnail((EMBED_LONG_SIDE, EMBED_LONG_SIDE), Image.LANCZOS)
+            side = int(long_side or EMBED_LONG_SIDE)
+            img.thumbnail((side, side), Image.LANCZOS)
             img.convert('RGB').save(path, 'JPEG', quality=88)
             out.append((label, t, path))
     if not out:
@@ -411,6 +419,52 @@ def _push_down_weight(value):
     return image_weight(value)
 
 
+# ── 🗣 The caption half of the search ─────────────────────────────────────────
+# CLIP ranks what a moment LOOKS like. It cannot find "turns and walks away",
+# because that is a fact about time and no single frame carries it. A caption
+# carries exactly that, and nothing the writer did not name — so the two are
+# complements, not alternatives, and the search uses both when both exist.
+#
+# THE WEIGHT IS INHERITED BY ANALOGY, NOT MEASURED. The 0.6 this project HAS
+# measured (image_bank_service.PUSH_DOWN_WEIGHT_DEFAULT, over 7 316 images) is
+# the weight of a SUBTRACTED excluded phrase — a different experiment with a
+# different question. No calibration exists for blending a literal caption match
+# with a visual one, so this constant is a starting point, it is named, it is
+# returned to the caller, and the UI must never present it as a measured figure.
+HYBRID_CAPTION_WEIGHT = 0.6
+
+# Words that appear in nearly every caption. Counting them would hand a free
+# half-match to any query written as a sentence rather than as keywords.
+_STOPWORDS = frozenset((
+    'a', 'an', 'the', 'and', 'or', 'of', 'in', 'on', 'at', 'to', 'is', 'are',
+    'as', 'by', 'with', 'from', 'it', 'its', 'this', 'that', 'their', 'his',
+    'her', 'they', 'he', 'she'))
+
+_WORD = re.compile(r"[a-z0-9']+")
+
+
+def _terms(text):
+    return [w for w in _WORD.findall(str(text or '').lower())
+            if w not in _STOPWORDS]
+
+
+def caption_hit(caption, query):
+    """0..1 — the share of the query's meaningful words present in `caption`.
+
+    A SHARE rather than a boolean: "a red car" fully present is a stronger claim
+    than one word of three, and collapsing them would rank a caption containing
+    only "car" level with an exact match. A clip with no caption scores 0 and is
+    NOT excluded — it is still findable by CLIP, and treating "no caption" as "no
+    match" would silently delete every un-captioned shot from every ranking."""
+    wanted = _terms(query)
+    if not wanted:
+        return 0.0
+    have = set(_terms(caption))
+    if not have:
+        return 0.0
+    return sum(1 for w in wanted if w in have) / len(wanted)
+
+
 def search(user_id, bank_id, query, n=60, *, push_down=None,
            push_down_weight=None, status=None):
     """Rank a bank's shots by CLIP similarity to a written phrase.
@@ -480,6 +534,13 @@ def search(user_id, bank_id, query, n=60, *, push_down=None,
         # `cached` promises INSTANT, and half a cache hit is not instant.
         cached = bool(cached) and bool(ncached)
 
+    # The caption half. Computed only over the pool, and only when a caption
+    # exists anywhere in it — a bank that never ran the caption pass must rank
+    # EXACTLY as it did before this feature.
+    hits = {cid: caption_hit(rows[cid].caption, text) for cid in pool}
+    captioned = sum(1 for cid in pool if (rows[cid].caption or '').strip())
+    hybrid = captioned > 0
+
     scored = []
     for cid in pool:
         best = None
@@ -497,6 +558,27 @@ def search(user_id, bank_id, query, n=60, *, push_down=None,
             if best is None or score > best[0]:
                 best = (score, match, excluded, frame)
         scored.append((cid, best))
+    # SCALED BY THE RANKING'S OWN SPREAD, not added raw. CLIP cosines live in a
+    # narrow per-bank band (0.09-0.23 measured on this checkpoint) while a
+    # caption hit is 0..1, so adding them directly would make any literal match
+    # outrank every visual one by a factor of five — a caption filter wearing a
+    # blend's clothes. The pool's own gap between its best score and its median
+    # is the only conversion factor that is measured rather than invented, and it
+    # is the same reasoning that made pool_median the yardstick for the CLIP-only
+    # ranking.
+    if hybrid:
+        raw = [b[0] for _, b in scored]
+        spread = max(raw) - float(np.median(raw)) if len(raw) > 1 else 0.0
+        if spread <= 0:
+            # Every shot scores the same visually — a real case on a
+            # single-subject bank, and the one where the caption is the ONLY
+            # thing that can separate them. Falling back to the score's own
+            # magnitude keeps the caption a tie-break instead of a no-op.
+            spread = abs(max(raw)) or 1.0
+        if spread > 0:
+            scored = [(cid, (b[0] + HYBRID_CAPTION_WEIGHT * hits[cid] * spread,
+                             b[1], b[2], b[3]))
+                      for cid, b in scored]
     # Descending score, clip id as the tie-break, so the same query on the same
     # bank always returns the same order.
     scored.sort(key=lambda p: (-p[1][0], p[0]))
@@ -511,6 +593,11 @@ def search(user_id, bank_id, query, n=60, *, push_down=None,
         if excluded is not None:
             row['match'] = round(match, 4)
             row['excluded_match'] = round(excluded, 4)
+        if hybrid:
+            # Reported per result so the grid can say WHY a shot moved up. A
+            # ranking that reordered itself for a reason the user cannot see is
+            # a ranking they cannot check.
+            row['caption_hit'] = round(hits[cid], 3)
         results.append(row)
     thresholds = metric_thresholds()
     relpaths = dict(db.session.query(VideoSource.id, VideoSource.relpath)
@@ -534,4 +621,11 @@ def search(user_id, bank_id, query, n=60, *, push_down=None,
                         if all_matches else None),
         'push_down': excl or None,
         'push_down_weight': round(weight, 3) if excl else None,
+        # What the ranking LEANED ON. The readiness line says "CLIP only" or
+        # "CLIP + captions" from this, and the weight rides along because it is
+        # NOT a measured constant (see HYBRID_CAPTION_WEIGHT) — presenting it as
+        # one would be the dishonest part of an otherwise honest feature.
+        'hybrid': hybrid,
+        'captioned': captioned,
+        'caption_weight': HYBRID_CAPTION_WEIGHT if hybrid else None,
     }

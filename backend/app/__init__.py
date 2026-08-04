@@ -314,6 +314,11 @@ _SCHEMA_ADDITIONS = (
     # Additive so a bank cut and measured by the earlier waves keeps every clip
     # and simply reads "not searchable yet" until the pass runs.
     ('video_clip', 'embed_state', 'VARCHAR(12)'),
+    # 🎬 Video wave 5: the shot's caption and whether a human has touched it.
+    # Additive, so every bank cut by the earlier waves keeps its clips and simply
+    # reads "not captioned yet".
+    ('video_clip', 'caption', 'TEXT'),
+    ('video_clip', 'caption_state', 'VARCHAR(12)'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

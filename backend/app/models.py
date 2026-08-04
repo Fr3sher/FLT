@@ -1209,6 +1209,19 @@ class VideoClip(db.Model):
     # what the resume contract and the counters read, and both must be answerable
     # without touching numpy. Additive — see _SCHEMA_ADDITIONS.
     embed_state = db.Column(String(12), nullable=True)
+    # 🗣 Caption: what HAPPENS in this shot, in prose. Two things at once, and the
+    # second is why it is a column rather than a search index: it is the text the
+    # 🔎 hybrid search matches literally, AND it is what the promotion writes into
+    # the clip's `.txt` sidecar — which IS the training prompt. An empty sidecar
+    # is not a neutral default: ai-toolkit trains it as an empty prompt and says
+    # nothing (see video_clip_export.write_sidecar).
+    caption = db.Column(Text, nullable=True)
+    # NULL = never captioned | 'ok' (generated) | 'edited' (a human corrected it,
+    # and a bulk re-run must not overwrite that) | 'error'. The 'edited' state is
+    # the whole reason this is not derivable from `caption is not None`: a
+    # generated caption is a draft, and losing a correction to the next pass is
+    # the one thing that would stop anyone from ever editing one.
+    caption_state = db.Column(String(12), nullable=True)
     # Triage decision — the same three words as the image lane.
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)
