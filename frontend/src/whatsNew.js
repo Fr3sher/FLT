@@ -3196,6 +3196,18 @@ export const WHATS_NEW = [
       'Setup now repairs a mixed Pillow install on boot and keeps incompatible ML extras out of the Flask environment — fewer cryptic image errors the first time you run the app.',
     // No `to`: a reliability fix with nothing to click.
   },
+  // Appended at the TAIL on purpose. Ordering is by date desc then id desc
+  // (sortedEntries), never by array position, so a new entry does not have to be
+  // prepended — and not prepending is what keeps two branches editing this file
+  // from merging into one mangled object.
+  {
+    id: '2026-08-04-bank-caption-engine-and-scope',
+    date: '2026-08-04',
+    title: 'Choose who writes your bank captions, and which pile gets them',
+    blurb:
+      'The 🏷️ Caption pass used to take whatever engine and vision model your Settings held, and always ran over everything you had not rejected. It now has its own row: pick the engine and the Ollama vision model for THIS run without touching your Settings, and aim the pass at the kept images only, the undecided only, or both. Which model writes a caption is not a matter of taste — one that describes things in evasive terms produces captions that are about something slightly other than your images, and a LoRA trained on them learns to look away too. The button also stops saying “Caption all” and starts saying how many images it is really about to write, because already-captioned ones are skipped and the count you could see was never the count it acted on. Rejected images stay out of reach, whatever you pick.',
+    // No `to`: the control lives inside a bank workspace, which has no deep link.
+  },
 ];
 
 // ── Ordering ────────────────────────────────────────────────────────────────

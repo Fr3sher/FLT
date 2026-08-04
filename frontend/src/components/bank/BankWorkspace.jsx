@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch, del, postJson } from '../../api/fetchClient'
 import { useToast } from '../common/Toast'
+// "This is configurable, here" — a deep link that lands ON the field, not on a tab.
+import SettingsLink from '../common/SettingsLink'
 import { useCapabilities } from '../../context/CapabilitiesContext'
 import { useConnectionStatus } from '../../hooks/useConnectionStatus'
 import DupGroupsPanel from './DupGroupsPanel'
@@ -35,8 +37,16 @@ import { busyRefusal } from './bankPassRun.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
 import { openerLabel } from './scoringPython.js'
-// Reuse the dataset's register list so the Bank lane never drifts from it.
-import { CAPTION_LENGTH_OPTIONS, VOCABULARY_OPTIONS } from '../dataset/CaptionOptionsPopover'
+// Reuse the dataset's register list so the Bank lane never drifts from it — and the
+// same ENGINE list, so "which engine" means the same thing on both surfaces.
+import {
+  CAPTION_LENGTH_OPTIONS, ENGINE_OPTIONS, OLLAMA_RELEVANT, VOCABULARY_OPTIONS,
+} from '../dataset/CaptionOptionsPopover'
+// Which pile the caption pass is aimed at, and the number the button quotes (pure).
+import {
+  CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown, captionScopeCount,
+  captionScopeDisabledReason, captionScopeNote, captionScopeStatuses,
+} from './bankCaptionScope.js'
 // Ordered zone model + the "what's next" accent, both pure/testable.
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 // Provenance wording (effective resolution, origin, black bars) — pure/testable.
@@ -660,6 +670,20 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // Caption LENGTH preset, per RUN like the vocabulary register above (a bank has no
   // caption_options row to persist to). '' = standard: nothing appended to the prompt.
   const [captionLength, setCaptionLength] = useState('')
+  // WHICH ENGINE and WHICH VISION MODEL write this run's captions. Per RUN, like every
+  // other dial on this row: the global Settings stay the default and are never written
+  // from here, so a user can try a different captioner on one pass without changing what
+  // every dataset does afterwards. '' on either = follow the setting, and the key is then
+  // left OUT of the request — a run that picks nothing is byte-identical to before.
+  const [captionEngine, setCaptionEngine] = useState('')
+  const [captionModel, setCaptionModel] = useState('')
+  // The pulled Ollama models, for the picker. Not in `caps` (which carries only the
+  // configured vision model), so it is its own always-200 fetch — an unreachable Ollama
+  // is an empty list, never an error.
+  const [ollamaModels, setOllamaModels] = useState([])
+  // WHICH PILE this run captions: '' = kept + undecided (today's behaviour, sends
+  // nothing), 'keep', or 'pending'. Never 'reject' — the bin is not curated from.
+  const [captionScope, setCaptionScope] = useState('')
   // Coverage advice (idea by @antonp) — a collapsible read-only panel, fetched
   // on demand (and refreshed whenever it's open and the bank changes).
   const [coverageOpen, setCoverageOpen] = useState(false)
@@ -811,6 +835,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   }, [bankId])
 
   useEffect(() => { loadFolderPersons() }, [loadFolderPersons, live])
+
+  // 🏷️ The pulled Ollama models, for the per-run caption model picker. Fetched ONCE per
+  // mount and never blocking: the endpoint always answers 200, and an unreachable Ollama
+  // is an empty list — the picker then offers only "Use the configured model", which is
+  // exactly the truth on that machine.
+  useEffect(() => {
+    let alive = true
+    apiFetch('/api/ollama/models').catch(() => ({ models: [] }))
+      .then((d) => { if (alive) setOllamaModels(d?.models || []) })
+    return () => { alive = false }
+  }, [])
 
   const runFolderPerson = async (call, success) => {
     setFolderPersonBusy(true)
@@ -1033,11 +1068,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // ⤢ the opt-in angle backfill. Its own endpoint, never folded into 🎭 Faces:
   // it is hours of work on a big bank and nobody must pay it by accident.
   const startAngles = () => act(() => postJson(`/api/bank/${bankId}/angles`, {}), null)
+  /* Every option is spread-if-set, so a run that changes nothing posts the SAME body it
+     posted before any of these controls existed — the contract the vocabulary/length
+     pair set and the two new dials join.
+
+     `statuses` is deliberately omitted while a selection is live: the server INTERSECTS
+     the two, so "kept only" plus a selection of undecided images would caption fewer
+     than the button says. The selection wins, the scope select goes inert, and the label
+     switches to the selection count. */
   const startCaption = () => act(
     () => postJson(`/api/bank/${bankId}/caption`, {
       ...(selected.size ? { image_ids: [...selected] } : {}),
       ...(captionVocab ? { vocabulary: captionVocab } : {}),
       ...(captionLength ? { length: captionLength } : {}),
+      ...(captionEngine ? { backend: captionEngine } : {}),
+      ...(captionModel ? { ollama_model: captionModel } : {}),
+      ...(!selected.size && captionScopeStatuses(captionScope)
+        ? { statuses: captionScopeStatuses(captionScope) } : {}),
     }), null)
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
   /* Posts with the dialog still OPEN and answers {ok,error}: a refused launch —
@@ -1366,8 +1413,20 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // model. We can't prove abliteration, but the common builds name themselves — a soft
   // heuristic drives an honest "may soften" hint (never a hard block: a differently
   // named abliterated model still works).
-  const visionModel = caps.ollama?.vision_model || ''
+  // It reads the EFFECTIVE model — this run's override if one was picked, else the
+  // configured one. Warning about the global model while the run uses another is worse
+  // than not warning at all.
+  const visionModel = captionModel || caps.ollama?.vision_model || ''
   const visionModelLooksUncensored = /abliterat|uncensor|huihui|nsfw/i.test(visionModel)
+  // The Ollama model choice only bites when the resolved engine can reach Ollama.
+  const ollamaPicksApply = OLLAMA_RELEVANT.has(captionEngine)
+  // A model pulled elsewhere (or configured in Settings) stays selectable even when the
+  // live list doesn't carry it — silently dropping the user's choice is worse than
+  // offering a name we can't confirm.
+  const captionModelChoices = captionModel && !ollamaModels.includes(captionModel)
+    ? [captionModel, ...ollamaModels] : ollamaModels
+  const captionScopeInert = captionScopeDisabledReason(selected.size, live)
+  const captionRunSize = captionScopeCount(counts, captionScope)
   const scored = counts?.scored || 0
   // ⚖️ Can a balanced pick even run? Answered BEFORE the click when we already
   // know (Score missing; coverage says nothing is classified) — otherwise the
@@ -1533,7 +1592,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <PassButton onClick={startFraming} disabled={live || !visionReady}
             title={visionReady
               ? 'Classify every non-rejected image by shot type — face close-up, bust, full body, back view — with the same Qwen3-VL classifier the datasets use. Powers the 📐 Framing filter and the coverage advice. GPU vision pass.'
-              : 'Pull the vision model (Settings ▸ Captioning & quality) to classify framing'}>
+              : 'Pull the vision model (Settings ▸ Local tools) to classify framing'}>
             📐 Classify framing{!visionReady && ' (needs setup)'}
           </PassButton>
           <PassButton onClick={startSemanticDedup} disabled={live || scored === 0}
@@ -1542,18 +1601,70 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               : 'Run ✨ Score first — semantic near-duplicates reuse its embeddings'}>
             ✂ Find crops &amp; variants{scored === 0 && ' (needs Score)'}
           </PassButton>
-          <PassButton onClick={startCaption} disabled={live}
+          {/* The label QUOTES THE NUMBER IT WILL MOVE — the scope's uncaptioned rows,
+              or the selection when there is one. "Caption all" was the older, vaguer
+              promise, and a button that announces one figure and acts on another is the
+              misunderstanding this whole row exists to end. */}
+          <PassButton onClick={startCaption}
+            disabled={live || (!selected.size && captionCountsKnown(counts) && captionRunSize === 0)}
             title={selected.size
-              ? `Caption the ${selected.size} selected image(s) with your caption engine (Settings ▸ Captioning & quality). Captions become searchable and follow the images when you promote them to a dataset.`
-              : 'Caption every not-yet-captioned image (skips rejected) with your caption engine. Captions become searchable tags and follow the images when you promote them to a dataset. Select images first to caption just those.'}>
-            🏷️ Caption{selected.size ? ` ${selected.size} selected` : ' all'}
+              ? `Caption the ${selected.size} selected image(s) with the engine chosen below. Captions become searchable and follow the images when you promote them to a dataset.`
+              : `${captionScopeNote(selected.size, counts, captionScope)} Pick the engine, the model and the pile below. Select images first to caption just those.`}>
+            {captionButtonLabel(selected.size, counts, captionScope)}
           </PassButton>
+        </div>
+        {/* Caption options get their OWN wrapping row instead of becoming the eighth,
+            ninth and tenth control on the pass row. At a 400 px viewport the usable
+            width is ~336 px and a <select> sizes itself to its widest option, so five
+            of them on one line push the toolbar into a horizontal scroll — which this
+            zone has no container for. Every select is capped at max-w-[11rem], the same
+            bound the grid Sort select carries. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <GroupLabel>Caption options</GroupLabel>
+          <label className="flex items-center gap-1 text-xs text-content-subtle">
+            <span className="sr-only">Caption scope</span>
+            <select value={captionScope} onChange={(e) => setCaptionScope(e.target.value)}
+              disabled={!!captionScopeInert} aria-label="Caption scope"
+              title={captionScopeInert
+                || 'Which pile this pass captions. Rejected images are never captioned, whichever you pick.'}
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              {CAPTION_SCOPE_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {captionCountsKnown(counts)
+                    ? `${o.label} (${captionScopeCount(counts, o.id)})` : o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-xs text-content-subtle">
+            <span className="sr-only">Caption engine</span>
+            <select value={captionEngine} onChange={(e) => setCaptionEngine(e.target.value)}
+              disabled={live} aria-label="Caption engine"
+              title="Which engine writes this run's captions, without changing your Settings. Auto is a CHAIN, not a choice between two: JoyCaption drafts, then Ollama covers whatever it missed."
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              {/* 'none' is dropped on purpose: "caption with nothing" is not a pass. */}
+              {ENGINE_OPTIONS.filter((o) => o.id !== 'none')
+                .map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-1 text-xs text-content-subtle">
+            <span className="sr-only">Caption vision model</span>
+            <select value={captionModel} onChange={(e) => setCaptionModel(e.target.value)}
+              disabled={live || !ollamaPicksApply} aria-label="Caption vision model"
+              title={ollamaPicksApply
+                ? 'Which pulled Ollama vision model writes this run. Your Settings model stays the default and is not changed. Which model writes a caption is not a matter of taste: one that describes things in evasive terms produces captions that are about something slightly other than the images.'
+                : 'Only used when the engine can reach Ollama.'}
+              className={`px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40${ollamaPicksApply ? '' : ' opacity-40'}`}>
+              <option value="">Configured model</option>
+              {captionModelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+          </label>
           <label className="flex items-center gap-1 text-xs text-content-subtle">
             <span className="sr-only">Caption vocabulary register</span>
             <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
               disabled={live} aria-label="Caption vocabulary register"
               title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
               {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
@@ -1562,11 +1673,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <select value={captionLength} onChange={(e) => setCaptionLength(e.target.value)}
               disabled={live} aria-label="Caption length"
               title="How much the captioner writes. Concise aims for one short sentence, Detailed for several - a target the model follows loosely, not a hard cap. Standard leaves the prompt untouched. Longer captions give the search more to match on."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
               {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
         </div>
+        {/* What the run will do, spelled out — including the two things a count alone
+            never says: already-captioned images are skipped, and the bin is out of
+            reach whatever is picked. */}
+        <p className="text-xs text-content-subtle">
+          {captionScopeNote(selected.size, counts, captionScope)}
+          {captionScopeInert && selected.size > 0 && ' The status scope is ignored while a selection is active.'}
+        </p>
         {/* Watermark CLEANING — the two manual levels (crop, then inpaint), with
             their own per-level progress. Lives in its own component so the
             "which level can run, and why not" logic stays unit-tested. */}
@@ -1604,10 +1722,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </div>
         )}
         {captionVocab === 'explicit' && !visionModelLooksUncensored && (
+          /* The old wording sent people to Settings ▸ Captioning & quality, which holds
+             the ENGINE selector — the vision model lives in Settings ▸ Local tools. Now
+             that the model is pickable right here, the sentence points at the control
+             on screen instead, and only mentions Settings for the case the picker
+             cannot solve: no uncensored model pulled on this machine at all. */
           <p className="text-xs text-amber-400/90">
             ⚠️ Explicit captions need an uncensored (abliterated) Ollama vision model
             {visionModel ? ` — “${visionModel}” may refuse or soften explicit terms` : ''}.
-            Pull one in Settings ▸ Captioning &amp; quality. Richer captions also feed the 🔍 search.
+            Pick another one in <b>Caption vision model</b> above, or pull one from{' '}
+            <SettingsLink section="local-tools" focus="ollama-vision-model" tone="warning">
+              Settings ▸ Local tools
+            </SettingsLink>. Richer captions also feed the 🔍 search.
           </p>
         )}
       </div>

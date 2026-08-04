@@ -1064,6 +1064,55 @@ is free even after a restart.
 On a memory-tight machine you can set `bank_scoring.text_search_idle_minutes` to
 `0`: nothing is ever kept warm, and each new phrase pays the ten seconds instead.
 
+## Choose who captions a bank, and which pile
+
+The 🏷️ **Caption** pass in ① Analyze has its own **Caption options** row, and
+every control on it applies to **that run only** — your Settings stay the
+default and are never rewritten from here.
+
+**Which pile gets captioned.** Three choices, and rejected images are in none of
+them:
+
+- **Kept + undecided** — the default, and exactly what the pass always did.
+- **✓ Kept only** — caption what you have already chosen, and nothing else. This
+  is the cheap one: on a 20 000-image dump where you kept 300, it is 300 vision
+  calls instead of 20 000.
+- **Undecided only** — the opposite errand. Captions feed the 🔍 search and the
+  🏷️ tag chips, so captioning the undecided pile is how you get *tools* to
+  triage it with.
+
+Each option carries its own count, and the button quotes the number it is really
+about to write. That number is **not** the size of the pile: images that already
+have a caption are skipped, so a bank of 4 000 kept images can honestly offer
+"Caption 12 kept". When everything in a pile already has a caption the button
+says so and goes inert.
+
+**A selection wins.** Select images first and the scope select greys out: the
+pass captions your selection, and the button switches to counting it. The server
+would otherwise *intersect* the two, and "Caption 12 selected" could quietly
+write 4.
+
+**Which engine, and which model.** Two more selects on the same row:
+
+- **Caption engine** — *Auto* is a chain, not a coin flip: JoyCaption drafts and
+  Ollama covers whatever it missed. Forcing *JoyCaption only* removes the Ollama
+  half rather than picking one of two.
+- **Caption vision model** — any Ollama model you have pulled. It is only used
+  when the engine can reach Ollama, and it is greyed out otherwise. A model
+  configured elsewhere stays selectable even if it is not in the live list.
+
+This last one matters more than it looks. A captioner that describes plainly
+visible things in evasive terms produces captions that are about something
+slightly *other* than your images — and a LoRA trained on those learns to look
+away too, with nothing in the output to reveal it. The captions read perfectly
+well. That is the problem. If you caption NSFW material, pair the **Explicit**
+register with an uncensored (abliterated) model; the app warns you when the
+model it is about to use does not look like one.
+
+You can change the model between runs on the same bank. Nothing is rewritten:
+the pass only fills images that have no caption yet, so a second run with a
+different model captions the rest, not the ones already done.
+
 ## Review a bank one image at a time
 
 Filter chips and bulk actions clear the obvious trash, but the last call —
