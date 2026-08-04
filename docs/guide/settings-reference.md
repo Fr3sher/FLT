@@ -697,6 +697,12 @@ panel now names each lock and its reason instead of just greying it out. The
 values below are editable because they change the *result*, not whether the run
 fits.
 
+**Krea 2 Raw only, never Turbo.** Turbo's speed comes from a de-distillation
+adapter that LoRA training subtracts back out at extraction time; a dense save
+has no such step, so it would bake that adapter permanently into the delivered
+weights instead of learning your subject — train dense on Raw (see the dataset
+guide, §10).
+
 | Setting | Key | Default | Notes |
 |---|---|---|---|
 | **Steps** | (per launch) | adaptive | ≥ 500 when set explicitly. |

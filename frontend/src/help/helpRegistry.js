@@ -1106,7 +1106,11 @@ const TOPICS = [
     keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'recipe', 'locked',
       'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
       'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
-      'gradient checkpointing', '80 gb'],
+      'gradient checkpointing', '80 gb',
+      // Why Turbo is refused as a dense base — searched as "why can't I train
+      // dense on turbo", not just "what can I edit here".
+      'turbo', 'distilled', 'speed distilled', 'speed-distilled', 'distillation',
+      'de-distillation', 'de-distilled', 'assistant lora', 'not supported', 'refused'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'full-model-recipe-unlocked',

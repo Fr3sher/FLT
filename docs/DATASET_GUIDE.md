@@ -733,6 +733,19 @@ typed in as before, and takes the same route: same refusals, same disk check,
 same destination, stated. When you have set **Custom weights…**, that path
 pre-fills it, so there is nothing to type there either.
 
+### Why there is no full-model training on Turbo
+
+Dense (full model) training is offered on Krea 2 Raw only. Turbo is a
+speed-distilled model: it was compressed so it can draw an image in about 8
+steps instead of ~50, and that compression is stored in the very same weights
+a dense run rewrites — so training over it erases the speed, and the model
+drifts back to needing many steps with no way to restore it. LoRA training can
+target Turbo because a temporary de-distillation adapter is added during
+training and subtracted afterwards, leaving only the small LoRA file; a dense
+run has nothing to subtract from, because that adapter gets baked into the
+exact weights you are saving. Train dense on Raw instead — Raw is the
+undistilled checkpoint Krea publishes for precisely this purpose.
+
 ### Testing a full model: it is a RAW checkpoint
 
 The artifact is **undistilled**. Krea 2 Turbo-style settings — CFG 1 and a

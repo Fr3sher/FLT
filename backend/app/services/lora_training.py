@@ -3768,7 +3768,12 @@ BUILTIN_TRAIN_PRESETS = [
     # The linked Pastebin configuration was later deleted. The post specifies
     # LoKr factor 16 but not linear rank/alpha, so LDS retains its verified Krea
     # Character 32/32 baseline instead of inventing missing values. `base` is
-    # Krea-2-Raw in LDS; Turbo is deliberately excluded from this Raw recipe.
+    # Krea-2-Raw in LDS; Turbo is excluded from THIS preset's variant list
+    # because the community report was never validated on it, not because
+    # Turbo LoRA training is broken (it works fine). That is a preset choice,
+    # unlike full-model/dense training, which refuses Turbo for a MECHANICAL
+    # reason (the de-distillation adapter merges into the saved weights with
+    # no way to unmerge it) — see _assert_full_transformer_recipe.
     {
         'id': 'builtin-krea-raw-lokr-likeness',
         'name': 'Krea 2 Raw · LoKr likeness',
@@ -4968,12 +4973,24 @@ def _apply_slider_overrides(ds, process: dict, family: str | None = None) -> dic
 
 
 def _assert_full_transformer_recipe(ds) -> None:
-    """Validate the intentionally narrow Krea 2 dense-training MVP."""
+    """Validate the intentionally narrow Krea 2 dense-training MVP.
+
+    The Turbo check below is a MECHANICAL incompatibility, not a precaution:
+    Turbo training merges the Ostris de-distillation `assistant_lora_path`
+    into the frozen base for every forward pass, and a LoRA run later
+    subtracts that same adapter back out at extraction time — a dense save
+    has no such step, so the delivered weights would permanently carry the
+    adapter fused in (quietly re-slowing the model), while previews (which DO
+    subtract it) would still look correct. Do not remove this guard as excess
+    caution — it is the only thing stopping a broken dense export.
+    """
     if not _is_full_transformer(ds):
         return
     if _train_type(ds) != 'krea':
         raise ValueError('full_transformer training is supported only for Krea 2')
     if not _krea_is_raw(ds):
+        # Merged into the weights during training, never unmerged at dense
+        # save time — see the docstring above for the mechanism.
         raise ValueError('full_transformer training requires Krea-2-Raw (Turbo is not supported)')
     if str(getattr(ds, 'train_base_model', None) or '').strip():
         raise ValueError('full_transformer training does not support a custom base model')
