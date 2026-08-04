@@ -397,6 +397,10 @@ def _counts(bank_id) -> dict:
         'reject': clips.filter_by(status='reject').count(),
         'promoted': clips.filter(VideoClip.promoted_dataset_id.isnot(None)).count(),
         'thumbs': clips.filter_by(thumb_state='ok').count(),
+        # How many shots 🔎 Search can actually find. Counted here rather than
+        # derived in the UI because "0 results" and "0 searchable shots" are two
+        # different answers and only this number tells them apart.
+        'embedded': clips.filter_by(embed_state='ok').count(),
     }
 
 
@@ -632,6 +636,20 @@ def _forget_measurements(bank_id, clip: VideoClip):
     exists to remove."""
     clip.thumb_state = None
     clip.metrics_json = None
+    # The search vectors describe three INSTANTS of the old span. Kept, they would
+    # make this shot answer a phrase for something that now belongs to its
+    # neighbour, and hand the player a second outside the shot's own bounds — a
+    # wrong answer that looks exactly like a right one. Same reasoning as the
+    # thumbnail: a measurement of a span nobody has any more is not stale, it is
+    # false.
+    #
+    # The COLUMN is cleared and the vectors are left where they are, deliberately.
+    # `video_clip_search.search` requires embed_state == 'ok' before it will read
+    # a shot's vectors, so this one line is what makes the old ones unreachable —
+    # and rewriting the store here would rewrite the WHOLE bank's .npz (tens of MB
+    # on a real bank) inside a trim, which is an interactive gesture. The orphans
+    # are pruned by the next embedding pass, where a rewrite is happening anyway.
+    clip.embed_state = None
     # The detector's frame indices described the old boundary and nothing cuts from
     # them; keeping them would make a later disagreement unreadable.
     clip.start_frame = None
@@ -925,6 +943,82 @@ def _measure_job(bank_id, remeasure):
             detail += f', {unreadable} unreadable'
         bank_jobs.progress(job, detail=detail)
         return {'measured': measured, 'unreadable': unreadable}
+    return run
+
+
+def _embed_available():
+    """None when this install can embed frames, else the sentence saying why not.
+
+    A named seam rather than an inline import so the refusal can be exercised in
+    both directions without a torch install — and so the ONE place that decides
+    "can this machine do CLIP" stays visible to a reader of this file."""
+    from .clip_image_encoder import unavailable_reason
+    return unavailable_reason()
+
+
+def start_embed(app, user_id, bank_id, reembed=False):
+    """🔎 Wave 3's pass: CLIP vectors for a few frames of every shot, so a typed
+    word can find the scenes it describes.
+
+    Refused up front — with the Setup sentence, not a generic error — when no
+    interpreter here can run CLIP: a 202 followed by a job that dies on an import
+    is the same information delivered ten minutes later and harder to read.
+
+    Serialised against training and the vision passes ONLY when it will really
+    use the card, exactly like the image lane's ✨ Score. On CPU this is hours of
+    work that never wanted the GPU, and holding the exclusive window through it
+    would leave the card idle AND unusable."""
+    from ..capabilities import bank_scoring_gpu_available
+    _require_free_bank(user_id, bank_id)
+    reason = _embed_available()
+    if reason:
+        raise RuntimeError(reason)
+    use_gpu = bank_scoring_gpu_available()
+    if use_gpu:
+        busy = _gpu_busy_reason()
+        if busy:
+            raise RuntimeError(busy)
+    return bank_jobs.start(app, job_key(bank_id), 'embed',
+                           _embed_job(bank_id, bool(reembed), use_gpu))
+
+
+def _gpu_busy_reason():
+    """A human reason the card is unavailable right now, or None. The same system
+    flags training and the vision window raise, so an embedding pass never races
+    a training run — the guarantee the whole app is built on."""
+    from ..job_queue import queue_manager
+    if queue_manager._get_system_state('training_in_progress'):
+        return 'training is running on the GPU — try again once it finishes'
+    if queue_manager._get_system_state('vision_in_progress'):
+        return 'a vision/GPU pass is already running — try again in a moment'
+    return None
+
+
+def _embed_job(bank_id, reembed, use_gpu):
+    def run(job):
+        from contextlib import nullcontext
+
+        from ..gpu_window import gpu_exclusive_vision_window
+        from . import video_clip_search
+        total = video_clip_search.pending_clips(bank_id, reembed).count()
+        # Say WHICH device every time: on the CPU this is ~336 ms per frame and
+        # three frames per shot, so a progress bar crawling for an hour with no
+        # explanation reads as a hang rather than as the price of not having a
+        # card configured for ✨ Score.
+        bank_jobs.progress(job, done=0, total=total,
+                           detail=f'embedding shots ({"GPU" if use_gpu else "CPU"})')
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
+                  else nullcontext())
+        with window:
+            out = video_clip_search.run_embed(
+                bank_id, reembed, use_gpu=use_gpu,
+                on_clip=lambda: bank_jobs.bump(job),
+                should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["embedded"]} shot(s) searchable'
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} could not be read'
+        bank_jobs.progress(job, detail=detail)
+        return out
     return run
 
 

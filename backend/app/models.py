@@ -1200,6 +1200,15 @@ class VideoClip(db.Model):
     # unit, and adding a metric to the scan must not need a migration.
     # NULL = the scan has not reached this clip. Additive — see _SCHEMA_ADDITIONS.
     metrics_json = db.Column(Text, nullable=True)
+    # 🔎 Search pass: NULL = never embedded | 'ok' | 'unreadable'. Only the STATE
+    # lives here; the vectors themselves are a .npz next to the bank's thumbnails
+    # (services/video_clip_search), for the same reason the image lane keeps its
+    # ✨ Score embeddings out of SQLite — three 768-float rows per clip over a bank
+    # of thousands is a blob store, not a column, and every reader of it wants the
+    # whole matrix at once rather than one row. The state is here because it is
+    # what the resume contract and the counters read, and both must be answerable
+    # without touching numpy. Additive — see _SCHEMA_ADDITIONS.
+    embed_state = db.Column(String(12), nullable=True)
     # Triage decision — the same three words as the image lane.
     status = db.Column(String(10), nullable=False, default='pending', index=True)
     reject_reason = db.Column(String(16), nullable=True)

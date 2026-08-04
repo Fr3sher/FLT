@@ -310,6 +310,10 @@ _SCHEMA_ADDITIONS = (
     # 🎬 Video wave 2: the metrics scan's raw per-clip summary. Additive so a
     # video bank cut by wave 1 keeps every clip and simply reads "not measured".
     ('video_clip', 'metrics_json', 'TEXT'),
+    # 🎬 Video wave 3: whether this shot's frames were embedded for 🔎 Search.
+    # Additive so a bank cut and measured by the earlier waves keeps every clip
+    # and simply reads "not searchable yet" until the pass runs.
+    ('video_clip', 'embed_state', 'VARCHAR(12)'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

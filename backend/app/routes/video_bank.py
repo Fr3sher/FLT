@@ -330,6 +330,64 @@ def video_bank_measure(bank_id):
                   remeasure=bool(data.get('remeasure')))
 
 
+@bp.post('/video-bank/<int:bank_id>/embed')
+def video_bank_embed(bank_id):
+    """🔎 Wave 3: CLIP vectors for a few frames of every shot, so a typed word can
+    find the scenes it describes. Body {reembed?: bool}.
+
+    Two 503s, and they are not the same sentence: the decode extra is missing
+    (no frames to embed at all), or no interpreter here can run CLIP (the ✨ Score
+    environment). Collapsing them into one "unavailable" is how someone installs
+    the wrong thing twice."""
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_embed, _app(), LOCAL_USER, bank_id,
+                  reembed=bool(data.get('reembed')))
+
+
+@bp.get('/video-bank/<int:bank_id>/search')
+def video_bank_search(bank_id):
+    """Rank a bank's shots by CLIP similarity to `q`, best first.
+
+    Query: q (the phrase), n (how many, default 60), push_down (a trait to sink
+    — `-term` inside q means the same thing), push_down_weight, status (search
+    inside one triage bucket).
+
+    A GET because it is a READ and nothing else: it changes nothing, it is
+    re-runnable, and a user can put a search in a bookmark. Answers the ranked
+    rows WITH the ranking (see video_clip_search.search) so the grid never has to
+    re-fetch them and lose the order.
+
+    400 = this bank cannot answer yet (no phrase, never embedded). 503 = this
+    INSTALL cannot answer at all (no torch/open_clip). One is "do this first",
+    the other is "this machine cannot do this" — and a UI that says the first
+    when it means the second sends people round a loop."""
+    from ..services.clip_text_encoder import TextEncodeError
+    from ..services import video_clip_search
+    if svc.get_bank(LOCAL_USER, bank_id) is None:
+        return _missing(bank_id)
+    args = request.args
+    try:
+        n = int(args.get('n') or 60)
+    except (TypeError, ValueError):
+        n = 60
+    weight = args.get('push_down_weight')
+    try:
+        out = video_clip_search.search(
+            LOCAL_USER, bank_id, args.get('q'), n=n,
+            push_down=args.get('push_down'),
+            push_down_weight=float(weight) if weight not in (None, '') else None,
+            status=args.get('status') or None)
+    except TextEncodeError as e:
+        return jsonify({'error': str(e), 'reason': 'encoder_unavailable'}), 503
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **out})
+
+
 @bp.post('/video-bank/<int:bank_id>/metrics-dry-run')
 def video_bank_metrics_dry_run(bank_id):
     """How many clips EACH cut would flag, before anything is committed. Body =
