@@ -485,11 +485,15 @@ def test_stopping_during_the_conversion_reads_as_a_stop_not_a_failure(
 
 
 def test_a_second_job_is_refused_while_one_is_running(app, comfy, tmp_path, monkeypatch):
-    # `start()` checks free space BEFORE it checks for a running job, so on a host
-    # that happens to be short on disk the space refusal fires first and this test
-    # silently measures the wrong branch — it went red on a release runner while
-    # passing everywhere else. Pin free space so the refusal under test is the only
-    # one that CAN fire; the sibling test below pins it low to cover the other side.
+    # `start()` now asks "is something already running?" BEFORE it plans and
+    # before it looks at the disk, so this pin is no longer what makes the test
+    # pass. IT STAYS ON PURPOSE. It was added because the space refusal used to
+    # fire first and this test silently measured the wrong branch — red on a
+    # release runner, green everywhere else. Kept, the pin means the test can
+    # never re-couple itself to the host's free space if the order is ever
+    # reorganised back; removed, that regression would come back invisible. The
+    # sibling test below pins it low to cover the other side, and the one after
+    # that pins it low WITH a job running, which is the ordering itself.
     monkeypatch.setattr(fld, '_free_bytes', lambda _p: 10 ** 15)
     from app.job_queue import queue_manager
     queue_manager._set_system_state('fp8_local_delivery', {'status': 'downloading'},
@@ -504,6 +508,40 @@ def test_starting_with_too_little_disk_refuses_instead_of_launching_a_thread(
     with pytest.raises(fld.DeliveryError, match='not enough disk space'):
         fld.start(app, repo_id=REPO, family='krea', _files=_files(FINAL))
     assert fld.status().get('status') != 'downloading'
+
+
+def test_a_running_job_is_named_even_when_the_disk_is_also_full(
+        app, comfy, monkeypatch):
+    """Both refusals are true at once — the ACTIONABLE one has to be the one said.
+
+    A job in flight is a fact about right now that one gesture settles (wait, or
+    stop it). Free space is a forecast about work that could not have started
+    anyway, and hearing it first sends someone off to delete gigabytes for a run
+    the disk was never blocking. So with a job running the space message must not
+    appear at all, whatever the disk says."""
+    monkeypatch.setattr(fld, '_free_bytes', lambda _p: 1000 ** 3)   # 1 GB: far too little
+    from app.job_queue import queue_manager
+    queue_manager._set_system_state('fp8_local_delivery', {'status': 'downloading'},
+                                    ttl_seconds=60)
+    with pytest.raises(fld.DeliveryError) as caught:
+        fld.start(app, repo_id=REPO, family='krea', _files=_files(FINAL))
+    assert 'already being prepared' in str(caught.value)
+    assert 'disk space' not in str(caught.value)
+
+
+def test_a_busy_machine_is_refused_without_planning_anything(app, comfy, monkeypatch):
+    """...and the refusal costs nothing. `plan` lists a Hugging Face repository
+    and probes interpreters for torch; none of that has to run to answer "one is
+    already going". This asserts the call is not made, not merely that it was
+    fast — a timing assertion would pass on a warm cache."""
+    def _never(**_kw):
+        raise AssertionError('plan() was called to refuse a job that is already running')
+    monkeypatch.setattr(fld, 'plan', _never)
+    from app.job_queue import queue_manager
+    queue_manager._set_system_state('fp8_local_delivery', {'status': 'quantizing'},
+                                    ttl_seconds=60)
+    with pytest.raises(fld.DeliveryError, match='already being prepared'):
+        fld.start(app, repo_id=REPO, family='krea', _files=_files(FINAL))
 
 
 def test_cancel_reports_nothing_to_stop_when_idle(app):
