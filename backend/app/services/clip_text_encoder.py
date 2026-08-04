@@ -54,14 +54,19 @@ click rather than stall for ten minutes.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import subprocess
 import sys
 import threading
 import time
+from collections import deque
 
 from .. import config as cfg
+from ..utils.redact import redact_tokens, redact_user_paths
+
+logger = logging.getLogger(__name__)
 
 _SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'clip_text_infer.py')
 
@@ -73,6 +78,18 @@ START_TIMEOUT = 900
 # Once warm, a query is ~20 ms. Anything past this means the worker is wedged.
 QUERY_TIMEOUT = 120
 DEFAULT_IDLE_MINUTES = 10
+
+# The child's stdout is ours by PROTOCOL, not by physics. An ML interpreter can
+# greet its first run, a dependency can announce a download, a sitecustomize can
+# print — and every one of those lands ahead of our JSON. A bare json.loads
+# turned any such line into "the text encoder produced no result" on installs
+# where the encoder was perfectly able to answer, and took 🎨 Medium and 🔎 text
+# search down with it. So the reader steps over what is not JSON, exactly like
+# the ✨ Score reader does, and keeps what it stepped over for the message.
+_MAX_NOISE_LINES = 30       # past this the child is talking, not answering
+_NOISE_KEEP = 6             # how many of those lines are quoted back
+_NOISE_CHARS = 300          # and how much of them — a message, not a log
+_STDERR_KEEP = 8
 
 _lock = threading.RLock()
 _memory: dict = {}          # normalised query -> list[float]
@@ -323,25 +340,27 @@ def _start_worker_locked():
     try:
         proc = subprocess.Popen(
             [python, _SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, text=True, encoding='utf-8',
+            stderr=subprocess.PIPE, text=True, encoding='utf-8',
             errors='replace', bufsize=1, env=env,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception as e:  # noqa: BLE001
         raise TextEncodeError(f'could not start the text encoder: '
                               f'{type(e).__name__}: {e}') from None
+    _attach_stderr_drain(proc)
+    noise = []
     try:
         proc.stdin.write(json.dumps({
             'models_root': cfg.get('bank_scoring.models_root') or None}) + '\n')
         proc.stdin.flush()
-        line = _readline_with_timeout(proc, START_TIMEOUT)
-        data = json.loads(line)
-    except TextEncodeError:
+        data = _read_json_with_timeout(proc, START_TIMEOUT, noise)
+    except TextEncodeError as e:
         _kill(proc)
-        raise
+        raise TextEncodeError(f'{e}{_transcript(proc, noise)}') from None
     except Exception:  # noqa: BLE001
         _kill(proc)
-        raise TextEncodeError('the text encoder produced no result — check the '
-                              '✨ Score interpreter') from None
+        raise TextEncodeError('the text encoder did not answer in a form this '
+                              'app could read'
+                              + _transcript(proc, noise)) from None
     if not data.get('ok') or not data.get('ready'):
         _kill(proc)
         raise TextEncodeError(str(data.get('error') or 'unknown encoder error'))
@@ -360,10 +379,14 @@ def _kill(proc):
         pass
 
 
-def _readline_with_timeout(proc, timeout):
+def _readline_with_timeout(proc, timeout, budget=None):
     """One stdout line, or TextEncodeError. subprocess pipes have no timed read,
     so the wait happens on a helper thread — a wedged child must never hang a
-    Flask worker forever."""
+    Flask worker forever.
+
+    ``budget`` is the whole allowance this read is one slice of, so the message
+    names the budget the user is actually up against and not whatever was left
+    of it after a banner line."""
     box = {}
 
     def _read():
@@ -377,13 +400,114 @@ def _readline_with_timeout(proc, timeout):
     t.join(timeout)
     if t.is_alive() or 'err' in box:
         raise TextEncodeError(
-            f'the text encoder did not answer within {int(timeout // 60)} minutes '
+            f'the text encoder did not answer within '
+            f'{int((budget or timeout) // 60)} minutes '
             '— loading CLIP on this machine is unusually slow')
     line = box.get('line') or ''
     if not line.strip():
-        raise TextEncodeError('the text encoder exited before answering — check '
-                              'the ✨ Score interpreter')
+        raise TextEncodeError('the text encoder exited before answering')
     return line
+
+
+def _read_json_with_timeout(proc, timeout, noise=None):
+    """The next JSON object the child prints, STEPPING OVER anything that is not
+    one — the fix for a first-load banner making a healthy encoder look broken.
+
+    Everything skipped is appended to ``noise`` so a genuine failure can quote
+    what really arrived instead of asserting that nothing did. The timeout is a
+    budget for the WHOLE read, never per line: a child printing a line a second
+    must not be able to extend the wait forever."""
+    deadline = time.monotonic() + timeout
+    for _ in range(_MAX_NOISE_LINES):
+        left = deadline - time.monotonic()
+        line = _readline_with_timeout(proc, max(left, 1.0), budget=timeout)
+        if line.lstrip().startswith('{'):
+            try:
+                return json.loads(line)
+            except json.JSONDecodeError:
+                pass          # a truncated or interleaved line is noise too
+        if noise is not None:
+            noise.append(line.strip())
+        logger.info('clip text encoder: ignored a non-JSON line from the worker: %s',
+                    _one_line(line))
+    raise TextEncodeError('the text encoder kept printing without ever answering')
+
+
+def _attach_stderr_drain(proc):
+    """Keep the child's last stderr lines, and keep its pipe empty.
+
+    stderr used to be DEVNULL: the one place a ModuleNotFoundError or a download
+    URL would have appeared was thrown away before anyone could read it, which
+    is why the only bug report we got could not say WHAT the worker printed. It
+    cannot be an unread pipe either — a child that fills the buffer would block
+    for ever. So a daemon thread drains it into a small ring buffer, which is
+    all an error message needs."""
+    stream = proc.stderr
+    if stream is None:
+        return
+    buf = deque(maxlen=_STDERR_KEEP)
+
+    def _pump():
+        try:
+            for line in stream:
+                s = str(line).strip()
+                if s:
+                    buf.append(s)
+        except Exception:  # noqa: BLE001 — a closed pipe just ends the pump
+            pass
+        finally:
+            try:
+                stream.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    t = threading.Thread(target=_pump, daemon=True, name='clip-text-stderr')
+    t.start()
+    try:
+        proc.lds_stderr_tail = (buf, t)
+    except Exception:  # noqa: BLE001 — diagnostics are never worth an exception
+        pass
+
+
+def _stderr_tail(proc):
+    got = getattr(proc, 'lds_stderr_tail', None)
+    if not got:
+        return []
+    buf, t = got
+    t.join(0.5)     # the child is being killed; let the pump flush what it read
+    return list(buf)
+
+
+def _one_line(text, limit=_NOISE_CHARS):
+    """A single, truncated, paste-safe line out of whatever the child printed.
+
+    Paste-safe matters here: this text goes into an error the user reads on
+    screen and pastes into a public help thread, and a worker's chatter is
+    exactly where an absolute home-dir path or a token shows up."""
+    s = ' '.join(str(text or '').split())
+    if not s:
+        return ''
+    s = redact_user_paths(redact_tokens(s))
+    return s if len(s) <= limit else s[:limit] + '…'
+
+
+def _transcript(proc, noise=None):
+    """What the worker actually said, appended to the message the user sees.
+
+    The report this exists for carried a stack trace that named no cause at all:
+    the offending line was dropped and stderr was silenced, so the message could
+    only guess — and it guessed the wrong component, sending the reporter to
+    check an interpreter that was provably fine."""
+    chunks = []
+    out = _one_line(' ⏎ '.join(x for x in (noise or [])[-_NOISE_KEEP:] if x))
+    if out:
+        chunks.append(f'it printed "{out}"')
+    err = _one_line(' ⏎ '.join(_stderr_tail(proc)[-_NOISE_KEEP:]))
+    if err:
+        chunks.append(f'its error output ends with "{err}"')
+    if not chunks:
+        return ' — it printed nothing at all (see 🪵 Server log in Settings)'
+    return ' — ' + '; '.join(chunks)
 
 
 def _encode_uncached(texts, models_root=None):
@@ -398,16 +522,18 @@ def _encode_uncached(texts, models_root=None):
         if proc is None:
             proc = _start_worker_locked()
         for text in texts:
+            noise = []
             try:
                 proc.stdin.write(json.dumps({'text': text}) + '\n')
                 proc.stdin.flush()
-                data = json.loads(_readline_with_timeout(proc, QUERY_TIMEOUT))
-            except TextEncodeError:
+                data = _read_json_with_timeout(proc, QUERY_TIMEOUT, noise)
+            except TextEncodeError as e:
                 _stop_worker_locked()      # a wedged worker must not be reused
-                raise
+                raise TextEncodeError(f'{e}{_transcript(proc, noise)}') from None
             except Exception:  # noqa: BLE001
                 _stop_worker_locked()
-                raise TextEncodeError('the text encoder stopped responding') from None
+                raise TextEncodeError('the text encoder stopped responding'
+                                      + _transcript(proc, noise)) from None
             if not data.get('ok'):
                 raise TextEncodeError(str(data.get('error') or 'unknown encoder error'))
             out.append(np.asarray(data.get('vector') or [], dtype='float32'))

@@ -3196,6 +3196,14 @@ export const WHATS_NEW = [
       'Setup now repairs a mixed Pillow install on boot and keeps incompatible ML extras out of the Flask environment — fewer cryptic image errors the first time you run the app.',
     // No `to`: a reliability fix with nothing to click.
   },
+  {
+    id: '2026-08-04-text-encoder-tolerates-a-chatty-worker',
+    date: '2026-08-04',
+    title: '🎨 Medium and 🔎 text search stop failing over a line of chatter',
+    blurb:
+      'On some installs 🎨 Medium and 🔎 text search died with “the text encoder produced no result — check the ✨ Score interpreter”, on machines whose ✨ Score interpreter was fine — it had just produced the embeddings both features read. The cause was one line: the first thing the text encoder printed had to be its answer, so a first-run banner, a weights download or any greeting from the ML environment ahead of it was read as a failure. Both features now step over anything that is not an answer, the way the ✨ Score pass already did. And when the encoder really does fail, the message quotes what it actually printed — including the error output, which used to be discarded — with home-folder paths stripped, so it is safe to paste into a help thread and it no longer sends you to check a component it never looked at.',
+    to: '/bank',
+  },
 ];
 
 // ── Ordering ────────────────────────────────────────────────────────────────
