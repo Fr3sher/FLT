@@ -484,7 +484,13 @@ def test_stopping_during_the_conversion_reads_as_a_stop_not_a_failure(
     assert 'resumes' in state['error']
 
 
-def test_a_second_job_is_refused_while_one_is_running(app, comfy, tmp_path):
+def test_a_second_job_is_refused_while_one_is_running(app, comfy, tmp_path, monkeypatch):
+    # `start()` checks free space BEFORE it checks for a running job, so on a host
+    # that happens to be short on disk the space refusal fires first and this test
+    # silently measures the wrong branch — it went red on a release runner while
+    # passing everywhere else. Pin free space so the refusal under test is the only
+    # one that CAN fire; the sibling test below pins it low to cover the other side.
+    monkeypatch.setattr(fld, '_free_bytes', lambda _p: 10 ** 15)
     from app.job_queue import queue_manager
     queue_manager._set_system_state('fp8_local_delivery', {'status': 'downloading'},
                                     ttl_seconds=60)
