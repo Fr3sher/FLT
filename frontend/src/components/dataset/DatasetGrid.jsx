@@ -5,6 +5,7 @@ import KleinImproveNote from './KleinImproveNote';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import { partitionKleinImproveSelection } from '../../utils/kleinBulkImprove';
 import { improvementStateByParent } from './improveCandidates.js';
+import { GRID_PAGE_SIZE, clampPage, pageSlice } from './gridPaging.js';
 import {
   availableImproveEngines,
   describeImproveLaunch,
@@ -160,6 +161,33 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
   );
 }
 
+/* Page navigator for the image wall — deliberately the same shape and wording as
+   the Bank grid's (← Prev · "1–500 of 6211" · Next →), because it is the same
+   gesture on the same kind of surface. Rendered ABOVE and BELOW the grid: a full
+   page is tens of thousands of pixels tall, and a bottom-only pager would mean
+   scrolling all the way back up to move on. Buttons are min-h-11 (44 px) so the
+   whole thing is usable with a thumb at 400 px, where the row wraps. */
+function GridPager({ view, onGo, where }) {
+  if (!view.paged) return null;
+  const btn = 'min-h-11 rounded-lg border border-border bg-surface px-3 py-1 '
+    + 'text-content font-semibold disabled:opacity-40 hover:bg-surface-raised';
+  return (
+    <nav aria-label={`Image grid pages (${where})`}
+      className="flex flex-wrap items-center gap-2 text-xs">
+      <button type="button" disabled={view.page === 0} onClick={() => onGo(view.page - 1)}
+        className={btn}>← Prev</button>
+      <button type="button" disabled={view.page >= view.pages - 1} onClick={() => onGo(view.page + 1)}
+        className={btn}>Next →</button>
+      <span className="text-content-muted tabular-nums">
+        {view.from}–{view.to} of {view.total}
+      </span>
+      <span className="text-content-subtle tabular-nums">
+        page {view.page + 1}/{view.pages}
+      </span>
+    </nav>
+  );
+}
+
 export default function DatasetGrid({ images, datasetId, onStatus, onCaption, onCrop, onDelete,
                                       onMirror, onRegenerate, onScoreFace, scoringFaceIds, onReimprove, onView, onBatch, busy, nonces,
                                       mirroringIds, faceThresholds, datasetKind = 'character',
@@ -189,10 +217,21 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   const improvementStates = useMemo(
     () => improvementStateByParent(images), [images]);
   const bulkBusy = busy || launchingImprove;
+  // Which page of the filtered list is on screen. Only the RENDERING is paged:
+  // the selection, the bulk actions, auto-triage and every count keep reading
+  // the full list (see gridPaging.js).
+  const [page, setPage] = useState(0);
   useEffect(() => {
     setSelected(new Set());
     setLaunchingImprove(false);
+    setPage(0);
   }, [datasetId]);
+  // A filter, a delete or a status flip can shrink the list under the page the
+  // user is standing on; land them on the last real page instead of a blank
+  // grid that would read as data loss.
+  useEffect(() => {
+    setPage((p) => clampPage(p, (images || []).length));
+  }, [images]);
   // Prune ids that vanished (deleted / poll refresh) so stale selections can't act.
   useEffect(() => {
     setSelected((prev) => {
@@ -227,6 +266,17 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   // Rescue winners remain editable one-by-one (caption/crop), but their paired
   // provenance makes generic bulk status/delete unsafe. Never select them here.
   const selectable = images.filter((i) => i.filename && !isSmallImageRescueRow(i));
+  // What is actually mounted. Everything below still reasons about `images`.
+  const view = pageSlice(images, page, GRID_PAGE_SIZE);
+  const goToPage = (next) => {
+    setPage(clampPage(next, images.length));
+    // Land at the top of the grid: the tiles under the cursor are now different
+    // images, and finishing a page leaves you tens of thousands of pixels down
+    // a page that no longer exists.
+    try {
+      document.getElementById('ds-images-review')?.scrollIntoView({ block: 'start' });
+    } catch { /* no DOM (tests) — the page still changed, which is what matters */ }
+  };
   const ids = [...selected];
   const improveUniverse = Array.isArray(eligibilityImages) ? eligibilityImages : images;
   const improveSelection = partitionKleinImproveSelection(improveUniverse, ids);
@@ -290,8 +340,13 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
           selected.size === 0 ? (
             <>
               <span className="text-content-subtle">Tick images to curate them in bulk —</span>
+              {/* The grid shows one page at a time, so this button has to say
+                  what it takes: EVERY image the current filters show, not the
+                  500 on screen (same rule as the Bank's "whole filter, all
+                  pages"). A selection also survives a page change. */}
               <button type="button" data-workspace-focus
                 disabled={bulkBusy}
+                title="Selects every image the current filters show — all pages, not just the tiles on screen"
                 onClick={() => setSelected(new Set(selectable.map((i) => i.id)))}
                 className="text-content-muted underline hover:text-content disabled:opacity-40">select all ({selectable.length})</button>
             </>
@@ -342,6 +397,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                 className={`${batchBtn} bg-red-500/15 border border-red-500/40 text-red-300`}>🗑 Delete</button>
               <span className="ml-auto flex gap-2">
                 <button type="button" disabled={bulkBusy}
+                  title="Selects every image the current filters show — all pages, not just the tiles on screen"
                   onClick={() => setSelected(new Set(selectable.map((i) => i.id)))}
                   className="text-content-muted underline hover:text-content disabled:opacity-40">all ({selectable.length})</button>
                 <button type="button" disabled={bulkBusy} onClick={() => setSelected(new Set())}
@@ -362,8 +418,9 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
         )}
         <TileSizeControl size={tileSize} onChange={setTileSize} titles={TILE_SIZE_TITLE} className="ml-auto" />
       </div>
+      <GridPager view={view} onGo={goToPage} where="top" />
       <div className={`grid ${TILE_SIZE_COLS[tileSize]} gap-2`}>
-        {images.map((img) => (
+        {view.items.map((img) => (
           <DatasetGridItem key={img.id} img={img} datasetId={datasetId} onStatus={onStatus} onCaption={onCaption}
             improvementState={improvementStates.get(img.id)}
             onCrop={onCrop} onDelete={onDelete} onMirror={onMirror}
@@ -378,6 +435,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
             tileSize={tileSize} datasetKind={datasetKind} dualCaptions={dualCaptions} />
         ))}
       </div>
+      <GridPager view={view} onGo={goToPage} where="bottom" />
     </div>
   );
 }

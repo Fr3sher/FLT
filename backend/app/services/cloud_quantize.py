@@ -79,6 +79,14 @@ DEFAULT_EXPORT_BUDGET_SECONDS = 1800
 # Smallest card that still clears the filters — the GPU is never used (see note).
 MIN_VRAM_GB = 8
 
+# The quote is the sentence the user clicked on. Renting is a fresh search, so
+# the machine that gets rented may not be the machine that was priced: a few
+# cents of drift is market noise, a different price CLASS is not. Above this
+# ceiling the lane says so and rents nothing. The absolute term keeps the
+# percentage from being absurd on the cheap end ($0.08/h + 25% = 2 cents).
+QUOTE_PRICE_TOLERANCE = 1.25
+QUOTE_PRICE_ABSOLUTE = 0.05
+
 
 class CloudQuantizeError(ValueError):
     """Refusal with a sentence for the user."""
@@ -131,6 +139,20 @@ def _weight_sibling(info, filename=None):
     return best
 
 
+def _choose(offers):
+    """The offer this lane would rent, by the SAME rule as a training launch.
+
+    Delegating to cloud_training is the point: hosts blacklisted for failing to
+    boot a training pod fail a quantization pod too, and "cheapest wins" is what
+    put a 57 GB machine at the top of the list for an 86 GB job. Quoting with
+    one rule and renting with another is also how a price guard turns into a
+    permanent refusal, so plan() and the rental share this function.
+    """
+    from . import cloud_training
+    pool = cloud_training._filter_offers([o for o in (offers or []) if o])
+    return cloud_training._best_of(pool) if pool else None
+
+
 def plan(repo_id, *, filename=None, keep_bf16=True, token=None, _api=None,
          _offers=None) -> dict:
     """What renting a machine to quantize ``repo_id`` would cost and produce.
@@ -167,8 +189,12 @@ def plan(repo_id, *, filename=None, keep_bf16=True, token=None, _api=None,
             f'{fp8_export.fp8_name_for(os.path.basename(weight_path))} is already in '
             f'{repo} — delete it there first if you want to rebuild it.')
 
-    offers = _offers if _offers is not None else _search_offers()
-    offer = offers[0] if offers else None
+    # Disk first: it decides which offers can be rented AT ALL, so it has to be
+    # known before the search, and the search has to ask for exactly what the
+    # rental will claim.
+    disk_gb = _disk_gb_for(source_bytes)
+    offers = _offers if _offers is not None else _search_offers(disk_gb)
+    offer = _choose(offers)
     minutes = _estimated_minutes(source_bytes, offer)
     price = float((offer or {}).get('dph_total') or 0)
     fp8_typical = fp8_export.typical_fp8_bytes(source_bytes)
@@ -193,6 +219,7 @@ def plan(repo_id, *, filename=None, keep_bf16=True, token=None, _api=None,
         'output_bytes_typical': fp8_typical,
         'keep_bf16': bool(keep_bf16),
         'offer': offer,
+        'disk_gb': disk_gb,
         'price_per_hour': price,
         'estimated_minutes': minutes,
         'estimated_cost': round(price * minutes / 60.0, 3),
@@ -201,7 +228,7 @@ def plan(repo_id, *, filename=None, keep_bf16=True, token=None, _api=None,
     }
 
 
-def _search_offers() -> list:
+def _search_offers(min_disk_gb=0) -> list:
     c = cfg.get('cloud') or {}
     return vast_client.search_offers(
         min_vram_gb=MIN_VRAM_GB,
@@ -211,7 +238,12 @@ def _search_offers() -> list:
         min_inet_down_mbps=_int_cfg('min_inet_down_mbps',
                                     int(c.get('min_inet_down_mbps') or 200)),
         min_reliability=float(c.get('min_reliability') or 0.98),
-        verified_only=bool(c.get('verified_only', True)))
+        verified_only=bool(c.get('verified_only', True)),
+        # The master, its fp8 twin and the Hub cache all land on this disk. An
+        # offer that cannot hold them is not a cheaper machine, it is a refused
+        # rental (measured: the cheapest offer of a live search had 57 GB free
+        # against the 86 GB this job asks for).
+        min_disk_gb=int(min_disk_gb or 0))
 
 
 def _estimated_minutes(source_bytes, offer) -> int:
@@ -256,7 +288,13 @@ def build_onstart(planned: dict, *, export_budget_seconds=None) -> str:
         'set -o pipefail',
         'mkdir -p /workspace/lds && cd /workspace/lds',
         f"echo '{payload}' | base64 -d > fp8_export.py",
-        'python -m pip install -q --upgrade "huggingface_hub>=0.30" safetensors || true',
+        # `huggingface_hub` and nothing else, because that is all the pod
+        # imports: the exporter below reads and writes the safetensors format
+        # with plain file I/O — deliberately NOT `safe_open`, which memory-maps
+        # the whole 26 GB checkpoint — and the two heredocs here import only
+        # huggingface_hub. The package rode along from before that change; on a
+        # machine billed by the hour an install nothing imports is pure boot.
+        'python -m pip install -q --upgrade "huggingface_hub>=0.30" || true',
         'python - <<\'PY\'',
         'import os',
         'from huggingface_hub import hf_hub_download',
@@ -285,15 +323,26 @@ def build_onstart(planned: dict, *, export_budget_seconds=None) -> str:
 # --- running it -----------------------------------------------------------------
 
 def start(app, repo_id, *, filename=None, keep_bf16=True, token=None,
-          _api=None, _offers=None) -> dict:
-    """Rent, convert, upload, destroy. Refuses before renting; never leaks."""
+          quoted_price=None, _api=None, _offers=None) -> dict:
+    """Rent, convert, upload, destroy. Refuses before renting; never leaks.
+
+    ``quoted_price`` is the $/h the user actually read on screen before clicking
+    (the estimate is a separate, earlier request). It is what the rental is held
+    to — see _rent — so a market that moved between the two is reported instead
+    of being paid.
+    """
     token = token or cfg.secret('HF_CLOUD_TOKEN') or cfg.secret('HF_TOKEN')
     planned = plan(repo_id, filename=filename, keep_bf16=keep_bf16, token=token,
                    _api=_api, _offers=_offers)
+    if quoted_price:
+        try:
+            planned['quoted_price_per_hour'] = max(0.0, float(quoted_price))
+        except (TypeError, ValueError):
+            pass                      # an unreadable quote is simply no quote
     if not planned['offer']:
         raise CloudQuantizeError(
-            'no vast.ai offer matches right now — raise the price cap in '
-            'Settings ▸ Training and retry')
+            f'no vast.ai machine with {planned["disk_gb"]} GB of free disk matches '
+            'the price cap right now — raise it in Settings ▸ Training and retry')
     reconcile_orphans()
     with _lock:
         if status().get('status') in ('provisioning', 'running'):
@@ -308,19 +357,79 @@ def start(app, repo_id, *, filename=None, keep_bf16=True, token=None,
     return planned
 
 
+def _repriced(planned, offer) -> dict:
+    """The plan, re-stated on the machine that was ACTUALLY rented.
+
+    The rental re-searches, so the quoted offer and the rented one need not be
+    the same box. Whatever the status panel shows from here on is the real
+    price, not the estimate that led to it.
+    """
+    price = float((offer or {}).get('dph_total') or 0)
+    minutes = _estimated_minutes(planned['source_bytes'], offer)
+    return {**planned, 'offer': offer, 'price_per_hour': price,
+            'gpu_name': (offer or {}).get('gpu_name'),
+            'estimated_minutes': minutes,
+            'estimated_cost': round(price * minutes / 60.0, 3)}
+
+
+def _rent(planned, *, label, env, _sleep=None):
+    """Rent a machine that can hold this job — trying more than one.
+
+    The first cloud quantization died on ``create_instance failed: HTTP 400 {}``
+    one second after the click, with no machine and no reason. Two things were
+    wrong and both are fixed here: the offer was picked by price alone (the
+    cheapest box on the market had 57 GB free against the 86 GB this job asks
+    for, which vast refuses outright), and a single refusal ended the job.
+
+    The retry loop, the host blacklist and the bait-price filter are the
+    training lane's — imported, not re-implemented.
+    """
+    from . import cloud_training
+    disk_gb = int(planned.get('disk_gb') or _disk_gb_for(planned['source_bytes']))
+    quoted = float(planned.get('quoted_price_per_hour')
+                   or planned.get('price_per_hour') or 0)
+    onstart = build_onstart(planned)
+    image = (_cfg().get('image') or (cfg.get('cloud') or {}).get('image'))
+
+    def _pick(offers):
+        if not offers:
+            raise CloudQuantizeError(
+                'every machine that matched is blacklisted here for failing to '
+                'boot recently — nothing was rented; retry in a few minutes')
+        ceiling = max(quoted * QUOTE_PRICE_TOLERANCE, quoted + QUOTE_PRICE_ABSOLUTE)
+        chosen = _choose([o for o in offers if not quoted
+                          or float(o.get('dph_total') or 0) <= ceiling])
+        if chosen is None:
+            cheapest = min(float(o.get('dph_total') or 0) for o in offers)
+            raise CloudQuantizeError(
+                f'the ${quoted:.3f}/h machines are gone — the cheapest one left is '
+                f'${cheapest:.3f}/h, too far above the estimate you agreed to. '
+                'Nothing was rented; ask for a new estimate to see the real price.')
+        return chosen
+
+    def _create(offer):
+        return vast_client.create_instance(
+            offer['offer_id'], disk_gb=disk_gb, label=label, image=image,
+            env=env, onstart=onstart)
+
+    # Every attempt carries the same label, so a contract created by a call that
+    # then failed on the wire is still reaped by reconcile_orphans.
+    return cloud_training.rent_with_fresh_offers(
+        search=lambda: _search_offers(disk_gb), create=_create, pick=_pick,
+        sleep=_sleep,
+        no_offer_message=(
+            f'no vast.ai machine with {disk_gb} GB of free disk matches the price '
+            'cap right now — raise it in Settings ▸ Training and retry'))
+
+
 def _drive(planned, token, *, _api=None, _sleep=time.sleep, _now=time.monotonic):
     label = LABEL_PREFIX + uuid.uuid4().hex[:10]
     instance_id = None
     deadline = _now() + max_minutes() * 60
     try:
         env = {'HF_TOKEN': token or ''}
-        instance_id = vast_client.create_instance(
-            planned['offer']['offer_id'],
-            disk_gb=_disk_gb_for(planned['source_bytes']),
-            label=label,
-            image=(_cfg().get('image') or (cfg.get('cloud') or {}).get('image')),
-            env=env,
-            onstart=build_onstart(planned))
+        instance_id, offer = _rent(planned, label=label, env=env, _sleep=_sleep)
+        planned = _repriced(planned, offer)
         _set('running', planned, instance_id=instance_id, label=label,
              started_at=time.time())
         api = _api or _hf_api(token)
@@ -415,6 +524,9 @@ def _set(state, planned, **extra):
         'output_bytes_typical': planned['output_bytes_typical'],
         'price_per_hour': planned['price_per_hour'],
         'estimated_cost': planned['estimated_cost'],
+        # None until a machine is actually rented — the quote does not know
+        # which box it will get (see _repriced).
+        'gpu_name': planned.get('gpu_name'),
         'keep_bf16': planned['keep_bf16'],
         **extra,
     }, ttl_seconds=_STATE_TTL)

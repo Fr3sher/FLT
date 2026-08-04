@@ -30,13 +30,35 @@ on this machine: ~1.2 GB/s of source through the streaming writer, i.e. under a
 minute of compute for a 25.6 GB checkpoint — the run is bound by disk, not by
 arithmetic. Putting it on the GPU would buy nothing and would fight ComfyUI and
 any training run for VRAM. It stays on the CPU, and takes no GPU lock.
+
+IN A SUBPROCESS, NOT IN THE SERVER
+----------------------------------
+The conversion needs ``torch`` and ``safetensors``. The app's own environment
+does NOT have them, and must not: torch is gigabytes, and LDS installs and runs
+without it. Importing them in-process shipped a feature that could not execute at
+all on a real install — the job died on ``No module named 'safetensors'`` while
+every test passed, because the tests ran under the one interpreter on the machine
+that happened to have both.
+
+So this delegates, exactly like ``bank_scoring`` / ``masks`` / ``watermark``
+already do: a configured interpreter (``quantize.python``, empty = the same one
+✨ Score uses, then ai-toolkit's, then this app's) runs ``fp8_export.py`` — the
+same file the pod runs — as a CLI. And because "can it run at all" is part of
+what the user must know BEFORE clicking, the interpreter is probed in ``plan``:
+one that lacks the dependencies is a refusal with the pip command in it, not an
+error thirty seconds after the button.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
+import subprocess
+import sys
 import threading
+import time
 
+from .. import config as cfg
 from ..job_queue import queue_manager
 from . import fp8_export, model_integrity
 
@@ -49,15 +71,148 @@ _STATE_KEY = 'fp8_quantize'
 _STATE_TTL = 6 * 3600
 _lock = threading.Lock()
 
-# A 26 GB source needs room for its ~13 GB output plus normal headroom. Checked
-# BEFORE anything is read, so a full drive is a refusal, not a half-written file.
-MIN_FREE_GB = 30
+# Working headroom on top of the file we are about to write. It is NOT a second
+# copy: the exporter streams into `<dst>.part` and renames, so the only bytes
+# claimed are the output's. This covers the filesystem being unhappy near zero
+# and whatever else the app writes while a long conversion runs.
+#
+# It replaces a flat `MIN_FREE_GB = 30`, which refused a real conversion that fit:
+# a 25.6 GB master quantizes to 12.8 GB and the drive had 17.6 GB free — enough,
+# twice over, for the file actually being written. A budget must be derived from
+# what the operation costs, or it is just a number saying no.
+WRITE_HEADROOM_BYTES = 2 * 1000 ** 3
 
 _ACCEPTED_EXT = ('.safetensors', '.sft')
+
+# What the worker interpreter must be able to import.
+#
+# torch, and ONLY torch. This used to also demand `safetensors`, which was true
+# while the worker opened checkpoints with `safe_open` — it no longer does:
+# fp8_export (and lora_merge, the other user of this probe) read and write the
+# format by hand, precisely so that nothing memory-maps a 26 GB file. Leaving
+# the old spelling here would refuse an environment that works, which is the
+# expensive kind of wrong: a check that describes a world that stopped existing
+# one commit ago, and that nobody thinks to re-read because it is "just a probe".
+DEP_MODULES = ('torch',)
+_PROBE_CODE = (
+    'import importlib.util as u, json, sys\n'
+    'print(json.dumps({m: u.find_spec(m) is not None for m in '
+    + repr(list(DEP_MODULES)) + '}))\n'
+)
+_PROBE_TIMEOUT = 90          # a cold `import torch` behind an antivirus is slow
+_PROBE_TTL = 300
+_probe_cache = {}            # normalised interpreter path -> (ts, dict|None)
 
 
 class QuantizeError(ValueError):
     """Refusal with a sentence for the user. Never a stack trace."""
+
+
+# --- the interpreter that does the work -------------------------------------------
+
+def candidates() -> list:
+    """Interpreters to try, best first. Only ones the app already knows about.
+
+    ``quantize.python`` is not first, it is EXCLUSIVE: someone who filled that
+    field said which environment does this work, and quietly using another one
+    because theirs turned out to be incomplete would hide the very problem they
+    need to fix. With it empty: the environment ✨ Score uses, then ai-toolkit's
+    — both have torch by construction — and finally this app's own, honest about
+    being last, because on most installs it is the one WITHOUT the dependencies.
+    """
+    out = []
+
+    def add(path):
+        path = str(path or '').strip().strip('"')
+        if path and path not in out:
+            out.append(path)
+
+    try:
+        explicit = str(cfg.get('quantize.python') or '').strip().strip('"')
+    except Exception:                            # noqa: BLE001 — config hiccup
+        explicit = ''
+    if explicit:
+        return [explicit]
+
+    try:
+        add(cfg.get('bank_scoring.python'))
+    except Exception:                            # noqa: BLE001
+        pass
+    try:
+        add(cfg.aitoolkit_path('venv_python'))
+    except Exception:                            # noqa: BLE001
+        pass
+    add(sys.executable)
+    return out
+
+
+def _probe(python: str):
+    """``{module: bool}`` for one interpreter, or None when it cannot be asked.
+
+    None is UNKNOWN, never "unusable": a probe that times out must not freeze a
+    working venv into a refusal.
+    """
+    key = os.path.normcase(os.path.abspath(python))
+    hit = _probe_cache.get(key)
+    now = time.time()
+    if hit and (now - hit[0]) < _PROBE_TTL:
+        return hit[1]
+    try:
+        proc = subprocess.run(
+            [python, '-c', _PROBE_CODE], capture_output=True, text=True,
+            encoding='utf-8', errors='replace', timeout=_PROBE_TIMEOUT,
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        info = json.loads(((proc.stdout or '').strip().splitlines() or [''])[-1])
+        info = info if isinstance(info, dict) else None
+    except Exception:                            # noqa: BLE001 — missing, broken, slow
+        info = None
+    if info is not None:
+        _probe_cache[key] = (now, info)
+    return info
+
+
+def clear_probe_cache() -> None:
+    _probe_cache.clear()
+
+
+def interpreter() -> dict:
+    """Which interpreter will run the conversion, and whether it actually can.
+
+    ``{'python', 'ready', 'missing', 'reason'}``. Never raises: an unanswerable
+    probe reports ``ready`` (the run may still work) rather than inventing a
+    refusal, but a probe that ANSWERED "no torch" is a hard, actionable no.
+    """
+    tried = []
+    for python in candidates():
+        info = _probe(python)
+        if info is None:
+            tried.append((python, None))
+            continue
+        missing = [m for m in DEP_MODULES if not info.get(m)]
+        if not missing:
+            return {'python': python, 'ready': True, 'missing': [], 'reason': None}
+        tried.append((python, missing))
+    # Nothing usable. Prefer naming an interpreter that ANSWERED, so the remedy
+    # names a real environment instead of one we could not even start.
+    answered = [(p, m) for p, m in tried if m is not None]
+    if answered:
+        python, missing = answered[0]
+        return {
+            'python': python, 'ready': False, 'missing': missing,
+            # "them" reads as "the missing modules" whether that is one or
+            # several, so the sentence survived DEP_MODULES shrinking to a single
+            # entry. lora_merge_job rewrites the first clause to say "Merging"
+            # instead of "Quantizing" — if this wording moves, move that too.
+            'reason': (f'the Python that would do the conversion is missing '
+                       f'{" and ".join(missing)}. Quantizing needs them, and this '
+                       'app deliberately ships without torch (gigabytes). Pick an '
+                       'environment that has them — the one ✨ Score uses (Bank ▸ '
+                       'Scoring ▸ change the Python) or ai-toolkit\'s — or set '
+                       '"quantize": {"python": "…"} in config.json. Installing them '
+                       f'there also works: pip install {" ".join(missing)}'),
+        }
+    python = (candidates() or [sys.executable])[0]
+    return {'python': python, 'ready': True, 'missing': [], 'reason': None}
 
 
 def status() -> dict:
@@ -65,18 +220,50 @@ def status() -> dict:
 
 
 def _free_gb(path) -> float | None:
+    """Free space on the volume that REALLY holds this path.
+
+    ``realpath`` first, on purpose: a ComfyUI models folder is very often a
+    junction onto another drive (``C:\\…\\models\\unet`` →  ``A:\\ComfyUI\\models\\unet``
+    is exactly the layout on the machine this was measured on). Asking about the
+    apparent path can answer for the wrong volume, which turns a disk guard into
+    a coin toss.
+    """
     try:
         import shutil
-        return shutil.disk_usage(os.path.dirname(os.path.abspath(path))).free / (1000 ** 3)
+        return shutil.disk_usage(
+            os.path.dirname(os.path.realpath(path))).free / (1000 ** 3)
     except Exception:
         return None
 
 
-def plan(source) -> dict:
+def space_error(free_gb, output_bytes) -> str | None:
+    """The refusal sentence when the output does not fit, or None.
+
+    States its own arithmetic. "~30 GB needed" next to a 12.8 GB output was a
+    number the user could neither check nor act on.
+    """
+    if free_gb is None:
+        return None                            # unmeasurable never blocks
+    need = (int(output_bytes or 0) + WRITE_HEADROOM_BYTES) / (1000 ** 3)
+    if free_gb >= need:
+        return None
+    return (f'not enough disk space where the output would go: {free_gb:.1f} GB free, '
+            f'and this needs {need:.1f} GB — the {output_bytes / 1000 ** 3:.1f} GB fp8 '
+            f'file plus {WRITE_HEADROOM_BYTES / 1000 ** 3:.0f} GB of working headroom. '
+            'Free up space, or write it to another folder.')
+
+
+def plan(source, *, overwrite=False, destination=None) -> dict:
     """Validate one source file and describe what quantizing it would produce.
 
-    Raises ``QuantizeError`` with an actionable sentence for every refusal, so
-    the button can be disabled with a reason instead of failing on click.
+    EVERY condition that would make ``quantize`` fail is evaluated HERE. It used
+    not to be: ``plan`` reported ``ok: true`` and a free-space figure, then the
+    start call refused on a threshold ``plan`` had never applied — so the button
+    stayed enabled, the user clicked, and the refusal arrived after the decision.
+    A refusal that only exists at run time is a refusal the UI cannot show.
+
+    ``destination`` overrides where the output would go (another folder, another
+    volume); the exists- and space-checks then answer about THAT folder.
     """
     path = str(source or '').strip().strip('"')
     if not path:
@@ -112,85 +299,132 @@ def plan(source) -> dict:
             'quantize — this is a LoRA or an adapter, not a full model. '
             'Quantizing it would save nothing.')
 
-    destination = os.path.join(os.path.dirname(path),
-                               fp8_export.fp8_name_for(os.path.basename(path)))
+    # Written NEXT TO the source by default, never over it: the master is the
+    # only file that can be trained again, and a user who chose the wrong file
+    # must be able to just delete the output. A caller with somewhere better to
+    # put it (ComfyUI's own models folder, or simply a drive with room) says so.
+    destination = str(destination or os.path.join(
+        os.path.dirname(path), fp8_export.fp8_name_for(os.path.basename(path))))
+    exists = os.path.isfile(destination)
+    if exists and not overwrite:
+        raise QuantizeError(
+            f'{os.path.basename(destination)} already exists next to the source — '
+            'delete it first, or re-run with overwrite.')
+    free_gb = _free_gb(destination)
+    refusal = space_error(free_gb, layout['bytes_after'])
+    if refusal:
+        raise QuantizeError(refusal)
+    # "Can this machine run the conversion at all" is the third thing that used
+    # to be discovered only after the click. It is a plan question.
+    worker = interpreter()
+    if not worker['ready']:
+        raise QuantizeError(worker['reason'])
     return {
+        'python': worker['python'],
         'source': path,
         'source_name': os.path.basename(path),
         'source_bytes': os.path.getsize(path),
-        # Written NEXT TO the source, never over it: the master is the only file
-        # that can be trained again, and a user who chose the wrong file must be
-        # able to just delete the output.
         'destination': destination,
         'destination_name': os.path.basename(destination),
-        'destination_exists': os.path.isfile(destination),
+        'destination_exists': exists,
         'quantized_tensors': len(layout['quantize']),
         'kept_tensors': len(layout['keep']),
         'estimated_bytes': layout['bytes_after'],
-        'free_gb': _free_gb(destination),
+        'free_gb': free_gb,
     }
 
 
-def describe(source) -> dict:
+def describe(source, *, overwrite=False, destination=None) -> dict:
     """``plan`` as a payload the UI can render, refusal included. Never raises —
     a disabled button with a reason beats an error toast on click."""
     try:
-        return {'ok': True, **plan(source)}
+        return {'ok': True, **plan(source, overwrite=overwrite, destination=destination)}
     except (QuantizeError, fp8_export.Fp8ExportError) as e:
         return {'ok': False, 'error': str(e), 'source': str(source or '')}
 
 
-def quantize(source, *, overwrite=False, progress=None) -> dict:
-    """Do it (BLOCKING, minutes on a 26 GB file). Returns the verified summary."""
-    info = plan(source)
-    if info['destination_exists'] and not overwrite:
+def quantize(source, *, overwrite=False, destination=None, progress=None,
+             cancelled=None) -> dict:
+    """Do it (BLOCKING, minutes on a 26 GB file). Returns the verified summary.
+
+    Every refusal lives in ``plan``; the space check is repeated here only
+    because a long download or another job can eat the drive between the two.
+    """
+    info = plan(source, overwrite=overwrite, destination=destination)
+    refusal = space_error(_free_gb(info['destination']), info['estimated_bytes'])
+    if refusal:
+        raise QuantizeError(refusal)
+    result = run_worker(info['python'], info['source'], info['destination'],
+                        progress=progress, cancelled=cancelled)
+    return {**info, **result}
+
+
+def worker_command(python, source, destination) -> list:
+    """The exact argv. Exposed so a test can assert it without running torch."""
+    return [str(python), os.path.abspath(fp8_export.__file__),
+            '--src', str(source), '--dst', str(destination), '--progress']
+
+
+def run_worker(python, source, destination, *, progress=None, cancelled=None) -> dict:
+    """Run the conversion in ``python`` and stream its progress back.
+
+    The child is ``fp8_export.py`` itself — the same file the pod runs, so there
+    is exactly one conversion and one verification in the product. It prints one
+    ``LDS_FP8_PROGRESS done total`` line per tensor and finishes with the
+    ``LDS_FP8_RESULT`` JSON, which already carries the read-back verification.
+    """
+    command = worker_command(python, source, destination)
+    try:
+        proc = subprocess.Popen(
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, encoding='utf-8', errors='replace', bufsize=1,
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(fp8_export.__file__))),
+            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except OSError as e:
         raise QuantizeError(
-            f'{info["destination_name"]} already exists next to the source — '
-            'delete it first, or re-run with overwrite.')
-    free = info['free_gb']
-    if free is not None and free < MIN_FREE_GB:
+            f'the Python that would do the conversion could not be started: '
+            f'{python} ({e}). Check "quantize": {{"python": "…"}} in config.json, '
+            'or clear it to fall back on the environment ✨ Score uses.') from e
+
+    result, tail = None, []
+    try:
+        for line in proc.stdout:
+            line = line.rstrip('\n')
+            if line.startswith(fp8_export.PROGRESS_PREFIX):
+                parts = line.split()
+                if progress and len(parts) == 3:
+                    try:
+                        progress(int(parts[1]), int(parts[2]))
+                    except Exception:                   # noqa: BLE001 — never fatal
+                        pass
+            elif line.startswith(fp8_export.RESULT_PREFIX):
+                try:
+                    result = json.loads(line[len(fp8_export.RESULT_PREFIX):].strip())
+                except ValueError:
+                    result = None
+            elif line.strip():
+                tail = (tail + [line])[-12:]            # kept for the error message
+            if cancelled is not None and cancelled():
+                proc.kill()
+                raise QuantizeError('the conversion was stopped')
+    finally:
+        try:
+            proc.wait(timeout=30)
+        except Exception:                               # noqa: BLE001
+            proc.kill()
+
+    if not isinstance(result, dict):
         raise QuantizeError(
-            f'not enough disk space: {free:.1f} GB free where the output would go, '
-            f'~{MIN_FREE_GB} GB needed — free up space and retry')
-    summary = fp8_export.export_scaled_fp8(
-        info['source'], info['destination'],
-        metadata={'lds_quantized_from': info['source_name']},
-        progress=progress)
-    return {**info, **summary, **verify(info['destination'])}
+            'the conversion produced no result. Its last output was: '
+            + (' | '.join(tail) or '(nothing)')[:400])
+    if not result.get('ok'):
+        raise QuantizeError(str(result.get('error') or 'the conversion failed'))
+    return result
 
 
 def verify(path) -> dict:
-    """Re-open the file we just wrote and prove it is what we claimed.
-
-    Same checks as the unit test, run on the REAL output: the fp8 marker, one
-    per-tensor scale, and the payload dtype. A conversion that produced an
-    unloadable file must say so here rather than at generation time, days later.
-    """
-    out = {'verified': False, 'verify_error': None}
-    try:
-        from safetensors import safe_open
-        with safe_open(str(path), framework='pt') as fh:
-            keys = list(fh.keys())
-            if fp8_export.MARKER_KEY not in keys:
-                raise ValueError('the scaled-fp8 marker is missing')
-            marker = fh.get_tensor(fp8_export.MARKER_KEY)
-            scales = [k for k in keys if k.endswith(fp8_export.SCALE_SUFFIX)]
-            if not scales:
-                raise ValueError('no per-tensor scale was written')
-            weight = scales[0][:-len(fp8_export.SCALE_SUFFIX)] + '.weight'
-            payload = fh.get_tensor(weight)
-            scale = fh.get_tensor(scales[0])
-        import torch
-        if marker.dtype is not torch.float8_e4m3fn or marker.nelement() != 2:
-            raise ValueError('the marker does not describe float8_e4m3fn weights')
-        if payload.dtype is not torch.float8_e4m3fn:
-            raise ValueError(f'{weight} was not written as float8_e4m3fn')
-        if scale.dtype is not torch.float32 or scale.ndim != 0:
-            raise ValueError('the per-tensor scale is not a float32 scalar')
-        out.update(verified=True, scaled_tensors=len(scales))
-    except Exception as e:                        # noqa: BLE001 — reported
-        out['verify_error'] = str(e)[:300]
-    return out
+    """Read-back proof. Delegated, because it needs torch just as the write does."""
+    return fp8_export.verify_export(path)
 
 
 def start_async(app, source, *, overwrite=False) -> dict:
@@ -200,7 +434,7 @@ def start_async(app, source, *, overwrite=False) -> dict:
     or the source is not usable — a rejection the user sees on click, not in a
     status poll thirty seconds later.
     """
-    info = plan(source)
+    info = plan(source, overwrite=overwrite)
     with _lock:
         if status().get('status') == 'running':
             raise QuantizeError('a quantization is already running — wait for it to finish')

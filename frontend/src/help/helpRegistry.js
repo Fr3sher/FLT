@@ -219,6 +219,27 @@ const TOPICS = [
       'graph', 'lineage', 'runs graph', 'continue', 'download'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
     app: { route: '/datasets?section=checkpoints' } },
+  // A full model is not an adapter, and the panel gives it its own block and its
+  // own verbs (quantize / send the fp8 twin / trash). It therefore needs its own
+  // topic: searching "26 GB", "master" or "send to ComfyUI" must not land on the
+  // LoRA deploy instructions, which say the opposite of what a full model needs.
+  { id: 'workspace-dense-models', kind: 'section', title: 'Full models',
+    keywords: ['full model', 'dense', 'full transformer', 'master', 'fp8', 'twin',
+      'quantize', 'send to comfyui', '26 gb', 'diffusion_models', 'raw', 'undistilled',
+      'hugging face', 'checkpoint store'],
+    guide: { chapter: 'using-the-app', anchor: 'using-a-full-model-you-trained' },
+    app: { route: '/datasets?section=checkpoints' } },
+  // Its own topic, not a line under "Full models": a merge is how most published
+  // checkpoints are actually made, and someone searching "turbo", "bake",
+  // "finetune" or "publish a checkpoint" is asking for THIS, not for the
+  // quantize button or the LoRA deploy instructions.
+  { id: 'workspace-lora-merge', kind: 'action', title: 'Merge a LoRA into a base',
+    keywords: ['merge', 'merge lora', 'bake', 'bake in', 'fold', 'full model from lora',
+      'checkpoint from lora', 'finetune', 'turbo', 'transplant', 're-distillation',
+      'distill', 'publish a checkpoint', 'civitai', 'base plus lora', 'stack loras',
+      'merged model', 'speed back', 'few-step'],
+    guide: { chapter: 'using-the-app', anchor: 'merge-a-lora-into-a-base-checkpoint' },
+    app: { route: '/datasets?section=checkpoints' } },
   { id: 'workspace-studio', kind: 'section', title: 'Studio',
     keywords: ['studio', 'test', 'lora', 'checkpoint', 'winning settings'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
@@ -262,6 +283,14 @@ const TOPICS = [
       'caption', 'captions', 'search', 'find', 'tag', 'tags', 'describe',
       'launch all', 'pipeline', 'auto-reject', 'overnight', 'run everything',
       'one click', 'batch', 'chain',
+      // "auto-reject doesn't work" — what it really means, in the words people
+      // type: the button only touches UNDECIDED images, so a second run has
+      // nothing left to do, and a never-scanned image is invisible to every
+      // quality flag.
+      'auto reject does nothing', "auto-reject doesn't work", 'rejected 0',
+      '0 to reject', 'nothing rejected', 'count is wrong', 'wrong count',
+      'flagged but not rejected', 'never scanned', 'not scanned', 'unscanned',
+      'blind spot', 'run it twice', 'second pass',
       'framing', 'shot type', 'face', 'bust', 'body', 'back', 'full body',
       'close-up', 'back view', 'classify framing', 'composition',
       'coverage advice', 'balance', 'what to add', 'missing', 'thin', 'imbalance',
@@ -337,6 +366,14 @@ const TOPICS = [
      'analyze everything anyway', 'skip the check', 'untick', 'uncheck',
      'why is my pass asking me something', 'sampled', 'sampling', 'sample',
      'not checked', 'not reached', 'ceiling', '200 folders',
+     // When the sample lands on images with no face, the check draws MORE rather
+     // than giving up — these are the words of the three ways that can end.
+     'no usable face', 'no readable face', 'only 0 of 15', 'only 1 of 15',
+     'had a usable face', 'no verdict', 'no result for a folder', 're-draw',
+     'redraw', 'draws more', 'tries more images', 'images tried', 'budget',
+     'thin evidence', 'partial', 'weak verdict', 'crops', 'backs', 'blurry',
+     'why was my folder not checked', 'why no answer for this folder',
+     'up to 60', 'more than 15 images', 'why is it slower than it said',
      'group by person', 'face pass', 'launch all', 'save gpu time', 'faster',
      'too slow', 'expensive', 'bank', 'triage', 'person', 'subfolder'],
     '/bank', 'using-the-app', 'checking-your-folders-before-the-person-pass'),
@@ -1191,6 +1228,17 @@ const TOPICS = [
   // The Hugging Face allowance is a DISK question, so its card moved to
   // Settings › Storage with the rest of them. Ids stay put: they are stored in
   // the "seen" maps of existing installs.
+  setting('cloud.full_transformer.delivery', 'storage',
+    'cloud-full-model-delivery', 'Full-model delivery (this computer / Hugging Face)',
+    ['full model', 'dense', 'krea', 'delivery', 'download', 'local', 'disk',
+      'hugging face', 'huggingface', 'backup', 'quota', '403', 'storage limit',
+      'resume', 'continue', '26 gb', 'checkpoint', 'where'],
+    { trigger: 'full-model-delivery-local',
+      text: 'New: a finished full model is downloaded to this computer first and verified before the pod is released — the Hugging Face copy is a backup taken afterwards, so a full quota can no longer end a training. It is also what keeps a run resumable.' }),
+  action('cloud.dense_fetch_local', 'Fetch a full model to this computer',
+    ['fetch', 'download', 'full model', 'dense', 'pod', 'kept', 'recover',
+      'retry', 'transfer', 'resume', 'cancel', '26 gb'],
+    '/cloud', 'dataset-guide', '10-full-model-recipe-what-you-can-change'),
   setting('cloud.full_transformer.private_storage_limit_gb', 'storage',
     'cloud-private-storage-limit', 'Private storage allowance',
     ['hugging face', 'huggingface', 'storage', 'quota', 'private', 'limit', 'allowance',
@@ -1199,6 +1247,19 @@ const TOPICS = [
     ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
       'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
     '/settings/storage', 'settings-reference', 'storage'),
+  // The fp8 tool's SECOND door, and the findable one. Its first
+  // (training.fp8_quantize_local, below) sits inside a dense dataset's recipe
+  // card — which the person this helps most, someone who downloaded a 26 GB
+  // full model from Hugging Face and has no dataset, never opens. Same
+  // component, same refusals; only the address differs, so it gets its own
+  // topic rather than stealing the other one's.
+  { id: 'storage.fp8_quantize', kind: 'action',
+    title: 'Quantize a model to fp8 (no dataset or training run needed)',
+    keywords: ['quantize', 'quantise', 'fp8', 'shrink', 'smaller', 'convert', 'comfyui',
+      'comfy', 'safetensors', 'hugging face', 'downloaded', 'disk', 'space', 'storage',
+      '26 gb', '10 gb', 'checkpoint', 'full model', 'load diffusion model', 'cpu'],
+    guide: { chapter: 'settings-reference', anchor: 'storage' },
+    app: { route: '/settings/storage', focus: 'storage-fp8-quantize' } },
   // The unlocked half of the full-model (dense) recipe. Per-dataset Advanced
   // controls, not global Settings — they point at the dataset guide's
   // full-model section. Grouped as one topic on purpose: they are one card, and
@@ -1209,11 +1270,38 @@ const TOPICS = [
     keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'recipe', 'locked',
       'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
       'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
-      'gradient checkpointing', '80 gb'],
+      'gradient checkpointing', '80 gb',
+      // Why dense training targets Raw and not Turbo — searched as "why can't
+      // I train dense on turbo", not just "what can I edit here". Turbo is out
+      // of SCOPE (untested for dense runs), not mechanically impossible; the
+      // guide section spells out what is actually known.
+      'turbo', 'distilled', 'speed distilled', 'speed-distilled', 'distillation',
+      'de-distillation', 'de-distilled', 'assistant lora', 'not supported', 'refused',
+      'untested', 'out of scope', 'scope'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'full-model-recipe-unlocked',
       text: 'New: the full-model recipe now lets you edit the preview prompts, learning rate, resolution and checkpoint cadence — the rest stays locked because it is what makes a 12B model fit on one 80 GB card.' } },
+  // The three quality levers get their OWN topic rather than more keywords on
+  // the one above, because the question behind them is different: not "what may
+  // I change here?" but "what should I change, and what does it cost me?". The
+  // cost half is the reason — images-per-step is the only dense setting billed
+  // by the hour — and the absences (EMA, min-SNR) need somewhere to be
+  // explained, or they read as things we forgot rather than things that break.
+  { id: 'training.full_model_quality', kind: 'setting',
+    title: 'Images per step, LR schedule and noise schedule (full-model)',
+    keywords: ['images per step', 'gradient accumulation', 'grad accum', 'effective batch',
+      'batch size', 'warmup', 'warm up', 'lr schedule', 'learning rate schedule',
+      'cosine', 'constant', 'noise schedule', 'timestep', 'timestep type', 'sigmoid',
+      'weighted', 'linear', 'shift', 'ema', 'min snr', 'min_snr_gamma', 'snr',
+      'full model', 'dense', 'krea', 'slower', 'cost', 'longer', 'bill'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    // Deliberately no one-time `tip`: the two dense topics above already declare
+    // tips that nothing in src ever requests, so a third would be dead config
+    // AND would move the tip count this file's contract test pins. What's-new
+    // already announces this; the topic exists to be FOUND when searching help.
+  },
   { id: 'training.full_model_fp8_export', kind: 'setting',
     title: 'fp8 export for ComfyUI (and the bf16 master)',
     keywords: ['fp8', 'quantized', 'quantised', 'export', 'comfyui', 'comfy', '10 gb',
@@ -1224,27 +1312,48 @@ const TOPICS = [
     tip: { trigger: 'full-model-fp8-export',
       text: 'New: a finished full-model run also delivers a ~10 GB fp8 file that ComfyUI loads directly — the 26 GB master is kept next to it unless you turn that off.' } },
   { id: 'training.fp8_quantize_local', kind: 'action',
-    title: 'Quantize an existing model to fp8',
+    title: 'Quantize a model to fp8 (the manual path field)',
     keywords: ['quantize', 'quantise', 'fp8', 'convert', 'shrink', 'comfyui', 'comfy',
-      'local', 'safetensors', '26 gb', '10 gb', 'checkpoint', 'full model', 'cpu',
+      'local', 'path', 'safetensors', '26 gb', '10 gb', 'checkpoint', 'full model', 'cpu',
       'ai-toolkit quantize', 'memory'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'fp8-quantize-local',
-      text: 'New: point “Quantize an existing model to fp8” at any full-precision checkpoint on this machine and it writes the ~10 GB ComfyUI version next to it — the original is never touched.' } },
-  { id: 'training.fp8_quantize_cloud', kind: 'action',
-    title: 'Quantize to fp8 in the cloud',
-    keywords: ['quantize', 'quantise', 'fp8', 'cloud', 'vast', 'rent', 'hugging face',
-      'hf', 'repository', 'download', 'bandwidth', 'full model', 'dense', 'cost'],
+      text: 'New: the fp8 tool no longer needs a path for the model your run delivered — it aims at it by itself. The path field is still there for a file nothing in the app points at, and it pre-fills with your custom training base.' } },
+  { id: 'training.fp8_deliver', kind: 'action',
+    title: 'Quantize to fp8 in one click (and where the file lands)',
+    keywords: ['quantize', 'quantise', 'fp8', 'one click', 'button', 'download',
+      'hugging face', 'hf', 'repository', 'master', 'bf16', 'comfyui', 'comfy',
+      'diffusion_models', 'checkpoints folder', 'full model', 'dense', 'krea',
+      'disk space', 'not enough disk space', 'another folder', 'junction',
+      'resume', 'cancel', 'stop', 'keep master', 'delete master',
+      'torch', 'safetensors', 'no module named', 'quantize.python', 'interpreter'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
-    app: { route: '/cloud' },
-    tip: { trigger: 'fp8-quantize-cloud',
-      text: 'New: a full model already delivered to Hugging Face can be quantized in the cloud — a few minutes of a cheap machine builds the fp8 file straight into the repository, so you only ever download the small one.' } },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'fp8-deliver-one-click',
+      text: 'New: “✨ Quantize to fp8” on a delivered full model does the whole thing — it fetches the master from your private Hugging Face repo, converts it, and leaves the fp8 file in ComfyUI’s own models folder. It tells you which checkpoint it takes and where the file lands before it starts, refuses if the disk is too small, and can be stopped and resumed.' } },
+  // Two questions behind one word. The refusal topic keeps its id (in-app help
+  // badges and bookmarked links resolve against it), but the title and keywords
+  // now cover BOTH answers: a packed export is refused, a plain fp8 cast is
+  // allowed and merely costly.
   { id: 'training.quantized_base_refused', kind: 'setting',
-    title: 'Why a quantized checkpoint is refused as a training base',
+    title: 'Which quantized checkpoints can be trained on, and which cannot',
     keywords: ['quantized', 'quantised', 'fp8', 'int8', 'gguf', 'custom weights',
-      'base', 'refused', 'inference only', 'training', 'bf16', 'fp16', 'error'],
+      'base', 'refused', 'inference only', 'training', 'bf16', 'fp16', 'error',
+      'scaled fp8', 'scale_weight', 'comfy_quant', 'packed export', 'fp8 cast',
+      'cannot be loaded', 'strict', 'state dict', 'degraded', 'precision'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' } },
+  // The Krea base LIST is a different question from the quantization verdict a
+  // listed entry may carry ("where are my models?" vs "why is this one greyed
+  // out?"), and it is searched with the family name, so it gets its own topic.
+  { id: 'training.krea_installed_bases', kind: 'setting',
+    title: 'Training Krea 2 on a checkpoint you already have',
+    keywords: ['krea', 'krea 2', 'base', 'base model', 'checkpoint', 'unet',
+      'diffusion_models', 'my model', 'installed', 'continue training', 'merge',
+      'community model', 'full model', 'not listed', 'missing from the list',
+      'custom weights', 'absolute path'],
+    guide: { chapter: 'dataset-guide', anchor: '1-pick-your-model-family-first' },
     app: { route: '/datasets?section=training' } },
   // Dual captions is a per-run Advanced training option (not a global Setting),
   // so it points at the dataset guide's dedicated section rather than
@@ -1540,7 +1649,12 @@ const TOPICS = [
   action('continue-training', 'Continue a training run',
     ['continue', 'resume', 'more steps', 'epoch', 'checkpoint', 'restart', 'undercook', 'overcook',
      'learning rate', 'lr', 'half', 'tenth', 'gentle finish', 'polish', 'timestep', 'cadence',
-     'lane', 'local', 'cloud', 'run it'],
+     'lane', 'local', 'cloud', 'run it',
+     // How a full model's 26 GB reaches the pod — the priced choice in this
+     // same dialog. Searchable from the words a user would actually type when
+     // they are staring at a GPU cost they did not expect.
+     'send it via', 'transport', 'upload', 'uplink', 'hugging face copy',
+     'gpu cost', 'how long', 'slice', 'resumable upload'],
     '/datasets?section=checkpoints', 'dataset-guide', '6-after-training-pick-the-right-checkpoint',
     { trigger: 'continue-any-epoch',
       text: 'Finished a run? ▶ Continue trains it further — for any number of steps, or resumed from an earlier, less-cooked epoch.' }),

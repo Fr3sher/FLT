@@ -1709,6 +1709,16 @@ def random_kept_caption(user_id, dataset_id) -> str | None:
 
 
 def list_datasets(user_id):
+    """Every dataset of this user, newest touched first.
+
+    The choke-point for "the datasets that exist": it feeds the library page,
+    `full_backup.build_full_backup` (its `datasets_total`, its per-dataset zips
+    AND its manifest), the name de-duplication of
+    `full_backup.restore_full_backup`, the canvas dataset index, the canvas
+    positions, the HF base-model index and `lora_training.find_run_collision`.
+    Eight surfaces, one query — so a rule about which datasets count belongs
+    HERE, never copied into a caller.
+    """
     return (FaceDataset.query.filter_by(user_id=str(user_id))
             .order_by(FaceDataset.updated_at.desc()).all())
 
@@ -1720,6 +1730,8 @@ def dataset_list_stats(user_id):
     'trained_families': [str]}}; datasets absent from a map just have zeros."""
     from sqlalchemy import case, func
     from ..models import TrainingRunRecord
+    # Same scope as list_datasets: the counts shown next to the library must add
+    # up to the library. One subquery, reused by BOTH grouped queries.
     owned = (db.session.query(FaceDataset.id)
              .filter_by(user_id=str(user_id))).subquery()
     stats = {}

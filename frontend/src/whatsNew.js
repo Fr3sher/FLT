@@ -126,6 +126,218 @@ export const WHATS_NEW = [
     blurb:
       'Drop a video into an image bank and until today it was skipped without a word: no row, no warning, nothing to click. Videos now get their own bank. Point it at a folder of rushes and it cuts every file at its shot boundaries, so you triage SHOTS instead of files — a two-hour rush becomes three hundred things you can judge in an afternoon. Click any shot to watch exactly that moment; the grid stays thumbnails, so a bank of hundreds of shots stays as light as a page of photos. Nothing is copied and nothing is re-encoded while you triage: a bank stores where each shot starts and ends, and only the ones you keep are ever encoded. When you build the set, the length menu offers only the frame counts your target model can actually ingest — 29 frames is legal for Wan and illegal for LTX, and no trainer tells you, they just quietly round it down. Two things are written next to the target you pick, because they are what costs a wasted week: whether a LoRA trainer for it is known to exist at all (exactly one of the four), and MiniMax H3’s licence, which grants no rights in the EU, the UK, South Korea or the USA — outputs included. And if a piece is missing, the app names which one: with no ffmpeg you can still scan, cut, watch and triage everything — only the final encode waits.',
     to: '/video-bank',
+    id: '2026-08-04-the-app-stops-claiming-a-full-model-it-has-not-checked',
+    date: '2026-08-04',
+    title: 'Your full models say where they really are, instead of where they were',
+    blurb:
+      'A delivered full model was announced as “available” on Hugging Face for ever after, because that status is written once, when the run ends, and was never asked again — so a repository you deleted last night still offered a link that answered 404, and one card managed to print “missing — the model is there” in the same sentence. The Checkpoints panel and the Runs page now ask Hugging Face when you open them, and say one of three things: it is still there, it is gone, or the check itself failed (no token, offline, an outage) — which is never reported as a loss. Until an answer arrives they date the delivery instead of claiming the present. When a repository really is gone they tell you what is left — the master on your disk, the fp8 twin, or nothing — and the buttons that could only have failed stop being offered: the dead links go, “Quantize to fp8” is disabled with its reason, and ▶ Continue is disabled only when the run left nothing on this computer to send to a pod instead.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-choose-how-a-full-model-reaches-the-pod',
+    date: '2026-08-04',
+    title: 'Continue a full model from your own copy — and see what each way costs',
+    blurb:
+      '☁ Continuing a 12B full model used to be possible from exactly one place: its Hugging Face copy. If a run had been delivered to this computer only, or its Hub copy had been deleted, there was nothing to do — the app refused, and the reason was a limit inside one upload route, not a fact about the world. ▶ Continue now offers both roads and prices them before you click. Hugging Face is minutes, because the pod downloads over a datacenter link; sending the copy from this computer is autonomous and costs your upload speed. The figure that actually decides it has never been shown anywhere until now: the pod is rented and billed the entire time it waits for its file, so three hours of upload at $1.40/h is $4.20 of GPU computing nothing. You see that number, the file size, and how long it should take — measured on your own past transfers once you have made one, and openly labelled an estimate before that. A long upload is no longer all-or-nothing either: the file goes up in slices, and every slice that landed stays on the pod, so a dropped link, a closed app or a reboot resumes where it stopped instead of starting over. When a road is closed the dialog says which one and why, and what would reopen it. The Hugging Face road is checked rather than remembered, too: the app knew only that a delivery had once succeeded, so a repository you deleted last night still offered itself with a duration and a price — and picking it rented a pod that then found nothing to download. Opening the dialog now asks whether the repository still answers. A confirmed deletion closes that road; a check that could not be made (offline, no token, an outage) leaves it open, because losing your fast road to a dropped connection would be worse than the problem being avoided.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-08-04-auto-reject-shows-the-number-it-will-actually-reject',
+    date: '2026-08-04',
+    title: 'Auto-reject stops promising more than it can do',
+    blurb:
+      '🧹 Auto-reject offered “5,930 flagged” for blurry shots, and rejecting them did nothing — because those 5,930 had already been rejected by an earlier run, and the pass deliberately never re-flips a decision. The count announced was not the count the button acted on, so the honest conclusion was that the feature was broken. It was not: the number was. Each checkbox now shows how many still-undecided images that exact click would reject, so a second run says “0 to reject” instead of advertising work it will not do — and running it really does reject that many. The filter chips keep counting every image carrying the flag, rejected ones included, which is what you want when you click one to look at them. Two things that used to hide behind an identical 0 now say which they are: a flag whose pass never ran tells you to run it first, and the panel names how many images have never been scanned at all — invisible to every quality flag until 🔎 Scan reaches them, which is very different from being clean. 🚀 Launch all shows the same numbers, and says plainly that the scan runs first so they will grow.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-04-the-merge-form-keeps-what-you-typed',
+    date: '2026-08-04',
+    title: 'The merge tool stops emptying itself when the window changes shape',
+    blurb:
+      'Turning a phone to landscape — or anything else that reshaped the page — folded “Merge a LoRA into a base checkpoint” shut and threw away the checkpoint path and the LoRA rows you had just typed, with nothing to undo. The panel it lives in is rebuilt when the layout moves, and it was taking the form down with it. What you type is now kept: the tool stays open where you left it and comes back filled in, after a resize, a rotation or a reload alike. It is cleared the moment a merge actually starts, so a form you already sent never comes back looking like unfinished work.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-converting-a-custom-zimage-base-stops-hitting-the-paging-file',
+    date: '2026-08-04',
+    title: 'Converting a custom Z-Image base no longer dies on a “paging file” error',
+    blurb:
+      'If preparing your own Z-Image merge for training ended in “the paging file is too small to complete this operation”, nothing was wrong with your disk, your memory or your model — and buying more disk would not have helped. Opening the checkpoint reserved its whole size up front: on a 11.5 GB base that was 11.7 GB claimed in a tenth of a second, before a single number had been read, and about 15 GB by the time the conversion was under way. Big custom bases are exactly where this bit, because they are the ones people convert. The file is now read one tensor at a time and nothing is mapped: the same 11.5 GB conversion peaks at 0.19 GB and finishes in about a minute, so the size of your checkpoint no longer has anything to do with whether it can be opened. The check that runs before the conversion got faster too — it only ever compared shapes, which are in the file header, and it was loading all 11.5 GB to read them.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-typed-base-path-is-checked-while-you-type',
+    date: '2026-08-04',
+    title: 'A base you type by hand is checked before you launch, not after',
+    blurb:
+      'Pick a base from the dropdown and the panel tells you immediately if it is a packed export the trainer cannot load, or an fp8 cast that trains from already-degraded weights. Type the path yourself under “Custom weights…” and, until now, you got that same verdict only when you saved or launched — which on the cloud lane meant after the dataset had been exported and a GPU had been rented. The typed path is now read the moment you stop typing: same check, same sentence, same red box, and the Train button stays disabled if the file cannot be loaded at all. A path that is not there, or that is not a .safetensors, says so instead of letting the run find out.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-quantizing-no-longer-fails-on-the-paging-file',
+    date: '2026-08-04',
+    title: 'Quantizing a big model no longer dies on a “paging file” error',
+    blurb:
+      'If you tried to turn a full-precision model into its fp8 file and got “the paging file is too small to complete this operation”, nothing was wrong with your disk, your memory or your model — and adding disk space would not have helped. Opening the checkpoint reserved its entire size, 26 GB of it, before reading a single number. The app now reads big checkpoints one tensor at a time instead, so the size of the file no longer has anything to do with whether it opens: a 25.6 GB model that could not be opened at all now quantizes in about a minute, and the read-back check at the end works the same way, so it can no longer fail on the last step after twenty minutes of work.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-studio-krea-base-is-chosen-not-hardcoded',
+    date: '2026-08-04',
+    title: 'The Test Studio picks its Krea base instead of hoping one file is there',
+    blurb:
+      'The Krea 2 base the Studio rendered on was a filename frozen into a workflow file — and not the one Setup installs. On a machine that simply followed Setup, that name matched nothing ComfyUI publishes, and the whole run was refused before a single step: it only ever worked if you happened to own that one community repack. The base is now chosen from what is actually on your disk, in an order you can check: the file Setup installs first, then a Turbo build (these graphs run at CFG 1 and a handful of steps, which only a distilled build can do), then whichever file the header says is in better shape — full precision ahead of a quantized cast, ahead of a packed export. Last of all comes anything carrying tensors the model family never declares: the repack that used to be the default hides about 75 MB of image inside itself, 432 tensors where Krea 2 has 430, announced in its own metadata. It stays usable — if it is the only Krea file you own it is still the default — but the Studio now tells you which file it picked and why, and the sampler numbers follow that file instead of assuming Turbo.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-04-merge-a-lora-into-a-base-checkpoint',
+    date: '2026-08-04',
+    title: 'Turn your LoRA into a full model you can publish',
+    blurb:
+      'Most of the checkpoints you download were not trained — they were merged: a LoRA folded into somebody’s base, quantized, uploaded. LDS could train the LoRA and could quantize the result, and could not do the step in between, so you could not reproduce what everyone else was doing. Now you can: pick a base, add one or more LoRAs with a weight each, and get a complete checkpoint. It also unlocks the speed problem — a full model trained here targets Raw, which is slow, and merging in the re-distillation LoRA Krea publishes for Turbo is the published route to getting few-step generation back (we have not tested that one ourselves, and the screen says so). Nothing starts on one click: the plan tells you how many tensors change, exactly how big the output is, which drive it lands on and how long it takes — about two minutes on a 26 GB base — and nothing is ever overwritten. And it calls the result what it is. A merged model is not a trained model, however often the model sites say “finetune” for it, so the file records the base, every LoRA and its weight, and the date, in its own metadata — which is what still identifies it in six months, after the name has changed.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-turbo-dense-untested-not-impossible',
+    date: '2026-08-04',
+    title: 'Correction: full-model training on Turbo is untested, not impossible',
+    blurb:
+      'The Guide and the app both told you that training a full model on Krea 2 Turbo was mechanically impossible and would deliver a broken file. That was overstated, and we are correcting it. On the distilled models anyone has actually measured, full training leaves a perfectly valid checkpoint that simply stops being fast — and for Krea 2 nobody has published that measurement at all. Full-model runs still target Raw, and nothing about how they behave has changed; the refusal now says what it really is — a lane we have not tested — and the Guide explains what is known, including the published route people use to get the speed back afterwards.',
+  },
+  {
+    id: '2026-08-04-train-krea-on-a-checkpoint-you-already-have',
+    date: '2026-08-04',
+    title: 'Train Krea 2 on a model you already have — including the one your last run delivered',
+    blurb:
+      'The Krea 2 base selector offered exactly one thing: the official base. So a full model you had just trained, or any Krea 2 build sitting in your ComfyUI folders, could not be used as the starting point of the next run — while a Z-Image merge could. It now lists every Krea 2 checkpoint on your disk, the yaml-declared folders included, and hands the real file to the trainer (local runs load it directly; a cloud run offers to push it to your private repo first). Each entry also states its format before you pick it: an ordinary fp8 file trains — the trainer up-casts it as it loads — and now says with numbers how much precision the cast dropped, instead of being refused outright as it used to be. Only a packed ComfyUI export is still refused, because it carries decompression tables a trainer literally cannot load; the message says that, and points at the bf16 master your run kept next to it.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-canvas-says-which-run-trained-a-full-model',
+    date: '2026-08-04',
+    title: 'On the board, a run that trained the whole model now says so',
+    blurb:
+      'A full-model run and a LoRA run of the same family printed exactly the same two words on their card — “Krea 2 · Raw” — while being completely different things: one produces a large checkpoint you load instead of the base, the other a small adapter you load on top of it. On a board holding both, nothing told you which was which. Those cards now carry a “full model” badge, in the graph and in the list alike.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-04-full-model-is-selectable-as-a-studio-base',
+    date: '2026-08-04',
+    title: 'The fp8 file of a full model you trained is now offered as a base in the Test Studio — with its own sample settings already filled in',
+    blurb:
+      'One line decided it: the base picker only accepted a Krea checkpoint if it sat in a folder whose name carried “krea”. The fp8 twin of a full-model run is written to the root of ComfyUI’s diffusion_models folder — deliberately, because that is a folder ComfyUI reads — so the one file the whole full-model lane exists to produce was invisible to the one screen meant to try it, and the only way to test a model you had paid hours of GPU for was to open ComfyUI by hand. The picker now also accepts a file whose NAME carries “krea”, which is the rule the Generate side has always used, so every twin already on your disk appears without moving a byte. And because a full model trained here is undistilled, selecting it fills in CFG 4 / 25 steps rather than the family’s few-step Turbo defaults, which render a blurry sketch on it. Those per-base settings now also reach the comparison and blend screen, which never received them.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-04-full-models-appear-in-the-checkpoints-panel',
+    date: '2026-08-04',
+    title: 'A full model you trained now appears in 📦 Checkpoints & LoRAs, with the two files it leaves and what each one is for',
+    blurb:
+      'Until now a full-model run existed in the app as a banner and a Hugging Face link. It was in none of the places a trained thing lives, so testing one meant going into ComfyUI and finding the file yourself. There is now a 🧱 Full models block in the same panel, and it keeps apart the two files a run leaves — because they are not interchangeable. The full-precision master (~26 GB) is the only one you can train again or resume from, and it is never sent to ComfyUI: it would fill a model folder to do a job the smaller file does better. The fp8 twin (~13 GB) is the inference format, and → Send to ComfyUI puts it where ComfyUI looks — on the same drive that is a hard link, so it is instant and costs no extra disk space. Each card names the exact file it chose when a run left several 26 GB saves, the sampler settings the model wants, the machine it trained on, and where the Hugging Face backup is. ✨ Quantize works whether the master is on this computer or still only in the repository, and 🗑 Trash is the app trash, so a mis-click on hours of GPU is recoverable.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-comfyui-unreachable-is-said-out-loud',
+    date: '2026-08-04',
+    title: 'When LDS cannot reach ComfyUI, the banner now says exactly that — instead of blaming a paused job',
+    blurb:
+      'On a brand-new install, the very first Generate could answer “A paused ComfyUI job is blocking new generations” — on a machine that had never generated anything, while ComfyUI logged no incoming connection at all. The pause was real, but it was the consequence, not the cause: LDS was knocking at an address nobody was behind, and nothing on screen said so. The banner now checks whether the two programs are in touch and leads with the answer: “LDS cannot reach ComfyUI at <your URL>”, followed by the three things that are actually wrong when that happens — the address of the ComfyUI window you really use, a ComfyUI started without --listen (it only answers on its own machine), and LDS in Docker needing host.docker.internal instead of 127.0.0.1. The paused job is still held, and still clears the same way; it just stops being the accusation. Reported by jerkyjunky (Discord).',
+    to: '/settings/local-tools',
+  },
+  {
+    id: '2026-08-04-prompt-batch-grid-shows-every-prompt',
+    date: '2026-08-04',
+    title: 'A batch of prompts now shows all of its images — one labelled grid per prompt, instead of a grid with a single picture',
+    blurb:
+      'Ticking several saved prompts generated every one of them, but the results view only ever showed one: it identified a run by its seed AND its prompt, so a single launch of five prompts arrived as five separate “runs” in the run picker, and you were looking at one of them. Nothing was lost — the images were all there, behind a dropdown that should never have had them. A run is now identified by the launch itself, so the batch stays whole, and each prompt gets its own grid under the prompt that produced it (shortened to fit, in full when you hover). Runs from before this change are grouped exactly as they were.',
+    to: '/studio',
+  },
+  {
+    id: '2026-08-04-full-model-run-no-longer-reads-as-gone',
+    date: '2026-08-04',
+    title: 'A full-model run whose model is on Hugging Face no longer shows up as “gone” — and the app no longer offers to delete it',
+    blurb:
+      'The canvas asked one question to decide whether a run still had anything: is there a checkpoint file on this disk? That question has no good answer for a full model delivered to a private Hugging Face repository — there is no local file, and there never was. So those runs were drawn dimmed, badged “gone”, and given a “Remove this run” button under the words “No checkpoints left on disk”, for a model that was perfectly fine and had cost hours of GPU. Removing one threw away the lineage, the notes and the only record of which repository the model was in. A full-model run is now asked about both of the addresses it can have: it shows “💾 full model here” when the weights are on this computer, “☁ on Hugging Face” when they are in its repository, and it is only offered for removal when the model is genuinely gone from both. If you try anyway, the app now says where the model still is instead of deleting the trail to it.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-04-person-preflight-redraws-unreadable-samples',
+    date: '2026-08-04',
+    title: 'The folder check before 👤 Group by person no longer gives up when its sample lands on faceless images — it draws new ones',
+    blurb:
+      'On a real bank, four folders out of six came back with no verdict at all: “only 0 of 15 sampled images had a usable face — analyzed in full”. Scraped folders are full of crops, backs and blur, so a sample of fifteen can land entirely on images no face detector can read — and the biggest folder then spent fifteen embeddings for nothing before analysing all 3 546 of its images anyway, which is exactly the cost the check exists to avoid. A draw that cannot be read is now replaced: the check keeps drawing new images (never one it already tried, still spread across the whole folder) until it has about fifteen usable faces or hits a budget — at most 60 images per folder, or a quarter of it, whichever is smaller, and the dialog prints that ceiling next to the typical cost before you start. Three honest endings replace the old silence: a normal verdict; “looks like one person, on thin evidence — only 6 usable faces in 60 images tried”, still offered because a weak verdict that says how weak beats none; and, when almost nothing is readable, a fact about the folder rather than a promise the full pass would do better — it would not, it uses the same detector on the same images and re-reads the answers the check already cached.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-04-fp8-quantize-runs-where-torch-lives',
+    date: '2026-08-04',
+    title: 'Quantizing to fp8 now actually runs — it uses an environment that has torch, and says so before you click if none does',
+    blurb:
+      'On a real install the conversion could not run at all: it ended on “No module named ‘safetensors’”, because it tried to do the work inside the app’s own Python — which ships without torch on purpose, since torch is gigabytes and nothing else here needs it. It now runs the conversion in a separate interpreter that has the dependencies, exactly like ✨ Score and the masking passes already do: the one ✨ Score uses, ai-toolkit’s, or whichever you set as `quantize.python`. And because “can this machine do it at all” is something you should learn before committing, it is checked while the plan is drawn: an environment without torch disables the button and tells you which environments would work and what to install, instead of failing thirty seconds in — or, worse, after a 26 GB download.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-fp8-disk-guard-says-yes-when-it-fits',
+    date: '2026-08-04',
+    title: 'The fp8 quantizer no longer refuses a conversion that fits — and a refusal now shows its arithmetic',
+    blurb:
+      'Two things were wrong with the disk check, and both showed up on a real 25.6 GB model. The panel said the conversion was fine, and the click that followed refused it: the threshold was only applied when starting, never when planning, so the button stayed enabled right up to the moment it was too late. And that threshold was a flat 30 GB, while the file being written was 12.8 GB and the drive had 17.6 GB free — an operation that fit twice over, refused by a number of our own. The budget is now derived from the job itself (what is left to download, the fp8 file’s own ceiling, and 2 GB of working headroom), every term is named in the refusal so you can check it, and whatever the plan accepts the start no longer rejects. Free space is also measured on the volume that really holds the folder, which matters because a ComfyUI models folder is very often a junction onto another drive. And when a drive genuinely is too full, the refusal offers to write the file to another folder instead of ending there.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-quantize-to-fp8-in-one-click',
+    date: '2026-08-04',
+    title: 'One click turns your full model into the fp8 file ComfyUI loads — nothing to type, and it works on a model that is only on Hugging Face',
+    blurb:
+      'The fp8 quantizer asked for an absolute path to a file on this machine, and the model most people want to shrink has no such path: a full-model run delivers its 26 GB master into your private Hugging Face repository and never downloads it. So the one full model you own was the one thing the tool could not touch. Now “✨ Quantize to fp8” sits right there in the full-model recipe, already aimed at the model your run delivered, and does the whole chain: fetches the master, converts it, and leaves the fp8 file in ComfyUI’s own models folder, ready to load. Before it starts it tells you which checkpoint it takes (a repository often holds the final save AND several 26 GB step snapshots whose names differ by a number — one rule now decides, and it is the same one that names the file on the card), which folder the file lands in, and what it costs in disk. The download reports its gigabytes, can be stopped, and resumes where it left off. Afterwards the master is kept by default, because it is the only copy you can train from again; deleting it is one radio button away with its size on it. The path field is still there for a file nothing in the app points at — and it now pre-fills itself with your custom training base.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-04-dense-quality-levers',
+    date: '2026-08-04',
+    title: 'Full-model training: choose how many images each step learns from, and how the learning rate moves',
+    blurb:
+      'A full-model Krea 2 run was training on ONE image per step — over a dataset of thousands, that is a very noisy idea of the right direction — at a flat learning rate from the first step to the last. Three settings in the recipe card change that. “Images per step” averages several images into each update, which steadies training on a big set; it needs no extra VRAM, only time, so the card tells you straight out that 4 images per step means a run about 4× longer and a rented GPU that costs about 4× as much. The learning-rate schedule can now warm up over the first steps instead of hitting a 12B model at full rate immediately, or fade to zero by the end to settle fine detail. The noise schedule picks which noise levels the run trains on. Leave all three alone and your run is byte-for-byte the recipe that shipped before — the defaults did not move. Two settings people ask for are deliberately absent, and the guide says why: on this model EMA would run the pod out of memory at its first checkpoint, and min-SNR weighting would crash the job an hour in, because a flow-matching model has none of the numbers it needs.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-04-image-grid-pages-big-datasets',
+    date: '2026-08-04',
+    title: 'A dataset of thousands of images no longer bogs the Images screen down',
+    blurb:
+      'The Images grid used to draw every photo of the dataset at once. On a 6 211-image dataset that is about 148 000 elements on one page — 6 211 thumbnails, 6 211 caption boxes, 60 000 buttons — and it showed: scrolling ran at roughly 20 frames a second on a desktop and 12 on a phone, and a single keystroke in a caption took a tenth of a second to appear. The grid now shows 500 images at a time with a ← Prev / Next → pager above and below it, the same way the Bank has always handled 24 000-image folders. Measured on that same 6 211-image dataset: scrolling back at full speed, typing in a caption instant again, switching a filter about seven times faster. Nothing about curation changed — “select all” still takes every image the current filters show across all pages (its tooltip now says so), a selection you started on one page is still there on the next, the counters, sort, filters and auto-triage all still read the whole dataset, and captions are still edited right on the tile. The pager only appears when there is more than one page.',
+    to: '/datasets?section=images',
+  },
+  {
+    id: '2026-08-04-full-model-lands-on-your-computer',
+    date: '2026-08-04',
+    title: 'A finished full model now lands on YOUR computer — and a full Hugging Face quota can no longer end a training',
+    blurb:
+      '🖥 Until now a full-model (dense) run had exactly one address: a private Hugging Face repository the pod pushed to while it trained. That address has a ceiling nobody controls, and it collected: a run died 250 steps from the end on “403 private repository storage limit reached”, after eight hours of paid GPU, and only survived because 50 GB were deleted by hand. So the order is reversed. The finished model is downloaded to your checkpoint folder FIRST, the ~10 GB fp8 file for ComfyUI with it, and the pod is destroyed only once the file here is proven — the byte count has to match what the pod advertised, and the safetensors header has to re-read. Only then is the master uploaded to Hugging Face as a backup, and that upload is now allowed to fail: it costs the ability to continue that model later, nothing else. Nothing is pushed while the run trains, so the quota can no longer reach the training at all. The transfer is tens of minutes of 26 GB, so it shows its progress, survives an app restart, and can be stopped and resumed without losing what already landed — and if it fails, the machine is kept and the Runs page offers “Fetch to this computer”. A launch also checks this machine’s disk before renting anything, and refuses (confirmably, like every other estimate) when the drive plainly has no room. Choose the delivery in Settings ▸ Storage ▸ Full-model delivery; runs made before today keep their Hugging-Face-only behaviour exactly as it was.',
+    to: '/settings/storage',
+  },
+  {
+    id: '2026-08-04-continue-a-full-model',
+    date: '2026-08-04',
+    title: 'Continue a full model instead of paying for its first 3000 steps again',
+    blurb:
+      '▶ A full-model run that stopped at step 3000 can now be continued to 4000 — the same ▶ Continue as a LoRA, with the same guardrails, cost estimate and “from which step” choice. The fresh machine downloads the checkpoint from the run’s Hugging Face copy itself, over a datacenter link, and training picks up at the step written inside the file. Two honest limits, said in the app rather than discovered: the copy on your computer cannot be used for this (the only channel that puts a file on a pod builds its whole request in memory, which 26 GB cannot survive), so a run delivered to this computer ONLY is not resumable — the default delivery keeps a Hugging Face copy precisely to leave that door open.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
+    date: '2026-08-04',
+    title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',
+    blurb:
+      '☁ Quantize to fp8 in the cloud used to give up one second after the click with “create_instance failed: HTTP 400 {}” — no machine, no money spent, and no reason. Two things were wrong. It rented the cheapest offer on the market, and cheap is exactly where free disk runs out: a 26 GB model needs about 86 GB on the pod for the master, its fp8 twin and the download cache, while the top offer of a live search had 57 GB — an ask vast refuses outright. And a single refusal ended the job, even though the next machine would have taken it. Now the search only considers machines with the disk this job will claim, the offer is chosen by the same rule a training launch uses (bad hosts skipped, suspiciously cheap listings ignored), and a refusal moves to the next candidate instead of ending everything. When a rental really is impossible, the error quotes what vast said rather than an empty “{}”. The estimate stays an estimate — but if the market moved and the only machine left costs materially more than the price you agreed to, it tells you and rents nothing.',
+  },
+  {
+    id: '2026-08-04-quantize-to-fp8-from-settings-storage',
+    date: '2026-08-04',
+    title: 'Shrink a model to fp8 from Settings ▸ Storage — no dataset, no training run',
+    blurb:
+      'The fp8 quantizer that shipped yesterday had exactly one door: the full-model recipe card, which only exists inside a dense dataset. So the person it was written for — someone who downloaded a 26 GB full-precision model from Hugging Face and cannot load it — had no dataset, and never found it. It is now also in Settings ▸ Storage, beside the folder sizes and the trash, because “this file is too big” is a disk question. It is the same tool, not a second copy: point it at any full-precision .safetensors on this machine and it writes the ~10 GB version ComfyUI loads directly, next to the original. Same refusals before you click (a file that is already quantized, a LoRA/adapter), same promise that your source file is never modified and never overwritten, same read-back of the result before it reports success. It runs on the CPU, one at a time, so it never takes VRAM from ComfyUI or a training run. One correction landed on the same tab: the Hugging Face storage card counts the fp8 export in what a full-model run needs, but did not name it, so a ~60 GB forecast explained itself as 46 GB — the breakdown now lists every term it adds up.',
+    to: '/settings/storage',
   },
   {
     id: '2026-08-04-gallery-lightbox-upscale-improve',

@@ -1065,19 +1065,113 @@ def _apply_sdxl_accelerator(workflow):
     return workflow
 
 
-# Basename du UNET câblé dans krea2_turbo.json (node 20) : l'entrée « Official »
-# des sélecteurs le représente déjà (valeur vide → on ne touche pas au node), donc
-# les listes de bases ALTERNATIVES l'excluent pour ne pas montrer le même modèle
-# deux fois. La whitelist de validation, elle, garde TOUT get_krea_models().
-_KREA_DEFAULT_BASE = 'krea2_turbo_fp8.safetensors'
+# WHAT THE « Official » ENTRY LOADS, AND WHY IT IS NO LONGER A FILENAME
+# ---------------------------------------------------------------------
+# It used to be one: `krea2_turbo_fp8.safetensors`, the basename frozen into
+# krea2_turbo.json's node 20 and repeated here as a constant. Two defects.
+#
+#   * It is NOT the file Setup installs. `setup_installer` fetches Comfy-Org's own
+#     `krea2_turbo_fp8_scaled.safetensors`; ComfyUI validates a loader widget by
+#     exact string match against the list it publishes, and those two names are
+#     not the same string. So on an install that simply followed Setup, the
+#     Studio's default base named a file that is not there and the whole prompt
+#     was refused ("Value not in list: unet_name") before a step ran. It worked
+#     only on machines that happened to have that community repack.
+#   * That repack carries tensors this family does not declare. Measured on the
+#     real header: 432 tensors against the family's 430, the two extras being
+#     `last.down.weight` / `last.up.weight` `[6144, 6144]`, which its own
+#     `__metadata__` (`egg_format`, `egg_w`, `egg_h`, `egg_c`) describes as an
+#     embedded image — ~75 MB of picture shipped inside a base model.
+#
+# So the default is ELECTED from what is on disk, by the ranking documented on
+# `krea_edit_helper.resolve_krea_unet` and shared with it — the Generate resolver
+# and this picker must never elect different files out of the same folder.
+
+def krea_default_base():
+    """ComfyUI-relative name of the base the « Official » entry loads, or None
+    when nothing on disk qualifies — then node 20 keeps the workflow's own value,
+    which is the historical behaviour and the case the missing-asset preflight
+    already owns.
+
+    Elected out of `get_krea_models()`, the very list this screen offers: ranking
+    a name the picker does not list would elect a base its own whitelist refuses."""
+    try:
+        from .krea_edit_helper import elect_krea_base
+        return elect_krea_base(get_krea_models())
+    except Exception:                       # noqa: BLE001 — never fatal to a render
+        logger.exception('Krea default base election failed')
+        return None
+
+
+def krea_default_base_entry() -> dict:
+    """The « Official » row of the Krea base pickers: ``{value, label, note, source}``.
+
+    ``value`` stays ``''`` forever — it is persisted on run rows and read back, so
+    it is an id, not a label. What CHANGES with the disk is what the row says: the
+    name stays "Official" only while the elected base IS the file Setup installs.
+    Anything else is named for what it is, so a base nobody chose is never
+    presented as the official one.
+
+    ``source`` is the file that row will actually load (None when node 20 keeps the
+    workflow's own value). Callers need it because the sampler defaults belong to
+    THAT file: a Raw build elected as the default must not be offered with the
+    Turbo numbers — cfg 1 / 8 steps on an undistilled base renders a blurry sketch
+    people read as a failed training (GitHub #18, bobba84, on the Z-Image side)."""
+    from .krea_edit_helper import KREA_ASSETS, KREA_CANONICAL_UNET
+    entry = {'value': '', 'label': 'Official – Krea 2 Turbo', 'note': None,
+             'source': None}
+    elected = krea_default_base()
+    if not elected:
+        return entry
+    entry['source'] = elected
+    bare = _basename(elected)
+    if bare.lower() == KREA_CANONICAL_UNET.lower():
+        return entry
+    entry['label'] = f'Default – {bare.rsplit(".", 1)[0]}'
+    notes = [f'The Krea 2 Turbo base Setup installs ({KREA_CANONICAL_UNET}) is not '
+             f'on this machine, so the Studio renders on the best Krea 2 build it '
+             f'found here: {bare}.']
+    health = _krea_base_health(elected)
+    if health and health.get('note'):
+        notes.append(health['note'])
+    # A note that only DIAGNOSES leaves the reader with a fact and no gesture, so
+    # it ends on the action and on where the file lands — the same folder every
+    # other Krea message names.
+    notes.append(f'To render on the official base instead: Setup ▸ Install ▸ Krea 2 '
+                 f'downloads {KREA_CANONICAL_UNET} into '
+                 f'{KREA_ASSETS["krea_model"]["path"]}, and this entry goes back to '
+                 f'it on its own — nothing else to change.')
+    entry['note'] = ' '.join(notes)
+    return entry
+
+
+def _krea_base_health(rel_name):
+    """`model_integrity.base_health` for an elected base, but ONLY when the verdict
+    is worth a sentence — a file that announces it carries something other than
+    weights. A plain fp8 cast is a normal thing to render on and says nothing here
+    (the TRAINING picker is where precision earns a warning). None when the file
+    cannot be resolved or read."""
+    try:
+        from . import comfy_model_paths, model_integrity
+        path = comfy_model_paths.resolve_model_file('diffusion_models', rel_name)
+        if not path:
+            return None
+        health = model_integrity.base_health(path)
+        return health if health['rank'] == model_integrity.HEALTH_FOREIGN_PAYLOAD else None
+    except Exception:                       # noqa: BLE001 — advisory only
+        return None
 
 
 def krea_alt_base_models() -> list:
-    """Bases Krea locales ALTERNATIVES au UNET câblé du workflow : les checkpoints
-    trouvés par get_krea_models() moins le défaut. Vide → aucun choix à offrir
-    (les sélecteurs restent cachés, comportement historique)."""
-    return [m for m in get_krea_models()
-            if _basename(m).lower() != _KREA_DEFAULT_BASE]
+    """Bases Krea locales ALTERNATIVES à celle de l'entrée « Official » : les
+    checkpoints trouvés par get_krea_models() moins le défaut élu. Vide → aucun
+    choix à offrir (les sélecteurs restent cachés, comportement historique).
+
+    L'exclusion se fait sur le BASENAME : la même base recopiée à la racine ET
+    dans un sous-dossier ne doit pas apparaître deux fois sous deux libellés."""
+    default = krea_default_base()
+    bare = _basename(default).lower() if default else None
+    return [m for m in get_krea_models() if not bare or _basename(m).lower() != bare]
 
 
 def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed,
@@ -1114,6 +1208,15 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
 
     if base_model:
         _set("20", "unet_name", base_model)
+    else:
+        # « Official » : elect the base rather than trust the filename frozen into
+        # the workflow JSON — see krea_default_base for what that literal actually
+        # named. Server-elected, so it does not go through `allowed_bases` (that
+        # whitelist guards a USER-supplied value against path injection). None →
+        # node untouched, exactly as before.
+        elected = krea_default_base()
+        if elected:
+            _set("20", "unet_name", elected)
 
     _set("23", "text", prompt)                    # prompt (CLIPTextEncode Krea)
     _set("25", "width", int(width))
@@ -3700,15 +3803,27 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
     # Pool de bases selon la FAMILLE effective : SDXL → checkpoints SDXL (forme
     # {value,label}) ; Krea → base fixe (UNET du workflow, aucun sélecteur) ; sinon
     # modèles Z-Image. `train_type` = famille effective (le front adapte picker + handoff).
+    base_note = None
+    # Repli CFG/steps de la famille. Krea l'ajuste sur la base RÉELLEMENT élue :
+    # une base non distillée élue par défaut avec les chiffres Turbo (cfg 1 /
+    # 8 steps) rend une esquisse floue lue comme « l'entraînement a raté ».
+    default_cfg, default_steps = DEFAULT_CFG, DEFAULT_STEPS
     if eff == 'sdxl':
         z_models = [{'value': m['filename'], 'label': m['label']}
                     for m in list_sdxl_base_models()]
     elif eff == 'krea':
-        # Bases Krea locales ALTERNATIVES au UNET câblé. « Official » (value vide →
-        # z_model None → node 20 intact) reste en tête = défaut. Aucune alternative
-        # sur disque → liste vide, le front cache le sélecteur (comportement historique).
+        # Bases Krea locales ALTERNATIVES au défaut élu. L'entrée de tête (value
+        # vide) reste le défaut ; son libellé dit QUEL fichier c'est quand ce n'est
+        # pas celui que Setup installe. Aucune alternative sur disque → liste vide,
+        # le front cache le sélecteur (comportement historique) — mais `base_note`,
+        # lui, sort quand même : c'est justement cette install-là qui doit le lire.
+        _krea_entry = krea_default_base_entry()
+        base_note = _krea_entry['note']
+        if _krea_entry['source']:
+            _d = krea_model_defaults(_krea_entry['source'])
+            default_cfg, default_steps = _d['cfg'], _d['steps']
         _alts = krea_alt_base_models()
-        z_models = ([{'value': '', 'label': 'Official – Krea 2 Turbo'}]
+        z_models = ([{'value': '', 'label': _krea_entry['label']}]
                     + [{'value': m, 'label': _basename(m).rsplit('.', 1)[0]} for m in _alts]
                     if _alts else [])
     else:
@@ -3725,10 +3840,14 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'permanent_loras': permanent_lora_candidates(eff),
         'prompt': identity_prompt(ds),
         'z_models': z_models,
+        # Ce que le défaut de base a d'anormal, quand il en a (Krea : le fichier
+        # que Setup installe n'est pas là / celui élu porte autre chose que des
+        # poids). None le reste du temps — le front n'affiche rien.
+        'base_note': base_note,
         'aspects': list(TEST_ASPECTS.keys()),
         'default_aspect': DEFAULT_ASPECT,
-        'cfg_choices': CFG_CHOICES, 'default_cfg': DEFAULT_CFG,
-        'steps_choices': STEPS_CHOICES, 'default_steps': DEFAULT_STEPS,
+        'cfg_choices': CFG_CHOICES, 'default_cfg': default_cfg,
+        'steps_choices': STEPS_CHOICES, 'default_steps': default_steps,
         # Per-BASE-MODEL cfg/steps, keyed by the same `value` as `z_models` (bobba84,
         # GitHub #18): Z-Image Base is not guidance-distilled and must not inherit
         # Turbo's cfg 1 / 8 steps. `default_cfg`/`default_steps` stay the fallback for
@@ -3746,7 +3865,14 @@ def studio_payload(user_id, dataset_id, family=None) -> dict | None:
         'cells': [{'id': r.id, 'checkpoint': r.checkpoint,
                    'label': format_trained_lora_label(r.checkpoint) or _basename(r.checkpoint).rsplit('.', 1)[0],
                    'strength': r.strength, 'aspect': r.aspect, 'filename': r.filename,
-                   'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed, 'status': r.status,
+                   'rating': r.rating, 'seed': r.seed, 'run_seed': r.run_seed,
+                   # WHICH launch this cell belongs to. The column has always been
+                   # written (`create_run`), but it was never served, so the grid
+                   # had to guess a run from `run_seed` + prompt — and a batch of N
+                   # prompts then looked like N separate runs, of which it showed
+                   # one. Null on rows predating the column; the frontend keeps the
+                   # old grouping for those.
+                   'run_id': r.run_id, 'status': r.status,
                    'queue_status': activity['queue_status'].get(r.job_id),
                    'queue_error': activity['queue_error'].get(r.job_id),
                    'prompt': r.prompt, 'z_model': r.z_model,

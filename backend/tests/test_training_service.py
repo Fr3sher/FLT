@@ -1579,3 +1579,31 @@ def test_sample_prompts_string_cap_and_reset(app):
         eff3 = lt.update_train_settings(LOCAL_USER, ds.id, {'sample_prompts': ''})
         assert eff3['sample_prompts'] == []                             # cleared → defaults
         assert any('portrait' in p for p in lt._sample_prompts(ds, 'ztrig'))
+
+
+def test_find_run_collision_only_names_datasets_the_library_lists(app, monkeypatch):
+    """Two datasets sharing a trigger share an ai-toolkit run folder, and
+    ai-toolkit auto-resumes from that folder — so the second launch is refused,
+    naming the first.
+
+    The search runs over `face_dataset_service.list_datasets`, the same listing
+    the library page shows, not over a raw query: a refusal that names a row the
+    user cannot open is a training run blocked with no way out, days after
+    whatever created that row. Pinned here because a regression would surface
+    only as an error message about a dataset that is not in the library."""
+    from app.services import lora_training as lt
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    with app.app_context():
+        first = svc.create_dataset(LOCAL_USER, 'Alice', 'alice', train_type='zimage')
+        second = svc.create_dataset(LOCAL_USER, 'Alice again', 'alice', train_type='zimage')
+        assert lt._run_name(first) == lt._run_name(second)       # same run folder
+
+        clash = lt.find_run_collision(LOCAL_USER, second.id)
+        assert clash is not None and clash.id == first.id
+
+        # Hide `first` from the listing: the refusal must go with it (proving the
+        # enumeration goes through the choke-point), and `second` being in the
+        # list must not make it collide with itself.
+        monkeypatch.setattr(svc, 'list_datasets', lambda uid: [second])
+        assert lt.find_run_collision(LOCAL_USER, second.id) is None

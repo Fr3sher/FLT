@@ -64,6 +64,14 @@ DEFAULT_BUDGET_SECONDS = 1800          # 30 min: measured conversions are minute
 _POLL_SECONDS = 15
 _POLL_SLACK_SECONDS = 300              # queueing + upload after the conversion
 
+# What vast will carry. The sibling lane (cloud_quantize) has to fit its WHOLE
+# program into vast's 16384-character ask and was refused twice for exceeding it;
+# this path stays small for a structural reason — the exporter travels as an
+# uploaded FILE and the command only names it. This ceiling exists so that
+# structure cannot quietly change: it is a path-and-integers command, and
+# anything approaching a kilobyte means something got inlined into it.
+MAX_COMMAND_CHARS = 2048
+
 
 class Fp8DeliveryError(RuntimeError):
     """Internal signal. Never escapes ``run_pod_fp8_export``."""
@@ -104,7 +112,14 @@ def build_command(paths: dict, training_folder: str, repo_id: str, *,
         parts += ['--token-file', q(paths['token'])]
     if drop_bf16:
         parts.append('--drop-bf16')
-    return ' '.join(parts)
+    command = ' '.join(parts)
+    if len(command) > MAX_COMMAND_CHARS:
+        # Fail-open, like everything here: the run is already delivered, so a
+        # command we do not trust costs an fp8 twin, never the training.
+        raise Fp8DeliveryError(
+            f'the pod command grew to {len(command)} characters (ceiling '
+            f'{MAX_COMMAND_CHARS}) — refusing to send it')
+    return command
 
 
 def parse_result(output) -> dict | None:
@@ -141,12 +156,20 @@ def _upload_text(remote, paths, name, text, tmp_dir):
 def run_pod_fp8_export(run, remote, *, instance_id, repo_id, hf_token,
                        keep_bf16=True, budget_seconds=DEFAULT_BUDGET_SECONDS,
                        tmp_dir=None, vast=None, on_state=None,
-                       _sleep=time.sleep, _now=time.monotonic) -> dict:
+                       _sleep=time.sleep, _now=time.monotonic,
+                       upload=True) -> dict:
     """Ship, execute and collect the fp8 export. NEVER raises.
 
     Returns ``{'state', 'detail', 'result'}`` where ``state`` is one of
     ``done`` / ``failed`` / ``skipped``. The caller stamps it on the run and
     carries on with the delivery verification either way.
+
+    ``upload=False`` writes the twin on the pod and stops there — it is what a
+    run delivering to the local disk wants: the file is then HARVESTED like the
+    master, and pushing a second ~10 GB object into a private Hugging Face
+    quota to bring it home would be paying twice for it. The bf16 master is
+    never dropped in that mode (the CLI only deletes it after a confirmed
+    upload), which is also the only safe reading.
     """
     from . import vast_client
     vast = vast or vast_client
@@ -164,7 +187,7 @@ def run_pod_fp8_export(run, remote, *, instance_id, repo_id, hf_token,
         out['state'] = 'skipped'
         note('no pod instance to run the fp8 export on')
         return out
-    if not repo_id:
+    if upload and not repo_id:
         out['state'] = 'skipped'
         note('no Hugging Face delivery repository for the fp8 export')
         return out
@@ -180,13 +203,14 @@ def run_pod_fp8_export(run, remote, *, instance_id, repo_id, hf_token,
 
         note('Shipping the fp8 exporter to the pod…')
         _upload_text(remote, paths, POD_SCRIPT_NAME, script_source(), staging)
-        if hf_token:
+        if hf_token and upload:
             _upload_text(remote, paths, POD_TOKEN_NAME, hf_token, staging)
 
-        command = build_command(paths, training_folder, repo_id,
+        command = build_command(paths, training_folder,
+                                repo_id if upload else '',
                                 budget_seconds=budget_seconds,
-                                drop_bf16=not keep_bf16,
-                                with_token=bool(hf_token))
+                                drop_bf16=upload and not keep_bf16,
+                                with_token=bool(hf_token) and upload)
         note('Quantizing the checkpoint to fp8 on the pod…')
         result_url = vast.execute_command(instance_id, command)
 
@@ -210,11 +234,11 @@ def run_pod_fp8_export(run, remote, *, instance_id, repo_id, hf_token,
         out['result'] = parsed
         if not parsed.get('ok'):
             raise Fp8DeliveryError(str(parsed.get('error') or 'fp8 export failed'))
-        if not parsed.get('uploaded'):
+        if upload and not parsed.get('uploaded'):
             raise Fp8DeliveryError(
                 'the fp8 file was written on the pod but never uploaded')
         out['state'] = 'done'
-        note(_success_detail(parsed, keep_bf16))
+        note(_success_detail(parsed, keep_bf16, upload=upload))
     except Exception as e:
         # The bf16 master is already delivered — this is a missing convenience,
         # not a lost run, and it must read that way everywhere it is shown.
@@ -225,10 +249,12 @@ def run_pod_fp8_export(run, remote, *, instance_id, repo_id, hf_token,
     return out
 
 
-def _success_detail(parsed, keep_bf16) -> str:
+def _success_detail(parsed, keep_bf16, upload=True) -> str:
     name = os.path.basename(str(parsed.get('path') or 'model_fp8.safetensors'))
     size = parsed.get('bytes_after')
     size_text = f' ({size / 1000 ** 3:.1f} GB)' if isinstance(size, (int, float)) else ''
+    if not upload:
+        return f'fp8 export {name}{size_text} written on the pod, ready to fetch.'
     tail = ('the bf16 master was kept next to it' if keep_bf16
             else 'the bf16 master was replaced by it')
     return f'fp8 export {name}{size_text} uploaded — {tail}.'

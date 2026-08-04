@@ -104,6 +104,16 @@ def test_the_locked_geometry_is_not_reachable_through_settings():
     ({'dense_save_every': 10}, 'dense_save_every'),
     ({'dense_max_step_saves': 9}, 'dense_max_step_saves'),
     ({'dense_fp8_export': 'yes'}, 'dense_fp8_export'),
+    ({'dense_grad_accum': 3}, 'dense_grad_accum'),
+    ({'dense_grad_accum': 16}, 'dense_grad_accum'),
+    ({'dense_grad_accum': True}, 'dense_grad_accum'),
+    ({'dense_lr_schedule': 'linear'}, 'dense_lr_schedule'),
+    ({'dense_warmup': 5}, 'dense_warmup'),
+    ({'dense_warmup': 5000}, 'dense_warmup'),
+    # The value people actually try. It parses in ai-toolkit and is refused
+    # here on purpose — see the timestep note in lora_training.
+    ({'dense_timestep_type': 'shift'}, 'dense_timestep_type'),
+    ({'dense_timestep_type': 'lognorm_blend'}, 'dense_timestep_type'),
 ])
 def test_out_of_bounds_values_are_refused(patch, message, one_dataset):
     settings = {}
@@ -119,6 +129,168 @@ def test_auto_clears_a_stored_value_back_to_the_default(one_dataset):
                              _settings=settings)
     assert settings == {}
     assert lt._dense_lr(FakeDataset()) == lt.FULL_TRANSFORMER_LR
+
+
+# --- volet 2b: the quality levers (accumulation / LR schedule / timesteps) -------
+
+def test_the_quality_levers_name_the_trainer_they_were_verified_against():
+    """The dense levers are claims about ai-toolkit's behaviour, and ai-toolkit
+    is not one thing: the LoRA lane runs the user's local checkout, the dense
+    lane runs whatever the vast.ai pod image carries. Those are different
+    codebases at different dates, and a verdict read off the wrong one ships a
+    setting that lies.
+
+    So the commit the verdicts were read against is pinned next to them, and it
+    has to be the commit the pod image actually carries. When somebody bumps the
+    image, this fails — which is the point: a new trainer means every
+    supported/refused verdict in that comment block needs re-reading before the
+    settings it justifies stay on."""
+    from app import config as cfg
+
+    image = cfg.get('cloud.image', '')
+    assert lt.FULL_TRANSFORMER_AITOOLKIT_COMMIT in image, (
+        f'the dense pod image is now {image!r}, but the quality levers were '
+        f'verified against ai-toolkit {lt.FULL_TRANSFORMER_AITOOLKIT_COMMIT}. '
+        'Re-read the verdicts in lora_training.py before moving this pin.')
+
+
+def test_the_shipped_defaults_change_nothing():
+    """The whole point of adding levers: a launch that touches none of them must
+    emit the recipe that ran before they existed, key for key. `lr_scheduler` is
+    absent on purpose — ai-toolkit already defaults it to 'constant', and adding
+    the key would be a diff in the config that reaches the pod."""
+    process = _job(FakeDataset(), steps=3000)
+    assert process['train'] == {
+        'batch_size': 1,
+        'steps': 3000,
+        'gradient_accumulation': 1,
+        'train_unet': True,
+        'train_text_encoder': False,
+        'unload_text_encoder': True,
+        'gradient_checkpointing': True,
+        'noise_scheduler': 'flowmatch',
+        'timestep_type': 'linear',
+        'optimizer': 'adafactor',
+        'lr': 1e-6,
+        'dtype': 'bf16',
+    }
+    assert lt.dense_time_multiplier(FakeDataset()) == 1
+    assert lt.dense_images_per_step(FakeDataset()) == 1
+
+
+def test_gradient_accumulation_reaches_the_job_config_and_costs_only_time():
+    """Accumulation is the batch-size lever a 12B dense run can afford: it buys
+    a less noisy gradient with wall clock, and touches nothing else in the
+    recipe — not the checkpoint cadence, not the storage forecast."""
+    ds = FakeDataset(dense_grad_accum=4)
+    process = _job(ds)
+    assert process['train']['gradient_accumulation'] == 4
+    assert process['train']['batch_size'] == 1        # still one image in VRAM
+    assert lt.dense_time_multiplier(ds) == 4
+    assert lt.dense_images_per_step(ds) == 4
+    # `steps` counts optimiser steps, so a 4× longer run still saves the same
+    # number of ~26 GB objects — the Hugging Face forecast must not move.
+    assert process['save']['save_every'] == _job(FakeDataset())['save']['save_every']
+    assert lt.dense_storage_plan(ds) == lt.dense_storage_plan(FakeDataset())
+
+
+def test_warmup_travels_only_with_the_schedule_that_accepts_it():
+    """`num_warmup_steps` on a cosine/constant schedule is not a no-op in
+    ai-toolkit — torch's schedulers reject the kwarg and the job dies at
+    startup. So the key is emitted for exactly one choice."""
+    warm = _job(FakeDataset(dense_lr_schedule='constant_with_warmup',
+                            dense_warmup=250))['train']
+    assert warm['lr_scheduler'] == 'constant_with_warmup'
+    assert warm['lr_scheduler_params'] == {'num_warmup_steps': 250}
+
+    cosine = _job(FakeDataset(dense_lr_schedule='cosine',
+                              dense_warmup=250))['train']
+    assert cosine['lr_scheduler'] == 'cosine'
+    assert 'lr_scheduler_params' not in cosine
+
+    constant = _job(FakeDataset(dense_warmup=250))['train']
+    assert 'lr_scheduler' not in constant
+    assert 'lr_scheduler_params' not in constant
+
+
+def test_timestep_type_reaches_the_job_config():
+    assert _job(FakeDataset(dense_timestep_type='sigmoid'))['train'][
+        'timestep_type'] == 'sigmoid'
+    assert _job(FakeDataset(dense_timestep_type='weighted'))['train'][
+        'timestep_type'] == 'weighted'
+    # An unknown/refused value stored by hand falls back to the shipped default
+    # rather than reaching the pod.
+    assert _job(FakeDataset(dense_timestep_type='shift'))['train'][
+        'timestep_type'] == 'linear'
+
+
+def test_the_levers_we_refused_never_appear_in_the_emitted_recipe():
+    """EMA would clone the whole 12B transformer twice on the training device,
+    and min_snr_gamma needs an `alphas_cumprod` a flow-matching scheduler does
+    not have. Neither is reachable — including through the LoRA lane's own keys
+    for the same ideas, which a dataset may still be carrying."""
+    ds = FakeDataset(ema=0.999, min_snr_gamma=5, timestep_type='shift',
+                     lr_scheduler='cosine', warmup=500)
+    train = _job(ds)['train']
+    assert 'ema_config' not in train
+    assert 'min_snr_gamma' not in train
+    assert 'snr_gamma' not in train
+    # The LoRA-lane keys are inert in dense mode: the defaults still stand.
+    assert train['timestep_type'] == 'linear'
+    assert 'lr_scheduler' not in train
+
+
+def test_the_provenance_snapshot_repeats_the_emitted_recipe_exactly():
+    """A stamped run must be re-launchable from its own record: every lever that
+    reached the config has to be readable back off the snapshot."""
+    ds = FakeDataset(dense_grad_accum=8, dense_timestep_type='weighted',
+                     dense_lr_schedule='constant_with_warmup', dense_warmup=200)
+    train = _job(ds)['train']
+    snapshot = lt.launch_settings_snapshot(ds, masked=False)
+    assert snapshot['grad_accum'] == train['gradient_accumulation'] == 8
+    assert snapshot['timestep_type'] == train['timestep_type'] == 'weighted'
+    assert snapshot['lr_scheduler'] == train['lr_scheduler'] == 'constant_with_warmup'
+    assert snapshot['warmup'] == train['lr_scheduler_params']['num_warmup_steps'] == 200
+    # 'constant' is the effective schedule even when the key is omitted, so
+    # provenance says so instead of leaving a hole.
+    plain = lt.launch_settings_snapshot(FakeDataset(), masked=False)
+    assert plain['lr_scheduler'] == 'constant'
+    assert 'warmup' not in plain
+
+
+def test_the_settings_payload_states_what_the_choice_costs():
+    """The panel must be able to say "≈4× longer, ≈4× the bill" at the moment of
+    choosing. That number is computed here, once, next to the value it scales."""
+    payload = lt.effective_train_settings(FakeDataset(dense_grad_accum=4))
+    assert payload['dense_grad_accum'] == 4
+    assert payload['dense_time_multiplier'] == 4
+    assert payload['dense_images_per_step'] == 4
+    assert payload['dense_grad_accum_choices'] == [1, 2, 4, 8]
+    assert payload['dense_timestep_type_choices'] == ['linear', 'sigmoid', 'weighted']
+    assert payload['dense_warmup_applies'] is False
+    assert lt.effective_train_settings(
+        FakeDataset(dense_lr_schedule='constant_with_warmup'))[
+            'dense_warmup_applies'] is True
+
+
+def test_auto_clears_every_new_lever_back_to_the_shipped_recipe(one_dataset):
+    settings = {'dense_grad_accum': 8, 'dense_lr_schedule': 'cosine',
+                'dense_warmup': 500, 'dense_timestep_type': 'sigmoid'}
+    lt.update_train_settings(1, 1, {'dense_grad_accum': 'auto',
+                                    'dense_lr_schedule': None,
+                                    'dense_warmup': '',
+                                    'dense_timestep_type': 'auto'},
+                             _settings=settings)
+    assert settings == {}
+
+
+def test_every_new_lever_is_a_preset_and_share_key(one_dataset):
+    """A dense recipe that cannot travel in a shared preset is a recipe nobody
+    else can reproduce."""
+    for key in ('dense_grad_accum', 'dense_lr_schedule', 'dense_warmup',
+                'dense_timestep_type'):
+        assert key in lt.DENSE_SETTING_KEYS
+        assert key in lt.TRAIN_SETTING_KEYS
 
 
 def test_storage_forecast_and_job_config_read_the_same_keep_count():
@@ -219,6 +391,15 @@ def test_a_plain_bf16_base_is_accepted(tmp_path):
     assert lt.assert_trainable_base_file(path)['quantized'] is False
 
 
+# The refusal is scoped to the STRUCTURED form, and each form gets its own test:
+# what makes a base unusable is the presence of loader-breaking extra KEYS, never
+# the bit width of the payload. Read from the installed ai-toolkit Krea 2 loader,
+# which casts the state dict and then calls load_state_dict(..., strict=True):
+# unknown keys raise there, immediately; a bare cast has none and is up-cast to
+# the training dtype. Same conclusion in musubi-tuner's docs (`--fp8_base` alone
+# trains, a `--fp8_scaled` checkpoint needs converting back first).
+
+
 def test_a_comfyui_scaled_fp8_export_is_refused(tmp_path):
     """The legacy marker alone is decisive — dtype counts never even matter."""
     path = _write_safetensors_header(tmp_path / 'q.safetensors', {
@@ -226,8 +407,11 @@ def test_a_comfyui_scaled_fp8_export_is_refused(tmp_path):
         'blocks.0.attn.wq.scale_weight': ('F32', [], 4),
         'scaled_fp8': ('F8_E4M3', [2], 2),
     })
-    assert mi.quantization_report(path)['quantized'] is True
-    with pytest.raises(ValueError, match='inference-only quantized export'):
+    report = mi.quantization_report(path)
+    assert report['quantized'] is True
+    assert report['form'] == mi.FORM_STRUCTURED
+    assert report['trainable_as_base'] is False
+    with pytest.raises(ValueError):
         lt.assert_trainable_base_file(path)
 
 
@@ -244,19 +428,65 @@ def test_a_modern_comfy_quant_export_is_refused_by_its_metadata(tmp_path):
     report = mi.quantization_report(path)
     assert report['quantized'] is True
     assert '_quantization_metadata' in report['signals']
-    with pytest.raises(ValueError, match='bf16/fp16 version'):
+    assert report['form'] == mi.FORM_STRUCTURED
+    with pytest.raises(ValueError):
         lt.assert_trainable_base_file(path)
 
 
-def test_a_bare_fp8_cast_is_refused_on_dtype_majority_alone(tmp_path):
+def test_the_refusal_names_the_format_obstacle_and_the_way_out(tmp_path):
+    """Nothing asserted the sentence users actually READ, so nothing would notice
+    it drifting back to "the weights lost the precision a gradient step needs" —
+    a claim the loader disproves, and one that already misled a scoping decision.
+    Semantics, not wording: name the extra keys, name the file to pick instead."""
+    path = _write_safetensors_header(tmp_path / 'q.safetensors', {
+        'blocks.0.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128),
+        'blocks.0.attn.wq.scale_weight': ('F32', [], 4),
+        'scaled_fp8': ('F8_E4M3', [2], 2),
+    })
+    with pytest.raises(ValueError) as excinfo:
+        lt.assert_trainable_base_file(path)
+    message = str(excinfo.value).lower()
+    assert 'scale_weight' in message or 'scaled_fp8' in message, message
+    assert 'load' in message, message
+    assert 'bf16' in message and 'checkpoints' in message, message
+
+
+def test_a_bare_fp8_cast_is_accepted_and_says_what_it_costs(tmp_path):
+    """The shape of the checkpoint this app itself ships as the Krea 2 Turbo
+    default: fp8 payload, F32 norms, the SAME tensor names as the bf16 master.
+    It loads and it trains, so refusing it hid a working path — but it starts
+    from degraded weights, and that is stated with numbers."""
     tensors = {f'blocks.{i}.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128)
                for i in range(20)}
     tensors.update({f'blocks.{i}.norm.scale': ('F32', [3072], 12) for i in range(5)})
     path = _write_safetensors_header(tmp_path / 'cast.safetensors', tensors)
     report = mi.quantization_report(path)
     assert report['signals'] == ['majority_quantized_dtypes']
-    with pytest.raises(ValueError):
-        lt.assert_trainable_base_file(path)
+    assert report['form'] == mi.FORM_BARE_CAST
+    assert report['quantized'] is True, 'still not a full-precision file'
+    assert report['trainable_as_base'] is True
+    assert lt.assert_trainable_base_file(path)['form'] == mi.FORM_BARE_CAST
+    warning = mi.base_precision_warning(report)
+    assert '20 of its 25 tensors' in warning, warning
+    assert 'F8_E4M3' in warning and 'bf16' in warning
+    # Scope, pinned: the header proves the file is not PACKED, and nothing more.
+    # A real Krea 2 Turbo fp8 build carries two extra `last.*` tensors that
+    # ai-toolkit's final layer does not declare — no header check can know that,
+    # so the sentence must not promise the run will start.
+    assert 'architecture' in warning, warning
+
+
+def test_a_bare_fp8_cast_is_still_refused_by_the_fp8_EXPORTER(tmp_path):
+    """Allowing it as a TRAINING base must not allow quantizing it AGAIN: that
+    doubles the error and produces a file nothing can load. Different question,
+    same report — `quantized` stays the broad answer the exporter reads."""
+    from app.services import fp8_quantize
+    tensors = {f'blocks.{i}.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128)
+               for i in range(20)}
+    tensors.update({f'blocks.{i}.norm.scale': ('F32', [3072], 12) for i in range(5)})
+    path = _write_safetensors_header(tmp_path / 'cast.safetensors', tensors)
+    with pytest.raises(fp8_quantize.QuantizeError, match='already a quantized export'):
+        fp8_quantize.plan(path)
 
 
 def test_an_unreadable_header_is_let_through_rather_than_guessed_at(tmp_path):
@@ -303,8 +533,24 @@ def test_selecting_a_quantized_custom_base_is_refused_at_selection(tmp_path):
     ds = FakeDataset()
     ds.training_mode = 'lora'
     ds.train_type = 'krea'
-    with pytest.raises(ValueError, match='inference-only quantized export'):
+    with pytest.raises(ValueError, match='bf16/fp16'):
         lt._training_selection_candidate(ds, {'base_model': path}, None)
+
+
+def test_selecting_a_bare_fp8_custom_base_goes_through(tmp_path):
+    """The other half of the same seam. Before this, the ONLY files exercised
+    here carried the `scaled_fp8` marker, so the branch that blocked a plain cast
+    was never covered by anything shaped like a real file — and it blocked one of
+    the two most common Krea checkpoints on disk."""
+    tensors = {f'blocks.{i}.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128)
+               for i in range(20)}
+    tensors.update({f'blocks.{i}.norm.scale': ('F32', [3072], 12) for i in range(5)})
+    path = _write_safetensors_header(tmp_path / 'cast.safetensors', tensors)
+    ds = FakeDataset()
+    ds.training_mode = 'lora'
+    ds.train_type = 'krea'
+    selection = lt._training_selection_candidate(ds, {'base_model': path}, None)
+    assert selection['base_model'] == path
 
 
 # --- volet 1: what the pod would actually be told -------------------------------
@@ -343,6 +589,29 @@ def test_the_shipped_script_is_the_module_the_tests_exercise():
     assert 'def export_scaled_fp8' in source
     assert 'LDS_FP8_RESULT' in source
     assert 'scale_weight' in source
+
+
+def test_the_exporter_travels_as_a_file_and_never_inside_the_command():
+    """Why this path is not the one that broke.
+
+    The sibling lane embeds the exporter IN its vast ask and was refused twice
+    for exceeding vast's 16384-character limit. Here the exporter is uploaded
+    and the command merely names it — a structural difference, pinned so a
+    future 'simplification' that inlines the source is caught by a test instead
+    of by a pod that answers HTTP 400.
+    """
+    command = dfd.build_command(dfd.pod_paths('/workspace/ai-toolkit/datasets'),
+                                '/workspace/ai-toolkit/output', 'me/krea-run-12')
+    assert len(command) < 400                       # paths and integers, nothing else
+    assert len(command) <= dfd.MAX_COMMAND_CHARS
+    assert 'export_scaled_fp8' not in command       # the SOURCE is not in here
+    assert 'base64' not in command
+
+
+def test_a_command_that_grew_out_of_shape_is_refused_rather_than_sent():
+    with pytest.raises(dfd.Fp8DeliveryError, match='ceiling'):
+        dfd.build_command(dfd.pod_paths('/d'), '/o' + 'x' * dfd.MAX_COMMAND_CHARS,
+                          'me/run')
 
 
 def test_result_parsing_ignores_the_surrounding_pod_chatter():

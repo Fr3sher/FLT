@@ -242,9 +242,21 @@ function NavBar() {
         </NavLink>
         {/* Desktop: workspaces on the left, utilities grouped into icon menus
             on the right (Guide/Help under ?, Setup/Settings under ⚙). */}
-        <nav className="hidden md:flex flex-1 items-center gap-1" aria-label="Main navigation">
-          {workspaceLinks}
-          <div className="ml-auto flex items-center gap-1">
+        {/* The workspace row is its own flex-wrap box, not a run of direct nav
+            children. Measured at 768 px, the row is saturated to the PIXEL with
+            the five workspaces it has today: as direct children they cannot
+            wrap, so the smallest growth — one more link, one longer label —
+            widened the header past the viewport and the whole PAGE scrolled
+            sideways, which is the one thing a layout must never do. Wrapping
+            keeps any overflow inside this box (a taller header) instead of
+            widening the document, and unlike `overflow-x-auto` here it cannot
+            clip the ? / ⚙ popovers, which live in the sibling below. Above lg
+            everything fits on one line, so a normal desktop is unchanged. */}
+        <nav className="hidden md:flex flex-1 min-w-0 items-center gap-1" aria-label="Main navigation">
+          <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
+            {workspaceLinks}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-1">
             <HeaderMenu triggerLabel={<span aria-hidden>?</span>}
               triggerTitle="Help & guide" active={helpMenuActive}>
               {(close) => (

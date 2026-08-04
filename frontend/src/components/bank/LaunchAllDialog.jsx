@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { attemptModalSubmit } from '../../utils/submitOutcome.js'
+import { flagCandidateLabel, launchRejectNote } from './autoRejectReadiness.js'
 
 /** 🚀 Launch all — the overnight funnel. The user picks which passes run and how
  * auto-reject behaves, sees a plain "here's what will run" preview, and hits Go.
@@ -20,7 +21,9 @@ const QUALITY_FLAGS = [
   { key: 'small', label: '📐 Small' },
 ]
 
-export default function LaunchAllDialog({ caps, visionReady, onClose, onLaunch }) {
+export default function LaunchAllDialog({
+  caps, visionReady, counts, flagsActionable, onClose, onLaunch,
+}) {
   // A heavy pass is "ready" when its tool is installed; scan/auto-reject always are.
   const ready = useMemo(() => ({
     scan: true,
@@ -72,6 +75,10 @@ export default function LaunchAllDialog({ caps, visionReady, onClose, onLaunch }
   })
 
   const autoRejectOn = steps.has('auto_reject')
+  // Honest about the ORDER: auto-reject runs after the scan here, so the counts
+  // shown next to the flags are a floor, and images nothing has ever measured
+  // are invisible to every flag until 🔎 Scan reaches them.
+  const rejectNote = launchRejectNote(counts, steps.has('scan'))
   // The honest preview: the steps that will actually RUN, in order, tagged when
   // one will be skipped because its tool isn't ready.
   const plan = STEPS.filter((s) => steps.has(s.key)).map((s) => ({
@@ -154,15 +161,28 @@ export default function LaunchAllDialog({ caps, visionReady, onClose, onLaunch }
                   <p className="text-xs text-content-muted">
                     Reject the still-undecided images with these flags (manual ✓/✕ are never touched):
                   </p>
+                  {/* The count is what the flag would catch RIGHT NOW — undecided
+                      images only, the same pile the pass touches. It is not the
+                      outcome: 🔎 Scan runs before auto-reject in this funnel, so
+                      the note below says which way the number will move rather
+                      than letting a stale figure pass for a promise. */}
                   <div className="flex flex-wrap gap-x-4 gap-y-1">
                     {QUALITY_FLAGS.map((f) => (
                       <label key={f.key} className="flex items-center gap-1.5 text-sm text-content">
                         <input type="checkbox" checked={rejectFlags.has(f.key)}
                           onChange={() => toggleFlag(f.key)} />
                         {f.label}
+                        <span className="text-xs text-content-subtle">
+                          ({flagCandidateLabel(f.key, flagsActionable)})
+                        </span>
                       </label>
                     ))}
                   </div>
+                  {rejectNote && (
+                    <p className="m-0 text-[0.6875rem] leading-snug text-amber-200">
+                      ⚠ {rejectNote}
+                    </p>
+                  )}
                   <label className="flex items-center gap-1.5 text-sm text-content">
                     <input type="checkbox" checked={resolveDups}
                       onChange={(e) => setResolveDups(e.target.checked)} />

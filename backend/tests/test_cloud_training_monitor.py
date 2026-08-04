@@ -449,6 +449,33 @@ def test_provision_retries_transient_create_refusal(ct, app, client, monkeypatch
         assert destroyed == ['777']
 
 
+def test_provision_only_looks_at_machines_with_the_disk_it_will_claim(
+        ct, app, client, monkeypatch):
+    """vast refuses an ask whose `disk` exceeds the offer's free space, and the
+    refusal is a bare HTTP 400 — the failure that cost the cloud quantization
+    lane its first run. Filtering for LESS than what will be asked for is the
+    bug; the two numbers are pinned equal here."""
+    destroyed = []
+    remote = FakeRemote(polls_to_complete=3)
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+    seen, created = {}, {}
+
+    def search(**kw):
+        seen.update(kw)
+        return list(_TWO_OFFERS)
+
+    def create(offer_id, **kw):
+        created.update(kw)
+        return '777'
+
+    monkeypatch.setattr(ct.vast_client, 'search_offers', search)
+    monkeypatch.setattr(ct.vast_client, 'create_instance', create)
+    with app.app_context():
+        ct._monitor(app, run_id)
+    assert created['disk_gb'] > 0
+    assert seen['min_disk_gb'] == created['disk_gb']
+
+
 def test_provision_does_not_retry_non_transient_create_error(ct, app, client, monkeypatch):
     """An auth-class refusal (HTTP 403) is not worth retrying — fail fast, once."""
     destroyed = []

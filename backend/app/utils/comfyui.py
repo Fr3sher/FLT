@@ -1813,6 +1813,27 @@ def resolve_checkpoint_ckpt_name(name):
     return name
 
 
+def _model_scan_roots(out_dir):
+    """The diffusion-model folders the Studio listers walk: `<ComfyUI>/models/unet`
+    and `.../diffusion_models`, plus any diffusion_models root declared in
+    extra_model_paths.yaml (the `unet` key folds into the same canonical type).
+
+    Derived from the OUTPUT dir rather than from `comfy_model_paths.search_roots`
+    — deliberately, for now: they are two config routes to the same folders, and
+    swapping one for the other here would be a behaviour change on any install
+    where they disagree, not a refactor. Extracted so the two listers cannot drift
+    on the question of WHERE to look, which is half of how four scanners diverge.
+    Additive: no yaml -> nothing appended, list unchanged."""
+    models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
+    roots = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
+    try:
+        from ..services import comfy_model_paths
+        roots += comfy_model_paths.extra_roots("diffusion_models")
+    except Exception:                       # noqa: BLE001 — an absent yaml is normal
+        pass
+    return roots
+
+
 _zimage_models_cache = {"data": None, "timestamp": 0}
 
 
@@ -1832,30 +1853,13 @@ def get_zimage_models():
     out_dir = _out_dir()
     if out_dir:
         try:
-            models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
-            base_dirs = [os.path.join(models_root, b) for b in ("unet", "diffusion_models")]
-            # Plus any diffusion_models root declared in extra_model_paths.yaml (the
-            # `unet` key folds into the same canonical type). Without this, a Z-Image
-            # merge kept outside <base>/models was absent from the training base
-            # picker — and therefore unconvertible, whatever zimage_convert resolves.
-            # Additive: no yaml -> nothing appended, list unchanged.
-            try:
-                from ..services import comfy_model_paths
-                base_dirs += comfy_model_paths.extra_roots("diffusion_models")
-            except Exception:
-                pass
-            for base_dir in base_dirs:
-                if not os.path.isdir(base_dir):
-                    continue
-                for root, _dirs, files in os.walk(base_dir):
-                    rel_dir = os.path.relpath(root, base_dir)
-                    low = rel_dir.lower()
-                    if "z image" not in low and "zimage" not in low:
-                        continue
-                    for f in files:
-                        if f.lower().endswith((".safetensors", ".gguf", ".sft")):
-                            out.append(f if rel_dir == "." else os.path.join(rel_dir, f))
-            out = sorted(set(out))
+            from ..services import comfy_model_paths
+            # No `root_file_accept`: this family has no root-filename rule. A
+            # `diffusion_models` root also holds Krea, FLUX and Klein weights, and
+            # nothing in a Z-Image filename separates them reliably — the folder
+            # IS the claim here. (Krea does have such a rule; see get_krea_models.)
+            out = comfy_model_paths.scan_family_tree(
+                _model_scan_roots(out_dir), ("z image", "zimage"))
         except Exception as e:
             logger.error(f"get_zimage_models error: {e}")
     _zimage_models_cache["data"] = out
@@ -1866,14 +1870,62 @@ def get_zimage_models():
 _krea_models_cache = {"data": None, "timestamp": 0}
 
 
+def _krea_root_candidate(name) -> bool:
+    """Is this ROOT-level file CLAIMED by the Krea family? A `diffusion_models`
+    root also holds Z-Image, FLUX and Klein weights, so at a root the filename is
+    the only claim there is.
+
+    Only the claim. Whether the file is a Krea base the pipeline can actually use
+    is `_krea_base_usable`, which applies at EVERY depth — that separation is the
+    fix for a checkpoint being refused here and accepted one folder down.
+
+    The wired workflow default used to be named explicitly on this line. It was
+    dead code (the name carries 'krea' and matches no exclusion) and it was the
+    last hardcoded filename in the lister, so it is gone.
+    """
+    return 'krea' in str(name or '').lower()
+
+
+def _krea_base_usable(name) -> bool:
+    """False for the checkpoints that carry 'krea' without being a Krea 2 base —
+    `KREA_INCOMPATIBLE_TOKENS`, borrowed from the Generate resolver rather than
+    re-declared so the two surfaces cannot drift."""
+    low = str(name or '').lower()
+    try:
+        from ..services.krea_edit_helper import KREA_INCOMPATIBLE_TOKENS
+    except Exception:                               # noqa: BLE001 — never fatal
+        KREA_INCOMPATIBLE_TOKENS = ('biglove',)
+    return not any(tok in low for tok in KREA_INCOMPATIBLE_TOKENS)
+
+
 def get_krea_models():
     """List Krea 2 UNET checkpoints: le défaut du workflow (krea2_turbo_fp8.safetensors
     à la racine de models/unet ou models/diffusion_models) + tout .safetensors/.gguf
-    sous un sous-dossier 'krea' (ex. 'Krea\\monKrea.safetensors'). Noms en forme
+    sous un sous-dossier 'krea' (ex. 'Krea\\monKrea.safetensors') + tout fichier de
+    RACINE dont le NOM porte 'krea'. Noms en forme
     UNETLoader (relatifs au dossier de base, séparateur de l'arbre parcouru =
     os.sep ; la file d'attente les réécrit selon la liste publiée par le ComfyUI
     ciblé). Cache TTL partagé. Vide si
-    ComfyUI n'est pas encore configuré."""
+    ComfyUI n'est pas encore configuré.
+
+    THE ROOT-FILENAME RULE, AND WHY IT WAS MISSING
+    ----------------------------------------------
+    The directory-only rule made the app's OWN full-model deliveries invisible
+    here. `fp8_local_delivery` writes the fp8 twin of a dense run to the ROOT of
+    `diffusion_models` — deliberately, because that is a folder ComfyUI reads —
+    so the one file the whole dense lane exists to produce could not be picked as
+    a Test Studio base. The only way to try a model you had paid hours of GPU for
+    was to open ComfyUI by hand.
+
+    That it was an oversight and not a rule is settled by the Generate surface:
+    `krea_edit_helper._krea_unet_folders` has always matched 'krea' in the folder
+    OR in the filename, root included. Aligning on it retro-fits every twin
+    already on disk without moving a byte, and it borrows the same exclusion
+    list — BigLove* carries 'krea' and renders pure noise under this pipeline.
+
+    Still NOT "every root file": a `diffusion_models` root also holds Z-Image,
+    FLUX and Klein weights, and listing those as Krea bases would trade one
+    silent wrong result for another."""
     current_time = time.time()
     if (_krea_models_cache["data"] is not None
             and current_time - _krea_models_cache["timestamp"] < _MODEL_CACHE_TTL):
@@ -1882,22 +1934,11 @@ def get_krea_models():
     out_dir = _out_dir()
     if out_dir:
         try:
-            models_root = os.path.normpath(os.path.join(out_dir, "..", "models"))
-            for base in ("unet", "diffusion_models"):
-                base_dir = os.path.join(models_root, base)
-                if not os.path.isdir(base_dir):
-                    continue
-                # Le défaut câblé dans krea2_turbo.json (racine) reste choisissable.
-                if os.path.isfile(os.path.join(base_dir, "krea2_turbo_fp8.safetensors")):
-                    out.append("krea2_turbo_fp8.safetensors")
-                for root, _dirs, files in os.walk(base_dir):
-                    rel_dir = os.path.relpath(root, base_dir)
-                    if rel_dir == "." or "krea" not in rel_dir.lower():
-                        continue
-                    for f in files:
-                        if f.lower().endswith((".safetensors", ".gguf", ".sft")):
-                            out.append(os.path.join(rel_dir, f))
-            out = sorted(set(out))
+            from ..services import comfy_model_paths
+            out = comfy_model_paths.scan_family_tree(
+                _model_scan_roots(out_dir), ("krea",),
+                root_file_accept=_krea_root_candidate,
+                accept=_krea_base_usable)
         except Exception as e:
             logger.error(f"get_krea_models error: {e}")
     _krea_models_cache["data"] = out

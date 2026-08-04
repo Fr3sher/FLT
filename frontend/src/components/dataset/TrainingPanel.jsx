@@ -2,16 +2,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router';
-import { getCsrfToken } from '../../api/fetchClient';
+import { apiFetch, getCsrfToken } from '../../api/fetchClient';
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { postJson } from '../../hooks/useDataset';
+import useHubPresence from '../../hooks/useHubPresence';
 import { animeFamilyNote } from './animeFamilyNote.js';
 import { customBasePushView } from './customBasePush.js';
 import { dualCaptionsSupport } from './dualCaptions.js';
+import { loadMergeOpen, saveMergeOpen } from './loraMerge.js';
 import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
-import CloudQuantizeButton from './CloudQuantizeButton';
+import DenseModelsPanel from './DenseModelsPanel';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
+import LoraMergeTool from './LoraMergeTool';
 import {
   checkpointSelectionMatchesTraining,
   checkpointVariantLabel,
@@ -55,7 +58,10 @@ import RunLineageGraph from './RunLineageGraph';
 import TrainingProgress from './TrainingProgress';
 import PreflightModal from './PreflightModal';
 import { laneOfPayload, preflightUrl } from './preflightLane.js';
-import { basesForFamily, cloudUnsupportedFamilyReason } from './trainingFamilyScope.js';
+import {
+  baseOptionSuffix, baseSelectionNote, basesForFamily,
+  cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
+} from './trainingFamilyScope.js';
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
@@ -71,6 +77,7 @@ import {
   TRAINING_MODE_FULL_TRANSFORMER,
   TRAINING_MODE_LORA,
   cloudTierEstimateView,
+  denseQuantizeTarget,
   fullTransformerArtifactFiles,
   fullTransformerArtifactView,
   fullTransformerFp8Note,
@@ -108,9 +115,14 @@ const DEFAULT_CUSTOM_FAMILIES = ['sdxl', 'krea', 'flux', 'flux2klein'];
 const defaultTrainingVariant = (family) => (
   family === 'krea' ? 'base' : family === 'flux2klein' ? '4b' : 'turbo'
 );
-// Absolute path = the persisted custom-weights path (never a ComfyUI-relative
-// base name): Windows drive (C:\), UNC (\\), or POSIX (/…).
-const looksAbsolute = (p) => /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(String(p || ''));
+// Absolute path (Windows drive, UNC, or POSIX) no longer MEANS « Custom
+// weights… » on its own: the Krea 2
+// selector lists the checkpoints installed on this machine, and the trainer
+// addresses those by absolute path (a relative name on Krea is read as another
+// family's base and ignored). The catalog decides — see trainingFamilyScope.js.
+const customBaseMode = (value, info, family) => (
+  isCustomWeightsBase(value, basesForFamily(info, family))
+);
 const baseName = (p) => String(p || '').replace(/[\\/]+$/, '').split(/[\\/]/).pop() || String(p || '');
 
 const fmtBytes = (b) => {
@@ -148,7 +160,14 @@ const FULL_ARTIFACT_TONE = {
 };
 
 function FullTransformerArtifactNotice({ run }) {
-  const view = fullTransformerArtifactView(run);
+  // Is the repository still there? `artifact_status` cannot say — it is stamped
+  // at delivery and never revisited, which is how this notice came to read
+  // "Full model available … verified" above a link answering 404. Asked after
+  // this block has already rendered; until it answers, the view speaks about
+  // the delivery in the past tense, which is all it ever knew. At most one of
+  // this panel's two notices exists at a time, so this is one question, once.
+  const presence = useHubPresence(run?.hf_repo_id ? [run.run_id] : []);
+  const view = fullTransformerArtifactView(run, presence[run?.run_id] || null);
   const files = fullTransformerArtifactFiles(run);
   const fp8Note = fullTransformerFp8Note(run);
   const hint = run?.inference_hint || null;
@@ -179,13 +198,10 @@ function FullTransformerArtifactNotice({ run }) {
       {fp8Note && (
         <p className="m-0 mt-1 opacity-85">ℹ {fp8Note}</p>
       )}
-      {/* A delivered master with no fp8 twin — an older run, or one whose pod
-          export failed. Building it in the cloud avoids pulling 26 GB home just
-          to push 10 GB back. */}
-      {view.available && !files.some((f) => f.kind === 'fp8') && (
-        <CloudQuantizeButton repoId={run?.hf_repo_id}
-          filename={run?.hf_weight_filename || null} />
-      )}
+      {/* No button here on purpose. The conversion has ONE surface — the recipe
+          card's "Quantize a model to fp8" block, which now targets this very
+          model on its own. Two doors doing the same thing on the same screen is
+          what the cloud button already was. */}
       {view.available && hint?.note && (
         <p className="m-0 mt-1 opacity-90">⚠ {hint.note}</p>
       )}
@@ -203,11 +219,17 @@ function FullTransformerArtifactNotice({ run }) {
 // FULL_TRANSFORMER_ADVANCED_RECIPE_START
 /** The dense Krea recipe stays server-owned, but not all of it is a constraint.
  *
- * Four values changed the OUTPUT rather than whether the run fits in 80 GB, and
- * they are editable here: preview prompts (the generic defaults showed nothing
- * about the actual dataset), learning rate, resolution, and the
- * checkpoint-every / keep pair — which is also what the Hugging Face storage
- * forecast multiplies, so it states the delivery size right next to the control.
+ * The values that changed the OUTPUT rather than whether the run fits in 80 GB
+ * are editable here: preview prompts (the generic defaults showed nothing about
+ * the actual dataset), learning rate, resolution, the checkpoint-every / keep
+ * pair — which is also what the Hugging Face storage forecast multiplies, so it
+ * states the delivery size right next to the control — and the three quality
+ * levers (images per step, learning-rate schedule, noise schedule).
+ *
+ * "Images per step" is gradient accumulation in the user's words. It is the only
+ * lever here whose cost is money rather than memory, so the multiplier it
+ * implies is printed next to it and turns amber once it is above 1: a rented
+ * 80 GB GPU is billed by the hour, and nobody should learn that from an invoice.
  *
  * Everything else is locked and SAYS SO: optimizer, batch size, dtype and
  * gradient checkpointing are the geometry that makes a 12B transformer trainable
@@ -219,17 +241,40 @@ const DENSE_BOUNDS_FALLBACK = {
   resolution: 1024, resolutionChoices: [768, 1024],
   saveEvery: 250, saveEveryMin: 100, saveEveryMax: 5000,
   keeps: 1, keepsMax: 3,
+  gradAccum: 1, gradAccumChoices: [1, 2, 4, 8],
+  lrSchedule: 'constant',
+  lrScheduleChoices: ['constant', 'constant_with_warmup', 'cosine'],
+  warmup: 100, warmupMin: 10, warmupMax: 1000,
+  timestepType: 'linear', timestepTypeChoices: ['linear', 'sigmoid', 'weighted'],
+};
+
+// User-facing wording for ai-toolkit's own value names. The STORED value stays
+// ai-toolkit's (no alias to maintain, cf. CLAUDE.md rule 7) — only the label is
+// translated, and each one says what it does rather than what it is called.
+const DENSE_LR_SCHEDULE_LABELS = {
+  constant: 'Constant (default)',
+  constant_with_warmup: 'Warm up, then constant',
+  cosine: 'Cosine decay to zero',
+};
+const DENSE_TIMESTEP_LABELS = {
+  linear: 'Linear (default)',
+  sigmoid: 'Sigmoid — favours mid noise levels',
+  weighted: 'Weighted — same draw, bell-curve loss weighting',
 };
 
 const fmtGB = (bytes) => (
   typeof bytes === 'number' && bytes > 0 ? `${(bytes / 1e9).toFixed(1)} GB` : null
 );
 
-function FullTransformerAdvancedRecipe({
+// Exported for the render contract test. Nothing else imports it: a settings
+// card whose JSX is never executed by a test is a card that can ship with a
+// crash in it, and source-text assertions do not execute anything.
+export function FullTransformerAdvancedRecipe({
   stepsOverride, setStepsOverride, disabled = false,
   adv = null, saveAdv = null,
   samplePromptsText = '', setSamplePromptsText = null, saveSamplePrompts = null,
   samplePromptsDefault = [], maxSamplePrompts = 8,
+  quantizeTarget = null, suggestedQuantizePath = '',
 }) {
   const explicitSteps = String(stepsOverride || '').trim();
   const factClass = 'rounded-lg border border-sky-400/20 bg-app/45 px-2.5 py-2';
@@ -248,10 +293,23 @@ function FullTransformerAdvancedRecipe({
   const hint = adv?.dense_inference_hint || null;
   const fp8 = adv?.dense_fp8_export !== false;
   const keepMaster = adv?.dense_keep_bf16 !== false;
+  const gradAccum = adv?.dense_grad_accum ?? b.gradAccum;
+  const gradAccumChoices = adv?.dense_grad_accum_choices ?? b.gradAccumChoices;
+  const timeMultiplier = adv?.dense_time_multiplier ?? gradAccum;
+  const lrSchedule = adv?.dense_lr_schedule ?? b.lrSchedule;
+  const lrScheduleChoices = adv?.dense_lr_schedule_choices ?? b.lrScheduleChoices;
+  const warmup = adv?.dense_warmup ?? b.warmup;
+  const warmupMin = adv?.dense_warmup_min ?? b.warmupMin;
+  const warmupMax = adv?.dense_warmup_max ?? b.warmupMax;
+  const warmupApplies = adv?.dense_warmup_applies ?? (lrSchedule === 'constant_with_warmup');
+  const timestepType = adv?.dense_timestep_type ?? b.timestepType;
+  const timestepTypeChoices = adv?.dense_timestep_type_choices ?? b.timestepTypeChoices;
   const [lrDraft, setLrDraft] = useState(String(lr));
   const [saveDraft, setSaveDraft] = useState(String(saveEvery));
+  const [warmupDraft, setWarmupDraft] = useState(String(warmup));
   useEffect(() => { setLrDraft(String(lr)); }, [lr]);
   useEffect(() => { setSaveDraft(String(saveEvery)); }, [saveEvery]);
+  useEffect(() => { setWarmupDraft(String(warmup)); }, [warmup]);
   const patch = (values) => { if (saveAdv) saveAdv(values); };
   const commitLr = () => {
     const value = Number(lrDraft);
@@ -268,6 +326,14 @@ function FullTransformerAdvancedRecipe({
       return;
     }
     if (value !== saveEvery) patch({ dense_save_every: value });
+  };
+  const commitWarmup = () => {
+    const value = Number(warmupDraft);
+    if (!Number.isInteger(value) || value < warmupMin || value > warmupMax) {
+      setWarmupDraft(String(warmup));
+      return;
+    }
+    if (value !== warmup) patch({ dense_warmup: value });
   };
   const controlClass = 'rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
 
@@ -366,6 +432,80 @@ function FullTransformerAdvancedRecipe({
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
           <label className="flex items-center gap-2">
+            <span className="font-semibold">Images per step</span>
+            <select value={String(gradAccum)} disabled={disabled}
+              onChange={(event) => patch({ dense_grad_accum: Number(event.target.value) })}
+              aria-label="How many images each optimizer step learns from"
+              className={controlClass}>
+              {gradAccumChoices.map((value) => (
+                <option key={value} value={String(value)}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Noise schedule</span>
+            <select value={timestepType} disabled={disabled}
+              onChange={(event) => patch({ dense_timestep_type: event.target.value })}
+              aria-label="Full-model timestep distribution"
+              className={controlClass}>
+              {timestepTypeChoices.map((value) => (
+                <option key={value} value={value}>
+                  {DENSE_TIMESTEP_LABELS[value] || value}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* The bill, next to the control that sets it. Gradient accumulation
+              is the one lever here that buys quality with money rather than
+              memory, and a rented GPU is billed by the hour. */}
+          <span className={`basis-full text-[0.6875rem] ${
+            timeMultiplier > 1 ? 'text-amber-100/90' : 'text-sky-200/70'}`}>
+            {timeMultiplier > 1
+              ? `Each step learns from ${gradAccum} images instead of 1 — steadier training on a `
+                + `big dataset, but the run takes about ${timeMultiplier}× as long, so the rented `
+                + `GPU costs about ${timeMultiplier}× as much. Same checkpoints, same storage.`
+              : 'One image per step is the default. Raising it averages several images into each '
+                + 'update — steadier on a large dataset, but it multiplies the run time and the '
+                + 'pod bill by the same number.'}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
+          <label className="flex items-center gap-2">
+            <span className="font-semibold">Learning-rate schedule</span>
+            <select value={lrSchedule} disabled={disabled}
+              onChange={(event) => patch({ dense_lr_schedule: event.target.value })}
+              aria-label="Full-model learning-rate schedule"
+              className={controlClass}>
+              {lrScheduleChoices.map((value) => (
+                <option key={value} value={value}>
+                  {DENSE_LR_SCHEDULE_LABELS[value] || value}
+                </option>
+              ))}
+            </select>
+          </label>
+          {/* Warmup steps only reach the trainer on the one schedule that
+              accepts them; the server gates it the same way. */}
+          {warmupApplies && (
+            <label className="flex items-center gap-2">
+              <span className="font-semibold">Warm up over</span>
+              <input type="number" min={warmupMin} max={warmupMax} step={10} value={warmupDraft}
+                onChange={(event) => setWarmupDraft(event.target.value)}
+                onBlur={commitWarmup} disabled={disabled}
+                aria-label="Full-model warmup length in steps"
+                className={`w-[5.5rem] ${controlClass}`} />
+              <span className="text-sky-100/80">steps</span>
+            </label>
+          )}
+          <span className="basis-full text-sky-200/70 text-[0.6875rem]">
+            Constant is what shipped. Warming up eases the first steps instead of hitting a 12B
+            model at full rate from step 1; cosine decay fades the rate to zero by the last step,
+            which settles detail late in the run. Neither changes what the run delivers or costs.
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
+          <label className="flex items-center gap-2">
             <span className="font-semibold">Checkpoint every</span>
             <input type="number" min={saveEveryMin} max={saveEveryMax} step={50} value={saveDraft}
               onChange={(event) => setSaveDraft(event.target.value)}
@@ -422,10 +562,15 @@ function FullTransformerAdvancedRecipe({
           </span>
         </label>
 
-        {/* The manual door to the SAME conversion: a full-precision model already
-            on this machine — downloaded from Hugging Face, or delivered by an
-            earlier run — turned into the fp8 file ComfyUI loads. */}
-        <Fp8QuantizeTool disabled={disabled} />
+        {/* THE surface for the conversion. `target` is what turns it from "paste
+            a path" into one click: the model this dataset's run delivered, named
+            by the same `hf_weight_filename` the artifact card above lists — so
+            the card and the operation can never designate different checkpoints
+            out of a repository that holds several 26 GB files. `suggestedPath`
+            pre-fills the manual field with the custom base already on screen,
+            when there is one. */}
+        <Fp8QuantizeTool disabled={disabled} target={quantizeTarget}
+          suggestedPath={suggestedQuantizePath} />
       </div>
     </section>
   );
@@ -468,6 +613,18 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     setCheckpointsView(v);
     try { localStorage.setItem('lds.checkpointsView', v); } catch { /* ignore */ }
   };
+  // The merge disclosure is CONTROLLED, and persisted. `open` on a <details> is
+  // DOM state, and the block lives inside CheckpointPortal below — every swap
+  // between the portal host and the inline place unmounts it, which closed the
+  // tool on top of emptying it. Held here, above the portal, it also survives
+  // the remount itself and not only a reload.
+  const [mergeOpen, setMergeOpen] = useState(loadMergeOpen);
+  const toggleMerge = (event) => {
+    event.preventDefault();
+    const next = !mergeOpen;
+    setMergeOpen(next);
+    saveMergeOpen(next);
+  };
   const [checkpoints, setCheckpoints] = useState([]);
   const [ckLoaded, setCkLoaded] = useState(false);
   // {registered, version, changed, diff} — provenance du dataset (registre).
@@ -479,6 +636,11 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // renders one identity header per run so look-alike epoch sets are no longer
   // ambiguous. Falls back to a single synthetic group if the server is older.
   const [cloudGroups, setCloudGroups] = useState([]);
+  // FULL MODELS of this dataset — a separate lane on purpose (see
+  // DenseModelsPanel): those are 26 GB transformers, not LoRA adapters, and
+  // they must never inherit the adapter verbs the two lists above carry.
+  // Empty on an older server and for every LoRA-only dataset → renders nothing.
+  const [denseModels, setDenseModels] = useState([]);
   // {run_dir_bytes, cloud_staging_bytes, deployed_bytes, total_bytes}
   const [diskUsage, setDiskUsage] = useState(null);
   // {steps, kind, n_images, rationale} renvoyé par /train/checkpoints — le POURQUOI
@@ -598,8 +760,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         setTrainingModeError('');
         incompatibleModeFallbackRef.current = '';
         setBaseInfo(info); setBase(info.base || '');
-        // A persisted ABSOLUTE base is the « Custom weights… » path → reopen that mode.
-        setCustomBase(looksAbsolute(info.base || ''));
         setVaePath(info.vae_path || '');
         setTePath(info.te_path || '');
         // Défaut family-aware : Krea sans variante persistée → Raw (reco officielle
@@ -608,6 +768,10 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         // dataset ex-Krea porte 'base', qui n'est pas une taille Klein valide) ;
         // les autres familles → Turbo.
         const fam = info.train_type || 'zimage';
+        // A persisted absolute base the catalog does NOT offer is the
+        // « Custom weights… » path → reopen that mode. One the catalog offers is
+        // a normal dropdown pick and must stay in the dropdown.
+        setCustomBase(customBaseMode(info.base || '', info, fam));
         const v = info.variant
           || (fam === 'krea' ? 'base' : fam === 'flux2klein' ? '4b' : 'turbo');
         const safeVariant = normalizeCheckpointVariant(fam, v);
@@ -677,9 +841,42 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const convertRunning = needsConversion && baseInfo?.convert?.status === 'running' && baseInfo?.convert?.z_model === base;
   const convertError = (needsConversion && baseInfo?.convert?.status === 'error' && baseInfo?.convert?.z_model === base)
     ? baseInfo.convert.error : null;
+  // What the server says about the SELECTED catalog entry: a packed inference
+  // export the trainer cannot load ('error'), or a low-precision cast that
+  // trains from degraded weights ('warning'). Computed from the list the server
+  // already annotated, so switching entries answers with no round trip.
+  //
+  // A path TYPED into « Custom weights… » is in no list, so it had no verdict
+  // until the save or the launch read it — the one base you cannot pick from a
+  // dropdown was also the only one whose refusal arrived after the dataset had
+  // been exported and, on the cloud lane, after a GPU had been rented. It is
+  // asked for here instead, once the typing settles.
+  const [typedBaseAdvisory, setTypedBaseAdvisory] = useState(null);
+  useEffect(() => {
+    const value = String(base || '');
+    if (!customBase || !looksAbsoluteBase(value)) { setTypedBaseAdvisory(null); return undefined; }
+    let alive = true;
+    // 500 ms: long enough that a typed path is not one request per character,
+    // short enough to land before the hand reaches the Train button.
+    const timer = setTimeout(() => {
+      apiFetch(`/api/train/base-file-advisory?path=${encodeURIComponent(value)}`)
+        // `for` is what makes a late answer harmless — see typedBaseNote.
+        .then((d) => { if (alive) setTypedBaseAdvisory({ ...d, for: value }); })
+        .catch(() => { if (alive) setTypedBaseAdvisory(null); });
+    }, 500);
+    return () => { alive = false; clearTimeout(timer); };
+  }, [base, customBase]);
+  const baseNote = baseSelectionNote(currentBases, base, typedBaseAdvisory);
+  const baseNotTrainable = baseNote?.level === 'error';
   // Bloque l'entraînement si la base custom Z-Image n'est pas encore convertie,
-  // ou si SDXL sans base choisie (SDXL exige un checkpoint).
-  const baseBlocksTrain = needsConversion && !baseConverted;
+  // si la base choisie ne peut pas être chargée du tout, ou si SDXL sans base
+  // choisie (SDXL exige un checkpoint).
+  const baseBlocksTrain = (needsConversion && !baseConverted) || baseNotTrainable;
+  // The button tooltips used to state one cause only ("convert the base"), which
+  // would now be wrong half the time.
+  const baseBlockTitle = baseNotTrainable
+    ? 'This checkpoint cannot be loaded for training — pick the bf16/fp16 version of it'
+    : 'Convert the custom base first';
   const sdxlNeedsBase = trainType === 'sdxl' && !base;
   // Changement de type : réinitialise la base (les listes diffèrent ; SDXL → 1ère base réelle)
   // et PERSISTE la famille (choisie à la création, modifiable ici) pour que le menu
@@ -713,7 +910,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         setTrainingMode(normalizeTrainingMode(saved.trainingMode));
         setTrainType(savedType);
         setBase(savedBase);
-        setCustomBase(looksAbsolute(savedBase));
+        setCustomBase(customBaseMode(savedBase, baseInfo, savedType));
         setVariant(savedVariant);
         setPresetSel('');
         setStepsInfo(null);
@@ -731,7 +928,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             setBaseInfo(info);
             setAdv(info.train_settings || null);
             setBase(info.base || savedBase);
-            setCustomBase(looksAbsolute(info.base || savedBase));
+            setCustomBase(customBaseMode(info.base || savedBase, info, savedType));
             setVariant(normalizeCheckpointVariant(savedType, info.variant || savedVariant));
           }
           const checkpointData = await ds.listCheckpoints?.(savedBase, savedType, savedVariant);
@@ -793,7 +990,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         seededBase = info.base || nextBase;
         seededVariant = normalizeCheckpointVariant(t, info.variant || nextVariant);
         setBase(seededBase);
-        setCustomBase(looksAbsolute(seededBase));
+        setCustomBase(customBaseMode(seededBase, info, t));
         setVariant(seededVariant);
       }
       const checkpointData = await ds.listCheckpoints?.(seededBase, t, seededVariant);
@@ -972,7 +1169,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       setTrainingMode(canonicalMode);
       setTrainType(canonicalType);
       setBase(canonicalBase);
-      setCustomBase(looksAbsolute(canonicalBase));
+      setCustomBase(customBaseMode(canonicalBase, baseInfo, canonicalType));
       setVariant(canonicalVariant);
       if (saved.slider) setSlider(saved.slider);
       setBaseInfo((current) => current ? {
@@ -1058,7 +1255,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           setBaseInfo(info);
           setTrainType(serverType);
           setBase(serverBase);
-          setCustomBase(looksAbsolute(serverBase));
+          setCustomBase(customBaseMode(serverBase, info, serverType));
           setVariant(serverVariant);
           setTrainingMode(normalizeTrainingMode(info.training_mode));
         }
@@ -1536,6 +1733,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     // Prefer the per-run grouped payload; fall back to grouping the flat list
     // by run_id so an older server still renders (single group per run).
     setCloudGroups(cloudGroupsFrom(data));
+    setDenseModels(Array.isArray(data.dense_models) ? data.dense_models : []);
     setDiskUsage(data.disk_usage || null);
     setCkLoaded(true);
     onCheckpointsChange?.(
@@ -1860,6 +2058,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       ? 'Custom VAE/text-encoder overrides are local-only — clear them in Advanced options to train in the cloud'
     : customWeightsEmpty
       ? 'Enter the path to your custom weights .safetensors first'
+    : baseNotTrainable
+      ? 'This checkpoint cannot be loaded for training — pick the bf16/fp16 version of it'
     : baseBlocksTrain
       ? 'Convert the custom base first — the cloud lane pushes the converted copy to your Hugging Face account'
     : cloudTooFewImages
@@ -2240,7 +2440,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           </span>
         )}
         {!fullMode && <button type="button" disabled={!status.installed || belowFloor || status.in_progress || baseBlocksTrain || sdxlNeedsBase || customWeightsEmpty || sliderPromptsMissing}
-          title={baseBlocksTrain ? 'Convert the custom base first'
+          title={baseBlocksTrain ? baseBlockTitle
             : customWeightsEmpty ? 'Enter the path to your custom weights .safetensors'
             : sdxlNeedsBase ? 'Choose a base SDXL checkpoint'
             : sliderPromptsMissing ? 'Slider mode needs both a positive and a negative prompt'
@@ -2327,7 +2527,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         {!fullMode && status.in_progress && status.installed && (keptCount >= trainMinFloor || allowNotReady) && !sliderPromptsMissing && (
           <button type="button" disabled={queued || baseBlocksTrain} onClick={enqueue}
             title={baseBlocksTrain
-              ? 'Convert the selected custom base first'
+              ? baseBlockTitle
               : `Train THIS dataset on “${baseLabel}” once the current training finishes`}
             className="px-3 py-1.5 rounded-lg bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-sm font-semibold disabled:opacity-40">
             {queued ? '✓ Queued' : `➕ Add to queue (${baseLabel})`}
@@ -2512,7 +2712,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           vit dans la section repliée — sinon la cause resterait cachée. */}
       {(baseBlocksTrain || sdxlNeedsBase) && (
         <p className="m-0 text-amber-300 text-[0.6875rem]">
-          ⚠ {sdxlNeedsBase
+          ⚠ {baseNotTrainable
+            ? 'The selected base cannot be loaded for training — open Advanced options below to pick another one.'
+            : sdxlNeedsBase
             ? 'SDXL needs a base checkpoint — pick one in Advanced options below.'
             : convertRunning
               ? 'The selected base is being converted — training unlocks when it finishes (details in Advanced options).'
@@ -2554,6 +2756,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               saveSamplePrompts={saveSamplePrompts}
               samplePromptsDefault={advSampleDefault}
               maxSamplePrompts={advMaxPrompts}
+              quantizeTarget={denseQuantizeTarget(cloudLastHere || {})}
+              suggestedQuantizePath={looksAbsoluteBase(base) ? String(base).trim() : ''}
               disabled={trainingModeBusy || cloudActiveHere} />
           ) : (<>
           {/* LORA_ADVANCED_CONTROLS_START */}
@@ -2664,7 +2868,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 {(currentBases.length ? currentBases
                   : [{ value: '', label: trainType === 'sdxl' ? (comfyConfigured ? 'No SDXL checkpoint found' : 'ComfyUI not configured') : trainType === 'krea' ? 'Official — Krea 2' : trainType === 'flux' ? 'Official — FLUX.1-dev' : trainType === 'flux2klein' ? 'Official — FLUX.2 Klein' : trainType === 'anima' ? 'Official — Anima' : 'Official — Z-Image-Turbo' }]).map((b) => (
                   <option key={b.value} value={b.value}>
-                    {trainType === 'zimage' && !b.value ? 'Official recipe — selected by variant' : b.label}{b.value && baseInfo?.converted?.[b.value] ? ' ✓' : ''}
+                    {trainType === 'zimage' && !b.value ? 'Official recipe — selected by variant' : b.label}{b.value && baseInfo?.converted?.[b.value] ? ' ✓' : ''}{baseOptionSuffix(b)}
                   </option>
                 ))}
                 {/* Local-only: a free path to a .safetensors of the SAME architecture. */}
@@ -2713,6 +2917,27 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 </select>
               )}
             </div>
+            {/* Quantization verdict for the SELECTED base. Two different facts,
+                so two different colours: rose = the trainer cannot load this
+                file at all (the run is blocked here, before the dataset export
+                and before a GPU is rented); amber = it loads and trains, from
+                weights a cast already degraded. Stacked and wrapping, because
+                this panel is read on a phone. */}
+            {baseNote && (
+              <div
+                aria-label="Selected base precision"
+                className={`flex flex-col gap-1 rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${
+                  baseNote.level === 'error'
+                    ? 'border-rose-400/40 bg-rose-500/[0.08] text-rose-200'
+                    : 'border-amber-400/40 bg-amber-500/[0.08] text-amber-200'}`}>
+                <span className="font-semibold">
+                  {baseNote.level === 'error'
+                    ? '⛔ This base cannot be used for training'
+                    : '⚠ This base trains, from already-degraded weights'}
+                </span>
+                <span className="text-content-subtle break-words">{baseNote.text}</span>
+              </div>
+            )}
             {zimageRecipe && (
               <div className="flex flex-col gap-1 rounded-md border border-sky-400/30 bg-sky-500/[0.08] px-2.5 py-2 text-[0.6875rem]"
                 aria-label="Effective Z-Image training recipe">
@@ -2760,13 +2985,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
                 </span>
               </div>
             )}
-            {/* krea, flux2klein et anima n'ont QUE des bases officielles fixes (rien à
+            {/* flux2klein et anima n'ont QUE des bases officielles fixes (rien à
                 lister depuis ComfyUI) → le warning « bases can't be listed » n'y
-                apporte que du bruit. */}
-            {!comfyConfigured && trainType !== 'krea' && trainType !== 'flux2klein' && trainType !== 'anima' && (
+                apporte que du bruit. Krea EN A une depuis que les checkpoints
+                installés sont proposés : sans ComfyUI pointé, la liste se réduit
+                à la base officielle et le dire vaut mieux que la laisser vide. */}
+            {!comfyConfigured && trainType !== 'flux2klein' && trainType !== 'anima' && (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-amber-300 text-[0.625rem]">
-                  ⚠️ ComfyUI folder not set — training bases can't be listed{trainType === 'sdxl' ? '' : ' (the official Z-Image base still works)'}.
+                  ⚠️ ComfyUI folder not set — training bases can't be listed{trainType === 'sdxl' ? '' : trainType === 'krea' ? ' (the official Krea 2 base still works)' : ' (the official Z-Image base still works)'}.
                 </span>
                 <a href="#/setup"
                   className="px-2.5 py-1 rounded-lg bg-indigo-500/20 border border-indigo-400/40 text-indigo-200 text-[0.6875rem] font-semibold">
@@ -3372,7 +3599,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               <button type="button" disabled={queued || baseBlocksTrain} onClick={openSched}
                 aria-expanded={showSched}
                 title={baseBlocksTrain
-                  ? 'Convert the selected custom base first'
+                  ? baseBlockTitle
                   : 'Schedule this training for a specific day and time — it will queue up if another training is running then'}
                 className="px-3 py-1.5 rounded-lg bg-amber-500/15 border border-amber-400/40 text-amber-200 text-sm font-semibold disabled:opacity-40">
                 {queued ? '✓ Queued' : '⏰ Schedule'}
@@ -3540,6 +3767,34 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               Dataset version: <span className="text-content font-semibold">v{datasetState.version}</span> — unchanged since the last training.
             </p>
           ))}
+          {/* FULL MODELS first, above the LoRA lanes: when a dataset has one it
+              is the biggest thing it produced, and until now it appeared in this
+              panel not at all — the only way to try it was to open ComfyUI by
+              hand and find the file. Renders nothing when there is none. */}
+          <DenseModelsPanel datasetId={ds.currentId} models={denseModels}
+            onChanged={() => loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant)} />
+          {/* Merging needs no dense run of its own — the usual case is a LoRA
+              trained here folded into a base downloaded from anywhere — and
+              DenseModelsPanel renders NOTHING when this dataset has no full
+              model. So the tool also lives here, where it is always reachable,
+              collapsed because most visits to this panel are not about it.
+              (Inside a dense card it appears again with the base pre-filled.) */}
+          <details open={mergeOpen}
+            className="rounded-lg border border-border bg-surface-raised px-3 py-2">
+            <summary onClick={toggleMerge}
+              className="cursor-pointer text-content text-xs font-semibold">
+              🧬 Merge a LoRA into a base checkpoint
+            </summary>
+            <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-relaxed">
+              Folds one or more LoRAs into a full-precision checkpoint and writes a new
+              full model — the step between “I trained a LoRA” and “I have a model to
+              publish”. Nothing is overwritten, and the result says in its own metadata
+              that it is a merge and not a training run.
+            </p>
+            <div className="mt-1.5">
+              <LoraMergeTool framed={false} family={checkpointTrainType} />
+            </div>
+          </details>
           <div className="flex items-center gap-2 flex-wrap">
             {/* () => … sinon React passe l'event en 1er arg → forBase = PointerEvent
                 → base_model=[object Object] → run inexistant → liste vide. */}

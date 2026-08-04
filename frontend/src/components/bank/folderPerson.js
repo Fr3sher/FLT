@@ -34,7 +34,7 @@ export function assertionSummary(entry) {
  *  as muted rather than reassuring: a shape we do not recognise is not good news. */
 export function verdictTone(sample) {
   if (!sample) return 'muted'
-  if (sample.verdict === 'consistent') return 'ok'
+  if (sample.verdict === 'consistent' || sample.verdict === 'partial') return 'ok'
   if (sample.verdict === 'mixed') return 'warn'
   return 'muted'
 }
@@ -44,7 +44,7 @@ export function verdictTone(sample) {
 export function verdictLine(sample) {
   if (!sample) return null
   const note = sample.note || ''
-  if (sample.verdict === 'consistent') return `✓ ${note}`
+  if (sample.verdict === 'consistent' || sample.verdict === 'partial') return `✓ ${note}`
   if (sample.verdict === 'mixed') return `⚠ ${note}`
   return note ? `· ${note}` : null
 }
@@ -92,7 +92,7 @@ export function suggestionFor(suggestions, subfolder) {
 export function suggestedFolders(suggestions) {
   if (!Array.isArray(suggestions)) return []
   return suggestions
-    .filter((s) => !s.stale && s.verdict === 'consistent')
+    .filter((s) => !s.stale && (s.verdict === 'consistent' || s.verdict === 'partial'))
     .map((s) => s.subfolder)
 }
 
@@ -103,23 +103,35 @@ export function suggestionLine(entry) {
     return `Looks like one person (${entry.largest}/${entry.scorable} of the `
       + `${entry.sample} sampled) — assert?`
   }
+  if (entry.verdict === 'partial') {
+    // Offered like the one above, but never dressed up as it: the number of
+    // usable faces IS the caveat, so it leads.
+    return `Looks like one person, on thin evidence — only ${entry.scorable} `
+      + `usable face${entry.scorable === 1 ? '' : 's'} in ${entry.sample} images `
+      + 'tried — assert?'
+  }
   if (entry.verdict === 'mixed') {
     return `Sampled ${entry.faces} different faces here — probably not one person.`
   }
-  return `Too few usable faces in the sample to tell (${entry.scorable} of `
-    + `${entry.sample}).`
+  // Not "the check could not tell": the folder has almost nothing a face
+  // detector can read, and the full pass uses the same detector on the same
+  // images. Saying otherwise would send the user to buy an answer that is not
+  // for sale.
+  return `Almost no readable face here — ${entry.scorable} in ${entry.sample} `
+    + 'images tried. Face grouping has little to work with in this folder.'
 }
 
 export function suggestionTone(entry) {
   if (!entry) return 'muted'
-  return entry.verdict === 'consistent' ? 'ok' : 'muted'
+  return (entry.verdict === 'consistent' || entry.verdict === 'partial') ? 'ok' : 'muted'
 }
 
 /** Marker appended to a folder's name in the picker, so the offer is visible
  *  without scoping every folder one by one. Deliberately a hint, not a claim. */
 export function folderMarker(suggestions, subfolder) {
   const got = suggestionFor(suggestions, subfolder)
-  return got && got.verdict === 'consistent' ? ' · 👤?' : ''
+  const offered = got && (got.verdict === 'consistent' || got.verdict === 'partial')
+  return offered ? ' · 👤?' : ''
 }
 
 /** What the "scan folders" button should say, and whether it should be there.
@@ -136,8 +148,14 @@ export function scanOffer(payload) {
   const limit = (payload && payload.scan_limit) || pending
   const covered = Math.min(pending, limit)
   const size = (payload && payload.sample_size) || SAMPLE_SIZE
+  // The ceiling belongs in the same sentence as the typical cost: a folder whose
+  // draw comes back unreadable gets more images drawn to replace them, and a
+  // number that only ever describes the easy case is not a cost estimate.
+  const max = (payload && payload.sample_max) || 0
+  const each = max > size ? `~${size} images each, up to ${max} in the hard ones`
+    : `~${size} images each`
   let note = `Samples ${covered} folder${covered === 1 ? '' : 's'} `
-    + `(~${size} images each) and tells you which look like a single person.`
+    + `(${each}) and tells you which look like a single person.`
   if (pending > limit) {
     note += ` ${pending} are waiting — the biggest go first, run it again for the rest.`
   }

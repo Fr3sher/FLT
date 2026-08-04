@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from datetime import datetime, timezone
@@ -84,6 +85,74 @@ MAX_SCAN_FOLDERS = 20
 # preamble into a pass of its own — and whatever it does not reach is stated out
 # loud, never assumed away.
 MAX_PREFLIGHT_FOLDERS = 200
+
+# --- the re-draw budget -----------------------------------------------------
+# THE HOLE THIS FILLS. The sample was a single draw: fifteen images, whatever
+# came back. On scraped folders full of crops, backs and blur that draw can land
+# on fifteen images with no readable face, and the folder ends with NO verdict —
+# fifteen embeddings spent for nothing, and then the full pass over its three
+# thousand images anyway. Exactly the cost the preflight exists to avoid, paid
+# twice. Measured on a real bank: four folders of six, 3 546 / 1 866 / 488 / 466
+# images, each reported "only 0 of 15 sampled images had a usable face".
+#
+# So a draw that cannot be read is REPLACED, not accepted. The target is still
+# fifteen images with a usable face; what changes is that the probe keeps drawing
+# (new images, never one it has already tried, still spread across the folder)
+# until it reaches that target or runs out of budget.
+#
+# THE BUDGET IS THE POINT. Without a ceiling "keep drawing" IS the full pass,
+# reached through the back door. Three numbers bound it, and the smallest wins:
+PROBE_TARGET_FACES = SAMPLE_SIZE
+# 1. a hard ceiling of draws per folder. 60 is not a round number: reaching 15
+#    usable faces needs 15/p draws at a hit rate p, and 60 is exactly the budget
+#    for p = 1/4 — one readable face in four images. Below that the folder is
+#    genuinely face-poor, and MORE draws would not change the answer, only its
+#    price; the verdict says so instead.
+PROBE_MAX_DRAWS = 4 * SAMPLE_SIZE
+# 2. never more than a quarter of the folder. This is what stops the probe from
+#    becoming the pass on SMALL folders: sampling 60 of an 80-image folder would
+#    cost most of what analysing it costs, for a suggestion. In practice this cap
+#    binds below ~240 images and the ceiling above it, so folders of 60 or fewer
+#    keep the exact single draw they have today.
+PROBE_MAX_FOLDER_SHARE = 0.25
+# 3. at most this many child calls per scan. Each round is one subprocess and one
+#    model load shared by EVERY folder still short of its target, so rounds are
+#    cheap in aggregate — but they are not free, and an unbounded loop is not a
+#    budget. Two rounds cover the realistic cases (see _topup_draws).
+PROBE_MAX_ROUNDS = 3
+
+
+def draw_budget(images: int) -> int:
+    """The most images a probe may ever draw from a folder of ``images``.
+
+    Read it as the sentence it is: at most PROBE_MAX_DRAWS draws, or a quarter of
+    the folder, whichever is SMALLER — and never fewer than the single sample the
+    probe has always taken, so no folder is sampled less than it is today."""
+    if images <= 0:
+        return 0
+    share = math.ceil(int(images) * PROBE_MAX_FOLDER_SHARE)
+    return min(int(images),
+               max(SAMPLE_SIZE, min(PROBE_MAX_DRAWS, share)))
+
+
+def _topup_draws(usable, tried, budget_left) -> int:
+    """How many MORE images to draw for a folder still short of its target.
+
+    Sized from what the folder has actually shown: at a measured hit rate of
+    ``usable/tried`` it takes about ``need/rate`` more draws to reach the target,
+    so that is what is asked for — bounded by what is left of the budget.
+
+    A folder that produced NOTHING has no rate to extrapolate from, and the
+    honest reading of "0 of 15" is that faces are rare here, not that one more
+    handful will change it. It gets the whole remaining budget in one go rather
+    than three rounds of hope: same ceiling, one model load instead of three, and
+    the strongest statement the budget can buy ("none in 60" beats "none in 15")."""
+    need = PROBE_TARGET_FACES - usable
+    if need <= 0 or budget_left <= 0:
+        return 0
+    if usable <= 0 or tried <= 0:
+        return budget_left
+    return min(budget_left, -(-need * tried // usable))     # ceil(need / rate)
 
 
 def _svc():
@@ -161,6 +230,10 @@ def payload(user_id, bank_id) -> dict | None:
             'to_check': _to_check(bank_id, row.subfolder),
         })
     return {'assertions': out, 'sample_size': SAMPLE_SIZE,
+            # The per-folder CEILING of the re-drawing probe. The scan offer
+            # quotes both, because "~15 images each" stopped being the whole
+            # truth the day a draw could be replaced.
+            'sample_max': PROBE_MAX_DRAWS,
             # Folders the app probed by itself. They are OFFERS, not decisions:
             # nothing here has grouped a single image.
             'suggestions': suggestions(bank_id),
@@ -277,17 +350,46 @@ def stamp_new_rows(bank_id, rows) -> int:
 _SAMPLE_PROGRESS_RE = re.compile(r'\[embed\] (\d+)/(\d+)')
 
 
+def _draw_order(n, cap, step=SAMPLE_SIZE) -> list:
+    """Indices 0..n-1 in the ORDER a probe should draw them, at most ``cap``.
+
+    The first ``step`` are the evenly-spaced pick this module has always made:
+    scraped folders are ordered by name, which is usually order of arrival, so
+    the first 15 files are one shoot, one day, often one outfit, and a second
+    person appearing halfway through would never be drawn. Evenly spaced picks
+    cover the whole folder, and being deterministic the same folder always gets
+    the same verdict.
+
+    Every FURTHER slice refines that same spread (the 30-point stratification,
+    then the 45-point one…) instead of appending a clump at one end. That is what
+    lets a re-draw replace unreadable images without giving up the property the
+    first draw was built for: no index is ever returned twice, and any prefix of
+    this list is still spread across the whole folder."""
+    limit = min(int(cap), n)
+    seen, order = set(), []
+    k = max(1, int(step))
+    while len(order) < limit:
+        added = 0
+        for i in range(k):
+            idx = (i * n) // k
+            if idx in seen:
+                continue
+            seen.add(idx)
+            order.append(idx)
+            added += 1
+            if len(order) >= limit:
+                return order
+        if k >= n:            # k = n enumerates every index; nothing left to add
+            break
+        k = n if k + step > n else k + step
+    return order
+
+
 def _stratified(rows, k=SAMPLE_SIZE) -> list:
-    """``k`` rows spread EVENLY across the folder, not the first k and not a
-    coin toss. Scraped folders are ordered by name, which is usually order of
-    arrival — the first 15 files are one shoot, one day, often one outfit, and a
-    second person who appears halfway through would never be drawn. Evenly
-    spaced picks cover the whole folder, and being deterministic the same folder
-    always gets the same verdict."""
-    n = len(rows)
-    if n <= k:
-        return list(rows)
-    return [rows[(i * n) // k] for i in range(k)]
+    """``k`` rows spread evenly across the folder — the first layer of
+    ``_draw_order``, kept as its own name because that is what the single-folder
+    sample check asks for (one draw, no re-draw)."""
+    return [rows[i] for i in _draw_order(len(rows), k, step=k)]
 
 
 def start_sample_check(app, user_id, bank_id, subfolder):
@@ -310,18 +412,46 @@ def start_sample_check(app, user_id, bank_id, subfolder):
                            total=SAMPLE_SIZE)
 
 
-def _verdict(largest, scorable, faces) -> tuple:
-    """(verdict, sentence) — plain English, and never more certain than 15 images
-    allow. It says what the SAMPLE showed; it never says the folder is clean."""
+def _verdict(largest, scorable, faces, tried=None, exhausted=False) -> tuple:
+    """(verdict, sentence) — plain English, and never more certain than the images
+    it saw allow. It says what the SAMPLE showed; it never says the folder is clean.
+
+    ``tried`` is how many images were actually handed to the detector (a re-drawing
+    probe tries more than a single sample); ``exhausted`` says the probe stopped
+    on its BUDGET while still short of its target, which is the difference between
+    a verdict and a weak verdict.
+
+    Four outcomes, and the last two are the ones this file gained:
+      consistent   — enough usable faces, and they agree;
+      mixed        — several faces, whatever the sample size;
+      partial      — they agree, but on fewer usable faces than asked for. A weak
+                     verdict that says how weak beats no verdict at all, which is
+                     what this used to produce;
+      inconclusive — almost nothing readable. That is INFORMATION ABOUT THE
+                     FOLDER, not a failure of the check, and the sentence says so:
+                     the full pass reads these images through the SAME detector at
+                     the same gates (backend/infer/face_embed_infer.py is the one
+                     script all three callers drive), and the probe writes its
+                     answers into the pass's OWN embedding cache — so it will get
+                     the identical states back without re-detecting. It is not
+                     "we could not tell, ask the expensive one"."""
+    n = SAMPLE_SIZE if tried is None else int(tried)
     if scorable < 2:
+        head = ('no readable face' if scorable <= 0
+                else f'only {scorable} readable face')
         return 'inconclusive', (
-            f'only {scorable} of the sampled images had a usable face — '
-            'nothing to compare, the folder is unchanged')
-    if faces <= 1:
-        return 'consistent', (
-            f'sample consistent ({largest}/{scorable} same person)')
-    return 'mixed', (
-        f'{faces} different faces in the sample — check this folder')
+            f'{head} in {n} images tried across the folder — crops, backs or '
+            'blur. The full pass reads them the same way, so much of this '
+            'folder will not group by face')
+    if faces > 1:
+        return 'mixed', (
+            f'{faces} different faces in the sample — check this folder')
+    if exhausted:
+        return 'partial', (
+            f'looks like one person, on thin evidence — only {scorable} usable '
+            f'{"face" if scorable == 1 else "faces"} in {n} images tried')
+    return 'consistent', (
+        f'sample consistent ({largest}/{scorable} same person)')
 
 
 def _sample_job(bank_id, subfolder):
@@ -398,7 +528,10 @@ def _sample_job(bank_id, subfolder):
         scorable = sum(sizes.values())
         faces = len(sizes)
         largest = max(sizes.values()) if sizes else 0
-        verdict, sentence = _verdict(largest, scorable, faces)
+        # One draw, no re-draw: this check answers "was I right about the folder
+        # I already declared?", and the user asked for exactly these fifteen
+        # embeddings. So it never reports 'partial' — nothing was cut short.
+        verdict, sentence = _verdict(largest, scorable, faces, tried=len(paths))
         fresh = assertion_for(bank_id, subfolder)
         if fresh is not None:      # revoked while the check ran — say nothing
             fresh.sample_report = json.dumps({
@@ -433,13 +566,33 @@ def _folder_signature(bank_id, subfolder) -> str:
 
 
 def _sample_pool(bank_id, subfolder):
-    """The rows a probe may sample: the folder's NON-REJECTED images. Rejected
-    ones are excluded on purpose — they are outside what the face pass looks at,
-    so sampling them would both cost embeddings nothing else has cached and let
-    images the user already threw away drive a suggestion."""
-    return (_folder_rows_q(bank_id, subfolder)
-            .filter(BankImage.status != 'reject')
+    """The rows a probe may sample: the folder's NON-REJECTED images, minus the
+    ones already MEASURED AS UNUSABLE.
+
+    Rejected ones are excluded on purpose — they are outside what the face pass
+    looks at, so sampling them would both cost embeddings nothing else has cached
+    and let images the user already threw away drive a suggestion.
+
+    The second exclusion is what makes a re-draw worth anything on a folder the
+    machinery has already looked at: a row whose face_state is set and is not
+    'scorable' has been through the detector and produced no usable face. Drawing
+    it again cannot give a different answer (same script, same gates, and its
+    embedding is cached), so it would only burn a draw. A NULL face_state means
+    "never looked at" — those stay in, they are the whole pool on a fresh bank.
+
+    It gives WAY when it would leave too little to sample. A folder the machinery
+    has already read as unusable end to end would otherwise have an empty pool,
+    draw nothing, get no verdict — and stay a candidate the preflight offers to
+    sample again on every single launch. Falling back to the full pool costs
+    nothing there (every one of those embeddings is cached) and the folder gets
+    the honest "almost no readable face" it earned."""
+    base = _folder_rows_q(bank_id, subfolder).filter(BankImage.status != 'reject')
+    rows = (base.filter(or_(BankImage.face_state.is_(None),
+                            BankImage.face_state == 'scorable'))
             .order_by(BankImage.relpath.asc()).all())
+    if len(rows) >= MIN_PROBE_IMAGES:
+        return rows
+    return base.order_by(BankImage.relpath.asc()).all()
 
 
 def probe_for(bank_id, subfolder):
@@ -506,12 +659,19 @@ def scan_candidates(bank_id, limit=None) -> list:
     return out if limit is None else out[:limit]
 
 
-def _write_probe(bank_id, subfolder, sizes, sample_n) -> str:
-    """Persist one folder's verdict and return its sentence."""
+def _write_probe(bank_id, subfolder, sizes, sample_n, exhausted=False) -> str:
+    """Persist one folder's verdict and return it.
+
+    ``sample`` keeps meaning what it always meant — how many images were actually
+    handed to the detector — which with a re-drawing probe is the number of images
+    TRIED, not the size of one draw. No column is added: 'partial' is a new value
+    in a column that already holds free text, and every database in the wild reads
+    it without a migration."""
     scorable = sum(sizes.values())
     faces = len(sizes)
     largest = max(sizes.values()) if sizes else 0
-    verdict, sentence = _verdict(largest, scorable, faces)
+    verdict, sentence = _verdict(largest, scorable, faces, tried=sample_n,
+                                 exhausted=exhausted)
     row = probe_for(bank_id, subfolder)
     if row is None:
         row = BankFolderProbe(bank_id=bank_id, subfolder=subfolder)
@@ -529,32 +689,72 @@ def drop_probes_for_bank(bank_id) -> int:
             .delete(synchronize_session=False))
 
 
-def _probe_groups(bank_id, bank, candidates) -> tuple:
-    """({folder: {path: image_id}}, [child group payloads]) for a set of folders."""
+def _probe_states(bank_id, bank, candidates) -> dict:
+    """{folder: draw state} with the FIRST draw already taken.
+
+    One state per folder, carrying everything a re-draw needs: the pool it draws
+    from, the order it draws in, how far into that order it has got (which is also
+    how much budget it has spent — the order is built no longer than the budget),
+    the paths gathered so far and the clustering the last round returned."""
     banks = _svc()
-    by_folder, groups = {}, []
-    for name, _n in candidates:
-        picked = _stratified(_sample_pool(bank_id, name))
-        paths = {}
-        for r in picked:
-            p = banks.abs_image_path(bank, r)
-            if banks._is_safe_bank_source(p, label='folder person probe'):
-                paths[p] = r.id
-        if len(paths) >= 2:      # nothing to compare below two faces
-            by_folder[name] = paths
-            groups.append({'name': name, 'images': list(paths)})
-    return by_folder, groups
+    state = {}
+    for name, images in candidates:
+        pool = _sample_pool(bank_id, name)
+        budget = draw_budget(images)
+        s = {'name': name, 'bank': bank, 'pool': pool, 'next': 0,
+             'order': _draw_order(len(pool), budget), 'paths': {}, 'clusters': {},
+             'pending': False}
+        _draw_more(s, SAMPLE_SIZE)
+        state[name] = s
+    return state
 
 
-def _apply_probe_results(bank_id, by_folder, data) -> dict:
+def _draw_more(s, want) -> int:
+    """Take up to ``want`` more images from the folder, never one already tried.
+
+    A draw the file guard refuses still SPENDS its place in the order: it was an
+    attempt, it is bounded like every other, and letting the unsafe ones be free
+    would turn a folder of unreadable files into an unbounded walk."""
+    banks = _svc()
+    added = 0
+    while added < want and s['next'] < len(s['order']):
+        row = s['pool'][s['order'][s['next']]]
+        s['next'] += 1
+        p = banks.abs_image_path(s['bank'], row)
+        if p in s['paths']:
+            continue
+        if banks._is_safe_bank_source(p, label='folder person probe'):
+            s['paths'][p] = row.id
+            added += 1
+    if added:
+        s['pending'] = True
+    return added
+
+
+def _usable(s) -> int:
+    """Images of this folder the detector could actually read a face in — the
+    clustering only ever contains those, which is why it is the count that
+    matters and len(paths) is not."""
+    return len(s['clusters'] or {})
+
+
+def _short_of_target(s) -> bool:
+    """Did the probe stop with fewer usable faces than it wanted, while the folder
+    still had images it never drew? That — and only that — is a PARTIAL verdict:
+    a folder drawn to the last image has been answered completely, however few
+    faces it turned out to hold."""
+    return _usable(s) < PROBE_TARGET_FACES and s['next'] < len(s['pool'])
+
+
+def _apply_probe_results(bank_id, state, results) -> dict:
     """Write the states back and persist one probe per folder. Returns
     {verdict: count} for the job's report."""
     banks = _svc()
-    results = data.get('results') or {}
-    group_clusters = data.get('group_clusters') or {}
     tally = {}
-    for name, paths in by_folder.items():
-        for p, image_id in paths.items():
+    for s in state.values():
+        if len(s['paths']) < 2:      # nothing to compare below two faces
+            continue
+        for p, image_id in s['paths'].items():
             live = banks._live_image(image_id)
             if live is None or live.face_state is not None:
                 continue
@@ -562,9 +762,10 @@ def _apply_probe_results(bank_id, by_folder, data) -> dict:
             live.face_state = res.get('state')
             live.face_det = res.get('det')
         sizes = {}
-        for cid in (group_clusters.get(name) or {}).values():
+        for cid in (s['clusters'] or {}).values():
             sizes[cid] = sizes.get(cid, 0) + 1
-        verdict = _write_probe(bank_id, name, sizes, len(paths))
+        verdict = _write_probe(bank_id, s['name'], sizes, len(s['paths']),
+                               exhausted=_short_of_target(s))
         tally[verdict] = tally.get(verdict, 0) + 1
     db.session.commit()
     return tally
@@ -574,13 +775,20 @@ def _probe_detail(tally, scanned, left) -> str:
     """What the scan found, in the user's terms — and what it did NOT reach."""
     if not scanned:
         return 'no folder left to look at'
-    likely = tally.get('consistent', 0)
+    likely = tally.get('consistent', 0) + tally.get('partial', 0)
     bits = [f'{likely} folder(s) look like one person' if likely
             else 'no folder looked like a single person']
+    if tally.get('partial'):
+        bits.append(f'{tally["partial"]} of them on thin evidence')
     if tally.get('mixed'):
-        bits.append(f'{tally["mixed"]} hold several')
+        n = tally['mixed']
+        bits.append(f'{n} {"holds" if n == 1 else "hold"} several')
     if tally.get('inconclusive'):
-        bits.append(f'{tally["inconclusive"]} had too few faces to tell')
+        # Not "the check failed" — the folder has almost nothing a face detector
+        # can read, and saying "too few faces to tell" invited a full pass that
+        # reads the very same images through the very same detector.
+        n = tally['inconclusive']
+        bits.append(f'{n} {"has" if n == 1 else "have"} almost no readable face')
     out = f'{scanned} folder(s) sampled — ' + ', '.join(bits)
     if likely:
         out += ' — confirm the ones you recognise'
@@ -591,35 +799,27 @@ def _probe_detail(tally, scanned, left) -> str:
     return out
 
 
-def _run_probe(job, bank_id, candidates, *, allow_inference: bool):
-    """Sample ``candidates`` in ONE child call and persist their verdicts.
+def _embed_round(job, bank_id, groups, *, allow_inference: bool):
+    """One child call over ``groups``, or None if the user stopped it.
 
-    ``allow_inference=False`` is the automatic path: it runs straight after the
-    face pass, whose cache already holds every embedding it needs, so the child
-    loads no model and touches no GPU. If an image is somehow missing from that
-    cache the child would embed it — cheap at this size, and still bounded by the
-    sample, but the flag is what lets the caller say honestly which it was."""
+    Every round sends a folder's WHOLE accumulated path list, not just the images
+    it drew this time: the clustering has to be over everything the folder has
+    shown, and re-sending an image the child already embedded costs nothing —
+    the .npz cache is exactly what makes a second round cheap."""
     from contextlib import nullcontext
-    from . import bank_jobs
     from ..gpu_window import gpu_exclusive_vision_window
-    from ..models import ImageBank
     banks = _svc()
-    bank = db.session.get(ImageBank, bank_id)
-    if not bank or not candidates:
-        return None
-    by_folder, groups = _probe_groups(bank_id, bank, candidates)
-    if not groups:
-        return None
-    every_path = [p for g in groups for p in g['images']]
     banks._bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
     th = banks.thresholds()
     device, use_gpu = banks._resolve_face_device()
     # The BANK's own face cache, deliberately: after 👤 Group by person every one
     # of these images is already in it, so the probe is free. One job runs per
-    # bank, so nothing else can be writing this file underneath us.
+    # bank, so nothing else can be writing this file underneath us. It also means
+    # a re-draw is never wasted work — every extra embedding it pays for is one
+    # the full pass will now skip.
     cache_path = banks._face_cache_path(bank_id)
     req = json.dumps({
-        'images': every_path,
+        'images': [p for g in groups for p in g['images']],
         'groups': groups,
         'models_root': banks.cfg.get('face_scoring.models_root') or None,
         'cache': str(cache_path),
@@ -641,12 +841,68 @@ def _run_probe(job, bank_id, candidates, *, allow_inference: bool):
         tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
         raise RuntimeError(tail or f'folder scan produced no output '
                                    f'(rc={returncode})')
-    return _apply_probe_results(bank_id, by_folder, data)
+    return data
+
+
+def _run_probe(job, bank_id, candidates, *, allow_inference: bool):
+    """Sample ``candidates`` and persist their verdicts, RE-DRAWING the folders
+    whose draw came back unreadable until they reach ~15 usable faces or run out
+    of budget (draw_budget / PROBE_MAX_ROUNDS).
+
+    Folders that already have their answer drop out after the first round, so the
+    second one carries only the hard folders — the ones that used to end with no
+    verdict at all and the full pass behind them.
+
+    ``allow_inference=False`` is the automatic path: it runs straight after the
+    face pass, whose cache already holds every embedding it needs, so the child
+    loads no model and touches no GPU. If an image is somehow missing from that
+    cache the child would embed it — cheap at this size, and still bounded by the
+    budget, but the flag is what lets the caller say honestly which it was."""
+    from ..models import ImageBank
+    bank = db.session.get(ImageBank, bank_id)
+    if not bank or not candidates:
+        return None
+    state = _probe_states(bank_id, bank, candidates)
+    results = {}
+    for rnd in range(PROBE_MAX_ROUNDS):
+        groups = [{'name': s['name'], 'images': list(s['paths'])}
+                  for s in state.values() if s['pending'] and len(s['paths']) >= 2]
+        if not groups:
+            break
+        data = _embed_round(job, bank_id, groups, allow_inference=allow_inference)
+        if data is None:
+            return None
+        results.update(data.get('results') or {})
+        measured = data.get('group_clusters') or {}
+        for s in state.values():
+            if not s['pending']:
+                continue
+            s['pending'] = False
+            if s['name'] in measured:
+                s['clusters'] = measured[s['name']]
+        if rnd + 1 >= PROBE_MAX_ROUNDS:
+            # No round left to measure them in, so draw nothing: an image drawn
+            # and never handed to the detector would still be counted among the
+            # "images tried" the verdict quotes, which is a lie about its own
+            # evidence.
+            break
+        # Replace what could not be read, for the folders still short. A folder
+        # whose budget is spent, or that has shown enough faces, asks for nothing
+        # and is simply not in the next round.
+        for s in state.values():
+            if _short_of_target(s):
+                _draw_more(s, _topup_draws(_usable(s), len(s['paths']),
+                                           len(s['order']) - s['next']))
+    if not any(len(s['paths']) >= 2 for s in state.values()):
+        return None
+    return _apply_probe_results(bank_id, state, results)
 
 
 def start_folder_scan(app, user_id, bank_id, limit=None, kind='folder-scan'):
     """Sample every unprobed folder and suggest the ones that look like a single
-    person. Costs ~15 embeddings per folder, capped at ``limit``.
+    person. Costs ~15 embeddings per folder — more where the first images have no
+    readable face and have to be replaced, never past ``draw_budget`` — over at
+    most ``limit`` folders.
 
     ``limit``/``kind`` exist for the PREFLIGHT, which is the same work with a
     different ceiling and a different name in the progress bar — not a second
@@ -706,7 +962,10 @@ def probe_after_faces(job, bank_id) -> str:
         tally = _run_probe(job, bank_id, pending, allow_inference=False)
         if not tally:
             return ''
-        likely = tally.get('consistent', 0)
+        # A partial verdict is offered exactly like a confident one, so it counts
+        # here too — announcing 3 when the dialog will pre-tick 5 would send the
+        # user looking for the two that "went missing".
+        likely = tally.get('consistent', 0) + tally.get('partial', 0)
         if not likely:
             return ''
         return (f' · {likely} folder(s) look like a single person — '
@@ -757,18 +1016,27 @@ def preflight_payload(user_id, bank_id) -> dict | None:
     from .face_similarity import is_available
     pending = scan_candidates(bank_id)
     covered = min(len(pending), MAX_PREFLIGHT_FOLDERS)
+    picked = pending[:covered]
     return {
         # Without the extra there is no probe and no pass either; the caller
         # skips straight through and lets the pass report the missing install.
         'available': bool(is_available()),
         'sample_size': SAMPLE_SIZE,
+        'sample_max': PROBE_MAX_DRAWS,
         'min_images': MIN_PROBE_IMAGES,
         'candidates': len(pending),
         'covered': covered,
         # Folders the ceiling will NOT reach. Reported as a number the UI has to
         # print, not as silence that would read as "the rest are not one person".
         'left': len(pending) - covered,
-        'sample_cost': covered * SAMPLE_SIZE,
+        'sample_cost': sum(min(SAMPLE_SIZE, n) for _name, n in picked),
+        # The CEILING of the re-drawing probe, announced before it is paid. The
+        # preflight's whole justification is "a few seconds against a full pass",
+        # so a mechanism that can multiply its cost may not hide behind the
+        # typical case: the dialog prints both numbers and the pass it is being
+        # compared against. Reached only on folders where faces are genuinely
+        # hard to find — which is exactly where the ceiling has to be visible.
+        'sample_cost_max': sum(draw_budget(n) for _name, n in picked),
         'full_cost': face_pass_cost(bank_id),
         # Fresh verdicts already on file (from an earlier preflight, a 🔎 Scan,
         # or the free probe at the end of a previous pass). They cost nothing to

@@ -19,12 +19,20 @@ before you caption anything.
 |---|---|---|---|---|---|
 | **Caption style** | Prose sentences | Booru tags | Prose sentences | Prose sentences | Prose sentences |
 | **Images (min → good)** | 12 → 20+ | 20 → 30+ | 15 → 20+ | 15 → 20+ | 15 → 20+ |
-| **Training base** | Z-Image-Turbo (or a converted custom merge) | Your ComfyUI checkpoint (e.g. bigLove) | Krea-2-Raw (default) or Turbo | FLUX.1-dev (gated HF) | FLUX.2-klein-base 4B (default) or 9B (gated HF) |
+| **Training base** | Z-Image-Turbo (or a converted custom merge) | Your ComfyUI checkpoint (e.g. bigLove) | Krea-2-Raw (default), Turbo, or a Krea 2 checkpoint on your disk | FLUX.1-dev (gated HF) | FLUX.2-klein-base 4B (default) or 9B (gated HF) |
 | **Preview quality** | Fast, distilled | Depends on checkpoint | Raw: slow but faithful | High, ~20 steps | Non-distilled, real CFG (~25 steps) |
 | **Best for** | Fast iteration, prose-driven prompting | Booru-native checkpoints, NSFW ecosystems | Highest realism ceiling | The largest LoRA ecosystem, strong prompt fidelity | Modern FLUX.2 stack; 4B trains on mid-range GPUs |
 
 **Krea note:** the default trains on **Krea-2-Raw** — the official recommendation is
 *"train on Raw, validate on Turbo"*. Raw runs are long (hours); that's normal, not stuck.
+The **Base** selector also lists every Krea 2 checkpoint sitting in your ComfyUI
+`unet` / `diffusion_models` folders — a model one of your own full-model runs
+delivered, or a community Krea 2 build — so you can keep training on top of one
+instead of starting from the official weights every time. Entries carry a tag when
+the file is quantized: `· fp8 cast` trains but starts from degraded weights,
+`· packed export` cannot be loaded at all (see *Which quantized checkpoints can be
+trained on* in section 10). Local runs use the file directly; a cloud run first
+pushes it to your private Hugging Face repo, which the panel offers to do.
 
 **FLUX.1 note:** trains on **FLUX.1-dev**, a *gated* Hugging Face model — accept its
 license and set a HF token before the first run (the initial download is ~24 GB). It's
@@ -557,12 +565,159 @@ now says which parts and why.
 | Learning rate | 1e-6 | 1e-7 – 5e-6 | Lower if the model drifts off the base too fast; higher only with evidence. |
 | Resolution | 1024 px | 768 or 1024 | 768 trains faster and cheaper, at lower fidelity. |
 | Checkpoint every / keep | 250 steps / keep 1 | ≥ 100 steps / keep 1-3 | More kept checkpoints means more sweet-spot candidates — and each one is about 26 GB of PRIVATE Hugging Face storage. The panel states the total before you launch; the launch itself refuses (confirmably) when it plainly will not fit. |
+| Images per step | 1 | 1, 2, 4, 8 | Batch size is locked at 1, so by default each step learns from a **single image** — over a set of several thousand, that is a very noisy estimate of the right direction. This averages several images into one update instead. It needs no extra VRAM (the images go through one at a time); it needs TIME. |
+| Learning-rate schedule | constant | constant · warmup · cosine | Constant is what shipped. Warming up eases the first steps rather than hitting a 12B model at full rate from step 1. Cosine fades the rate to zero by the last step, which settles fine detail late instead of still shoving the weights around at the end. |
+| Warm up over | 100 steps | 10 - 1000 | Only used by the warmup schedule. |
+| Noise schedule | linear | linear · sigmoid · weighted | Which noise levels the run trains on. `sigmoid` concentrates on the middle of the range; `weighted` keeps the linear draw but weights the loss on a bell curve. There is no settled consensus for Krea 2 — linear is what every validated run so far used, so it stays the default. |
+
+**"Images per step" is the one setting here that spends money.** Everything else
+changes what the run produces at the same price. This one multiplies the run:
+4 images per step means about 4× the wall-clock and about 4× the bill on a GPU
+rented by the hour. The card prints the multiplier next to the control and turns
+it amber above 1, so the number is visible *before* you launch rather than on an
+invoice. What it does **not** change: the number of checkpoints, their cadence,
+or the Hugging Face storage the run needs — `steps` counts optimizer steps, so
+raising this changes how much each step learned from, not how many files land.
+
+**Two settings you may expect, and why they are not offered**
+
+Both exist in AI Toolkit. Both would break *this* model, so the card does not
+show them:
+
+- **EMA** (averaging the weights as training goes) keeps a second copy of every
+  trained parameter on the GPU, plus a third whenever it saves. On a LoRA that is
+  a few hundred megabytes. On a 12B full model it is roughly +26 GB, then +26 GB
+  again at the first checkpoint, on top of an unquantized model and its
+  gradients — the run would die at its first save. EMA is still available for
+  **LoRA** training, where it costs almost nothing.
+- **min-SNR weighting** needs a signal-to-noise table that flow-matching models
+  like Krea 2 simply do not have. Worse, the trainer's attempt to build that
+  table fails *silently* at startup, so the job does not refuse when you launch
+  it — it crashes inside the loss computation an hour later, on a pod you are
+  paying for. Refusing it up front is the cheaper failure.
+
+The same reasoning removes `shift`-style noise schedules from the full-model
+list: the trainer derives their shift from a token count that assumes a field
+Krea 2's denoiser names differently, so the value silently comes out four times
+too big. A mis-shifted schedule looks like a tuned run and is not one.
+
+> **Which AI Toolkit is this about?** LoRA training uses the AI Toolkit installed
+> on *your* machine — it changes whenever you update it. Full-model training is
+> cloud-only and uses the AI Toolkit baked into the rented pod's image, which is
+> pinned. They are different codebases at different dates. Every statement above
+> was checked against the pinned one, and each run now records the image the pod
+> actually booted, so a run can say for itself which trainer produced its weights.
+
+### Where a finished run lands, and why in that order
+
+A finished full model is brought **to this computer first** — into the checkpoint
+folder (Settings ▸ Storage) — and the pod is destroyed **only** once that file is
+proven: its byte count matches what the pod advertised, and its safetensors
+header re-reads and declares tensors. Nothing is pushed to Hugging Face *while
+the run trains*, which is the whole point: a full private quota used to arrive as
+a `403` at step 2750 of 3000 and end a paid run. Once the local copy exists, the
+master is uploaded to your private repository as a **backup**, and that upload is
+allowed to fail — it costs the ability to *continue* this model later, nothing
+more.
+
+Three deliveries, in Settings ▸ Storage ▸ **Full-model delivery**:
+
+| Delivery | What you get | What it costs |
+| --- | --- | --- |
+| **This computer, then a Hugging Face backup** (default) | The model here, plus a Hub copy that keeps the run resumable. | The Hub copy still needs private storage. |
+| **This computer only** | Nothing touches your Hugging Face quota. | The run can **not** be continued later. |
+| **Hugging Face only** | The behaviour of runs made before this existed. | A full quota can end the run itself. |
+
+If anything interrupts the download — a cut stream, a full drive, a cancelled
+transfer — the run ends as **error_pod_kept** with the machine alive, and the
+Runs page offers **Fetch to this computer**, which resumes from the byte it
+stopped at. A launch also refuses (confirmably) when the checkpoint drive plainly
+has no room for what is coming.
+
+### Continuing a full model
+
+▶ Continue works on a full model: a fresh pod is handed the checkpoint, drops it
+into its job folder, and ai-toolkit resumes from the step written in the file —
+so a run that stopped at 3000 continues to 4000 instead of paying for the first
+3000 again.
+
+The interesting part is **how the 26 GB gets to the pod**, because there are two
+roads and they are not interchangeable. The dialog shows both, with numbers:
+
+- **☁ Hugging Face** — the pod downloads the checkpoint itself over a datacenter
+  link. Minutes. It needs a Hub copy of the run to exist, and the weights pass
+  through a third party on the way.
+- **💻 This computer** — the file goes straight up from here. Nothing outside
+  your machine is involved, and it costs your upload speed: usually hours.
+
+**The number that actually decides it is neither speed nor privacy — it is the
+GPU bill.** The pod is rented and charged from the moment it boots, including
+every minute it spends waiting for its checkpoint. Three hours of upload at
+$1.40/h is **$4.20 of graphics card computing nothing**. The dialog shows that
+figure for each road before you click, alongside the file size and how long it
+expects to take.
+
+That estimate is honest about where it comes from. The app times the checkpoints
+it pushes to pods, so once you have sent one the forecast says *"measured at N
+Mbit/s on your last 3 transfers"*. Until then it says it is an estimate and names
+the speed it assumed. (If you already know your uplink, `cloud.uplink_mbps` seeds
+it — but a real measurement always wins over a typed one.)
+
+**Dataset uploads deliberately do not count towards that number**, even though
+they are also transfers to a pod. A dataset is thousands of small files sent
+eight per request, so what it measures is dominated by per-request latency; a
+checkpoint is one continuous stream. Mixing them would produce a figure that
+describes neither, and it would be used to forecast the faster of the two. The
+cost of that choice is stated rather than hidden: ten dataset uploads still leave
+this forecast labelled an estimate.
+
+**A long upload is interruptible without being lost.** The file is sent in
+slices, and every slice that reached the pod stays there: if the link drops, the
+app is closed, or the machine reboots, continuing that run again picks up at the
+last whole slice instead of starting over.
+
+When a road is unavailable the dialog says which one and why — a run delivered
+to this computer only has no Hub copy to pull, and a run whose local file was
+deleted has only the Hub.
+
+**The Hugging Face road is checked, not remembered.** The app records that a
+delivery succeeded, but that record is a minute of the past: a repository you
+deleted last night still reads "delivered". So opening the dialog asks whether
+the repository still answers, and a confirmed deletion closes that road with a
+price of nothing rather than an ETA — renting a pod to fetch a file that is not
+there would spend money on a download that cannot succeed. A check that could
+not be made (offline, no token, an outage) is **not** treated as a deletion: the
+road stays open, because refusing your fast road over a dropped Wi-Fi connection
+would be worse than the problem being avoided. Keeping the default **"This computer + Hugging Face"**
+delivery keeps the fast road open for every future run.
+
+**And the Hub copy is yours to delete — Hugging Face will not tell the app when
+you do.** Deleting one to free space is normal; being told weeks later that a
+model is "available" when the link answers 404 is not. So the Checkpoints panel
+and the Runs page **ask** whether the repository still answers when you open
+them, and say which of three things they found: it is still there, it is not
+there any more, or the check itself failed (no token, offline, an outage) —
+which is never reported as a loss. Until an answer comes back they describe the
+delivery in the past tense, dated, rather than claiming the model is there right
+now.
+
+A repository confirmed gone stops offering what can no longer work: the dead
+links disappear, *Quantize to fp8* is disabled on that card with its reason
+(downloading from that repository is the first thing it would do), and ▶ Continue
+is disabled **only when neither road is open** — that is, when the repository is
+gone *and* this computer no longer holds a full-precision file. With one on the
+disk, the 💻 road above is exactly the way out, so the button stays.
+
+Both halves of that are read fresh, which is the whole point: the repository is
+asked over the network, and the local file is looked for on the disk every time
+the page is drawn. Neither is a note taken when the run finished — deleting
+either one by hand shows up immediately.
 
 ### The two files a finished run delivers
 
-A dense run pushes its ~26 GB **bf16 master** to your private Hugging Face repo.
-Nobody generates with a file that size, so the app then quantizes it **on the pod**
-and uploads a **~10 GB fp8 export** next to it:
+A dense run produces a ~26 GB **bf16 master**. Nobody generates with a file that
+size, so the app quantizes it **on the pod** and delivers a **~10 GB fp8 export**
+next to it:
 
 - **the fp8 file is the one to download for ComfyUI.** It is a scaled fp8
   checkpoint (per-tensor `float8_e4m3fn` weights with their scales) and loads
@@ -572,8 +727,10 @@ and uploads a **~10 GB fp8 export** next to it:
   master* is ON by default for exactly that reason — turning it off halves your
   storage and closes that door permanently.
 
-If the export fails, the run is still a success: the master was delivered before
-the export ever ran, and the panel says so rather than reporting a failure.
+If the export fails, the run is still a success: the master is delivered either
+way, and the panel says so rather than reporting a failure. Only the master is
+ever backed up to Hugging Face — the fp8 twin is regenerated from it in seconds,
+and pushing both would eat the private quota twice as fast.
 
 ### Quantizing a model you already have
 
@@ -587,6 +744,15 @@ existing output is never silently overwritten.
 - It runs on the **CPU**, not the GPU: the work is an elementwise cast plus one
   reduction per tensor (measured ~1.2 GB/s here, so a 26 GB file is bound by your
   disk, not by arithmetic). Nothing competes with ComfyUI or a training run.
+- It runs in a **separate Python** — the one that has `torch` (the app installs
+  without it; torch is gigabytes). Whether that environment can actually do the
+  work is checked *while the plan is drawn*: one that cannot disables the button
+  and names what to install, rather than failing after the click or, worse,
+  after the download.
+- **The size of the model has no bearing on whether it opens.** It is read one
+  tensor at a time. Mapping the whole file used to reserve its entire size
+  up front, which is why a big checkpoint could fail with "the paging file is
+  too small" on a machine with plenty of free memory and disk.
 - One at a time, app-wide, and it checks free space before it reads a byte.
 - It **refuses a file that is already quantized** — quantizing twice only loses
   more precision — and refuses a LoRA or adapter, which has nothing large enough
@@ -600,27 +766,114 @@ existing output is never silently overwritten.
 > card can train something that would not otherwise fit. They write nothing: the
 > saved checkpoint is still full precision. This feature produces the **file**.
 
-### Quantizing a model that is already on Hugging Face
+### ✨ Quantize to fp8 — one click, no path to find
 
-A full model delivered before the automatic export existed is a 26 GB file in
-your private repo, and building its fp8 twin at home means pulling 26 GB down
-and pushing 10 GB back — an hour of your bandwidth for under a minute of
-arithmetic. **☁ Quantize to fp8 in the cloud**, on the delivered artifact,
-rents one cheap machine to do that round trip on a datacentre link and writes
-the fp8 file straight into the same repository. You then download only the small
-one.
+A run delivered before the automatic export existed leaves you with a 26 GB file
+in a private repo and no fp8 twin, and until now this block could not help: it
+asked for a path on your disk, and that master has none — the dense lane never
+downloads it. So the block now aims at the model **your run delivered**, and
+does the whole chain with nothing to type: fetch the master, convert it, and
+leave the fp8 file in ComfyUI's own models folder, ready to load.
 
-- **The cost is quoted before anything is rented** — price per hour, estimated
-  minutes, estimated total — exactly like a training run, plus the hard cap.
-- **The machine is destroyed on every path out**: on success, on failure, and at
-  a hard deadline (`cloud.quantize.max_minutes`, default 60) even if it reported
-  nothing. A sweep also reaps any machine of this lane left behind by an app
-  restart, and it runs every time the status is polled.
-- The GPU is irrelevant here — the job is network-bound — so the selection asks
-  for the cheapest card and filters on **downlink bandwidth** instead.
-- It refuses if the fp8 file already exists in the repository, and it warns
-  before renting when your private Hugging Face storage looks too small for the
-  new file.
+Click **✨ Quantize to fp8** once and it tells you what it is about to do; the
+conversion only starts on the second click.
+
+- **Which checkpoint it takes, by name.** A dense repo usually holds the final
+  save *and* several ~26 GB step snapshots whose names differ by a number. One
+  rule decides — the **final save** wins, and without one the **highest step**
+  does — and it is the same rule that stamped the file this card lists, so what
+  you read and what runs can never be two different files.
+- **Where the file lands, spelled out.** `models/diffusion_models` for a dense
+  transformer, `models/checkpoints` for an SDXL-style full checkpoint, honouring
+  an `extra_model_paths.yaml` root exactly as a LoRA deploy does. With ComfyUI
+  not configured it falls back to the app's own `data/models/…` and **says so** —
+  it never pretends to have put the file where ComfyUI looks.
+- **What it costs in disk, before it starts.** What is still to download, the
+  fp8 file's own ceiling, and 2 GB of working headroom — compared against the
+  free space of the volume that *really* holds that folder (a ComfyUI models
+  folder is very often a junction onto another drive). Not enough is a refusal
+  that writes out every term, and offers to write the file to another folder
+  rather than ending there. Whatever this forecast accepts, the conversion does
+  not then refuse.
+- **It is a real job.** Progress in gigabytes while the master comes down, then
+  per-tensor while it converts, a **Stop** button, and resumption from where it
+  stopped — stopping keeps what already arrived. The job also survives leaving
+  the page: come back and the card shows the same run.
+- **Afterwards, the master is kept by default.** It is the only file you can
+  train from again, merge, or re-quantize. Deleting it is one radio button away,
+  with its size written on it, and it only ever happens *after* the fp8 file has
+  been re-opened and verified.
+- It refuses a file that is **already quantized**, refuses a LoRA/adapter, and
+  **never overwrites** an existing output.
+
+**The path field is still there, as the exception.** A file nothing in the app
+points at — a checkpoint someone shared, a model you downloaded yourself — is
+typed in as before, and takes the same route: same refusals, same disk check,
+same destination, stated. When you have set **Custom weights…**, that path
+pre-fills it, so there is nothing to type there either.
+
+### Why full-model training targets Raw, not Turbo
+
+Dense (full model) training is offered on **Krea 2 Raw only**. That is a scope
+decision, and it has numbers behind it — but it is a choice, not a defect we hit.
+
+**What Turbo is.** A speed-distilled build: it draws an image in about 8 steps
+instead of ~50, and that compression lives in the very weights a dense run
+rewrites. So a dense run on Turbo does eat into the speed.
+
+**What that actually costs, where anyone has measured it.** Not a broken file.
+One distilled model has published results for this: **Z-Image-Turbo**. Full
+fine-tuning leaves a model that still generates properly and simply **stops being
+fast**. Both published sources give the same replacement recipe: give up the
+acceleration settings and infer at **~30 steps, CFG ~2** instead of 8 steps and
+CFG 1.
+
+- [DiffSynth-Studio ▸ Z-Image](https://github.com/modelscope/DiffSynth-Studio/blob/main/docs/en/Model_Details/Z-Image.md)
+  — "Direct training will quickly cause the model to lose its acceleration
+  capability", and after it "the effect of inference with 'acceleration
+  configuration' becomes worse, while the effect of inference with 'no
+  acceleration configuration' becomes better".
+- [Training strategies of Z-Image-Turbo](https://huggingface.co/blog/kelseye/training-strategies-of-z-image-turbo)
+  (kelseye, 2025-12-16) — "Directly updating the model weights (such as **full
+  fine-tuning** or standard LoRA) tends to disrupt the model's pre-trained
+  acceleration trajectory". Its Scheme 1, "the most general fine-tuning method",
+  degrades "significantly" at 8 steps / CFG 1 and is then run at
+  `num_inference_steps=30`, `cfg_scale=2`. It is offered to people "insensitive
+  to inference speed", which is the whole point: usable, not broken.
+
+Two things those sources do **not** say, and this page used to:
+
+- **They do not say the erosion is progressive.** DiffSynth says training
+  loses the acceleration "quickly"; the paper that studies the problem head-on
+  ([D-OPSD, arXiv 2605.05204](https://arxiv.org/abs/2605.05204), 2026-05-06)
+  treats it as something fine-tuning "would compromise" outright, and exists to
+  *prevent* it rather than to describe it fading. Expect to lose the few-step
+  mode, not to watch it drift.
+- **They say nothing about FLUX.2 Klein.** This page named it as a second model
+  with published results; no source we have does. Black Forest Labs' own
+  fine-tuning material for Klein is about LoRA, and points at the undistilled 9B
+  Base for post-training — consistent with the advice below, but it is not a
+  measurement of what dense training costs a distilled build.
+
+**Nobody has published that measurement for Krea 2 in particular.** Everything
+above is carried over from neighbouring models. So the honest word for
+dense-on-Turbo here is **untested**, not impossible. For now the app declines it
+rather than letting a rented 80 GB GPU be the first experiment — that is where
+the line sits today, drawn by missing evidence rather than by a known defect,
+and it is the kind of line a measurement moves.
+
+**Krea's own recommendation is train on Raw** — the undistilled checkpoint they
+publish for exactly this — then validate on Turbo. musubi-tuner, the other
+public trainer with Krea 2 support, recommends the same. Nothing here changes
+that advice.
+
+**If you want the speed back afterwards, the published route is a transplant.**
+Fine-tune on Raw, then merge the Turbo re-distillation LoRA published in the
+`Comfy-Org/Krea-2` repo onto your result; authors report doing this around
+strength 0.8-1.0 to get an 8-step build out of a Raw fine-tune. The same trick
+exists for neighbouring models (Z-Image-Turbo distill patches, LCM-LoRA).
+**We have not tested it ourselves** — treat it as a lead, not a supported
+feature.
 
 ### Testing a full model: it is a RAW checkpoint
 
@@ -630,16 +883,53 @@ failed" when nothing failed at all. Use the same settings the run previewed
 with: **CFG ~4 (3.5-5) and 20-30 steps**. The Test Studio now pre-fills those
 automatically when the selected base looks like a Raw / full / fp8 checkpoint.
 
-### Why a quantized checkpoint is refused as a training base
+### Which quantized checkpoints can be trained on, and which cannot
 
-Picking a community fp8/int8 export as **Custom weights** is refused with
-*"This is an inference-only quantized export — training needs the bf16/fp16
-version of this model."* Those files (about 10 GB instead of 26 GB) are repacks
-made for generation: the weights no longer carry the precision a gradient step
-needs. The check reads a few kilobytes of file header — the quantization
-markers and the tensor dtypes — so it costs nothing and fires the moment you
-pick the file, not an hour into a paid run. A file whose header cannot be read
-is let through: the app refuses what it can prove, never what it merely suspects.
+**The format decides, not the number of bits.** "Quantized" covers two different
+files, and only one of them is a wall:
+
+- a **packed export** — ComfyUI's scaled fp8 and its newer `comfy_quant` form,
+  every int8 repack, and the fp8 twin this app itself writes — stores its
+  decompression tables as *extra tensors* (`scaled_fp8`, `<layer>.scale_weight`,
+  `<layer>.comfy_quant`). A trainer loads a base strictly: those tensors are keys
+  it does not know, so **the load fails immediately** — not mid-run, not at the
+  first optimizer step. This one is refused, and the message names both the
+  obstacle and the way out;
+- a **plain fp8 cast** stores the weights in fp8 under the tensor names the
+  full-precision file already had, adding nothing. There is no unknown key for the
+  strict load to trip on: the trainer up-casts it to bf16 as it loads. This one is
+  **allowed**. Several widely used Krea 2 checkpoints — including the Turbo file
+  most people already have — are of this kind, and refusing them closed a path
+  that works.
+
+Allowed is not recommended. Picking a cast base shows a warning with the actual
+numbers (how many of the file's tensors are stored in fp8, and how many
+significand bits that leaves against bf16's 8): the precision the cast dropped
+does not come back, so the run starts from an already-degraded base and the LoRA
+it produces is worse than the same run on the full-precision file, for the same
+GPU time. Train on it if that is the file you have — the point is that you know
+what it costs, not that you should not.
+
+**What this check does not answer.** It reads how the file is *packed*, not
+whether the model family can accept its tensors. A checkpoint can pass here and
+still be refused at load for carrying a tensor the architecture does not declare.
+Real case, found while building this: a widely circulated fp8 conversion of Krea 2
+Turbo carries two extra 6144×6144 tensors under weight-shaped names — its own
+metadata describes them as an embedded image, not weights — and a strict load
+rejects them. That failure also happens in the first seconds, before any GPU time
+is spent, and it comes with the trainer's own message naming the keys.
+
+**The way out of a refusal is a click, not a download.** A full-model run keeps
+its bf16 master next to the fp8 twin, and the Checkpoints panel lists that master
+by name — pick it there. If the only copy you have is a packed export, the
+full-precision version has to come from wherever the model was published; there
+is no way back from a packed file, which is why *Keep the bf16 master* is on by
+default.
+
+The check reads a few kilobytes of file header — the quantization markers and the
+tensor dtypes — so it costs nothing and fires the moment you pick the file, not
+an hour into a paid run. A file whose header cannot be read is let through: the
+app refuses what it can prove, never what it merely suspects.
 
 ---
 

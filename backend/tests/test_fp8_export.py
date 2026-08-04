@@ -199,3 +199,83 @@ def test_estimate_and_name_helpers():
     # ~26 GB bf16 -> ~11 GB planning figure, never zero, never larger.
     est = fx.estimate_fp8_bytes(26 * 1000 ** 3)
     assert 0 < est < 26 * 1000 ** 3
+
+
+# --- the reader: nothing is memory-mapped, in either direction ------------------
+# Root incident: safetensors' safe_open maps the WHOLE container, and Windows
+# reserves that against the system commit charge when the mapping is created.
+# Measured on this project's own 25.64 GB dense master while the machine had
+# 5.7-10.4 GB of commit available: safe_open raised OSError 1455 ("the paging
+# file is too small") and, on one attempt, took the process down outright, while
+# the reader below opened the same file and pulled a tensor out of it for 0.30 GB.
+# The box where this was NOT reproducible has a 119 GB pagefile — which is
+# exactly how a defect like this ships.
+
+def test_reader_returns_exactly_what_safetensors_would(tmp_path):
+    """The replacement has to be boring: same tensors, same dtypes, same values."""
+    torch.manual_seed(5)
+    tensors = {
+        'blocks.0.attn.wq.weight': torch.randn(64, 32).bfloat16(),
+        'blocks.0.prenorm.scale': torch.ones(64),
+        'blocks.0.mlp.up.weight': torch.randn(48, 16).half(),
+        'scalar': torch.tensor(1.5),
+    }
+    path = tmp_path / 'm.safetensors'
+    safetensors_torch.save_file(tensors, str(path))
+    reference = safetensors_torch.load_file(str(path))
+    with fx._Reader(path) as reader:
+        assert set(reader.keys()) == set(tensors)
+        for name, expected in reference.items():
+            got = reader.get_tensor(name)
+            assert got.dtype is expected.dtype, name
+            assert tuple(got.shape) == tuple(expected.shape), name
+            assert torch.equal(got, expected), name
+
+
+def test_reader_says_so_when_the_file_is_truncated(tmp_path):
+    path = tmp_path / 'cut.safetensors'
+    safetensors_torch.save_file(
+        {'blocks.0.mlp.up.weight': torch.randn(64, 64).bfloat16()}, str(path))
+    whole = path.read_bytes()
+    path.write_bytes(whole[:-2048])            # lose the tail of the data block
+    with fx._Reader(path) as reader:
+        with pytest.raises(fx.Fp8ExportError, match='truncated'):
+            reader.get_tensor('blocks.0.mlp.up.weight')
+
+
+def test_reader_refuses_a_file_that_is_not_safetensors(tmp_path):
+    junk = tmp_path / 'nope.safetensors'
+    junk.write_bytes(b'this is not a safetensors container at all')
+    with pytest.raises(fx.Fp8ExportError, match='not a readable'):
+        fx._Reader(junk)
+
+
+def test_no_code_path_in_this_module_memory_maps_a_checkpoint():
+    """A HEURISTIC, and the only guard available — be clear about which.
+
+    WHAT IT CATCHES: somebody reaching for ``safe_open`` or importing
+    ``safetensors`` in this module again, for the source, for the read-back
+    verification, or for anything else.
+
+    WHAT IT DOES NOT CATCH: memory-mapping by any other spelling — ``mmap``,
+    ``np.memmap``, a helper in another module that maps on our behalf, or a
+    future safetensors API with a different name. It matches text, so it cannot
+    know what a call actually does.
+
+    It exists in this weak form because the real defect CANNOT be unit tested:
+    it needs a multi-GB file AND a machine whose commit charge is not generous,
+    which is never the machine the code is written on. Measured, it took a
+    25.6 GB file and a box down to 5.7 GB of free commit. A grep that catches
+    the one spelling we know about is worth more than nothing and much less than
+    a proof — treat a green here as "the known mistake was not repeated", not as
+    "nothing is mapped".
+    """
+    import inspect
+    code = '\n'.join(line for line in inspect.getsource(fx).splitlines()
+                     if not line.lstrip().startswith('#'))
+    # Docstrings name safe_open on purpose (they explain why it is not used);
+    # what must not exist is a CALL or an import.
+    assert 'safe_open(str(' not in code and 'safe_open(path' not in code, \
+        'fp8_export must not memory-map a checkpoint — use _Reader'
+    assert 'from safetensors import' not in code
+    assert 'import safetensors' not in code

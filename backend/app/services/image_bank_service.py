@@ -1194,6 +1194,44 @@ def _sort_order(sort):
     return (col.is_(None).asc(), ranked, BankImage.id.asc())
 
 
+def _flag_counts(bank_id, th) -> tuple[dict, dict]:
+    """Two per-flag maps, because the UI asks two different questions of them.
+
+    ``flags[f]``      — every image in the bank carrying the flag, whatever its
+                        status. This is the FACET number: clicking the chip shows
+                        exactly these rows, rejected ones included.
+    ``actionable[f]`` — what a 🧹 Auto-reject on that flag would really flip.
+                        ``apply_flags`` only ever touches ``status='pending'``
+                        (its contract: a manual — or an earlier automatic — ✓/✕
+                        is never overridden), so it is the same criterion
+                        narrowed to the undecided pile.
+
+    The two coincide on a bank nothing has been decided on yet, and diverge the
+    moment one pass has run — which is exactly when the user starts trusting the
+    number. Measured on a real 99 000-image bank at its SECOND pass: the button
+    offered "5 930 flagged" for blur and rejected 0, because all 5 930 had been
+    rejected by the first pass. Reading that as "the feature is broken" is the
+    only reasonable conclusion, and it was the counter's fault, not the pass's.
+
+    One query per flag, not two: the pending half rides along as a conditional
+    SUM, so telling the truth costs nothing extra on a 100 000-image bank."""
+    flags, actionable = {}, {}
+    for flag in _QUALITY_FLAGS + _SCORE_FLAGS:
+        crit = _flag_filter(flag, th)
+        if crit is None:
+            flags[flag] = actionable[flag] = 0
+            continue
+        total, pending = (
+            db.session.query(
+                func.count(BankImage.id),
+                func.coalesce(
+                    func.sum(case((BankImage.status == 'pending', 1), else_=0)), 0))
+            .filter(BankImage.bank_id == bank_id).filter(crit).one())
+        flags[flag] = int(total or 0)
+        actionable[flag] = int(pending or 0)
+    return flags, actionable
+
+
 def bank_payload(user_id, bank_id) -> dict | None:
     """Everything the bank workspace needs on one poll: counts, flag totals,
     duplicate/cluster summaries, live job, thresholds."""
@@ -1206,6 +1244,18 @@ def bank_payload(user_id, bank_id) -> dict | None:
     counts = {
         'total': total,
         'scanned': base.filter(BankImage.quality_state.isnot(None)).count(),
+        # The blind spot, named. An image no quality pass ever measured carries
+        # no verdict, and EVERY quality flag is gated on `quality_state == 'ok'`
+        # (see _flag_filter) — so these rows are structurally unreachable by
+        # 🧹 Auto-reject. That is not "they are clean": it is "we know nothing
+        # about them", and the two must never render as the same 0.
+        'unscanned': base.filter(BankImage.quality_state.is_(None)).count(),
+        # ...and how many of those a 🔎 Scan would actually pick up. Rejected
+        # rows are out of the scan pool (_scan_pool), so the two numbers differ
+        # by exactly the images that were thrown away before being measured. The
+        # UI offers the gesture, so it quotes the number the gesture moves.
+        'unscanned_scannable': base.filter(BankImage.quality_state.is_(None),
+                                           BankImage.status != 'reject').count(),
         'pending': base.filter_by(status='pending').count(),
         'keep': base.filter_by(status='keep').count(),
         'reject': base.filter_by(status='reject').count(),
@@ -1240,10 +1290,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
                                           BankImage.face_yaw.is_(None)).count(),
     }
     framing = _framing_counts(bank_id)
-    flags = {}
-    for flag in _QUALITY_FLAGS + _SCORE_FLAGS:
-        crit = _flag_filter(flag, th)
-        flags[flag] = base.filter(crit).count() if crit is not None else 0
+    flags, flags_actionable = _flag_counts(bank_id, th)
     res_buckets = _res_bucket_counts(bank_id)
     origins = _origin_counts(bank_id)
     dup_rows = (db.session.query(BankImage.dup_group, func.count(BankImage.id))
@@ -1301,7 +1348,13 @@ def bank_payload(user_id, bank_id) -> dict | None:
     return {
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
-        'counts': counts, 'flags': flags, 'res_buckets': res_buckets,
+        'counts': counts, 'flags': flags,
+        # A SECOND map, not a replacement: 'flags' answers the facet's question
+        # ("show me these") and 'flags_actionable' answers the button's ("how
+        # many would this reject"). Overwriting the first would have broken the
+        # chip row, whose count legitimately includes already-rejected images.
+        'flags_actionable': flags_actionable,
+        'res_buckets': res_buckets,
         'framing': framing, 'origins': origins,
         'mediums': _medium_counts(bank_id), 'angles': _angle_counts(bank_id),
         # What the ⤢ backfill would cost, in the app's own words. ~2 s/image is
@@ -1360,11 +1413,12 @@ def flag_preview(user_id, bank_id, overrides=None) -> dict | None:
     th['dup_distance'] = int(th['dup_distance'])
     th['min_side'] = int(th['min_side'])
     base = BankImage.query.filter_by(bank_id=bank_id)
-    flags = {}
-    for flag in _QUALITY_FLAGS + _SCORE_FLAGS:
-        crit = _flag_filter(flag, th)
-        flags[flag] = base.filter(crit).count() if crit is not None else 0
-    return {'flags': flags, 'thresholds': th, 'total': base.count()}
+    # Same producer as the workspace payload, so the two can never answer the
+    # same question differently — and so the panel's "before/after" line can
+    # tell "would be flagged" from "would be rejected" if it ever needs to.
+    flags, flags_actionable = _flag_counts(bank_id, th)
+    return {'flags': flags, 'flags_actionable': flags_actionable,
+            'thresholds': th, 'total': base.count()}
 
 
 def _load_pipeline_report(bank: ImageBank):

@@ -334,29 +334,15 @@ def _klein_unet_folders():
     is exactly what UNETLoader loads for a root-level file. Per root, subfolders
     first (sorted), then the root entry; across roots, base unet/ first (the
     canonical download location), then shared-install folders, then extra roots.
-    With no extra_model_paths.yaml the roots are exactly [unet, diffusion_models]."""
-    out = []
-    for base_dir in comfy_model_paths.search_roots('diffusion_models'):
-        try:
-            entries = os.listdir(base_dir)
-        except OSError:
-            continue
-        subs = sorted(d for d in entries
-                      if 'klein' in d.lower() and os.path.isdir(os.path.join(base_dir, d)))
-        for sub in subs:
-            try:
-                names = sorted(n for n in os.listdir(os.path.join(base_dir, sub))
-                               if n.lower().endswith(_MODEL_SUFFIXES))
-            except OSError:
-                continue
-            if names:
-                out.append((sub, names))
-        root_names = sorted(n for n in entries
-                            if 'klein' in n.lower() and n.lower().endswith(_MODEL_SUFFIXES)
-                            and os.path.isfile(os.path.join(base_dir, n)))
-        if root_names:
-            out.append(('', root_names))
-    return out
+    With no extra_model_paths.yaml the roots are exactly [unet, diffusion_models].
+
+    No `accept`: unlike Krea, this family has no checkpoint that carries its token
+    without being one of its bases. That is a fact about Klein, not a missing
+    filter — `test_model_scanners_agree` pins it so a consolidation cannot hand it
+    somebody else's exclusion list."""
+    return comfy_model_paths.scan_family_folders(
+        comfy_model_paths.search_roots('diffusion_models'), ('klein',),
+        suffixes=_MODEL_SUFFIXES)
 
 
 class KleinModelGone(ValueError):

@@ -103,9 +103,21 @@ test('a mixed or thin sample is never dressed up as an offer', () => {
   const mixed = { ...LIKELY, verdict: 'mixed', faces: 2 };
   assert.match(suggestionLine(mixed), /probably not one person/);
   assert.equal(suggestionTone(mixed), 'muted');
-  const thin = { ...LIKELY, verdict: 'inconclusive', scorable: 1 };
-  assert.match(suggestionLine(thin), /Too few usable faces/);
+  const thin = { ...LIKELY, verdict: 'inconclusive', scorable: 1, sample: 60 };
+  assert.match(suggestionLine(thin), /Almost no readable face here — 1 in 60 images tried/);
+  assert.match(suggestionLine(thin), /little to work with in this folder/);
   assert.equal(suggestionTone(thin), 'muted');
+});
+
+test('a partial verdict is offered with its thinness in front of it', () => {
+  const partial = { ...LIKELY, verdict: 'partial', sample: 40, scorable: 6, largest: 6 };
+  const line = suggestionLine(partial);
+  assert.match(line, /Looks like one person, on thin evidence/);
+  assert.match(line, /only 6 usable faces in 40 images tried/);
+  assert.match(line, /assert\?$/);          // still a question, never a claim
+  assert.equal(suggestionTone(partial), 'ok');
+  assert.deepEqual(suggestedFolders([partial]), ['anna']);
+  assert.equal(folderMarker([partial], 'anna'), ' · 👤?');
 });
 
 test('a STALE probe never surfaces — the folder it describes is gone', () => {
@@ -130,6 +142,11 @@ test('the scan states its cost BEFORE it is paid, and who decides', () => {
   assert.match(o.note, /~15 images each/);
   assert.match(o.note, /only suggests; you confirm/);
   assert.ok(!/waiting/.test(o.note));      // nothing left over, so nothing claimed
+});
+
+test('the scan quotes the re-draw ceiling, not just the lucky case', () => {
+  const o = scanOffer({ scannable: 6, scan_limit: 20, sample_size: 15, sample_max: 60 });
+  assert.match(o.note, /~15 images each, up to 60 in the hard ones/);
 });
 
 test('a ceiling is announced rather than silently applied', () => {

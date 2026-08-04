@@ -53,16 +53,19 @@ HOW IT RUNS
 This file is BOTH a normal service module (imported by the tests and by the
 cloud orchestrator, which ships its own source text to the pod) and a
 self-contained CLI with no LDS imports, so the exact same code that is unit
-tested here is what executes on the pod. torch / safetensors / huggingface_hub
-are imported lazily inside the functions that need them: importing this module
-on a machine with none of them must stay free.
+tested here is what executes on the pod. torch / huggingface_hub are imported
+lazily inside the functions that need them: importing this module on a machine
+with neither must stay free. Reading and writing the safetensors format is done
+here, by hand, against its own 8-byte length + JSON header — see ``_Reader``.
 
 MEMORY
 ------
-The writer is streaming: the safetensors header is computed up front from the
-SOURCE header (every output size is knowable without reading a tensor), then
-tensors are read, quantized and written one at a time. Peak resident memory is
-one tensor, not one checkpoint — a 26 GB input never needs 26 GB of RAM.
+The writer is streaming and NOTHING is memory-mapped in either direction: the
+output header is computed up front from the SOURCE header (every output size is
+knowable without reading a tensor), then tensors are read, quantized and written
+one at a time. Peak resident memory is one tensor, not one checkpoint — a 26 GB
+input never needs 26 GB of RAM, and it never needs 26 GB of address space
+either, which is the failure that actually shipped (``_Reader``).
 """
 from __future__ import annotations
 
@@ -160,6 +163,108 @@ def read_header(path) -> dict:
 def _entries(header: dict) -> dict:
     return {k: v for k, v in header.items()
             if k != '__metadata__' and isinstance(v, dict)}
+
+
+def _torch_dtype_for(name: str):
+    """safetensors dtype spelling -> torch dtype. Lazy: importing torch at module
+    scope would make this file un-importable where it is only read for planning."""
+    import torch
+    return {
+        'BF16': torch.bfloat16, 'F16': torch.float16, 'F32': torch.float32,
+        'F64': torch.float64, 'F8_E4M3': torch.float8_e4m3fn,
+        'F8_E5M2': torch.float8_e5m2, 'I64': torch.int64, 'I32': torch.int32,
+        'I16': torch.int16, 'I8': torch.int8, 'U8': torch.uint8,
+        'BOOL': torch.bool,
+    }.get(str(name).upper())
+
+
+class _Reader:
+    """One tensor at a time out of a .safetensors, by ordinary file I/O.
+
+    DELIBERATELY NOT ``safetensors.safe_open``. That memory-maps the whole
+    container, and on Windows a multi-GB mapping is charged against the pagefile
+    the moment it is created — so opening a 25.6 GB master fails outright with
+    ``OSError 1455`` ("the paging file is too small for this operation") on a
+    machine with free RAM and hundreds of GB of free disk. Measured on the real
+    file: the merge lane died on exactly that line before reading one tensor, and
+    this lane opens the same size of file the same way.
+
+    The machine where this was NOT reproducible has a 119 GB pagefile. That is
+    the whole danger: the defect is invisible on a generously configured box and
+    fatal on a default one, so it ships.
+
+    Both passes here are strictly sequential — read a tensor, transform it, write
+    it, drop it — so a mapping buys nothing anyway. Seeking to the offset the
+    header already gives us has the same peak memory (one tensor), no
+    address-space cost, and no dependence on the user's pagefile.
+
+    YES, THIS DUPLICATES ``lora_merge.Reader``. On purpose, and do not
+    deduplicate it: this file is shipped to a rented pod as SOURCE TEXT and run
+    there as a CLI with no LDS package around it (see the module docstring). An
+    import of a sibling service would work here and fail there, which is the
+    worst possible place to find out.
+    """
+
+    def __init__(self, path):
+        self.path = str(path)
+        self._fh = open(self.path, 'rb')
+        try:
+            raw = self._fh.read(8)
+            if len(raw) != 8:
+                raise ValueError('file too short to be a safetensors container')
+            n = struct.unpack('<Q', raw)[0]
+            if n <= 0 or n > _HEADER_LEN_MAX:
+                raise ValueError('implausible safetensors header length')
+            blob = self._fh.read(n)
+            if len(blob) != n:
+                raise ValueError('truncated safetensors header')
+            self.header = json.loads(blob.decode('utf-8'))
+            if not isinstance(self.header, dict):
+                raise ValueError('safetensors header is not an object')
+        except Exception as e:
+            self._fh.close()
+            raise Fp8ExportError(f'not a readable .safetensors file ({e})') from e
+        self._start = 8 + n
+        self.entries = _entries(self.header)
+
+    def keys(self):
+        return list(self.entries)
+
+    def get_tensor(self, name):
+        import torch
+        spec = self.entries.get(name)
+        if spec is None:
+            raise Fp8ExportError(f'{name} is not in {os.path.basename(self.path)}')
+        dtype = _torch_dtype_for(spec.get('dtype'))
+        if dtype is None:
+            raise Fp8ExportError(f'unsupported dtype {spec.get("dtype")!r} on {name}')
+        begin, end = int(spec['data_offsets'][0]), int(spec['data_offsets'][1])
+        nbytes = end - begin
+        self._fh.seek(self._start + begin)
+        # readinto a bytearray: torch.frombuffer warns once per tensor over a
+        # read-only buffer, and copying afterwards would hold two copies of a
+        # 200 MB tensor at the peak for nothing.
+        raw = bytearray(nbytes)
+        got = self._fh.readinto(raw)
+        if got != nbytes:
+            raise Fp8ExportError(
+                f'{os.path.basename(self.path)} is truncated: {name} claims '
+                f'{nbytes} bytes and only {got} are there.')
+        shape = [int(d) for d in (spec.get('shape') or [])]
+        return torch.frombuffer(raw, dtype=dtype).reshape(shape)
+
+    def close(self):
+        try:
+            self._fh.close()
+        except OSError:
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        self.close()
+        return False
 
 
 def should_quantize(name: str, dtype: str, shape) -> bool:
@@ -298,7 +403,6 @@ def export_scaled_fp8(src_path, dst_path, *, metadata=None, progress=None,
     the caller has the bf16 master already delivered.
     """
     import torch                                   # noqa: F401  (fail fast, clearly)
-    from safetensors import safe_open
 
     header = read_header(src_path)
     plan = plan_quantization(header)
@@ -351,8 +455,7 @@ def export_scaled_fp8(src_path, dst_path, *, metadata=None, progress=None,
     tmp = str(dst_path) + '.part'
     written = 0
     try:
-        with safe_open(str(src_path), framework='pt') as reader, \
-                open(tmp, 'wb') as out:
+        with _Reader(src_path) as reader, open(tmp, 'wb') as out:
             out.write(_pack_header(index, out_meta))
             for i, name in enumerate(order):
                 if budget_seconds and (_now() - started) > budget_seconds:
@@ -462,16 +565,74 @@ def _newest_checkpoint(folder, prefix='Krea'):
     return best[1] if best else None
 
 
-def main(argv=None) -> int:
-    """CLI executed ON THE POD. Prints exactly one JSON line on stdout.
+def verify_export(path) -> dict:
+    """Re-open the file we just wrote and prove it is what we claimed.
 
-    Fail-open by contract: a non-zero exit means "no fp8 export", never "the run
-    failed" — the bf16 master was pushed by the trainer before this ever ran.
+    Same checks as the unit test, run on the REAL output: the fp8 marker, one
+    per-tensor scale, and the payload dtype. A conversion that produced an
+    unloadable file must say so here rather than at generation time, days later.
+
+    It lives HERE, next to the writer, because both need torch — and the app
+    server is not allowed to (see fp8_quantize's module note). One
+    implementation, run wherever the conversion runs.
+
+    It reads through ``_Reader`` for the same reason the writer does: this opens
+    the ~13 GB file we just produced, which is squarely in the range where a
+    memory mapping fails on a default Windows pagefile. Fixing only the source
+    side would have moved the crash from the start of the conversion to its last
+    second — after twenty minutes of work — which is worse than not fixing it.
+    """
+    out = {'verified': False, 'verify_error': None}
+    try:
+        with _Reader(path) as fh:
+            keys = list(fh.keys())
+            if MARKER_KEY not in keys:
+                raise ValueError('the scaled-fp8 marker is missing')
+            marker = fh.get_tensor(MARKER_KEY)
+            scales = [k for k in keys if k.endswith(SCALE_SUFFIX)]
+            if not scales:
+                raise ValueError('no per-tensor scale was written')
+            weight = scales[0][:-len(SCALE_SUFFIX)] + '.weight'
+            payload = fh.get_tensor(weight)
+            scale = fh.get_tensor(scales[0])
+        import torch
+        if marker.dtype is not torch.float8_e4m3fn or marker.nelement() != 2:
+            raise ValueError('the marker does not describe float8_e4m3fn weights')
+        if payload.dtype is not torch.float8_e4m3fn:
+            raise ValueError(f'{weight} was not written as float8_e4m3fn')
+        if scale.dtype is not torch.float32 or scale.ndim != 0:
+            raise ValueError('the per-tensor scale is not a float32 scalar')
+        out.update(verified=True, scaled_tensors=len(scales))
+    except Exception as e:                       # noqa: BLE001 — reported
+        out['verify_error'] = str(e)[:300]
+    return out
+
+
+# One line per converted tensor, read by the parent process to drive a progress
+# bar. Deliberately not JSON: it is parsed off a stream that also carries torch's
+# own chatter, so it has to be recognisable at a glance and cheap to emit.
+PROGRESS_PREFIX = 'LDS_FP8_PROGRESS'
+
+# The single line this CLI ends on, whichever machine runs it. `dense_fp8_delivery`
+# declares the same string for the pod lane it parses; defining it HERE too keeps
+# the local worker from importing that module just to read a constant.
+RESULT_PREFIX = 'LDS_FP8_RESULT'
+
+
+def main(argv=None) -> int:
+    """CLI, executed on the pod AND — with ``--dst`` — as this app's own worker.
+
+    Prints exactly one ``LDS_FP8_RESULT`` JSON line on stdout, plus progress
+    lines when asked. Fail-open by contract on the pod: a non-zero exit means
+    "no fp8 export", never "the run failed" — the bf16 master was pushed by the
+    trainer before this ever ran.
     """
     import argparse
     parser = argparse.ArgumentParser(prog='lds-fp8-export')
     parser.add_argument('--src', default='')
     parser.add_argument('--src-dir', default='')
+    parser.add_argument('--dst', default='')
+    parser.add_argument('--progress', action='store_true')
     parser.add_argument('--prefix', default='Krea')
     parser.add_argument('--repo-id', default='')
     parser.add_argument('--budget-seconds', type=int, default=1800)
@@ -493,9 +654,15 @@ def main(argv=None) -> int:
         src = args.src or _newest_checkpoint(args.src_dir, args.prefix)
         if not src:
             raise Fp8ExportError('no dense checkpoint found to quantize')
-        dst = os.path.join(os.path.dirname(src), fp8_name_for(src))
-        summary = export_scaled_fp8(src, dst, budget_seconds=args.budget_seconds)
-        result.update(ok=True, **summary)
+        dst = args.dst or os.path.join(os.path.dirname(src), fp8_name_for(src))
+
+        def report(done, total):
+            print(f'{PROGRESS_PREFIX} {done} {total}', flush=True)
+
+        summary = export_scaled_fp8(src, dst, budget_seconds=args.budget_seconds,
+                                    progress=report if args.progress else None,
+                                    metadata={'lds_quantized_from': os.path.basename(src)})
+        result.update(ok=True, **summary, **verify_export(dst))
         if args.repo_id:
             from huggingface_hub import HfApi
             api = HfApi(token=os.environ.get('HF_TOKEN') or None)
@@ -510,7 +677,7 @@ def main(argv=None) -> int:
                 result['dropped_bf16'] = True
     except Exception as e:                       # noqa: BLE001 — reported, not raised
         result['error'] = str(e)[:500]
-    print('LDS_FP8_RESULT ' + json.dumps(result))
+    print(RESULT_PREFIX + ' ' + json.dumps(result))
     return 0 if result['ok'] else 1
 
 

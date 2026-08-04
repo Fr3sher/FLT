@@ -188,6 +188,12 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset', 'prompt_suffixes', 'TEXT'),
     ('face_dataset', 'caption_options', 'TEXT'),
     ('face_dataset', 'klein_model', 'VARCHAR(255)'),
+    # NOTE — `face_dataset.internal` was added here for a feature that was
+    # removed before it ever shipped in a release. Databases created while it
+    # existed still carry the column; it is nullable, nothing reads or writes it,
+    # and it is deliberately NOT dropped: SQLite's DROP COLUMN is unavailable on
+    # older engines and would rewrite the table for no gain. Do not reuse the
+    # name for anything else — an old database would hand you stale values.
     ('face_dataset_image', 'caption_short', 'TEXT'),
     ('face_dataset_image', 'fail_reason', 'TEXT'),
     # Nature de l'échec ('refused' | 'empty' | 'error') pour compter les refus

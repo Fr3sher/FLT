@@ -182,7 +182,11 @@ DEFAULTS = {
         # to a raw-image launch using `image`/`onstart` below.
         'template_hash': '471ed5903d8cdb8e63b0d0e50f6cd519',
         'ui_port': 18675,              # container port the UI is reachable on (Caddy proxy)
-        'image': 'vastai/ostris-ai-toolkit:4625406-2026-07-12-cuda-12.9',  # raw-image fallback only
+        # Raw-image fallback only — BUT the tag also names the ai-toolkit commit
+        # the dense (full-transformer) recipe's supported/refused verdicts were
+        # read against. Bumping it means a different trainer: re-read the lever
+        # comments in services/lora_training.py first (a test enforces the pin).
+        'image': 'vastai/ostris-ai-toolkit:4625406-2026-07-12-cuda-12.9',
         'max_price_per_hour': 0.80,    # background safety cap on offer price, $/h
         'offer_scan_limit': 100,       # offers fetched when listing GPU speed tiers
         'pod_overhead_minutes': 35,    # boot+model download+quantize (measured ~40 min live), in cost estimates
@@ -263,6 +267,21 @@ DEFAULTS = {
             # 0 = size one dense checkpoint from what past runs really delivered
             # (their persisted Hub integrity proof), else ~26 GB.
             'checkpoint_size_gb': 0,
+            # Where a full model is delivered: 'both' (default) downloads it to
+            # this computer FIRST, proves it, and only then backs the master up
+            # to the private Hugging Face repository; 'local' skips the backup
+            # (and with it the ability to continue that run later); 'hub' is the
+            # historical Hugging-Face-only delivery. The order is the point: a
+            # full private quota can no longer end a training, because nothing
+            # is pushed while it trains.
+            'delivery': 'both',
+            # Free space to leave on the checkpoint volume on top of the
+            # delivery itself, checked before the pod is rented.
+            'local_disk_margin_gb': 15,
+            # Ceilings for the two pod-side Hugging Face transfers (backing the
+            # master up, and pulling it back when continuing a run).
+            'hub_push_budget_seconds': 3600,
+            'hub_fetch_budget_seconds': 3600,
         },
         'onstart': '',                 # raw-image fallback: optional startup command
     },
@@ -329,6 +348,12 @@ DEFAULTS = {
     #   base model asked plainly outperformed it. A caption that talks around its
     #   subject teaches the trained model to look away. Empty = 'standard'.
     'video_caption': {'model': '', 'style': ''},
+    # fp8 quantization runs `fp8_export.py` in a SUBPROCESS, because it needs
+    # torch + safetensors and this app deliberately installs without them
+    # (gigabytes). Empty -> the same interpreter ✨ Score uses, then ai-toolkit's,
+    # then the app's own. Never imported in-process: doing so shipped a feature
+    # that could not run at all on a real install.
+    'quantize': {'python': ''},
     # Watermark inpainting (simple-lama-inpainting, extra ML). Dedicated key so a
     # user can override it, but defaults empty -> reuse the same ML interpreter as
     # rembg/insightface (masks.python) then sys.executable. Never imported in-process.

@@ -391,3 +391,85 @@ def test_test_studio_route_forwards_the_prompt_batch(client, monkeypatch):
         'prompts': ['one', 'two']})
     assert resp.status_code == 200
     assert seen['prompts'] == ['one', 'two']
+
+
+# --- what the RESULTS view needs in order to keep a batch whole --------------
+# The batch generated all N images and lost them on the way to the SCREEN.
+# Reported as « a grid with a single image »: the results view had no launch
+# identity to group by, so it inferred one from `run_seed` + prompt — and a
+# batch, whose whole point is N prompts under ONE seed, therefore arrived as N
+# separate runs, of which the view displays one. `run_id` has been written by
+# `create_run` since the multi-LoRA comparison; it was simply never served.
+
+
+def test_payload_tells_the_grid_which_launch_each_cell_belongs_to(app):
+    """If `run_id` silently leaves this payload again, the grid falls back to the
+    prompt-keyed grouping and the bug returns without a single test going red —
+    which is exactly why this one exists."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.models import LoraTestImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Batch', 'batchtrig')
+        ck = 'z image' + chr(92) + 'lora_batchtrig_000001000.safetensors'
+        prompts = ['on a rooftop', 'in a neon alley', 'in a sunlit cafe']
+        for i, prompt in enumerate(prompts):
+            db.session.add(LoraTestImage(
+                dataset_id=ds.id, checkpoint=ck, strength=1.0, status='done',
+                filename=f'b{i}.png', seed=99, run_seed=99, run_id='ONE-LAUNCH',
+                prompt=prompt, aspect='1:1', cfg=1.0, steps=8))
+        db.session.commit()
+
+        cells = lts.studio_payload(LOCAL_USER, ds.id)['cells']
+        assert len(cells) == len(prompts)
+        assert {c['prompt'] for c in cells} == set(prompts)
+        # ONE launch: every cell carries the same, non-null run_id...
+        assert {c['run_id'] for c in cells} == {'ONE-LAUNCH'}
+        # ...and it is served ON THE CELL, which is where the grid groups. A
+        # payload carrying it only at the top level would not help at all.
+        assert all('run_id' in c for c in cells)
+
+
+def test_a_run_predating_run_id_says_so_instead_of_inventing_one(app):
+    """Old rows have no run_id. The payload reports that honestly (None) so the
+    frontend can keep its legacy grouping for them — a fabricated id would merge
+    two genuinely separate launches into one."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.models import LoraTestImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        ds = svc.create_dataset(LOCAL_USER, 'Legacy', 'legacytrig')
+        ck = 'z image' + chr(92) + 'lora_legacytrig_000001000.safetensors'
+        db.session.add(LoraTestImage(
+            dataset_id=ds.id, checkpoint=ck, strength=1.0, status='done',
+            filename='old.png', seed=5, run_seed=5, run_id=None, prompt='old run'))
+        db.session.commit()
+        assert lts.studio_payload(LOCAL_USER, ds.id)['cells'][0]['run_id'] is None
+
+
+def test_create_run_stamps_ONE_run_id_across_the_whole_prompt_batch(app, tmp_path, monkeypatch):
+    """The grouping the frontend now relies on is only as good as what the engine
+    writes: N prompts must land under ONE run_id, not one per prompt."""
+    from app.extensions import db
+    from app.services import lora_test_studio as lts, face_dataset_service as svc
+    from app.models import LoraTestImage
+    from app.config import LOCAL_USER
+    with app.app_context():
+        _zimage_tree(tmp_path, monkeypatch, ['lora_batched_000001000.safetensors'])
+        _comfy(monkeypatch)
+        _neutralise_preflights(monkeypatch, lts)
+        monkeypatch.setattr(lts, '_persist_and_enqueue_cell',
+                            lambda img, *a, **k: (db.session.add(img), db.session.commit()))
+        ds = svc.create_dataset(LOCAL_USER, 'Batched', 'batched')
+        res = lts.create_run(
+            LOCAL_USER, ds.id,
+            ['z image' + chr(92) + 'lora_batched_000001000.safetensors'], [1.0],
+            seed=42, prompts=['first prompt', 'second prompt', 'third prompt'])
+        rows = LoraTestImage.query.filter_by(dataset_id=ds.id).all()
+        assert len(rows) == 3, 'one cell per ticked prompt'
+        assert len({r.prompt for r in rows}) == 3
+        assert len({r.run_id for r in rows}) == 1, 'a batch is ONE launch'
+        assert rows[0].run_id == res['run_id']
+        assert len({r.run_seed for r in rows}) == 1
