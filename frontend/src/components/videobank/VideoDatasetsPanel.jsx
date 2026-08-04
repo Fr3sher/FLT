@@ -143,12 +143,20 @@ function VideoTrainingSection({ ds }) {
       const r = await postJson(`/api/video-dataset/${ds.id}/train`,
         { steps: 2000, accept_download: acceptDownload })
       toast.success(`Training started — ${r.clips} clips, ${r.steps} steps.`)
+      // Things the run will not fail on but that change what to expect from it.
+      ;(r.warnings || []).forEach((w) => toast.warning(w))
       poll()
     } catch (e) {
       const body = e?.body
       if (body?.needs_download) {
+        // `free_gigabytes` is null when the drive could not be measured. Saying
+        // nothing is the only honest rendering — "0 GB free" and "plenty of
+        // room" are opposite answers and we have neither.
+        const room = typeof body.free_gigabytes === 'number'
+          ? ` You have ${body.free_gigabytes.toFixed(1)} GB free there.`
+          : ''
         // eslint-disable-next-line no-alert
-        if (window.confirm(`${body.error}\n\nDownload about ${body.gigabytes} GB from ${body.repo} and start training?`)) {
+        if (window.confirm(`${body.error}\n\nDownload about ${body.gigabytes} GB from ${body.repo}?${room}`)) {
           setBusy(false)
           return start(true)
         }
@@ -206,6 +214,13 @@ function VideoTrainingSection({ ds }) {
         <p className="text-[0.6875rem] text-content-subtle">
           {ds.target_label} is wired from ai-toolkit’s own settings but has not been
           trained end to end here yet.
+        </p>
+      )}
+      {/* On the card, not only in the toast after launching: a warning that
+          arrives once the run is up is a warning about a decision already made. */}
+      {!active && progress?.resolution_note && (
+        <p className="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[0.6875rem] text-amber-100">
+          ⚠ {progress.resolution_note}
         </p>
       )}
       {!!progress?.checkpoints?.length && (

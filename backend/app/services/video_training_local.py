@@ -90,14 +90,20 @@ _RUN_MARKER = 'lds_video_run.json'
 
 class VideoWeightsMissing(RuntimeError):
     """The model's weights are not on this machine, and downloading them is tens
-    of gigabytes. Carries the repository and the size so the caller can state both
-    before asking for a yes — a bare "missing weights" would be answered by
-    clicking again."""
+    of gigabytes. Carries the repository, the size AND the free space on the drive
+    they would land on, so the caller can state all three before asking for a yes.
 
-    def __init__(self, message, repo, gigabytes):
+    The free space is what turns the question from "do you want to wait?" into
+    "this cannot happen here": 43 GB needed against 26 GB free is not a download
+    to confirm, it is a destination to move. `free_gigabytes` is None when the
+    drive could not be measured — which must be rendered as silence, never as
+    zero and never as room."""
+
+    def __init__(self, message, repo, gigabytes, free_gigabytes=None):
         super().__init__(message)
         self.repo = repo
         self.gigabytes = gigabytes
+        self.free_gigabytes = free_gigabytes
 
 
 def _models_dir() -> Path:
@@ -131,6 +137,44 @@ def weights_report(arch) -> dict | None:
         'missing': missing,
         'present': not missing,
     }
+
+
+# Below four fifths of the size a model states for itself, the pixel count is
+# under two thirds of it — the point at which a difference stops being rounding
+# and starts being a different training regime. Above it, saying anything would
+# be the banner people learn to skip.
+_RESOLUTION_NOTE_RATIO = 0.8
+
+
+def resolution_note(video_ds) -> str | None:
+    """A sentence when this dataset is well below the sizes its target states for
+    itself, or None when there is nothing to say.
+
+    A NOTE and never a refusal. A low-resolution run is a legitimate choice — it
+    is faster, it fits on smaller cards, and someone may want exactly that — but
+    it is not the regime the model was trained in, and discovering that after a
+    night of GPU is the expensive way to learn it.
+
+    Derived from the profile's own `recommended_sizes`, which is deliberately
+    EMPTY for every Wan target because no local source states one. An empty list
+    therefore yields no note: a threshold computed from a number we do not have
+    would be exactly the dressed-up guess that field exists to avoid."""
+    profile = video_targets.get(getattr(video_ds, 'target_profile', None))
+    if not profile:
+        return None
+    sizes = profile.get('recommended_sizes') or ()
+    width = getattr(video_ds, 'width', None)
+    height = getattr(video_ds, 'height', None)
+    if not sizes or not width or not height:
+        return None
+    native = min(min(w, h) for w, h in sizes)
+    short = min(int(width), int(height))
+    if short >= native * _RESOLUTION_NOTE_RATIO:
+        return None
+    return (f'These clips are {int(width)}x{int(height)}, and {profile["label"]} '
+            f'states {native} px for its own shortest edge. Training at this size '
+            'works, but it is well below what the model was trained on — expect '
+            'less of it than a run at the stated size.')
 
 
 def local_run_name(video_ds) -> str:
@@ -271,12 +315,17 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
 
     weights = weights_report(arch)
     if weights and not weights['present'] and not accept_download:
+        models = _models_dir()
+        free = lt.free_disk_gb(models)
+        room = (f' That drive has {free:.1f} GB free.' if free is not None else '')
         raise VideoWeightsMissing(
             f'{video_targets.get(ds.target_profile)["label"]} needs about '
             f'{weights["gigabytes"]} GB of weights that are not on this machine. '
             f'They would be downloaded from {weights["repo"]} into '
-            f'{_models_dir()} before training starts. Confirm to download them.',
-            weights['repo'], weights['gigabytes'])
+            f'{models}.{room} That folder follows the ai-toolkit folder set in '
+            'Settings, so a drive with more room can host it. Confirm to '
+            'download them.',
+            weights['repo'], weights['gigabytes'], free)
 
     lt.assert_free_disk(lt._output_dir(), lt.MIN_FREE_GB_TRAIN, 'a training run')
     _assert_run_folder_matches(ds, arch)
@@ -385,6 +434,10 @@ def start_video_training(user_id, video_dataset_id, steps=1000, base_model=None,
         'clips': clips,
         'run_token': run_token,
         'downloading': None if weights is None else not weights['present'],
+        # Things the run will not fail on but the user should hear once. Not
+        # refusals: every one of these describes a legitimate choice that is
+        # simply not the model's own regime.
+        'warnings': [n for n in (resolution_note(ds),) if n],
     }
 
 
@@ -424,8 +477,12 @@ def video_training_progress(video_dataset_id, user_id=None) -> dict:
             download = lt.parse_download_progress(text)
         except OSError:
             log_exists = False
-    return {'active': active, 'log_exists': log_exists, 'run_name':
-            local_run_name(ds), 'download': download, **parsed}
+    return {'active': active, 'log_exists': log_exists,
+            'run_name': local_run_name(ds), 'download': download,
+            # Carried here and not only on the launch result: a warning that
+            # arrives after the click is a warning about a decision already
+            # taken. The card polls this on mount.
+            'resolution_note': resolution_note(ds), **parsed}
 
 
 def list_run_checkpoints(video_dataset_id, user_id=None) -> list:

@@ -240,6 +240,116 @@ def test_the_download_happens_only_when_it_is_explicitly_accepted(
         _clear_fence()
 
 
+def test_the_refusal_says_how_much_room_the_target_drive_actually_has(
+        app, tmp_path, monkeypatch):
+    """"43 GB" alone leaves the user to go and check. The number that decides
+    whether this is a wait or an impossibility is the FREE space on the drive the
+    files would land on — and on a machine where that is 26 GB, "download?" is the
+    wrong question entirely. Both numbers, and the drive, in one sentence."""
+    from app.services import lora_training as lt
+    _aitoolkit(monkeypatch, tmp_path)
+    monkeypatch.setattr(lt, 'free_disk_gb', lambda path: 26.5)
+    with app.app_context():
+        _clear_fence()
+        vid = _video_dataset(tmp_path, profile='minimax_h3', frames=107, fps=24)
+        with pytest.raises(vtl.VideoWeightsMissing) as e:
+            vtl.start_video_training('local', vid.id, steps=100)
+        msg = str(e.value)
+        assert '43' in msg and '26.5' in msg
+        assert e.value.free_gigabytes == 26.5
+        # ...and it points at the setting that moves the destination, because a
+        # full drive here is not a full machine: another disk usually has room.
+        assert 'ai-toolkit folder' in msg.lower() or 'settings' in msg.lower()
+        _clear_fence()
+
+
+def test_a_drive_that_cannot_be_measured_still_names_the_download(
+        app, tmp_path, monkeypatch):
+    """`free_disk_gb` answers None on a stat failure. The refusal must degrade to
+    the size alone rather than printing "None GB free" or, worse, deciding the
+    disk is empty and going ahead."""
+    from app.services import lora_training as lt
+    _aitoolkit(monkeypatch, tmp_path)
+    monkeypatch.setattr(lt, 'free_disk_gb', lambda path: None)
+    with app.app_context():
+        _clear_fence()
+        vid = _video_dataset(tmp_path, profile='minimax_h3', frames=107, fps=24)
+        with pytest.raises(vtl.VideoWeightsMissing) as e:
+            vtl.start_video_training('local', vid.id, steps=100)
+        assert '43' in str(e.value)
+        assert 'None' not in str(e.value)
+        assert e.value.free_gigabytes is None
+        _clear_fence()
+
+
+# --- the size the model was trained at, stated rather than hidden --------------
+
+def test_a_dataset_far_below_the_targets_own_sizes_is_warned_about_not_refused(
+        app, tmp_path, monkeypatch, spawned):
+    """MiniMax H3's own recommended sizes are all short-edge 768; a 384x384 set is
+    perfectly legal and will train, but it is a long way from what the model saw.
+    That is a limit to STATE, not one to enforce — refusing would block a
+    deliberate low-resolution run, and saying nothing would let someone spend a
+    night discovering it. The note names both numbers."""
+    _aitoolkit(monkeypatch, tmp_path)
+    with app.app_context():
+        _clear_fence()
+        vid = _video_dataset(tmp_path, profile='minimax_h3', frames=107, fps=24,
+                             width=384, height=384)
+        note = vtl.resolution_note(vid)
+        assert note and '384' in note and '768' in note
+        res = vtl.start_video_training('local', vid.id, steps=100,
+                                       accept_download=True, _spawn=spawned)
+        assert note in res['warnings']
+        _clear_fence()
+
+
+def test_a_dataset_at_the_targets_own_size_draws_no_note(
+        app, tmp_path, monkeypatch, spawned):
+    """The guard has to be quiet when there is nothing to say, or it becomes the
+    banner everyone learns to skip."""
+    _aitoolkit(monkeypatch, tmp_path)
+    with app.app_context():
+        _clear_fence()
+        vid = _video_dataset(tmp_path, profile='minimax_h3', frames=107, fps=24,
+                             width=768, height=768)
+        assert vtl.resolution_note(vid) is None
+        res = vtl.start_video_training('local', vid.id, steps=100,
+                                       accept_download=True, _spawn=spawned)
+        assert res['warnings'] == []
+        _clear_fence()
+
+
+def test_a_target_that_states_no_sizes_says_nothing_rather_than_guessing(
+        app, tmp_path, monkeypatch):
+    """`recommended_sizes` is deliberately EMPTY for every Wan profile — no local
+    source states one, and the catalogue refuses to invent them. A note derived
+    from a number we do not have would be exactly the dressed-up guess that field
+    exists to avoid."""
+    from app.services import video_targets as vt
+    _aitoolkit(monkeypatch, tmp_path)
+    with app.app_context():
+        _clear_fence()
+        assert vt.get('wan22_14b')['recommended_sizes'] == ()
+        vid = _video_dataset(tmp_path, width=384, height=384)
+        assert vtl.resolution_note(vid) is None
+        _clear_fence()
+
+
+def test_the_progress_route_carries_the_note_before_anything_is_clicked(
+        app, client, tmp_path, monkeypatch):
+    """A warning that only arrives after the launch is a warning about a decision
+    already taken. The card polls this endpoint on mount, so the note is on screen
+    before the button is pressed."""
+    _aitoolkit(monkeypatch, tmp_path)
+    with app.app_context():
+        _clear_fence()
+        vid_id = _video_dataset(tmp_path, profile='minimax_h3', frames=107,
+                                fps=24, width=384, height=384).id
+    body = client.get(f'/api/video-dataset/{vid_id}/train/progress').get_json()
+    assert body['resolution_note'] and '768' in body['resolution_note']
+
+
 def test_weights_already_on_disk_are_not_re_announced(
         app, tmp_path, monkeypatch, spawned):
     """The check is a file probe, not a flag. With the four checkpoints present

@@ -161,7 +161,11 @@ def video_dataset_train_local(dataset_id):
             accept_download=bool(body.get('accept_download', False))))
     except vtl.VideoWeightsMissing as e:
         return jsonify({'error': str(e), 'needs_download': True,
-                        'repo': e.repo, 'gigabytes': e.gigabytes}), 409
+                        'repo': e.repo, 'gigabytes': e.gigabytes,
+                        # None when the drive could not be measured. The panel
+                        # must render that as silence, not as zero and not as
+                        # room — the two read as opposite answers.
+                        'free_gigabytes': e.free_gigabytes}), 409
     except video_training.VideoTrainingUnsupported as e:
         return jsonify({'error': str(e)}), 400
     except GpuBusyError as e:
