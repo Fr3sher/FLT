@@ -247,7 +247,7 @@ def put_settings():
     # feature reads "NOT installed" forever despite a perfect install. Drop the blank so
     # a stale Save can't undo an install. (aitoolkit.python IS user-editable — not here.)
     for _managed in ('watermark', 'masks', 'face_scoring', 'bank_scoring',
-                     'watermark_detect'):
+                     'watermark_detect', 'shot_detect'):
         node = config_partial.get(_managed)
         if isinstance(node, dict) and 'python' in node and not str(node.get('python') or '').strip():
             node.pop('python')
