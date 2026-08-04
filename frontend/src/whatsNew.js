@@ -54,6 +54,16 @@ export const WHATS_NEW = [
     blurb:
       'Turning a phone to landscape — or anything else that reshaped the page — folded “Merge a LoRA into a base checkpoint” shut and threw away the checkpoint path and the LoRA rows you had just typed, with nothing to undo. The panel it lives in is rebuilt when the layout moves, and it was taking the form down with it. What you type is now kept: the tool stays open where you left it and comes back filled in, after a resize, a rotation or a reload alike. It is cleared the moment a merge actually starts, so a form you already sent never comes back looking like unfinished work.',
     to: '/datasets?section=checkpoints',
+  },
+  {
+    id: '2026-08-04-converting-a-custom-zimage-base-stops-hitting-the-paging-file',
+    date: '2026-08-04',
+    title: 'Converting a custom Z-Image base no longer dies on a “paging file” error',
+    blurb:
+      'If preparing your own Z-Image merge for training ended in “the paging file is too small to complete this operation”, nothing was wrong with your disk, your memory or your model — and buying more disk would not have helped. Opening the checkpoint reserved its whole size up front: on a 11.5 GB base that was 11.7 GB claimed in a tenth of a second, before a single number had been read, and about 15 GB by the time the conversion was under way. Big custom bases are exactly where this bit, because they are the ones people convert. The file is now read one tensor at a time and nothing is mapped: the same 11.5 GB conversion peaks at 0.19 GB and finishes in about a minute, so the size of your checkpoint no longer has anything to do with whether it can be opened. The check that runs before the conversion got faster too — it only ever compared shapes, which are in the file header, and it was loading all 11.5 GB to read them.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-08-04-typed-base-path-is-checked-while-you-type',
     date: '2026-08-04',
     title: 'A base you type by hand is checked before you launch, not after',

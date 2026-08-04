@@ -61,7 +61,6 @@ import {
   baseOptionSuffix, baseSelectionNote, basesForFamily,
   cloudUnsupportedFamilyReason, isCustomWeightsBase, looksAbsoluteBase,
 } from './trainingFamilyScope.js';
-
 import { failureView } from './trainingFailure';
 import {
   MEMORY_KEYS, MEMORY_LABELS, memoryAdviceText, memoryIsOverridden, memoryPatchFor,
