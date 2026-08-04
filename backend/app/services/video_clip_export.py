@@ -113,6 +113,20 @@ def write_sidecar(clip_path, caption):
     these with a bare open() at the host's locale encoding. A BOM becomes a stray
     character at the head of the first caption; an accent on a cp1252 Windows host
     becomes a UnicodeDecodeError that kills the run.
+
+    THE CAPTION IS WRITTEN VERBATIM, FOR EVERY TARGET — no prefix, no template,
+    no per-architecture dialect, and this function deliberately takes no profile.
+    MiniMax H3 is the one that invites the opposite belief, and the belief is
+    wrong on both counts: its ``"<Picture i>: "`` labels are built by the encoder
+    from the KEYFRAME IMAGES it is handed, never parsed out of the caption
+    (ai-toolkit ``.../minimax_h3/src/text_encoder.py:65-74``, whose docstring
+    states "no chat template, no special tokens"), and its soundtrack is decoded
+    from the video file's own audio track into VAE latent rows, with no text
+    channel at all (``toolkit/dataloader_mixins.py:718-761``,
+    ``minimax_h3.py:733-760``). ai-toolkit's caption path is architecture-blind
+    end to end: read the homonym .txt, pass it through a ``clean_caption`` that
+    normalises nothing, encode ``p.strip()``. Pinned by
+    test_video_sidecar_caption_format.py.
     """
     with open(sidecar_path(clip_path), 'w', encoding='utf-8', newline='\n') as fh:
         fh.write(caption or '')
