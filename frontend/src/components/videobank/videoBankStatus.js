@@ -69,11 +69,62 @@ export function passLabel(kind) {
  * A finished job is deliberately NOT running: the server keeps the snapshot for
  * a while after `finished` so the last result can be read, and treating that as
  * activity leaves a spinner up forever. */
-export function activityLine(activity) {
+/** Which `counts` key already holds the work a given pass does. A pass only ever
+ * iterates what is LEFT, so this is what turns its own slice back into the whole
+ * picture. */
+const _PASS_COUNTS = {
+  detect: (c) => n(c?.detected) + n(c?.detect_errors),
+  thumbs: (c) => n(c?.thumbs),
+  probe: (c) => n(c?.probed) + n(c?.unreadable),
+}
+
+/** Overall progress of a running pass: `{done, total, alreadyDone, resumed}`, or
+ * null when nothing is running.
+ *
+ * WHY THIS EXISTS. A resumed pass filters out everything already done BEFORE it
+ * fixes its total, so it honestly reports "3 of 117" while 132 of 246 sources are
+ * cut. Accurate, and it reads as a restart from zero — which makes people afraid
+ * to ever stop a one-hour pass, and that fear costs more than the display bug.
+ *
+ * `alreadyDone` is derived by subtraction rather than snapshotted: the counts are
+ * live and already include what this job has done so far, so the difference is
+ * exactly what preceded it. That also keeps failed files inside the total — they
+ * are not retried by a plain resume, and leaving them out would shrink the total
+ * a little more on every restart.
+ */
+export function passProgress(activity, counts) {
+  if (!activity || activity.finished) return null
+  // No counts, no overall view: fall back to the job's own numbers rather than
+  // computing an "already done" of zero, which would report a pass as being at
+  // its very start no matter how far along it is.
+  if (!counts) return null
+  const fromCounts = _PASS_COUNTS[activity.kind]
+  const total = n(activity.total)
+  if (!fromCounts || !total) return null
+  const done = fromCounts(counts)
+  const alreadyDone = Math.max(0, done - n(activity.done))
+  return { done, total: total + alreadyDone, alreadyDone, resumed: alreadyDone > 0 }
+}
+
+/** "129 sources are already cut and stay cut — stopping is safe." Null when there
+ * is nothing yet to lose.
+ *
+ * Worth saying out loud rather than leaving to trust: the guarantee is real (a
+ * source is marked done only in the same transaction that writes its shots, so an
+ * interrupted one is simply picked up again), but a guarantee nobody can see
+ * protects nobody. */
+export function resumeSafetyNote(activity, counts) {
+  const p = passProgress(activity, counts)
+  if (!p || !p.resumed) return null
+  return `${p.alreadyDone} already done and kept — stopping is safe, this pass resumes where it left off.`
+}
+
+export function activityLine(activity, counts) {
   if (!activity || activity.finished) return null
   const label = PASS_RUNNING_LABELS[activity.kind] || activity.kind || 'Working'
-  const done = n(activity.done)
-  const total = n(activity.total)
+  const overall = passProgress(activity, counts)
+  const done = overall ? overall.done : n(activity.done)
+  const total = overall ? overall.total : n(activity.total)
   const progress = total ? ` — ${done}/${total}` : ''
   const detail = activity.detail ? ` (${activity.detail})` : ''
   return `${label}${progress}${detail}`
@@ -82,9 +133,12 @@ export function activityLine(activity) {
 /** 0–100, or null when the job does not know its total (a pass that is still
  * counting). Null must render as an indeterminate bar, never as 0 % — a bar
  * pinned at zero for two minutes reads as a hang. */
-export function activityPercent(activity) {
+export function activityPercent(activity, counts) {
   if (!activity || activity.finished || !n(activity.total)) return null
-  return Math.min(100, Math.round((n(activity.done) / n(activity.total)) * 100))
+  const overall = passProgress(activity, counts)
+  const done = overall ? overall.done : n(activity.done)
+  const total = overall ? overall.total : n(activity.total)
+  return Math.min(100, Math.round((done / total) * 100))
 }
 
 /** True while a pass owns the bank. Every pass button reads this, so the UI

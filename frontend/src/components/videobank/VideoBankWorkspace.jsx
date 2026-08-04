@@ -8,6 +8,7 @@ import {
 import { passBlockedBy } from './videoCapability'
 import {
   countsSummary, countsProblems, activityLine, activityPercent, isBusy,
+  resumeSafetyNote,
   announcement, nextStep, passLabel, PASS_LABELS,
 } from './videoBankStatus'
 import {
@@ -270,11 +271,20 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
 
       {busy && (
         <div role="status" className="rounded-lg border border-amber-500/50 bg-amber-500/10 p-2.5">
-          <p className="text-sm text-amber-100">⏳ {activityLine(activity)}</p>
+          <p className="text-sm text-amber-100">⏳ {activityLine(activity, counts)}</p>
           <div className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/30">
-            <div className={`h-full bg-amber-400 ${activityPercent(activity) == null ? 'w-1/3 animate-pulse' : ''}`}
-              style={activityPercent(activity) == null ? undefined : { width: `${activityPercent(activity)}%` }} />
+            <div className={`h-full bg-amber-400 ${activityPercent(activity, counts) == null ? 'w-1/3 animate-pulse' : ''}`}
+              style={activityPercent(activity, counts) == null ? undefined
+                : { width: `${activityPercent(activity, counts)}%` }} />
           </div>
+          {/* A resumed pass counts only what is LEFT, so it honestly reports "3 of
+              117" while most of the bank is already cut. Saying what is kept is
+              what makes stopping a one-hour pass feel allowed. */}
+          {resumeSafetyNote(activity, counts) && (
+            <p className="mt-1.5 text-xs text-amber-200/80">
+              ↩ {resumeSafetyNote(activity, counts)}
+            </p>
+          )}
         </div>
       )}
 

@@ -4,7 +4,7 @@ import assert from 'node:assert/strict'
 import {
   countsSummary, countsProblems, passLabel, activityLine, activityPercent,
   isBusy, finishedOutcome, announcement, nextStep, formatDuration,
-  formatFileSize, sourceGeometry, sourceState,
+  formatFileSize, sourceGeometry, sourceState, passProgress, resumeSafetyNote,
 } from './videoBankStatus.js'
 import { passBlockedBy } from './videoCapability.js'
 
@@ -172,4 +172,77 @@ test('a source reports its shot count once detection has run', () => {
   assert.equal(sourceState({ probe_state: 'ok', detect_state: 'ok', clips: 1 }).label, '1 shot')
   assert.equal(sourceState({ probe_state: 'ok', detect_state: 'error' }).label, 'Detection failed')
   assert.equal(sourceState({ probe_state: 'ok', detect_state: null }).label, 'Scanned')
+})
+
+// --- resuming a stopped pass --------------------------------------------------
+// A pass only ever iterates what is LEFT to do, so a resumed job legitimately
+// reports "3 of 117" while 132 of 246 sources are actually cut. That is accurate
+// and it reads as a restart from zero — which is the one thing that would make
+// someone afraid to ever stop a one-hour pass.
+
+test('a resumed pass reports overall progress, not just its own slice', () => {
+  const p = passProgress({ kind: 'detect', done: 3, total: 117, finished: false },
+                         { detected: 132, detect_errors: 0 })
+  assert.equal(p.done, 132)
+  assert.equal(p.total, 246)
+  assert.equal(p.alreadyDone, 129)
+})
+
+test('a pass that starts from nothing shows no resume note', () => {
+  const p = passProgress({ kind: 'detect', done: 10, total: 246, finished: false },
+                         { detected: 10, detect_errors: 0 })
+  assert.equal(p.alreadyDone, 0)
+  assert.equal(p.resumed, false)
+})
+
+test('files that failed detection still count as already visited', () => {
+  // They are not retried by a plain resume, so leaving them out would make the
+  // total shrink every time the pass is restarted.
+  const p = passProgress({ kind: 'detect', done: 1, total: 10, finished: false },
+                         { detected: 40, detect_errors: 5 })
+  assert.equal(p.alreadyDone, 44)
+})
+
+test('the thumbnail and probe passes resume the same way', () => {
+  assert.equal(passProgress({ kind: 'thumbs', done: 2, total: 20, finished: false },
+                            { thumbs: 302 }).total, 320)
+  assert.equal(passProgress({ kind: 'probe', done: 5, total: 50, finished: false },
+                            { probed: 105 }).total, 150)
+})
+
+test('a finished or absent pass has no progress to report', () => {
+  assert.equal(passProgress({ finished: true, done: 5, total: 5 }, COUNTS), null)
+  assert.equal(passProgress(null, COUNTS), null)
+})
+
+test('the activity line shows the overall figures when a pass was resumed', () => {
+  const line = activityLine({ kind: 'detect', done: 3, total: 117, finished: false },
+                            { detected: 132, detect_errors: 0 })
+  assert.match(line, /132\/246/)
+  assert.doesNotMatch(line, /3\/117/)
+})
+
+test('the activity line is unchanged when nothing was done before', () => {
+  const line = activityLine({ kind: 'detect', done: 10, total: 246, finished: false },
+                            { detected: 10, detect_errors: 0 })
+  assert.match(line, /10\/246/)
+})
+
+test('the percentage follows the overall progress too', () => {
+  // Otherwise a resumed pass shows a bar near zero while most of the work is done.
+  const pct = activityPercent({ kind: 'detect', done: 3, total: 117, finished: false },
+                              { detected: 132, detect_errors: 0 })
+  assert.equal(pct, 54)
+})
+
+test('stopping is described as safe, and says exactly what is kept', () => {
+  const note = resumeSafetyNote({ kind: 'detect', done: 3, total: 117, finished: false },
+                                { detected: 132, detect_errors: 0 })
+  assert.match(note, /129/)
+  assert.match(note, /kept|keeps|safe/i)
+})
+
+test('no safety note when there is nothing yet to lose', () => {
+  assert.equal(resumeSafetyNote({ kind: 'detect', done: 1, total: 246, finished: false },
+                                { detected: 1 }), null)
 })
