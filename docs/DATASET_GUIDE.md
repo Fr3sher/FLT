@@ -533,6 +533,114 @@ The panel reads the same pool the Composition bar counts: everything that is not
 rejected and not failed. It also tells you how many images have **no shot type
 yet**, which is the one thing the bar above silently drops.
 
+## 10. Full-model recipe — what you can change
+
+Full-model (dense) training is a different animal from a LoRA: instead of a small
+adapter, it rewrites all 12B weights of Krea 2 Raw. That only fits on one 80 GB
+card under a specific geometry, so most of the recipe is locked — and the panel
+now says which parts and why.
+
+**Locked, and not negotiable**
+
+| Locked | Why |
+| --- | --- |
+| Batch size 1, bf16 | The 80 GB budget has no room for more. |
+| Adafactor | Adam-family optimizer states would not fit alongside the weights. |
+| Gradient checkpointing, cached latents + text embeddings | Same reason — turn any of them off and the run dies out of memory, an hour in, on a rented GPU. |
+
+**Editable, because these change the RESULT rather than whether it fits**
+
+| Setting | Default | Range | Why you would move it |
+| --- | --- | --- | --- |
+| Steps | adaptive | ≥ 500 | Longer runs on larger sets. |
+| Preview prompts | generic per kind | up to 8 lines | The defaults describe nobody. These images are the only way to judge a run *while it is still costing money* — make them look like your dataset. `{trigger}` marks where the subject goes. |
+| Learning rate | 1e-6 | 1e-7 – 5e-6 | Lower if the model drifts off the base too fast; higher only with evidence. |
+| Resolution | 1024 px | 768 or 1024 | 768 trains faster and cheaper, at lower fidelity. |
+| Checkpoint every / keep | 250 steps / keep 1 | ≥ 100 steps / keep 1-3 | More kept checkpoints means more sweet-spot candidates — and each one is about 26 GB of PRIVATE Hugging Face storage. The panel states the total before you launch; the launch itself refuses (confirmably) when it plainly will not fit. |
+
+### The two files a finished run delivers
+
+A dense run pushes its ~26 GB **bf16 master** to your private Hugging Face repo.
+Nobody generates with a file that size, so the app then quantizes it **on the pod**
+and uploads a **~10 GB fp8 export** next to it:
+
+- **the fp8 file is the one to download for ComfyUI.** It is a scaled fp8
+  checkpoint (per-tensor `float8_e4m3fn` weights with their scales) and loads
+  with the standard *Load Diffusion Model* node, no extra setup;
+- **the bf16 master is the only one that can be trained again**, merged, or
+  re-quantized differently. fp8 is a lossy, one-way export. *Keep the bf16
+  master* is ON by default for exactly that reason — turning it off halves your
+  storage and closes that door permanently.
+
+If the export fails, the run is still a success: the master was delivered before
+the export ever ran, and the panel says so rather than reporting a failure.
+
+### Quantizing a model you already have
+
+The same conversion is available by hand, in **⚙️ Full-model recipe → Quantize an
+existing model to fp8**: give it the full path to any full-precision
+`.safetensors` checkpoint on this machine — a 26 GB model you downloaded from
+Hugging Face, a dense checkpoint from an earlier run — and it writes
+`<name>_fp8.safetensors` **next to it**. The source is never modified, and an
+existing output is never silently overwritten.
+
+- It runs on the **CPU**, not the GPU: the work is an elementwise cast plus one
+  reduction per tensor (measured ~1.2 GB/s here, so a 26 GB file is bound by your
+  disk, not by arithmetic). Nothing competes with ComfyUI or a training run.
+- One at a time, app-wide, and it checks free space before it reads a byte.
+- It **refuses a file that is already quantized** — quantizing twice only loses
+  more precision — and refuses a LoRA or adapter, which has nothing large enough
+  to shrink.
+- When it finishes it **re-opens the file it just wrote** and checks the marker,
+  the per-tensor scales and the payload dtype, so a bad conversion is reported
+  now rather than at generation time.
+
+> **This is not ai-toolkit's `quantize`.** The `quantize` / memory options in
+> Advanced training shrink the model *in memory while it loads*, so a smaller
+> card can train something that would not otherwise fit. They write nothing: the
+> saved checkpoint is still full precision. This feature produces the **file**.
+
+### Quantizing a model that is already on Hugging Face
+
+A full model delivered before the automatic export existed is a 26 GB file in
+your private repo, and building its fp8 twin at home means pulling 26 GB down
+and pushing 10 GB back — an hour of your bandwidth for under a minute of
+arithmetic. **☁ Quantize to fp8 in the cloud**, on the delivered artifact,
+rents one cheap machine to do that round trip on a datacentre link and writes
+the fp8 file straight into the same repository. You then download only the small
+one.
+
+- **The cost is quoted before anything is rented** — price per hour, estimated
+  minutes, estimated total — exactly like a training run, plus the hard cap.
+- **The machine is destroyed on every path out**: on success, on failure, and at
+  a hard deadline (`cloud.quantize.max_minutes`, default 60) even if it reported
+  nothing. A sweep also reaps any machine of this lane left behind by an app
+  restart, and it runs every time the status is polled.
+- The GPU is irrelevant here — the job is network-bound — so the selection asks
+  for the cheapest card and filters on **downlink bandwidth** instead.
+- It refuses if the fp8 file already exists in the repository, and it warns
+  before renting when your private Hugging Face storage looks too small for the
+  new file.
+
+### Testing a full model: it is a RAW checkpoint
+
+The artifact is **undistilled**. Krea 2 Turbo-style settings — CFG 1 and a
+handful of steps — produce a blurry sketch on it, which reads as "the training
+failed" when nothing failed at all. Use the same settings the run previewed
+with: **CFG ~4 (3.5-5) and 20-30 steps**. The Test Studio now pre-fills those
+automatically when the selected base looks like a Raw / full / fp8 checkpoint.
+
+### Why a quantized checkpoint is refused as a training base
+
+Picking a community fp8/int8 export as **Custom weights** is refused with
+*"This is an inference-only quantized export — training needs the bf16/fp16
+version of this model."* Those files (about 10 GB instead of 26 GB) are repacks
+made for generation: the weights no longer carry the precision a gradient step
+needs. The check reads a few kilobytes of file header — the quantization
+markers and the tensor dtypes — so it costs nothing and fires the moment you
+pick the file, not an hour into a paid run. A file whose header cannot be read
+is let through: the app refuses what it can prove, never what it merely suspects.
+
 ---
 
 *Everything above is enforced or surfaced by the app itself (pre-flight checks,

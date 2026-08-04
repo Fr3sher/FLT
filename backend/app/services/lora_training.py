@@ -65,6 +65,134 @@ FULL_TRANSFORMER_MAX_STEP_SAVES = 1
 FULL_TRANSFORMER_BASE = 'krea/Krea-2-Raw'
 FULL_TRANSFORMER_VAE = 'Qwen/Qwen-Image-2512'
 
+# --- the four dense knobs that are NOT locked ---------------------------------
+# The dense recipe stays server-owned because its geometry is what makes a 12B
+# transformer fit in 80 GB: optimizer (adafactor), batch 1, bf16 and gradient
+# checkpointing are load-bearing, and changing any one of them turns a working
+# run into an out-of-memory crash an hour in. These four are different — they
+# change what the run PRODUCES, not whether it fits:
+#
+#   * preview prompts  — the four generic defaults show nothing about the actual
+#     dataset, which makes the mid-run sample sheet useless for deciding whether
+#     to stop. Reuses the LoRA `sample_prompts` key on purpose: same dataset,
+#     same subject, one place to edit (and no new stored id to alias later).
+#   * learning rate    — bounded around the validated 1e-6.
+#   * resolution       — 1024 (default) or 768; 768 is the measured fallback
+#     when a run has to be cheaper, not a quality choice.
+#   * checkpoint every / keep — the storage lever, and the one the Hugging Face
+#     pre-check multiplies by. Nothing here may drift from what the job config
+#     emits; both read the resolvers below.
+FULL_TRANSFORMER_LR = 1e-6
+FULL_TRANSFORMER_LR_MIN = 1e-7
+FULL_TRANSFORMER_LR_MAX = 5e-6
+FULL_TRANSFORMER_RESOLUTION_CHOICES = (768, 1024)
+FULL_TRANSFORMER_SAVE_EVERY_MIN = 100
+FULL_TRANSFORMER_SAVE_EVERY_MAX = 5000
+FULL_TRANSFORMER_MAX_STEP_SAVES_MAX = 3
+# train_settings keys. NEW names (never reused from the LoRA lane), so a dataset
+# that switches modes cannot inherit a value that meant something else.
+DENSE_SETTING_KEYS = ('dense_lr', 'dense_resolution', 'dense_save_every',
+                      'dense_max_step_saves', 'dense_fp8_export',
+                      'dense_keep_bf16')
+
+
+def _dense_bool(ds, key, default=True) -> bool:
+    v = _train_settings(ds).get(key)
+    return v if isinstance(v, bool) else default
+
+
+def dense_fp8_export_enabled(ds) -> bool:
+    """Produce the ~10 GB ComfyUI-loadable fp8 twin at the end of a dense run.
+
+    ON by default: nobody generates with a 26 GB bf16 transformer, and doing the
+    conversion on the pod (where the file already is) costs minutes, while doing
+    it at home costs a 26 GB download first."""
+    return _dense_bool(ds, 'dense_fp8_export', True)
+
+
+def dense_keep_bf16_master(ds) -> bool:
+    """Keep the bf16 master NEXT TO the fp8 export instead of replacing it.
+
+    ON by default, and that default is not a preference: fp8 is a lossy,
+    one-way export. A dense run that only delivered fp8 can never be continued,
+    re-trained, merged or re-quantized differently — the master is the only
+    thing that makes those possible."""
+    return _dense_bool(ds, 'dense_keep_bf16', True)
+
+
+def _dense_lr(ds) -> float:
+    v = _train_settings(ds).get('dense_lr')
+    if isinstance(v, (int, float)) and not isinstance(v, bool) \
+            and FULL_TRANSFORMER_LR_MIN <= float(v) <= FULL_TRANSFORMER_LR_MAX:
+        return float(v)
+    return FULL_TRANSFORMER_LR
+
+
+def _dense_resolution(ds) -> int:
+    v = _train_settings(ds).get('dense_resolution')
+    return v if v in FULL_TRANSFORMER_RESOLUTION_CHOICES else KREA_TRAIN_RESOLUTION
+
+
+def _dense_save_every(ds) -> int:
+    v = _train_settings(ds).get('dense_save_every')
+    if isinstance(v, int) and not isinstance(v, bool) \
+            and FULL_TRANSFORMER_SAVE_EVERY_MIN <= v <= FULL_TRANSFORMER_SAVE_EVERY_MAX:
+        return v
+    return FULL_TRANSFORMER_SAVE_EVERY
+
+
+def _dense_max_step_saves(ds) -> int:
+    v = _train_settings(ds).get('dense_max_step_saves')
+    if isinstance(v, int) and not isinstance(v, bool) \
+            and 1 <= v <= FULL_TRANSFORMER_MAX_STEP_SAVES_MAX:
+        return v
+    return FULL_TRANSFORMER_MAX_STEP_SAVES
+
+
+# --- how to TEST what a dense run delivers -------------------------------------
+# The dense artifact is Krea 2 RAW: undistilled, and it needs a real CFG and a
+# real step count. The family's inference defaults are Turbo defaults (a handful
+# of steps at CFG 1) — applied to a Raw checkpoint they produce a blurry sketch
+# and read as "the training failed". These are the values the run's OWN preview
+# sheet was rendered with (sample.guidance_scale / sample.sample_steps in the
+# emitted job config), which is why they are defined once, here, and referenced
+# by the recipe, the panel, the run card and the test lane rather than retyped.
+FULL_TRANSFORMER_SAMPLE_GUIDANCE = 4
+FULL_TRANSFORMER_SAMPLE_STEPS = 25
+FULL_TRANSFORMER_SAMPLE_GUIDANCE_RANGE = (3.5, 5.0)
+FULL_TRANSFORMER_SAMPLE_STEPS_RANGE = (20, 30)
+
+
+def dense_inference_hint() -> dict:
+    """The settings to generate with from a dense (Raw) artifact, in one shape.
+
+    Consumed by the training panel, the run card and the test/generation lane so
+    a single change of the recipe moves every surface at once.
+    """
+    lo_cfg, hi_cfg = FULL_TRANSFORMER_SAMPLE_GUIDANCE_RANGE
+    lo_steps, hi_steps = FULL_TRANSFORMER_SAMPLE_STEPS_RANGE
+    return {
+        'base': 'krea2_raw',
+        'guidance_scale': FULL_TRANSFORMER_SAMPLE_GUIDANCE,
+        'steps': FULL_TRANSFORMER_SAMPLE_STEPS,
+        'guidance_scale_range': [lo_cfg, hi_cfg],
+        'steps_range': [lo_steps, hi_steps],
+        'note': (f'This is a RAW (undistilled) Krea 2 model. Test it at CFG '
+                 f'~{FULL_TRANSFORMER_SAMPLE_GUIDANCE} ({lo_cfg:g}-{hi_cfg:g}) '
+                 f'and {lo_steps}-{hi_steps} steps — Turbo-style few-step '
+                 f'settings will look blurry.'),
+    }
+
+
+def dense_max_step_saves_for(ds) -> int:
+    """THE number the Hugging Face storage forecast multiplies a ~26 GB
+    checkpoint by. Exported because two callers outside this module (the cloud
+    launch pre-check and the Settings storage card) must never re-derive it —
+    a forecast that disagrees with the emitted job config is the exact failure
+    that cost run #146 its last 250 steps. ``None`` = no dataset in hand, i.e.
+    the shipped default."""
+    return FULL_TRANSFORMER_MAX_STEP_SAVES if ds is None else _dense_max_step_saves(ds)
+
 # Persisted/API contract. Keep this deliberately tiny: accepting aliases here
 # would make provenance ambiguous and could silently turn a requested dense run
 # back into a LoRA. Legacy/NULL rows resolve to the historical LoRA behaviour.
@@ -616,6 +744,27 @@ def _is_custom_weights(value) -> bool:
     return bool(value) and os.path.isabs(str(value))
 
 
+def assert_trainable_base_file(path) -> dict:
+    """Refuse a pre-quantized inference export as a TRAINING base, at selection.
+
+    The community publishes fp8/int8 repacks of every popular base (~10 GB
+    instead of ~26 GB) and they are the files most people already have on disk —
+    they are also the ones that cannot be trained on: ai-toolkit loads them, then
+    dies deep in the first optimizer step, after the dataset has been exported
+    and (in the cloud lane) after a GPU has been rented. Catching it when the
+    file is PICKED costs a few kilobytes of header.
+
+    Returns the report (``checked=False`` = unreadable header → deliberately
+    permissive: the integrity validator owns "this file is broken", and refusing
+    a base nobody could inspect would be worse than the failure it prevents).
+    """
+    from . import model_integrity
+    report = model_integrity.quantization_report(path)
+    if report.get('quantized'):
+        raise ValueError(model_integrity.QUANT_REFUSAL)
+    return report
+
+
 _SAFETENSORS_MAX_HEADER = 64 * 1024 * 1024   # 64 MB — a real header is < ~10 MB
 
 
@@ -866,6 +1015,11 @@ def preflight_custom_paths(family, weights=None, vae_path=None, te_path=None,
     if _is_custom_weights(weights):
         if not os.path.isfile(weights):
             raise ValueError(f'custom weights file not found: {weights}')
+        # Second seam for the same refusal the SELECTOR already makes: a base
+        # persisted before that guard shipped, or restored from a preset/share,
+        # must not reach a rented GPU either. Hard, never confirmable — an
+        # inference-only export cannot be trained on at any confidence level.
+        assert_trainable_base_file(weights)
         keys = _safetensors_tensor_keys(weights)   # raises on unreadable header
         detected = _detect_safetensors_arch(keys)
         expected = _FAMILY_EXPECTED_ARCH.get(family)
@@ -2238,12 +2392,12 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
             'model_arch': 'krea2',
             'effective_base': FULL_TRANSFORMER_BASE,
             'vae_path': FULL_TRANSFORMER_VAE,
-            'resolution': [KREA_TRAIN_RESOLUTION],
+            'resolution': [_dense_resolution(dense_ds)],
             'caption_dropout_rate': 0.05,
             'cache_latents_to_disk': True,
             'cache_text_embeddings': True,
-            'save_every': FULL_TRANSFORMER_SAVE_EVERY,
-            'max_step_saves': 1,
+            'save_every': _dense_save_every(dense_ds),
+            'max_step_saves': _dense_max_step_saves(dense_ds),
             'save_dtype': 'bf16',
             'batch_size': 1,
             'grad_accum': 1,
@@ -2254,14 +2408,17 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
             'noise_scheduler': 'flowmatch',
             'timestep_type': 'linear',
             'optimizer': 'adafactor',
-            'lr': 1e-6,
+            'lr': _dense_lr(dense_ds),
             'dtype': 'bf16',
             'quantize': False,
             'quantize_te': False,
             'low_vram': False,
-            'sample_every': FULL_TRANSFORMER_SAMPLE_EVERY,
-            'guidance_scale': 4,
-            'sample_steps': 25,
+            'sample_every': _dense_save_every(dense_ds),
+            'guidance_scale': FULL_TRANSFORMER_SAMPLE_GUIDANCE,
+            'sample_steps': FULL_TRANSFORMER_SAMPLE_STEPS,
+            'sample_prompts': _sample_prompts(dense_ds, _safe_trigger(dense_ds)),
+            'fp8_export': dense_fp8_export_enabled(dense_ds),
+            'keep_bf16_master': dense_keep_bf16_master(dense_ds),
             'trigger': _safe_trigger(dense_ds),
             'masked': (bool(masked) if isinstance(masked, bool)
                        else person_masking_enabled(dense_ds)),
@@ -2551,7 +2708,72 @@ def effective_train_settings(ds, family=None) -> dict:
             # défaut résolu (kind + trigger courant) : placeholder/aperçu quand vide.
             'sample_prompts_default': _resolved_default_sample_prompts(ds, trig),
             'sample_every_choices': list(_SAMPLE_EVERY_CHOICES),
-            'max_sample_prompts': _MAX_SAMPLE_PROMPTS}
+            'max_sample_prompts': _MAX_SAMPLE_PROMPTS,
+            # --- full-model (dense) recipe: the four unlocked values + the two
+            # delivery switches. Always present so the panel can render the
+            # locked card and its editable half from ONE payload; `*_stored` is
+            # the raw choice (None = "default", so the control re-checks Auto),
+            # the bare key is what the run will actually use.
+            **_dense_settings_payload(ds)}
+
+
+def _dense_settings_payload(ds) -> dict:
+    s = _train_settings(ds)
+    return {
+        'dense_lr': _dense_lr(ds),
+        'dense_lr_stored': s.get('dense_lr') if isinstance(s.get('dense_lr'), (int, float))
+        and not isinstance(s.get('dense_lr'), bool) else None,
+        'dense_lr_default': FULL_TRANSFORMER_LR,
+        'dense_lr_min': FULL_TRANSFORMER_LR_MIN,
+        'dense_lr_max': FULL_TRANSFORMER_LR_MAX,
+        'dense_resolution': _dense_resolution(ds),
+        'dense_resolution_default': KREA_TRAIN_RESOLUTION,
+        'dense_resolution_choices': list(FULL_TRANSFORMER_RESOLUTION_CHOICES),
+        'dense_save_every': _dense_save_every(ds),
+        'dense_save_every_default': FULL_TRANSFORMER_SAVE_EVERY,
+        'dense_save_every_min': FULL_TRANSFORMER_SAVE_EVERY_MIN,
+        'dense_save_every_max': FULL_TRANSFORMER_SAVE_EVERY_MAX,
+        'dense_max_step_saves': _dense_max_step_saves(ds),
+        'dense_max_step_saves_default': FULL_TRANSFORMER_MAX_STEP_SAVES,
+        'dense_max_step_saves_max': FULL_TRANSFORMER_MAX_STEP_SAVES_MAX,
+        'dense_fp8_export': dense_fp8_export_enabled(ds),
+        'dense_keep_bf16': dense_keep_bf16_master(ds),
+        # What the delivery will weigh, so the panel can say it BEFORE the pod is
+        # rented rather than after the 403. One source of arithmetic with the
+        # Hugging Face pre-check (hf_storage.dense_storage_forecast).
+        'dense_storage_plan': dense_storage_plan(ds),
+        # What to generate with once the model lands — the SAME numbers the run
+        # previews with, so the panel never hard-codes a second version of them.
+        'dense_inference_hint': dense_inference_hint(),
+    }
+
+
+def dense_storage_plan(ds) -> dict:
+    """How many objects of what size ONE dense run will put on Hugging Face.
+
+    Deliberately expressed as the PEAK, not the steady state: even when the bf16
+    master is dropped, ai-toolkit pushes it first and the fp8 twin is uploaded
+    before it is deleted. A forecast that quoted the post-cleanup total would be
+    accurate about the wrong moment — the moment that refuses a push is the peak.
+    """
+    from . import hf_storage
+    from . import fp8_export
+    keeps = _dense_max_step_saves(ds)
+    checkpoint, source = hf_storage.dense_checkpoint_bytes()
+    fp8 = (fp8_export.estimate_fp8_bytes(checkpoint)
+           if dense_fp8_export_enabled(ds) else 0)
+    return {'keeps': keeps, 'checkpoint_bytes': checkpoint,
+            'checkpoint_source': source,
+            # `fp8_bytes` is the forecast CEILING (it has to round up or it stops
+            # protecting anything); `fp8_typical_bytes` is what to SHOW someone
+            # asking how big their download will be. Same file, two questions.
+            'fp8_bytes': fp8,
+            'fp8_typical_bytes': (fp8_export.typical_fp8_bytes(checkpoint)
+                                  if dense_fp8_export_enabled(ds) else 0),
+            'keep_bf16': dense_keep_bf16_master(ds),
+            'peak_bytes': checkpoint * keeps + fp8,
+            'resident_bytes': (checkpoint * keeps if dense_keep_bf16_master(ds)
+                               else 0) + fp8}
 
 
 def _training_selection_candidate(ds, patch: dict, requested_mode) -> dict:
@@ -2595,6 +2817,10 @@ def _training_selection_candidate(ds, patch: dict, requested_mode) -> dict:
         if raw_base is not None and not isinstance(raw_base, str):
             raise ValueError('base_model must be a string or empty')
         base_model = (raw_base or '').strip()
+        # Custom weights only: a ComfyUI-relative name addresses a catalog entry
+        # this app installed, an absolute path is a file the user picked.
+        if _is_custom_weights(base_model):
+            assert_trainable_base_file(base_model)
     if 'variant' in patch:
         raw_variant = patch.get('variant')
         if not isinstance(raw_variant, str) or not raw_variant.strip():
@@ -2708,6 +2934,59 @@ def update_train_settings(user_id, dataset_id, patch: dict, *, _settings=None) -
                 cur.pop('sample_prompts', None)
         else:
             raise ValueError('sample_prompts must be a list of strings (or empty to reset)')
+    # --- the unlocked half of the dense recipe --------------------------------
+    # Bounded, never free-form: the bounds are what keep "editable" from meaning
+    # "able to burn 80 GB of rented GPU on a value that cannot converge".
+    if 'dense_lr' in patch:
+        v = patch['dense_lr']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_lr', None)
+        elif (isinstance(v, (int, float)) and not isinstance(v, bool)
+                and FULL_TRANSFORMER_LR_MIN <= float(v) <= FULL_TRANSFORMER_LR_MAX):
+            cur['dense_lr'] = float(v)
+        else:
+            raise ValueError(
+                f'dense_lr must be between {FULL_TRANSFORMER_LR_MIN:g} and '
+                f'{FULL_TRANSFORMER_LR_MAX:g} (or auto)')
+    if 'dense_resolution' in patch:
+        v = patch['dense_resolution']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_resolution', None)
+        elif v in FULL_TRANSFORMER_RESOLUTION_CHOICES:
+            cur['dense_resolution'] = v
+        else:
+            raise ValueError('dense_resolution must be one of '
+                             f'{list(FULL_TRANSFORMER_RESOLUTION_CHOICES)} (or auto)')
+    if 'dense_save_every' in patch:
+        v = patch['dense_save_every']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_save_every', None)
+        elif (isinstance(v, int) and not isinstance(v, bool)
+                and FULL_TRANSFORMER_SAVE_EVERY_MIN <= v <= FULL_TRANSFORMER_SAVE_EVERY_MAX):
+            cur['dense_save_every'] = v
+        else:
+            raise ValueError(
+                f'dense_save_every must be between {FULL_TRANSFORMER_SAVE_EVERY_MIN} '
+                f'and {FULL_TRANSFORMER_SAVE_EVERY_MAX} steps (or auto)')
+    if 'dense_max_step_saves' in patch:
+        v = patch['dense_max_step_saves']
+        if v in (None, '', 'auto'):
+            cur.pop('dense_max_step_saves', None)
+        elif (isinstance(v, int) and not isinstance(v, bool)
+                and 1 <= v <= FULL_TRANSFORMER_MAX_STEP_SAVES_MAX):
+            cur['dense_max_step_saves'] = v
+        else:
+            raise ValueError('dense_max_step_saves must be between 1 and '
+                             f'{FULL_TRANSFORMER_MAX_STEP_SAVES_MAX} (or auto)')
+    for _flag in ('dense_fp8_export', 'dense_keep_bf16'):
+        if _flag in patch:
+            v = patch[_flag]
+            if v in (None, '', 'auto'):
+                cur.pop(_flag, None)
+            elif isinstance(v, bool):
+                cur[_flag] = v
+            else:
+                raise ValueError(f'{_flag} must be true or false')
     if 'dropout' in patch:
         v = patch['dropout']
         if v in (None, 0, 0.0, 'off', ''):
@@ -3017,6 +3296,10 @@ TRAIN_SETTING_KEYS = ('rank', 'resolution', 'save_every', 'max_step_saves',
                       'cache_text_embeddings', 'save_dtype',
                       'preset_steps_per_image', 'preset_steps_min',
                       'preset_steps_max', 'preset_steps_fixed',
+                      # The unlocked half of the dense recipe. Present here so a
+                      # shared/exported preset can carry it too — the values are
+                      # bounded, and a LoRA run simply never reads them.
+                      *DENSE_SETTING_KEYS,
                       *_MEMORY_SETTING_KEYS)
 
 # The ONLY settings a resume/continue may change. ai-toolkit rebuilds the job
@@ -4604,8 +4887,8 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     # absence as optimisation of the actual transformer weights.
                     'save': {
                         'dtype': 'bf16',
-                        'save_every': FULL_TRANSFORMER_SAVE_EVERY,
-                        'max_step_saves_to_keep': FULL_TRANSFORMER_MAX_STEP_SAVES,
+                        'save_every': _dense_save_every(ds),
+                        'max_step_saves_to_keep': _dense_max_step_saves(ds),
                     },
                     'datasets': [{
                         'folder_path': dataset_folder,
@@ -4613,7 +4896,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                         'caption_dropout_rate': 0.05,
                         'cache_latents_to_disk': True,
                         'cache_text_embeddings': True,
-                        'resolution': [KREA_TRAIN_RESOLUTION],
+                        'resolution': [_dense_resolution(ds)],
                         **_mask_fields(dataset_folder),
                     }],
                     'train': {
@@ -4627,7 +4910,7 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                         'noise_scheduler': 'flowmatch',
                         'timestep_type': 'linear',
                         'optimizer': 'adafactor',
-                        'lr': 1e-6,
+                        'lr': _dense_lr(ds),
                         'dtype': 'bf16',
                     },
                     'model': {
@@ -4641,9 +4924,12 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     'sample': {
                         'sampler': 'flowmatch',
                         'neg': '',
-                        'sample_every': FULL_TRANSFORMER_SAMPLE_EVERY,
-                        'guidance_scale': 4,
-                        'sample_steps': 25,
+                        # Previews follow the checkpoint cadence: a probe sheet
+                        # that does not line up with a save cannot be used to
+                        # pick which save to keep.
+                        'sample_every': _dense_save_every(ds),
+                        'guidance_scale': FULL_TRANSFORMER_SAMPLE_GUIDANCE,
+                        'sample_steps': FULL_TRANSFORMER_SAMPLE_STEPS,
                         'prompts': _sample_prompts(ds, trigger),
                     },
                 }],

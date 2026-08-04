@@ -1714,6 +1714,90 @@ def _hf_storage_namespace():
     return None, None, {}
 
 
+# --- Local fp8 quantization ---------------------------------------------------
+# Same conversion as the post-training pod export, started by hand on a model
+# already on this machine. No ai-toolkit and no cloud gate: it is a pure
+# file-in / file-out operation on the CPU (see fp8_quantize's module note).
+
+@bp.post('/tools/fp8-quantize/plan')
+def tools_fp8_quantize_plan():
+    """What quantizing this file would produce, or WHY it is refused.
+
+    Always 200: the panel disables its button with the reason instead of showing
+    an error toast after a click.
+    """
+    from ..services import fp8_quantize
+    d = request.get_json(silent=True) or {}
+    return jsonify(fp8_quantize.describe(d.get('path')))
+
+
+@bp.post('/tools/fp8-quantize')
+def tools_fp8_quantize_start():
+    from ..services import fp8_quantize
+    d = request.get_json(silent=True) or {}
+    try:
+        info = fp8_quantize.start_async(current_app._get_current_object(),
+                                        d.get('path'),
+                                        overwrite=bool(d.get('overwrite')))
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **info, 'status': fp8_quantize.status()})
+
+
+@bp.get('/tools/fp8-quantize/status')
+def tools_fp8_quantize_status():
+    from ..services import fp8_quantize
+    return jsonify({'ok': True, **(fp8_quantize.status() or {})})
+
+
+@bp.post('/cloud/quantize/plan')
+def cloud_quantize_plan():
+    """Cost, duration cap and storage impact of quantizing a delivered artifact
+    in the cloud — always answered BEFORE anything is rented."""
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import cloud_quantize
+    d = request.get_json(silent=True) or {}
+    try:
+        return jsonify({'ok': True, **cloud_quantize.plan(
+            d.get('repo_id'), filename=d.get('filename'),
+            keep_bf16=d.get('keep_bf16', True))})
+    except Exception as e:
+        return _map_error(e)
+
+
+@bp.post('/cloud/quantize')
+def cloud_quantize_start():
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import cloud_quantize
+    d = request.get_json(silent=True) or {}
+    try:
+        planned = cloud_quantize.start(
+            current_app._get_current_object(), d.get('repo_id'),
+            filename=d.get('filename'), keep_bf16=d.get('keep_bf16', True))
+    except Exception as e:
+        return _map_error(e)
+    return jsonify({'ok': True, **planned, 'status': cloud_quantize.status()})
+
+
+@bp.get('/cloud/quantize/status')
+def cloud_quantize_status():
+    """State of the cloud quantization, and a sweep for orphaned pods.
+
+    The sweep runs HERE on purpose: this endpoint is what the UI polls, so a
+    machine left behind by an app restart is reaped by the act of looking at it.
+    """
+    gate = _require_cloud()
+    if gate:
+        return gate
+    from ..services import cloud_quantize
+    reaped = cloud_quantize.reconcile_orphans()
+    return jsonify({'ok': True, 'reaped': reaped, **(cloud_quantize.status() or {})})
+
+
 @bp.get('/cloud/hf-storage')
 def cloud_hf_storage():
     """Measured private storage + the lds-base-* cache inventory.
@@ -1732,9 +1816,13 @@ def cloud_hf_storage():
     usage = hf_storage.private_storage_usage(namespace, token)
     inventory = hf_storage.base_cache_inventory(namespace, token, LOCAL_USER,
                                                 _usage=usage)
+    # No dataset in hand here — this card describes the account, not one run.
+    # It therefore quotes the SHIPPED defaults (1 checkpoint + the fp8 export);
+    # the per-run figure, which follows that dataset's own "keep" choice, is
+    # shown in the training panel and enforced at launch.
     forecast = hf_storage.dense_storage_forecast(
-        namespace, token, keeps=lt.FULL_TRANSFORMER_MAX_STEP_SAVES, who=who,
-        _usage=usage)
+        namespace, token, keeps=lt.dense_max_step_saves_for(None), who=who,
+        _usage=usage, fp8_export=True)
     forecast.pop('usage', None)
     inventory.pop('usage', None)
     return jsonify({'ok': usage['ok'], 'namespace': namespace,

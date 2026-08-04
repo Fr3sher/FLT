@@ -689,6 +689,47 @@ Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token
 
 ### Advanced options (per run)
 
+#### Full-model (dense) recipe
+
+Full-model training keeps a **locked** recipe — batch 1, bf16, Adafactor and
+gradient checkpointing are what make a 12B model fit on one 80 GB card, and the
+panel now names each lock and its reason instead of just greying it out. Five
+values are editable because they change the *result*, not whether the run fits.
+
+| Setting | Key | Default | Notes |
+|---|---|---|---|
+| **Steps** | (per launch) | adaptive | ≥ 500 when set explicitly. |
+| **Preview prompts** | `sample_prompts` | generic per dataset kind | Up to 8 lines, `{trigger}` marks the subject. Shared with the LoRA lane on purpose — same dataset, same subject. The defaults describe nobody, and these images are the only way to judge a run while it is still costing money. |
+| **Learning rate** | `dense_lr` | `1e-6` | 1e-7 – 5e-6. |
+| **Resolution** | `dense_resolution` | `1024` | `768` or `1024`. 768 trains faster and cheaper, at lower fidelity. |
+| **Checkpoint every / keep** | `dense_save_every` / `dense_max_step_saves` | `250` / `1` | ≥ 100 steps; keep 1–3. Each kept checkpoint is ~26 GB of **private** Hugging Face storage — the panel states the total before launch and the pre-check uses the same number, never the shipped default. |
+| **Keep the bf16 master** | `dense_keep_bf16` | on | Keeps the ~26 GB master next to the fp8 export. fp8 is a lossy, one-way export: without the master the model can never be continued, merged or re-quantized. |
+| **fp8 export** | `dense_fp8_export` | on | Quantize the finished checkpoint on the pod and upload the ~10 GB ComfyUI file. A failed export never fails the run. |
+
+**Quantizing a model you already have.** The same conversion is available by
+hand from the same card — *Quantize an existing model to fp8*. Point it at any
+full-precision `.safetensors` on this machine and it writes
+`<name>_fp8.safetensors` next to it; the source is never modified, an existing
+output is never silently overwritten, and the result is re-opened and verified
+before it reports success. It runs on the **CPU** (one elementwise cast per
+tensor — disk-bound, not GPU-bound), one at a time app-wide. It refuses a file
+that is already quantized and refuses a LoRA/adapter. Note this is **not** the
+`quantize` training option, which only shrinks the model in memory while it
+trains and writes no file.
+
+**Testing what it delivers.** The artifact is a **Raw (undistilled)** Krea 2
+checkpoint. Turbo-style few-step settings render a blurry sketch on it; use
+**CFG ~4 (3.5–5) and 20–30 steps** — the same settings the run previewed with.
+The Test Studio pre-fills them when the selected base looks Raw / full / fp8.
+
+**Quantized bases are refused.** Choosing a community fp8/int8 export as *Custom
+weights* is rejected at selection with *"This is an inference-only quantized
+export — training needs the bf16/fp16 version of this model."* The check reads a
+few kilobytes of file header (quantization markers and tensor dtypes), so it
+costs nothing; a header it cannot read is let through rather than guessed at.
+
+
+
 These live under **⚙️ Advanced options** in a dataset's training panel — rank, resolution, save/sample cadence, optimizer, scheduler, EMA, LoKr and more. Each carries its own inline **Why/How** note, so they aren't repeated here. Two are worth calling out because of a caveat.
 
 #### Krea 2 Raw · LoKr likeness — a reported community starting point
@@ -1067,6 +1108,12 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `cloud.full_transformer.private_storage_limit_gb` | Private Hugging Face allowance the dense pre-check compares against (default `0` = infer from the documented plan, an estimate). Also in Settings → Storage. |
 | `cloud.full_transformer.storage_margin_gb` | Headroom added to that forecast (default `20`). |
 | `cloud.full_transformer.checkpoint_size_gb` | Dense checkpoint size used by that forecast (default `0` = measured from past runs, else ~26 GB). |
+| `cloud.full_transformer.fp8_export` | Produce the ~10 GB ComfyUI-loadable fp8 twin at the end of a successful dense run (default `true`). `false` disables it for every dataset — an install that would rather not spend the extra pod minutes. |
+| `cloud.quantize.max_minutes` | Hard ceiling on a cloud quantization rental (default `60`, floor 5). The machine is destroyed when it is reached, whatever it reported. |
+| `cloud.quantize.max_price_per_hour` | Price cap for that rental (default: the general `cloud.max_price_per_hour`). |
+| `cloud.quantize.min_inet_down_mbps` | Downlink floor for the host (default `200`). The job is network-bound — this is the setting that decides the bill. |
+| `cloud.quantize.export_budget_seconds` | Time budget for the conversion inside the pod (default `1800`). |
+| `cloud.full_transformer.fp8_export_budget_seconds` | Time budget for that conversion on the pod (default `1800`). Exceeding it abandons the export; the bf16 master is already delivered, so the run stays a success. |
 | `face_scoring.python` | Python interpreter used to run the InsightFace subprocess (empty = current interpreter). |
 | `face_scoring.models_root` | Directory where InsightFace model weights are stored/downloaded. |
 | `face_scoring.green` | Similarity score threshold (0–1) above which an image is flagged "green" (strong match). |

@@ -56,6 +56,22 @@ export const WHATS_NEW = [
     to: '/video-bank',
   },
   {
+    id: '2026-08-04-gallery-lightbox-upscale-improve',
+    date: '2026-08-04',
+    title: 'Upscale & improve is now in the checkpoint gallery — the screen the result lands on',
+    blurb:
+      'Yesterday ✨ Upscale & improve arrived on the ◉ LoRA Canvas lightbox. It was missing from the one place an improvement actually appears: a checkpoint’s gallery. Open any picture from a pill’s 🖼 gallery or from a run card and the button is there, next to ⬇ Download — the same pass, the same choice between Klein (re-renders detail and texture) and SeedVR2 (resolves detail, keeps the look), and the same quote of the instruction Klein is about to send. It is the same action on the same picture as on the board, wired once rather than twice, so the two screens can never start behaving differently. The original is never touched: the improvement arrives as its own image in that very gallery, beside the picture it came from, ready to compare, download or pin onto the board. One honest limit — the pass takes minutes and a gallery left open does not refresh by itself, so close it and open it again to find the new picture waiting at the top.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-04-canvas-drop-keeps-your-view',
+    date: '2026-08-04',
+    title: 'Arranging the canvas no longer throws your framing away',
+    blurb:
+      'Park a render up beside another dataset’s lane, let go — and the whole board zoomed out from under you, because it had just become bigger. Every time you tidied, the canvas re-framed the thing you were tidying, and the further you placed something the harder it kicked. From now on, moving anything — a pinned picture or a run card — means you have taken the view over: the board keeps the zoom and the position you chose and never re-frames itself again. ✦ Fit is still one click away for when you do want the whole board back, which is the difference between an offer and an interruption. A board you have never arranged still opens fitted to your screen, exactly as before.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-03-krea-edit-takes-an-extra-angle',
     date: '2026-08-03',
     title: 'Krea 2 Edit takes a second image — add it in the edit dialog, and use it to compose',
@@ -67,7 +83,7 @@ export const WHATS_NEW = [
     date: '2026-08-03',
     title: 'Pinned images go anywhere on the canvas, not just below and right of their run',
     blurb:
-      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. Three things came with it. ✦ Tidy up is the way home — it brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart — and it is no longer greyed out on a board where only pictures have been moved, which is exactly when you need it. The board no longer re-zooms under your finger while you drag something past its edge; it settles once, when you let go. And a strip of grouped pictures now draws ONE line back to each checkpoint it came from instead of one per picture, so a long link stays readable.',
+      'A picture pinned onto the ◉ LoRA Canvas could be dragged down and right as far as you liked, but never up and never left: its own lane\'s corner was a wall, so you could not park a render above its run, in the free margin beside the board, or next to another dataset\'s lane to compare across datasets. That wall is gone — the mouse and the arrow keys both reach everywhere now, and ✦ Fit grows to include a picture wherever you put it, so it is always one click from being back on screen. Nothing about where an image came from changes: the line to the checkpoint that made it follows it, because that link is read off the image itself rather than off its position. Three things came with it. ✦ Tidy up is the way home — it brings every picture on the board back beside the run that made it, side-by-side strips included, moved in one piece and never taken apart — and it is no longer greyed out on a board where only pictures have been moved, which is exactly when you need it. The board no longer re-zooms under your finger while you drag something past its edge — nor when you let go of it (see the entry above). And a strip of grouped pictures now draws ONE line back to each checkpoint it came from instead of one per picture, so a long link stays readable.',
     to: '/canvas',
   },
   {
@@ -108,6 +124,54 @@ export const WHATS_NEW = [
     blurb:
       'Ticking more than 24 saved prompts was refused. That number was a guess, not a limit: nothing breaks past it, and it governed the wrong thing — 24 prompts across eight checkpoints went through, while 25 on a single one did not, even though the second run is far shorter. Tick as many as you like. What you get instead is the real cost, before the click: the panel counts every generation the run will queue and tells you how long that takes at the pace your own machine has actually been running at, measured from your recent tests rather than assumed. Past about an hour it asks once whether you meant it, and reminds you that the queue is serial — you can stop it whenever you like and keep what is already done. Every duration in the Studio and on the canvas now comes from that same measured pace, so a slower card stops being told it will take twenty minutes when it will take two hours.',
     to: '/studio',
+  },
+  {
+    id: '2026-08-03-full-model-fp8-export-for-comfyui',
+    date: '2026-08-03',
+    title: 'A finished full model now also arrives as a ~10 GB file ComfyUI can just load',
+    blurb:
+      'Full-model training delivers a 26 GB bf16 checkpoint, and nobody generates with a file that size — everyone hunts for a community fp8 repack instead. Now the run makes one itself, on the pod, in the minutes before the machine is released: a scaled fp8 export (~10 GB) pushed next to the master in your private Hugging Face repo, loadable with the standard Load Diffusion Model node, no extra setup. The run card lists both files and says which to download for ComfyUI and which one is the master. “Keep the bf16 master” stays on by default on purpose: fp8 is a one-way export, and the master is the only file you can ever continue, merge or re-quantize from — turning it off halves your storage and closes that door. If the export fails the run is still a success: the master was delivered before it ever ran, and the card says exactly that instead of reporting a failure.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-08-03-quantize-in-the-cloud-without-downloading',
+    date: '2026-08-03',
+    title: 'Quantize a delivered full model in the cloud — you only ever download the small one',
+    blurb:
+      'A full model already sitting in your private Hugging Face repo is 26 GB, and building its fp8 twin at home means pulling all 26 GB down and pushing 10 GB back — an hour of your bandwidth for under a minute of arithmetic. “☁ Quantize to fp8 in the cloud” rents one cheap machine to do that round trip on a datacentre link and writes the fp8 file straight into the same repository; you then download only the ~10 GB result. The cost is quoted before anything is rented — price per hour, estimated minutes, estimated total — like a training run. And the machine is destroyed on every path out: on success, on failure, and at a hard deadline even if it never reported anything, with a sweep that also reaps a machine left behind by an app restart. It refuses if the fp8 file already exists, and warns before renting if your private storage looks too small for it.',
+    to: '/cloud',
+  },
+  {
+    id: '2026-08-03-quantize-an-existing-model-to-fp8',
+    date: '2026-08-03',
+    title: 'Turn any full-precision model you already have into its ~10 GB ComfyUI version',
+    blurb:
+      'The same conversion the cloud runs at the end of a full-model training is now available by hand, on this machine: give it the path to any full-precision .safetensors — a 26 GB model downloaded from Hugging Face, a checkpoint from an earlier run — and it writes the fp8 version next to it. The source file is never modified and an existing output is never silently overwritten. It runs on the CPU, so nothing competes with ComfyUI or a training run, and when it finishes it re-opens the file it wrote to check the scales and dtypes are what ComfyUI expects. It refuses a file that is already quantized, and it refuses a LoRA — neither has anything to gain. Worth saying plainly, because it is constantly confused: this is NOT the “quantize” option in Advanced training, which only shrinks the model in memory while it trains and writes no file at all.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-03-full-model-recipe-unlocked-four-settings',
+    date: '2026-08-03',
+    title: 'The full-model recipe finally lets you change the four things that matter',
+    blurb:
+      'Full-model training only exposed “steps”, so the mid-run preview sheet was four generic prompts that showed nothing about your actual dataset — the one thing you look at while the GPU is billing. Preview prompts are now editable, along with the learning rate (1e-7 to 5e-6), the resolution (768 or 1024) and the checkpoint cadence (every ≥100 steps, keep 1 to 3). Defaults are unchanged, so nothing moves unless you move it. Keeping 3 checkpoints means about 78 GB of private Hugging Face storage, and the panel now says the total before you launch instead of letting the last push fail. Everything still locked — batch size, Adafactor, bf16, gradient checkpointing — now says WHY: it is the geometry that makes a 12B model fit on one 80 GB card, and changing it turns a working run into an out-of-memory crash an hour in.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-03-raw-full-model-test-settings',
+    date: '2026-08-03',
+    title: 'Testing a full model no longer looks like a failed training',
+    blurb:
+      'A full model trained on Krea 2 Raw is an undistilled checkpoint: it needs a real CFG and a real step count. The app was handing it Turbo’s defaults — CFG 1 and 8 steps — which render a blurry sketch and read as “the fine-tune did not work”, when nothing had gone wrong. The Test Studio now pre-fills CFG 4 and 25 steps when the selected base looks like a Raw / full / fp8 checkpoint (the exact settings the run’s own preview sheet used), and the training panel and run card say it in words: test at CFG ~4 and 20-30 steps.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-03-quantized-base-refused-at-selection',
+    date: '2026-08-03',
+    title: 'Picking a quantized checkpoint as a training base is refused before it costs you a run',
+    blurb:
+      'The fp8/int8 exports everyone keeps on disk for generation cannot be trained on — the weights no longer carry the precision a gradient step needs. Until now the app took one happily and the run died deep inside ai-toolkit, after the dataset export and, in the cloud, after a GPU had been rented. Choosing one as Custom weights is now refused the moment you pick it, with a sentence that says what to do: “This is an inference-only quantized export — training needs the bf16/fp16 version of this model.” It reads a few kilobytes of file header, never the 10 GB body, and a header it cannot read is let through rather than guessed at.',
+    to: '/datasets?section=training',
   },
   {
     id: '2026-08-03-person-pass-checks-folders-first',

@@ -32,7 +32,9 @@ import { runSilenceWarning, stopOutcomeMessage } from '../utils/runSilence';
 import { runsHubContinueLanes } from '../utils/runsHubContinueLanes';
 import {
   canRecheckFullTransformerDelivery,
+  fullTransformerArtifactFiles,
   fullTransformerArtifactView,
+  fullTransformerFp8Note,
   fullTransformerRecheckOutcome,
   isFullTransformerRun,
 } from '../utils/trainingMode.js';
@@ -170,6 +172,20 @@ function FullArtifactStatus({ run, onRecheck, rechecking = false }) {
       className={`w-full rounded-md border px-2.5 py-2 text-[0.6875rem] leading-relaxed ${FULL_ARTIFACT_TONE[view.tone]}`}>
       <span className="font-semibold">{view.label}</span>
       <span className="block opacity-90">{view.detail}</span>
+      {/* Which of the delivered files to take. Without this the repository shows
+          two objects with nearly the same name, one of which is 26 GB. */}
+      {fullTransformerArtifactFiles(run).map((file) => (
+        <span key={file.kind} className="block opacity-90">
+          {file.primary ? '★ ' : '· '}
+          <span className="font-mono break-all">{file.name}</span> — {file.note}
+        </span>
+      ))}
+      {fullTransformerFp8Note(run) && (
+        <span className="block opacity-80">ℹ {fullTransformerFp8Note(run)}</span>
+      )}
+      {view.available && run.inference_hint?.note && (
+        <span className="block opacity-90">⚠ {run.inference_hint.note}</span>
+      )}
       {view.href && (
         <a href={view.href} target="_blank" rel="noreferrer"
           className="mt-1 inline-block font-semibold text-sky-200 underline hover:text-sky-100">

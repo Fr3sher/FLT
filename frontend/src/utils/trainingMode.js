@@ -179,6 +179,55 @@ export function fullTransformerArtifactView(run = {}) {
   };
 }
 
+/** The files a delivered full model actually contains, and which one to take.
+ *
+ * A dense run delivers a ~26 GB bf16 master and (when the export ran) a ~10 GB
+ * fp8 twin. They are NOT interchangeable and the difference is the whole point:
+ * the fp8 file is what ComfyUI loads to generate; the bf16 file is the only one
+ * that can be trained again, merged or re-quantized. Listing them without
+ * saying which is which is how someone downloads 26 GB they cannot use, or
+ * deletes the only copy they could have continued from.
+ *
+ * Returns [] for a run that has not delivered — nothing to choose between.
+ */
+export function fullTransformerArtifactFiles(run = {}) {
+  if (String(run.artifact_status || '').trim().toLowerCase() !== 'available') return [];
+  const files = [];
+  const fp8Status = String(run.fp8_export_status || '').trim().toLowerCase();
+  if (fp8Status === 'done' && run.fp8_weight_filename) {
+    files.push({
+      kind: 'fp8',
+      name: String(run.fp8_weight_filename),
+      sizeBytes: typeof run.fp8_size_bytes === 'number' ? run.fp8_size_bytes : null,
+      primary: true,
+      note: 'Download this one for ComfyUI — quantized fp8, loads with the standard Load Diffusion Model node.',
+    });
+  }
+  if (run.hf_weight_filename && run.fp8_keep_bf16 !== false) {
+    files.push({
+      kind: 'bf16',
+      name: String(run.hf_weight_filename).split('/').pop(),
+      sizeBytes: run.hf_artifact_proof?.size_bytes ?? null,
+      primary: files.length === 0,
+      note: files.length === 0
+        ? 'Full-precision master. Usable in ComfyUI, but large.'
+        : 'Full-precision master — keep it if you may ever continue training, merge or re-quantize.',
+    });
+  }
+  return files;
+}
+
+/** Why an expected fp8 export is not in the list. Never an error state: the
+ * bf16 master is delivered either way, so this is a missing convenience. */
+export function fullTransformerFp8Note(run = {}) {
+  const status = String(run.fp8_export_status || '').trim().toLowerCase();
+  if (status === 'failed') {
+    return String(run.fp8_export_detail || '')
+      || 'The fp8 export did not complete — the full-precision model was delivered.';
+  }
+  return null;
+}
+
 /** Delivery verification is safe only for the recovery state whose pod was
  * deliberately kept alive. Rechecking a live/finished run could otherwise race
  * the monitor and tear down an instance that is still uploading. */

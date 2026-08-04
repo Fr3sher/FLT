@@ -39,6 +39,7 @@ import PreviewLightbox from '../dataset/PreviewLightbox';
 import GeneratedImageLightbox from '../shared/GeneratedImageLightbox';
 import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpointPopover.js';
 import { useCheckpointActions } from '../../hooks/useCheckpointActions';
+import { useCanvasImageImprove } from '../../hooks/useCanvasImageImprove';
 import { useCanvasRun } from '../../hooks/useCanvasRun';
 import { canvasRunDatasetIds, readyImageCount, runPinCandidates } from '../../utils/canvasRunResults';
 import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeChrome';
@@ -47,8 +48,7 @@ import {
   groupPinnedBatchBySource, groupPinnedBatchTogether,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
-import { canImproveCanvasImage, canvasImproveLaunchMessage } from '../../utils/canvasImprove';
-import { improveEngine } from '../../utils/improveEngines';
+import { canImproveCanvasImage } from '../../utils/canvasImprove';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
@@ -493,19 +493,35 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   }, []);
 
   // Auto-fit until the user takes over. `touched` is what makes the canvas feel
-  // like a board and not a slideshow: once you have zoomed or panned, a lane
-  // finishing its load must NOT yank your view back to a fit.
+  // like a board and not a slideshow: once you have zoomed, panned or ARRANGED
+  // anything, a lane finishing its load must NOT yank your view back to a fit.
   const touched = useRef(false);
   const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
   const lastFit = useRef('');
-  // …and NEVER mid-gesture. The board's size is recomputed from the thing being
-  // dragged, so on a board whose view the user has not taken over yet, every
-  // frame of a drag that grows the board used to re-fit it: the picture followed
-  // the finger while the whole board zoomed and slid underneath it. Free
-  // placement made that reachable in one short drag — dragging UP past a lane's
-  // corner grows the board immediately — where before it needed a long haul to
-  // the bottom right. A drop still fits, so nothing is left off-screen; it just
-  // happens once, when the hand has let go.
+  /* 🖐 ARRANGING THE BOARD IS TAKING THE VIEW OVER, and that is the half that was
+     missing. Not re-fitting mid-gesture fixed the board sliding under the finger
+     while it dragged; it left the jump at the DROP. So: you carry a render up
+     beside another lane to compare the two, you let go — and because the board
+     is now bigger than it was, the whole plateau zooms out and your framing is
+     gone. Every act of tidying re-framed the board being tidied, and the further
+     you placed something the harder it kicked.
+
+     A drop is now a deliberate act on the layout, so it claims the view for the
+     user: from the first thing moved — picture or run CARD, one rule for the
+     whole board — nothing re-frames itself again. ✦ Fit is one click away for
+     when the whole thing IS wanted back, which is the difference between an
+     offer and an interruption.
+
+     A board nobody has arranged still frames itself on arrival: `touched` starts
+     false, so the opening view is exactly what it always was. */
+  const takeOverView = useCallback(() => { touched.current = true; }, []);
+  // …and never mid-gesture either. The board's size is recomputed from the thing
+  // being dragged, so on a board whose view the user has not taken over yet,
+  // every frame of a drag that grows the board used to re-fit it: the picture
+  // followed the finger while the whole board zoomed and slid underneath it.
+  // Free placement made that reachable in one short drag — dragging UP past a
+  // lane's corner grows the board immediately — where before it needed a long
+  // haul to the bottom right.
   const gesturing = Boolean(drag || imgDrag);
   useEffect(() => {
     if (touched.current || gesturing || lastFit.current === fitSignature) return;
@@ -885,6 +901,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
          and writes NOTHING: the gesture was started and abandoned, and the
          board goes back exactly as it was. */
       const nodes = imagesRef.current[gi.datasetId] || [];
+      // 🖐 The board has been arranged by hand: no automatic re-frame from here
+      // on (see takeOverView). A tap that never travelled is not an arrangement
+      // and leaves a fresh board free to fit itself.
+      if (gi.moved) takeOverView();
       if (gi.moved && gi.hint) {
         saveRows(gi.datasetId,
           mergeIntoGroup(nodes, gi.imageId, gi.hint.targetImageId, gi.hint.side));
@@ -904,9 +924,14 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       dragRef.current = null;
       // Only a gesture that actually MOVED writes anything: a plain click on a
       // card must stay a click, and must not turn its lane into an arranged one
-      // behind the user's back.
+      // behind the user's back — nor, for the same reason, take the view over.
       if (d.moved) {
         suppressClick.current = true;
+        // A card is a placement like any other: moving one is arranging the
+        // board, so it stops re-framing itself too. One rule for both, because
+        // a board that holds still for pictures and jumps for cards is a board
+        // whose behaviour cannot be learned.
+        takeOverView();
         const lane = placedRef.current.find((l) => l.datasetId === d.datasetId);
         if (lane?.graph) onPinLane?.(d.datasetId, pinSnapshot(lane.graph, d.recordId, d.x, d.y));
       }
@@ -932,7 +957,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, [onPinLane, runCardGesture, saveImage, saveRows]);
+  }, [onPinLane, runCardGesture, saveImage, saveRows, takeOverView]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -1280,25 +1305,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     })));
   }, [allImageNodes, onSaveImageNodes]);
 
-  /* ✨ Upscale & improve THIS picture. Its own route on purpose: a board image is
-     a `lora_test_image` row and the dataset improve endpoint resolves a
-     `face_dataset_image` — two tables, two id spaces, so reusing it would have
-     improved an unrelated picture without failing. The result is a row of the
-     same checkpoint's gallery, so the toast says where to find it: nothing on
-     the board moves, and a bare "started" would read as a dead click. */
-  const handleImproveCanvasImage = useCallback(async (imageId, engineId) => {
-    try {
-      const d = await postJson(`/api/canvas/image/${imageId}/improve`,
-        engineId ? { engine: engineId } : {});
-      if (!d?.ok) {
-        toast.error(d?.error || 'Could not start the improvement');
-        return;
-      }
-      toast.success(canvasImproveLaunchMessage(improveEngine(d.engine).label));
-    } catch (err) {
-      toast.error(err?.message || 'Could not start the improvement');
-    }
-  }, [toast]);
+  /* ✨ Upscale & improve THIS picture. The handler is SHARED with the checkpoint
+     gallery's own lightbox (hooks/useCanvasImageImprove) — same row, same route,
+     same toast. It moved out of this file the day the second surface asked for
+     it: the route is a `lora_test_image` id and the dataset improve endpoint
+     resolves a `face_dataset_image`, so a second copy that reached for the wrong
+     one would improve an unrelated picture and report success. */
+  const handleImproveCanvasImage = useCanvasImageImprove();
 
   /* 📌 Pin ALL of a finished run's images, in one click.
      A lot spanning four checkpoints used to mean opening four galleries and

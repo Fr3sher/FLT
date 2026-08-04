@@ -1611,6 +1611,15 @@ zoom, and **Fit** puts the whole board back in view. The board only fits itself
 automatically until you first touch it — after that a dataset finishing its load
 never yanks your view away.
 
+**Moving something counts as touching it.** Zooming and panning are not the only
+way to take the view over: the first time you drag a picture or a run card to a
+new place, the board stops re-framing itself for good. Placing a render far from
+its lane makes the board bigger, and an automatic fit at that moment zoomed the
+whole plateau out the instant you let go — your framing thrown away by the very
+act of tidying. **✦ Fit** is still one click away whenever you *do* want the
+whole board back; it simply is not decided for you any more. A board you have
+never arranged still opens fitted, as it always did.
+
 **The reference face.** A character dataset's lane opens with its reference
 image, next to the dataset name — the person the renders on that lane are meant
 to be. Click it to open it full size against them. It is part of the lane label,
@@ -1969,7 +1978,13 @@ inline previews). The canvas is a second way in, not a replacement.
 
 Click a pinned picture (🔍, or the picture itself) and the full-screen view now
 carries **✨ Upscale & improve** next to **⬇ Download** — the same pass, and the
-same choice of engine, as the one in the dataset lightbox:
+same choice of engine, as the one in the dataset lightbox.
+
+The same button is on the **checkpoint and run galleries** — open a picture from
+a pill's 🖼 gallery, or from a run card, and it is there too. That is where an
+improvement is delivered, so it is where the gesture costs the fewest clicks:
+you are already comparing a checkpoint's renders when you decide one of them
+deserves a bigger pass. Both surfaces are the same action on the same picture:
 
 - **✨ Improve via Klein** re-renders detail and texture. Sharper, but skin and
   colour can shift. The note under the button quotes the exact instruction it is
@@ -1979,12 +1994,13 @@ same choice of engine, as the one in the dataset lightbox:
   can download it for you, and pressing ✨ before that answers with the same
   offer to install it rather than a plain error.
 
-**Where the result goes.** The picture on the board is never touched. The
+**Where the result goes.** The picture you started from is never touched. The
 improvement arrives as its **own image in that checkpoint's gallery**, right next
 to the original — open the gallery from the checkpoint pill (🖼) and you can
 compare the two, download either, or pin the improved one onto the board beside
-its source. Nothing on the board moves on its own, which is why the confirmation
-says where to look.
+its source. Nothing moves on its own, which is why the confirmation says where to
+look. The pass takes minutes, and a gallery already open does not refresh by
+itself: close it and open it again to find the new picture waiting at the top.
 
 Two things it deliberately will not do. An **improvement cannot be improved
 again** — running two passes over the same pixels is how a face turns to

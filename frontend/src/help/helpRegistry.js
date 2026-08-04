@@ -626,7 +626,11 @@ const TOPICS = [
      'tidy up', 'reset the layout', 'positions', 'long press', 'pick up a card',
      'datasets filter', 'filter is collapsed', 'filter is folded',
      'where is the dataset list', 'show fewer datasets',
-     'my board keeps moving', 'new run moved everything', 'organise runs'],
+     'my board keeps moving', 'new run moved everything', 'organise runs',
+     // "the board zoomed out when I let go" — the auto-fit at the drop, which a
+     // drop now switches off for good. People search for the SYMPTOM.
+     'board zooms out', 'view jumps', 'board re-frames itself', 'zoom keeps resetting',
+     'lost my zoom', 'stop the board resizing', 'auto fit', 'fit keeps happening'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-generate', 'Generate from the board',
     ['generate from the canvas', 'generate on the board', 'test a checkpoint from the canvas',
@@ -1115,6 +1119,53 @@ const TOPICS = [
     ['hugging face', 'huggingface', 'storage', 'quota', 'full', 'lds-base', 'cache',
       'delete', 'free space', 'disk', 'custom base', 'dense', 'full model'],
     '/settings/storage', 'settings-reference', 'storage'),
+  // The unlocked half of the full-model (dense) recipe. Per-dataset Advanced
+  // controls, not global Settings — they point at the dataset guide's
+  // full-model section. Grouped as one topic on purpose: they are one card, and
+  // the question a user actually has ("what can I change here?") is answered by
+  // the card, not by four separate entries.
+  { id: 'training.full_model_recipe', kind: 'setting',
+    title: 'Full-model recipe (prompts, LR, resolution, checkpoints)',
+    keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'recipe', 'locked',
+      'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
+      'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
+      'gradient checkpointing', '80 gb'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'full-model-recipe-unlocked',
+      text: 'New: the full-model recipe now lets you edit the preview prompts, learning rate, resolution and checkpoint cadence — the rest stays locked because it is what makes a 12B model fit on one 80 GB card.' } },
+  { id: 'training.full_model_fp8_export', kind: 'setting',
+    title: 'fp8 export for ComfyUI (and the bf16 master)',
+    keywords: ['fp8', 'quantized', 'quantised', 'export', 'comfyui', 'comfy', '10 gb',
+      'bf16', 'master', 'full model', 'dense', 'krea', 'scaled fp8', 'safetensors',
+      'inference', 'download', 'storage'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'full-model-fp8-export',
+      text: 'New: a finished full-model run also delivers a ~10 GB fp8 file that ComfyUI loads directly — the 26 GB master is kept next to it unless you turn that off.' } },
+  { id: 'training.fp8_quantize_local', kind: 'action',
+    title: 'Quantize an existing model to fp8',
+    keywords: ['quantize', 'quantise', 'fp8', 'convert', 'shrink', 'comfyui', 'comfy',
+      'local', 'safetensors', '26 gb', '10 gb', 'checkpoint', 'full model', 'cpu',
+      'ai-toolkit quantize', 'memory'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'fp8-quantize-local',
+      text: 'New: point “Quantize an existing model to fp8” at any full-precision checkpoint on this machine and it writes the ~10 GB ComfyUI version next to it — the original is never touched.' } },
+  { id: 'training.fp8_quantize_cloud', kind: 'action',
+    title: 'Quantize to fp8 in the cloud',
+    keywords: ['quantize', 'quantise', 'fp8', 'cloud', 'vast', 'rent', 'hugging face',
+      'hf', 'repository', 'download', 'bandwidth', 'full model', 'dense', 'cost'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/cloud' },
+    tip: { trigger: 'fp8-quantize-cloud',
+      text: 'New: a full model already delivered to Hugging Face can be quantized in the cloud — a few minutes of a cheap machine builds the fp8 file straight into the repository, so you only ever download the small one.' } },
+  { id: 'training.quantized_base_refused', kind: 'setting',
+    title: 'Why a quantized checkpoint is refused as a training base',
+    keywords: ['quantized', 'quantised', 'fp8', 'int8', 'gguf', 'custom weights',
+      'base', 'refused', 'inference only', 'training', 'bf16', 'fp16', 'error'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' } },
   // Dual captions is a per-run Advanced training option (not a global Setting),
   // so it points at the dataset guide's dedicated section rather than
   // settings-reference, and its route is the training workspace section. Its tip
@@ -1308,16 +1359,21 @@ const TOPICS = [
      'original pending', 'original undecided', 'automatic unkeep', 'keep both',
      'bulk keep', 'batch keep', 'nothing deleted', 'do not delete'],
     '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
-  // ✨ in the CANVAS lightbox. Its own topic, not a variant of the dataset one:
-  // the result lands somewhere else (the checkpoint's gallery, not the curation
-  // grid), and "where did my upscale go" is the question this button actually
-  // raises on a screen where nothing moves when you press it.
-  action('action-canvas-improve', 'Upscale a picture straight from the LoRA Canvas',
+  // ✨ in the CANVAS lightbox AND in the checkpoint / run gallery's. Its own
+  // topic, not a variant of the dataset one: the result lands somewhere else
+  // (the checkpoint's gallery, not the curation grid), and "where did my upscale
+  // go" is the question this button actually raises on a screen where nothing
+  // moves when you press it. ONE topic for both surfaces on purpose — it is the
+  // same pass on the same row, and two topics would be two answers to drift.
+  action('action-canvas-improve', 'Upscale a picture from the board or its gallery',
     ['canvas', 'board', 'improve', 'upscale', 'upscale & improve', 'enhance', 'klein',
      'seedvr2', 'sharpen', 'detail', 'resolution', 'megapixels', 'lightbox',
      'pinned image', 'generated image', 'where did it go', 'result', 'gallery',
      'checkpoint gallery', 'improve from canvas', 'no improve button',
-     'improve an improvement', 'reference face', 'retry', 'failed upscale'],
+     'improve an improvement', 'reference face', 'retry', 'failed upscale',
+     'improve from the gallery', 'upscale from the gallery', 'run gallery',
+     'gallery lightbox', 'improve a test image', 'improve a render',
+     'gallery did not update', 'upscale not showing'],
     '/canvas', 'using-the-app', 'upscale-a-picture-straight-from-the-board'),
   action('action-grid-sort', 'Sort the dataset grid by face similarity',
     ['sort', 'order', 'ordering', 'reorder', 'rank', 'ranking', 'best first',
