@@ -200,7 +200,8 @@ def test_a_video_run_never_registers_a_face_provenance_record(app, tmp_path):
         assert TrainingRunRecord.query.filter_by(dataset_id=vid.id).count() == 0
 
 
-def test_a_video_run_is_never_imported_into_a_face_datasets_lora_folder(app, tmp_path):
+def test_a_video_run_is_never_imported_into_a_face_datasets_lora_folder(
+        app, tmp_path, monkeypatch):
     """`_import_result` calls `lt.import_checkpoint('local', run.dataset_id, …)`,
     which deploys into the ComfyUI folder of THAT face dataset's family. For a
     video run the id names a different table entirely, so the deploy would land a
@@ -210,12 +211,13 @@ def test_a_video_run_is_never_imported_into_a_face_datasets_lora_folder(app, tmp
     with app.app_context():
         vid = _video_dataset(tmp_path)
         run = _run(vid.id, crd.VIDEO, checkpoint_local_path='/nowhere/x.safetensors')
-        ct.lt.import_checkpoint = lambda *a, **k: pytest.fail(
-            'a video run reached the face import path')
+        monkeypatch.setattr(ct.lt, 'import_checkpoint', lambda *a, **k: pytest.fail(
+            'a video run reached the face import path'))
         assert ct._import_result(run) is None
 
 
-def test_a_video_run_has_no_local_run_directory_to_mirror_into(app, tmp_path):
+def test_a_video_run_has_no_local_run_directory_to_mirror_into(
+        app, tmp_path, monkeypatch):
     """The mirror copies harvested checkpoints into `lt._run_dir(user, dataset_id,
     …)` — a path built from a FACE dataset's folder. There is no local video
     training lane, so there is no directory to mirror into; the mirror must stand
@@ -224,8 +226,8 @@ def test_a_video_run_has_no_local_run_directory_to_mirror_into(app, tmp_path):
     with app.app_context():
         vid = _video_dataset(tmp_path)
         run = _run(vid.id, crd.VIDEO)
-        ct.lt._run_dir = lambda *a, **k: pytest.fail(
-            'a video run asked for a face run directory')
+        monkeypatch.setattr(ct.lt, '_run_dir', lambda *a, **k: pytest.fail(
+            'a video run asked for a face run directory'))
         assert ct._mirror_into_local_run(run) is None
 
 
@@ -259,7 +261,8 @@ def test_the_video_launcher_stamps_the_table_on_the_run(app, tmp_path):
         assert run.dataset_id == vid.id
 
 
-def test_the_video_launcher_skips_the_image_preflight_entirely(app, tmp_path):
+def test_the_video_launcher_skips_the_image_preflight_entirely(
+        app, tmp_path, monkeypatch):
     """`assert_trainable` counts IMAGES and their captions, and
     `export_dataset_to_aitoolkit` re-exports them with rembg masks. A video
     dataset has neither: its folder is already the flat mp4 + .txt shape
@@ -269,10 +272,10 @@ def test_the_video_launcher_skips_the_image_preflight_entirely(app, tmp_path):
     from app.services import cloud_video_training as cvt
     with app.app_context():
         vid = _video_dataset(tmp_path)
-        ct.lt.assert_trainable = lambda *a, **k: pytest.fail(
-            'the image preflight ran on a video dataset')
-        ct.lt.export_dataset_to_aitoolkit = lambda *a, **k: pytest.fail(
-            'the image export ran on a video dataset')
+        monkeypatch.setattr(ct.lt, 'assert_trainable', lambda *a, **k: pytest.fail(
+            'the image preflight ran on a video dataset'))
+        monkeypatch.setattr(ct.lt, 'export_dataset_to_aitoolkit', lambda *a, **k: pytest.fail(
+            'the image export ran on a video dataset'))
         cvt.launch_cloud_video_training('local', vid.id, steps=500,
                                         _provision=lambda run: None)
 
@@ -476,7 +479,7 @@ def test_a_face_datasets_checkpoint_panel_lists_none_of_a_video_runs_saves(
 
 
 def test_retry_and_continue_refuse_a_video_run_instead_of_relaunching_a_face_one(
-        app, tmp_path):
+        app, tmp_path, monkeypatch):
     """Both rebuild their arguments from a run's stamped params and call
     `launch_cloud_training`, which resolves `dataset_id` as a FACE dataset. On a
     colliding id that is not an error — it is a face training launched on someone
@@ -486,8 +489,8 @@ def test_retry_and_continue_refuse_a_video_run_instead_of_relaunching_a_face_one
         _face_dataset('portraits')
         vid = _video_dataset(tmp_path, 'surf clips')
         run = _run(vid.id, crd.VIDEO, status='error')
-        ct.lt.assert_trainable = lambda *a, **k: pytest.fail(
-            'a video run re-entered the face launcher')
+        monkeypatch.setattr(ct.lt, 'assert_trainable', lambda *a, **k: pytest.fail(
+            'a video run re-entered the face launcher'))
         with pytest.raises(ValueError) as e:
             ct.retry_cloud_run('local', run.id)
         assert 'video' in str(e.value).lower()
