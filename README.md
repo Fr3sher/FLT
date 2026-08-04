@@ -92,6 +92,7 @@ the target model accepts.
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — and an empty one trains uncaptioned, which is why the build
   dialog counts them out loud before encoding.
+<<<<<<< HEAD
 - **Training starts here, but only one target is proven here.** A promoted set
   has a **▶ Train this dataset** button that hands the clips to the ai-toolkit
   installed on your machine, and the cloud lane rents a pod for the same set. The
@@ -106,6 +107,23 @@ the target model accepts.
   them.** They come from `Comfy-Org/MiniMax-H3`. If they are not on your disk the
   button names the repository and the size and waits for a yes — a first run that
   quietly downloaded 43 GB would look like a training that had hung.
+=======
+- **It trains in the cloud only — not on your own GPU.** A promoted video set has
+  a **☁ Train in the cloud** panel: it rents a pod, uploads the clips, runs the
+  training and lists the checkpoints for download, with the GPU and its hourly
+  price on screen. There is no local video training button; nobody has yet
+  published VRAM figures for a video LoRA run at 24 GB, and the shipped "24gb"
+  example configs all train on stills.
+  Two limits worth knowing before you spend: only targets marked
+  **training-verified** can be launched (for the others the geometry is known and
+  no LoRA trainer is), and a target with no verified base repository asks you to
+  name one rather than guessing a repo id that fails once the pod is paid for.
+  Wan 2.2 saves each checkpoint as a **pair** (high-noise and low-noise experts);
+  both files are offered together, because either one alone is a LoRA nothing can
+  load. The eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V variants,
+  LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the installed
+  ai-toolkit ships.
+>>>>>>> feat/video-cloud-complete
 - **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
   the EU, the UK, South Korea or the USA, and the restriction covers the model's
   outputs, not only the model. Check your own territory before using that profile.

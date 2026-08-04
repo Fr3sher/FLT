@@ -64,7 +64,8 @@ def _start_pod(run):
 
 def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                                 base_model=None, low_vram=False, gpu_name=None,
-                                _provision=None) -> dict:
+                                resume_ckpt_paths=None, resume_step=None,
+                                parent_run_id=None, _provision=None) -> dict:
     """Rent a pod and train a LoRA on a built video dataset.
 
     `low_vram` defaults to FALSE here and True in the builder, and the asymmetry
@@ -76,6 +77,14 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
     `_provision` overrides `_start_pod` for callers that drive provisioning
     themselves; leave it None and the shared monitor takes over, exactly as it
     does for a face run.
+
+    `resume_ckpt_paths` is a LIST, and that is the one shape difference from the
+    face lane's single `resume_ckpt_path`. A Wan 2.2 MoE checkpoint is two files
+    — `_high_noise` and `_low_noise` — and seeding one of them onto a fresh pod
+    resumes one expert while the other restarts from zero. Nothing raises; the
+    LoRA simply comes back half as trained as its step count claims. So the
+    continuation carries every file of the chosen step, and `_seed_resume_checkpoint`
+    ships all of them.
     """
     ds = VideoDataset.query.get(int(video_dataset_id))
     if ds is None or str(ds.user_id) != str(user_id):
@@ -112,6 +121,16 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                 'frames': ds.frames,
                 'artifact_kind': 'lora',
                 **({'requested_gpu': str(gpu_name)} if gpu_name else {}),
+                # A continuation, and what it grew from. `resume_ckpt_paths`
+                # (plural) is read by _seed_resume_checkpoint; `parent_run_id`
+                # is the video lane's genealogy edge — a CloudTrainingRun id,
+                # never a face TrainingRunRecord id.
+                **({'resume_ckpt_paths': [str(p) for p in resume_ckpt_paths]}
+                   if resume_ckpt_paths else {}),
+                **({'resume_step': int(resume_step)}
+                   if resume_step is not None else {}),
+                **({'parent_run_id': int(parent_run_id)}
+                   if parent_run_id is not None else {}),
             }))
         # Deliberately NO `version` key and no checkpoint_registry call. That
         # registry freezes a manifest of face-dataset IMAGES and their caption
@@ -131,3 +150,119 @@ def launch_cloud_video_training(user_id, video_dataset_id, steps=1000,
                 run.id, clips, n_steps, ds.target_profile)
     return {'run_id': run.id, 'status': run.status, 'job_name': run.job_name,
             'steps': n_steps, 'clips': clips}
+
+
+# ── Relaunching: retry and continue, in the VIDEO lane ────────────────────────
+# Both used to refuse. The refusal was right at the time: `retry_cloud_run` and
+# `continue_cloud_run` rebuild their arguments from a run's stamped params and
+# hand them to `launch_cloud_training`, which resolves `dataset_id` as a FACE
+# dataset — so on a colliding id they would have launched a face training on
+# someone else's data and billed for it. What was missing was not a guard, it
+# was these two functions: the same rebuild, aimed at the video launcher.
+
+
+def _params_of(run) -> dict:
+    try:
+        p = json.loads(run.train_params or '{}')
+    except ValueError:
+        return {}
+    return p if isinstance(p, dict) else {}
+
+
+def _relaunch_args(p) -> dict:
+    """The launch arguments a video run replays. Read from the run's STAMPED
+    params and never from the dataset row: the row may have been rebuilt at
+    another length or retargeted since, and a replay that silently picked up
+    today's target is a different training under the same name."""
+    return {
+        'base_model': p.get('base_model') or None,
+        'low_vram': bool(p.get('low_vram', False)),
+        'gpu_name': p.get('requested_gpu'),
+    }
+
+
+def retry_cloud_video_run(user_id, run_id) -> dict:
+    """↻ Relaunch a FAILED video run with the exact parameters of the original.
+    A real launch on a fresh pod — same guardrails as any other — not a
+    resurrection of the dead one."""
+    run = db.session.get(CloudTrainingRun, int(run_id))
+    if not run:
+        raise ValueError('unknown cloud run')
+    if run.status != 'error':
+        raise ValueError('only a failed run can be retried')
+    p = _params_of(run)
+    return launch_cloud_video_training(
+        user_id, run.dataset_id, steps=p.get('steps') or 1000, **_relaunch_args(p))
+
+
+def harvested_steps(run) -> list:
+    """This run's harvested saves GROUPED BY STEP, ascending.
+
+    Grouping is not presentation here, it is correctness. A Wan 2.2 MoE
+    checkpoint is two files at ONE step, and every operation that treats a save
+    as a single file gets it wrong in a way that raises nothing — a download
+    that serves one half, a continue that seeds one expert. So the unit this
+    lane works in is the step, and its files travel together.
+
+    The FINAL save carries no number in ai-toolkit's naming; it is reported at
+    the run's total step count and flagged `final`."""
+    saves = ct.run_checkpoint_files(run)
+    if not saves:
+        return []
+    target = int(ct._run_param(run, 'steps') or 0)
+    by_step = {}
+    for name, path in saves.items():
+        step, _stage = video_training.split_checkpoint_name(name)
+        final = step is None
+        key = (target if final else step, final)
+        by_step.setdefault(key, []).append((name, path))
+    out = []
+    for (step, final), items in sorted(by_step.items()):
+        items.sort()
+        out.append({'step': int(step), 'final': final,
+                    'files': [n for n, _ in items],
+                    'paths': [p for _, p in items]})
+    return out
+
+
+def continue_cloud_video_run(user_id, run_id, extra_steps=1000,
+                             from_step=None) -> dict:
+    """▶ Resume a TERMINAL video run from one of its harvested steps and train
+    `extra_steps` further. A fresh pod: the monitor drops every file of the
+    chosen step into the new job's save_root before starting it, and ai-toolkit
+    auto-resumes from what it finds there."""
+    run = db.session.get(CloudTrainingRun, int(run_id))
+    if not run:
+        raise ValueError('unknown cloud run')
+    if run.status in ct.ACTIVE_STATES:
+        raise ValueError('a run that is still running cannot be continued — '
+                         'wait for it to finish or fail')
+    steps = harvested_steps(run)
+    if not steps:
+        raise ValueError('no harvested checkpoint to continue from — this run '
+                         'has none left on disk; launch a fresh video run instead')
+    if from_step is None:
+        chosen = steps[-1]
+    else:
+        try:
+            want = int(from_step)
+        except (TypeError, ValueError):
+            raise ValueError('from_step must be an integer step')
+        matches = [s for s in steps if s['step'] == want]
+        if not matches:
+            raise ValueError(
+                f'no harvested checkpoint at step {want} for this run '
+                f'(available: {sorted({s["step"] for s in steps})})')
+        # Prefer the numbered save over the unsuffixed final when they tie: the
+        # numbered one states its step in its own name, the final one only
+        # inherits it from the run's target.
+        chosen = min(matches, key=lambda s: s['final'])
+    try:
+        extra = max(100, int(extra_steps))
+    except (TypeError, ValueError):
+        extra = 1000
+    p = _params_of(run)
+    return launch_cloud_video_training(
+        user_id, run.dataset_id, steps=chosen['step'] + extra,
+        resume_ckpt_paths=list(chosen['paths']), resume_step=chosen['step'],
+        parent_run_id=run.id, **_relaunch_args(p))

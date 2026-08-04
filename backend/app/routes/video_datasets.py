@@ -268,3 +268,121 @@ def video_dataset_train_cloud_progress(dataset_id):
         'created_at': run.created_at.isoformat() if run.created_at else None,
         'finished_at': run.finished_at.isoformat() if run.finished_at else None,
     })
+
+
+def _video_run(dataset_id, run_id):
+    """One cloud run OF THIS VIDEO DATASET, or None.
+
+    The ownership test is the PAIR (id, table), never the id alone: a face run
+    carrying the same integer is a different training on someone else's data,
+    and these three routes serve its weights and relaunch it."""
+    from ..models import CloudTrainingRun
+    from ..services import cloud_run_dataset as crd
+    try:
+        run = CloudTrainingRun.query.get(int(run_id))
+    except (TypeError, ValueError):
+        return None
+    return run if run and crd.owns(run, dataset_id, crd.VIDEO) else None
+
+
+@bp.get('/video-dataset/<int:dataset_id>/train/cloud/checkpoints')
+def video_dataset_cloud_checkpoints(dataset_id):
+    """Every LoRA this dataset's cloud runs brought back, grouped by run then by
+    STEP.
+
+    Grouped by step and not by file, because a Wan 2.2 checkpoint IS two files —
+    `_high_noise` and `_low_noise` — and a list of individual files invites a UI
+    to offer half a LoRA. MiniMax H3 has one file per step (ai-toolkit's
+    `MinimaxH3Model` defines no `save_lora`, so the generic single-file save
+    applies), and the same shape carries it without a special case."""
+    from ..models import CloudTrainingRun
+    from ..services import cloud_run_dataset as crd
+    from ..services import cloud_training as ct
+    from ..services import cloud_video_training as cvt
+    if not svc.get_video_dataset(LOCAL_USER, dataset_id):
+        return _missing(dataset_id)
+    groups = []
+    for run in (CloudTrainingRun.query.filter_by(dataset_id=dataset_id)
+                .order_by(CloudTrainingRun.id.desc()).all()):
+        if not crd.owns(run, dataset_id, crd.VIDEO):
+            continue
+        steps = cvt.harvested_steps(run)
+        if not steps:
+            continue
+        groups.append({
+            'run_id': run.id, 'status': run.status,
+            'active': run.status in ct.ACTIVE_STATES,
+            'gpu': run.gpu_name, 'price_per_hour': run.price_per_hour,
+            'target_profile': ct._run_param(run, 'target_profile'),
+            'parent_run_id': ct._run_param(run, 'parent_run_id'),
+            'created_at': run.created_at.isoformat() if run.created_at else None,
+            'finished_at': run.finished_at.isoformat() if run.finished_at else None,
+            # Paths stay server-side: the client asks for a file by NAME and the
+            # server resolves it against this run's own saves.
+            'steps': [{'step': s['step'], 'final': s['final'],
+                       'files': s['files']} for s in steps],
+        })
+    return jsonify({'groups': groups})
+
+
+@bp.get('/video-dataset/<int:dataset_id>/train/cloud/checkpoint')
+def video_dataset_cloud_checkpoint(dataset_id):
+    """Download ONE harvested save of one of this dataset's cloud runs.
+
+    Both halves of a Wan pair are fetched as two calls to this route — a single
+    archive would be friendlier and would also be a second format to explain to
+    every loader downstream; two files is what ai-toolkit wrote and what the
+    loaders expect side by side."""
+    from flask import abort
+    from ..services import cloud_training as ct
+    import os
+    run = _video_run(dataset_id, request.args.get('run_id'))
+    if not run:
+        abort(404)
+    # Resolved through the run's own save list, which is basename-only by
+    # construction — the client can never point this at a path of its choosing.
+    path = ct.run_checkpoint_path(run, request.args.get('filename'))
+    if not path or not os.path.isfile(path):
+        abort(404)
+    return send_file(path, as_attachment=True)
+
+
+@bp.post('/video-dataset/<int:dataset_id>/train/cloud/retry')
+def video_dataset_cloud_retry(dataset_id):
+    """↻ Relaunch a failed run of this dataset on a fresh pod."""
+    from ..services import cloud_video_training as cvt
+    run = _video_run(dataset_id, (request.get_json(silent=True) or {}).get('run_id'))
+    if not run:
+        return _missing(dataset_id)
+    return _relaunch(lambda: cvt.retry_cloud_video_run(LOCAL_USER, run.id))
+
+
+@bp.post('/video-dataset/<int:dataset_id>/train/cloud/continue')
+def video_dataset_cloud_continue(dataset_id):
+    """▶ Train an existing LoRA of this dataset further, from one of its
+    harvested steps."""
+    from ..services import cloud_video_training as cvt
+    body = request.get_json(silent=True) or {}
+    run = _video_run(dataset_id, body.get('run_id'))
+    if not run:
+        return _missing(dataset_id)
+    return _relaunch(lambda: cvt.continue_cloud_video_run(
+        LOCAL_USER, run.id, extra_steps=body.get('extra_steps', 1000),
+        from_step=body.get('from_step')))
+
+
+def _relaunch(call):
+    """The two relaunch routes answer identically, and the mapping is the same
+    one the launch route uses: anything the user can act on is a 400, and the
+    launch guard (already running, fleet limit, budget) is a 409 — the request
+    was well-formed, the state refuses it.
+
+    No branch for `VideoTrainingUnsupported`: it IS a ValueError, and the launch
+    route only names it separately because there ValueError also carries the
+    "dataset not found" 404. Here it would be a line that never runs."""
+    try:
+        return jsonify({'ok': True, **call()})
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except RuntimeError as e:
+        return jsonify({'error': str(e)}), 409

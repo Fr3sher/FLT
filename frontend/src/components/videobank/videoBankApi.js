@@ -110,3 +110,42 @@ export function videoPassUrl(bankId, pass) {
 export function videoDatasetUrl(datasetId) {
   return `/api/video-dataset/${datasetId}`
 }
+
+/** ☁ The cloud lane of ONE video dataset.
+ *
+ * Its own URL family, and not the face lane's `/api/dataset/<id>/train/cloud`,
+ * for the reason the run's `dataset_table` column exists: the two dataset tables
+ * share one integer space, so the same URL shape for both would make the id
+ * alone ambiguous at the outermost layer. `/api/video-dataset/...` says which
+ * table it means before the server has to.
+ */
+export function videoDatasetCloudUrl(datasetId) {
+  return `/api/video-dataset/${datasetId}/train/cloud`
+}
+
+export function videoDatasetCloudProgressUrl(datasetId) {
+  return `/api/video-dataset/${datasetId}/train/cloud/progress`
+}
+
+/** Everything this dataset's cloud runs brought back, grouped by run then by
+ * STEP — a Wan 2.2 save is a `_high_noise` + `_low_noise` PAIR, and a list of
+ * loose files invites a button that downloads half a LoRA. */
+export function videoDatasetCloudCheckpointsUrl(datasetId) {
+  return `/api/video-dataset/${datasetId}/train/cloud/checkpoints`
+}
+
+/** ⬇ ONE harvested file. The filename is encoded rather than interpolated: it
+ * comes back from the server carrying the dataset's own name, which may hold
+ * anything a user typed. */
+export function videoDatasetCheckpointUrl(datasetId, runId, filename) {
+  const p = new URLSearchParams({ run_id: String(runId), filename: String(filename ?? '') })
+  return `/api/video-dataset/${datasetId}/train/cloud/checkpoint?${p.toString()}`
+}
+
+export function videoDatasetCloudRetryUrl(datasetId) {
+  return `/api/video-dataset/${datasetId}/train/cloud/retry`
+}
+
+export function videoDatasetCloudContinueUrl(datasetId) {
+  return `/api/video-dataset/${datasetId}/train/cloud/continue`
+}

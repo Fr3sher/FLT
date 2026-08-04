@@ -37,6 +37,8 @@ from . import vast_client
 # one place that knows a save may carry a multistage suffix, and every family's
 # step is read through it so the single-file and the paired case cannot drift.
 # The module is pure (no torch, no ffmpeg, no database), so this costs nothing.
+from . import video_run_lineage
+from . import video_targets
 from . import video_training
 from .aitoolkit_remote import RemoteAiToolkit, TransferCancelled
 
@@ -1428,19 +1430,29 @@ def _reconcile_before_launch(app):
     reconcile_orphans(app)
 
 
-def _refuse_video_run(run, verb):
-    """Refuse an operation that would re-enter the FACE launcher.
+def _video_lane(run):
+    """The video lane's own relauncher for this run, or None when it is a face
+    run and this module's own path applies.
 
     `retry_cloud_run` and `continue_cloud_run` both rebuild their arguments from
     a run's stamped params and call `launch_cloud_training`, which resolves
-    `dataset_id` as a face dataset. Handed a video run they would either 404 on a
-    dataset that is not there or — on a colliding id — launch a face training on
-    someone else's data and charge for it. Saying so is the honest answer until
-    the video lane grows its own retry; the run's checkpoints are unaffected."""
-    if crd.is_video(run):
-        raise ValueError(
-            f'a video training run cannot be {verb} yet — launch a fresh run '
-            'from the video dataset instead (its checkpoints are kept)')
+    `dataset_id` as a FACE dataset. Handed a video run they would either 404 on
+    a dataset that is not there or — on a colliding id — launch a face training
+    on someone else's data and charge for it. Both used to refuse for exactly
+    that reason; what was actually missing was the video-side rebuild, which now
+    exists, so they DISPATCH instead.
+
+    `crd.is_video` still raises on a run naming a table this build does not know
+    — that refusal was never about the video lane, it is about a row that cannot
+    say which dataset it trained, and guessing there is the silent
+    mis-attribution the whole column exists to prevent.
+
+    Imported inside the function: `cloud_video_training` imports this module at
+    its top, and the video lane reusing the shared monitor is the point."""
+    if not crd.is_video(run):
+        return None
+    from . import cloud_video_training
+    return cloud_video_training
 
 
 def retry_cloud_run(user_id, run_id) -> dict:
@@ -1453,7 +1465,9 @@ def retry_cloud_run(user_id, run_id) -> dict:
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
-    _refuse_video_run(run, 'retried')
+    video = _video_lane(run)
+    if video:
+        return video.retry_cloud_video_run(user_id, run.id)
     if run.status != 'error':
         raise ValueError('only a failed run can be retried')
     try:
@@ -1871,7 +1885,15 @@ def continue_cloud_run(user_id, run_id, extra_steps=1000, from_step=None,
     run = db.session.get(CloudTrainingRun, int(run_id))
     if not run:
         raise ValueError('unknown cloud run')
-    _refuse_video_run(run, 'continued')
+    video = _video_lane(run)
+    if video:
+        # The video lane's own continue: its checkpoints come in steps that may
+        # hold TWO files, and its launcher is the one that resolves a video
+        # dataset id. `overrides` / `transport` / state bundles are face-lane
+        # concepts with no video counterpart yet, and are not silently dropped —
+        # `_require_cloud_weights_only` above already refused a state bundle.
+        return video.continue_cloud_video_run(
+            user_id, run.id, extra_steps=extra_steps, from_step=from_step)
     # Continue from any TERMINAL run — a run that failed at pod teardown
     # ('pod did not become ready in time') can still have harvested, complete
     # checkpoints in its staging, and resuming from one is valid. Only a run
@@ -2827,6 +2849,47 @@ def _staging_dataset_dir(run) -> str:
             raise RuntimeError(f'run {run.id} has no video dataset folder left')
         return str(row.output_dir)
     return os.path.join(run.staging_dir, 'dataset')
+
+
+def _assert_pod_can_decode(run, remote, pod_settings):
+    """Before the job starts: can this pod READ the clips it was just sent?
+
+    Only for a video run — a face run uploads jpegs and would gain a new way to
+    fail for a decoder it never calls.
+
+    The placement is the design. A pod is billed from boot, and whether its image
+    can decode these mp4s is genuinely unknown: OpenCV's bundled ffmpeg has no
+    software AV1 decoder, PyAV is absent from some images, and an image without
+    libGL cannot import cv2 at all. Each of those ends the same way — a job that
+    runs and yields nothing. Asked here, the answer costs seconds of an
+    already-booted pod; discovered later it costs the run. This is run #138's
+    lesson one step further along: the phase you do not observe is the phase that
+    bills you.
+
+    A refusal RAISES, and the monitor's generic handler turns it into a failed
+    run with the pod released. Standing down "just in case the probe is wrong"
+    would restore exactly the blind launch this exists to remove."""
+    from . import pod_video_probe
+    if not crd.is_video(run):
+        return None
+    profile = video_targets.get(_run_param(run, 'target_profile')
+                                or getattr(crd.dataset_row(run),
+                                           'target_profile', None)) or {}
+    # Only when the target actually trains on the track. MiniMax H3 is a joint
+    # video+audio model on muxed clips: a pod that decodes the picture and finds
+    # no audio stream trains a video-only LoRA under an audio target's name.
+    want_audio = bool((profile.get('audio') or {}).get('muxed'))
+    pod_dir = (pod_settings['DATASETS_FOLDER'].rstrip('/') + '/' + run.job_name)
+    _set(run, phase_detail='Checking the pod can read the clips…')
+    verdict = pod_video_probe.probe_decoder(
+        remote, instance_id=run.vast_instance_id, pod_dataset_dir=pod_dir,
+        want_audio=want_audio, tmp_dir=run.staging_dir or str(_staging_root()),
+        should_cancel=lambda: _stop_event_for(run.id).is_set())
+    logger.info('run %s: the pod decoded %s with %s (%s frames)', run.id,
+                verdict.get('clip'), verdict.get('decoder'), verdict.get('frames'))
+    _set(run, phase_detail=f'Pod reads the clips with '
+                           f'{verdict.get("decoder") or "its decoder"}')
+    return verdict
 
 
 def _register_instance(run, instance_id, offer, token):
@@ -5068,6 +5131,11 @@ def _monitor(app, run_id):
                         run.job_name + '_masks', masks_dir,
                         on_progress=_upload_heartbeat(run, 'Uploading the masks'))
 
+                # A rented pod that cannot decode these clips is a job that runs
+                # and yields nothing. Asked here, one command after the bytes
+                # landed and before the GPU starts.
+                _assert_pod_can_decode(run, remote, pod_settings)
+
                 # -- build + submit the job -----------------------------------
                 # Built from the run's own STAMPED params, and from the right
                 # dataset table — see _build_pod_job_config, which now carries
@@ -5271,6 +5339,11 @@ def _monitor(app, run_id):
                     _download_intermediates(run, remote)
                     _import_result(run)
                     _mirror_into_local_run(run)
+                    # The video lane's provenance, written beside the weights —
+                    # the face lane's registry cannot hold it (its manifest is
+                    # face IMAGES, its dataset_id a face id). No-op for a face
+                    # run, and best-effort: bookkeeping never fails a run.
+                    video_run_lineage.record(run)
                     _finish_if_open(run, 'done', detail='Training complete')
                     return
                 if status in ('error', 'stopped'):
@@ -5538,13 +5611,31 @@ def _seed_resume_checkpoint(run, remote, pod_settings):
     genuinely different prices, which is why they are both offered and both
     costed before the click."""
     src = _run_param(run, 'resume_ckpt_path')
+    # The video lane stamps a LIST. A Wan 2.2 MoE checkpoint is two files at one
+    # step, and ai-toolkit's auto-resume globs the save_root, takes the newest
+    # match, and then `Wan2214bModel.load_lora` reads its SIBLING by rewriting
+    # `_high_noise` into `_low_noise` — so both must land, under this job's
+    # prefix, with their stage suffixes intact. Seeding one of them resumes one
+    # expert and restarts the other from zero, and nothing raises.
+    sources = list(_run_param(run, 'resume_ckpt_paths') or ())
     repo_id = _run_param(run, 'resume_hf_repo_id')
-    if not src and not repo_id:
+    if not src and not sources and not repo_id:
         return
     step = int(_run_param(run, 'resume_step') or 0)
     remote_name = f'{run.job_name}_{step:09d}.safetensors'
     training_folder = pod_settings['TRAINING_FOLDER'].rstrip('/')
     dest_dir = f'{training_folder}/{run.job_name}'
+    if sources:
+        _set(run, phase_detail='Seeding checkpoint for resume…')
+        for one in sources:
+            if not os.path.isfile(one):
+                raise RuntimeError(f'resume checkpoint vanished before upload: {one}')
+            _, stage = video_training.split_checkpoint_name(one)
+            name = video_training.restage_checkpoint_name(run.job_name, step, stage)
+            _push_resume_checkpoint(run, remote, pod_settings, one, dest_dir, name)
+        logger.info('run %s: seeded %s resume file(s) -> %s',
+                    run.id, len(sources), dest_dir)
+        return
     if repo_id:
         from . import dense_pod_hub
         filename = _run_param(run, 'resume_hf_filename')
