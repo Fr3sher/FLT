@@ -70,6 +70,13 @@ export function summarize(result) {
     'Search brings the likeliest shots to the front; it does not select them. '
       + 'Every shot scores something against every phrase.',
   ]
+  // WHICH HALVES RAN. A visual-only ranking and one that also read the captions
+  // answer different questions, and a user who cannot tell them apart cannot
+  // tell "not in this bank" from "not visible in any single frame".
+  if (result.hybrid) {
+    parts.splice(2, 0, `Ranked on what the frames look like AND on the words in `
+      + `${result.captioned} caption(s).`)
+  }
   const note = unsearchableNote(result)
   if (note) parts.push(note)
   return parts.join(' ')
@@ -168,6 +175,57 @@ export const VIDEO_CLIP_LIMITS = [
   'Sound and motion — only frames are looked at, so “a door slamming” or '
     + '“panning left” describe nothing it can see.',
 ]
+
+/** What this bank's search can actually reach, in one line.
+ *
+ * The two halves find different things and neither is a superset: CLIP ranks
+ * what a moment LOOKS like and cannot see an action, because an action is a fact
+ * about time that no single frame carries; a caption carries the action and
+ * nothing its writer did not name. Saying which are running is what lets someone
+ * read an empty result correctly. */
+export function searchBasisNote(counts) {
+  const c = counts || {}
+  const embedded = Number(c.embedded) || 0
+  const captioned = Number(c.captioned) || 0
+  const clips = Number(c.clips) || 0
+  if (!embedded) return ''
+  if (!captioned) {
+    return 'Searching what the frames LOOK like. An action that no single frame '
+      + 'shows — “turns and walks away” — needs captions; run 🗣 Describe shots.'
+  }
+  if (captioned < clips) {
+    return `Searching what the frames look like, plus the words in ${captioned} of `
+      + `${clips} captions — the rest can only be found by how they look.`
+  }
+  return 'Searching what the frames look like AND what happens in them — the '
+    + 'captions carry the action.'
+}
+
+/** Why a shot moved up, when a caption is part of the reason. '' otherwise. */
+export function captionMatchNote(hit) {
+  const share = Number(hit?.caption_hit)
+  if (!Number.isFinite(share) || share <= 0) return ''
+  return share >= 1 ? 'every word of your search is in its caption'
+    : 'some of your search words are in its caption'
+}
+
+/** What state this shot's caption is in, and what to do about it. */
+export function captionStateNote(clip) {
+  const state = clip?.caption_state
+  if (state === 'edited') return 'You wrote this caption — the pass will not overwrite it.'
+  if (state === 'error') return 'The model could not caption this shot. Run the pass again, or write one.'
+  if ((clip?.caption || '').trim()) return ''
+  return 'No caption yet. It is what this clip trains on, and what a word search reads.'
+}
+
+/** The promotion's load-bearing warning. An empty sidecar is not a neutral
+ * default: ai-toolkit trains it as an EMPTY PROMPT and says nothing anywhere. */
+export function uncaptionedWarning(composition) {
+  const missing = Number(composition?.uncaptioned) || 0
+  if (missing <= 0) return ''
+  return `${missing} clip(s) have no caption and will ship with an EMPTY prompt `
+    + '— the trainer accepts that silently. Run 🗣 Describe shots first, or accept it.'
+}
 
 export function limitsSentence() {
   return 'Best at subjects, settings, styles and framing, in the frames it '

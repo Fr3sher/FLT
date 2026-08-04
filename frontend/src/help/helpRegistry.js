@@ -614,6 +614,16 @@ const TOPICS = [
      'thumbnail disappeared', 'lost my thumbnail', 'thumbnail gone after trimming',
      'redetect deleted my cuts', 're-detect', 'lost my manual cuts'],
     '/video-bank', 'using-the-app', 'retouch-a-cut-trim-split-or-draw-a-shot-by-hand'),
+  // The symptoms: a search that cannot find an action, a dataset that trained on
+  // nothing, and "why did my caption come back after I fixed it" (it must not).
+  action('video-captions', 'Describe shots, and search what happens',
+    ['caption', 'captions', 'describe shots', 'describe', 'video caption',
+     'empty prompt', 'empty txt', 'sidecar', 'trains on nothing', 'no caption',
+     'edit a caption', 'my caption was overwritten', 'recaption',
+     'search for an action', 'find what happens', 'hybrid search',
+     'qwen', 'vlm', 'caption model'],
+    '/video-bank', 'using-the-app',
+    'describe-your-shots-and-search-what-happens-in-them'),
   // Two symptoms bring people here and neither mentions "audio metrics": a
   // trained model that came out silent, and an audio cut that flags nothing.
   // The second is almost always a bank measured before sound was looked at.

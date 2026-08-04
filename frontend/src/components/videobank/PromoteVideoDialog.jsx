@@ -7,6 +7,7 @@ import {
   insetProblem, insetHint, insetOutcome,
   capProblem, capHint, capBalanceNote,
 } from './videoTargetChoice'
+import { uncaptionedWarning } from './videoClipSearch'
 import { passBlockedBy } from './videoCapability'
 import VideoTargetPicker from './VideoTargetPicker'
 
@@ -102,6 +103,10 @@ export default function PromoteVideoDialog({
       // place it can be seen is here, right after it happened.
       const balance = capBalanceNote(d.composition, maxPerSource)
       if (balance) toast.warning(balance)
+      // An empty sidecar trains as an EMPTY PROMPT and the trainer says nothing.
+      // The one limit here that silently degrades the dataset itself.
+      const captions = uncaptionedWarning(d.composition)
+      if (captions) toast.warning(captions)
       onDone?.(d)
       onClose?.()
     } catch (err) {

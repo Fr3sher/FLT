@@ -5,6 +5,7 @@ import {
   searchUnavailableReason, summarize, unsearchableNote, formatTimestamp,
   frameLabelPhrase, matchLine, seekFragment, playFromSecond,
   VIDEO_CLIP_LIMITS, limitsSentence,
+  searchBasisNote, captionMatchNote, captionStateNote, uncaptionedWarning,
 } from './videoClipSearch.js'
 
 // ---- what stops a search before it starts ------------------------------------
@@ -129,4 +130,61 @@ test('the negation trap is stated, because it fails invisibly', () => {
   const all = VIDEO_CLIP_LIMITS.join(' ')
   assert.match(all, /without/i)
   assert.match(limitsSentence(), /-/)
+})
+
+// ---- hybrid search (wave 5) ---------------------------------------------------
+
+test('the summary says what the ranking actually leaned on', () => {
+  // "Searched 340 shots" hides the difference between a visual-only ranking and
+  // one that also read the captions — and they answer different questions.
+  const clipOnly = summarize({ query: 'a red car', pool: 40, unembedded: 0,
+    clip_ids: [1], score_range: { top: 0.2, bottom: 0.2 }, pool_median: 0.1,
+    hybrid: false })
+  assert.doesNotMatch(clipOnly, /caption/i)
+
+  const hybrid = summarize({ query: 'a red car', pool: 40, unembedded: 0,
+    clip_ids: [1], score_range: { top: 0.2, bottom: 0.2 }, pool_median: 0.1,
+    hybrid: true, captioned: 31 })
+  assert.match(hybrid, /caption/i)
+  assert.match(hybrid, /31/)
+})
+
+test('the readiness line distinguishes what CAN be found from what cannot', () => {
+  // CLIP finds what is visible; captions find what HAPPENS. A user who does not
+  // know which half is running cannot tell "not in the bank" from "not visible
+  // in a single frame".
+  assert.match(searchBasisNote({ clips: 40, embedded: 40, captioned: 0 }),
+    /looks? like|visible/i)
+  const both = searchBasisNote({ clips: 40, embedded: 40, captioned: 40 })
+  assert.match(both, /happen|action/i)
+})
+
+test('a partly captioned bank says so instead of implying the whole of it', () => {
+  const note = searchBasisNote({ clips: 40, embedded: 40, captioned: 12 })
+  assert.match(note, /12/)
+  assert.match(note, /40/)
+})
+
+test('a caption match is explained on the result, never left as a number', () => {
+  assert.equal(captionMatchNote({ caption_hit: 0 }), '')
+  assert.equal(captionMatchNote({}), '')
+  assert.match(captionMatchNote({ caption_hit: 1 }), /caption/i)
+  assert.match(captionMatchNote({ caption_hit: 0.5 }), /caption/i)
+})
+
+// ---- caption editing ----------------------------------------------------------
+
+test('a caption state is described in words the user can act on', () => {
+  assert.match(captionStateNote({ caption_state: 'edited' }), /you|yours|edited/i)
+  assert.match(captionStateNote({ caption_state: 'error' }), /fail|could not/i)
+  assert.equal(captionStateNote({ caption_state: 'ok', caption: 'x' }), '')
+  assert.match(captionStateNote({}), /no caption/i)
+})
+
+test('the promotion warns about clips that would ship with an empty prompt', () => {
+  // ai-toolkit trains an empty sidecar as an empty prompt and says nothing.
+  const note = uncaptionedWarning({ captioned: 8, uncaptioned: 12 })
+  assert.match(note, /12/)
+  assert.match(note, /empty|no caption|without/i)
+  assert.equal(uncaptionedWarning({ captioned: 20, uncaptioned: 0 }), '')
 })

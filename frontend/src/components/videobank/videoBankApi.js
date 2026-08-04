@@ -93,6 +93,13 @@ export function videoSearchUrl(bankId, { q, n = 60, status = null, pushDown = nu
   return `/api/video-bank/${bankId}/search?${p.toString()}`
 }
 
+/** 🗣 One shot's caption, edited by hand. PATCH — it replaces one field of an
+ * existing shot and is idempotent, which matters because a save-on-blur is easy
+ * to double-fire. */
+export function videoClipCaptionUrl(bankId, clipId) {
+  return `/api/video-bank/${bankId}/clip/${clipId}/caption`
+}
+
 /** Pass endpoints, so the four buttons cannot disagree about their own names. */
 export function videoPassUrl(bankId, pass) {
   return `/api/video-bank/${bankId}/${pass}`

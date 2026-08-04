@@ -74,6 +74,7 @@ the target model accepts.
 | **Sound measured, not assumed** | For the targets that keep an audio track (LTX, MiniMax H3), every shot is scored for **how much of it is silence** and its **level in dBFS** — because a dataset of silent clips teaches the model to be silent and the file on disk gives nothing away. "No track", "silent" and "not measured yet" stay three different answers |
 | **Cap one source's share** | Optional cap on how many clips a single file contributes, so a 50-clip set is not quietly three videos over-represented. Keeps each source's earliest clips (same bank, same dataset — not a random sample), and the result reports the share it ended up with |
 | **Trim the transition off both ends** | Optional per-export trim of both bounds (0 by default). A clip the trim makes too short for the target's frame count is **dropped, never exported short** — and counted separately from clips that were never long enough, since only one of the two is fixed by lowering the trim |
+| **Shots described in words** | A pass writes what HAPPENS in each shot ("a woman turns and walks away"), which becomes the clip's `.txt` — the prompt it trains on. Captions are drafts: editable per shot, and a re-run never overwrites what you wrote |
 | **Find a scene by typing a word** | One pass looks at a few frames of every shot; after it, typing *a woman walking on a beach* ranks the bank instantly and tells you **which second** of each shot matched. Several frames per shot, so a subject that only appears at the end is still findable. It is a **ranking, not a filter** — every shot scores something against every phrase — and the model **ignores "without"**, so `-word` pushes something down instead |
 
 **What it does NOT do yet**, plainly:
@@ -85,9 +86,11 @@ the target model accepts.
 - **No audio captioning, and no audio in the search.** The sound is measured
   (silence and level) but never described, and 🔎 Find scenes reads frames only —
   "a door slamming" describes nothing it can see.
-- **No captioning.** Every promoted clip gets an **empty** `.txt`. The file is
+- **Captioning is per-shot prose, not tags.** Every promoted clip gets a `.txt`:
+  its caption when it has one, and an **empty** file when it does not. The file is
   always written, because a missing one crashes one trainer and makes another drop
-  the clip silently — but a dataset shipped as-is trains uncaptioned.
+  the clip silently — and an empty one trains uncaptioned, which is why the build
+  dialog counts them out loud before encoding.
 - **It does not train.** This builds the dataset; the training itself happens in
   ai-toolkit — the eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V
   variants, LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the

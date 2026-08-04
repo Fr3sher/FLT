@@ -1693,6 +1693,34 @@ Searching respects the triage filter you are on, so *keep only* plus a phrase
 ranks what you already decided to keep. Changing the filter clears the search: a
 ranking computed over one bucket has nothing to say about another.
 
+## Describe your shots, and search what happens in them
+
+🔎 Find scenes ranks by what a moment **looks like**. It cannot find an action —
+"turns and walks away" is a fact about *time*, and no single frame carries it. The
+**🗣 Describe shots** pass closes that gap: it watches eight frames spread across
+each shot and writes one or two sentences about what happens in it.
+
+That line does two jobs, and the second is the one nobody sees coming:
+
+- **It is what the clip trains on.** At promotion each clip gets a `.txt` sidecar
+  next to it, and that file *is* the prompt. Before this pass existed every
+  promoted clip shipped with an **empty** one — which the trainer accepts in
+  silence, training the clip on no prompt at all. The build dialog now tells you
+  how many clips are about to go out uncaptioned, before it encodes anything.
+- **It makes the search read words as well as pixels.** Once captions exist,
+  typing a phrase ranks on both, and the panel says which halves are running so
+  that "nothing found" can be read correctly.
+
+**Captions are drafts.** Open any shot and edit the caption under the player; a
+bulk re-run will never overwrite one you wrote. Clearing it puts the shot back in
+the queue. Regenerating over your own words is possible, but you have to ask for
+it by name.
+
+**It needs the same environment as ✨ Score** (torch + transformers) and it uses
+the GPU when there is one — a 4B vision model on a CPU is minutes per shot. It
+will not start while a training run owns the card, and stopping is safe: what is
+captioned stays captioned and the next run picks up where it left off.
+
 ## Video training sets (and the two things to check before you cut one)
 
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next

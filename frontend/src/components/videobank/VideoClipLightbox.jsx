@@ -3,7 +3,9 @@ import {
   clipFragmentSrc, clipLabel, shouldRemountPlayer, playerBudgetWarning,
   MAX_MOUNTED_PLAYERS,
 } from './videoClipFragment'
-import { playFromSecond } from './videoClipSearch'
+import { playFromSecond, captionStateNote } from './videoClipSearch'
+import { videoClipCaptionUrl } from './videoBankApi'
+import { patchJson } from '../../api/fetchClient'
 import { videoSourceMediaUrl } from './videoBankApi'
 import VideoClipTrimTools from './VideoClipTrimTools'
 
@@ -39,6 +41,11 @@ export default function VideoClipLightbox({
   // retouch tools use `currentTime` as a bound with no conversion, and it is
   // asserted rather than assumed in videoClipEdit.playheadToSourceTime.
   const [playheadS, setPlayheadS] = useState(null)
+  // 🗣 The caption, held locally while it is being typed. A generated caption is
+  // a DRAFT: saving marks it 'edited' server-side so a bulk re-run leaves it
+  // alone, which is what makes correcting one worth the effort.
+  const [caption, setCaption] = useState('')
+  const [savingCaption, setSavingCaption] = useState(false)
   // What the mounted element was built for, plus the key that forces React to
   // recreate it. Adjusted DURING render on purpose (React's documented
   // derive-during-render pattern) — an effect would run after paint and leave
@@ -59,6 +66,7 @@ export default function VideoClipLightbox({
   }
   const playerKey = player.current.key
 
+  useEffect(() => { setCaption(clip?.caption || '') }, [clip?.id, clip?.caption])
   useEffect(() => { setFailed(false); setPlayheadS(clip ? openAt : null) },
     [playerKey])                                        // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -162,6 +170,41 @@ export default function VideoClipLightbox({
             </button>
           </div>
         </div>
+        {/* 🗣 The caption. Above the retouch tools because it is read far more
+            often than a bound is moved: it is what this clip will TRAIN on and
+            what a word search matches. */}
+        <div className="rounded-lg border border-white/15 bg-black/40 p-2">
+          <label htmlFor="video-clip-caption"
+            className="block text-xs font-semibold text-white/80">
+            Caption <span className="font-normal text-white/50">— the training prompt</span>
+          </label>
+          <textarea id="video-clip-caption" rows={2} value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            placeholder="What happens in this shot"
+            className="mt-1 w-full resize-y rounded-md border border-white/20 bg-black/50 px-2 py-1 text-sm text-white placeholder:text-white/30" />
+          <div className="mt-1 flex flex-wrap items-center gap-2">
+            <button type="button" disabled={savingCaption || caption === (clip.caption || '')}
+              onClick={async () => {
+                setSavingCaption(true)
+                try {
+                  const d = await patchJson(videoClipCaptionUrl(bankId, clip.id),
+                    { caption })
+                  onRetouched?.(d, 'caption')
+                } catch {
+                  /* the field keeps what was typed; nothing is lost */
+                } finally {
+                  setSavingCaption(false)
+                }
+              }}
+              className="rounded-md bg-gradient-primary px-2.5 py-1 text-xs font-semibold text-white disabled:opacity-40">
+              {savingCaption ? 'Saving…' : 'Save caption'}
+            </button>
+            <span className="text-[0.6875rem] text-white/50">
+              {captionStateNote({ ...clip, caption })}
+            </span>
+          </div>
+        </div>
+
         {/* The retouch tools. Folded by default: triage is a K/R/→ rhythm over
             hundreds of shots, and the mis-cut ones are the minority. */}
         <VideoClipTrimTools bankId={bankId} clip={clip} source={source}

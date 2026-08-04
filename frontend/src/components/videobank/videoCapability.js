@@ -59,6 +59,9 @@ export const PASS_REQUIREMENTS = {
   // that one is checked server-side and refused with its own sentence, because
   // it is the ✨ Score environment and belongs to a different install step.
   embed: ['decode'],
+  // Same shape as embed: frames are decoded here, the model runs in the ✨ Score
+  // interpreter, and THAT requirement is checked server-side with its own sentence.
+  caption: ['decode'],
   pipeline: ['decode', 'detect'],
   promote: ['encode'],
 }

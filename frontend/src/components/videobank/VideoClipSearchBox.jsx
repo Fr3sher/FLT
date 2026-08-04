@@ -4,7 +4,7 @@ import { HelpBadge } from '../../help/HelpMode'
 import { videoSearchUrl } from './videoBankApi'
 import {
   searchUnavailableReason, summarize, readinessHint, pendingLabel,
-  suggestPushDown, limitsSentence, VIDEO_CLIP_LIMITS,
+  suggestPushDown, limitsSentence, VIDEO_CLIP_LIMITS, searchBasisNote,
 } from './videoClipSearch'
 
 /** 🔎 Find scenes — type a word, get the shots that look like it.
@@ -127,6 +127,12 @@ export default function VideoClipSearchBox({
 
           {error && <p className="text-xs text-rose-300">✕ {error}</p>}
 
+          {/* WHAT this bank's search can reach. CLIP finds what is visible;
+              captions find what HAPPENS. Someone who does not know which halves
+              are running cannot read an empty result correctly. */}
+          {searchBasisNote(counts) && (
+            <p className="text-xs text-content-muted">{searchBasisNote(counts)}</p>
+          )}
           <p className="text-xs text-content-subtle">{readinessHint(status)}</p>
 
           {result && (

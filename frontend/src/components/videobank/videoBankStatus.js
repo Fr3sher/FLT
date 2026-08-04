@@ -49,6 +49,7 @@ export const PASS_LABELS = {
   thumbs: 'Make thumbnails',
   measure: 'Measure quality',
   embed: 'Find scenes',
+  caption: 'Describe shots',
   pipeline: 'Run everything',
   promote: 'Build the dataset',
 }
@@ -60,6 +61,7 @@ export const PASS_RUNNING_LABELS = {
   thumbs: 'Making thumbnails',
   measure: 'Measuring clips',
   embed: 'Looking at shots',
+  caption: 'Describing shots',
   pipeline: 'Running everything',
   promote: 'Building the dataset',
 }
@@ -80,6 +82,7 @@ const _PASS_COUNTS = {
   detect: (c) => n(c?.detected) + n(c?.detect_errors),
   thumbs: (c) => n(c?.thumbs),
   embed: (c) => n(c?.embedded),
+  caption: (c) => n(c?.captioned),
   probe: (c) => n(c?.probed) + n(c?.unreadable),
 }
 
