@@ -583,16 +583,58 @@ one you would have no reason to go looking for.
 Four things the dialog always tells you:
 
 - **what the check costs, against what it saves** — *Checking 12 folders (~15
-  images each — 180 in all), against the 7 316 this pass would embed.*
+  images each — 180 in all, up to 720 where faces are hard to find), against the
+  7 316 this pass would embed.*
 - **what ticking the boxes spares** — *3 412 images are grouped instantly and
   skipped by the pass.*
 - **why a folder is not offered** — *3 different faces in the sample — analyzed
-  in full*, or *only 1 of 15 sampled images had a usable face — analyzed in
-  full*. A doubtful folder is never quietly ticked.
+  in full*. A doubtful folder is never quietly ticked.
 - **what it did not reach.** The preflight covers up to 200 folders in one go.
   Beyond that it says *N folders were not checked (biggest first) — they get the
   full analysis*, because silence there would read as "the rest are not one
   person".
+
+### When the sampled images have no face in them
+
+Scraped folders are full of crops, backs, distant shots and blur. A sample of
+fifteen can land entirely on those, and until recently that ended the folder's
+story: *only 0 of 15 sampled images had a usable face — analyzed in full*. On a
+3 546-image folder that meant fifteen embeddings spent for no answer at all, and
+then the whole pass anyway — exactly the cost the check exists to avoid.
+
+A draw that cannot be read is now **replaced**. The check keeps drawing new
+images — never one it has already tried, still spread across the whole folder —
+until it has about fifteen images with a usable face, or until it runs out of
+**budget**. That budget is the point, because "keep drawing" without one is the
+full pass by the back door. It is the smaller of two numbers, per folder:
+
+- **at most 60 images** — fifteen usable faces at a hit rate of one in four,
+  which is the worst rate still worth chasing;
+- **at most a quarter of the folder** — so a small folder is never nearly
+  analysed in full just to be described. Folders of 60 images or fewer keep the
+  single draw they have always had.
+
+That cap is also why the check can never quietly become expensive: a quarter of
+a folder is a quarter of what analysing it would cost, and the dialog prints the
+ceiling next to the typical cost before you start.
+
+Three ways it can end, and each says which one it is:
+
+- **enough usable faces** — the verdict you already know: *15/15 of 30 sampled
+  images look like the same person.*
+- **the budget ran out with a few** — *looks like one person, on thin evidence —
+  only 6 usable faces in 60 images tried.* It is still offered and still
+  pre-ticked, because the bar for an offer has always been two agreeing faces and
+  six is more evidence than two, not less — but the row says what it rests on so
+  you can weigh it.
+- **almost nothing readable** — *no readable face in 60 images tried across the
+  folder — crops, backs or blur.* This is not the check failing; it is what the
+  folder is. **The full pass will not do better on those images**: the preflight,
+  the folder check and the pass all drive the same detector at the same
+  thresholds, and the check writes its answers into the pass's own embedding
+  cache, so the pass reads them straight back rather than looking again. Grouping
+  by face simply has little to grip in that folder, and much of it will stay
+  ungrouped whatever you run.
 
 If there is nothing to ask — a bank with no subfolders, or one whose folders you
 have already declared — no dialog appears at all and the pass starts straight

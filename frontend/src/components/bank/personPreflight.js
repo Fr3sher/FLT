@@ -25,10 +25,24 @@ export const SAMPLE_SIZE = 15;
 
 /* The verdicts the probe writes, and what each one MEANS for the pass:
    'consistent'  → offered, pre-ticked, its folder can be skipped;
+   'partial'     → the same answer on fewer usable faces than asked for, because
+                   the folder ran out of re-draw budget before it found fifteen.
+                   Offered and pre-ticked TOO, and the row says how thin it is;
    'mixed'       → several faces in the sample, so it gets the full analysis;
-   'inconclusive'→ too few readable faces to tell, so it gets the full analysis.
-   Only the first is ever pre-ticked. */
+   'inconclusive'→ almost nothing a face detector can read. Not a failed check —
+                   a fact about the folder, said as one.
+   Only the first two are ever pre-ticked. */
 const CONSISTENT = 'consistent';
+const PARTIAL = 'partial';
+/* WHY 'partial' IS PRE-TICKED, since it is the one decision here that looks
+   arguable. The bar for offering a folder has always been TWO agreeing faces —
+   a folder answered "2/2 of 15" is pre-ticked today. A partial verdict rests on
+   at least as many faces as that and usually far more (six in forty, say), drawn
+   from more of the folder. Pre-ticking the weaker evidence and not the stronger
+   would be incoherent; what the weaker one owes the user is a row that SAYS how
+   thin it is, which is what changed. Every box is still untickable, and
+   "Analyze everything anyway" is still one click. */
+const OFFERED = [CONSISTENT, PARTIAL];
 
 /** Is there anything worth asking the user before the pass?
  *  No candidate to sample AND no verdict already on file = no question, so the
@@ -61,8 +75,16 @@ export function preflightCostLine(plan) {
   const size = n(plan.sample_size) || SAMPLE_SIZE;
   const cost = n(plan.sample_cost) || covered * size;
   const full = n(plan.full_cost);
+  // The CEILING, whenever the re-draw can push the bill past the typical case.
+  // A folder whose first images have no readable face gets more drawn to replace
+  // them, so "45 in all" would be the cost of the lucky day only — and the whole
+  // offer rests on the user trusting this number against the one below it.
+  const max = n(plan.sample_cost_max);
   let line = `Checking ${covered} ${plural(covered, 'folder', 'folders')} `
-    + `(~${size} images each — ${cost} in all)`;
+    + `(~${size} images each — ${cost} in all`;
+  line += max > cost
+    ? `, up to ${max} where faces are hard to find)`
+    : ')';
   if (full > 0) line += `, against the ${full} this pass would embed.`;
   else line += '.';
   return line;
@@ -83,6 +105,7 @@ export function preflightRows(plan) {
   const known = (plan && Array.isArray(plan.known)) ? plan.known : [];
   return known.map((s) => {
     const sample = n(s.sample);
+    const scorable = n(s.scorable);
     if (s.verdict === CONSISTENT) {
       return {
         subfolder: s.subfolder,
@@ -90,8 +113,22 @@ export function preflightRows(plan) {
         tone: 'ok',
         preselect: true,
         images: n(s.images),
-        line: `${n(s.largest)}/${n(s.scorable)} of ${sample} sampled images `
+        line: `${n(s.largest)}/${scorable} of ${sample} sampled images `
           + 'look like the same person',
+      };
+    }
+    if (s.verdict === PARTIAL) {
+      // The honest middle. It says what the answer rests on, in the numbers the
+      // user can weigh — "6 usable faces in 40 images tried" — rather than
+      // rounding a weak verdict up to a confident one or down to silence.
+      return {
+        subfolder: s.subfolder,
+        verdict: PARTIAL,
+        tone: 'ok',
+        preselect: true,
+        images: n(s.images),
+        line: `looks like one person, on thin evidence — only ${scorable} `
+          + `usable ${plural(scorable, 'face', 'faces')} in ${sample} images tried`,
       };
     }
     if (s.verdict === 'mixed') {
@@ -104,14 +141,24 @@ export function preflightRows(plan) {
         line: `${n(s.faces)} different faces in the sample — analyzed in full`,
       };
     }
+    /* Almost nothing readable. This used to say "only 0 of 15 sampled images had
+       a usable face — analyzed in full", which was two wrongs: it read as the
+       check having failed, and it pointed at a full pass as the thing that would
+       do better. It will not. The preflight, the folder check and the pass all
+       drive ONE script (backend/infer/face_embed_infer.py) with the same
+       detector and the same gates, and the probe's answers land in the pass's
+       own embedding cache — the pass re-reads them rather than re-detecting. So
+       the row reports what was found about the FOLDER instead. */
     return {
       subfolder: s.subfolder,
       verdict: s.verdict || 'inconclusive',
       tone: 'muted',
       preselect: false,
       images: n(s.images),
-      line: `only ${n(s.scorable)} of ${sample} sampled images had a usable `
-        + 'face — analyzed in full',
+      line: `${scorable ? `only ${scorable} readable face` : 'no readable face'} `
+        + `in ${sample} images tried across the folder — crops, backs or blur. `
+        + 'The full pass reads them the same way, so much of this folder will '
+        + 'not group by face.',
     };
   });
 }
@@ -126,7 +173,7 @@ export function defaultPicked(rows) {
  *  accepting it does. Null when the sampling found no single-person folder —
  *  then the list is only reporting, and there is nothing to pre-tick. */
 export function preflightHeadline(rows) {
-  const good = (rows || []).filter((r) => r.verdict === CONSISTENT);
+  const good = (rows || []).filter((r) => OFFERED.includes(r.verdict));
   if (!good.length) return null;
   const nf = good.length;
   return `${nf} ${plural(nf, 'folder looks', 'folders look')} like a single `

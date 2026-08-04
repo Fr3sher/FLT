@@ -72,6 +72,14 @@ export const WHATS_NEW = [
     to: '/canvas',
   },
   {
+    id: '2026-08-04-person-preflight-redraws-unreadable-samples',
+    date: '2026-08-04',
+    title: 'The folder check before 👤 Group by person no longer gives up when its sample lands on faceless images — it draws new ones',
+    blurb:
+      'On a real bank, four folders out of six came back with no verdict at all: “only 0 of 15 sampled images had a usable face — analyzed in full”. Scraped folders are full of crops, backs and blur, so a sample of fifteen can land entirely on images no face detector can read — and the biggest folder then spent fifteen embeddings for nothing before analysing all 3 546 of its images anyway, which is exactly the cost the check exists to avoid. A draw that cannot be read is now replaced: the check keeps drawing new images (never one it already tried, still spread across the whole folder) until it has about fifteen usable faces or hits a budget — at most 60 images per folder, or a quarter of it, whichever is smaller, and the dialog prints that ceiling next to the typical cost before you start. Three honest endings replace the old silence: a normal verdict; “looks like one person, on thin evidence — only 6 usable faces in 60 images tried”, still offered because a weak verdict that says how weak beats none; and, when almost nothing is readable, a fact about the folder rather than a promise the full pass would do better — it would not, it uses the same detector on the same images and re-reads the answers the check already cached.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-04-fp8-quantize-runs-where-torch-lives',
     date: '2026-08-04',
     title: 'Quantizing to fp8 now actually runs — it uses an environment that has torch, and says so before you click if none does',

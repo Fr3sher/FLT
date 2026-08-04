@@ -337,6 +337,14 @@ const TOPICS = [
      'analyze everything anyway', 'skip the check', 'untick', 'uncheck',
      'why is my pass asking me something', 'sampled', 'sampling', 'sample',
      'not checked', 'not reached', 'ceiling', '200 folders',
+     // When the sample lands on images with no face, the check draws MORE rather
+     // than giving up — these are the words of the three ways that can end.
+     'no usable face', 'no readable face', 'only 0 of 15', 'only 1 of 15',
+     'had a usable face', 'no verdict', 'no result for a folder', 're-draw',
+     'redraw', 'draws more', 'tries more images', 'images tried', 'budget',
+     'thin evidence', 'partial', 'weak verdict', 'crops', 'backs', 'blurry',
+     'why was my folder not checked', 'why no answer for this folder',
+     'up to 60', 'more than 15 images', 'why is it slower than it said',
      'group by person', 'face pass', 'launch all', 'save gpu time', 'faster',
      'too slow', 'expensive', 'bank', 'triage', 'person', 'subfolder'],
     '/bank', 'using-the-app', 'checking-your-folders-before-the-person-pass'),

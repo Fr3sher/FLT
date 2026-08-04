@@ -286,7 +286,10 @@ def test_sample_check_is_honest_when_it_saw_no_face(client, tmp_path, app,
     job, _seen = _run_check(app, bank_id, 'anna', lambda imgs: {}, monkeypatch,
                             states={'a1.jpg': 'no_face', 'a2.jpg': 'no_face',
                                     'a3.jpg': 'unreadable'})
-    assert 'nothing to compare' in job['detail']
+    # It reports the FOLDER, not a broken check — and it does not send the user
+    # to a full pass that reads the very same images with the very same detector.
+    assert 'no readable face in 3 images tried' in job['detail']
+    assert 'the same way' in job['detail']
     data = client.get(f'/api/bank/{bank_id}/folder-persons').get_json()
     entry = data['assertions'][0]
     assert entry['sample']['verdict'] == 'inconclusive'
@@ -583,6 +586,232 @@ def test_a_stratified_sample_spans_the_whole_folder():
     assert picked[0] == 0 and picked[-1] >= 80      # reaches the far end
     assert len(set(picked)) == 10                   # no image sampled twice
     assert folder_person._stratified([1, 2, 3], k=10) == [1, 2, 3]
+
+
+# --- replacing a draw that cannot be read ------------------------------------
+# THE HOLE, as a real bank showed it: four folders of six ended the preflight
+# with NO verdict — "only 0 of 15 sampled images had a usable face" — and 3 546
+# images went to the full pass behind it. Fifteen embeddings bought nothing and
+# the pass they were meant to avoid ran anyway. A draw that cannot be read is now
+# REPLACED, up to a budget that is the whole design.
+def test_the_draw_budget_is_the_smaller_of_a_ceiling_and_a_quarter_of_the_folder():
+    """Read the rule off the numbers, not off the comment: small folders keep the
+    single draw they have today, big ones may re-draw up to the ceiling, and no
+    folder ever gives up more than a quarter of itself to a suggestion."""
+    b = folder_person.draw_budget
+    size = folder_person.SAMPLE_SIZE
+    assert b(0) == 0
+    for n in (5, 15, 20, 60):
+        assert b(n) == min(n, size)          # unchanged from the single draw
+    assert b(100) == 25 and b(200) == 50     # a quarter of the folder
+    assert b(240) == b(3546) == folder_person.PROBE_MAX_DRAWS   # the ceiling
+    for n in (5, 61, 240, 466, 3546):
+        assert b(n) <= folder_person.PROBE_MAX_DRAWS
+        assert b(n) <= max(size, -(-n * 25 // 100))
+    # The ceiling is 15 usable faces at a hit rate of one in four — the worst
+    # rate still worth chasing. Below it the folder is face-poor, and more draws
+    # would buy price, not answers.
+    assert folder_person.PROBE_MAX_DRAWS == 4 * size
+
+
+def test_the_scan_summary_counts_the_thin_verdicts_and_names_the_faceless():
+    """The one-line report of a scan. A partial folder WILL be pre-ticked in the
+    dialog, so it has to be counted here too — announcing 3 and pre-ticking 5
+    would send the user hunting for the two that went missing."""
+    d = folder_person._probe_detail
+    line = d({'consistent': 3, 'partial': 2, 'mixed': 1, 'inconclusive': 1}, 7, 0)
+    assert '5 folder(s) look like one person' in line
+    assert '2 of them on thin evidence' in line
+    assert '1 holds several' in line
+    # Not "too few faces to tell", which invited the full pass to try harder on
+    # images it reads through the very same detector.
+    assert '1 has almost no readable face' in line
+    assert 'too few faces to tell' not in line
+    many = d({'mixed': 2, 'inconclusive': 3}, 5, 4)
+    assert '2 hold several' in many and '3 have almost no readable face' in many
+    assert '4 folder(s) not reached' in many
+
+
+def _face_probe_driver(seen, faces, person=lambda name, path: 1):
+    """A child that reads a face only in the images ``faces`` accepts (by their
+    numeric basename), the way a folder of crops and backs behaves."""
+    def has_face(p):
+        return int(os.path.splitext(os.path.basename(p))[0]) in faces
+
+    def fake_driver(job, python, script, payload, cache_path, rx, window):
+        req = json.loads(payload)
+        seen.setdefault('calls', []).append(req)
+        return ({'ok': True,
+                 'results': {p: {'state': 'scorable' if has_face(p) else 'no_face',
+                                 'det': 0.9 if has_face(p) else 0.0}
+                             for p in req['images']},
+                 'group_clusters': {
+                     g['name']: {p: person(g['name'], p)
+                                 for p in g['images'] if has_face(p)}
+                     for g in (req.get('groups') or [])}},
+                deque(), 0)
+    return fake_driver
+
+
+def _drawn(seen, folder):
+    """Every path the probe ever handed to the child for one folder."""
+    out = []
+    for req in seen['calls']:
+        for g in (req.get('groups') or []):
+            if g['name'] == folder:
+                out = list(g['images'])     # each round carries the whole set
+    return out
+
+
+def test_a_folder_with_no_readable_face_reports_the_folder_and_stops_at_its_budget(
+        client, tmp_path, app, monkeypatch):
+    """The exact case from the bank: nothing readable anywhere. The probe replaces
+    its unusable draws until the budget is spent, then says what it learnt ABOUT
+    THE FOLDER — it does not point at a full pass that would read the same images
+    through the same detector."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1, per=240))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _face_probe_driver(seen, faces=set()))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    known = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()['known']
+    assert [k['verdict'] for k in known] == ['inconclusive']
+    assert known[0]['scorable'] == 0
+    # It tried FOUR times what it used to, and not one image more than the budget.
+    assert known[0]['sample'] == folder_person.draw_budget(240) == 60
+    assert 'no readable face in 60 images tried' in known[0]['note']
+    assert 'the same way' in known[0]['note']
+    assert 'nothing to compare' not in known[0]['note']
+    drawn = _drawn(seen, 'model0')
+    assert len(drawn) == 60 and len(set(drawn)) == 60      # never twice
+    assert len(seen['calls']) == 2                         # bounded rounds
+    # …and still not one image grouped. The safety rule survives the re-draw.
+    assert all(v == (None, None) for v in _rows(app, bank_id).values())
+
+
+def test_a_hard_folder_reaches_its_target_by_replacing_the_unreadable_draws(
+        client, tmp_path, app, monkeypatch):
+    """One image in three has a face — the case the old single draw answered with
+    "only 5 of 15 had a usable face" and gave up on. Re-drawing reaches the
+    fifteen usable faces the verdict is supposed to rest on."""
+    import random
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1, per=240))
+    faces = set(random.Random(11).sample(range(240), 80))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _face_probe_driver(seen, faces))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    known = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()['known']
+    assert known[0]['verdict'] == 'consistent'
+    assert known[0]['scorable'] >= folder_person.PROBE_TARGET_FACES
+    drawn = _drawn(seen, 'model0')
+    assert len(set(drawn)) == len(drawn)                   # no image drawn twice
+    assert len(drawn) <= folder_person.draw_budget(240)    # and inside the budget
+    assert len(drawn) > folder_person.SAMPLE_SIZE          # it did re-draw
+    # The re-draw stays SPREAD: replacing the unreadable images must not turn the
+    # sample into a clump at the top of the folder, or a second person appearing
+    # later would stop being reachable.
+    idx = sorted(int(os.path.splitext(os.path.basename(p))[0]) for p in drawn)
+    assert idx[0] < 24 and idx[-1] > 216
+
+
+def test_a_budget_spent_short_of_the_target_still_gives_a_verdict_that_says_so(
+        client, tmp_path, app, monkeypatch):
+    """One image in ten. Fifteen usable faces are out of reach inside the budget,
+    and a weak verdict that states its own weakness beats the nothing this used
+    to produce — so it is offered, and the sentence carries the numbers."""
+    import random
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1, per=240))
+    faces = set(random.Random(5).sample(range(240), 24))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _face_probe_driver(seen, faces))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    known = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()['known']
+    assert known[0]['verdict'] == 'partial'
+    assert 2 <= known[0]['scorable'] < folder_person.PROBE_TARGET_FACES
+    assert known[0]['sample'] == folder_person.draw_budget(240)
+    assert 'on thin evidence' in known[0]['note']
+    assert f"in {known[0]['sample']} images tried" in known[0]['note']
+    # A partial verdict is an OFFER like any other — accepting it writes the same
+    # ordinary, revocable assertion, and nothing was grouped before that click.
+    assert all(v == (None, None) for v in _rows(app, bank_id).values())
+    r = client.post(f'/api/bank/{bank_id}/folder-persons/accept',
+                    json={'subfolders': ['model0']})
+    assert r.status_code == 200 and r.get_json()['images'] == 240
+
+
+def test_a_folder_that_answers_first_time_is_left_exactly_as_it_was(
+        client, tmp_path, app, monkeypatch):
+    """The regression guard. On ordinary folders — the overwhelming majority —
+    the re-draw must be invisible: one child call, fifteen images, same verdict,
+    same cost. A fix for the hard case that taxed the easy one would be a bad
+    trade made silently."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=2, per=240))
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _face_probe_driver(seen, faces=set(range(240))))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    assert len(seen['calls']) == 1                     # ONE round, as before
+    groups = seen['calls'][0]['groups']
+    assert len(groups) == 2
+    assert all(len(g['images']) == folder_person.SAMPLE_SIZE for g in groups)
+    known = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()['known']
+    assert {k['verdict'] for k in known} == {'consistent'}
+    assert all(k['sample'] == folder_person.SAMPLE_SIZE for k in known)
+
+
+def test_the_preflight_announces_the_ceiling_of_its_re_draw_before_it_is_paid(
+        client, tmp_path, monkeypatch):
+    """The preflight is sold as "a few seconds against a whole pass". A mechanism
+    that can multiply its bill has to be visible in the estimate, not discovered
+    in the progress bar."""
+    _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=2, per=240))
+    plan = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()
+    assert plan['sample_cost'] == 2 * folder_person.SAMPLE_SIZE          # 30
+    assert plan['sample_cost_max'] == 2 * folder_person.draw_budget(240)  # 120
+    assert plan['sample_max'] == folder_person.PROBE_MAX_DRAWS
+    # Both stay far under the pass they stand in front of — that ratio IS the
+    # justification, and the quarter-of-the-folder cap is what guarantees it.
+    assert plan['sample_cost_max'] * 4 <= plan['full_cost']
+
+
+def test_a_folder_already_read_as_unusable_is_not_drawn_from_twice(
+        client, tmp_path, app, monkeypatch):
+    """An image the detector has already read as faceless cannot become readable:
+    same script, same gates, and its embedding is cached. Re-drawing it would burn
+    budget for an answer we hold — so the pool skips it, which is what makes the
+    probe after a full pass land on faces instead of on crops."""
+    banks = _preflight_ready(monkeypatch)
+    bank_id, _src = _mkbank(client, tmp_path, _big_tree(folders=1, per=240))
+    from app.extensions import db as _db
+    from app.models import BankImage
+    with app.app_context():
+        for r in BankImage.query.filter_by(bank_id=bank_id).all():
+            n = int(os.path.splitext(os.path.basename(r.relpath))[0])
+            r.face_state = 'scorable' if n % 8 == 0 else 'no_face'
+        _db.session.commit()
+    seen = {}
+    monkeypatch.setattr(banks, '_drive_infer_subprocess',
+                        _face_probe_driver(seen, faces=set(range(0, 240, 8))))
+    client.post(f'/api/bank/{bank_id}/person-preflight')
+
+    drawn = _drawn(seen, 'model0')
+    assert drawn and all(int(os.path.splitext(os.path.basename(p))[0]) % 8 == 0
+                         for p in drawn)
+    # One round is enough once the known-blind images are out of the way.
+    assert len(seen['calls']) == 1
+    known = client.get(f'/api/bank/{bank_id}/person-preflight').get_json()['known']
+    assert known[0]['verdict'] == 'consistent' and known[0]['scorable'] == 15
 
 
 # --- the preflight: the same probe, moved IN FRONT of the pass ---------------

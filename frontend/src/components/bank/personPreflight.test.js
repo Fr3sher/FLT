@@ -64,7 +64,7 @@ test('only a consistent verdict is pre-ticked; mixed and inconclusive are not', 
     known: [
       probe('anna'),
       probe('bob', { verdict: 'mixed', faces: 3, largest: 6 }),
-      probe('scraps', { verdict: 'inconclusive', scorable: 1, largest: 1 }),
+      probe('scraps', { verdict: 'inconclusive', sample: 60, scorable: 1, largest: 1 }),
     ],
   }));
   assert.deepEqual(rows.map((r) => r.preselect), [true, false, false]);
@@ -72,8 +72,71 @@ test('only a consistent verdict is pre-ticked; mixed and inconclusive are not', 
   // And each says WHY, in the sample's own terms.
   assert.match(rows[0].line, /15\/15 of 15 sampled images look like the same person/);
   assert.match(rows[1].line, /3 different faces in the sample — analyzed in full/);
-  assert.match(rows[2].line, /only 1 of 15 sampled images had a usable face/);
+  assert.match(rows[2].line, /only 1 readable face in 60 images tried/);
   assert.deepEqual(rows.map((r) => r.tone), ['ok', 'warn', 'muted']);
+});
+
+// --- the three outcomes of a re-drawing probe -------------------------------
+// The hole this closes, verbatim from the bank that showed it: four folders of
+// six ended with NO verdict — "only 0 of 15 sampled images had a usable face",
+// then 3 546 images analysed in full. A draw that cannot be read is now
+// replaced, and each of the three ways that can end has its own sentence.
+test('a folder with almost no readable face reports the FOLDER, not a failed check', () => {
+  const rows = preflightRows(plan({
+    known: [probe('QOF_thumbs', {
+      verdict: 'inconclusive', sample: 60, scorable: 0, largest: 0, faces: 0,
+      images: 3546,
+    })],
+  }));
+  assert.match(rows[0].line, /no readable face in 60 images tried across the folder/);
+  assert.match(rows[0].line, /crops, backs or blur/);
+  // The claim that replaced "analyzed in full", and the reason it is allowed:
+  // the pass drives the same detector over the same images and re-reads the
+  // probe's own cached answers. It is not a better second opinion.
+  assert.match(rows[0].line, /full pass reads them the same way/);
+  assert.doesNotMatch(rows[0].line, /had a usable face/);
+  assert.equal(rows[0].preselect, false);
+});
+
+test('a partial verdict is offered, and says exactly how thin it is', () => {
+  const rows = preflightRows(plan({
+    known: [probe('QOF_hard', {
+      verdict: 'partial', sample: 40, scorable: 6, largest: 6, faces: 1,
+    })],
+  }));
+  assert.match(rows[0].line, /looks like one person, on thin evidence/);
+  assert.match(rows[0].line, /only 6 usable faces in 40 images tried/);
+  // Pre-ticked like a consistent one: the bar for an offer has always been two
+  // agreeing faces, and six is more evidence than two — not less. What the weak
+  // verdict owes the user is the number, and the row carries it.
+  assert.equal(rows[0].preselect, true);
+  assert.deepEqual(defaultPicked(rows), ['QOF_hard']);
+  assert.match(preflightHeadline(rows), /1 folder looks like a single person/);
+});
+
+test('one usable face reads as a face, not "1 faces"', () => {
+  const rows = preflightRows(plan({
+    known: [probe('a', { verdict: 'partial', sample: 60, scorable: 1, largest: 1 })],
+  }));
+  assert.match(rows[0].line, /only 1 usable face in 60 images tried/);
+});
+
+test('the re-draw ceiling is announced next to the typical cost', () => {
+  // The preflight is sold as "a few seconds against a whole pass". A mechanism
+  // that can multiply the bill may not hide behind the lucky case.
+  const line = preflightCostLine(plan({
+    candidates: 6, covered: 6, sample_cost: 90, sample_cost_max: 360,
+    full_cost: 7316,
+  }));
+  assert.match(line, /90 in all/);
+  assert.match(line, /up to 360 where faces are hard to find/);
+  assert.match(line, /7316 this pass would embed/);
+  // No re-draw room (small folders) = no second number to print.
+  const flat = preflightCostLine(plan({
+    candidates: 3, covered: 3, sample_cost: 45, sample_cost_max: 45, full_cost: 60,
+  }));
+  assert.match(flat, /45 in all\)/);
+  assert.doesNotMatch(flat, /up to/);
 });
 
 test('the headline is the sentence the critique asked for', () => {
