@@ -1,6 +1,6 @@
 import { CARD_H } from '../../utils/lineageGraph';
 import { resumeCaption } from '../../utils/lineageTree';
-import { famLabel, StatusDot, SavesChip } from './lineageChrome';
+import { famLabel, ModeChip, StatusDot, SavesChip } from './lineageChrome';
 import { trainingRunVariantLabel } from '../../utils/trainingRuns';
 import { runNumber, cloudNumber, runIdentityLabel } from '../../utils/runIdentity';
 import {
@@ -86,6 +86,7 @@ export function GraphCard({ node, lit, annotated, compareRole, onSelect }) {
         <span className="ml-auto shrink-0"><SavesChip node={node} /></span>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-content-subtle text-[0.5625rem]">
+        <ModeChip node={node} />
         {node.version != null && (
           <span className="rounded bg-app/60 px-1 py-px font-medium text-content-muted">v{node.version}</span>
         )}

@@ -23,6 +23,23 @@ export function StatusDot({ status }) {
   );
 }
 
+/** "full model" for a run that trained the whole transformer, nothing for a LoRA.
+ *
+ *  Both kinds printed the SAME two words — "Krea 2 · Raw" — while being entirely
+ *  different objects: one produces a ~26 GB checkpoint you load INSTEAD of the
+ *  base, the other a small adapter you load ON TOP of it. On a board holding
+ *  both, nothing on the card said which was which. Lives here so the ☰ List and
+ *  the ◉ Graph cannot drift apart, like every other badge in this file. */
+export function ModeChip({ node }) {
+  if (node?.training_mode !== 'full_transformer') return null;
+  return (
+    <span title="This run trained the whole model, not a LoRA adapter"
+      className="rounded bg-sky-500/20 px-1 py-px font-semibold text-sky-200">
+      full model
+    </span>
+  );
+}
+
 /** LoRA/checkpoint availability chip: on-disk vs gone (superseded aside or
  *  deleted). A null availability (a scan we couldn't run) shows nothing.
  *

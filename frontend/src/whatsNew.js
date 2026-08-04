@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-canvas-says-which-run-trained-a-full-model',
+    date: '2026-08-04',
+    title: 'On the board, a run that trained the whole model now says so',
+    blurb:
+      'A full-model run and a LoRA run of the same family printed exactly the same two words on their card — “Krea 2 · Raw” — while being completely different things: one produces a large checkpoint you load instead of the base, the other a small adapter you load on top of it. On a board holding both, nothing told you which was which. Those cards now carry a “full model” badge, in the graph and in the list alike.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-04-full-model-is-selectable-as-a-studio-base',
     date: '2026-08-04',
     title: 'The fp8 file of a full model you trained is now offered as a base in the Test Studio — with its own sample settings already filled in',
