@@ -430,6 +430,10 @@ def bank_payload(user_id, bank_id) -> dict | None:
     payload['activity'] = activity(bank_id)
     payload['pipeline_report'] = _load_pipeline_report(bank)
     payload['capability'] = _capability()
+    # The saved cuts ride along so the thresholds panel opens on what is actually
+    # in force — a panel that opens blank while cuts are active would invite the
+    # user to "apply" an accidental clear.
+    payload['thresholds'] = metric_thresholds()
     return payload
 
 

@@ -69,21 +69,21 @@ the target model accepts.
 | **Target-aware cutting** | Pick the model you are building for and the clip length offers **only counts that model can actually ingest** — Wan wants 4n+1 frames, LTX 8n+1, MiniMax H3 five modulo seventeen, and none of them will tell you if you get it wrong |
 | **Encode only what you keep** | Cutting a clip means re-encoding it, so that is paid once, at promotion, for the clips you kept. A bank of 400 shots you triage down to 120 encodes 120 files, not 400 |
 
+| **Measure every shot, choose your own cuts** | One pass reads every frame and scores stillness, blur, black moments and frozen stretches. Flags mark shots to *look at* — nothing is auto-rejected — and there are **no default thresholds**: a preview shows how many shots each cut would flag against *your* bank's own distribution before you apply it |
+
 **What it does NOT do yet**, plainly:
 
-- **No quality filtering.** None of the image bank's passes has a video equivalent
-  here — no blur, motion, exposure, aesthetic or duplicate detection. You review
-  by eye.
+- **No aesthetic scoring or duplicate detection.** The technical measures above
+  say what is broken, not what is beautiful — ranking, "most varied", and
+  cross-clip dedup are still to come.
 - **No captioning.** Every promoted clip gets an **empty** `.txt`. The file is
   always written, because a missing one crashes one trainer and makes another drop
   the clip silently — but a dataset shipped as-is trains uncaptioned.
 - **It does not train.** This builds the dataset; the training itself happens in
-  your trainer of choice.
-- **One target out of four is verified trainable.** Wan 2.1/2.2 14B has working
-  support in maintained trainers. Wan 2.2 TI2V-5B, LTX 2.3 and MiniMax H3 are
-  offered because their cutting constraints are known and sourced, **not** because
-  anyone has demonstrated a LoRA trained on them at 24 GB — the app says which is
-  which where you pick the target.
+  ai-toolkit — the eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V
+  variants, LTX-2 and 2.3, MiniMax H3) are exactly the video architectures the
+  installed ai-toolkit ships. Nobody has yet published VRAM figures for a video
+  LoRA run at 24 GB; the shipped "24gb" example configs all train on stills.
 - **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
   the EU, the UK, South Korea or the USA, and the restriction covers the model's
   outputs, not only the model. Check your own territory before using that profile.

@@ -1561,6 +1561,32 @@ independent things: reading files, finding shots, and encoding clips. The app
 says which one is missing and what still works — with no ffmpeg, for example, you
 can scan, cut, watch and triage an entire bank, and only the final build waits.
 
+## Measure your shots, and choose your own cuts
+
+**📊 Measure quality** reads every frame of every shot in one pass and scores the
+four things that quietly ruin a video dataset: shots that barely move, shots that
+are all blur, black moments, and frozen stretches. The pass stores raw numbers,
+never verdicts — so changing a threshold later re-sorts the bank instantly, with
+no rescan. Stopping is safe; a re-run picks up where it left off.
+
+Flagged shots get an **amber ⚑ mark** in the grid. Amber, not red, because a flag
+is a reason to *look* — nothing is ever rejected for you. Hover the mark to see
+which cuts a shot tripped.
+
+**There are deliberately no default thresholds.** The same number that flags 2 %
+of one bank flags 12 % of another — a cut only means something against *your*
+bank's own distribution. Open **🎚 Quality cuts**, type a value (leave a field
+empty to disable that cut), and press **👁 Preview**: it answers with how many
+shots each rule would flag, per rule, before anything is applied. If a draft
+would flag most of the bank, the preview says so in as many words instead of
+letting you apply it by accident.
+
+Two touches you get for free once shots are measured: thumbnails move from the
+middle-of-shot guess to the **sharpest measured frame**, and the freeze detector
+catches the failure the averages never can — a shot that plays fine and then
+hangs on a still image for a second. On a real 4.5-hour test bank that turned
+out to be the most common defect of all.
+
 ## Video training sets (and the two things to check before you cut one)
 
 Promoting a video bank builds a flat folder of clips with a `.txt` caption next

@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  FLAG_LABELS, cutSummary, filterByFlag, flagCounts, thresholdFields,
+  FLAG_LABELS, cutSummary, draftThresholds, editThreshold, filterByFlag,
+  flagCounts, payloadFromDraft, thresholdFields,
 } from './videoMetricsFilter.js';
 
 const CLIPS = [
@@ -79,4 +80,40 @@ test('a dry run that would flag most of the bank warns instead of celebrating', 
   // nobody noticed until after. Above half the bank, the sentence changes tone.
   const text = cutSummary({ still: 400, total_flagged: 400 }, 470);
   assert.match(text, /⚠|most of/i);
+});
+
+// --- the panel's draft state -------------------------------------------------
+// The panel edits a DRAFT and the dry run previews the draft; nothing reaches
+// config until Apply. Editing live thresholds would re-flag the grid on every
+// keystroke — including through the states the user is merely passing through.
+
+test('a draft starts from the saved cuts and tracks edits', () => {
+  const d = draftThresholds({ motion_floor: 0.001, luma_floor: null });
+  assert.equal(d.motion_floor, 0.001);
+  const edited = editThreshold(d, 'luma_floor', '0.05');
+  assert.equal(edited.luma_floor, 0.05);
+  assert.equal(d.luma_floor, null);          // the original is not mutated
+});
+
+test('clearing a field disables that cut rather than making it zero', () => {
+  // Zero is a real threshold (flag everything below 0 = nothing, above = all);
+  // an empty input means "no cut", and those must not be confused.
+  const d = editThreshold(draftThresholds({}), 'motion_floor', '');
+  assert.equal(d.motion_floor, null);
+});
+
+test('garbage input leaves the previous draft value in place', () => {
+  const d = editThreshold(draftThresholds({ motion_floor: 0.002 }), 'motion_floor', 'abc');
+  assert.equal(d.motion_floor, 0.002);
+});
+
+test('only the fields the backend knows ever leave the draft', () => {
+  const d = editThreshold(draftThresholds({}), 'motion_floor', '0.001');
+  d.garbage = 42;
+  assert.deepEqual(Object.keys(payloadFromDraft(d)),
+                   ['motion_floor']);
+});
+
+test('a draft with no active cut yields an empty payload and no dry run', () => {
+  assert.deepEqual(payloadFromDraft(draftThresholds({})), {});
 });

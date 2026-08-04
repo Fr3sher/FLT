@@ -89,3 +89,43 @@ export function cutSummary(dryRun, totalClips) {
   }
   return head
 }
+
+/** A draft copy of the saved cuts, for the panel to edit. The grid keeps
+ * flagging against the SAVED cuts while the user types; nothing reaches config
+ * until Apply — editing live would re-flag the bank on every keystroke,
+ * including through values the user is merely passing through. */
+export function draftThresholds(saved) {
+  const draft = {}
+  for (const f of thresholdFields()) {
+    const v = saved ? saved[f.key] : null
+    draft[f.key] = (v === undefined || v === null) ? null : Number(v)
+  }
+  return draft
+}
+
+/** One edit, immutably. An EMPTY input disables the cut (null) — zero is a real
+ * threshold and the two must never be confused. Garbage keeps the previous
+ * value: mid-typing states ("0.", "-") must not wipe a number out. */
+export function editThreshold(draft, key, raw) {
+  const next = { ...draft }
+  const text = String(raw ?? '').trim()
+  if (text === '') {
+    next[key] = null
+    return next
+  }
+  const value = Number(text)
+  if (Number.isFinite(value)) next[key] = value
+  return next
+}
+
+/** The dry-run/apply payload: only the backend's known keys, only active cuts.
+ * Anything else a component stuffed into the draft object stays behind. */
+export function payloadFromDraft(draft) {
+  const payload = {}
+  for (const f of thresholdFields()) {
+    if (draft[f.key] !== null && draft[f.key] !== undefined) {
+      payload[f.key] = draft[f.key]
+    }
+  }
+  return payload
+}

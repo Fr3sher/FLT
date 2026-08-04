@@ -17,6 +17,7 @@ import {
   hasMore,
 } from './videoTriage'
 import VideoCapabilityStrip from './VideoCapabilityStrip'
+import VideoThresholdsPanel from './VideoThresholdsPanel'
 import VideoSourceList from './VideoSourceList'
 import VideoClipGrid from './VideoClipGrid'
 import VideoClipLightbox from './VideoClipLightbox'
@@ -286,6 +287,13 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
             </p>
           )}
         </div>
+      )}
+
+      {/* The cuts panel sits between the passes and the grid: it only means
+          something once Measure has run, and it changes what the grid shows. */}
+      {(counts.clips || 0) > 0 && (
+        <VideoThresholdsPanel bankId={bankId} saved={bank?.thresholds}
+          totalClips={counts.clips || 0} onApplied={() => loadBank(false)} />
       )}
 
       <details className="rounded-lg border border-border bg-surface">

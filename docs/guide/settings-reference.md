@@ -983,6 +983,21 @@ this app's material, so they are stated as adjustable rather than tuned.
 | `shot_detect.min_shot_frames` | `5` | Shots shorter than this are **dropped, not merged** into a neighbour. Merging would silently move that neighbour's boundary, and a boundary is the one thing this whole lane exists to get right. 5 rejects a stray flash cut while leaving real rapid montages intact. |
 | `shot_detect.device` | `auto` | `auto` \| `cuda` \| `cpu`. The network runs on 48×27 frames and is never the bottleneck — decoding is. CPU is a perfectly reasonable choice, and it leaves the GPU free for captioning and training. |
 
+**Video bank quality cuts:** the thresholds behind the video bank's amber flags.
+All default to **empty = no cut** — that is a decision, not an omission: published
+thresholds measurably do not transfer between collections, so the app never ships
+one. Set them from **Video bank → 🎚 Quality cuts**, where **Preview** shows how
+many shots each value would flag before you apply it. Raw scores stay stored, so
+changing any of these re-sorts every bank instantly, without rescanning.
+
+| Key | Default | Role |
+|---|---|---|
+| `video_bank.motion_floor` | *(empty)* | Flags shots whose average motion falls below this (`still`). |
+| `video_bank.motion_ceiling` | *(empty)* | Flags shots whose busiest moments exceed this (`agitated`). |
+| `video_bank.luma_floor` | *(empty)* | Flags shots whose darkest frame falls below this brightness (`black`). |
+| `video_bank.freeze_max` | *(empty)* | Flags shots where more than this share of frames do not move (`freeze`). |
+| `video_bank.sharpness_floor` | *(empty)* | Flags shots whose sharpest stretch stays below this (`soft`). |
+
 **Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
 
 | Key | Default | Role |
