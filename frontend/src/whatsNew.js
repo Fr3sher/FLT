@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-merge-a-lora-into-a-base-checkpoint',
+    date: '2026-08-04',
+    title: 'Turn your LoRA into a full model you can publish',
+    blurb:
+      'Most of the checkpoints you download were not trained — they were merged: a LoRA folded into somebody’s base, quantized, uploaded. LDS could train the LoRA and could quantize the result, and could not do the step in between, so you could not reproduce what everyone else was doing. Now you can: pick a base, add one or more LoRAs with a weight each, and get a complete checkpoint. It also unlocks the speed problem — a full model trained here targets Raw, which is slow, and merging in the re-distillation LoRA Krea publishes for Turbo is the published route to getting few-step generation back (we have not tested that one ourselves, and the screen says so). Nothing starts on one click: the plan tells you how many tensors change, exactly how big the output is, which drive it lands on and how long it takes — about two minutes on a 26 GB base — and nothing is ever overwritten. And it calls the result what it is. A merged model is not a trained model, however often the model sites say “finetune” for it, so the file records the base, every LoRA and its weight, and the date, in its own metadata — which is what still identifies it in six months, after the name has changed.',
+    to: '/datasets?section=checkpoints',
+  },
+  {
     id: '2026-08-04-turbo-dense-untested-not-impossible',
     date: '2026-08-04',
     title: 'Correction: full-model training on Turbo is untested, not impossible',

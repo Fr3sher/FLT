@@ -4,6 +4,7 @@ import { apiFetch } from '../../api/fetchClient';
 import { HelpBadge } from '../../help/HelpMode';
 import { postJson } from '../../hooks/useDataset';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
+import LoraMergeTool from './LoraMergeTool';
 import {
   denseActions, denseFileRows, denseGuidanceLine, denseModelTitle,
   denseStudioTarget, denseWhereChip, fmtBytes, STUDIO_NEEDS_A_LORA,
@@ -118,6 +119,7 @@ function SendPlan({ plan, busy, onSend, onCancel }) {
 export default function DenseModelsPanel({ datasetId, models = [], onChanged = null }) {
   const [plans, setPlans] = useState({});          // run_id -> send plan
   const [quantizeFor, setQuantizeFor] = useState(null);
+  const [mergeFor, setMergeFor] = useState(null);
   const [busy, setBusy] = useState(false);
   const [job, setJob] = useState(null);
   const pollRef = useRef(null);
@@ -302,7 +304,29 @@ export default function DenseModelsPanel({ datasetId, models = [], onChanged = n
                     {quantizeFor?.run_id === entry.run_id ? 'Hide' : actions.quantize.label}
                   </button>
                 )}
+                {/* Only for a master that is HERE. Merging reads the whole
+                    checkpoint tensor by tensor, so a model that exists only in a
+                    Hugging Face repo has nothing to merge into yet — offering the
+                    button anyway would be a refusal dressed as an action. */}
+                {entry.master?.path && (
+                  <button type="button"
+                    onClick={() => setMergeFor(
+                      mergeFor?.run_id === entry.run_id ? null : entry)}
+                    disabled={busy}
+                    title="Fold a LoRA into this model's weights and write a new full model"
+                    className="rounded-md border border-sky-300/40 bg-sky-400/15 px-2.5 py-1 text-[0.6875rem] font-semibold text-sky-50 hover:bg-sky-400/25 disabled:opacity-40">
+                    {mergeFor?.run_id === entry.run_id ? 'Hide' : '🧬 Merge a LoRA in'}
+                  </button>
+                )}
               </div>
+
+              {mergeFor?.run_id === entry.run_id && (
+                <div className="mt-1.5 rounded-md border border-sky-300/30 bg-app/50 px-2 py-1.5">
+                  <LoraMergeTool framed={false} family={entry.train_type}
+                    base={entry.master.path}
+                    baseLabel="this run’s full model" />
+                </div>
+              )}
 
               {/* The honest limit, next to the thing that would otherwise look
                   broken: the Test Studio is entered through a LoRA of this

@@ -134,6 +134,79 @@ only as a full model has none, so it cannot open the Studio at all. If you have
 any LoRA of that dataset deployed, pick it and set its **strength to 0** — no
 LoRA node is added at 0, so you generate with the bare model.
 
+## Merge a LoRA into a base checkpoint
+
+This is the step between *"I trained a LoRA"* and *"I have a model to publish"*,
+and it is how most of the community checkpoints you can download were actually
+made. Of the Krea 2 checkpoints whose authors describe their method, the ones
+that explain themselves describe a **merge**, not a training run: train a LoRA on
+Raw, fold it into a base, quantize, upload.
+
+You will find it in **📦 Checkpoints & LoRAs**, as **🧬 Merge a LoRA into a base
+checkpoint**. Inside a full model's card the same tool appears with that model
+already filled in as the base.
+
+**Say what you are merging.** Pick a full-precision base, then add one or more
+LoRAs, each with a weight. `1.0` applies a LoRA exactly as it was trained;
+lower blends it in more gently; a negative weight subtracts it. Several LoRAs
+stack — that is what "baked in LoRAs with balanced weights" means when you read
+it on a model page.
+
+**Nothing starts on the first click.** The plan is computed from the file headers
+alone — no weight is read — and it tells you how many tensors change, exactly how
+big the output is, which drive it lands on, roughly how long it takes, and what
+happens if it fails. On a 26 GB Krea 2 base, a measured merge took **about two
+minutes** and rewrote 256 of 430 tensors.
+
+**Nothing is ever overwritten.** The result is written next to the base under a
+new timestamped name, through a temporary file that is only renamed once the
+merge finishes. A merge that fails, or that you stop, leaves the base, the LoRAs
+and any earlier merge exactly as they were.
+
+### It is a merged model, and it says so
+
+The file's own metadata records that it came from a merge, which base it used,
+which LoRAs at which weights, and when. That matters because **file names lie**,
+and because on the model sites "finetune" is routinely used for exactly this
+object — by authors who describe the merge themselves a sentence later. LDS does
+not copy that vocabulary: what comes out of here is a base with LoRAs folded into
+its weights, not a model that was trained as a whole, and the header keeps saying
+so after the file is renamed or re-uploaded.
+
+### Getting the speed back (the Turbo transplant)
+
+A full-model run in this app targets **Raw**, which is undistilled and therefore
+slow. Krea publishes a re-distillation LoRA for Turbo; merging it at **0.8-1.0**
+into a model trained on Raw is the published route people use to get few-step
+behaviour back, and it is how the same model ends up on the model sites in both a
+Raw and a Turbo flavour.
+
+**We have not tested this ourselves.** It is an approximation, not an identity —
+generate a few comparisons before you publish anything on the strength of it.
+
+### Merge first, quantize after
+
+Merging into an **already quantized** file is refused, on purpose. It would
+dequantize every weight, modify it and re-quantize it: lossy on the way in and
+again on the way out, and the loss compounds each time somebody does it. Merge
+into the full-precision (bf16) model, then quantize the merged result with the
+fp8 tool — which is the order the refusal points you at.
+
+### Two things it will tell you about, rather than hide
+
+- **A LoRA that does not belong to the base** is refused before anything is
+  written, naming the weights it expected to find. A LoRA trained for another
+  model has nothing to merge into.
+- **Tensors that are not part of the model** are reported, not dropped. Not every
+  `.safetensors` contains only a model: one community Krea 2 file circulating
+  today carries about 75 MB of an image in two tensors hiding under a legitimate
+  name. Nothing we do not understand is modified — it is copied through, and the
+  plan names it so you know it is there.
+
+**What the merge needs:** the same Python that quantization uses — one with
+`torch` available. If it is missing, the plan says so with the command to fix it,
+before you click anything.
+
 ## Recover a paused Test Studio batch
 
 If ComfyUI drops while Test Studio is processing a batch, the affected tile says

@@ -12,6 +12,7 @@ import { maskedCarryOverAction, clearLegacyMasked } from './maskedMigration.js';
 import ConceptFaceMaskField from './ConceptFaceMaskField';
 import DenseModelsPanel from './DenseModelsPanel';
 import Fp8QuantizeTool from './Fp8QuantizeTool';
+import LoraMergeTool from './LoraMergeTool';
 import {
   checkpointSelectionMatchesTraining,
   checkpointVariantLabel,
@@ -3730,6 +3731,26 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               hand and find the file. Renders nothing when there is none. */}
           <DenseModelsPanel datasetId={ds.currentId} models={denseModels}
             onChanged={() => loadCheckpoints(checkpointBase, checkpointTrainType, checkpointVariant)} />
+          {/* Merging needs no dense run of its own — the usual case is a LoRA
+              trained here folded into a base downloaded from anywhere — and
+              DenseModelsPanel renders NOTHING when this dataset has no full
+              model. So the tool also lives here, where it is always reachable,
+              collapsed because most visits to this panel are not about it.
+              (Inside a dense card it appears again with the base pre-filled.) */}
+          <details className="rounded-lg border border-border bg-surface-raised px-3 py-2">
+            <summary className="cursor-pointer text-content text-xs font-semibold">
+              🧬 Merge a LoRA into a base checkpoint
+            </summary>
+            <p className="m-0 mt-1 text-content-subtle text-[0.625rem] leading-relaxed">
+              Folds one or more LoRAs into a full-precision checkpoint and writes a new
+              full model — the step between “I trained a LoRA” and “I have a model to
+              publish”. Nothing is overwritten, and the result says in its own metadata
+              that it is a merge and not a training run.
+            </p>
+            <div className="mt-1.5">
+              <LoraMergeTool framed={false} family={checkpointTrainType} />
+            </div>
+          </details>
           <div className="flex items-center gap-2 flex-wrap">
             {/* () => … sinon React passe l'event en 1er arg → forBase = PointerEvent
                 → base_model=[object Object] → run inexistant → liste vide. */}

@@ -229,6 +229,17 @@ const TOPICS = [
       'hugging face', 'checkpoint store'],
     guide: { chapter: 'using-the-app', anchor: 'using-a-full-model-you-trained' },
     app: { route: '/datasets?section=checkpoints' } },
+  // Its own topic, not a line under "Full models": a merge is how most published
+  // checkpoints are actually made, and someone searching "turbo", "bake",
+  // "finetune" or "publish a checkpoint" is asking for THIS, not for the
+  // quantize button or the LoRA deploy instructions.
+  { id: 'workspace-lora-merge', kind: 'action', title: 'Merge a LoRA into a base',
+    keywords: ['merge', 'merge lora', 'bake', 'bake in', 'fold', 'full model from lora',
+      'checkpoint from lora', 'finetune', 'turbo', 'transplant', 're-distillation',
+      'distill', 'publish a checkpoint', 'civitai', 'base plus lora', 'stack loras',
+      'merged model', 'speed back', 'few-step'],
+    guide: { chapter: 'using-the-app', anchor: 'merge-a-lora-into-a-base-checkpoint' },
+    app: { route: '/datasets?section=checkpoints' } },
   { id: 'workspace-studio', kind: 'section', title: 'Studio',
     keywords: ['studio', 'test', 'lora', 'checkpoint', 'winning settings'],
     guide: { chapter: 'dataset-guide', anchor: '6-after-training-pick-the-right-checkpoint' },
