@@ -40,7 +40,7 @@ import ResultLightbox from './ResultLightbox';
 const rollSeed = () => Math.floor(Math.random() * 2 ** 31);
 
 export default function ComparisonStudio({ selection, baseModels = [], axes = null,
-  runType = 'zimage' }) {
+  modelDefaults = null, runType = 'zimage' }) {
   const toast = useToast();
 
   // --- Réglages du run (persistés : recharger la page ne les perd plus) --------
@@ -92,11 +92,31 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
       return Array.isArray(v) && v.length ? v : null;
     } catch { return null; }
   };
+  // Modèle de base sélectionné : défaut = 1er de la liste fournie par le parent.
+  // Se réinitialise quand baseModels change (changement de runType).
+  // ⚠ DÉCLARÉ AVANT les axes : leurs défauts en dépendent (cf. `baseDefaults`
+  // plus bas), et une `const` lue avant sa déclaration est une ReferenceError au
+  // rendu — pas une valeur `undefined` qu'on rattraperait avec un `??`.
+  const [selectedBase, setSelectedBase] = useState('');
+  useEffect(() => {
+    setSelectedBase(baseModels.length > 0 ? baseModels[0].filename : '');
+  }, [baseModels]);
   const [selCfgs, setSelCfgs] = useState(() => readAxis('studioComp_cfgs'));
   const [selSteps, setSelSteps] = useState(() => readAxis('studioComp_steps'));
   const [selSteps2, setSelSteps2] = useState(() => readAxis('studioComp_steps2'));
-  const effectiveCfgs = effectiveAxis(selCfgs, axes?.default_cfg);
-  const effectiveSteps = effectiveAxis(selSteps, axes?.default_steps);
+  // Le défaut d'un axe dépend de la BASE, pas seulement de la famille : une base
+  // non distillée (Z-Image Base, un modèle complet Krea 2 Raw) rend une esquisse
+  // floue avec le cfg 1 / 8 steps de la Turbo. Le studio mono-LoRA lisait déjà
+  // `model_defaults` ; cette branche ne le recevait pas et héritait donc des
+  // mauvais chiffres pour exactement les modèles qui coûtent le plus cher à
+  // tester. Un axe que l'utilisateur a touché (selCfgs non nul) n'est jamais
+  // réécrit — ici comme là-bas.
+  const baseDefaults = (modelDefaults && selectedBase
+    ? modelDefaults[selectedBase] : null) || null;
+  const defaultCfg = baseDefaults?.cfg ?? axes?.default_cfg;
+  const defaultSteps = baseDefaults?.steps ?? axes?.default_steps;
+  const effectiveCfgs = effectiveAxis(selCfgs, defaultCfg);
+  const effectiveSteps = effectiveAxis(selSteps, defaultSteps);
   // ⚠ La 2e passe appartient au workflow SDXL. Sans cette garde, une sélection
   // laissée par un run SDXL suivrait l'utilisateur dans un run Z-Image (les
   // réglages sont persistés, la famille change avec les cases cochées) et
@@ -131,12 +151,6 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
   const toggleStrength = (s) =>
     setStrengths((cur) => (cur.includes(s) ? cur.filter((v) => v !== s) : [...cur, s].sort((a, b) => a - b)));
 
-  // Modèle de base sélectionné : défaut = 1er de la liste fournie par le parent.
-  // Se réinitialise quand baseModels change (changement de runType).
-  const [selectedBase, setSelectedBase] = useState('');
-  useEffect(() => {
-    setSelectedBase(baseModels.length > 0 ? baseModels[0].filename : '');
-  }, [baseModels]);
 
   // --- Run piloté --------------------------------------------------------------
   const [runId, setRunId] = useState(null);
@@ -333,15 +347,18 @@ export default function ComparisonStudio({ selection, baseModels = [], axes = nu
                MÊME composant que le studio mono-LoRA et le canvas — base et format
                sont déjà réglés au-dessus ici, donc ces deux blocs restent muets. */
             axisSlot={axes ? (
+              /* defaultCfg/defaultSteps = ceux de la BASE choisie (repli sur la
+                 famille) : la puce marquée « défaut » doit désigner la valeur
+                 réellement lancée, sinon elle désigne celle qui rend flou. */
               <AxisPickers
                 zModels={null} effectiveModels={[]} onToggleModel={() => {}}
                 aspects={null} effectiveAspects={[]} onToggleAspect={() => {}}
                 cfgChoices={axes.cfg_choices} effectiveCfgs={effectiveCfgs}
-                onToggleCfg={(v) => setSelCfgs((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_cfg), v))}
-                defaultCfg={axes.default_cfg}
+                onToggleCfg={(v) => setSelCfgs((cur) => toggleAxisValue(effectiveAxis(cur, defaultCfg), v))}
+                defaultCfg={defaultCfg}
                 stepsChoices={axes.steps_choices} effectiveSteps={effectiveSteps}
-                onToggleStep={(v) => setSelSteps((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_steps), v))}
-                defaultSteps={axes.default_steps}
+                onToggleStep={(v) => setSelSteps((cur) => toggleAxisValue(effectiveAxis(cur, defaultSteps), v))}
+                defaultSteps={defaultSteps}
                 steps2Choices={axes.steps2_choices} effectiveSteps2={effectiveSteps2}
                 onToggleStep2={(v) => setSelSteps2((cur) => toggleAxisValue(effectiveAxis(cur, axes.default_steps2), v))}
                 defaultSteps2={axes.default_steps2}

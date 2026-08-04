@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-full-model-is-selectable-as-a-studio-base',
+    date: '2026-08-04',
+    title: 'The fp8 file of a full model you trained is now offered as a base in the Test Studio — with its own sample settings already filled in',
+    blurb:
+      'One line decided it: the base picker only accepted a Krea checkpoint if it sat in a folder whose name carried “krea”. The fp8 twin of a full-model run is written to the root of ComfyUI’s diffusion_models folder — deliberately, because that is a folder ComfyUI reads — so the one file the whole full-model lane exists to produce was invisible to the one screen meant to try it, and the only way to test a model you had paid hours of GPU for was to open ComfyUI by hand. The picker now also accepts a file whose NAME carries “krea”, which is the rule the Generate side has always used, so every twin already on your disk appears without moving a byte. And because a full model trained here is undistilled, selecting it fills in CFG 4 / 25 steps rather than the family’s few-step Turbo defaults, which render a blurry sketch on it. Those per-base settings now also reach the comparison and blend screen, which never received them.',
+    to: '/studio',
+  },
+  {
     id: '2026-08-04-full-models-appear-in-the-checkpoints-panel',
     date: '2026-08-04',
     title: 'A full model you trained now appears in 📦 Checkpoints & LoRAs, with the two files it leaves and what each one is for',

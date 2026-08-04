@@ -28,7 +28,8 @@ import LoraPicker from './LoraPicker';
 import LegacyDatasetStudio from './LegacyDatasetStudio';
 import ComparisonStudio from './ComparisonStudio';
 
-export default function StudioShell({ preselectDataset = null, preselectFamily = null, datasetId = null }) {
+export default function StudioShell({ preselectDataset = null, preselectFamily = null,
+  preselectBase = null, datasetId = null }) {
   // `datasetId` legacy est un alias de preselectDataset.
   const preselect = preselectDataset ?? datasetId;
 
@@ -45,13 +46,26 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
   // Sans elles, la branche comparaison/blend n'avait aucun axe de rendu à
   // proposer — c'est ce qui la privait du réglage des steps (bug signalé).
   const [axes, setAxes] = useState(null);
+  // CFG/steps PAR BASE, servis par le même appel. Sans eux la branche
+  // comparaison lançait une base non distillée (Z-Image Base, un modèle complet
+  // Krea 2 Raw) avec les chiffres de la Turbo — cfg 1 / 8 steps — qui rendent une
+  // esquisse floue lue comme « l'entraînement a raté ». Le studio mono-LoRA les
+  // recevait déjà par son propre payload ; c'est la même source.
+  const [modelDefaults, setModelDefaults] = useState(null);
   useEffect(() => {
-    if (!runType) { setBaseModels([]); setAxes(null); return; }
+    if (!runType) { setBaseModels([]); setAxes(null); setModelDefaults(null); return; }
     let cancelled = false;
     fetch(`/api/studio/base-models?type=${encodeURIComponent(runType)}`, { credentials: 'include' })
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
-      .then((d) => { if (!cancelled) { setBaseModels(d.models || []); setAxes(d.axes || null); } })
-      .catch(() => { if (!cancelled) { setBaseModels([]); setAxes(null); } });
+      .then((d) => {
+        if (cancelled) return;
+        setBaseModels(d.models || []);
+        setAxes(d.axes || null);
+        setModelDefaults(d.model_defaults || null);
+      })
+      .catch(() => {
+        if (!cancelled) { setBaseModels([]); setAxes(null); setModelDefaults(null); }
+      });
     return () => { cancelled = true; };
   }, [runType]);
 
@@ -85,12 +99,13 @@ export default function StudioShell({ preselectDataset = null, preselectFamily =
 
       {comparison ? (
         <ComparisonStudio selection={selection} baseModels={baseModels} axes={axes}
-          runType={runType} />
+          modelDefaults={modelDefaults} runType={runType} />
       ) : soloDatasetId ? (
         // `key` force un remontage propre quand on change de LoRA solo OU de famille
         // (reset des hooks/état du studio riche — sinon on garderait la grille du précédent).
         <LegacyDatasetStudio key={`${soloDatasetId}:${soloFamily ?? 'default'}`}
-          datasetId={String(soloDatasetId)} initialFamily={soloFamily} />
+          datasetId={String(soloDatasetId)} initialFamily={soloFamily}
+          initialBase={preselectBase} />
       ) : (
         <p className="text-content-subtle text-sm rounded-lg border border-border bg-surface px-3 py-6 text-center">
           Check a LoRA above to tune and test it. Check ≥2 to compare them side by side.
