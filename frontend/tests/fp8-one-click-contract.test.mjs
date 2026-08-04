@@ -132,7 +132,10 @@ test('the recipe card is the ONE surface, and it is handed that target', () => {
   assert.match(panel, /quantizeTarget=\{denseQuantizeTarget\(cloudLastHere \|\| \{\}\)\}/)
   // The custom base already on screen pre-fills the manual field instead of
   // earning a second button of its own.
-  assert.match(panel, /suggestedQuantizePath=\{looksAbsolute\(base\) \? String\(base\)\.trim\(\) : ''\}/)
+  // `looksAbsolute` moved into trainingFamilyScope.js as `looksAbsoluteBase`
+  // when the Krea 2 base selector landed; the helper is renamed, the contract
+  // is not — the custom base on screen still pre-fills the manual field.
+  assert.match(panel, /suggestedQuantizePath=\{looksAbsoluteBase\(base\) \? String\(base\)\.trim\(\) : ''\}/)
   assert.doesNotMatch(panel, /Fp8DeliverButton/,
     'the conversion has one surface — a second button on the artifact card was removed')
 })
