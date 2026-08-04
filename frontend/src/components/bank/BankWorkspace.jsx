@@ -44,7 +44,9 @@ import {
 } from '../dataset/CaptionOptionsPopover'
 // Which pile the caption pass is aimed at, and the number the button quotes (pure).
 import {
-  CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown, captionScopeCount,
+  CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown,
+  captionRecaptionConfirmation, captionRecaptionDisabledReason, captionRecaptionLabel,
+  captionRecaptionNote, captionScopeCount,
   captionScopeDisabledReason, captionScopeNote, captionScopeStatuses,
 } from './bankCaptionScope.js'
 // Ordered zone model + the "what's next" accent, both pure/testable.
@@ -1087,6 +1089,34 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         ? { statuses: captionScopeStatuses(captionScope) } : {}),
     }), null)
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
+  /* 🔄 THE DESTRUCTIVE TWIN. Same endpoint, same options, plus `force:true` — which
+     drops the server's "no caption yet" filter and rewrites the whole pile. It exists
+     because 🏷️ Caption greys out at zero uncaptioned rows and takes the engine/model
+     selects down with it, leaving a fully captioned bank with no way to redo its
+     captions with a better model.
+
+     THREE RULES, all of them about not lying:
+     - it ASKS FIRST, with the count of captions it will destroy, in the Dataset's own
+       wording (dataset/captionCategory.js) so the app has one way of asking this;
+     - it never carries `image_ids`. A selection can span pages that were never loaded,
+       so how many selected rows already have a caption is unknowable client-side, and
+       this button does not run on a number it cannot state (see
+       captionRecaptionDisabledReason). 🏷️ Caption still honours selections;
+     - `statuses` rides WITHOUT the `!selected.size` guard the normal pass needs,
+       precisely because a selection makes this button inert instead. */
+  const startRecaption = () => {
+    if (captionRecaptionDisabledReason(selected.size, live, counts, captionScope)) return
+    if (!window.confirm(captionRecaptionConfirmation(counts, captionScope))) return
+    return act(() => postJson(`/api/bank/${bankId}/caption`, {
+      force: true,
+      ...(captionVocab ? { vocabulary: captionVocab } : {}),
+      ...(captionLength ? { length: captionLength } : {}),
+      ...(captionEngine ? { backend: captionEngine } : {}),
+      ...(captionModel ? { ollama_model: captionModel } : {}),
+      ...(captionScopeStatuses(captionScope)
+        ? { statuses: captionScopeStatuses(captionScope) } : {}),
+    }), null)
+  }
   /* Posts with the dialog still OPEN and answers {ok,error}: a refused launch —
      "a scan job is already running on this bank" is the usual one — used to close
      the dialog first and reset all seven pass checkboxes and the reject flags to
@@ -1427,6 +1457,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     ? [captionModel, ...ollamaModels] : ollamaModels
   const captionScopeInert = captionScopeDisabledReason(selected.size, live)
   const captionRunSize = captionScopeCount(counts, captionScope)
+  // 🔄 Re-caption: inert (and why), plus the sentence that names what it destroys.
+  const recaptionInert = captionRecaptionDisabledReason(
+    selected.size, live, counts, captionScope)
+  const recaptionNote = captionRecaptionNote(selected.size, live, counts, captionScope)
   const scored = counts?.scored || 0
   // ⚖️ Can a balanced pick even run? Answered BEFORE the click when we already
   // know (Score missing; coverage says nothing is classified) — otherwise the
@@ -1617,8 +1651,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             ninth and tenth control on the pass row. At a 400 px viewport the usable
             width is ~336 px and a <select> sizes itself to its widest option, so five
             of them on one line push the toolbar into a horizontal scroll — which this
-            zone has no container for. Every select is capped at max-w-[11rem], the same
-            bound the grid Sort select carries. */}
+            zone has no container for.
+
+            ONLY THE MODEL SELECT IS CAPPED AT 11rem, and it is the one that needs it:
+            Ollama model refs run long ("someorg/some-vision-model:8b-instruct-q4"), and
+            measured at a 360 px width it asks for 430 px and overflows on its own. The
+            other four were capped by symmetry and paid for it in truncation — "Use
+            default (Settings ▸ Cap⌄" and "Standard — the prompt as⌄" are not labels, and
+            two of them carried no bound at all before this row existed. Their natural
+            widths are 240-262 px, so max-w-full (never wider than the column) with a
+            16rem ceiling from the sm breakpoint up keeps them readable and still keeps
+            scrollWidth == clientWidth at 400 px. */}
         <div className="flex flex-wrap items-center gap-1.5">
           <GroupLabel>Caption options</GroupLabel>
           <label className="flex items-center gap-1 text-xs text-content-subtle">
@@ -1627,7 +1670,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               disabled={!!captionScopeInert} aria-label="Caption scope"
               title={captionScopeInert
                 || 'Which pile this pass captions. Rejected images are never captioned, whichever you pick.'}
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
               {CAPTION_SCOPE_OPTIONS.map((o) => (
                 <option key={o.id} value={o.id}>
                   {captionCountsKnown(counts)
@@ -1641,7 +1684,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <select value={captionEngine} onChange={(e) => setCaptionEngine(e.target.value)}
               disabled={live} aria-label="Caption engine"
               title="Which engine writes this run's captions, without changing your Settings. Auto is a CHAIN, not a choice between two: JoyCaption drafts, then Ollama covers whatever it missed."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
               {/* 'none' is dropped on purpose: "caption with nothing" is not a pass. */}
               {ENGINE_OPTIONS.filter((o) => o.id !== 'none')
                 .map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -1664,7 +1707,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
               disabled={live} aria-label="Caption vocabulary register"
               title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
               {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
@@ -1673,10 +1716,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <select value={captionLength} onChange={(e) => setCaptionLength(e.target.value)}
               disabled={live} aria-label="Caption length"
               title="How much the captioner writes. Concise aims for one short sentence, Detailed for several - a target the model follows loosely, not a hard cap. Standard leaves the prompt untouched. Longer captions give the search more to match on."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40">
+              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
               {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
+          {/* 🔄 The destructive twin, HERE rather than on the pass row: it is what makes
+              the four selects beside it reachable on a finished bank, and the pass row
+              lists seven DIFFERENT passes — a second variant of one of them reads as an
+              eighth pass. Layout, measured in the running app at a 400 px viewport (334 px
+              of usable width): the selects are each on their own line there, so the button
+              takes one more and the options row goes 164 → 191 px. A ninth button on the
+              pass row costs +40 px instead, and pushes this whole row down with it. */}
+          <button type="button" onClick={startRecaption} disabled={!!recaptionInert}
+            aria-label="Re-caption"
+            title={recaptionInert || recaptionNote}
+            className="px-2 py-1 rounded-lg bg-surface border border-border text-content text-xs disabled:opacity-40">
+            {captionRecaptionLabel(counts, captionScope, recaptionInert)}
+          </button>
         </div>
         {/* What the run will do, spelled out — including the two things a count alone
             never says: already-captioned images are skipped, and the bin is out of
@@ -1685,6 +1741,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           {captionScopeNote(selected.size, counts, captionScope)}
           {captionScopeInert && selected.size > 0 && ' The status scope is ignored while a selection is active.'}
         </p>
+        {/* …and what the OTHER button destroys, in the same place, before the click.
+            Amber because this is the one line on the row that describes a loss, and
+            rendered only while the button can actually run — a warning about an
+            impossible action is what teaches people to stop reading warnings. */}
+        {recaptionNote && (
+          <p className="text-xs text-amber-400/90">{recaptionNote}</p>
+        )}
         {/* Watermark CLEANING — the two manual levels (crop, then inpaint), with
             their own per-level progress. Lives in its own component so the
             "which level can run, and why not" logic stays unit-tested. */}

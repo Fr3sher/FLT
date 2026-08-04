@@ -3208,6 +3208,13 @@ export const WHATS_NEW = [
       'The 🏷️ Caption pass used to take whatever engine and vision model your Settings held, and always ran over everything you had not rejected. It now has its own row: pick the engine and the Ollama vision model for THIS run without touching your Settings, and aim the pass at the kept images only, the undecided only, or both. Which model writes a caption is not a matter of taste — one that describes things in evasive terms produces captions that are about something slightly other than your images, and a LoRA trained on them learns to look away too. The button also stops saying “Caption all” and starts saying how many images it is really about to write, because already-captioned ones are skipped and the count you could see was never the count it acted on. Rejected images stay out of reach, whatever you pick.',
     // No `to`: the control lives inside a bank workspace, which has no deep link.
   },
+  {
+    id: '2026-08-04-bank-recaption-button',
+    date: '2026-08-04',
+    title: 'Redo a bank’s captions with a better model — and see what that costs first',
+    blurb:
+      'Once every image in a bank had a caption, 🏷️ Caption reached zero and went grey — taking the engine and model selects beside it out of reach, on exactly the bank whose captions you wanted to redo. A 🔄 Re-caption button now sits at the end of the Caption options row and runs the same pass over the pile you chose, with the engine, model, register and length you picked. It overwrites, so it tells you the numbers before you click: the button quotes how many images it will rewrite, an amber line quotes how many of those already carry a caption, and the confirmation repeats both. It also says the part we cannot fix: this app stores one caption per image and records nothing about who wrote it, so a caption you corrected by hand looks exactly like a generated one and is overwritten too — and no undo covers captions. With images selected the button stays inert and says why, because a selection can span pages that were never loaded and the count would be a guess.',
+  },
 ];
 
 // ── Ordering ────────────────────────────────────────────────────────────────

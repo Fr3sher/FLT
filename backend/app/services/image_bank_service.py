@@ -5601,6 +5601,21 @@ def _normalize_caption_statuses(statuses):
     return [s for s in CAPTION_SCOPES if s in want]
 
 
+def _caption_name_option(name, value):
+    """Normalize one free-text caption option, or raise ValueError → 400.
+
+    Every one of these options is a NAME out of a closed list. A non-string reached
+    ``.strip()`` and answered 500 — a bad request rendered as a broken server, while
+    ``statuses`` next door already answered 400 for exactly the same mistake. The
+    validation now matches the promise the route's docstring makes ("invalid → 400")."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f'invalid caption {name}: expected a name, not '
+                         f'{type(value).__name__}')
+    return value.strip().lower() or None
+
+
 def _caption_scope_q(bank_id, statuses):
     """The rows a caption pass may touch, for this bank and this scope.
 
@@ -5654,14 +5669,14 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
         raise ValueError('bank not found')
     from .face_dataset_service import (CAPTION_BACKENDS, CAPTION_LENGTHS,
                                        CAPTION_VOCABULARIES)
-    vocab = (vocabulary or '').strip().lower() or None
+    vocab = _caption_name_option('vocabulary', vocabulary)
     if vocab and vocab not in CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
-    size = (length or '').strip().lower() or None
+    size = _caption_name_option('length', length)
     if size and size not in CAPTION_LENGTHS:
         raise ValueError(f'invalid caption length: {size}')
     want = _normalize_caption_statuses(statuses)
-    engine = (backend or '').strip().lower() or None
+    engine = _caption_name_option('backend', backend)
     if engine and engine not in CAPTION_BACKENDS:
         raise ValueError(f'invalid captioning backend: {engine}')
     # Same charset check the Caption Lab uses (never shelled out — it is a JSON

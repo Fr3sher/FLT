@@ -1109,9 +1109,46 @@ well. That is the problem. If you caption NSFW material, pair the **Explicit**
 register with an uncensored (abliterated) model; the app warns you when the
 model it is about to use does not look like one.
 
-You can change the model between runs on the same bank. Nothing is rewritten:
-the pass only fills images that have no caption yet, so a second run with a
-different model captions the rest, not the ones already done.
+You can change the model between runs on the same bank. 🏷️ **Caption** never
+rewrites anything: it only fills images that have no caption yet, so a second run
+with a different model captions the rest, not the ones already done. To redo the
+ones already done, see the next section.
+
+## Redo the captions of a bank with a different model
+
+🏷️ **Caption** skips images that already have a caption — which is what you want
+until the day it isn't. Once a bank is fully captioned that button reaches zero
+images and goes inert, and on a bank you captioned with a model you have since
+decided was a poor one, "nothing left to caption" is the wrong answer.
+
+🔄 **Re-caption**, at the end of the **Caption options** row, is that answer. It
+runs the same pass with the same engine, model, register and length you picked on
+that row, on the pile the scope select names — and it **overwrites** the captions
+that are already there.
+
+**It tells you the number before you click, in two places.** The button quotes
+what it will rewrite ("🔄 Re-caption 1 240 kept" — the whole pile, captioned or
+not), and the amber line under the row quotes what it will *destroy*: how many of
+those images already carry a caption. The confirmation repeats both. Neither
+number is an estimate; both come from the same count the pass itself uses.
+
+**There is no undo, and no way to spare hand-written captions.** This app stores
+one caption per image and records nothing about who wrote it — a caption you typed
+or corrected yourself and one a model produced are the same text in the same
+column. So a guard that "protected your edits" would have to guess, and would
+guess wrong in both directions. The honest version is the one you get: it
+overwrites everything in the pile and says so first. The bank's ↩ Undo covers
+keep/reject decisions only; it has never covered captions.
+
+The case to be careful about is a bank built with **Import to bank** from a
+dataset whose captions you had corrected by hand: those corrections came along,
+and nothing on screen marks them.
+
+**It works by pile, never on a selection.** With images selected the button goes
+inert and says why: a selection can cover pages that were never loaded, so the
+app cannot count how many of them already have a caption — and it will not run a
+destructive pass on a number it cannot state. Clear the selection to re-caption a
+pile. 🏷️ **Caption** still honours selections as it always did.
 
 ## Review a bank one image at a time
 

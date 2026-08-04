@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { markdownHeadingId } from '../../utils/headingId.js';
 
 /* Source-text contract on the 🏷️ Caption options row, in the house style used by
    curation-ui.test.js and pipeline-ui.test.js: the file is read and asserted against,
@@ -8,11 +9,16 @@ import fs from 'node:fs';
 
 const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
 
-test('the four caption selects are all bounded for a 400 px toolbar', () => {
-  // A <select> sizes itself to its widest option and has min-width:auto, so it does
-  // not shrink; the ① Analyze zone has no overflow-x container, so an unbounded one
-  // pushes the whole page into a horizontal scroll on a phone. max-w-[11rem] is the
-  // bound the grid Sort select already carries (grid-sort-contract.test.mjs).
+test('only the model select is width-capped, and the other four are not truncated', () => {
+  // A <select> sizes itself to its widest option and has min-width:auto, so it does not
+  // shrink; the ① Analyze zone has no overflow-x container, so an unbounded one pushes
+  // the whole page into a horizontal scroll on a phone. But the cap has a cost: at
+  // 11rem the vocabulary and length selects render "Use default (Settings ▸ Cap⌄" and
+  // "Standard — the prompt as⌄", and neither carried any bound before this row existed.
+  // Only the MODEL select needs it — Ollama refs run long and it overflows on its own
+  // (measured: 430 px asked at a 360 px width). The other four take max-w-full with a
+  // 16rem ceiling from sm up: never wider than the column, readable everywhere else.
+  const capped = { 'Caption vision model': /max-w-\[11rem\]/ };
   for (const label of ['Caption scope', 'Caption engine', 'Caption vision model',
     'Caption vocabulary register', 'Caption length']) {
     const i = ws.indexOf(`aria-label="${label}"`);
@@ -20,8 +26,15 @@ test('the four caption selects are all bounded for a 400 px toolbar', () => {
     // The className sits within the same element; look at the tag around it.
     const tagStart = ws.lastIndexOf('<select', i);
     const tagEnd = ws.indexOf('>', ws.indexOf('className=', i));
-    assert.match(ws.slice(tagStart, tagEnd), /max-w-\[11rem\]/,
-      `${label} select has no width bound`);
+    const tag = ws.slice(tagStart, tagEnd);
+    if (capped[label]) {
+      assert.match(tag, capped[label], `${label} select lost its width bound`);
+    } else {
+      assert.ok(!/max-w-\[11rem\]/.test(tag),
+        `${label} select is capped at 11rem and truncates its own options`);
+      assert.match(tag, /max-w-full sm:max-w-\[16rem\]/,
+        `${label} select has no width bound at all`);
+    }
   }
 });
 
@@ -85,4 +98,82 @@ test('no surface in the bank sends people to the wrong tab for the vision model'
         `${name}: "${m[0].trim()}" points at the engine section, not Local tools`);
     }
   }
+});
+
+/* 🔄 RE-CAPTION — the destructive twin. Wiring facts no pure function can hold. */
+
+test('the normal caption pass never sends force', () => {
+  // The whole safety story rests on this: 🏷️ Caption fills blanks and nothing else.
+  // A stray `force` here would turn the everyday button into the destructive one.
+  const call = ws.slice(ws.indexOf('const startCaption'),
+    ws.indexOf('const cancelJob'));
+  assert.ok(!/force/.test(call), '🏷️ Caption must never post force');
+});
+
+test('re-caption posts force, and asks before it does', () => {
+  const call = ws.slice(ws.indexOf('const startRecaption'),
+    ws.indexOf('const startRecaption') + 1400);
+  // The confirmation comes FIRST — after the post there is nothing left to confirm.
+  const confirmAt = call.indexOf('window.confirm(captionRecaptionConfirmation');
+  const postAt = call.indexOf('postJson');
+  assert.ok(confirmAt > 0, 're-caption does not confirm');
+  assert.ok(postAt > confirmAt, 'the request is built before the question is asked');
+  assert.match(call, /force: true/);
+  // …and it re-checks the inert reason itself, so a stale click cannot slip through.
+  assert.match(call, /if \(captionRecaptionDisabledReason\(/);
+});
+
+test('re-caption never carries a selection', () => {
+  // A selection can span pages that were never loaded, so the overwrite count is
+  // unknowable client-side. This button goes inert instead of quoting a guess —
+  // sending image_ids would be exactly the number-that-differs-from-the-action bug.
+  const call = ws.slice(ws.indexOf('const startRecaption'),
+    ws.indexOf('const startRecaption') + 1400);
+  assert.ok(!/image_ids/.test(call), 're-caption must not post image_ids');
+  assert.match(ws, /const recaptionInert = captionRecaptionDisabledReason\(\s*selected\.size/);
+});
+
+test('re-caption carries the same per-run options as the normal pass', () => {
+  // Making the engine and model reachable on a finished bank IS the feature; a
+  // re-caption that dropped them would redo the captions with the old model.
+  const call = ws.slice(ws.indexOf('const startRecaption'),
+    ws.indexOf('const startRecaption') + 1400);
+  for (const key of ['vocabulary: captionVocab', 'length: captionLength',
+    'backend: captionEngine', 'ollama_model: captionModel',
+    'statuses: captionScopeStatuses(captionScope)']) {
+    assert.ok(call.includes(key), `re-caption drops ${key}`);
+  }
+});
+
+test('the button and the amber warning both live on the options row', () => {
+  const eyebrow = ws.indexOf('<GroupLabel>Caption options</GroupLabel>');
+  const button = ws.indexOf('{captionRecaptionLabel(counts, captionScope, recaptionInert)}');
+  assert.ok(button > eyebrow, 're-caption must sit on the options row');
+  // The pass row above it must not have grown a ninth button.
+  assert.ok(ws.indexOf('onClick={startRecaption}') > eyebrow);
+  // The warning is rendered, and only when the helper has something to say.
+  assert.match(ws, /\{recaptionNote && \(/);
+  assert.match(ws, /text-amber-400\/90">\{recaptionNote\}/);
+  // The label is handed the inert reason, so a button that cannot run stops quoting
+  // a number — the tooltip carries the reason instead.
+  assert.match(ws, /captionRecaptionLabel\(counts, captionScope, recaptionInert\)/);
+  assert.match(ws, /title=\{recaptionInert \|\| recaptionNote\}/);
+});
+
+test('re-caption has a help topic pointing at a real guide anchor', () => {
+  const registry = fs.readFileSync(
+    new URL('../../help/helpRegistry.js', import.meta.url), 'utf8');
+  const i = registry.indexOf("action('bank-recaption'");
+  assert.ok(i > 0, 'bank-recaption has no help topic');
+  const entry = registry.slice(i, i + 1200);
+  const anchor = /'using-the-app', '([a-z0-9-]+)'\)/.exec(entry);
+  assert.ok(anchor, 'the topic has no guide anchor');
+  const guide = fs.readFileSync(
+    new URL('../../../../docs/guide/using-the-app.md', import.meta.url), 'utf8');
+  // Slugified with the SHARED function the Guide itself uses, not a look-alike:
+  // a private copy is exactly how an anchor comes to pass its own test and 404 in
+  // the app.
+  const headings = [...guide.matchAll(/^## (.+)$/gm)].map((m) => markdownHeadingId(m[1]));
+  assert.ok(headings.includes(anchor[1]),
+    `no guide heading resolves to #${anchor[1]}`);
 });
