@@ -2224,6 +2224,12 @@ def dataset_train_run_delete(record_id):
     if status == 'has_saves':
         return jsonify({'error': 'This run still has checkpoints on disk. Delete '
                                  'its checkpoints first, then remove the run.'}), 409
+    if status == 'has_model':
+        return jsonify({'error': 'This run trained a full model that is still in '
+                                 'its private Hugging Face repository. Removing '
+                                 'the run would discard the only record of where '
+                                 'that model is. Delete the repository first if '
+                                 'you really want it gone.'}), 409
     if status == 'conflict':
         return jsonify({'error': 'This run is still referenced and could not be '
                                  'removed. Refresh and try again.'}), 409

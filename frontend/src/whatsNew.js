@@ -64,6 +64,14 @@ export const WHATS_NEW = [
     to: '/studio',
   },
   {
+    id: '2026-08-04-full-model-run-no-longer-reads-as-gone',
+    date: '2026-08-04',
+    title: 'A full-model run whose model is on Hugging Face no longer shows up as “gone” — and the app no longer offers to delete it',
+    blurb:
+      'The canvas asked one question to decide whether a run still had anything: is there a checkpoint file on this disk? That question has no good answer for a full model delivered to a private Hugging Face repository — there is no local file, and there never was. So those runs were drawn dimmed, badged “gone”, and given a “Remove this run” button under the words “No checkpoints left on disk”, for a model that was perfectly fine and had cost hours of GPU. Removing one threw away the lineage, the notes and the only record of which repository the model was in. A full-model run is now asked about both of the addresses it can have: it shows “💾 full model here” when the weights are on this computer, “☁ on Hugging Face” when they are in its repository, and it is only offered for removal when the model is genuinely gone from both. If you try anyway, the app now says where the model still is instead of deleting the trail to it.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-04-fp8-quantize-runs-where-torch-lives',
     date: '2026-08-04',
     title: 'Quantizing to fp8 now actually runs — it uses an environment that has torch, and says so before you click if none does',

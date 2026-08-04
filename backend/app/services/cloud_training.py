@@ -1127,6 +1127,53 @@ def _dense_delivers_hub(run) -> bool:
     return _is_full_transformer_run(run) and dld.delivers_hub(_dense_delivery(run))
 
 
+# Where a full model still IS. STORED nowhere — computed — but published in the
+# lineage payload, so the strings are part of the frontend contract.
+DENSE_ON_DISK = 'local'
+DENSE_ON_HUB = 'hub'
+DENSE_GONE = 'none'
+
+
+def dense_artifact_state(run) -> str:
+    """Where THIS run's full model still lives: on this disk, on Hugging Face,
+    or nowhere.
+
+    WHY THIS CANNOT BE ``checkpoint_local_path``
+    --------------------------------------------
+    That column belongs to the LoRA lane: the cloud sync writes it for the
+    adapter it downloaded. A dense run only ever fills it when the LOCAL
+    delivery lands — a feature younger than the dense lane itself — so every run
+    that delivered to Hugging Face only, which is every dense run trained before
+    it, reads as holding nothing.
+
+    The canvas believed that literally. It dimmed those cards, badged them
+    ``gone``, and offered "Remove this run" under the words "No checkpoints left
+    on disk" — for a model sitting in a private repository that cost eight hours
+    of GPU. Removing one discards the lineage, the notes, the version and the
+    only recorded pointer to that repository.
+
+    So presence is asked of BOTH addresses a full model can have, and the
+    Hugging Face half is deliberately generous: only an explicitly verified
+    ``missing`` counts as absent. An upload still pending, or a verification that
+    could not run, is not proof of a lost model — and the two mistakes do not
+    cost the same. A button that fails to appear is an annoyance; a training
+    thrown away is not recoverable.
+    """
+    if not _is_full_transformer_run(run):
+        return DENSE_GONE
+    try:
+        if run_checkpoint_files(run):
+            return DENSE_ON_DISK
+    except Exception:                                   # noqa: BLE001
+        # A scan that cannot run is not an absence. Fall through to the Hub
+        # answer rather than report a model gone on the strength of an OSError.
+        logger.debug('dense artifact scan failed', exc_info=True)
+    if not _run_param(run, 'hf_repo_id'):
+        return DENSE_GONE
+    return (DENSE_GONE if _run_param(run, 'artifact_status') == 'missing'
+            else DENSE_ON_HUB)
+
+
 class _RunConfigDataset:
     """Read-only view of a dataset whose config inputs are forced to the values
     stamped for this run; every other attribute delegates to the real dataset.
@@ -6764,6 +6811,27 @@ def _record_checkpoints_on_disk(rec) -> int:
         return 0
 
 
+def _record_removal_blocker(rec) -> str | None:
+    """Why removing this run from the graph must be refused, or None.
+
+    ``'has_saves'`` — its checkpoints are still on this disk.
+    ``'has_model'`` — it is a full model that lives in its Hugging Face
+    repository. The disk count cannot see that one (``checkpoint_local_path`` is
+    a LoRA-lane column), which is exactly how a hub-delivered dense run came to
+    be offered for removal under the words "No checkpoints left on disk".
+    """
+    if _record_checkpoints_on_disk(rec) > 0:
+        return 'has_saves'
+    try:
+        crun = (db.session.get(CloudTrainingRun, rec.cloud_run_id)
+                if rec.source == 'cloud' and rec.cloud_run_id else None)
+        if crun is not None and dense_artifact_state(crun) == DENSE_ON_HUB:
+            return 'has_model'
+    except Exception:                                   # noqa: BLE001
+        logger.debug('dense removal check failed for %s', rec.id, exc_info=True)
+    return None
+
+
 def _releasable_blob_sigs(rec) -> set:
     """Content hashes archived for `rec` that NO OTHER run references.
 
@@ -6838,6 +6906,9 @@ def run_deletion_impact(record_id) -> dict | None:
     return {
         'record_id': rec.id,
         'has_saves': _record_checkpoints_on_disk(rec) > 0,
+        # Why a removal would be refused, if it would ('has_saves' | 'has_model').
+        # Additive: the dialog reads the flat keys and is untouched by it.
+        'removal_blocker': _record_removal_blocker(rec),
         'cascade': cascade or {
             'checkpoints': 0, 'checkpoint_bytes': 0, 'images_deleted': 0,
             'images_kept_rated': 0, 'deployed_kept': 0, 'training_active': None},
@@ -6883,6 +6954,9 @@ def delete_run_record(record_id, cascade=False) -> str:
 
     Guards kept: a run whose checkpoints are still on disk is REFUSED
     ('has_saves') so a recoverable run is never discarded from under the user.
+    A full model that lives in its Hugging Face repository is refused the same
+    way ('has_model') — its files are not on this disk and never were, which is
+    precisely why the disk count alone let it through.
 
     `cascade=True` is the ONE caller allowed past that guard:
     ``run_cascade_delete.delete_run_cascade`` has just moved those checkpoints to
@@ -6892,7 +6966,8 @@ def delete_run_record(record_id, cascade=False) -> str:
     behaviour byte for byte — the cascade is an explicitly requested mode, never
     a new default that starts destroying files under code that never asked.
 
-    Returns 'not_found' | 'has_saves' | 'deleted' | 'conflict'. The FK children
+    Returns 'not_found' | 'has_saves' | 'has_model' | 'deleted' | 'conflict'.
+    The FK children
     (no relationship cascade in this schema) are deleted and FLUSHED before the
     parent row so SQLite never raises the repo's "delete 500" IntegrityError; a
     stray one is caught and reported as 'conflict', never a 500. Blobs are
@@ -6905,8 +6980,10 @@ def delete_run_record(record_id, cascade=False) -> str:
     rec = db.session.get(TrainingRunRecord, int(record_id))
     if rec is None:
         return 'not_found'
-    if not cascade and _record_checkpoints_on_disk(rec) > 0:
-        return 'has_saves'
+    if not cascade:
+        blocker = _record_removal_blocker(rec)
+        if blocker:
+            return blocker
     # Computed BEFORE the row is gone — the snapshot that names the blobs lives
     # on the record itself.
     releasable = _releasable_blob_sigs(rec)
@@ -6973,11 +7050,26 @@ def _lineage_node(rec, crun, requested_id, failed_local_id):
     if crun is not None:
         node['run_id'] = crun.id
         node['status'] = crun.status
-        node['checkpoint_ready'] = bool(
-            crun.checkpoint_local_path and os.path.isfile(crun.checkpoint_local_path))
+        node['training_mode'] = _run_training_mode(crun)
+        if _is_full_transformer_run(crun):
+            # A full model is not addressed by checkpoint_local_path (see
+            # dense_artifact_state). `None` for a model that lives on the Hub is
+            # the tri-state every existing reader already treats as "cannot say":
+            # the chip stays quiet and `isRunDeletable` refuses — which is the
+            # right behaviour on an older frontend too, without a version check.
+            state = dense_artifact_state(crun)
+            node['dense_artifact'] = state
+            node['checkpoint_ready'] = {DENSE_ON_DISK: True, DENSE_ON_HUB: None,
+                                        DENSE_GONE: False}[state]
+        else:
+            node['checkpoint_ready'] = bool(
+                crun.checkpoint_local_path and os.path.isfile(crun.checkpoint_local_path))
         node['checkpoints'] = _node_checkpoints(rec, crun)
         node['saves'] = _staging_save_count(crun)
     else:
+        # A local record is always a LoRA run: dense training is refused outside
+        # the cloud lane (routes.training), so there is no local dense to detect.
+        node['training_mode'] = 'lora'
         node['status'] = ('error' if (rec.source == 'local'
                                        and rec.id == failed_local_id) else None)
         # Local checkpoints still on disk that list_checkpoints attributes to
