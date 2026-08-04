@@ -961,6 +961,26 @@ def start_promote(app, user_id, bank_id, *, ids=None, name, target_profile,
                 q.order_by(VideoClip.source_id.asc(), VideoClip.start_s.asc()).all()]
     if not clip_ids:
         raise ValueError('nothing to promote — keep some clips first')
+    # "Keep the source's size" quietly bypasses the explicit-size validation, and
+    # for a target that caps the canvas AREA that is exactly the gap: 1920x1088
+    # is a clean multiple of 32 and still out of spec for MiniMax H3. Only bites
+    # when the source size would SURVIVE — an explicit size rescales everything,
+    # so big sources stop mattering. Refused here, before any folder exists.
+    cap = profile.get('max_pixels')
+    if cap and not size:
+        oversized = (db.session.query(VideoSource)
+                     .join(VideoClip, VideoClip.source_id == VideoSource.id)
+                     .filter(VideoClip.id.in_(clip_ids),
+                             VideoSource.width.isnot(None),
+                             (VideoSource.width * VideoSource.height) > cap)
+                     .count())
+        if oversized:
+            raise ValueError(
+                f'{oversized} selected clip(s) come from sources larger than '
+                f'{profile["label"]}\'s canvas cap ({cap:,} px). Pick a size '
+                f'(e.g. {profile["recommended_sizes"][0][0]}x'
+                f'{profile["recommended_sizes"][0][1]}) so they are rescaled, '
+                f'or deselect those clips.')
     _ffmpeg_or_raise()
 
     dataset = VideoDataset(user_id=user_id, name=name,

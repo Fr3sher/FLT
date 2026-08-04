@@ -78,6 +78,12 @@ export function sizeOptions(target) {
     width: null,
     height: null,
   }]
+  // A target that caps the canvas AREA makes "no resize" the one path that can
+  // smuggle an out-of-spec size through — the backend refuses it at launch, and
+  // this hint is what keeps that refusal from being a surprise.
+  if (target && target.max_pixels) {
+    out[0].hint = `This target caps the canvas at ${target.max_pixels.toLocaleString()} px — sources larger than that must be rescaled (pick a size below).`
+  }
   for (const pair of (target && target.recommended_sizes) || []) {
     const [w, h] = pair
     out.push({ key: `${w}x${h}`, label: `${w} × ${h}`, width: w, height: h })

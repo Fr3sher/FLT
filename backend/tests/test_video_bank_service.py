@@ -581,3 +581,65 @@ def test_an_unmeasured_clip_still_thumbnails_at_its_middle(app, tmp_path, seams,
         svc.start_thumbs(app, LOCAL_USER, bank_id)
 
     assert middle in grabbed
+
+
+# --- the canvas cap (max_pixels) at promotion -----------------------------------
+
+def test_source_size_promotion_is_refused_when_a_source_exceeds_the_canvas_cap(
+        app, tmp_path, seams, monkeypatch):
+    """MiniMax H3 caps the canvas area, and "keep the source's size" quietly
+    bypasses the explicit-size validation. A 1920x1088 source is a clean multiple
+    of 32 and still out of spec — encoding it would produce a dataset the model
+    was never meant to ingest, with no error anywhere. Refused at launch, with
+    the cap in the message, before any folder exists."""
+    import pytest as _pytest
+    bank_id = _ready_for_promotion(app, tmp_path, width=1920, height=1088)
+
+    with app.app_context():
+        with _pytest.raises(ValueError) as e:
+            svc.start_promote(app, LOCAL_USER, bank_id, name='H3 set',
+                              target_profile='minimax_h3', frames=39)
+        assert 'canvas' in str(e.value) or 'max' in str(e.value)
+
+
+def test_source_size_promotion_passes_when_sources_fit_the_cap(
+        app, tmp_path, seams, monkeypatch):
+    bank_id = _ready_for_promotion(app, tmp_path, width=768, height=1024)
+
+    with app.app_context():
+        result = svc.start_promote(app, LOCAL_USER, bank_id, name='H3 set',
+                                   target_profile='minimax_h3', frames=39)
+        assert result['clips'] == 1
+
+
+def test_an_explicit_size_within_the_cap_is_never_blocked_by_big_sources(
+        app, tmp_path, seams, monkeypatch):
+    """Choosing 768x1344 RESCALES every clip, so the sources' own size stops
+    mattering — the guard must only bite when the source size would survive."""
+    bank_id = _ready_for_promotion(app, tmp_path, width=1920, height=1088)
+
+    with app.app_context():
+        result = svc.start_promote(app, LOCAL_USER, bank_id, name='H3 set',
+                                   target_profile='minimax_h3', frames=39,
+                                   size=(768, 1344))
+        assert result['clips'] == 1
+
+
+def _ready_for_promotion(app, tmp_path, *, width, height):
+    """A bank with one probed source of the given geometry and one KEPT clip long
+    enough for any profile's default length."""
+    from app.extensions import db
+    from app.models import VideoClip, VideoSource
+    with app.app_context():
+        bank_id, _ = _bank(app, tmp_path, ('a.mp4',))
+        src = VideoSource.query.filter_by(bank_id=bank_id).first()
+        src.probe_state = 'ok'
+        src.duration_s = 60.0
+        src.fps_native = 30.0
+        src.width = width
+        src.height = height
+        clip = VideoClip(bank_id=bank_id, source_id=src.id, start_s=0.0,
+                         end_s=20.0, status='keep')
+        db.session.add(clip)
+        db.session.commit()
+        return bank_id

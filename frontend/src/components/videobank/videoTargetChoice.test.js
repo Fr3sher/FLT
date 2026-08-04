@@ -175,3 +175,19 @@ test('the dialog refuses what the server would refuse, before the round trip', (
     /whole number of frames/)
   assert.equal(promoteProblem({ name: 'x', target: WAN14B, frames: 81 }), null)
 })
+
+test('the source-size option warns when the target caps the canvas area', () => {
+  // 1920x1088 is a clean multiple of 32 and still out of spec for MiniMax H3 —
+  // "keep the source's size" is the one path that can smuggle it through, so it
+  // carries the warning at the point of choice. The backend refuses too; this
+  // hint is what keeps the refusal from being a surprise.
+  const h3 = { key: 'minimax_h3', recommended_sizes: [[1344, 768]],
+               max_pixels: 1032192 }
+  const source = sizeOptions(h3).find((o) => o.key === 'source')
+  assert.match(source.hint, /cap|larger|rescal/i)
+})
+
+test('no canvas cap, no hint on the source-size option', () => {
+  const source = sizeOptions(WAN14B).find((o) => o.key === 'source')
+  assert.equal(source.hint, undefined)
+})

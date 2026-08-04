@@ -159,10 +159,17 @@ export default function PromoteVideoDialog({
               className="mt-1 w-full rounded-md border border-border bg-surface-raised px-3 py-1.5 text-sm text-content">
               {sizes.map((s) => <option key={s.key} value={s.key}>{s.label}</option>)}
             </select>
-            <p className="mt-1 text-xs text-content-muted">
-              Suggestions mirror the model’s own inference sizes — they are not training
-              limits. Keeping the source size is fine.
-            </p>
+            {/* The chosen option's own caveat wins over the generic reassurance:
+                for a canvas-capped target, "keeping the source size is fine" is
+                exactly the sentence that would be false. */}
+            {size?.hint ? (
+              <p className="mt-1 text-xs text-amber-300">⚠ {size.hint}</p>
+            ) : (
+              <p className="mt-1 text-xs text-content-muted">
+                Suggestions mirror the model’s own inference sizes — they are not training
+                limits. Keeping the source size is fine.
+              </p>
+            )}
           </div>
         </div>
 
