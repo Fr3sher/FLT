@@ -179,8 +179,10 @@ def test_bank_score_marks_rejected_snapshot_error_without_second_pillow_open(
 
     monkeypatch.setattr(Image, 'open', tracking_open)
     module = _load_infer('bank_score_infer')
-    monkeypatch.setattr(module, '_load_aesthetic_head', lambda *_args: (None, False))
-    monkeypatch.setattr(module, '_load_nsfw', lambda *_args: (None, False))
+    monkeypatch.setattr(module, '_load_aesthetic_head',
+                        lambda *_args: (None, False, 'URLError: unreachable'))
+    monkeypatch.setattr(module, '_load_nsfw',
+                        lambda *_args: (None, False, 'OSError: unreachable'))
     monkeypatch.setattr(sys, 'stdin', io.StringIO(json.dumps({
         'images': [str(bad)], 'models_root': str(tmp_path / 'models')})))
     assert module.main() == 0

@@ -77,6 +77,13 @@ export const WHATS_NEW = [
     title: 'The numbers on the bank filter chips now match what they open',
     blurb:
       'Every chip in the bank — 🌫 Blurry, 📺 Noisy, the resolution tiers, 🔎 Origin, 📐 Framing, 🎨 Medium, ⤢ Angle — used to print a total for the whole bank whatever else you had filtered. Pick ✕ Rejected, read "📺 Noisy 4 043", click it, get twelve images. The counts now describe the bank you are actually looking at: each one is measured with your other filters applied. The value you already picked is deliberately left out of its own count, so choosing 🌫 Blurry never zeroes 📺 Noisy next to it and you can always switch to a neighbour without clearing everything first. Chips stay on screen even when they hold nothing under the current filter, for the same reason. Two smaller things went with it: clicking a ✨ Score or ≈ Duplicates chip no longer silently drops the person or style group you were in, and the "showing N of M" line now notices 🔎 Origin, the 🚫 exclude box and the 🏷️ tag chips, which it used to ignore.',
+  },
+  {
+    id: '2026-08-05-a-scoring-pass-that-came-back-empty-now-says-why',
+    date: '2026-08-05',
+    title: 'A ✨ Score pass that could not load its models tells you why',
+    blurb:
+      'A scoring pass could finish, announce "done", and leave every image without a single number — with sorting by aesthetics, find crops and variants all greyed out because there was nothing to sort on. The closing line named the head that had gone quiet and stopped there: "(aesthetic + NSFW head unavailable)". Both models are fetched over the internet the first time they are used — the aesthetic predictor from GitHub, the NSFW classifier from Hugging Face — so on a machine that cannot reach them, typically a container without outbound network, both go down together and the whole pass comes back empty for one reason nobody was told. That reason was known all along, in the scoring log, and never made it to the screen. It does now: the sentence carries the actual error, so "no scores" reads as a network problem you can fix rather than a feature that looks broken. Reported by @_nofaceman on Discord.',
     to: '/bank',
   },
   {

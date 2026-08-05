@@ -249,9 +249,13 @@ def _aesthetic_mlp():
 
 
 def _load_aesthetic_head(models_root, device):
-    """(module, ok). Downloads the LAION head weights once (cached under models_root
-    or the default HF hub cache), returns (None, False) on any failure so the pass
-    still yields nsfw + style."""
+    """(module, ok, reason). Downloads the LAION head weights once (cached under
+    models_root or the default HF hub cache), returns (None, False, why) on any
+    failure so the pass still yields nsfw + style. `why` is a one-line
+    "<ExcType>: <message>" the parent puts in front of the user: this fetch is the
+    first network call of a pass, so on a machine with no egress it is also the
+    reason every score comes back empty — and "unavailable" alone left the user
+    with a completed pass, no scores, and nothing to act on."""
     import torch
     try:
         cache_dir = os.path.join(models_root or _default_cache(), 'bank_scoring')
@@ -268,16 +272,28 @@ def _load_aesthetic_head(models_root, device):
         state = torch.load(dest, map_location='cpu', weights_only=True)
         head.load_state_dict(state)
         head.to(device).eval()
-        return head, True
+        return head, True, None
     except Exception as e:  # noqa: BLE001
-        _log(f'[score] aesthetic head unavailable ({type(e).__name__}: {e}) — '
+        reason = _reason(e)
+        _log(f'[score] aesthetic head unavailable ({reason}) — '
              'aesthetic scores skipped')
-        return None, False
+        return None, False, reason
+
+
+def _reason(exc) -> str:
+    """One short "<ExcType>: <message>" line, safe to show in the UI. Trimmed
+    because some hub/urllib errors carry a multi-line body with a URL and a
+    traceback hint, and this ends up inside a one-line activity sentence."""
+    msg = ' '.join(str(exc).split())
+    if len(msg) > 160:
+        msg = msg[:157] + '…'
+    return f'{type(exc).__name__}: {msg}' if msg else type(exc).__name__
 
 
 def _load_nsfw(device):
-    """((model, processor, nsfw_index), ok). Marqo NSFW classifier; degrades to
-    (None, False) so a fetch/load failure only drops the nsfw column."""
+    """((model, processor, nsfw_index), ok, reason). Marqo NSFW classifier;
+    degrades to (None, False, why) so a fetch/load failure only drops the nsfw
+    column — while still saying why (see _load_aesthetic_head)."""
     try:
         from transformers import AutoImageProcessor, AutoModelForImageClassification
         proc = AutoImageProcessor.from_pretrained(_NSFW_MODEL)
@@ -290,11 +306,11 @@ def _load_nsfw(device):
             if 'nsfw' in str(label).lower():
                 nsfw_idx = int(idx)
                 break
-        return (model, proc, nsfw_idx), True
+        return (model, proc, nsfw_idx), True, None
     except Exception as e:  # noqa: BLE001
-        _log(f'[score] NSFW model unavailable ({type(e).__name__}: {e}) — '
-             'nsfw scores skipped')
-        return None, False
+        reason = _reason(e)
+        _log(f'[score] NSFW model unavailable ({reason}) — nsfw scores skipped')
+        return None, False, reason
 
 
 def _default_cache():
@@ -367,6 +383,9 @@ def main() -> int:
     _log(f'[score] {len(images)} image(s), {reused} cached')
 
     computed = fresh = 0
+    # Why a head produced nothing, per head. Empty when every head loaded — and
+    # when no work ran at all, since heads are only loaded for real work.
+    head_errors = {}
     if todo or holed:
         try:
             import numpy as np  # noqa: F401
@@ -383,8 +402,10 @@ def main() -> int:
         # decides whether the ~1 GB CLIP load is needed at all. Loading CLIP first
         # would charge that load to every relaunch of a bank whose head is
         # permanently unavailable, for zero work.
-        aes_head, aes_ok = _load_aesthetic_head(models_root, device)
-        nsfw_bundle, nsfw_ok = _load_nsfw(device)
+        aes_head, aes_ok, aes_why = _load_aesthetic_head(models_root, device)
+        nsfw_bundle, nsfw_ok, nsfw_why = _load_nsfw(device)
+        head_errors = {k: v for k, v in (('aesthetic', aes_why),
+                                         ('nsfw', nsfw_why)) if v}
         retry = [p for p in holed
                  if (aes_ok and cache[p][1] is None)
                  or (nsfw_ok and cache[p][2] is None)]
@@ -496,7 +517,8 @@ def main() -> int:
                           'clusters': None}))
         return 0
     print(json.dumps({'ok': True, 'results': results, 'clusters': clusters,
-                      'computed': computed, 'reused': reused}))
+                      'computed': computed, 'reused': reused,
+                      'head_errors': head_errors}))
     return 0
 
 

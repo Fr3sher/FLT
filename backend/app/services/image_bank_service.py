@@ -4901,7 +4901,20 @@ def _score_job(bank_id, rescore=False):
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if missing:
-            detail += f' ({" + ".join(missing)} head unavailable)'
+            detail += f' ({" + ".join(missing)} head unavailable'
+            # WHY, when the child said so. Both heads fetch their weights over the
+            # network on first use, so a host with no egress loses BOTH at once and
+            # the pass reports "done" over a bank whose every score is empty — the
+            # sort stays greyed out and the sentence explained nothing. The child
+            # always knew the exception; it just never travelled. Older children
+            # (a stopped update) send no `head_errors`, so the sentence degrades to
+            # exactly what it said before rather than growing an empty bracket.
+            why = data.get('head_errors') or {}
+            causes = list(dict.fromkeys(
+                str(why[k]) for k in ('aesthetic', 'nsfw') if why.get(k)))
+            if causes:
+                detail += ' — ' + ' · '.join(causes)
+            detail += ')'
         if not bank_jobs.cancelled(job):
             detail += _chain_medium_after_score(job, bank_id)
         bank_jobs.progress(job, detail=detail)
