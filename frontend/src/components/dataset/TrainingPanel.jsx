@@ -585,6 +585,92 @@ export function FullTransformerAdvancedRecipe({
 }
 // FULL_TRANSFORMER_ADVANCED_RECIPE_END
 
+/** The base a FULL-MODEL run fine-tunes: the Raw/Turbo switch, the Krea 2
+ * checkpoints installed on this machine, and a local file.
+ *
+ * It exists because the family/variant/base controls live in the LoRA-only
+ * branch of the Advanced section, so a dense recipe had no visible way to
+ * choose anything — the owner's report was literally "I still can't see where
+ * to put the turbo option". The values are the same state the LoRA lane
+ * writes (one stored column each), so nothing new is persisted and no alias is
+ * owed.
+ *
+ * It is a top-level component rather than inline JSX for one reason: inline
+ * JSX inside the panel is unreachable for a test. The panel only enters
+ * full-model mode from an effect, and effects do not run under
+ * renderToStaticMarkup, so this markup could never be EXECUTED by the suite —
+ * exactly the shape that shipped two white screens before (see
+ * tests/support/mountJsx.mjs). As its own component it is mounted for real, in
+ * each of its three states. */
+export function DenseBasePicker({
+  variant, setVariant, base, setBase, customBase, setCustomBase,
+  currentBases = [], customSupported = false, baseNote = null,
+  baseSummary = 'official Krea 2 Raw', busy = false,
+}) {
+  // A picked checkpoint IS the base: the backend resolver returns it whatever
+  // the variant says, so a live Raw/Turbo switch would offer a choice with no
+  // effect — the exact class of lie this lane is being corrected for.
+  const customPicked = !!String(base || '').trim();
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-sky-400/25 bg-app/40 px-3 py-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-content-muted text-[0.625rem] uppercase">
+          Base to fine-tune
+        </span>
+        <select value={variant} onChange={(e) => setVariant(e.target.value)}
+          disabled={busy || customPicked}
+          aria-label="Krea 2 base for full-model training"
+          title="Raw is Krea's official recommendation. Turbo is allowed and untested for full-model training — the notice above says exactly what is unknown."
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
+          <option value="base">Raw (recommended)</option>
+          <option value="turbo">Turbo (few-step)</option>
+        </select>
+        <select value={customBase ? CUSTOM_BASE_SENTINEL : base}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === CUSTOM_BASE_SENTINEL) { setCustomBase(true); setBase(''); }
+            else { setCustomBase(false); setBase(v); }
+          }}
+          disabled={busy}
+          aria-label="Full-model base checkpoint"
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] max-w-[230px]">
+          <option value="">Official Krea 2 — by variant</option>
+          {currentBases.filter((b) => b.value).map((b) => (
+            <option key={b.value} value={b.value}>
+              {b.label}{baseOptionSuffix(b)}
+            </option>
+          ))}
+          {customSupported && (
+            <option value={CUSTOM_BASE_SENTINEL}>Custom weights… (local file)</option>
+          )}
+        </select>
+      </div>
+      {customBase && customSupported && (
+        <input type="text" value={base} onChange={(e) => setBase(e.target.value)}
+          disabled={busy}
+          spellCheck={false}
+          placeholder={'C:\\path\\to\\your-krea2-model.safetensors'}
+          aria-label="Full-model custom weights path"
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] font-mono w-full max-w-[520px]" />
+      )}
+      {baseNote && (
+        <span className={`text-[0.625rem] leading-relaxed ${
+          baseNote.level === 'error' ? 'text-red-300' : 'text-amber-300'}`}>
+          {baseNote.level === 'error' ? '⛔' : '⚠️'} {baseNote.text}
+        </span>
+      )}
+      <span className="text-content-subtle text-[0.625rem] leading-relaxed">
+        This run will train <b className="text-content-muted font-medium">{baseSummary}</b>.
+        {customPicked
+          ? ' A local checkpoint IS the base, so the Raw/Turbo switch does not apply to it. It travels to the rented GPU through a private repository on your own Hugging Face account.'
+          : ' Raw is the non-distilled checkpoint Krea recommends fine-tuning.'}
+        {' '}A ComfyUI-scaled fp8 export cannot be loaded for training and is refused with its reason —
+        pick the bf16/fp16 build of the same model.
+      </span>
+    </div>
+  );
+}
+
 /** Panneau d'entraînement LoRA : lance l'UI ai-toolkit (pause ComfyUI),
  * affiche l'état, liste les checkpoints et importe celui choisi.
  * Poll régulier : c'est ce poll qui fait avancer la file (fin du courant → suivant). */
@@ -1928,9 +2014,6 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const denseBaseSummary = fullTransformerBaseLabel({
     baseModel: base, baseLabel, variant });
   const denseTurboNotice = denseTurboWarning({ baseModel: base, variant });
-  // A picked checkpoint IS the base: the Raw/Turbo switch stops applying to it,
-  // on the backend (`_krea_name_or_path`) and therefore here too.
-  const denseUsesCustomBase = !!String(base || '').trim();
   const effectiveTargetSteps = stepsN ?? stepsInfo?.steps ?? null;
   const zimageTurboLongRun = trainType === 'zimage'
     && isLongZImageTurboRun({ variant, steps: effectiveTargetSteps });
@@ -2777,69 +2860,17 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           {/* FULL_TRANSFORMER_ADVANCED_BRANCH_START — no LoRA control may escape
               the false branch below: the backend ignores all of them in dense. */}
           {fullMode ? (<>
-            {/* DENSE_BASE_PICKER_START — the base a full-model run fine-tunes.
-                It exists because the family/variant/base controls live in the
-                LoRA-only branch below, so a dense recipe had no visible way to
-                choose anything: the owner's report was literally "I still
-                can't see where to put the turbo option". The values are the
-                same state the LoRA lane writes (one stored column each), so
-                nothing new is persisted and no alias is owed. */}
-            <div className="flex flex-col gap-1.5 rounded-lg border border-sky-400/25 bg-app/40 px-3 py-2">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-content-muted text-[0.625rem] uppercase">
-                  Base to fine-tune
-                </span>
-                <select value={variant} onChange={(e) => setVariant(e.target.value)}
-                  disabled={trainingModeBusy || denseUsesCustomBase}
-                  aria-label="Krea 2 base for full-model training"
-                  title="Raw is Krea's official recommendation. Turbo is allowed and untested for full-model training — the notice above says exactly what is unknown."
-                  className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
-                  <option value="base">Raw (recommended)</option>
-                  <option value="turbo">Turbo (few-step)</option>
-                </select>
-                <select value={customBase ? CUSTOM_BASE_SENTINEL : base}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v === CUSTOM_BASE_SENTINEL) { setCustomBase(true); setBase(''); }
-                    else { setCustomBase(false); setBase(v); }
-                  }}
-                  disabled={trainingModeBusy}
-                  aria-label="Full-model base checkpoint"
-                  className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] max-w-[230px]">
-                  <option value="">Official Krea 2 — by variant</option>
-                  {currentBases.filter((b) => b.value).map((b) => (
-                    <option key={b.value} value={b.value}>
-                      {b.label}{baseOptionSuffix(b)}
-                    </option>
-                  ))}
-                  {customSupported && (
-                    <option value={CUSTOM_BASE_SENTINEL}>Custom weights… (local file)</option>
-                  )}
-                </select>
-              </div>
-              {customBase && customSupported && (
-                <input type="text" value={base} onChange={(e) => setBase(e.target.value)}
-                  disabled={trainingModeBusy}
-                  spellCheck={false}
-                  placeholder={'C:\\path\\to\\your-krea2-model.safetensors'}
-                  aria-label="Full-model custom weights path"
-                  className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] font-mono w-full max-w-[520px]" />
-              )}
-              {baseNote && (
-                <span className={`text-[0.625rem] leading-relaxed ${
-                  baseNote.level === 'error' ? 'text-red-300' : 'text-amber-300'}`}>
-                  {baseNote.level === 'error' ? '⛔' : '⚠️'} {baseNote.text}
-                </span>
-              )}
-              <span className="text-content-subtle text-[0.625rem] leading-relaxed">
-                This run will train <b className="text-content-muted font-medium">{denseBaseSummary}</b>.
-                {denseUsesCustomBase
-                  ? ' A local checkpoint IS the base, so the Raw/Turbo switch does not apply to it. It travels to the rented GPU through a private repository on your own Hugging Face account.'
-                  : ' Raw is the non-distilled checkpoint Krea recommends fine-tuning.'}
-                {' '}A ComfyUI-scaled fp8 export cannot be loaded for training and is refused with its reason —
-                pick the bf16/fp16 build of the same model.
-              </span>
-            </div>
+            {/* DENSE_BASE_PICKER_START — the control the owner could not find.
+                Its markup lives in the DenseBasePicker component above so a
+                test can execute it; what has to stay HERE is the fact that the
+                full-model arm renders it at all. */}
+            <DenseBasePicker
+              variant={variant} setVariant={setVariant}
+              base={base} setBase={setBase}
+              customBase={customBase} setCustomBase={setCustomBase}
+              currentBases={currentBases} customSupported={customSupported}
+              baseNote={baseNote} baseSummary={denseBaseSummary}
+              busy={trainingModeBusy} />
             {/* DENSE_BASE_PICKER_END */}
             <FullTransformerAdvancedRecipe
               stepsOverride={stepsOverride}

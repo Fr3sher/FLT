@@ -44,29 +44,28 @@ test('the automatic fallback to LoRA no longer fires for a Turbo or custom-base 
 });
 
 test('the full-model recipe renders its own base and variant controls', () => {
+  // The MARKUP of those controls is asserted by mounting them for real, in
+  // tests/dense-base-picker-render.test.mjs — a source-text match cannot tell
+  // a rendered control from one that throws. What belongs here is the wiring:
+  // the dense arm, and only the dense arm, reaches that component.
   assert.ok(picker.length > 0, 'the dense base picker block must exist');
-  assert.match(picker, /aria-label="Krea 2 base for full-model training"/);
-  assert.match(picker, /<option value="base">Raw \(recommended\)<\/option>/);
-  assert.match(picker, /<option value="turbo">Turbo \(few-step\)<\/option>/);
-  assert.match(picker, /aria-label="Full-model base checkpoint"/);
-  assert.match(picker, /CUSTOM_BASE_SENTINEL/);
-  assert.match(picker, /aria-label="Full-model custom weights path"/);
-  // It is rendered in the DENSE arm, not the LoRA one.
+  assert.match(picker, /<DenseBasePicker/);
+  assert.match(picker, /baseSummary=\{denseBaseSummary\}/);
+  assert.match(picker, /busy=\{trainingModeBusy\}/);
   const denseArm = panel.slice(
     panel.indexOf('FULL_TRANSFORMER_ADVANCED_BRANCH_START'),
     panel.indexOf('LORA_ADVANCED_CONTROLS_START'));
   assert.ok(denseArm.includes('DENSE_BASE_PICKER_START'));
 });
 
-test('a picked checkpoint disables the Raw/Turbo switch instead of quietly ignoring it', () => {
+test('a picked checkpoint IS the base, so its label ignores the variant', () => {
   // Backend truth: `_krea_name_or_path` returns the custom path whatever the
-  // variant says. A live switch would therefore have shown a choice with no
-  // effect — the exact class of lie this wave is fixing.
-  assert.match(picker, /disabled=\{trainingModeBusy \|\| denseUsesCustomBase\}/);
-  assert.match(panel, /const denseUsesCustomBase = !!String\(base \|\| ''\)\.trim\(\);/);
+  // variant says. The picker greys the switch out for the same reason, which
+  // the render test asserts on the produced markup.
   assert.equal(
     fullTransformerBaseLabel({ variant: 'turbo', baseModel: 'C:/m/a.safetensors' }),
     'custom: a.safetensors');
+  assert.equal(fullTransformerBaseLabel({ variant: 'turbo' }), 'official Krea 2 Turbo');
 });
 
 test('every full-model summary is computed from the selection, never a Raw literal', () => {
