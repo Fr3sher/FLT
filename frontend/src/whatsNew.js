@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-04-full-model-training-on-turbo-and-your-own-krea-checkpoint',
+    date: '2026-08-04',
+    title: 'Full-model training now accepts Krea 2 Turbo — and a checkpoint of your own',
+    blurb:
+      'Full-model training used to accept exactly one thing: the official Krea 2 Raw base. Choosing Turbo did not just refuse — it silently switched the dataset back to LoRA, which is why the option looked like it did not exist. Both refusals are gone, and the reason they were there has been fixed rather than waived: the configuration sent to the rented GPU used to name Raw no matter what you had selected, so simply lifting the ban would have produced a run labelled Turbo that trained Raw for hours. The base is now resolved from your selection everywhere it appears — the job sent to the pod, the run’s provenance, the model card, the recipe summary — and the full-model panel finally has its own Raw/Turbo switch and base picker. You can also fine-tune a Krea 2 checkpoint from your own disk: it rides to the GPU through a private repository on your Hugging Face account, exactly as it already did for LoRA runs, and the launch checks the pod’s credential can really read it before renting anything. What has not changed: a ComfyUI scaled-fp8 export still cannot be trained at all — the loader refuses it — and the app says so when you pick it, while a plain fp8 cast stays allowed. Turbo comes with a plain warning shown before you spend anything: Krea recommends training a LoRA on Raw and applying it to Turbo, nobody has measured full-model training on a distilled base, and it may cost the model its few-step behaviour. It is a warning, not a wall.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-08-04-the-app-stops-claiming-a-full-model-it-has-not-checked',
     date: '2026-08-04',
     title: 'Your full models say where they really are, instead of where they were',

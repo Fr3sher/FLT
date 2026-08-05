@@ -62,7 +62,12 @@ FULL_TRANSFORMER_SAMPLE_EVERY = 250
 # forecast and the job config must never disagree about how many ~26 GB objects
 # a run produces.
 FULL_TRANSFORMER_MAX_STEP_SAVES = 1
+# The two OFFICIAL Krea 2 repositories, used by the LoRA lane and the dense lane
+# alike. FULL_TRANSFORMER_BASE keeps its name because it is also the dense
+# DEFAULT (an unset `train_variant` means Raw, cf. _krea_is_raw) — but it is no
+# longer the only base a dense run can carry: see _krea_name_or_path.
 FULL_TRANSFORMER_BASE = 'krea/Krea-2-Raw'
+KREA_TURBO_BASE = 'krea/Krea-2-Turbo'
 FULL_TRANSFORMER_VAE = 'Qwen/Qwen-Image-2512'
 
 # --- the dense knobs that are NOT locked --------------------------------------
@@ -335,24 +340,48 @@ FULL_TRANSFORMER_SAMPLE_GUIDANCE_RANGE = (3.5, 5.0)
 FULL_TRANSFORMER_SAMPLE_STEPS_RANGE = (20, 30)
 
 
-def dense_inference_hint() -> dict:
-    """The settings to generate with from a dense (Raw) artifact, in one shape.
+def dense_inference_hint(ds=None) -> dict:
+    """The settings to generate with from a dense artifact, in one shape.
 
     Consumed by the training panel, the run card and the test/generation lane so
     a single change of the recipe moves every surface at once.
-    """
+
+    The NUMBERS never change with the base — undistilled guidance and 20-30
+    steps are what a dense Krea 2 artifact wants either way, and that is also
+    the published replacement recipe for a distilled model that has been fully
+    fine-tuned. The SENTENCE does: calling a Turbo-based run "a RAW
+    (undistilled) model" would state as fact the very thing nobody has
+    measured. ``ds`` is optional because two callers hold a delivered artifact
+    rather than a dataset; without one the wording stays the Raw default, which
+    is the default recipe."""
     lo_cfg, hi_cfg = FULL_TRANSFORMER_SAMPLE_GUIDANCE_RANGE
     lo_steps, hi_steps = FULL_TRANSFORMER_SAMPLE_STEPS_RANGE
+    settings = (f'CFG ~{FULL_TRANSFORMER_SAMPLE_GUIDANCE} '
+                f'({lo_cfg:g}-{hi_cfg:g}) and {lo_steps}-{hi_steps} steps')
+    base = 'krea2_raw'
+    note = (f'This is a RAW (undistilled) Krea 2 model. Test it at {settings} '
+            '— Turbo-style few-step settings will look blurry.')
+    if ds is not None and _train_type(ds) == 'krea':
+        if _is_custom_weights(getattr(ds, 'train_base_model', None)):
+            base = 'custom'
+            note = (f'Test this full model at {settings}. If the checkpoint you '
+                    'fine-tuned was a few-step build, check for yourself whether '
+                    'it still works at low step counts — training moves the '
+                    'weights that behaviour lives in.')
+        elif not _krea_is_raw(ds):
+            base = 'krea2_turbo'
+            note = (f'Trained from Krea 2 Turbo. Test it at {settings}, the way '
+                    'an undistilled model is tested: full fine-tuning moves the '
+                    'weights the few-step behaviour lives in. How much of that '
+                    'behaviour is left is exactly what has not been measured — '
+                    'try your usual Turbo settings too and compare.')
     return {
-        'base': 'krea2_raw',
+        'base': base,
         'guidance_scale': FULL_TRANSFORMER_SAMPLE_GUIDANCE,
         'steps': FULL_TRANSFORMER_SAMPLE_STEPS,
         'guidance_scale_range': [lo_cfg, hi_cfg],
         'steps_range': [lo_steps, hi_steps],
-        'note': (f'This is a RAW (undistilled) Krea 2 model. Test it at CFG '
-                 f'~{FULL_TRANSFORMER_SAMPLE_GUIDANCE} ({lo_cfg:g}-{hi_cfg:g}) '
-                 f'and {lo_steps}-{hi_steps} steps — Turbo-style few-step '
-                 f'settings will look blurry.'),
+        'note': note,
     }
 
 
@@ -1500,6 +1529,25 @@ def _krea_is_raw(ds, variant=_PERSISTED) -> bool:
     return str(selected or 'base').lower() in ('base', 'raw')
 
 
+def _krea_name_or_path(ds, variant=_PERSISTED) -> str:
+    """The base ai-toolkit LOADS for a Krea 2 run — the single resolver for both
+    the LoRA lane and the dense lane.
+
+    It exists because those two lanes used to answer this question differently:
+    the LoRA branch read the selection, the dense branch pinned the constant. A
+    dense run could therefore be launched, named and stamped "Turbo" while
+    training Raw. One function, one answer, and a test asserts the emitted
+    ``model.name_or_path`` per recipe rather than the absence of an exception.
+
+    Custom weights (an ABSOLUTE local path) win over the variant: the file IS
+    the base. The TE/VAE stay official — Krea bundles them, and ai-toolkit's
+    krea2 arch takes no override for either."""
+    base = getattr(ds, 'train_base_model', None)
+    if _is_custom_weights(base):
+        return str(base)
+    return FULL_TRANSFORMER_BASE if _krea_is_raw(ds, variant) else KREA_TURBO_BASE
+
+
 def _flux2klein_is_9b(ds, variant=_PERSISTED) -> bool:
     """FLUX.2 Klein model size. `train_variant` '9b' → the 9B base (32-48 GB VRAM,
     the cloud-first lane); anything else → the 4B base (16-24 GB, the local lane).
@@ -2586,8 +2634,15 @@ def launch_settings_snapshot(ds, family=None, masked=None) -> dict:
             'training_mode': 'full_transformer',
             'artifact_kind': 'full_transformer',
             'model_arch': 'krea2',
-            'effective_base': FULL_TRANSFORMER_BASE,
+            # Read from the SAME resolver as the emitted config. It used to be
+            # the Raw constant, which was harmless only for as long as a dense
+            # run could not be anything else — the Runs page would otherwise
+            # claim "Krea 2 Raw" over a Turbo or custom-base run.
+            'effective_base': _krea_name_or_path(dense_ds),
             'vae_path': FULL_TRANSFORMER_VAE,
+            **({'base_weights': str(getattr(dense_ds, 'train_base_model', None))}
+               if _is_custom_weights(getattr(dense_ds, 'train_base_model', None))
+               else {}),
             'resolution': [_dense_resolution(dense_ds)],
             'caption_dropout_rate': 0.05,
             'cache_latents_to_disk': True,
@@ -2970,7 +3025,7 @@ def _dense_settings_payload(ds) -> dict:
         'dense_storage_plan': dense_storage_plan(ds),
         # What to generate with once the model lands — the SAME numbers the run
         # previews with, so the panel never hard-codes a second version of them.
-        'dense_inference_hint': dense_inference_hint(),
+        'dense_inference_hint': dense_inference_hint(ds),
     }
 
 
@@ -4990,48 +5045,69 @@ def _apply_slider_overrides(ds, process: dict, family: str | None = None) -> dic
 
 
 def _assert_full_transformer_recipe(ds) -> None:
-    """Validate the intentionally narrow Krea 2 dense-training MVP.
+    """What a Krea 2 dense run may and may not be built from.
 
-    The Turbo check below is a SCOPE decision, not a demonstrated
-    impossibility. An earlier version of this docstring called it mechanical;
-    that was wrong, and the honest state of the evidence is:
+    Two refusals used to live here and no longer do — Turbo, and a custom base.
+    Both were SCOPE decisions, and this docstring already said so; what kept
+    them was not the risk of a broken checkpoint but the risk of a MISLABELLED
+    run, because the dense config pinned its base to a constant. That is the
+    part that was fixed first: `_krea_name_or_path` now resolves the base from
+    the selection for the dense lane exactly as for the LoRA lane, and the
+    provenance stamp reads the same resolver. A dense run can no longer
+    announce Turbo and train Raw, so the refusal it justified has nothing left
+    to protect.
 
-    - The scenario it was written against — the de-distillation
-      `assistant_lora_path` ending up fused into a dense save — is
-      hypothetical HERE, because the dense recipe loads no adapter at all:
-      the `_is_full_transformer` branch of `_build_job_config_krea` sets no
-      `assistant_lora_path` and pins `name_or_path` to FULL_TRANSFORMER_BASE.
-    - The subtraction arithmetic does exist in the trainer anyway
-      (`merge_out(w) == merge_in(-w)` in ai-toolkit's network mixins), so
-      "no way to unmerge it" was also wrong: it is simply not wired into the
-      save path — a wiring gap, not a law. It would not be a complete answer
-      either: a LoRA-shaped subtraction only covers the linear modules an
-      adapter wraps, and a dense run also moves the normalisation and
-      modulation tensors it never touched.
+    What travels with the lifted Turbo refusal, as a WARNING rather than a
+    wall (the product decision: warn and let through):
+
+    - The dense lane still loads NO `assistant_lora_path`, on Turbo included.
+      That is deliberate. ai-toolkit can subtract an adapter
+      (`merge_out(w) == merge_in(-w)`) but nothing wires that into the dense
+      save path, and a LoRA-shaped subtraction would not cover the
+      normalisation/modulation tensors a dense run moves anyway. Adding the
+      de-distillation adapter here would introduce the exact defect the old
+      guard feared; leaving it out cannot.
     - Where dense-on-distilled HAS been measured publicly (Z-Image-Turbo,
-      FLUX.2 Klein), the cost is speed, not validity: the checkpoint stays
+      FLUX.2 Klein) the cost is speed, not validity: the checkpoint stays
       structurally sound and progressively stops being a few-step model,
       drifting back toward real guidance and ~25-30 steps. Erosion, not a
-      cliff, and not a corrupt export.
-    - No such measurement has been published for Krea 2 specifically. Removing
-      this guard today would not produce a broken file; it would produce a
-      mislabelled run — the config would still train on Raw.
+      cliff. Nothing equivalent has been measured for Krea 2, by us or by
+      anyone — which is what the UI says, without predicting either outcome.
 
-    Keep the guard while it is untested; retire it with a measurement, not
-    with an argument.
+    What survives, and why each one is a different kind of statement:
+
+    * family — Krea 2 only. The dense recipe (no `network` block, adafactor,
+      the 80 GB geometry) is written against `arch='krea2'`.
+    * Slider — a slider LoRA IS an adapter with a direction; there is no dense
+      equivalent of a network multiplier.
+    * a base that is not an absolute local path — a ComfyUI-relative name
+      addresses another family's catalog and is silently ignored by the krea2
+      loader. The LoRA lane drops it; the dense lane refuses it instead,
+      because "ignored" here means training something other than what the
+      panel shows.
+    * a STRUCTURED fp8/int8 export as the base — the only MECHANICAL limit in
+      this list, and the reason it is enforced by `assert_trainable_base_file`
+      rather than restated: ai-toolkit loads a base with
+      ``load_state_dict(..., strict=True)`` and a scaled_fp8 export carries
+      `.scale_weight` tensors the architecture never declares, so the load
+      raises. A BARE cast (same tensor names, reduced dtype) is up-cast by the
+      trainer and stays allowed. Refusing the two alike would repeat, in the
+      other direction, the mistake this function is being corrected for.
     """
     if not _is_full_transformer(ds):
         return
     if _train_type(ds) != 'krea':
         raise ValueError('full_transformer training is supported only for Krea 2')
-    if not _krea_is_raw(ds):
-        # Scope, not a known defect — see the docstring above.
-        raise ValueError('full_transformer training targets Krea-2-Raw; Turbo is out '
-                         'of scope for now (untested, not blocked by a known defect)')
-    if str(getattr(ds, 'train_base_model', None) or '').strip():
-        raise ValueError('full_transformer training does not support a custom base model')
     if slider_mode_enabled(ds):
         raise ValueError('full_transformer training is incompatible with Slider LoRA mode')
+    base = str(getattr(ds, 'train_base_model', None) or '').strip()
+    if base:
+        if not _is_custom_weights(base):
+            raise ValueError(
+                'full_transformer training needs either the official Krea 2 base '
+                'or the full path to a local .safetensors checkpoint')
+        # Mechanical, not scope: a structured fp8/int8 export cannot be loaded.
+        assert_trainable_base_file(base)
 
 
 def build_job_config(ds, dataset_folder: str, steps: int = 3000, training_folder=None) -> dict:
@@ -5237,7 +5313,13 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
                     },
                     'model': {
                         'arch': 'krea2',
-                        'name_or_path': FULL_TRANSFORMER_BASE,
+                        # The SELECTION, not a constant: Raw, Turbo, or the
+                        # absolute path to a local checkpoint. Same resolver as
+                        # the LoRA branch and as the provenance stamp, so a run
+                        # cannot be named/stamped one base and trained on
+                        # another. NO assistant_lora_path on Turbo here — see
+                        # _assert_full_transformer_recipe.
+                        'name_or_path': _krea_name_or_path(ds),
                         'quantize': False,
                         'low_vram': False,
                         'quantize_te': False,
@@ -5261,11 +5343,9 @@ def _build_job_config_krea(ds, dataset_folder: str, steps: int, training_folder=
     _krank = _lora_rank(ds, 'krea')   # défaut 32/32 (recherche) ; éditable via train_settings
     # Custom weights (local-only, same krea2 arch) override name_or_path; the TE/VAE
     # stay official (Krea bundles them). The variant still drives the adapter/CFG.
-    _kbase = getattr(ds, 'train_base_model', None)
     model = {
         'arch': 'krea2',
-        'name_or_path': (_kbase if _is_custom_weights(_kbase)
-                         else ('krea/Krea-2-Raw' if is_raw else 'krea/Krea-2-Turbo')),
+        'name_or_path': _krea_name_or_path(ds),
         **_model_memory_block(ds, 'krea'),
     }
     # Adapter de dé-distillation : Turbo UNIQUEMENT (le Raw est déjà non distillé →
@@ -7007,20 +7087,43 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
             dense_issues.append('full_transformer training is cloud-only')
         if ttype != 'krea':
             dense_issues.append('it is supported only for Krea 2')
-        elif not _krea_is_raw(ds):
-            dense_issues.append('Krea-2-Raw is required (Turbo not tested yet for dense runs)')
-        if str(getattr(ds, 'train_base_model', None) or '').strip():
-            dense_issues.append('custom base models are not supported')
         if slider:
             dense_issues.append('Slider LoRA mode must be disabled')
+        _dense_base = str(getattr(ds, 'train_base_model', None) or '').strip()
+        if _dense_base:
+            if not _is_custom_weights(_dense_base):
+                dense_issues.append('a custom base must be the full path to a '
+                                    'local .safetensors checkpoint')
+            else:
+                try:
+                    assert_trainable_base_file(_dense_base)
+                except ValueError as exc:
+                    dense_issues.append(str(exc))
         if dense_issues:
             message = '; '.join(dense_issues)
             blockers.append(message)
             _check('training_mode', 'Dense training compatibility', 'fail',
                    message, 'gf-training', bypassable=False)
         else:
+            # Names the base this run will REALLY train — by file name for a
+            # custom checkpoint, never its full path: preflight details are
+            # pasted into Discord and GitHub issues.
+            _dense_target = (os.path.basename(_dense_base)
+                             if _is_custom_weights(_dense_base)
+                             else _krea_name_or_path(ds))
             _check('training_mode', 'Dense training compatibility', 'ok',
-                   'Krea-2-Raw full transformer training will run in the cloud')
+                   f'{_dense_target} full transformer training will run '
+                   'in the cloud')
+        # Turbo is allowed and UNMEASURED. Said here, in the preflight the user
+        # reads before renting, not after — and phrased as what is unknown: no
+        # promise of a result, no prediction of failure.
+        if ttype == 'krea' and not _krea_is_raw(ds) and not _is_custom_weights(_dense_base):
+            _check('dense_turbo', 'Full-model training on Krea 2 Turbo', 'warn',
+                   'Krea officially recommends training a LoRA on Raw and applying '
+                   'it to Turbo. Dense training on a distilled base has not been '
+                   'measured here; on other distilled models it has been seen to '
+                   'erode few-step behaviour, so the result may need real guidance '
+                   'and more steps.', scope='cloud')
 
         # Reuse the launch's definitive credential validator.  This may contact
         # Hugging Face, but it never reserves a pod/GPU; a paid run must not be
@@ -7028,7 +7131,8 @@ def training_preflight(user_id, dataset_id, train_type=None, variant=None,
         # Krea licence is discovered.
         try:
             from . import cloud_training as cloud
-            hf_cloud_token_status = cloud.full_transformer_token_preflight()
+            hf_cloud_token_status = cloud.full_transformer_token_preflight(
+                required_base_repo=official_base_repo(ds, ttype))
             if not isinstance(hf_cloud_token_status, dict):
                 raise RuntimeError('invalid token preflight response')
         except Exception:

@@ -711,7 +711,7 @@ separate 3.10–3.12 interpreter.
 
 Guard-rails on cost and host quality for rented pods. The card also shows a live **Spent this month** line. Everything here has a sane default — you can leave it all alone and just add the key.
 
-Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token is strongly recommended: grant **`repo.content.read` exactly on `krea/Krea-2-Raw`**, then **`repo.content.read` + `repo.write` on one dedicated HF user or organization namespace containing only LDS deliveries**. [Create a fine-grained token](https://huggingface.co/settings/tokens/new?tokenType=fineGrained). A classic/global token with `role=write` is also accepted, but LDS shows a broad-access warning because it can modify every repository the account can write to; [create a global write token](https://huggingface.co/settings/tokens/new?tokenType=write). Read-only tokens are rejected, and Settings validates the token as soon as it is saved.
+Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token is strongly recommended: grant **`repo.content.read` exactly on the Krea 2 repository the run trains from** (`krea/Krea-2-Raw`, or `krea/Krea-2-Turbo` for a Turbo run — a scope on either is accepted, and the one this run needs is required), then **`repo.content.read` + `repo.write` on one dedicated HF user or organization namespace containing only LDS deliveries**. [Create a fine-grained token](https://huggingface.co/settings/tokens/new?tokenType=fineGrained). A classic/global token with `role=write` is also accepted, but LDS shows a broad-access warning because it can modify every repository the account can write to; [create a global write token](https://huggingface.co/settings/tokens/new?tokenType=write). Read-only tokens are rejected, and Settings validates the token as soon as it is saved.
 
 | Setting | Key | Default | Range | What it does |
 |---|---|---|---|---|
@@ -739,15 +739,29 @@ panel now names each lock and its reason instead of just greying it out. The
 values below are editable because they change the *result*, not whether the run
 fits.
 
-**Krea 2 Raw only — Turbo is out of scope, not proven impossible.** Turbo is
-speed-distilled, and a dense run rewrites the weights that distillation lives
-in. On the distilled models where this *has* been measured, the result stays a
-valid checkpoint and simply stops being fast (back toward real CFG and 25-30
-steps); for Krea 2 specifically nobody has published the measurement, so for now
-the lane stays shut on missing evidence, not on a known defect. Train dense on
-Raw — the undistilled checkpoint Krea publishes for exactly this — and see the
-dataset guide, §10, for what is known and for the published trick to get the
-speed back afterwards.
+**Raw, Turbo, or a checkpoint of your own — with one warning and one real
+refusal.** The full-model panel has its own base picker: the Raw/Turbo switch,
+the Krea 2 checkpoints installed on this machine, and **Custom weights…** for a
+local `.safetensors`. A custom base travels to the rented GPU through a private
+repository on your Hugging Face account, exactly as it already did for LoRA
+runs, and the launch verifies the pod's own credential can read it before
+anything is rented.
+
+*Turbo is allowed and unmeasured.* Turbo is speed-distilled, and a dense run
+rewrites the weights that distillation lives in. On the distilled models where
+this *has* been measured, the result stays a valid checkpoint and simply stops
+being fast (back toward real CFG and 25-30 steps); for Krea 2 specifically
+nobody has published the measurement. The panel says exactly that before you
+spend anything — Krea's own recommendation is still to train a LoRA on Raw and
+apply it to Turbo — and then lets you through. See the dataset guide, §10, for
+what is known and for the published trick to get the speed back afterwards.
+
+*A structured fp8/int8 export is refused, and that one is mechanical.* A
+ComfyUI scaled-fp8 build (or any `comfy_quant`/int8 repack, including this app's
+own fp8 twin) carries dequantization tensors the architecture never declares,
+and ai-toolkit loads a base with `strict=True` — the load itself raises. Pick
+the bf16/fp16 build of the same model. A **bare** fp8 cast, which adds no key of
+its own, stays allowed and says what it costs.
 
 | Setting | Key | Default | Notes |
 |---|---|---|---|

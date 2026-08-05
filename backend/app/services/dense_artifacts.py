@@ -267,9 +267,12 @@ def describe_run(run, index=None) -> dict:
         # and shown nowhere until now; it is the first thing anyone needs when a
         # model behaves unlike its siblings.
         'trainer': ct._run_param(run, 'pod_image'),
-        # The sample settings this model wants. A dense Krea 2 artifact is RAW:
-        # the family's Turbo defaults render mush on it.
-        'inference_hint': lt.dense_inference_hint(),
+        # The sample settings this model wants — and a sentence that follows the
+        # base the run ACTUALLY used, so a Turbo-based artifact is not described
+        # as an undistilled one.
+        'inference_hint': lt.dense_inference_hint(
+            ct._RunConfigDataset(None, 'krea', ct._run_param(run, 'variant'),
+                                 ct._run_param(run, 'base_model') or '')),
         'master': master,
         'fp8': fp8,
         'hub': _hub_of(run),

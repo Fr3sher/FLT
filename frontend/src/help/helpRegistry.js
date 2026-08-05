@@ -1144,17 +1144,30 @@ const TOPICS = [
       'learning rate', 'lr', 'resolution', '768', '1024', 'checkpoint every', 'keep',
       'preview prompts', 'sample prompts', 'adafactor', 'batch', 'bf16',
       'gradient checkpointing', '80 gb',
-      // Why dense training targets Raw and not Turbo — searched as "why can't
-      // I train dense on turbo", not just "what can I edit here". Turbo is out
-      // of SCOPE (untested for dense runs), not mechanically impossible; the
-      // guide section spells out what is actually known.
+      // Why Raw is still the recommendation even though Turbo is now allowed —
+      // searched as "should I train dense on turbo", not just "what can I edit
+      // here". The guide section spells out what is actually known and what is
+      // merely carried over from neighbouring models.
       'turbo', 'distilled', 'speed distilled', 'speed-distilled', 'distillation',
-      'de-distillation', 'de-distilled', 'assistant lora', 'not supported', 'refused',
-      'untested', 'out of scope', 'scope'],
+      'de-distillation', 'de-distilled', 'assistant lora', 'untested', 'warning'],
     guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'full-model-recipe-unlocked',
       text: 'New: the full-model recipe now lets you edit the preview prompts, learning rate, resolution and checkpoint cadence — the rest stays locked because it is what makes a 12B model fit on one 80 GB card.' } },
+  // Its own topic rather than more keywords above: the question here is not
+  // "what may I change?" but "what am I actually fine-tuning?", and it now has
+  // three answers instead of one. It is also where the two refusals that
+  // REMAIN have to be explained, or a greyed control reads as a bug.
+  { id: 'training.full_model_base', kind: 'setting',
+    title: 'Base to fine-tune (Raw, Turbo, or your own checkpoint)',
+    keywords: ['full model', 'full-model', 'dense', 'krea', 'raw', 'turbo',
+      'base', 'base model', 'custom base', 'custom weights', 'own checkpoint',
+      'safetensors', 'fp8', 'scaled fp8', 'quantized base', 'int8',
+      'cannot be loaded', 'few-step', 'distilled', 'variant'],
+    guide: { chapter: 'dataset-guide', anchor: '10-full-model-recipe-what-you-can-change' },
+    app: { route: '/datasets?section=training' },
+    tip: { trigger: 'full-model-base-picker',
+      text: 'New: full-model training is no longer limited to the official Krea 2 Raw base — pick Turbo (with a warning: nobody has measured a full-model run on a distilled base) or a Krea 2 checkpoint from your own disk. A ComfyUI scaled-fp8 export still cannot be trained: the loader refuses it, and the app says so when you pick it.' } },
   // The three quality levers get their OWN topic rather than more keywords on
   // the one above, because the question behind them is different: not "what may
   // I change here?" but "what should I change, and what does it cost me?". The
