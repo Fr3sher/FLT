@@ -8,10 +8,12 @@ integrity fingerprint of the exact bytes written to the Dataset.  If that file
 is edited later, consumers keep the safe user-authored fields but discard the
 stale pixel analysis.
 
-Only independent per-image measurements belong in this snapshot.  Group and
-cluster ids are meaningful only in their original Bank, and rotation/cleaning
-markers would make a destination apply an already-materialised transformation a
-second time.
+Only independent per-image measurements belong in a Dataset snapshot.  A direct
+Bank -> Bank byte copy is different: it can also retain the source row's model
+measurements and grouping results when the destination still matches the source
+row's deterministic measurements.  Rotation/cleaning markers still never travel,
+or the destination would apply an already-materialised transformation a second
+time.
 """
 from __future__ import annotations
 
@@ -42,15 +44,50 @@ DETERMINISTIC_ANALYSIS_FIELDS = (
     'origin_evidence',
 )
 
-# These ML-derived values are meaningful only for the exact Bank file a model
-# saw.  They are never serialised in a Dataset snapshot or copied into another
-# Bank: every copied file starts without model verdicts until that Bank reruns
-# its own model passes.
+# These ML-derived values are meaningful only for the exact file a model saw.
+# They are never serialised in a Dataset snapshot.  A direct Bank -> Bank copy
+# may preserve them after the copied destination passes the legacy deterministic
+# compatibility guard; a transformed or visibly changed copy clears them.
 MODEL_ANALYSIS_FIELDS = (
     'face_state',
     'face_det',
     'aesthetic_score',
     'nsfw_score',
+)
+
+BANK_COPY_DUPLICATE_GROUP_FIELDS = (
+    'dup_group',
+    'semantic_dup_group',
+)
+
+# The complete analysis state a direct Bank -> Bank byte copy preserves.  Keep
+# this list explicit and central: adding a new persisted Bank analysis requires
+# one deliberate decision here, and transformed copies automatically clear every
+# non-deterministic entry below.  Group ids remain meaningful when at least two
+# copied rows retain the same id; singleton duplicate groups are removed after
+# the actual copy set is known.  Bank-level embedding caches are intentionally
+# not part of row metadata and are never copied.
+BANK_DIRECT_COPY_ANALYSIS_FIELDS = (
+    *DETERMINISTIC_ANALYSIS_FIELDS,
+    *MODEL_ANALYSIS_FIELDS,
+    'framing',
+    'watermark_state',
+    'watermark_bbox',
+    'watermark_regions',
+    'watermark_source',
+    'watermark_score',
+    'medium',
+    'medium_margin',
+    'face_yaw',
+    *BANK_COPY_DUPLICATE_GROUP_FIELDS,
+    'face_cluster',
+    'face_cluster_origin',
+    'style_cluster',
+)
+
+BANK_TRANSFORM_STALE_ANALYSIS_FIELDS = tuple(
+    name for name in BANK_DIRECT_COPY_ANALYSIS_FIELDS
+    if name not in DETERMINISTIC_ANALYSIS_FIELDS
 )
 
 _TEXT_LIMITS = {

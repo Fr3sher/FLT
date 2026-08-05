@@ -19,9 +19,9 @@ SOURCE_METADATA = {
 WATERMARK_BBOX = '[0.1,0.1,0.3,0.3]'
 WATERMARK_REGIONS = '[[0.1,0.1,0.3,0.3]]'
 
-# Deliberately implausible historical Bank values. Bank -> Dataset and Bank ->
-# Bank calculate deterministic values again from copied output and never carry
-# these ML values.
+# Deliberately implausible seeded deterministic values make recalculation easy
+# to detect. Direct-copy tests first synchronize them to the real source bytes,
+# while their complete ML/review/group history remains the preservation oracle.
 HISTORICAL_ANALYSIS = {
     'quality_state': 'ok',
     'blur_score': 13.5,
@@ -37,7 +37,47 @@ HISTORICAL_ANALYSIS = {
     'jpeg_quality': 92.0,
     'origin': 'camera',
     'origin_evidence': 'exif-camera',
+    'framing': 'body',
+    'watermark_state': 'detected',
+    'watermark_bbox': WATERMARK_BBOX,
+    'watermark_regions': WATERMARK_REGIONS,
+    'watermark_source': 'detector',
+    'watermark_score': 0.97,
+    'medium': 'photo',
+    'medium_margin': 0.42,
+    'face_yaw': -17.25,
 }
+
+EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS = (
+    'quality_state',
+    'blur_score',
+    'noise_score',
+    'uniformity_score',
+    'dhash',
+    'detail_ratio',
+    'bars_ratio',
+    'jpeg_quality',
+    'origin',
+    'origin_evidence',
+    'face_state',
+    'face_det',
+    'aesthetic_score',
+    'nsfw_score',
+    'framing',
+    'watermark_state',
+    'watermark_bbox',
+    'watermark_regions',
+    'watermark_source',
+    'watermark_score',
+    'medium',
+    'medium_margin',
+    'face_yaw',
+    'dup_group',
+    'semantic_dup_group',
+    'face_cluster',
+    'face_cluster_origin',
+    'style_cluster',
+)
 
 
 def _write_photo(path: Path, size=(160, 96), *, quality=35):
@@ -119,7 +159,7 @@ def _valid_v2_snapshot_payload():
 
 
 def _bank_with_analysed_image(app, tmp_path, *, filename='one.jpg'):
-    """Seed a Bank row with history that must not become transfer truth."""
+    """Seed a Bank row with complete history for transfer-policy tests."""
     from app.extensions import db
     from app.models import BankImage, ImageBank
 
@@ -132,16 +172,49 @@ def _bank_with_analysed_image(app, tmp_path, *, filename='one.jpg'):
     image = BankImage(
         bank_id=bank.id, relpath=filename, file_size=source.stat().st_size,
         width=160, height=96, **HISTORICAL_ANALYSIS,
-        # These are intentionally non-null: no transfer may recycle a relation
-        # id that only has meaning inside this particular Bank.
-        dup_group=7, semantic_dup_group=8, face_cluster=4, style_cluster=3,
-        watermark_state='detected', watermark_bbox=WATERMARK_BBOX,
-        watermark_regions=WATERMARK_REGIONS, caption='caption from the bank',
-        source_metadata=json.dumps(SOURCE_METADATA), framing='body', status='keep',
+        # A direct Bank copy retains these relationships inside its selection;
+        # Dataset round-trips and transformed copies must clear them.
+        dup_group=7, semantic_dup_group=8, face_cluster=4,
+        face_cluster_origin='asserted', style_cluster=3,
+        caption='caption from the bank', caption_origin='asserted',
+        source_metadata=json.dumps(SOURCE_METADATA), status='keep',
     )
     db.session.add(image)
     db.session.commit()
     return bank, image
+
+
+def _sync_bank_row_to_current_file(bank, image) -> Path:
+    """Make a seeded row describe its current source bytes exactly."""
+    from app.services import bank_transfer_metadata as transfer
+
+    path = Path(bank.source_path) / image.relpath
+    analysis = _final_deterministic_analysis(path)
+    for name in transfer.DETERMINISTIC_ANALYSIS_FIELDS:
+        setattr(image, name, analysis[name])
+    image.width, image.height = _dimensions(path)
+    image.file_size = path.stat().st_size
+    return path
+
+
+def _add_group_peer(bank, *, filename='two.jpg'):
+    """Add a second fully-analysed member of the seeded duplicate clusters."""
+    from app.extensions import db
+    from app.models import BankImage
+
+    path = Path(bank.source_path) / filename
+    _write_photo(path)
+    image = BankImage(
+        bank_id=bank.id, relpath=filename, file_size=path.stat().st_size,
+        width=160, height=96, **HISTORICAL_ANALYSIS,
+        dup_group=7, semantic_dup_group=8, face_cluster=4,
+        face_cluster_origin='asserted', style_cluster=3,
+        caption='peer caption', caption_origin='asserted',
+        source_metadata=json.dumps(SOURCE_METADATA), status='keep',
+    )
+    db.session.add(image)
+    _sync_bank_row_to_current_file(bank, image)
+    return image
 
 
 def _promote_to_dataset(app, bank, image, *, name='Transfer target'):
@@ -495,8 +568,8 @@ def test_bank_to_bank_promotion_rejects_pillow_bomb_without_creating_a_row(
         assert warnings.filters == filters_before
 
 
-def test_direct_bank_to_bank_copy_recalculates_analysis_and_resets_container_state(
-        app, tmp_path):
+def test_direct_bank_to_bank_copy_preserves_all_analysis_and_resets_transfer_state(
+        app, tmp_path, monkeypatch):
     from app.extensions import db
     from app.models import BankImage, ImageBank
     from app.services import bank_transfer_metadata as transfer
@@ -504,30 +577,165 @@ def test_direct_bank_to_bank_copy_recalculates_analysis_and_resets_container_sta
 
     with app.app_context():
         source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_path = _sync_bank_row_to_current_file(source_bank, source_image)
+        peer = _add_group_peer(source_bank)
+        assert transfer.BANK_DIRECT_COPY_ANALYSIS_FIELDS == (
+            EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS)
+        source_analysis = _row_values(
+            source_image, EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS)
+        # Some valid deterministic results are optional (for example a JPEG
+        # without provenance evidence); every preserved ML/group result is set.
+        assert all(
+            source_analysis[name] is not None
+            for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS)
+        # None of this destination/curation state may leak into the new row.
+        source_image.status = 'reject'
+        source_image.reject_reason = 'manual'
+        source_image.promoted_dataset_id = 987
+        source_image.promoted_bank_id = 654
+        db.session.commit()
+        # Exercise the canonical-path comparison, not just equal strings: a
+        # harmless alternate spelling of the raw source is still a direct copy.
+        alias_dir = Path(source_bank.source_path) / 'alias'
+        alias_dir.mkdir()
+        monkeypatch.setattr(
+            banks, 'resolved_image_path',
+            lambda _bank, row: str(alias_dir / '..' / row.relpath))
         destination_id = banks.start_bank_promote(
-            app, 'local', source_bank.id, [source_image.id], 'Bank copy')
+            app, 'local', source_bank.id, [source_image.id, peer.id], 'Bank copy')
+        copied = BankImage.query.filter_by(
+            bank_id=destination_id, relpath=source_image.relpath).one()
+        copies = BankImage.query.filter_by(bank_id=destination_id).all()
+        destination = db.session.get(ImageBank, destination_id)
+        copied_file = Path(destination.source_path) / copied.relpath
+        assert copied_file.read_bytes() == source_path.read_bytes()
+        assert copied.caption == 'caption from the bank'
+        assert copied.caption_origin == 'asserted'
+        assert json.loads(copied.source_metadata) == SOURCE_METADATA
+        assert _row_values(copied, EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS) == (
+            source_analysis)
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
+            _final_deterministic_analysis(copied_file))
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
+            _row_values(source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS))
+        assert {(row.dup_group, row.semantic_dup_group) for row in copies} == {
+            (7, 8)}
+        assert (copied.width, copied.height) == _dimensions(copied_file)
+        assert copied.status == 'pending'
+        assert copied.reject_reason is None
+        assert copied.promoted_dataset_id is None
+        assert copied.promoted_bank_id is None
+        assert copied.watermark_clean_method is None
+        assert copied.rotation is None
+
+
+def test_same_path_replacement_invalidates_source_analysis(app, tmp_path):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_path = _sync_bank_row_to_current_file(source_bank, source_image)
+        db.session.commit()
+        # Same canonical path and dimensions, different bytes after the scan.
+        _write_photo(source_path, quality=92)
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source_image.id], 'Replaced copy')
         copied = BankImage.query.filter_by(bank_id=destination_id).one()
         destination = db.session.get(ImageBank, destination_id)
         copied_file = Path(destination.source_path) / copied.relpath
-        assert copied.caption == 'caption from the bank'
-        # Image-specific review state must be redone for every new Bank, even
-        # for a direct byte copy; only caption and provenance are safe to keep.
-        assert copied.framing is None
-        assert copied.watermark_state is None
-        assert copied.watermark_bbox is None
-        assert copied.watermark_regions is None
-        assert json.loads(copied.source_metadata) == SOURCE_METADATA
+
         assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
             _final_deterministic_analysis(copied_file))
-        # The historical source row is deliberately implausible: even the
-        # direct route must take its technical truth from the copied bytes.
-        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) != _row_values(
-            source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS)
-        _assert_model_analysis_is_empty(copied)
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) != (
+            _row_values(source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS))
+        assert _row_values(
+            copied, transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS) == {
+                name: None
+                for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS
+            }
         assert (copied.width, copied.height) == _dimensions(copied_file)
-        assert copied.status == 'pending'
-        assert (copied.dup_group, copied.semantic_dup_group,
-                copied.face_cluster, copied.style_cluster) == (None, None, None, None)
+        assert copied.file_size == copied_file.stat().st_size
+        assert copied.caption == source_image.caption
+        assert copied.caption_origin == source_image.caption_origin
+
+
+@pytest.mark.parametrize('marker', ('missing_clean', 'rotation_fallback'))
+def test_unmaterialized_transform_marker_invalidates_source_analysis(
+        app, tmp_path, monkeypatch, marker):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_path = _sync_bank_row_to_current_file(source_bank, source_image)
+        if marker == 'missing_clean':
+            source_image.watermark_clean_method = 'crop'
+            assert not banks.clean_image_path(
+                source_bank.id, source_image.id).exists()
+        else:
+            source_image.rotation = 90
+            monkeypatch.setattr(
+                banks, '_ensure_rotated',
+                lambda _bank_id, _row, source: source)
+        db.session.commit()
+        assert banks._same_resolved_path(
+            banks.resolved_image_path(source_bank, source_image), source_path)
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source_image.id], f'{marker} copy')
+        copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        destination = db.session.get(ImageBank, destination_id)
+        copied_file = Path(destination.source_path) / copied.relpath
+
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
+            _final_deterministic_analysis(copied_file))
+        assert _row_values(
+            copied, transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS) == {
+                name: None
+                for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS
+            }
+        assert copied.watermark_clean_method is None
+        assert copied.rotation is None
+
+
+@pytest.mark.parametrize(
+    ('scenario', 'expected_count', 'expected_duplicate_groups'),
+    (('single_selection', 1, {(None, None)}),
+     ('unreadable_peer', 1, {(None, None)}),
+     ('two_members', 2, {(7, 8)})),
+)
+def test_bank_copy_removes_only_singleton_duplicate_groups(
+        app, tmp_path, scenario, expected_count, expected_duplicate_groups):
+    from app.extensions import db
+    from app.models import BankImage
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, first = _bank_with_analysed_image(app, tmp_path)
+        _sync_bank_row_to_current_file(source_bank, first)
+        peer = _add_group_peer(source_bank)
+        db.session.commit()
+        selected = ([first.id] if scenario == 'single_selection'
+                    else [first.id, peer.id])
+        if scenario == 'unreadable_peer':
+            (Path(source_bank.source_path) / peer.relpath).unlink()
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, selected, f'{scenario} copy')
+        copied = BankImage.query.filter_by(bank_id=destination_id).all()
+
+        assert len(copied) == expected_count
+        assert {(row.dup_group, row.semantic_dup_group) for row in copied} == (
+            expected_duplicate_groups)
+        # These clusters remain useful row classifications even with one member.
+        assert {(row.face_cluster, row.face_cluster_origin, row.style_cluster)
+                for row in copied} == {(4, 'asserted', 3)}
 
 
 @pytest.mark.parametrize(
@@ -543,6 +751,11 @@ def test_transformed_bank_to_bank_copy_recalculates_deterministic_analysis_only(
 
     with app.app_context():
         source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_image.status = 'reject'
+        source_image.reject_reason = 'manual'
+        source_image.promoted_dataset_id = 987
+        source_image.promoted_bank_id = 654
+        db.session.commit()
         assert _make_source_transform(source_bank, source_image, transform) == expected_size
         destination_id = banks.start_bank_promote(
             app, 'local', source_bank.id, [source_image.id], f'{transform} copy')
@@ -553,12 +766,24 @@ def test_transformed_bank_to_bank_copy_recalculates_deterministic_analysis_only(
         assert (copied.width, copied.height) == expected_size
         assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) == (
             _final_deterministic_analysis(copied_file))
+        assert _row_values(copied, transfer.DETERMINISTIC_ANALYSIS_FIELDS) != (
+            _row_values(source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS))
+        assert transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS == tuple(
+            name for name in EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS
+            if name not in transfer.DETERMINISTIC_ANALYSIS_FIELDS)
+        assert _row_values(
+            copied, transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS) == {
+                name: None
+                for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS
+            }
         _assert_model_analysis_is_empty(copied)
         assert copied.status == 'pending'
-        assert copied.framing is None
-        assert copied.watermark_state is None
-        assert copied.watermark_bbox is None
-        assert copied.watermark_regions is None
+        assert copied.reject_reason is None
+        assert copied.promoted_dataset_id is None
+        assert copied.promoted_bank_id is None
+        assert copied.caption == 'caption from the bank'
+        assert copied.caption_origin == 'asserted'
+        assert json.loads(copied.source_metadata) == SOURCE_METADATA
         assert copied.watermark_clean_method is None
         assert copied.rotation is None
 

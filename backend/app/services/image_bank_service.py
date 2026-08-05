@@ -7837,39 +7837,63 @@ def _discard_promoted_bank(user_id, dest_bank_id):
                        exc_info=True)
 
 
-def _bank_copy_values(row: BankImage, copied_path) -> dict:
-    """Metadata a Bank -> Bank copy can keep without inheriting false links.
+def _same_resolved_path(left, right) -> bool:
+    """Whether two resolver results identify the same canonical path."""
+    if not left or not right:
+        return False
+    try:
+        return os.path.normcase(os.path.realpath(left)) == os.path.normcase(
+            os.path.realpath(right))
+    except (OSError, TypeError, ValueError):
+        return False
 
-    The copied image has its own physical size and no derived-clean/rotation
-    artifact yet.  Every copy is remeasured from its destination bytes: a source
-    path can be replaced after its original Bank scan, so even an unchanged
-    resolved path proves nothing about stale technical or ML results.  Caption
-    and source attribution are safe user metadata; framing and watermark review
-    describe pixels, so a new Bank must review them again.  Cluster and
-    duplicate-group ids are container-local, so they are intentionally left
-    blank for the destination to rebuild.  Curation deliberately does not: a
-    copied Bank has always begun as a fresh triage queue.
+
+def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
+                      preserve_analysis_candidate: bool) -> dict:
+    """Metadata for an independent Bank -> Bank file copy.
+
+    Bank rows predate transfer fingerprints, so a raw path alone cannot prove
+    byte identity: the live file may have been replaced since its scan.  As a
+    targeted legacy guard (not a cryptographic proof), preserve source analysis
+    only when the destination's ten deterministic values, dimensions and byte
+    size still match the analysed row.  This rejects manifest replacements while
+    accepting compatible old databases without a schema migration.  The one
+    fresh deterministic measurement is reused whether the guard succeeds or
+    fails; dimensions and size are likewise each read once and reused.
     """
-    values = {name: None
-              for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS}
-    values.update(bank_deterministic_analysis(copied_path) or {})
-    values.update({name: None
-                   for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
+    fresh_analysis = bank_deterministic_analysis(copied_path)
+    dimensions = _copied_image_dimensions(copied_path)
+    source_analysis = {
+        name: getattr(row, name)
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS
+    }
+    preserve_analysis = (
+        preserve_analysis_candidate
+        and fresh_analysis is not None
+        and fresh_analysis == source_analysis
+        and dimensions == (row.width, row.height)
+        and copied_size == row.file_size
+    )
+    values = {
+        name: None
+        for name in bank_transfer_metadata.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS
+    }
+    values.update({
+        name: None
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS
+    })
+    values.update(fresh_analysis or {})
+    if preserve_analysis:
+        values.update({
+            name: getattr(row, name)
+            for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
+        })
     values.update({
         'caption': row.caption,
-        # Beside 'caption', deliberately NOT among the fields blanked above: the
-        # analysis results are about pixels this Bank has not looked at, but the
-        # authorship of a sentence is a fact about the sentence and copying it
-        # without its author is what turns a protected caption into a rewritable one.
+        # Authorship is a fact about the caption, independent of whether the
+        # copied pixels required fresh analysis.
         'caption_origin': row.caption_origin,
         'source_metadata': _source_metadata_storage(row.source_metadata),
-        # Both are image-specific review outputs.  The copied image may have
-        # been cleaned, rotated, or replaced after the source verdict, so no
-        # watermark/framing conclusion is portable to another Bank.
-        'framing': None,
-        'watermark_state': None,
-        'watermark_bbox': None,
-        'watermark_regions': None,
         # The target file IS already cleaned/rotated when the source was resolved.
         # Replaying either pointer would look for a non-existent derived blob or
         # rotate the image a second time.
@@ -7879,14 +7903,29 @@ def _bank_copy_values(row: BankImage, copied_path) -> dict:
         # candidate set, never an inherited keep/reject decision.
         'status': 'pending',
         'reject_reason': None,
-        # New Bank-local relationships are rebuilt by the normal passes.
-        'dup_group': None,
-        'semantic_dup_group': None,
-        'face_cluster': None,
-        'style_cluster': None,
     })
-    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    values['width'], values['height'] = dimensions
     return values
+
+
+def _clear_singleton_copy_duplicate_groups(bank_id) -> None:
+    """Drop duplicate labels that no longer describe a destination relation."""
+    for field in bank_transfer_metadata.BANK_COPY_DUPLICATE_GROUP_FIELDS:
+        column = getattr(BankImage, field)
+        singleton_groups = [
+            group for group, in (
+                db.session.query(column)
+                .filter(BankImage.bank_id == bank_id, column.isnot(None))
+                .group_by(column)
+                .having(func.count(BankImage.id) == 1)
+                .all()
+            )
+        ]
+        for i0 in range(0, len(singleton_groups), _SQL_IN_CHUNK):
+            (BankImage.query
+             .filter(BankImage.bank_id == bank_id,
+                     column.in_(singleton_groups[i0:i0 + _SQL_IN_CHUNK]))
+             .update({field: None}, synchronize_session=False))
 
 
 def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
@@ -7902,8 +7941,17 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
             if bank_jobs.cancelled(job):
                 break
             # RESOLVED path: a watermark-cleaned image must land cleaned, same
-            # rule as promoting to a dataset.
+            # rule as promoting to a dataset.  Only an unmarked raw-path copy is
+            # even eligible to retain analysis. A missing clean blob or failed
+            # rotation may fall back to this same path, but its effective marker
+            # deliberately forces the safe recalculation/reset path.
+            raw_source_path = abs_image_path(src, r)
             p = resolved_image_path(src, r)
+            preserve_analysis_candidate = (
+                _same_resolved_path(p, raw_source_path)
+                and not r.watermark_clean_method
+                and not r.rotation
+            )
             try:
                 # Read + validate the exact bounded bytes before writing. A
                 # `copy2` after a header-only check could race a live folder
@@ -7939,7 +7987,9 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                 return
             db.session.add(BankImage(
                 bank_id=dest_bank_id, relpath=r.relpath, file_size=size,
-                **_bank_copy_values(r, target)))
+                **_bank_copy_values(
+                    r, target, size,
+                    preserve_analysis_candidate=preserve_analysis_candidate)))
             copied.append(r.id)
             if len(copied) % 200 == 0:
                 db.session.commit()
@@ -7949,6 +7999,12 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
             bank_jobs.fail(job, 'Nothing could be copied — the new bank was '
                                 'discarded. The selected files could not be read.')
             return
+        # The selected set is not necessarily the copied set: unreadable files
+        # and cancellation can remove group peers. Flush the rows actually
+        # written, then clear only duplicate/semantic labels left with one member.
+        # Face/style clusters remain useful classifications even as singletons.
+        db.session.flush()
+        _clear_singleton_copy_duplicate_groups(dest_bank_id)
         db.session.commit()
         # Marked LAST, and only for what really landed: the source keeps its rows
         # (a promotion never removes anything from the bank it came from) and now
