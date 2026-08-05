@@ -14,6 +14,8 @@ import {
   fullTransformerUnavailableReason,
   hfCloudTokenReadiness,
   isFullTransformerRun,
+  denseTurboWarning,
+  fullTransformerBaseLabel,
   isFullTransformerEligible,
   normalizeTrainingMode,
   trainingModeSettingsPayload,
@@ -35,15 +37,46 @@ test('training mode enum is exact and every legacy or invalid value falls back t
   assert.equal(trainingModeLabel('full_transformer'), 'Full model');
 });
 
-test('dense eligibility is limited to the official Krea 2 Raw recipe', () => {
+test('dense eligibility covers the whole Krea 2 family, and picking Turbo no longer expels the user', () => {
+  // The regression this replaces: choosing Turbo made Full model ineligible,
+  // and the panel's fallback effect then SAVED LoRA behind the user's back —
+  // which is why the owner could not find "where to put the turbo option".
   assert.equal(isFullTransformerEligible({ trainType: 'krea', variant: 'base', baseModel: '' }), true);
-  assert.equal(isFullTransformerEligible({ trainType: 'krea', variant: 'turbo', baseModel: '' }), false);
-  assert.equal(isFullTransformerEligible({ trainType: 'zimage', variant: 'base', baseModel: '' }), false);
-  assert.equal(isFullTransformerEligible({ trainType: 'krea', variant: 'base', baseModel: 'custom.safetensors' }), false);
+  assert.equal(isFullTransformerEligible({ trainType: 'krea', variant: 'turbo', baseModel: '' }), true);
   assert.equal(isFullTransformerEligible({
-    trainType: 'krea', variant: 'base', baseModel: '', customBase: true,
-  }), false);
-  assert.match(fullTransformerUnavailableReason({ trainType: 'krea', variant: 'turbo' }), /Raw/);
+    trainType: 'krea', variant: 'turbo', baseModel: 'C:/w/custom.safetensors', customBase: true,
+  }), true);
+  assert.equal(isFullTransformerEligible({ trainType: 'zimage', variant: 'base', baseModel: '' }), false);
+  assert.equal(fullTransformerUnavailableReason({ trainType: 'krea', variant: 'turbo' }), null);
+  assert.match(fullTransformerUnavailableReason({ trainType: 'zimage' }), /Krea 2 family/);
+});
+
+test('the dense summary names the base the run will actually train on', () => {
+  assert.equal(fullTransformerBaseLabel({ variant: 'base' }), 'official Krea 2 Raw');
+  assert.equal(fullTransformerBaseLabel({ variant: 'turbo' }), 'official Krea 2 Turbo');
+  assert.equal(fullTransformerBaseLabel({}), 'official Krea 2 Raw');
+  // An unset variant means Raw, exactly like the backend default.
+  assert.equal(fullTransformerBaseLabel({ variant: undefined }), 'official Krea 2 Raw');
+  // A picked checkpoint wins over the variant, and never leaks its full path.
+  assert.equal(
+    fullTransformerBaseLabel({ variant: 'turbo', baseModel: 'C:/models/my-krea.safetensors' }),
+    'custom: my-krea.safetensors');
+  assert.equal(
+    fullTransformerBaseLabel({ baseModel: 'C:/m/x.safetensors', baseLabel: 'Krea 2 Raw bf16' }),
+    'Krea 2 Raw bf16');
+});
+
+test('the dense Turbo warning states what is unknown, without promising or predicting', () => {
+  assert.equal(denseTurboWarning({ variant: 'base' }), null);
+  assert.equal(denseTurboWarning({ variant: 'turbo', baseModel: 'C:/m/x.safetensors' }), null);
+  const notice = denseTurboWarning({ variant: 'turbo' });
+  assert.match(notice.title, /untested here/);
+  assert.match(notice.body, /LoRA on Raw/);
+  assert.match(notice.body, /have not measured/);
+  assert.match(notice.body, /few-step/);
+  assert.match(notice.body, /Nothing is blocked/);
+  // No promise, no predicted failure.
+  assert.doesNotMatch(notice.body, /will (?:work|fail|break|ruin)|guaranteed|corrupt/i);
 });
 
 test('cloud launch and preflight carry the mode while LoRA stays the default regression path', () => {
@@ -422,7 +455,9 @@ test('dense Advanced exposes exactly the five unlocked values and states why the
     panel.indexOf('// FULL_TRANSFORMER_ADVANCED_RECIPE_END'),
   );
   assert.match(panel, /Full-model recipe · steps · prompts · LR · resolution · checkpoints/);
-  assert.match(recipe, /Official Krea 2 Raw · full transformer · unquantized/);
+  // Computed, not a literal: this line used to say "Official Krea 2 Raw" over
+  // a recipe that can now be Turbo or a local checkpoint.
+  assert.match(recipe, /\{baseSummary\}[\s\S]{0,80}full transformer · unquantized/);
   assert.match(recipe, /80 GB VRAM GPU · at least 200 GB disk/);
 
   // The four values the 80 GB geometry depends on stay locked, and each says
@@ -468,7 +503,14 @@ test('the full Advanced branch cannot render the unchanged LoRA controls', () =>
   const denseArm = branch.slice(0, split);
   const loraArm = branch.slice(split);
   assert.match(denseArm, /<FullTransformerAdvancedRecipe/);
-  assert.doesNotMatch(denseArm, /Presets|CUSTOM_BASE_SENTINEL|advNetworkType|Masked \(bg 10%\)|saveAdv\(/);
+  // LoRA-ONLY controls must not leak in. The base picker is deliberately NOT on
+  // this list any more: a dense run can now be pointed at Raw, Turbo or a local
+  // checkpoint, so the base/variant selectors are shared, not LoRA-only — and
+  // the dense arm renders its own copy (the LoRA arm's lives below the split
+  // and would otherwise be unreachable in full-model mode, which is exactly why
+  // the Turbo option looked missing).
+  assert.match(denseArm, /DENSE_BASE_PICKER_START/);
+  assert.doesNotMatch(denseArm, /Presets|advNetworkType|Masked \(bg 10%\)|saveAdv\(/);
   assert.match(loraArm, /Presets/);
   assert.match(loraArm, /CUSTOM_BASE_SENTINEL/);
   assert.match(loraArm, /advNetworkType/);

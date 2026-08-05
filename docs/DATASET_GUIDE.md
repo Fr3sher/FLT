@@ -812,10 +812,12 @@ typed in as before, and takes the same route: same refusals, same disk check,
 same destination, stated. When you have set **Custom weights…**, that path
 pre-fills it, so there is nothing to type there either.
 
-### Why full-model training targets Raw, not Turbo
+### Full-model training on Turbo: allowed, and unmeasured
 
-Dense (full model) training is offered on **Krea 2 Raw only**. That is a scope
-decision, and it has numbers behind it — but it is a choice, not a defect we hit.
+Dense (full model) training accepts **Raw, Turbo, or a Krea 2 checkpoint of your
+own** — the full-model panel has its own base picker for all three. Raw is still
+the recommendation, and Turbo now comes with a warning shown before the GPU is
+rented rather than a refusal. Here is what that warning is made of.
 
 **What Turbo is.** A speed-distilled build: it draws an image in about 8 steps
 instead of ~50, and that compression lives in the very weights a dense run
@@ -857,10 +859,17 @@ Two things those sources do **not** say, and this page used to:
 
 **Nobody has published that measurement for Krea 2 in particular.** Everything
 above is carried over from neighbouring models. So the honest word for
-dense-on-Turbo here is **untested**, not impossible. For now the app declines it
-rather than letting a rented 80 GB GPU be the first experiment — that is where
-the line sits today, drawn by missing evidence rather than by a known defect,
-and it is the kind of line a measurement moves.
+dense-on-Turbo here is **untested**, not impossible — and an untested lane is a
+thing to warn about, not a thing to forbid. The app says all of the above in the
+panel and in the rental dialog, then lets you launch. What it will not do is
+pretend: the run trains the base you picked, the configuration sent to the pod
+names it, and the run's provenance and model card name it too.
+
+One thing the dense lane deliberately does **not** do on Turbo: load the
+de-distillation adapter the LoRA lane loads. Nothing in the save path unmerges
+it from dense weights, and a LoRA-shaped subtraction would miss the
+normalisation and modulation tensors a dense run moves. Adding it would create
+the defect the old refusal feared; leaving it out cannot.
 
 **Krea's own recommendation is train on Raw** — the undistilled checkpoint they
 publish for exactly this — then validate on Turbo. musubi-tuner, the other

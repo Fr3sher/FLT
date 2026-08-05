@@ -558,22 +558,58 @@ export function cloudTierEstimateView(tier = {}, { fullMode = false } = {}) {
   };
 }
 
-/** Dense fine-tuning is deliberately a single, narrow cloud recipe for the MVP:
- * the official Krea 2 Raw base. A local/custom base is not equivalent, even when
- * its architecture happens to be Krea-compatible. */
-export function isFullTransformerEligible({
-  trainType, variant, baseModel = '', customBase = false,
-} = {}) {
-  return !customBase
-    && trainType === 'krea'
-    && variant === 'base'
-    && String(baseModel || '').trim() === '';
+/** Dense fine-tuning is a Krea 2 recipe — and now the WHOLE Krea 2 family:
+ * Raw, Turbo, or a local Krea checkpoint. It used to accept the official Raw
+ * base alone, which is why picking Turbo threw the user out of Full model with
+ * no way back in; that was a scope decision, and the backend no longer makes
+ * it. What is still refused is decided elsewhere and for other reasons: a
+ * structured fp8/int8 export cannot be loaded at all (the base advisory says
+ * so, and the launch refuses it), and Slider mode has no dense equivalent. */
+export function isFullTransformerEligible({ trainType } = {}) {
+  return trainType === 'krea';
 }
 
 export function fullTransformerUnavailableReason(selection = {}) {
   if (selection.trainType !== 'krea') return 'Choose the Krea 2 family.';
-  if (selection.variant !== 'base') return 'Choose Krea 2 Raw.';
-  if (selection.customBase === true) return 'This MVP supports only the official Krea 2 Raw base.';
-  if (String(selection.baseModel || '').trim()) return 'This MVP supports only the official Krea 2 Raw base.';
   return null;
+}
+
+/** True for a Krea variant that is a DISTILLED few-step model. Unset means Raw,
+ * mirroring the backend default (`_krea_is_raw`), so a dataset that never
+ * persisted a variant is never warned about Turbo. */
+export function isKreaTurboVariant(variant) {
+  return !['', 'base', 'raw'].includes(String(variant ?? '').trim().toLowerCase());
+}
+
+/** What the dense recipe will ACTUALLY load, worded for the panel. Mirrors the
+ * backend resolver (`_krea_name_or_path`): a selected local checkpoint wins over
+ * the variant, otherwise the official repository for that variant. The two
+ * summary lines used to be the literal string "official Krea 2 Raw", which is a
+ * sentence that can now be false. */
+export function fullTransformerBaseLabel({
+  baseModel = '', baseLabel = '', variant = 'base',
+} = {}) {
+  const picked = String(baseModel || '').trim();
+  if (picked) {
+    return String(baseLabel || '').trim()
+      || `custom: ${picked.split(/[\\/]/).pop()}`;
+  }
+  return isKreaTurboVariant(variant) ? 'official Krea 2 Turbo' : 'official Krea 2 Raw';
+}
+
+/** The warning shown BEFORE the money is spent when a dense run targets Turbo.
+ * It states what is unknown — no promised result, no predicted failure — and it
+ * never blocks: the product decision is warn and let through. `null` for Raw and
+ * for a custom base, whose distillation state this app cannot read. */
+export function denseTurboWarning({ baseModel = '', variant = 'base' } = {}) {
+  if (String(baseModel || '').trim() || !isKreaTurboVariant(variant)) return null;
+  return {
+    title: 'Full-model training on Krea 2 Turbo — untested here',
+    body: 'Krea officially recommends training a LoRA on Raw and applying it to '
+      + 'Turbo. We have not measured full-model training on a distilled base, so '
+      + 'we cannot tell you what this run produces. On other distilled models it '
+      + 'has been seen to erode few-step behaviour: the result may need real '
+      + 'guidance and more steps than Turbo does today. Nothing is blocked — this '
+      + 'is what is unknown, not a predicted failure.',
+  };
 }

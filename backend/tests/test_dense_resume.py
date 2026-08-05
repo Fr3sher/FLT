@@ -136,10 +136,10 @@ def test_a_dense_continuation_stamps_its_hub_seed_and_asks_for_a_big_disk(
     monkeypatch.setattr(ct.lt, 'assert_trainable', lambda *a, **k: None)
     monkeypatch.setattr(ct, '_assert_official_base_reachable', lambda *a, **k: None)
     monkeypatch.setattr(ct, '_validate_full_transformer_token',
-                        lambda token, _api=None: (object(), 'tester', False))
+                        lambda token, _api=None, **_kw: (object(), 'tester', False))
     monkeypatch.setattr(ct, '_assert_dense_storage_headroom',
                         lambda *a, **k: {'fits': True})
-    monkeypatch.setattr(ct, '_create_full_transformer_repo', lambda run, token: {
+    monkeypatch.setattr(ct, '_create_full_transformer_repo', lambda run, token, **_kw: {
         'hf_repo_id': 'tester/Krea-2-full-9-dense',
         'hf_url': 'https://huggingface.co/tester/Krea-2-full-9-dense'})
     monkeypatch.setenv('VAST_API_KEY', 'vast-test')

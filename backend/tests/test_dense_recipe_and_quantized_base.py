@@ -687,3 +687,118 @@ def test_no_pod_or_no_repository_is_skipped_not_failed(tmp_path):
         FakeDataset(), _Remote(), instance_id=None, repo_id='me/repo',
         hf_token='t', tmp_dir=str(tmp_path), vast=_Vast(''))
     assert skipped['state'] == 'skipped'
+
+
+# --- volet 4: the base a dense run ACTUALLY trains on ---------------------------
+#
+# These tests exist because "the guard no longer raises" was never the property
+# that mattered. The dense branch used to build its model block from a constant,
+# so lifting the Turbo/custom refusals without rewiring it would have produced a
+# run NAMED Turbo, STAMPED Turbo, and trained on Raw — for hours, on a rented
+# GPU. Each test below reads the emitted `model.name_or_path` (and the
+# provenance stamp beside it), never the absence of an exception.
+
+
+def _dense(variant='base', base_model=None):
+    ds = FakeDataset()
+    ds.train_variant = variant
+    ds.train_base_model = base_model
+    return ds
+
+
+def test_the_dense_config_carries_the_base_the_recipe_names(tmp_path):
+    """Three recipes, three DIFFERENT values in the emitted config."""
+    custom = _bf16_model(tmp_path / 'my-krea.safetensors')
+    emitted = {
+        'raw': _job(_dense('base'))['model']['name_or_path'],
+        'turbo': _job(_dense('turbo'))['model']['name_or_path'],
+        'custom': _job(_dense('base', custom))['model']['name_or_path'],
+    }
+    assert emitted == {'raw': 'krea/Krea-2-Raw',
+                       'turbo': 'krea/Krea-2-Turbo',
+                       'custom': custom}
+    assert len(set(emitted.values())) == 3
+
+
+def test_a_custom_dense_base_wins_over_the_variant(tmp_path):
+    """A local checkpoint IS the base: the Turbo/Raw switch must not override
+    the file the user picked, on either lane."""
+    custom = _bf16_model(tmp_path / 'my-krea.safetensors')
+    assert _job(_dense('turbo', custom))['model']['name_or_path'] == custom
+
+
+def test_the_dense_provenance_stamp_names_the_base_the_config_uses(tmp_path):
+    """The Runs page and ⎘ Share config read this stamp. It used to be the Raw
+    constant, which would now claim "Krea 2 Raw" over a Turbo run."""
+    custom = _bf16_model(tmp_path / 'my-krea.safetensors')
+    for ds in (_dense('base'), _dense('turbo'), _dense('base', custom)):
+        snapshot = lt.launch_settings_snapshot(ds, masked=False)
+        assert snapshot['effective_base'] == _job(ds)['model']['name_or_path']
+    turbo = lt.launch_settings_snapshot(_dense('turbo'), masked=False)
+    assert turbo['effective_base'] == 'krea/Krea-2-Turbo'
+    stamped = lt.launch_settings_snapshot(_dense('base', custom), masked=False)
+    assert stamped['base_weights'] == custom
+    assert 'base_weights' not in lt.launch_settings_snapshot(_dense('base'),
+                                                             masked=False)
+
+
+def test_dense_turbo_loads_no_de_distillation_adapter(tmp_path):
+    """The LoRA lane puts Ostris' training adapter on Turbo; the dense lane must
+    NOT. Nothing un-merges it from a dense save, and a LoRA-shaped subtraction
+    would miss the normalisation tensors a dense run moves anyway."""
+    assert 'assistant_lora_path' not in _job(_dense('turbo'))['model']
+    lora = _dense('turbo')
+    lora.training_mode = 'lora'
+    assert 'assistant_lora_path' in _job(lora)['model']
+
+
+def test_a_scaled_fp8_export_is_still_refused_as_a_dense_base(tmp_path):
+    """The one MECHANICAL limit of this lane, and the one that must survive the
+    two scope refusals being lifted: ai-toolkit loads a base with strict=True
+    and a scaled export carries tensors the architecture never declares."""
+    path = _write_safetensors_header(tmp_path / 'scaled.safetensors', {
+        'blocks.0.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128),
+        'blocks.0.attn.wq.scale_weight': ('F32', [], 4),
+        'scaled_fp8': ('F8_E4M3', [2], 2),
+    })
+    mi.clear_cache()
+    with pytest.raises(ValueError) as excinfo:
+        _job(_dense('base', path))
+    message = str(excinfo.value).lower()
+    assert 'scale_weight' in message or 'scaled_fp8' in message, message
+    assert 'bf16' in message, message
+
+
+def test_a_bare_fp8_cast_is_accepted_as_a_dense_base(tmp_path):
+    """The distinction IS the subject: same tensor names, reduced dtype, the
+    trainer up-casts it. Refusing this one alongside the scaled export would
+    repeat, in the other direction, the mistake this lane is being corrected
+    for."""
+    tensors = {f'blocks.{i}.attn.wq.weight': ('F8_E4M3', [3072, 3072], 128)
+               for i in range(20)}
+    tensors.update({f'blocks.{i}.norm.scale': ('F32', [3072], 12) for i in range(5)})
+    path = _write_safetensors_header(tmp_path / 'cast.safetensors', tensors)
+    mi.clear_cache()
+    assert mi.quantization_report(path)['form'] == mi.FORM_BARE_CAST
+    assert _job(_dense('base', path))['model']['name_or_path'] == path
+
+
+def test_a_relative_dense_base_is_refused_rather_than_ignored(tmp_path):
+    """The LoRA lane silently drops a non-absolute base (it addresses another
+    family's catalog). Silently means "trains something other than what the
+    panel shows", which is the whole defect this lane just fixed."""
+    with pytest.raises(ValueError, match='full path'):
+        _job(_dense('base', 'krea2-turbo-fp8.safetensors'))
+
+
+def test_the_family_and_slider_refusals_survive(tmp_path):
+    off_family = _dense('base')
+    off_family.train_type = 'zimage'
+    with pytest.raises(ValueError, match='only for Krea 2'):
+        _job(off_family)
+
+    slider = _dense('turbo')
+    slider.train_slider = json.dumps({'enabled': True, 'positive': 'a',
+                                      'negative': 'b'})
+    with pytest.raises(ValueError, match='Slider LoRA'):
+        _job(slider)
