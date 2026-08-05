@@ -24,7 +24,10 @@ Protocol (same shape as face_embed_infer.py):
             "results": {path: {state, aesthetic?, nsfw?}},
             "clusters": {path: int}|null, "computed": int, "reused": int,
             "error"?: str}
-  stderr : "[score] i/N <state>" progress lines the parent streams to the UI.
+  stderr : "[score] i/N <state>" progress lines the parent streams to the UI, and
+           "[phase] <sentence>" lines for the steps that have no per-image
+           counter (cache write, style grouping) — the parent shows those
+           verbatim instead of leaving a full bar and a stale count behind.
 
 Each of the three heads degrades independently: if the aesthetic weights can't be
 fetched the pass still returns nsfw + style (aesthetic omitted), and vice-versa —
@@ -75,6 +78,18 @@ from bank_image_guard import read_validated_bank_image  # noqa: E402
 
 def _log(m):
     print(m, file=sys.stderr, flush=True)
+
+
+def _phase(sentence):
+    """Announce a step that has NO per-image counter, in words the UI shows as-is.
+
+    The parent forwards any ``[phase] …`` line straight into the job's detail and
+    clears the counter with it (see _PHASE_RE in image_bank_service). So this
+    sentence is user-facing English, and it states what a Stop would cost RIGHT
+    HERE when that differs from the rest of the pass — the whole point being that
+    the Stop button stays offered through steps where it destroys different
+    things."""
+    _log(f'[phase] {sentence}')
 
 
 def _cancel_requested(cancel_file):
@@ -501,10 +516,20 @@ def main() -> int:
                     'clusters': None}))
                 return 0
         if cache_path:
+            _phase(f'saving the score cache ({len(cache)} image(s))…')
             _save_cache(cache_path, cache)
             _write_count(cache_path, reused + fresh)
 
     results = _results_from_cache(images, cache)
+    # EVERYTHING BELOW IS MUTE WORK, and that is what these phase lines are for.
+    # The per-image counter stopped at N/N when the last image was scored, and
+    # the two steps after it (a compressed 70 MB cache write, then an n² pass over
+    # every embedding) take MINUTES on a large bank with the bar sitting at 100 %.
+    # A pass that says nothing while it works reads as a hung one — measured on a
+    # 21 000-image bank: ~4 minutes of silence behind a full bar.
+    _phase(f'grouping styles over {len(images)} image(s) — the slow tail of this '
+           'pass; Stop now keeps every score already computed but discards the '
+           'grouping, which can only be redone whole')
     clusters = _cluster_style(images, cache, style_threshold,
                               lambda: _cancel_requested(cancel_file))
     if clusters is None:
@@ -516,6 +541,9 @@ def main() -> int:
                           'results': _results_from_cache(images, cache, True),
                           'clusters': None}))
         return 0
+    # One more mute step worth naming: this JSON carries a line per image, and
+    # building it over tens of thousands of them is not instant either.
+    _phase(f'handing {len(results)} result(s) back to the app…')
     print(json.dumps({'ok': True, 'results': results, 'clusters': clusters,
                       'computed': computed, 'reused': reused,
                       'head_errors': head_errors}))

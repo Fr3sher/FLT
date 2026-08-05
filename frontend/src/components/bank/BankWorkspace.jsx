@@ -229,7 +229,10 @@ function UndoBar({ offer, busy, onUndo, onDismiss }) {
   )
 }
 
-function ProgressBar({ activity, onCancel, offline = false }) {
+// Exported for the render test only: what this bar says during a step with no
+// per-image counter is the whole fix for "the pass looks frozen", and a source
+// regex cannot see what the renderer produces.
+export function ProgressBar({ activity, onCancel, offline = false }) {
   const presence = progressPresence(activity, offline)
   if (presence === PROGRESS_HIDDEN) return null
   if (presence === PROGRESS_UNKNOWN) return <ProgressUnknown />
@@ -254,7 +257,13 @@ function ProgressBar({ activity, onCancel, offline = false }) {
               // The one destructive pass: it must NAME itself in the bar, not
               // ride under the anonymous "Job running" fallback.
               delete_rejected: 'Deleting rejected files' }[kind] || 'Job') + ' running'}
-          {' — '}{done}{total ? ` / ${total}` : ''}{detail ? ` · ${detail}` : ''}
+          {/* A step with no per-image counter publishes done=total=0 and says
+              what it is doing in words (the cache write, the style grouping).
+              Printing a bare "0" next to that sentence would read as "0 done"
+              on work that is running — so the figure only appears when there
+              is one. */}
+          {(done || total) ? <>{' — '}{done}{total ? ` / ${total}` : ''}</> : null}
+          {detail ? `${(done || total) ? ' · ' : ' — '}${detail}` : ''}
         </span>
         {pct != null && (
           <div className="h-1.5 w-40 overflow-hidden rounded bg-surface-raised" role="progressbar"

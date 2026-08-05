@@ -103,6 +103,10 @@ test('a stopped pass writes scores but never a half style partition', () => {
   // the cluster write must NOT run when the write-back was interrupted.
   assert.match(service,
     /_apply_score_results\(\s*job, by_path, data\['results'\], interruptible=False\)/)
+  // The gap after the `return` is deliberately loose: the pass now publishes a
+  // phase line before the partition write (that step is minutes long and used
+  // to run mute behind a full progress bar). What is pinned is the ORDER — the
+  // cluster write stays behind the stopped-return, whatever is said in between.
   assert.match(service,
-    /if stopped:[\s\S]{0,400}?Stopped while saving[\s\S]{0,400}?return\n\s+_write_style_clusters/)
+    /if stopped:[\s\S]{0,400}?Stopped while saving[\s\S]{0,400}?return\n[\s\S]{0,700}?_write_style_clusters/)
 })
