@@ -47,7 +47,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from PIL import Image, ImageOps
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, or_, text
 
 from .. import config as cfg
 from ..extensions import db
@@ -80,6 +80,28 @@ THUMB_MAX_SIDE = 320
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
+# --- duplicate regrouping budgets (see rebuild_dup_groups) -------------------
+# Rows written between two commits. The whole regrouping used to be ONE
+# transaction: a global clear plus one UPDATE per group, ~5 000 of them on a
+# 50 000-image bank, measured holding the single SQLite write lock 6 to 9.5 s —
+# past the 5 s busy_timeout, so every other writer in the app died on
+# `database is locked` (3 attempts out of 3) while the progress bar sat at 100 %.
+_DUP_WRITE_ROWS = 2000
+# And the pause AFTER each batch. Without it the next batch re-takes the write
+# lock in the microsecond after the commit, inside the sleep of another writer's
+# busy handler: batching alone still left a concurrent writer waiting 620 ms and
+# refused (measured, test_bank_scan_no_db_lock.py). Five batches on a 50 000-image
+# bank make this 100 ms of wall time in total.
+_DUP_WRITE_YIELD = 0.02
+# Bucket size from which the pairwise comparison goes to numpy. Below it the
+# plain Python loop is cheaper than allocating arrays, and it is bounded by
+# construction (at most 21 pairs).
+_DUP_NUMPY_FROM = 8
+# Ceiling on the cells of ONE comparison block, so peak memory follows this
+# constant and not the bucket size: 2e6 cells ≈ 34 MB of uint64 XOR plus its
+# popcount lookup, freed at every block.
+_DUP_BLOCK_CELLS = 2_000_000
+_POPCOUNT8 = None           # lazily built uint8 popcount table (see _popcount_lut)
 # A quality pass that keeps finding NOTHING on disk is not looking at a bank of
 # broken images — it is looking at the wrong folder. Bail out after this many
 # absent files (when they are at least half of what has been walked) rather than
@@ -1879,15 +1901,22 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     return out
 
 
-def start_scan(app, user_id, bank_id, rescan=False):
+def start_scan(app, user_id, bank_id, rescan=False, regroup=False):
     """Launch the quality pass. Raises BankJobBusy when a job is already live,
-    ValueError when the bank is unknown."""
+    ValueError when the bank is unknown.
+
+    ``regroup`` asks for the duplicate grouping EXPLICITLY, whatever the scan
+    itself finds. That is what the 🎚 threshold panel's "↻ Re-group duplicates"
+    sends: on an already-scanned bank its pool is empty, and the tail of the pass
+    now only regroups when the stored hashes moved — without this flag that
+    button would have quietly become a no-op."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
     total = _scan_pool(bank_id, rescan).count()
     return bank_jobs.start(app, bank_id, 'scan',
-                           _scan_job(bank_id, rescan), total=total)
+                           _scan_job(bank_id, rescan, regroup=regroup),
+                           total=total)
 
 
 def _scan_pool(bank_id, rescan):
@@ -1918,7 +1947,7 @@ def _scan_pool(bank_id, rescan):
     return q
 
 
-def _scan_job(bank_id, rescan):
+def _scan_job(bank_id, rescan, regroup=False):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -1936,6 +1965,7 @@ def _scan_job(bank_id, rescan):
         done = 0
         missing = 0
         vanished = 0
+        hashed = 0      # rows whose STORED hash actually changed (see the tail)
         with ThreadPoolExecutor(max_workers=workers) as ex:
             it = iter(items)
             futures = deque()
@@ -1964,12 +1994,26 @@ def _scan_job(bank_id, rescan):
                     if not bank_jobs.cancelled(job):
                         submit_next()
                     continue
-                row = _live_image(res['id'])
+                # no_autoflush: this re-read is a SELECT, and SQLAlchemy flushes
+                # the session before one by default. That flush takes the single
+                # SQLite write lock at the FIRST image after a mutation and holds
+                # it until the commit 25 images later, so every other writer in
+                # the app queues behind a scan it has nothing to do with —
+                # measured on a live bank: a sort click went from 5.0 ms median
+                # to 327.6 ms (p90 2 183 ms, worst 5 564 ms, one HTTP 500 out of
+                # 62 clicks). Suppressing the flush here took the worst wait to
+                # 16.7 ms with zero failures and no change in scan throughput
+                # (70-81 img/s): the rows are still written, by the commit that
+                # already paces this loop.
+                with db.session.no_autoflush:
+                    row = _live_image(res['id'])
                 if row is None:
                     # Deleted while the pass ran (see _live_image): skip it and
                     # keep going rather than sinking a scan of thousands.
                     vanished += 1
                 else:
+                    if row.dhash != res['dhash']:
+                        hashed += 1
                     row.quality_state = res['quality_state']
                     row.width, row.height = res['width'], res['height']
                     if res['file_size'] is not None:
@@ -1997,33 +2041,87 @@ def _scan_job(bank_id, rescan):
                 if not bank_jobs.cancelled(job):
                     submit_next()
         db.session.commit()
-        if not bank_jobs.cancelled(job):
+        if bank_jobs.cancelled(job):
+            return
+        tail = (f' — {missing} file(s) were not on disk and were left '
+                'untouched') if missing else ''
+        if vanished:
+            tail += f', {vanished} skipped (deleted while the pass ran)'
+        # Regroup only when the input to the grouping CHANGED, or when the
+        # caller asked for it on purpose (the 🎚 panel's "↻ Re-group duplicates",
+        # which is how a new dup_distance is applied without decoding anything).
+        #
+        # This is the whole freeze the owner reported. A scan with rescan off has
+        # an empty-to-tiny pool on an already-scanned bank — measured 2 rows out
+        # of 50 397 — and the tail then re-grouped the 50 389 hashed rows anyway:
+        # the bar reached 100 %, said "grouping duplicates", and the app went
+        # away for 96 to 124 s. When no stored hash moved and no row disappeared,
+        # the grouping's input is byte-for-byte what produced the groups already
+        # on screen, so running it can only reproduce them.
+        if regroup or hashed or vanished:
             bank_jobs.progress(job, detail='grouping duplicates')
-            groups = rebuild_dup_groups(bank_id)
-            tail = (f' — {missing} file(s) were not on disk and were left '
-                    'untouched') if missing else ''
-            if vanished:
-                tail += f', {vanished} skipped (deleted while the pass ran)'
-            bank_jobs.progress(
-                job, detail=f'done — {groups} duplicate group(s){tail}')
+            groups = rebuild_dup_groups(bank_id, job=job)
+            if bank_jobs.cancelled(job):
+                return
+            head = f'done — {groups} duplicate group(s)'
+        elif done:
+            head = f'done — {done} image(s) checked, no new hash to group'
+        else:
+            head = 'done — every image was already scanned'
+        bank_jobs.progress(job, detail=f'{head}{tail}')
     return run
 
 
 # --- duplicate groups -------------------------------------------------------
-def rebuild_dup_groups(bank_id, max_distance=None) -> int:
-    """Recompute near-duplicate groups over every hashed image of the bank.
-    Banded prefilter (pigeonhole: two hashes within Hamming d share at least
-    one of d+1 equal bands) keeps this out of the full O(n²) — then candidate
-    pairs are verified exactly and grouped by union-find. Groups of ≥2 get a
-    1-based id ordered by size (biggest first). Returns the group count."""
-    th = thresholds()
-    d = int(th['dup_distance'] if max_distance is None else max_distance)
-    rows = (db.session.query(BankImage.id, BankImage.dhash)
-            .filter(BankImage.bank_id == bank_id, BankImage.dhash.isnot(None))
-            .order_by(BankImage.id.asc()).all())
-    ids = [r[0] for r in rows]
-    hashes = [int(r[1], 16) for r in rows]
-    n = len(ids)
+def _job_progress(job, **values):
+    """bank_jobs.progress for a phase that also runs OUTSIDE a job (tests, and
+    any future caller): no job, no reporting, no branch at every call site."""
+    if job is not None:
+        bank_jobs.progress(job, **values)
+
+
+def _job_cancelled(job) -> bool:
+    return job is not None and bank_jobs.cancelled(job)
+
+
+def _popcount_lut():
+    """256-entry uint8 popcount table, built once.
+
+    numpy only grew `bitwise_count` in 2.0 and the app still ships on 1.26, so
+    the table is the portable way to popcount a whole XOR block in one C pass —
+    which is also the point: the GIL is released for the duration instead of
+    being held by a Python loop over pairs."""
+    global _POPCOUNT8
+    if _POPCOUNT8 is None:
+        import numpy as np
+        _POPCOUNT8 = np.array([bin(i).count('1') for i in range(256)],
+                              dtype='uint8')
+    return _POPCOUNT8
+
+
+def _dup_groups_from_hashes(hashes, d, job=None):
+    """The grouping itself: 64-bit hashes in, groups of ≥2 POSITIONS out, biggest
+    group first and ties broken by the smallest position. None when the job was
+    stopped mid-way (nothing has been written at that point).
+
+    Banded prefilter (pigeonhole: two hashes within Hamming d share at least one
+    of d+1 equal bands) keeps this out of the full O(n²); candidate pairs are
+    then verified exactly and grouped by union-find.
+
+    WHY IT LOOKS LIKE `rebuild_semantic_dup_groups`. The pairs used to be walked
+    in Python, with a `set` of every pair already looked at. That set is not
+    bounded by anything: 13 MB at 2 000 images, 829 MB at 16 000, ~4.3 GB
+    extrapolated at 36 000 — and the garbage collector sweeping it was ~79 % of
+    the wall time (disabling the GC took one measured phase from 68 s to 14 s and
+    a typical handler's p95 from 351 ms back to 22 ms). Comparing a whole block
+    at once in numpy has no such set, releases the GIL while it works, and caps
+    its own memory at `_DUP_BLOCK_CELLS`. The pair set it unions is EXACTLY the
+    one the Python loops produced — same buckets, same `x < y`, same threshold —
+    so the groups are identical, which `test_bank_dup_groups_identity.py` pins
+    against a verbatim copy of the old code.
+    """
+    import numpy as np
+    n = len(hashes)
     parent = list(range(n))
 
     def find(a):
@@ -2044,32 +2142,119 @@ def rebuild_dup_groups(bank_id, max_distance=None) -> int:
         for b in range(bands):
             key = (b, (h >> (b * band_bits)) & ((1 << band_bits) - 1))
             buckets.setdefault(key, []).append(i)
-    seen_pairs = set()
-    for members in buckets.values():
-        if len(members) < 2:
+    work = [m for m in buckets.values() if len(m) >= 2]
+    total = sum(len(m) for m in work)
+    _job_progress(job, done=0, total=total,
+                  detail=f'grouping duplicates — comparing {n} hash(es)')
+    lut = _popcount_lut()
+    seen = 0
+    for members in work:
+        if _job_cancelled(job):
+            return None
+        m = len(members)
+        if m < _DUP_NUMPY_FROM:
+            # Tiny buckets are the majority and an array costs more than the
+            # handful of comparisons it would save.
+            for x in range(m):
+                for y in range(x + 1, m):
+                    a, b = members[x], members[y]
+                    if find(a) != find(b) and _hamming(hashes[a], hashes[b]) <= d:
+                        union(a, b)
+            seen += m
+            _job_progress(job, done=seen)
             continue
-        for x in range(len(members)):
-            for y in range(x + 1, len(members)):
-                a, b = members[x], members[y]
-                if find(a) == find(b) or (a, b) in seen_pairs:
-                    continue
-                seen_pairs.add((a, b))
-                if _hamming(hashes[a], hashes[b]) <= d:
-                    union(a, b)
+        arr = np.array([hashes[i] for i in members], dtype='uint64')
+        cols = np.arange(m, dtype='int64')[None, :]
+        step = max(1, min(m, _DUP_BLOCK_CELLS // m))
+        for i0 in range(0, m, step):
+            if _job_cancelled(job):
+                return None
+            block = arr[i0:i0 + step, None] ^ arr[None, :]
+            rows_n = block.shape[0]
+            dist = lut[block.view('uint8').reshape(rows_n, m, 8)].sum(
+                axis=2, dtype='uint8')
+            # `> row index` is the vectorised form of the old `for y in
+            # range(x + 1, ...)`: the diagonal and the mirror pair are skipped,
+            # so each unordered pair is offered to union-find exactly once.
+            keep = (dist <= d) & (cols > np.arange(
+                i0, i0 + rows_n, dtype='int64')[:, None])
+            for a_rel, b in np.argwhere(keep):
+                union(members[i0 + int(a_rel)], members[int(b)])
+            seen += rows_n
+            _job_progress(job, done=min(seen, total))
     comps: dict = {}
     for i in range(n):
         comps.setdefault(find(i), []).append(i)
-    groups = sorted((m for m in comps.values() if len(m) >= 2),
-                    key=lambda m: (-len(m), m[0]))
+    return sorted((m for m in comps.values() if len(m) >= 2),
+                  key=lambda m: (-len(m), m[0]))
+
+
+def rebuild_dup_groups(bank_id, max_distance=None, job=None) -> int:
+    """Recompute near-duplicate groups over every hashed image of the bank.
+    Groups of ≥2 get a 1-based id ordered by size (biggest first). Returns the
+    group count (what was written, when the job was stopped part-way).
+
+    ``job`` makes the phase VISIBLE and STOPPABLE. It used to be neither: no
+    progress, no cancel check anywhere in its body, so a bank of 50 000 images
+    left the progress bar at 100 % under the words "grouping duplicates" for 96
+    to 124 s with no way out — which reads as a dead application, and was
+    reported as one."""
+    th = thresholds()
+    d = int(th['dup_distance'] if max_distance is None else max_distance)
+    rows = (db.session.query(BankImage.id, BankImage.dhash)
+            .filter(BankImage.bank_id == bank_id, BankImage.dhash.isnot(None))
+            .order_by(BankImage.id.asc()).all())
+    ids = [r[0] for r in rows]
+    hashes = [int(r[1], 16) for r in rows]
+    # Everything below the comparison is pure CPU over data already in memory,
+    # so the session must not sit on a transaction across it — same guard, same
+    # reason, as every inference pass (see _release_db_before_inference).
+    _release_db_before_inference()
+    groups = _dup_groups_from_hashes(hashes, d, job=job)
+    if groups is None:
+        return 0            # stopped before any write: the bank is untouched
+    _job_progress(job, done=0, total=len(groups),
+                  detail=f'grouping duplicates — writing {len(groups)} group(s)')
     BankImage.query.filter_by(bank_id=bank_id).update(
         {'dup_group': None}, synchronize_session=False)
-    for gid, members in enumerate(groups, start=1):
-        member_ids = [ids[i] for i in members]
-        for i0 in range(0, len(member_ids), _SQL_IN_CHUNK):
-            BankImage.query.filter(
-                BankImage.id.in_(member_ids[i0:i0 + _SQL_IN_CHUNK])).update(
-                {'dup_group': gid}, synchronize_session=False)
     db.session.commit()
+    # ONE prepared statement per batch, and a real pause between batches.
+    #
+    # The clear plus one `UPDATE ... WHERE id IN (…)` per group — about 5 000 of
+    # them on a 50 000-image bank — used to be a single transaction holding the
+    # write lock 6 to 9.5 s, past the 5 s busy_timeout: `database is locked` for
+    # everybody else, 3 attempts out of 3. Splitting it into batches is only half
+    # the fix, and the half that measures nothing on its own:
+    #   • 4 000 separate UPDATE statements cost 0.67 s of pure statement overhead
+    #     whatever the transaction boundaries are; one executemany over the same
+    #     8 000 rows is ~30 ms, so the lock is barely taken at all;
+    #   • and without the pause, the next batch re-takes the lock in the
+    #     microsecond after the commit, inside the sleep of the other writer's
+    #     busy handler. Batching alone left a concurrent writer waiting 620 ms
+    #     and still refused — measured, and the reason this loop yields.
+    # The cost of the trade is stated where the user reads it: groups land
+    # biggest-first, and a stop part-way keeps the ones already written (the
+    # panel already says "the groups are whatever it had reached").
+    stmt = text('UPDATE bank_image SET dup_group = :gid WHERE id = :iid')
+    pending: list = []
+
+    def flush():
+        if not pending:
+            return
+        db.session.execute(stmt, pending)
+        db.session.commit()
+        pending.clear()
+        time.sleep(_DUP_WRITE_YIELD)
+
+    for gid, members in enumerate(groups, start=1):
+        pending.extend({'gid': gid, 'iid': ids[i]} for i in members)
+        if len(pending) >= _DUP_WRITE_ROWS:
+            flush()
+            _job_progress(job, done=gid)
+            if _job_cancelled(job):
+                return gid
+    flush()
+    _job_progress(job, done=len(groups))
     return len(groups)
 
 

@@ -83,13 +83,18 @@ export const APPLIES = {
    offered as a BUTTON next to the field, because "applies at the next pass" is
    only half an answer if the next pass is somewhere else on the page.
 
-   The duplicate one is the cheap surprise: rebuild_dup_groups runs at the tail
-   of EVERY quality scan, and a scan with rescan off has an empty pool on an
-   already-scanned bank — so re-grouping thousands of images costs a walk over
-   stored hashes, no decode. Worth saying, or the button reads as "rescan 36 000
-   files" and nobody presses it. */
+   The duplicate one is the cheap surprise: a scan with rescan off has an empty
+   pool on an already-scanned bank, so re-grouping thousands of images costs a
+   walk over stored hashes, no decode. Worth saying, or the button reads as
+   "rescan 36 000 files" and nobody presses it.
+
+   `body` is what makes that true AND safe. The quality scan only regroups when
+   the hashes it stored actually moved — regrouping 50 000 unchanged hashes at
+   the tail of a scan that had 2 images to look at is what froze the app for two
+   minutes. This button asks for the grouping on purpose, so it keeps working on
+   a bank where the scan itself has nothing to do. */
 export const PASS_RERUN = {
-  scan: { endpoint: 'scan', label: '↻ Re-group duplicates',
+  scan: { endpoint: 'scan', body: { regroup: true }, label: '↻ Re-group duplicates',
     note: 'Regroups from the stored hashes — nothing is decoded again.' },
   faces: { endpoint: 'faces', label: '↻ Re-run the face pass',
     note: 'Re-clusters from the cached face embeddings.' },

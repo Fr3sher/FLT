@@ -7,10 +7,18 @@
  * looked exactly like a button that could, and the only feedback was the
  * server's own sentence, "a scan job is already running on this bank", pasted
  * into a red toast. That sentence names no progress, no remedy, and no place to
- * go. And when the click DID work, the pass returned 202 and said nothing: a
- * re-group over stored hashes finishes in under the 2 s poll, so the workspace's
- * completion toast (which only fires for a job it observed alive) never fired
- * either. Both halves of the click were silent.
+ * go. And when the click DID work, the pass returned 202 and said nothing: on a
+ * small bank a re-group over stored hashes is over before the next 2 s poll, so
+ * the workspace's completion toast (which only fires for a job it observed
+ * alive) never fired either. Both halves of the click were silent.
+ *
+ * "Before the next poll" is a SMALL bank and nothing more — the line that used
+ * to live here said a re-group always finishes inside the poll, and that was
+ * measured false: 96 to 124 s on a 50 000-image bank, which is exactly how the
+ * pass came to look like a frozen application. The grouping now reports its own
+ * progress and honours Stop like every other pass, so this file's job is to
+ * report what a pass it WATCHED produced, never to assume one was too quick to
+ * see.
  *
  * THREE FUNCTIONS, ONE RULE EACH:
  *   passButtonState  — a button that cannot work must not look like one, and

@@ -1976,8 +1976,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 activity={payload?.activity} offline={!connection.online}
                 dupSummary={payload?.dup} semanticDupSummary={payload?.semantic_dup}
                 onSaved={() => { refreshPayload(); refreshImages() }}
-                onRunPass={(endpoint) => act(
-                  () => postJson(`/api/bank/${bankId}/${endpoint}`, {}), null)} />
+                onRunPass={(endpoint, body) => act(
+                  () => postJson(`/api/bank/${bankId}/${endpoint}`, body || {}),
+                  null)} />
             </div>
           )}
         </div>

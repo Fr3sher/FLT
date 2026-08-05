@@ -277,9 +277,13 @@ def _start(fn, *args, **kwargs):
 
 @bp.post('/bank/<int:bank_id>/scan')
 def bank_scan(bank_id):
+    """Quality pass. {rescan: true} walks every image again; {regroup: true} asks
+    for the duplicate grouping whatever the scan finds — that is the 🎚 panel's
+    "↻ Re-group duplicates", whose pool is empty on an already-scanned bank."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_scan, _app(), LOCAL_USER, bank_id,
-                  rescan=bool(data.get('rescan')))
+                  rescan=bool(data.get('rescan')),
+                  regroup=bool(data.get('regroup')))
 
 
 @bp.post('/bank/<int:bank_id>/faces')
