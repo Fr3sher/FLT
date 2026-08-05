@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import { BANK_PASSES } from './bankPasses.js';
 
 const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
 const panel = fs.readFileSync(new URL('./DupGroupsPanel.jsx', import.meta.url), 'utf8');
@@ -38,13 +39,16 @@ test('✂ Find crops quotes NO number, and says why instead of inventing one', (
   // score cache, not in a column, so no honest count exists client-side. The rule on
   // this surface is that every number is one somebody measured, so this window shows
   // none and explains the absence.
-  const passes = fs.readFileSync(new URL('./bankPasses.js', import.meta.url), 'utf8');
-  const i = passes.indexOf('  semantic_dedup: {');
-  const spec = passes.slice(i, passes.indexOf('\n  caption: {'));
-  assert.ok(i > 0, 'the ✂ spec is missing');
-  assert.match(spec, /countable: false/);
-  assert.match(spec, /rejected ones\s*\+?\s*'?\s*included/);
-  assert.match(spec, /without inventing one/);
+  //
+  // Asserted on the VALUES, not on the source text: the first version of this test
+  // matched a regex across the `+` of a wrapped string literal, so re-flowing a
+  // sentence by one word turned it red without a single user-visible word changing.
+  // The claim here is about what the window SAYS, so read what it says.
+  const spec = BANK_PASSES.semantic_dedup;
+  assert.ok(spec, 'the ✂ spec is missing');
+  assert.equal(spec.countable, false);
+  assert.match(spec.fixedScopeLine, /rejected ones included/);
+  assert.match(spec.fixedScopeLine, /without inventing one/);
 });
 
 test('the resolution panel hits the semantic endpoints and uses same-shot wording', () => {

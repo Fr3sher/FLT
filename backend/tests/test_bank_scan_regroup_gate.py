@@ -134,16 +134,29 @@ def test_the_scan_route_forwards_the_regroup_intent(app, client, tmp_path):
     with app.app_context():
         bank_id, _src = _bank(banks, tmp_path, name='Route')
 
-    def fake_start(app_, user_id, bid, rescan=False, regroup=False):
-        seen.update(rescan=rescan, regroup=regroup)
+    # The launch window added `statuses` and `image_ids` to every pass body, so
+    # the route forwards two more keys. They are pinned here rather than absorbed
+    # by a **kwargs: what matters is that a body WITHOUT them still reaches the
+    # service as None/None — the request that shipped before the window existed
+    # has to stay byte-for-byte the same run.
+    def fake_start(app_, user_id, bid, rescan=False, regroup=False,
+                   statuses=None, ids=None):
+        seen.update(rescan=rescan, regroup=regroup, statuses=statuses, ids=ids)
         return {}
 
     with patch.object(banks, 'start_scan', fake_start):
         assert client.post(f'/api/bank/{bank_id}/scan',
                            json={'regroup': True}).status_code == 202
-        assert seen == {'rescan': False, 'regroup': True}
+        assert seen == {'rescan': False, 'regroup': True,
+                        'statuses': None, 'ids': None}
         assert client.post(f'/api/bank/{bank_id}/scan', json={}).status_code == 202
-        assert seen == {'rescan': False, 'regroup': False}
+        assert seen == {'rescan': False, 'regroup': False,
+                        'statuses': None, 'ids': None}
+        # …and a scoped body arrives whole, not silently dropped on the floor.
+        assert client.post(f'/api/bank/{bank_id}/scan',
+                           json={'statuses': ['keep'], 'image_ids': [7, 9]}).status_code == 202
+        assert seen == {'rescan': False, 'regroup': False,
+                        'statuses': ['keep'], 'ids': [7, 9]}
 
 
 # --- the phase is visible, and it stops --------------------------------------
