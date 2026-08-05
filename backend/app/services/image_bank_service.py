@@ -1391,8 +1391,18 @@ def bank_payload(user_id, bank_id) -> dict | None:
                       'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
         'framing': {'todo': _todo_by_status(bank_id, BankImage.framing.is_(None)),
                     'all': dict(all_by_status)},
+        # 🎨 Medium is the one pass whose pool is not its work: it computes NO
+        # image inference and reads the CLIP embedding ✨ Score cached, so a row
+        # with no score CANNOT be classified however wide the scope is. Counting
+        # only the pool made the window promise "Classify 2 images" over a run
+        # that could only answer "0 classified, 2 skipped (not scored yet)" —
+        # the same class of defect as a count that does not match the run, one
+        # step earlier. 'blocked' is that subset, measured, per pile.
         'medium': {'todo': _todo_by_status(bank_id, BankImage.medium.is_(None)),
-                   'all': dict(all_by_status)},
+                   'all': dict(all_by_status),
+                   'blocked': _todo_by_status(bank_id, and_(
+                       BankImage.medium.is_(None), _unscored_clause())),
+                   'blocked_all': _todo_by_status(bank_id, _unscored_clause())},
         # ⤢ has no "do it again" lane at all: a measured yaw is a measured yaw.
         # Both figures are the same pool, said twice rather than left absent.
         'angles': {'todo': _todo_by_status(bank_id, _angle_todo_clause()),
@@ -2173,6 +2183,16 @@ def normalize_pass_statuses(statuses, allowed=PASS_SCOPES):
     return [s for s in PASS_SCOPES if s in want]
 
 
+def _unscored_clause():
+    """Rows the ✨ Score pass never reached — no aesthetic AND no NSFW value, so
+    no cached CLIP embedding either. The 🎨 Medium pass can do nothing with them,
+    and `medium_prereq` reads the same two columns to decide the bank has been
+    scored at all: one definition, so the window's warning and the pass's
+    "skipped (not scored yet)" can never disagree."""
+    return and_(BankImage.aesthetic_score.is_(None),
+                BankImage.nsfw_score.is_(None))
+
+
 def _scope_clause(statuses):
     """The WHERE fragment for a scope. None → the historical non-rejected set."""
     if statuses is None:
@@ -2209,6 +2229,47 @@ def _todo_by_status(bank_id, todo_clause):
         .filter(BankImage.bank_id == bank_id).one())
     return {'keep': int(keep or 0), 'pending': int(pending or 0),
             'reject': int(reject or 0)}
+
+
+# The user-facing word for each pile. Same split every scope surface draws: the
+# column stores 'keep'/'pending'/'reject', the reader sees these.
+_PILE_WORDS = {'keep': 'kept', 'pending': 'undecided', 'reject': 'rejected'}
+
+
+def scope_left_out(todo, statuses):
+    """(n, words) — the work this pass HAS TO DO that its scope will not reach.
+
+    THE DEFECT THIS ANSWERS. 🎨 Medium on a 50 397-image bank reported "0
+    classified, 2 skipped (not scored yet)" in a few seconds and read as "nothing
+    happened". Every figure in it was exact; the one that explained the screen —
+    25 464 rejected images the default scope drops before the pool is even built
+    (_scope_clause: status != 'reject') — was in no sentence anywhere.
+
+    ``todo`` is a _todo_by_status mapping computed from the pass's OWN clause, so
+    what is counted here is work, never mere population. Returns (0, '') when the
+    scope reaches everything there is to do — a pass with nothing to report must
+    stay quiet, or the note becomes noise on every run."""
+    included = set(statuses) if statuses is not None else {'keep', 'pending'}
+    out = [(p, int(todo.get(p) or 0)) for p in PASS_SCOPES if p not in included]
+    out = [(p, n) for p, n in out if n > 0]
+    if not out:
+        return 0, ''
+    return (sum(n for _p, n in out),
+            ' + '.join(f'{n} {_PILE_WORDS[p]}' for p, n in out) if len(out) > 1
+            else _PILE_WORDS[out[0][0]])
+
+
+def _scope_note(bank_id, todo_clause, statuses, ids=None):
+    """The sentence naming what the SCOPE left out, or '' when it left out
+    nothing. Empty for a run aimed at a selection: there the user named the
+    images one by one, and 'left out by the scope' would describe their own
+    click back at them."""
+    if ids:
+        return ''
+    n, words = scope_left_out(_todo_by_status(bank_id, todo_clause), statuses)
+    if not n:
+        return ''
+    return f'; {n} image(s) left out by the scope ({words})'
 
 
 def start_scan(app, user_id, bank_id, rescan=False, regroup=False,
@@ -2393,7 +2454,8 @@ def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
             head = f'done — {done} image(s) checked, no new hash to group'
         else:
             head = 'done — every image was already scanned'
-        bank_jobs.progress(job, detail=f'{head}{tail}')
+        bank_jobs.progress(job, detail=f'{head}{tail}' + _scope_note(
+            bank_id, None if rescan else _scan_todo_clause(), statuses, ids))
     return run
 
 
@@ -4165,6 +4227,11 @@ def delete_rejected(user_id, bank_id, job=None) -> dict:
 # always shows an honest count — even in the rare hard-kill case.
 _INFER_CANCEL_GRACE = 15.0   # seconds a cleanly-cancelled child gets before a kill
 _CACHED_RE = re.compile(r'(\d+) image\(s\), (\d+) cached')
+# A step the child cannot count per image (writing a 70 MB cache, the n² style
+# grouping). The sentence is written child-side in user-facing English and shown
+# VERBATIM — a phase nobody translates cannot drift away from what runs. Any
+# infer child may emit these; one that emits none behaves exactly as before.
+_PHASE_RE = re.compile(r'\[phase\] (.+)$')
 
 
 def _safe_kill(proc):
@@ -4311,6 +4378,15 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
                 m = progress_re.search(line)
                 if m:
                     bank_jobs.progress(job, done=int(m.group(1)), total=int(m.group(2)))
+                mp = _PHASE_RE.search(line)
+                if mp:
+                    # A step with no per-image counter. The count is CLEARED with
+                    # the sentence, on purpose: leaving "373 / 373" up next to
+                    # "grouping styles…" is what made a working pass look frozen
+                    # behind a full bar. done=total=0 renders as no figure and no
+                    # bar (see ProgressBar), which is the honest shape for a step
+                    # nobody can count.
+                    bank_jobs.progress(job, done=0, total=0, detail=mp.group(1))
                 if not hint['shown']:
                     mc = _CACHED_RE.search(line)
                     if mc:
@@ -4557,10 +4633,14 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
-        multi = sum(1 for n in sizes.values() if n >= 2)
+        # Same sentence-with-its-shape as the style grouping, for the same
+        # reason: "1 person cluster of 2+" over a bank where ONE cluster holds
+        # everybody reads as "nobody grouped", the exact opposite of the truth.
         detail = (f'done — {sum(1 for r in results.values() if r.get("yaw") is not None)}'
                   ' angle(s) measured' if angles_only
-                  else f'done — {multi} person cluster(s) of 2+ images')
+                  else 'done — ' + group_summary(
+                      sizes.values(), 'person cluster', th['face_threshold'],
+                      '🎚 Filter thresholds ▸ face_threshold'))
         if skipped_asserted:
             # Never mute: an image the pass did not look at must be reported as
             # such, or "0 clusters" would read as "no one in this bank".
@@ -4707,6 +4787,14 @@ def _apply_score_results(job, by_path, results, interruptible):
     a pass that only wrote at the very end lost everything to a restart."""
     written = scored = vanished = 0
     stopped = False
+    # The write-back is the parent's own mute step, and on a large bank it is
+    # minutes long: 21 000 rows one at a time, committed in batches. It used to
+    # run under the child's last progress line ("373 / 373"), so the pass looked
+    # finished and hung at the same time. Its own counter starts here.
+    total = len(by_path)
+    bank_jobs.progress(job, done=0, total=total, detail=(
+        f'writing {total} score(s) to the database…'
+        + (' — a few minutes on a bank this size' if total >= 5000 else '')))
     for p, image_id in by_path.items():
         res = results.get(p)
         if res is None:
@@ -4729,6 +4817,7 @@ def _apply_score_results(job, by_path, results, interruptible):
         written += 1
         if written % _SCORE_COMMIT_EVERY == 0:
             db.session.commit()
+            bank_jobs.progress(job, done=written)
             # Stop is honoured HERE and not per row, on purpose: the rows in
             # hand are already computed, so abandoning them buys nothing except
             # a relaunch. A bank smaller than one commit therefore always
@@ -4738,6 +4827,43 @@ def _apply_score_results(job, by_path, results, interruptible):
                 break
     db.session.commit()
     return written, scored, vanished, stopped
+
+
+# A style grouping that swallowed almost the whole bank and one that grouped
+# nothing at all are OPPOSITE failures — and until this function existed they
+# printed the same sentence. "1 style group(s) of 2+" was what a bank of 24 931
+# images reported when ONE group held 24 928 of them: read as "almost nothing
+# grouped", when the truth was "everything did". Below these two floors the
+# diagnosis is suppressed entirely — on a handful of images a single group is an
+# ordinary answer, not a symptom, and a warning there would be noise.
+_STYLE_DIAGNOSIS_MIN = 20      # images, under which no verdict is offered
+_STYLE_DOMINANT_SHARE = 0.9    # of the grouped images, in ONE group
+
+
+def group_summary(sizes, noun='style group', threshold=None, setting=''):
+    """The end-of-pass sentence about a CLUSTERING, from the group SIZES.
+
+    Never quotes a count of groups without the shape behind it: the reader has to
+    be able to tell "the threshold is too permissive to separate anything" from
+    "too strict to join anything" without opening the database. Shared by the
+    style grouping and the person clustering — both are one union-find over
+    embeddings, so both fail in exactly these two opposite ways."""
+    sizes = sorted((int(n) for n in sizes), reverse=True)
+    total = sum(sizes)
+    if not total:
+        return f'no {noun} — no image carried a usable embedding'
+    multi = sum(1 for n in sizes if n >= 2)
+    biggest = sizes[0]
+    th = '' if threshold is None else f' ({threshold:g})'
+    where = f' — retune it in {setting} and re-run' if setting else ''
+    if total >= _STYLE_DIAGNOSIS_MIN and biggest >= _STYLE_DOMINANT_SHARE * total:
+        return (f'1 {noun} holds {biggest} of {total} images — the threshold{th} '
+                'is too permissive to separate anything' + where)
+    if total >= _STYLE_DIAGNOSIS_MIN and not multi:
+        return (f'no two images grouped — {len(sizes)} {noun}s of one; the '
+                f'threshold{th} is too strict to join anything' + where)
+    return (f'{multi} {noun}(s) of 2+ '
+            f'(the biggest holds {biggest} of {total} images)')
 
 
 def _write_style_clusters(by_path, clusters):
@@ -4872,11 +4998,17 @@ def _score_job(bank_id, rescore=False):
                 f'({len(paths) - written - vanished} left); nothing was '
                 'recomputed, relaunch finishes from the cache'))
             return
+        # The last mute step, and the one whose Stop semantics differ from every
+        # other: the partition is written whole or not at all (see
+        # _write_style_clusters), so a Stop landing here does NOT undo it.
+        bank_jobs.progress(job, done=0, total=0, detail=(
+            f'writing the style grouping over {len(clusters)} image(s) — this '
+            'step finishes even if you Stop, because a half-written grouping '
+            'would mix two numberings'))
         _write_style_clusters(by_path, clusters)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
-        multi = sum(1 for n in sizes.values() if n >= 2)
         # The child's own report — used ONLY to name a head that produced nothing
         # (below). It counts PATHS it was handed, so it is the wrong thing to
         # report as "scored": see the counter in the write-back loop.
@@ -4889,7 +5021,9 @@ def _score_job(bank_id, rescore=False):
         if ok and not any('nsfw' in r for r in ok):
             missing.append('NSFW')
         detail = (f'done — scored {scored} image(s), '
-                  f'{multi} style group(s) of 2+')
+                  + group_summary(sizes.values(), 'style group',
+                                  th['style_threshold'],
+                                  '🎚 Filter thresholds ▸ style_threshold'))
         # Where the work went. Both numbers count images HANDED to the pass, so
         # they add up to the pool and never stand in for `scored`, which counts
         # rows actually written. Saying "scored N" over a bank that recomputed
@@ -5189,6 +5323,8 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
                        'nothing — check Ollama in Settings, then run it again)')
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, _watermark_not_dismissed() if rescan
+                              else _watermark_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -5367,6 +5503,8 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, _watermark_not_dismissed() if rescan
+                              else _watermark_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -6082,7 +6220,13 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
         rows = (_framing_pool(bank_id, rescan, statuses, ids)
                 .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='framing')
+        todo_clause = None if rescan else BankImage.framing.is_(None)
         if not rows:
+            # A pass that ran over nothing used to return MUTE, so the screen
+            # showed the previous pass's line and the click read as ignored.
+            bank_jobs.progress(job, detail=(
+                'done — nothing to classify in this scope'
+                + _scope_note(bank_id, todo_clause, statuses, ids)))
             return
         row_ids = [r.id for r in rows]
         classified = errors = vanished = 0
@@ -6155,6 +6299,7 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, todo_clause, statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -6280,6 +6425,9 @@ def _medium_job(bank_id, rescan, statuses=None, ids=None):
             # Never silent: an image with no ✨ Score embedding CANNOT get a
             # medium, and "0 results" without that sentence reads as a bug.
             detail += f', {unscored} skipped (not scored yet)'
+        detail += _scope_note(bank_id,
+                              None if rescan else BankImage.medium.is_(None),
+                              statuses, ids)
         if bank_jobs.cancelled(job):
             detail = (f'stopped — {classified} classified, '
                       f'{len(rows) - done} left (re-run to finish)')
@@ -6524,6 +6672,11 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             detail += f', {skipped_asserted} kept (written by you)'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
+        detail += _scope_note(
+            bank_id,
+            None if force else or_(BankImage.caption.is_(None),
+                                   BankImage.caption == ''),
+            statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 

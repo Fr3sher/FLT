@@ -252,6 +252,17 @@ export const BANK_PASSES = {
       '✨ Score runs this pass automatically when it finishes, always with the '
         + 'default scope — a scope picked here belongs to this run only and is '
         + 'stored nowhere.',
+      // The dependency, stated where the scope is chosen. ✨ Score has NO scope
+      // control at all (its style grouping is one numbering of the bank, so it
+      // always runs on kept + undecided), which means the bin cannot be scored
+      // by asking for it — the images there carry an embedding only if they
+      // were scored BEFORE being rejected. Aiming this pass at the bin without
+      // that is a run that classifies nothing, and the scope lines now count
+      // exactly how many of the images they offer are in that state.
+      'This pass reads the embeddings ✨ Score cached and computes none of its '
+        + 'own. ✨ Score never runs on the bin, so a rejected image has an '
+        + 'embedding only if it was scored before you rejected it — aimed at '
+        + 'the bin, this pass answers for those and skips the rest.',
     ],
     binFree: true,
   },

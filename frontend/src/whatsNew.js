@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-bank-passes-say-what-they-left-out',
+    date: '2026-08-05',
+    title: 'Bank passes now say what they were doing, what they grouped, and what they left out',
+    blurb:
+      '✨ Score used to go quiet for minutes once its counter reached the last image, bar full, Stop still offered — on a 21 000-image bank that silence read as a freeze. It was writing a 70 MB cache and then comparing every embedding against every other; both steps now name themselves while they run, and the ones where Stop costs something different say what it costs before you press it. The style grouping stopped hiding behind a number too: "1 style group of 2+" was printed both when almost nothing grouped and when a single group had swallowed 24 928 of 24 931 images. It now states the size of the biggest group against the total, and names the threshold when the grouping is too loose to separate anything or too tight to join anything. And every pass that skips part of your bank says so at the end: 🎨 Classify medium answering "0 classified" on a 50 000-image bank was exact — 25 464 rejected images had been dropped by the scope before the pass even began, and that figure appeared nowhere. It does now, on 🔎 Scan, 🏷️ Caption, 📐 Framing, 💧 Watermark and 🎨 Medium alike, and stays silent when a run really did reach everything. 🎨 Medium\'s launch window also counts, per scope, the images it cannot answer for because ✨ Score never reached them — and refuses to start a run where that is all of them.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-every-bank-pass-asks-where-to-run-before-it-runs',
     date: '2026-08-05',
     title: 'Every bank pass now asks where to run — kept, undecided, unkept, or your selection',

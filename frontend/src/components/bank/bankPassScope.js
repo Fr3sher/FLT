@@ -144,14 +144,44 @@ export function pileCount(counts, scopeId) {
     .reduce((n, pile) => n + (Number(counts?.[pile]) || 0), 0);
 }
 
+/**
+ * How many images in THIS scope the pass will reach but cannot answer for,
+ * because a PREREQUISITE pass never got to them. 0 when there is none, null when
+ * the server sends no figure (an older build, or a pass with no prerequisite).
+ *
+ * WHY THIS EXISTS. 🎨 Medium runs no image inference at all — it multiplies the
+ * CLIP embeddings ✨ Score cached. On a bank of 50 397 images where every
+ * unclassified row but two sat in the bin, its window counted its pool honestly
+ * ("2 images") and the run answered "0 classified, 2 skipped (not scored yet)":
+ * those two rows had never been scored. The count was right about the POOL and
+ * wrong about the WORK — on this screen, the same defect one step earlier.
+ */
+export function passScopeBlocked(payload, passId, scopeId, redo = false) {
+  const table = payload?.pass_scopes?.[passId]?.[redo ? 'blocked_all' : 'blocked'];
+  if (!table) return null;
+  return passScopeOption(scopeId).piles
+    .reduce((n, pile) => n + (Number(table[pile]) || 0), 0);
+}
+
 /** One scope line's words: "✓ Kept only — 412 images".
  *
  *  With no count yet it says so rather than showing a bare label that reads like
- *  a zero. */
+ *  a zero. When part of the line cannot be answered without ✨ Score, the line
+ *  says so INSIDE itself: the user is choosing BETWEEN these lines, so the
+ *  objection has to sit on the line it disqualifies. */
 export function passScopeLineLabel(payload, passId, scopeId, redo = false) {
   const opt = passScopeOption(scopeId);
   const n = passScopeCount(payload, passId, scopeId, redo);
   if (n === null) return `${opt.label} — counting…`;
+  const blocked = passScopeBlocked(payload, passId, scopeId, redo);
+  // BOTH magnitudes, never one replacing the other. Showing only the feasible
+  // count would trade a wrong number for a mute "0 images" — a dead button with
+  // no explanation, which is the same defect wearing the opposite coat. So the
+  // line reads "N in scope, M ready" and names the pass that closes the gap.
+  const note = !blocked ? ''
+    : ` in scope, ${Math.max(0, n - blocked)} ready — ✨ Score has not reached `
+      + `${blocked} of them`;
+  if (note) return `${opt.label} — ${n} ${n === 1 ? 'image' : 'images'}${note}`;
   return `${opt.label} — ${n} ${n === 1 ? 'image' : 'images'}`;
 }
 
@@ -188,6 +218,16 @@ export function passLaunchDisabledReason({
   if (!countable) return '';
   const n = passScopeCount(payload, passId, scopeId, redo);
   if (n === null) return '';        // unknown is not zero — stay clickable
+  // A pool that exists but is entirely waiting on a prerequisite is a run that
+  // provably writes nothing. Refused HERE, with the fix named, rather than
+  // started and reported as "done — 0 classified, N skipped (not scored yet)"
+  // seconds later, which is what read as "nothing happened".
+  const blocked = passScopeBlocked(payload, passId, scopeId, redo);
+  if (n > 0 && blocked >= n) {
+    return `${n} image(s) in scope, 0 ready — this pass reads the embeddings `
+      + '✨ Score computes and none of these has been scored, so it would write '
+      + 'nothing. Run ✨ Score first, or pick a scope that has been scored.';
+  }
   if (n === 0) {
     const opt = passScopeOption(scopeId);
     return `Nothing to do in this scope — 0 ${opt.short === 'images' ? 'image' : opt.short} `
