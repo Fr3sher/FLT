@@ -49,10 +49,10 @@ export function promoteCount({ useSelection, selectedCount, promotable, size }) 
 
 /** The weight sentence, or null when there is nothing honest to say.
  *
- *  Only for the NEW BANK destination: that copy is byte-for-byte, so the
- *  measured size IS the disk cost. A dataset promotion re-encodes to webp on the
- *  way in, so quoting the source weight there would be a number the user could
- *  check and find wrong. */
+ *  Only for the NEW BANK destination: that copy has no de-duplication step, so
+ *  the measured size IS the disk cost. A dataset promotion preserves the bytes
+ *  too, but may skip near-duplicates; quoting the whole source weight there
+ *  would therefore overstate what is actually written. */
 export function weightNotice({ destination, size }) {
   if (destination !== 'bank') return null
   if (!size) return 'Measuring what that weighs on disk…'
@@ -73,15 +73,16 @@ export function promoteSummary({ destination, useSelection, selectedCount,
   }
   if (!useSelection && !datasetChosen) {
     return 'Kept image(s) not yet in the chosen dataset will be COPIED into it'
-      + ' — normalized to webp, near-duplicates already in the dataset skipped.'
+      + ' byte-for-byte so their Bank analysis can travel with them; near-duplicates'
+      + ' already in the dataset are skipped.'
       + ' The bank and its source folder are left as they are.'
   }
   const scoped = useSelection ? `The ${selectedCount} selected image(s)`
     : (n == null ? 'The kept image(s) not yet in this dataset'
       : `The ${n} kept image(s) not yet in this dataset`)
-  return `${scoped} will be COPIED into the dataset — normalized to webp,`
-    + ' near-duplicates already in the dataset skipped. The bank and its source'
-    + ' folder are left as they are.'
+  return `${scoped} will be COPIED into the dataset byte-for-byte so their Bank`
+    + ' analysis can travel with them; near-duplicates already in the dataset are'
+    + ' skipped. The bank and its source folder are left as they are.'
 }
 
 /** May the confirm button arm? A dataset needs a target, a new bank needs a
