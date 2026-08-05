@@ -1263,6 +1263,22 @@ def bank_payload(user_id, bank_id) -> dict | None:
     th = thresholds()
     base = BankImage.query.filter_by(bank_id=bank_id)
     total = base.count()
+    # 🏷️ What each caption SCOPE would really caption: in that status AND still
+    # without a caption. NOT counts.keep / counts.pending — the pass skips rows
+    # that already have one, so quoting the status total would advertise a number
+    # the run does not act on. That exact mistake was paid for once already by the
+    # 🧹 Auto-reject counter (see _flag_counts): a button that offers "5 930" and
+    # moves 0 reads as a broken feature, and it is the counter's fault. One query,
+    # two conditional sums, so telling the truth costs nothing on a 100 000-image
+    # bank.
+    todo_keep, todo_pending = (
+        db.session.query(
+            func.coalesce(
+                func.sum(case((BankImage.status == 'keep', 1), else_=0)), 0),
+            func.coalesce(
+                func.sum(case((BankImage.status == 'pending', 1), else_=0)), 0))
+        .filter(BankImage.bank_id == bank_id)
+        .filter(or_(BankImage.caption.is_(None), BankImage.caption == '')).one())
     counts = {
         'total': total,
         'scanned': base.filter(BankImage.quality_state.isnot(None)).count(),
@@ -1281,6 +1297,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'pending': base.filter_by(status='pending').count(),
         'keep': base.filter_by(status='keep').count(),
         'reject': base.filter_by(status='reject').count(),
+        # …and the caption-pass sizes of the two scopes it can be aimed at.
+        'caption_todo_keep': int(todo_keep or 0),
+        'caption_todo_pending': int(todo_pending or 0),
         # Images a dataset REALLY holds today (back-link), plus the ones promoted
         # before that link existed (legacy flag). Counting the flag alone kept
         # advertising copies the user had since deleted.
@@ -4503,7 +4522,7 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     use_detector = watermark_detector.available()
     if not use_detector and not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
-                           '(Settings ▸ Captioning & quality)')
+                           '(Settings ▸ Local tools)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
@@ -5501,7 +5520,7 @@ def start_framing(app, user_id, bank_id, rescan=False):
         raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
     if not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
-                           '(Settings ▸ Captioning & quality)')
+                           '(Settings ▸ Local tools)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
@@ -5727,8 +5746,75 @@ def _medium_job(bank_id, rescan):
 
 
 # --- caption pass (reuses the dataset caption engines) ----------------------
+# The statuses a caption pass may be AIMED at. 'reject' is absent on purpose and
+# it is not an oversight: you curate from what you might keep, never from the bin
+# — the same rule every other pass on this page follows. Values are the ones
+# stored in the column ('keep' / 'pending'); the UI says "Kept" and "Undecided".
+# Renaming either would break stored queries, so the wire keeps the column's
+# vocabulary and the translation happens in the label.
+CAPTION_SCOPES = ('keep', 'pending')
+
+
+def _normalize_caption_statuses(statuses):
+    """Validate a per-run caption scope, or None for the historical set.
+
+    None / [] → None, which means the pass keeps its original
+    ``status != 'reject'`` filter: a client that sends no scope is
+    byte-identical to before this option existed. Anything outside
+    CAPTION_SCOPES — 'reject' first among them — raises ValueError → 400,
+    exactly like a bad vocabulary or length."""
+    if statuses is None:
+        return None
+    if isinstance(statuses, str):       # a lone 'keep' is a scope of one
+        statuses = [statuses]
+    if not isinstance(statuses, (list, tuple, set)):
+        raise ValueError('invalid caption statuses: expected a list of statuses')
+    want = []
+    for s in statuses:
+        if not isinstance(s, str):
+            raise ValueError('invalid caption status: expected status names')
+        v = s.strip().lower()
+        if not v:
+            continue
+        if v not in CAPTION_SCOPES:
+            raise ValueError(f'invalid caption status: {v}')
+        want.append(v)
+    if not want:
+        return None
+    # Canonical order + dedup, so ['pending','keep'] and ['keep','pending'] are
+    # one value and never two code paths.
+    return [s for s in CAPTION_SCOPES if s in want]
+
+
+def _caption_name_option(name, value):
+    """Normalize one free-text caption option, or raise ValueError → 400.
+
+    Every one of these options is a NAME out of a closed list. A non-string reached
+    ``.strip()`` and answered 500 — a bad request rendered as a broken server, while
+    ``statuses`` next door already answered 400 for exactly the same mistake. The
+    validation now matches the promise the route's docstring makes ("invalid → 400")."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f'invalid caption {name}: expected a name, not '
+                         f'{type(value).__name__}')
+    return value.strip().lower() or None
+
+
+def _caption_scope_q(bank_id, statuses):
+    """The rows a caption pass may touch, for this bank and this scope.
+
+    ONE definition, called by the launch (to price the run) and by the job (to do
+    it). Two copies of this filter is precisely how a button comes to announce a
+    number it does not act on."""
+    q = BankImage.query.filter_by(bank_id=bank_id)
+    if statuses is None:
+        return q.filter(BankImage.status != 'reject')
+    return q.filter(BankImage.status.in_(statuses))
+
+
 def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
-                  length=None):
+                  length=None, backend=None, ollama_model=None, statuses=None):
     """Launch the caption pass over a selection (``ids``) or, when empty, every
     non-rejected readable image. Reuses the dataset caption engines (JoyCaption /
     Ollama per Settings) through a dataset-free descriptive brick; the captions
@@ -5745,42 +5831,75 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
 
     ``length`` picks the SIZE preset (one of CAPTION_LENGTHS: 'concise' | 'detailed';
     None/'' = standard, nothing appended) — an axis orthogonal to the register, again
-    the same lane and the same text as the dataset caption."""
+    the same lane and the same text as the dataset caption.
+
+    ``backend`` overrides ``captioning.backend`` for THIS run only (one of
+    CAPTION_BACKENDS) and ``ollama_model`` overrides ``ollama.vision_model`` for THIS
+    run only — the global settings stay the default and are never written. Which model
+    writes a caption is not a matter of taste: a captioner that describes what it sees
+    in evasive terms produces captions that are about something slightly other than the
+    images, and a LoRA trained on them learns to look away too, with nothing in the
+    output to reveal it (measured on the video lane, commit "the model that writes the
+    captions stops being a decision we made"). Both empty → the global settings, so a
+    call without them is byte-identical to before. 'auto' is left alone deliberately:
+    it CHAINS JoyCaption then Ollama on what JoyCaption missed, so forcing 'joycaption'
+    removes the Ollama half rather than "picking one of two".
+
+    ``statuses`` picks the SCOPE of the run: ['keep'], ['pending'] or ['keep','pending']
+    (CAPTION_SCOPES). None = the historical non-rejected set, byte-identical to before.
+    'reject' is refused — the bin is never captioned. When ``ids`` are also given the
+    two INTERSECT (the selection is narrowed by the scope, never widened)."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    from .face_dataset_service import CAPTION_LENGTHS, CAPTION_VOCABULARIES
-    vocab = (vocabulary or '').strip().lower() or None
+    from .face_dataset_service import (CAPTION_BACKENDS, CAPTION_LENGTHS,
+                                       CAPTION_VOCABULARIES)
+    vocab = _caption_name_option('vocabulary', vocabulary)
     if vocab and vocab not in CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
-    size = (length or '').strip().lower() or None
+    size = _caption_name_option('length', length)
     if size and size not in CAPTION_LENGTHS:
         raise ValueError(f'invalid caption length: {size}')
-    backend = (cfg.get('captioning.backend') or 'auto').lower()
-    if backend == 'none':
+    want = _normalize_caption_statuses(statuses)
+    engine = _caption_name_option('backend', backend)
+    if engine and engine not in CAPTION_BACKENDS:
+        raise ValueError(f'invalid captioning backend: {engine}')
+    # Same charset check the Caption Lab uses (never shelled out — it is a JSON
+    # field to the local Ollama server), and the same allow_empty contract.
+    from .ollama_control import normalize_ollama_model_ref
+    model = normalize_ollama_model_ref(ollama_model or '', allow_empty=True) or None
+    # The RESOLVED engine decides whether there is anything to run at all — a
+    # per-run 'none' is refused exactly like the global one, and a per-run engine
+    # rescues a run on an install whose global setting is 'none'.
+    resolved = engine or (cfg.get('captioning.backend') or 'auto').lower()
+    if resolved == 'none':
         raise ValueError('no captioning backend configured (Settings ▸ Captioning & quality)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
     ids = [int(i) for i in ids] if ids else None
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
+    q = _caption_scope_q(bank_id, want)
     if ids is not None:
         q = q.filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK]))
     if not force:
         q = q.filter(or_(BankImage.caption.is_(None), BankImage.caption == ''))
     total = q.count()
     return bank_jobs.start(app, bank_id, 'caption',
-                           _caption_job(bank_id, ids, force, vocab, size), total=total)
+                           _caption_job(bank_id, ids, force, vocab, size,
+                                        backend=engine, ollama_model=model,
+                                        statuses=want),
+                           total=total)
 
 
-def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
+def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
+                 backend=None, ollama_model=None, statuses=None):
     def run(job):
         from .face_dataset_service import caption_paths, caption_preset_instructions
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
+        q = _caption_scope_q(bank_id, statuses)
         if ids is not None:
             rows = []
             for i0 in range(0, len(ids), _SQL_IN_CHUNK):
@@ -5821,10 +5940,15 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
         # The vocabulary register and the length preset ride in as the SAME appended
         # instructions the dataset pass uses, in the same order (None when neither is
         # set → byte-identical to the plain pass).
+        # The engine and the Ollama model ride the SAME per-call seam the Caption
+        # Lab uses (caption_paths already takes both); None on either means "the
+        # global setting", so a run that picks nothing is byte-identical.
         extra = caption_preset_instructions(vocabulary, length)
         with gpu_exclusive_vision_window(flag_ttl=1800):
             caption_paths(
                 paths,
+                backend=backend,
+                ollama_model=ollama_model,
                 extra_instructions=extra,
                 should_cancel=lambda: bank_jobs.cancelled(job),
                 on_caption=_on_caption,
@@ -5887,7 +6011,7 @@ def _score_prereq() -> str | None:
 def _watermark_prereq() -> str | None:
     from ..capabilities import probe_ollama_model
     if not probe_ollama_model().get('ok'):
-        return 'vision model not available (Settings ▸ Captioning & quality)'
+        return 'vision model not available (Settings ▸ Local tools)'
     return None
 
 
@@ -5901,7 +6025,7 @@ def _faces_prereq() -> str | None:
 def _framing_prereq() -> str | None:
     from ..capabilities import probe_ollama_model
     if not probe_ollama_model().get('ok'):
-        return 'vision model not available (Settings ▸ Captioning & quality)'
+        return 'vision model not available (Settings ▸ Local tools)'
     return None
 
 

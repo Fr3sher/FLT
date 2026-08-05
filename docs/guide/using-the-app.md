@@ -1064,6 +1064,92 @@ is free even after a restart.
 On a memory-tight machine you can set `bank_scoring.text_search_idle_minutes` to
 `0`: nothing is ever kept warm, and each new phrase pays the ten seconds instead.
 
+## Choose who captions a bank, and which pile
+
+The 🏷️ **Caption** pass in ① Analyze has its own **Caption options** row, and
+every control on it applies to **that run only** — your Settings stay the
+default and are never rewritten from here.
+
+**Which pile gets captioned.** Three choices, and rejected images are in none of
+them:
+
+- **Kept + undecided** — the default, and exactly what the pass always did.
+- **✓ Kept only** — caption what you have already chosen, and nothing else. This
+  is the cheap one: on a 20 000-image dump where you kept 300, it is 300 vision
+  calls instead of 20 000.
+- **Undecided only** — the opposite errand. Captions feed the 🔍 search and the
+  🏷️ tag chips, so captioning the undecided pile is how you get *tools* to
+  triage it with.
+
+Each option carries its own count, and the button quotes the number it is really
+about to write. That number is **not** the size of the pile: images that already
+have a caption are skipped, so a bank of 4 000 kept images can honestly offer
+"Caption 12 kept". When everything in a pile already has a caption the button
+says so and goes inert.
+
+**A selection wins.** Select images first and the scope select greys out: the
+pass captions your selection, and the button switches to counting it. The server
+would otherwise *intersect* the two, and "Caption 12 selected" could quietly
+write 4.
+
+**Which engine, and which model.** Two more selects on the same row:
+
+- **Caption engine** — *Auto* is a chain, not a coin flip: JoyCaption drafts and
+  Ollama covers whatever it missed. Forcing *JoyCaption only* removes the Ollama
+  half rather than picking one of two.
+- **Caption vision model** — any Ollama model you have pulled. It is only used
+  when the engine can reach Ollama, and it is greyed out otherwise. A model
+  configured elsewhere stays selectable even if it is not in the live list.
+
+This last one matters more than it looks. A captioner that describes plainly
+visible things in evasive terms produces captions that are about something
+slightly *other* than your images — and a LoRA trained on those learns to look
+away too, with nothing in the output to reveal it. The captions read perfectly
+well. That is the problem. If you caption NSFW material, pair the **Explicit**
+register with an uncensored (abliterated) model; the app warns you when the
+model it is about to use does not look like one.
+
+You can change the model between runs on the same bank. 🏷️ **Caption** never
+rewrites anything: it only fills images that have no caption yet, so a second run
+with a different model captions the rest, not the ones already done. To redo the
+ones already done, see the next section.
+
+## Redo the captions of a bank with a different model
+
+🏷️ **Caption** skips images that already have a caption — which is what you want
+until the day it isn't. Once a bank is fully captioned that button reaches zero
+images and goes inert, and on a bank you captioned with a model you have since
+decided was a poor one, "nothing left to caption" is the wrong answer.
+
+🔄 **Re-caption**, at the end of the **Caption options** row, is that answer. It
+runs the same pass with the same engine, model, register and length you picked on
+that row, on the pile the scope select names — and it **overwrites** the captions
+that are already there.
+
+**It tells you the number before you click, in two places.** The button quotes
+what it will rewrite ("🔄 Re-caption 1 240 kept" — the whole pile, captioned or
+not), and the amber line under the row quotes what it will *destroy*: how many of
+those images already carry a caption. The confirmation repeats both. Neither
+number is an estimate; both come from the same count the pass itself uses.
+
+**There is no undo, and no way to spare hand-written captions.** This app stores
+one caption per image and records nothing about who wrote it — a caption you typed
+or corrected yourself and one a model produced are the same text in the same
+column. So a guard that "protected your edits" would have to guess, and would
+guess wrong in both directions. The honest version is the one you get: it
+overwrites everything in the pile and says so first. The bank's ↩ Undo covers
+keep/reject decisions only; it has never covered captions.
+
+The case to be careful about is a bank built with **Import to bank** from a
+dataset whose captions you had corrected by hand: those corrections came along,
+and nothing on screen marks them.
+
+**It works by pile, never on a selection.** With images selected the button goes
+inert and says why: a selection can cover pages that were never loaded, so the
+app cannot count how many of them already have a caption — and it will not run a
+destructive pass on a number it cannot state. Clear the selection to re-caption a
+pile. 🏷️ **Caption** still honours selections as it always did.
+
 ## Review a bank one image at a time
 
 Filter chips and bulk actions clear the obvious trash, but the last call —

@@ -6690,6 +6690,9 @@ def _compose_preview_instructions(vocabulary, instructions, length=None) -> str 
 # tuples or the texts.
 CAPTION_VOCABULARIES = _CAPTION_VOCABULARIES
 CAPTION_LENGTHS = _CAPTION_LENGTHS
+# ...and the same closed list of ENGINES, so a per-run engine override validates against
+# one tuple instead of a copy that drifts the day a fifth engine lands.
+CAPTION_BACKENDS = _CAPTION_BACKENDS
 
 
 def vocabulary_instruction(vocabulary) -> str | None:

@@ -57,7 +57,10 @@ export function findLevelState(levels, {
   const reason = live
     ? 'A pass is already running on this bank — wait for it to finish.'
     : !visionReady && !detectorReady
-      ? 'Pull the vision model (Settings ▸ Captioning & quality), or install the '
+      // Settings ▸ Local tools, NOT ▸ Captioning & quality: that section holds the
+      // ENGINE selector, while the Ollama vision model field lives in Local tools.
+      // Sending someone to the wrong tab to fix a blocked pass is worse than silence.
+      ? 'Pull the vision model (Settings ▸ Local tools), or install the '
         + 'watermark detector (Setup ▸ Quality tools), to scan for watermarks.'
       : null;
   return {
