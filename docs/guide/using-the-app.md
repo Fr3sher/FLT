@@ -1691,6 +1691,43 @@ reversible at any time, and the note under the passes always says which
 interpreter is in use. If you never open this dialog, nothing changes: an install
 that works today keeps working, untouched.
 
+## Stopping Score, and what a relaunch costs
+
+**✨ Score** always covers the whole bank — but it only *computes* what it does
+not already have. Every image it scores is written to a cache next to the bank
+(the CLIP embedding plus the aesthetic and NSFW numbers), and a relaunch reads
+that cache and pays only for the rest. On a bank that is fully scored, the pass
+does not even load the model: it goes straight to the grouping.
+
+So **Stop is safe**, and it is now safe in the database too. When you stop a run,
+the scores it had already computed are written to your images before the pass
+ends — that work was paid for, and it used to reach the cache and never reach a
+single row. The line at the end of the pass says exactly what happened: how many
+images were scored, how many remain, and how many were reused instead of
+recomputed.
+
+One thing does *not* survive a stop: the **🎨 style groups**. Those ids are not a
+per-image measurement, they are a single numbering of the whole bank, computed
+from every embedding at once and renumbered on each pass. Half of one is not
+partial progress — it would put a new group 1 next to an old group 1 and mix two
+unrelated styles under the same chip. So a stopped pass leaves the previous
+grouping alone and says so. Relaunch and it finishes: the scoring part is already
+cached, and only the grouping is left. That grouping is the slow tail of the pass
+— about **8 seconds over 5 000 images and 3 minutes over 23 000** — so on a big
+bank it is worth letting it finish.
+
+**Rescore all** appears next to ✨ Score once a bank has scores. It is the
+opposite intent: throw the cache away and recompute everything, for a bank you
+scored with a different setup or whose results you no longer trust. It costs a
+full pass, which is why it is a separate button — ✨ Score itself has always
+meant "cover the whole bank", and it still does.
+
+One more thing a relaunch fixes on its own: if the aesthetic head or the NSFW
+model could not be downloaded during an earlier run, the images scored in that
+window carry a hole. They are picked up again the next time you run Score, once
+the missing piece is available — an image is never left permanently half-scored
+because a download failed once.
+
 ## The LoRA Canvas (every run on one board)
 
 **Canvas** in the top bar opens a single board holding the training history of

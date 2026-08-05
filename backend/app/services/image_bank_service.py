@@ -3858,20 +3858,22 @@ def _read_cache_count(cache_path):
         return None
 
 
-def _stopped_detail(noun, data, cache_path, total):
+def _stopped_detail(noun, data, cache_path, total, suffix=''):
     """The honest end-of-pass line when the user Stopped it. Prefers the child's
     own cancel counts, falls back to the flushed sidecar count, and never invents
-    a number it can't back up."""
+    a number it can't back up. ``suffix`` states what reached the DATABASE, which
+    is a different claim from what reached the cache and must not be implied."""
     n = data.get('cached')
     if n is None:
         n = _read_cache_count(cache_path)
     if n is None:
-        return 'Stopped — progress saved to cache; relaunch to finish and cluster'
+        return ('Stopped — progress saved to cache'
+                f'{suffix}; relaunch to finish and cluster')
     n = int(n)
     remaining = data.get('remaining')
     remaining = int(remaining) if remaining is not None else max(0, int(total) - n)
-    return (f'Stopped — {n} {noun} ({remaining} remaining); '
-            'relaunch to finish and cluster')
+    return (f'Stopped — {n} {noun} ({remaining} remaining)'
+            f'{suffix}; relaunch to finish and cluster')
 
 
 # --- rows that can vanish under a long pass ---------------------------------
@@ -4280,12 +4282,27 @@ def score_device_info(bank_id=None) -> dict:
     return out
 
 
-def start_score(app, user_id, bank_id):
+def start_score(app, user_id, bank_id, rescore=False):
     """Launch the scoring pass (LAION aesthetic + NSFW + style clustering) over
     the bank's non-rejected images. Needs the bank-scoring extra (Setup ▸ Quality
     tools). Serialized against training/vision ONLY when it will really run on
     the GPU: refusing a CPU pass because 'the GPU is busy' would block an hour of
-    work that never wanted the card."""
+    work that never wanted the card.
+
+    The pool is ALWAYS the whole bank, and deliberately so — "already scored" is
+    not a reason to leave an image out. The style ids are a partition computed
+    from every embedding at once, so a pass handed only the unscored rows would
+    number a sub-population from 1 and land those ids on top of unrelated groups
+    already in the database; the semantic-dedup pass, which blocks by
+    style_cluster, would then stop comparing across the seam and miss crops
+    without saying anything. Skipping work is the CHILD's job and it already does
+    it: a cached, unchanged image is never embedded again, and a fully cached
+    bank does not even load CLIP.
+
+    ``rescore=True`` is the explicit "throw the cache away and recompute" lane
+    (same shape as the quality pass's ``rescan``) — for a new model, or scores
+    you no longer trust. The plain ✨ Score button keeps meaning exactly what it
+    always meant: a complete pass that resumes."""
     from ..capabilities import probe_bank_scoring
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -4299,10 +4316,106 @@ def start_score(app, user_id, bank_id):
         raise RuntimeError(reason)
     total = (BankImage.query.filter_by(bank_id=bank_id)
              .filter(BankImage.status != 'reject').count())
-    return bank_jobs.start(app, bank_id, 'score', _score_job(bank_id), total=total)
+    return bank_jobs.start(app, bank_id, 'score', _score_job(bank_id, rescore),
+                           total=total)
 
 
-def _score_job(bank_id):
+# Rows written between two commits in the score write-back. Small enough that a
+# Stop (or a crash) never costs more than a few seconds of re-run, large enough
+# that we are not committing per row — same trade-off as the duplicate regrouping
+# budget above, and for the same reason: long single transactions hold SQLite's
+# one write lock and everything else in the app dies on "database is locked".
+_SCORE_COMMIT_EVERY = 200
+
+
+def _apply_score_results(job, by_path, results, interruptible):
+    """Write the PER-IMAGE scores (aesthetic, nsfw) back. Returns
+    (written, scored, vanished, stopped).
+
+    Two rules earn their place here:
+
+    * a head's value is written only when the child produced one. It used to be
+      assigned unconditionally from ``res.get(...)``, so a run where the
+      aesthetic weights failed to download did not merely skip that column — it
+      wrote NULL over every aesthetic score the bank already had. Same rule as
+      the face pass and its yaw: never blank a good value because this run had
+      nothing to say.
+    * ``interruptible`` is False on the salvage path (the child was stopped and
+      handed us what it had computed). There, the job flag is ALREADY set, so
+      honouring it would mean discarding the exact GPU work we came to save.
+
+    Whatever it wrote is committed either way: the job registry is in-memory, so
+    a pass that only wrote at the very end lost everything to a restart."""
+    written = scored = vanished = 0
+    stopped = False
+    for p, image_id in by_path.items():
+        res = results.get(p)
+        if res is None:
+            continue          # never reached by this run — leave the row alone
+        row = _live_image(image_id)
+        if row is None:      # deleted while the pass ran — see _live_image
+            vanished += 1
+            continue
+        if 'aesthetic' in res:
+            row.aesthetic_score = res['aesthetic']
+        if 'nsfw' in res:
+            row.nsfw_score = res['nsfw']
+        # Counted HERE, on the row we actually wrote — not from the child's
+        # report. The child scores a PATH; this loop is the only place that
+        # knows whether the image behind it still exists. Counting the report
+        # made the pass announce "scored 3 image(s), 1 skipped" over a bank of
+        # three, which is two claims that cannot both be true.
+        if res.get('state') == 'ok':
+            scored += 1
+        written += 1
+        if written % _SCORE_COMMIT_EVERY == 0:
+            db.session.commit()
+            # Stop is honoured HERE and not per row, on purpose: the rows in
+            # hand are already computed, so abandoning them buys nothing except
+            # a relaunch. A bank smaller than one commit therefore always
+            # finishes rather than reporting "stopped after 1 image".
+            if interruptible and bank_jobs.cancelled(job):
+                stopped = True
+                break
+    db.session.commit()
+    return written, scored, vanished, stopped
+
+
+def _write_style_clusters(by_path, clusters):
+    """Write the style partition — all of it or none of it.
+
+    ``style_cluster`` is not a per-image measurement, it is one numbering of the
+    whole bank, recomputed (and renumbered) every pass. Half of a new partition
+    next to half of the old one is not "partial progress", it is two different
+    meanings sharing an id space: the 🎨 chip would mix unrelated groups and the
+    semantic-dedup pass, which only compares inside a cluster, would silently
+    stop looking across the seam. So this is deliberately NOT interruptible, and
+    the child hands us ``None`` (not a half-clustering) whenever it was stopped.
+
+    Grouped bulk UPDATEs rather than a write per row: same number of rows, a few
+    hundred statements instead of tens of thousands."""
+    by_cid: dict = {}
+    for p, image_id in by_path.items():
+        by_cid.setdefault(clusters.get(p), []).append(image_id)
+    since_commit = 0
+    for cid, ids in by_cid.items():
+        for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+            chunk = ids[i0:i0 + _SQL_IN_CHUNK]
+            BankImage.query.filter(BankImage.id.in_(chunk)).update(
+                {'style_cluster': cid}, synchronize_session=False)
+            since_commit += len(chunk)
+            if since_commit >= _DUP_WRITE_ROWS:
+                db.session.commit()
+                # Same yield the duplicate regrouping needs: without it the next
+                # batch re-takes SQLite's single write lock in the microsecond
+                # after the commit, inside another writer's busy-handler sleep,
+                # and that writer dies on "database is locked".
+                time.sleep(_DUP_WRITE_YIELD)
+                since_commit = 0
+    db.session.commit()
+
+
+def _score_job(bank_id, rescore=False):
     def run(job):
         import json as _json
         import sys
@@ -4328,6 +4441,13 @@ def _score_job(bank_id):
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail=f'scoring pass ({device.upper()})')
         if not paths:
+            # Never leave the label of a pass that did not run: the one-click
+            # tunnel falls back to a count read from the DATABASE when a step
+            # says nothing, so a mute return here reported "scored N image(s)"
+            # over a run that scored none of them.
+            bank_jobs.progress(job, detail=(
+                'done — nothing to score: every image in this bank is either '
+                'rejected or unreadable'))
             return
         _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
         th = thresholds()
@@ -4338,6 +4458,7 @@ def _score_job(bank_id):
             'cache': str(cache_path),
             'cancel_file': str(cache_path) + '.cancel',
             'style_threshold': th['style_threshold'],
+            'rescore': bool(rescore),
         })
         python = cfg.get('bank_scoring.python') or sys.executable
         # The GPU-exclusive window frees ComfyUI's VRAM and blocks any training
@@ -4351,11 +4472,22 @@ def _score_job(bank_id):
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _SCORE_SCRIPT, payload, cache_path, _SCORE_PROGRESS_RE,
             window)
-        # Stopped by the user — say exactly what's kept, never a mute ✗ (the cached
-        # scores/embeddings are safe; relaunching skips them and finishes the rest).
+        # Stopped by the user. The scores the child DID compute are paid GPU work
+        # and land in the database here — the pass used to return empty-handed, so
+        # an hour of inference reached the disk cache and never reached a single
+        # row. The style partition is the one thing that cannot come back with it:
+        # it is global by construction and takes minutes (measured 181 s over
+        # 23 000 images), which is why the child hands us None for it instead of
+        # half of one. Relaunching finishes from the cache and clusters then.
         if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
+            saved = 0
+            if data.get('results'):
+                _, saved, _v, _s = _apply_score_results(
+                    job, by_path, data['results'], interruptible=False)
+            suffix = (f'; {saved} score(s) saved, style groups need a full pass'
+                      if saved else '')
             bank_jobs.progress(job, detail=_stopped_detail(
-                'images scored', data, cache_path, len(paths)))
+                'images scored', data, cache_path, len(paths), suffix=suffix))
             return
         if not data.get('ok'):
             tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
@@ -4363,30 +4495,25 @@ def _score_job(bank_id):
                                        f'(rc={returncode})')
         results = data.get('results') or {}
         clusters = data.get('clusters') or {}
-        done = vanished = scored = 0
-        for p, image_id in by_path.items():
-            row = _live_image(image_id)
-            if row is None:      # deleted while the pass ran — see _live_image
-                vanished += 1
-                continue
-            res = results.get(p) or {}
-            row.aesthetic_score = res.get('aesthetic')
-            row.nsfw_score = res.get('nsfw')
-            row.style_cluster = clusters.get(p)
-            # Counted HERE, on the row we actually wrote — not from the child's
-            # report. The child scores a PATH; this loop is the only place that
-            # knows whether the image behind it still exists. Counting the report
-            # made the pass announce "scored 3 image(s), 1 skipped" over a bank of
-            # three, which is two claims that cannot both be true.
-            if res.get('state') == 'ok':
-                scored += 1
-            done += 1
-            if done % 200 == 0:
-                db.session.commit()
-        db.session.commit()
+        computed = data.get('computed')
+        reused = data.get('reused')
+        written, scored, vanished, stopped = _apply_score_results(
+            job, by_path, results, interruptible=True)
         if vanished:
             logger.info('bank scoring pass: %s image(s) were deleted while it ran',
                         vanished)
+        if stopped:
+            # Stopped while saving. What landed is committed; the partition is
+            # left alone precisely because only part of the bank got its scores.
+            bank_jobs.progress(job, detail=(
+                f'Stopped while saving — {written} image(s) written '
+                # Rows that vanished under the pass are neither written nor
+                # left: counting them here would inflate the only number the
+                # user has to judge how much is still pending.
+                f'({len(paths) - written - vanished} left); nothing was '
+                'recomputed, relaunch finishes from the cache'))
+            return
+        _write_style_clusters(by_path, clusters)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
@@ -4404,6 +4531,14 @@ def _score_job(bank_id):
             missing.append('NSFW')
         detail = (f'done — scored {scored} image(s), '
                   f'{multi} style group(s) of 2+')
+        # Where the work went. Both numbers count images HANDED to the pass, so
+        # they add up to the pool and never stand in for `scored`, which counts
+        # rows actually written. Saying "scored N" over a bank that recomputed
+        # nothing would be the auto-reject mistake again: a true-looking total
+        # covering an action that did not happen.
+        if reused:
+            detail += (f' · {computed} newly computed, '
+                       f'{reused} reused from cache')
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if missing:
