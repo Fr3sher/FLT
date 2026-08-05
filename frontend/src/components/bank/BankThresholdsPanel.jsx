@@ -119,7 +119,10 @@ function RerunButton({ rerun, field, activity, offline, phase, outcome, onRun })
   const label = phase === 'starting' ? 'Starting…'
     : phase === 'running' ? 'Running…' : rerun.label
   // While OUR pass is the one running, the line is progress, not a refusal.
-  const why = phase === 'running' ? `${busyLine({ activity })}…`
+  // WITHOUT the phase detail: the progress bar at the top of the bank is on the
+  // same screen and already narrates the phase, so carrying it here printed
+  // "grouping styles over 21220 image(s) — the slow tail of this pass" twice.
+  const why = phase === 'running' ? `${busyLine({ activity, withDetail: false })}…`
     : phase === 'starting' ? null : state.reason
   const describedBy = [why && reasonId, outcome && outcomeId].filter(Boolean).join(' ')
   const tone = outcome?.tone === 'error' ? 'text-rose-300'

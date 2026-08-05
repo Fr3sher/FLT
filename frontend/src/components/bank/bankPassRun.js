@@ -112,11 +112,17 @@ const STOP_HINT = 'Wait for it to finish, or press Stop in the progress bar at t
 /** One sentence naming the blocker and its progress, e.g.
  *  "✨ Score pass is running on this bank — 137 / 412". No remedy: callers add
  *  the part that fits their surface. */
-export function busyLine({ kind, activity } = {}) {
+export function busyLine({ kind, activity, withDetail = true } = {}) {
   const k = kind || activity?.kind;
   const label = jobLabel(k);
   const progress = jobProgress(activity);
-  const detail = activity && !activity.finished ? usefulDetail(label, activity.detail) : null;
+  // `withDetail: false` for a surface that sits on the SAME screen as the
+  // progress bar. The bar narrates the phase already; repeating it beside a
+  // threshold slider printed the same sentence twice, and on a phone the second
+  // copy is what pushes the setting off screen. A refusal is the opposite case:
+  // it answers "why did my click do nothing", so it keeps the detail.
+  const detail = withDetail && activity && !activity.finished
+    ? usefulDetail(label, activity.detail) : null;
   let line = `${label} is running on this bank`;
   if (progress) line += ` — ${progress}`;
   if (detail) line += `${progress ? ' · ' : ' — '}${detail}`;
