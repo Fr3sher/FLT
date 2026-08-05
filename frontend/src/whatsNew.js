@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-upscale-improve-finds-its-lora-on-a-docker-install',
+    date: '2026-08-05',
+    title: '✨ Upscale & improve stops re-downloading a LoRA you already have',
+    blurb:
+      'On a Docker or Linux install, raising the enhancement-LoRA strength made every ✨ Upscale & improve answer “Klein needs klein_enhancement_lora — I’ve started downloading it”, then download the file it already had, then say it again. The file was never missing: the improve workflow was exported from a Windows ComfyUI and names that LoRA klein\\realistic.safetensors, and on Linux a backslash is part of a filename rather than a folder separator — so the app looked for one file with a strange name instead of realistic.safetensors inside klein/. Setup, which spelled it correctly, kept showing it installed, which is why the two screens disagreed and only that one file looked broken while every other model loaded. The name is now respelled for whichever system opens it, on the way in and on the way out to ComfyUI. Nothing to reinstall — the LoRA already on your disk is picked up after an Update & restart. Reported by @_nofaceman on Discord.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-05-stopping-score-no-longer-throws-away-what-it-computed',
     date: '2026-08-05',
     title: 'Stopping ✨ Score keeps the scores it had already computed',
