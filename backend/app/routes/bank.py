@@ -275,6 +275,17 @@ def _start(fn, *args, **kwargs):
     return jsonify({'ok': True}), 202
 
 
+def _scope(data):
+    """The two keys every pass dialog can send: WHERE to run.
+
+    {statuses:["keep"|"pending"|"reject"]} and {image_ids:[...]}. Both optional;
+    a body without them is the request that shipped before the dialogs existed,
+    byte for byte. Validation lives in the service (one definition, 400 on a bad
+    value) — this only reads the body."""
+    return {'statuses': data.get('statuses') or None,
+            'ids': data.get('image_ids') or None}
+
+
 @bp.post('/bank/<int:bank_id>/scan')
 def bank_scan(bank_id):
     """Quality pass. {rescan: true} walks every image again; {regroup: true} asks
@@ -283,11 +294,13 @@ def bank_scan(bank_id):
     data = request.get_json(silent=True) or {}
     return _start(banks.start_scan, _app(), LOCAL_USER, bank_id,
                   rescan=bool(data.get('rescan')),
-                  regroup=bool(data.get('regroup')))
+                  regroup=bool(data.get('regroup')), **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/faces')
 def bank_faces(bank_id):
+    """Face embeddings + person clustering. Takes NO scope on purpose: the
+    clusters are one numbering of the whole bank (400 if one is sent anyway)."""
     return _start(banks.start_faces, _app(), LOCAL_USER, bank_id)
 
 
@@ -324,7 +337,7 @@ def bank_watermark(bank_id):
     """Overlaid-watermark scan (Qwen3-VL). {rescan:true} re-checks scanned rows."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_watermark, _app(), LOCAL_USER, bank_id,
-                  rescan=bool(data.get('rescan')))
+                  rescan=bool(data.get('rescan')), **_scope(data))
 
 
 @bp.get('/bank/<int:bank_id>/watermark/levels')
@@ -412,7 +425,7 @@ def bank_framing(bank_id):
     rows. 202/409/503."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_framing, _app(), LOCAL_USER, bank_id,
-                  rescan=bool(data.get('rescan')))
+                  rescan=bool(data.get('rescan')), **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/medium')
@@ -425,7 +438,7 @@ def bank_medium(bank_id):
     re-inferred."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_medium, _app(), LOCAL_USER, bank_id,
-                  rescan=bool(data.get('rescan')))
+                  rescan=bool(data.get('rescan')), **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/angles')
@@ -435,8 +448,9 @@ def bank_angles(bank_id):
     detector on those rows ONLY, writes nothing but the yaw, and leaves the
     person clusters untouched. 202/409/503; 400 when there is nothing to
     backfill."""
+    data = request.get_json(silent=True) or {}
     return _start(banks.start_faces, _app(), LOCAL_USER, bank_id,
-                  angles_only=True)
+                  angles_only=True, **_scope(data))
 
 
 @bp.get('/bank/<int:bank_id>/coverage')
@@ -461,9 +475,10 @@ def bank_caption(bank_id):
     {backend} ('auto'|'joycaption'|'ollama') and {ollama_model} override the engine
     and the vision model for THIS run only, without touching the global settings —
     same keys and same validation as the dataset caption options. {statuses} picks
-    the scope: ["keep"], ["pending"] or ["keep","pending"]; "reject" is refused. Every
-    one of these keys is optional, and a body without them runs exactly the pass that
-    ran before they existed.
+    the scope: any combination of "keep" / "pending" / "reject". "reject" aims the
+    pass at the bin — reachable only by asking for it by name, never part of the
+    default. Every one of these keys is optional, and a body without them runs
+    exactly the pass that ran before they existed.
 
     {force:true} SPARES the captions a human wrote or corrected (caption_origin =
     'asserted'); {include_asserted:true} is the explicit opt-out that rewrites those

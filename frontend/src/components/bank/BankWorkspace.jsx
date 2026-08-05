@@ -44,12 +44,14 @@ import {
 } from '../dataset/CaptionOptionsPopover'
 // Which pile the caption pass is aimed at, and the number the button quotes (pure).
 import {
-  CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown,
-  captionIncludeAssertedLabel,
+  captionButtonLabel, captionIncludeAssertedLabel,
   captionRecaptionConfirmation, captionRecaptionDisabledReason, captionRecaptionLabel,
-  captionRecaptionNote, captionScopeCount,
-  captionScopeDisabledReason, captionScopeNote, captionScopeStatuses,
+  captionRecaptionNote, captionScopeNote, captionScopeStatuses,
 } from './bankCaptionScope.js'
+// 🎛 The launch window every pass now opens, and the two pure modules behind it:
+// what each pass is (blocks, offered scopes, refusals) and how big a run is.
+import PassDialog from './PassDialog.jsx'
+import { BANK_PASSES } from './bankPasses.js'
 // Ordered zone model + the "what's next" accent, both pure/testable.
 import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 // Provenance wording (effective resolution, origin, black bars) — pure/testable.
@@ -487,6 +489,11 @@ function CoveragePanel({ coverage, onClose, onBalance = null, balanceReason = ''
 function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
   // `key` matters only for the flags list below (the one mapped array) — it was
   // missing and logged a React warning on every bank grid render.
+  // The chips this image would actually offer. Computed HERE rather than asked of
+  // the caption's mere existence: a caption of nothing but stop words ("a photo of
+  // her") yields zero chips, and `img.caption && …` would have offered the button
+  // anyway. The test for "can this button do its job" is the job's own output.
+  const tagChips = captionChips(img.caption)
   const badge = (txt, cls, key) => (
     <span key={key} className={`rounded px-1 py-px text-[10px] font-semibold leading-none ${cls}`}>{txt}</span>
   )
@@ -543,22 +550,42 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
         {img.style_cluster != null && badge(`🎨${img.style_cluster}`, 'bg-black/60 text-fuchsia-200')}
         {img.dup_group != null && badge(`≈${img.dup_group}`, 'bg-black/60 text-fuchsia-200')}
         {img.semantic_dup_group != null && badge(`✂${img.semantic_dup_group}`, 'bg-black/60 text-orange-200')}
-        {/* 🏷️ is the only badge that DOES something: it lifts this image's own
-            caption words into the filter bar as tickable chips. A button, not a
-            span, so it is reachable by keyboard and announces what it opens. */}
-        {img.caption && (
-          <button type="button"
-            onClick={(e) => { e.stopPropagation(); onTags?.() }}
-            title={`Filter the bank by this image's tags — ${img.caption}`}
-            aria-label={`Use the tags of ${img.name} as a filter`}
-            className="rounded bg-black/60 px-1 text-[10px] text-emerald-200 hover:bg-black/80">
-            🏷️
-          </button>
-        )}
       </span>
       {/* ▶ starts the fast-triage lightbox AT this image. It's a separate hit
           target on purpose: the tile's own click still (de)selects for the bulk
           ✓/✕/⬆ bar, so neither use loses its gesture. */}
+      {/* 🏷️ MOVED HERE, out of the badge cluster in the top-left corner.
+          Everything up there is a STATE READOUT — ✓, ✕, ⬆, the flags, the person
+          and framing chips — and none of it is clickable. A button dropped in the
+          middle of that row does not read as an action; in the maintainer's own
+          words, "otherwise it gets drowned at the top with the icons that aren't
+          clickable". The tile's two real actions live in this bottom-right group,
+          so the third one joins them, in the same clothes.
+
+          AND IT ONLY APPEARS WHEN IT CAN DELIVER. The chips ARE the words of the
+          caption, so on an image whose caption yields none the picker could only
+          say "This caption has no word worth filtering on." — a button promising
+          something it cannot do. That silence has already cost once, the other way
+          round: the feature had shipped for two days and was read as absent,
+          because the bank simply had no captions. So the button says WHY it is
+          not there, exactly the way "✂ Find crops & variants (needs Score)" does
+          on the pass row — a shipped feature that says nothing is indistinguishable
+          from one that does not exist. */}
+      {tagChips.length > 0 ? (
+        <button type="button" onClick={onTags}
+          title={`Filter the bank by this image's tags — ${img.caption}`}
+          aria-label={`Use the tags of ${img.name} as a filter`}
+          className="absolute bottom-1 right-11 rounded bg-black/60 px-1 text-[11px] text-emerald-200 hover:bg-black/80">🏷️</button>
+      ) : (
+        <span
+          title={img.caption
+            ? '🏷️ Tags — this caption has no word worth filtering on (the chips are the caption\'s own words)'
+            : '🏷️ Tags (needs a caption) — run 🏷️ Caption on this bank and the chips appear here'}
+          aria-label={img.caption
+            ? 'Tags unavailable: this caption has no word worth filtering on'
+            : 'Tags unavailable: this image has no caption yet'}
+          className="absolute bottom-1 right-11 rounded bg-black/40 px-1 text-[11px] text-white/35">🏷️</span>
+      )}
       <button type="button" onClick={onReview}
         title="Review from this image — full size, one at a time, with Keep/Reject/Skip"
         aria-label={`Review from ${img.name}`}
@@ -620,6 +647,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [undoBusy, setUndoBusy] = useState(false)
   const [undoDismissedAt, setUndoDismissedAt] = useState(0)
   const [launchOpen, setLaunchOpen] = useState(false)
+  /* 🎛 Which pass's launch window is open (a BANK_PASSES id, or null).
+     ONE piece of state for nine windows: a pass button no longer fires, it opens
+     the window that shows where the run applies, what the calculation reads and
+     what is NOT decided there — then launches from the bottom of it. */
+  const [passOpen, setPassOpen] = useState(null)
   // ✨ Score's interpreter picker — reuse a CUDA Python this machine already has
   // instead of downloading another torch. Opened from the CPU warning.
   const [scoringPythonOpen, setScoringPythonOpen] = useState(false)
@@ -684,9 +716,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // configured vision model), so it is its own always-200 fetch — an unreachable Ollama
   // is an empty list, never an error.
   const [ollamaModels, setOllamaModels] = useState([])
-  // WHICH PILE this run captions: '' = kept + undecided (today's behaviour, sends
-  // nothing), 'keep', or 'pending'. Never 'reject' — the bin is not curated from.
-  const [captionScope, setCaptionScope] = useState('')
+  /* WHICH PILE each pass runs on, and whether it re-does rows that already have a
+     result — kept HERE, not inside the windows, so closing one does not silently
+     undo a choice. Keyed by pass id; '' is the historical scope (kept + undecided,
+     and the request omits `statuses` entirely).
+
+     🏷️ Caption reads its entry under the name it has always used, because the
+     re-caption arithmetic beside it is written against that name. */
+  const [passScopes, setPassScopes] = useState({})
+  const [passRedo, setPassRedo] = useState({})
+  const setPassScope = (id, v) => setPassScopes((p) => ({ ...p, [id]: v }))
+  const setPassRedoFor = (id, v) => setPassRedo((p) => ({ ...p, [id]: v }))
+  const captionScope = passScopes.caption || ''
   /* The ESCAPE HATCH, and the reason it is a piece of state and not a request key: it has
      to be visible, deliberate and re-read in the confirmation. Never persisted, so it
      resets with the panel — an opt-out of a protection is not a preference. */
@@ -998,8 +1039,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
   }
 
-  const startScan = (rescan) => act(
-    () => postJson(`/api/bank/${bankId}/scan`, { rescan: !!rescan }), null)
   const runFacesPass = () => act(() => postJson(`/api/bank/${bankId}/faces`, {}), null)
 
   /* 👤 THE PREFLIGHT GATE.
@@ -1040,11 +1079,6 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     return true
   }
 
-  const startFaces = async () => {
-    const gated = await gate(runFacesPass)
-    if (gated === true || gated === 'refused') return null
-    return runFacesPass()
-  }
 
   /* The answer. Accepted folders become ORDINARY assertions (same endpoint
      family, same revoke) and only then does the pass the user asked for run. */
@@ -1068,18 +1102,46 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // ✨ Score always covers the WHOLE bank and skips what is already computed —
   // `rescore` is the explicit "recompute it all" lane (new model, scores you no
   // longer trust), exactly like the quality pass's "Rescan all".
-  const startScore = (rescore) => act(
-    () => postJson(`/api/bank/${bankId}/score`, rescore ? { rescore: true } : {}),
-    null)
-  const startSemanticDedup = () => act(
-    () => postJson(`/api/bank/${bankId}/semantic-dedup`, {}), null)
-  const startFraming = () => act(() => postJson(`/api/bank/${bankId}/framing`, {}), null)
-  // 🎨 Medium reuses the ✨ Score embeddings — no image is looked at twice and
-  // no GPU is taken, which is why it has no capability gate of its own.
-  const startMedium = () => act(() => postJson(`/api/bank/${bankId}/medium`, {}), null)
-  // ⤢ the opt-in angle backfill. Its own endpoint, never folded into 🎭 Faces:
-  // it is hours of work on a big bank and nobody must pay it by accident.
-  const startAngles = () => act(() => postJson(`/api/bank/${bankId}/angles`, {}), null)
+  /* 🎛 ONE launcher for every pass window.
+     The window hands back WHERE the run applies ({statuses} for a pile, the
+     'selection' marker for the images the user ticked, `redo` for the "do it
+     again on rows that already have a result" line). Everything is spread-if-set,
+     so a run that changes nothing posts the SAME body the button posted before
+     the windows existed — the byte-identical contract the caption options already
+     followed, now the rule for all of them.
+
+     It answers {ok,error} rather than toasting: the window owns its own refusal
+     surface and stays open with the choices intact (utils/submitOutcome.js). */
+  const passBody = (passId, { statuses, imageIds, redo } = {}, extra = {}) => {
+    const spec = BANK_PASSES[passId]
+    return {
+      ...(spec?.redo && redo ? { [spec.redo.key]: true } : {}),
+      ...(statuses ? { statuses } : {}),
+      ...(imageIds === 'selection' && selected.size ? { image_ids: [...selected] } : {}),
+      ...extra,
+    }
+  }
+
+  const runPass = async (passId, run, extra = {}) => {
+    const spec = BANK_PASSES[passId]
+    if (!spec) return { ok: false, error: 'Unknown pass.' }
+    let error = null
+    const d = await act(
+      () => postJson(`/api/bank/${bankId}/${spec.endpoint}`, passBody(passId, run, extra)),
+      null, { onRefusal: (m) => { error = m } })
+    return d ? { ok: true } : { ok: false, error }
+  }
+
+  /* 👥 is the one pass whose launch is not a POST: the folder preflight can take
+     ownership of it. When it does, this window has nothing left to do and closes
+     on a success — the run is now the preflight dialog's to start. */
+  const launchFacesFromDialog = async () => {
+    let error = null
+    const gated = await gate(runFacesPass, (m) => { error = m })
+    if (gated === 'refused') return { ok: false, error }
+    if (gated === true) return { ok: true }
+    return runPass('faces', {})
+  }
   /* Every option is spread-if-set, so a run that changes nothing posts the SAME body it
      posted before any of these controls existed — the contract the vocabulary/length
      pair set and the two new dials join.
@@ -1088,16 +1150,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
      the two, so "kept only" plus a selection of undecided images would caption fewer
      than the button says. The selection wins, the scope select goes inert, and the label
      switches to the selection count. */
-  const startCaption = () => act(
-    () => postJson(`/api/bank/${bankId}/caption`, {
-      ...(selected.size ? { image_ids: [...selected] } : {}),
-      ...(captionVocab ? { vocabulary: captionVocab } : {}),
-      ...(captionLength ? { length: captionLength } : {}),
-      ...(captionEngine ? { backend: captionEngine } : {}),
-      ...(captionModel ? { ollama_model: captionModel } : {}),
-      ...(!selected.size && captionScopeStatuses(captionScope)
-        ? { statuses: captionScopeStatuses(captionScope) } : {}),
-    }), null)
+  const captionRunOptions = () => ({
+    ...(captionVocab ? { vocabulary: captionVocab } : {}),
+    ...(captionLength ? { length: captionLength } : {}),
+    ...(captionEngine ? { backend: captionEngine } : {}),
+    ...(captionModel ? { ollama_model: captionModel } : {}),
+  })
+  const startCaption = (run) => runPass('caption', run, captionRunOptions())
   const cancelJob = () => act(() => postJson(`/api/bank/${bankId}/cancel`, {}), null)
   /* 🔄 THE DESTRUCTIVE TWIN. Same endpoint, same options, plus `force:true` — which
      drops the server's "no caption yet" filter and rewrites the whole pile. It exists
@@ -1114,24 +1173,29 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
        captionRecaptionDisabledReason). 🏷️ Caption still honours selections;
      - `statuses` rides WITHOUT the `!selected.size` guard the normal pass needs,
        precisely because a selection makes this button inert instead. */
-  const startRecaption = () => {
+  const startRecaption = async () => {
     if (captionRecaptionDisabledReason(selected.size, live, counts, captionScope,
-                                       captionIncludeAsserted)) return
+                                       captionIncludeAsserted)) {
+      return { ok: false, error: null }
+    }
     if (!window.confirm(captionRecaptionConfirmation(counts, captionScope,
-                                                     captionIncludeAsserted))) return
-    return act(() => postJson(`/api/bank/${bankId}/caption`, {
+                                                     captionIncludeAsserted))) {
+      // A declined confirmation is not a failure: the window stays as it is and
+      // says nothing (the question they just answered IS the explanation).
+      return { ok: false, error: null }
+    }
+    let error = null
+    const d = await act(() => postJson(`/api/bank/${bankId}/caption`, {
       force: true,
       // Sent ONLY when ticked. Omitting the key is the protected reading, on this
       // side as on the server's — the destructive one is never the default shape
       // of the request.
       ...(captionIncludeAsserted ? { include_asserted: true } : {}),
-      ...(captionVocab ? { vocabulary: captionVocab } : {}),
-      ...(captionLength ? { length: captionLength } : {}),
-      ...(captionEngine ? { backend: captionEngine } : {}),
-      ...(captionModel ? { ollama_model: captionModel } : {}),
+      ...captionRunOptions(),
       ...(captionScopeStatuses(captionScope)
         ? { statuses: captionScopeStatuses(captionScope) } : {}),
-    }), null)
+    }), null, { onRefusal: (m) => { error = m } })
+    return d ? { ok: true } : { ok: false, error }
   }
   /* Posts with the dialog still OPEN and answers {ok,error}: a refused launch —
      "a scan job is already running on this bank" is the usual one — used to close
@@ -1471,14 +1535,126 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // offering a name we can't confirm.
   const captionModelChoices = captionModel && !ollamaModels.includes(captionModel)
     ? [captionModel, ...ollamaModels] : ollamaModels
-  const captionScopeInert = captionScopeDisabledReason(selected.size, live)
-  const captionRunSize = captionScopeCount(counts, captionScope)
   // 🔄 Re-caption: inert (and why), plus the sentence that names what it destroys.
   const includeAssertedLabel = captionIncludeAssertedLabel(counts, captionScope)
   const recaptionInert = captionRecaptionDisabledReason(
     selected.size, live, counts, captionScope, captionIncludeAsserted)
   const recaptionNote = captionRecaptionNote(selected.size, live, counts, captionScope,
                                              captionIncludeAsserted)
+
+  /* 🏷️ THE FIVE CAPTION OPTIONS, now INSIDE the caption window — literally the
+     maintainer's example of what these windows are for ("this way we can gather
+     all the caption options"). Nothing was dropped in the move: engine, model,
+     register, length, the pile (which became the window's THIS RUN block) and
+     🔄 Re-caption with both its figures and its confirmation.
+
+     The state stays out here, in the workspace, so closing the window does not
+     reset a choice the user made. Each select keeps the width rules measured at a
+     400 px viewport: only the MODEL one is capped at 11rem (Ollama refs run long
+     and overflow on their own); the rest are max-w-full with a 16rem ceiling from
+     sm up, because capping them by symmetry truncated them into nonsense
+     ("Standard — the prompt as⌄"). */
+  const captionSelectClass = 'mt-0.5 w-full rounded-lg border border-border bg-app/60 '
+    + 'px-2 py-1 text-xs text-content disabled:opacity-40'
+  const captionRunControls = (
+    <div className="space-y-2 rounded-md border border-border bg-surface-raised p-2">
+      <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-content-muted">
+        Options for this run
+      </p>
+      <p className="m-0 text-[11px] leading-snug text-content-subtle">
+        These override your Settings for this run only — the global values are never
+        written from here.
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <label className="block text-[11px] text-content-subtle">
+          Engine
+          <select value={captionEngine} onChange={(e) => setCaptionEngine(e.target.value)}
+            disabled={live} aria-label="Caption engine"
+            title="Which engine writes this run's captions, without changing your Settings. Auto is a CHAIN, not a choice between two: JoyCaption drafts, then Ollama covers whatever it missed."
+            className={`${captionSelectClass} sm:max-w-[16rem]`}>
+            {/* 'none' is dropped on purpose: "caption with nothing" is not a pass. */}
+            {ENGINE_OPTIONS.filter((o) => o.id !== 'none')
+              .map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="block text-[11px] text-content-subtle">
+          Vision model
+          <select value={captionModel} onChange={(e) => setCaptionModel(e.target.value)}
+            disabled={live || !ollamaPicksApply} aria-label="Caption vision model"
+            title={ollamaPicksApply
+              ? 'Which pulled Ollama vision model writes this run. Your Settings model stays the default and is not changed. Which model writes a caption is not a matter of taste: one that describes things in evasive terms produces captions that are about something slightly other than the images.'
+              : 'Only used when the engine can reach Ollama.'}
+            className={`${captionSelectClass} sm:max-w-[11rem]`}>
+            <option value="">Configured model</option>
+            {captionModelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
+          </select>
+          {!ollamaPicksApply && (
+            <span className="mt-0.5 block text-[11px] leading-snug text-amber-300/90">
+              The engine you picked does not reach Ollama, so this choice would change
+              nothing — disabled rather than quietly ignored.
+            </span>
+          )}
+        </label>
+        <label className="block text-[11px] text-content-subtle">
+          Register
+          <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
+            disabled={live} aria-label="Caption vocabulary register"
+            title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
+            className={`${captionSelectClass} sm:max-w-[16rem]`}>
+            {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </label>
+        <label className="block text-[11px] text-content-subtle">
+          Length
+          <select value={captionLength} onChange={(e) => setCaptionLength(e.target.value)}
+            disabled={live} aria-label="Caption length"
+            title="How much the captioner writes. Concise aims for one short sentence, Detailed for several - a target the model follows loosely, not a hard cap. Standard leaves the prompt untouched. Longer captions give the search more to match on."
+            className={`${captionSelectClass} sm:max-w-[16rem]`}>
+            {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+        </label>
+      </div>
+      <p className="m-0 text-[11px] leading-snug text-content-subtle">
+        {captionScopeNote(selected.size, counts, captionScope)}
+      </p>
+    </div>
+  )
+
+  /* 🔄 THE DESTRUCTIVE TWIN, in the window's footer beside the normal launch —
+     a SECOND launch button, not a pass of its own. It keeps everything it had:
+     the number it rewrites, the number it spares, its amber warning and its
+     window.confirm. And it keeps greying out WITH ITS REASON rather than
+     disappearing: on a bank whose only captions are ones you wrote by hand, that
+     disabled reason is the only place the protection is visible at all. */
+  const captionSecondary = (
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={startRecaption} disabled={!!recaptionInert}
+          aria-label="Re-caption"
+          title={recaptionInert || recaptionNote}
+          className="rounded-md border border-amber-400/40 bg-amber-500/10 px-3 py-1.5 text-xs font-semibold text-amber-200 disabled:opacity-40">
+          {captionRecaptionLabel(counts, captionScope, recaptionInert,
+                                 captionIncludeAsserted)}
+        </button>
+        {includeAssertedLabel && (
+          <label className="flex items-center gap-1 text-[11px] text-amber-400/90">
+            <input type="checkbox" checked={captionIncludeAsserted} disabled={live}
+              onChange={(e) => setCaptionIncludeAsserted(e.target.checked)}
+              aria-label="Also re-caption the captions I wrote by hand"
+              className="accent-amber-500" />
+            {includeAssertedLabel}
+          </label>
+        )}
+      </div>
+      {recaptionInert && (
+        <p className="m-0 text-[11px] leading-snug text-amber-300/90">{recaptionInert}</p>
+      )}
+      {recaptionNote && (
+        <p className="m-0 text-[11px] leading-snug text-amber-400/90">{recaptionNote}</p>
+      )}
+    </div>
+  )
+
   const scored = counts?.scored || 0
   // ⚖️ Can a balanced pick even run? Answered BEFORE the click when we already
   // know (Score missing; coverage says nothing is classified) — otherwise the
@@ -1612,181 +1788,76 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       <div className="space-y-1.5">
         <GroupLabel>Analysis passes</GroupLabel>
         <div className="flex flex-wrap items-center gap-1.5">
-          <PassButton onClick={() => startScan(false)} disabled={live}
-            title="Score every unscanned image (sharpness/noise/flat/size), hash it and group near-duplicates — CPU only, runs in the background">
-            🔎 Scan quality
+          {/* Every button OPENS ITS WINDOW instead of firing. The window is where
+              the scope, the counts, the settings the calculation really reads and
+              the things it does NOT decide finally have room to be said — and
+              where the launch button quotes the exact number it will move.
+
+              “Rescan all” is gone as a button on purpose: it was never a second
+              pass, it was a SCOPE wearing a button's clothes. It is now the last
+              line of 🔎 Scan's THIS RUN block, next to the piles it belongs with.
+              “Rescore all” went the same way, into ✨ Score's window. */}
+          <PassButton onClick={() => setPassOpen('scan')} disabled={live}
+            title="Measure sharpness, noise, flatness, size and detail, hash every image and group the exact duplicates — CPU only. Opens the launch window.">
+            🔎 Scan quality…
           </PassButton>
-          {(counts?.scanned || 0) > 0 && (
-            <PassButton onClick={() => startScan(true)} disabled={live}
-              title="Re-score everything (e.g. after files changed on disk)">
-              Rescan all
-            </PassButton>
-          )}
-          <PassButton onClick={startFaces} disabled={live || !caps.face_scoring}
+          <PassButton onClick={() => setPassOpen('faces')} disabled={live || !caps.face_scoring}
             title={caps.face_scoring
               ? 'Detect the dominant face of every non-rejected image and cluster the bank by person (no reference needed). CPU, can take a while on thousands of images. It samples your subfolders first and offers the ones that look like a single person, so you can skip them.'
               : 'Install the Quality tools (Setup) to sort by person'}>
-            👥 Group by person
+            👥 Group by person…
           </PassButton>
-          <PassButton onClick={() => startScore(false)} disabled={live || !caps.bank_scoring}
+          <PassButton onClick={() => setPassOpen('score')} disabled={live || !caps.bank_scoring}
             title={caps.bank_scoring
               ? `Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". Already-scored images are reused, so stopping and relaunching costs only what is left. Runs in the background${
                 holdsTheGpu(scoreDevice) ? ', and holds the GPU (ComfyUI is unloaded and training cannot start) for its duration' : ' on the CPU, leaving the GPU free'}.`
               : 'Install the Bank scoring extra (Setup ▸ Quality tools) to score aesthetics / NSFW / style'}>
-            ✨ Score{!caps.bank_scoring && ' (needs setup)'}
+            ✨ Score…{!caps.bank_scoring && ' (needs setup)'}
           </PassButton>
-          {scored > 0 && caps.bank_scoring && (
-            <PassButton onClick={() => startScore(true)} disabled={live}
-              title="Recompute every score from scratch, ignoring the cached embeddings — for a new model or results you no longer trust. Costs a full pass.">
-              Rescore all
-            </PassButton>
-          )}
-          <PassButton onClick={startMedium} disabled={live || !caps.bank_scoring}
+          <PassButton onClick={() => setPassOpen('medium')} disabled={live || !caps.bank_scoring}
             title={caps.bank_scoring
               ? 'Sort every scored image into photograph / anime / 3D render / illustration — read off the CLIP embeddings ✨ Score already computed, so no image is looked at again and the GPU stays free. It answers “unsure” rather than guessing: measured on a real 23 500-image bank, it named 2 anime drawings and no wrong verdict.'
               : 'Install the Bank scoring extra (Setup ▸ Quality tools) — 🎨 Medium reads the embeddings ✨ Score produces'}>
-            🎨 Classify medium{!caps.bank_scoring && ' (needs setup)'}
+            🎨 Classify medium…{!caps.bank_scoring && ' (needs setup)'}
           </PassButton>
-          <PassButton onClick={startFraming} disabled={live || !visionReady}
+          <PassButton onClick={() => setPassOpen('framing')} disabled={live || !visionReady}
             title={visionReady
               ? 'Classify every non-rejected image by shot type — face close-up, bust, full body, back view — with the same Qwen3-VL classifier the datasets use. Powers the 📐 Framing filter and the coverage advice. GPU vision pass.'
               : 'Pull the vision model (Settings ▸ Local tools) to classify framing'}>
-            📐 Classify framing{!visionReady && ' (needs setup)'}
+            📐 Classify framing…{!visionReady && ' (needs setup)'}
           </PassButton>
-          <PassButton onClick={startSemanticDedup} disabled={live || scored === 0}
+          <PassButton onClick={() => setPassOpen('semantic_dedup')} disabled={live || scored === 0}
             title={scored > 0
               ? 'Group crops and re-compressed variants of the SAME shot the exact-duplicate hash misses — reuses the ✨ Score embeddings, so it costs no extra GPU time. Review them under the ✂ Same shot chip.'
               : 'Run ✨ Score first — semantic near-duplicates reuse its embeddings'}>
-            ✂ Find crops &amp; variants{scored === 0 && ' (needs Score)'}
+            ✂ Find crops &amp; variants…{scored === 0 && ' (needs Score)'}
           </PassButton>
           {/* The label QUOTES THE NUMBER IT WILL MOVE — the scope's uncaptioned rows,
               or the selection when there is one. "Caption all" was the older, vaguer
               promise, and a button that announces one figure and acts on another is the
-              misunderstanding this whole row exists to end. */}
-          <PassButton onClick={startCaption}
-            disabled={live || (!selected.size && captionCountsKnown(counts) && captionRunSize === 0)}
-            title={selected.size
-              ? `Caption the ${selected.size} selected image(s) with the engine chosen below. Captions become searchable and follow the images when you promote them to a dataset.`
-              : `${captionScopeNote(selected.size, counts, captionScope)} Pick the engine, the model and the pile below. Select images first to caption just those.`}>
-            {captionButtonLabel(selected.size, counts, captionScope)}
-          </PassButton>
-        </div>
-        {/* Caption options get their OWN wrapping row instead of becoming the eighth,
-            ninth and tenth control on the pass row. At a 400 px viewport the usable
-            width is ~336 px and a <select> sizes itself to its widest option, so five
-            of them on one line push the toolbar into a horizontal scroll — which this
-            zone has no container for.
+              misunderstanding this whole row exists to end.
 
-            ONLY THE MODEL SELECT IS CAPPED AT 11rem, and it is the one that needs it:
-            Ollama model refs run long ("someorg/some-vision-model:8b-instruct-q4"), and
-            measured at a 360 px width it asks for 430 px and overflows on its own. The
-            other four were capped by symmetry and paid for it in truncation — "Use
-            default (Settings ▸ Cap⌄" and "Standard — the prompt as⌄" are not labels, and
-            two of them carried no bound at all before this row existed. Their natural
-            widths are 240-262 px, so max-w-full (never wider than the column) with a
-            16rem ceiling from the sm breakpoint up keeps them readable and still keeps
-            scrollWidth == clientWidth at 400 px. */}
-        <div className="flex flex-wrap items-center gap-1.5">
-          <GroupLabel>Caption options</GroupLabel>
-          <label className="flex items-center gap-1 text-xs text-content-subtle">
-            <span className="sr-only">Caption scope</span>
-            <select value={captionScope} onChange={(e) => setCaptionScope(e.target.value)}
-              disabled={!!captionScopeInert} aria-label="Caption scope"
-              title={captionScopeInert
-                || 'Which pile this pass captions. Rejected images are never captioned, whichever you pick.'}
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
-              {CAPTION_SCOPE_OPTIONS.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {captionCountsKnown(counts)
-                    ? `${o.label} (${captionScopeCount(counts, o.id)})` : o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-1 text-xs text-content-subtle">
-            <span className="sr-only">Caption engine</span>
-            <select value={captionEngine} onChange={(e) => setCaptionEngine(e.target.value)}
-              disabled={live} aria-label="Caption engine"
-              title="Which engine writes this run's captions, without changing your Settings. Auto is a CHAIN, not a choice between two: JoyCaption drafts, then Ollama covers whatever it missed."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
-              {/* 'none' is dropped on purpose: "caption with nothing" is not a pass. */}
-              {ENGINE_OPTIONS.filter((o) => o.id !== 'none')
-                .map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="flex items-center gap-1 text-xs text-content-subtle">
-            <span className="sr-only">Caption vision model</span>
-            <select value={captionModel} onChange={(e) => setCaptionModel(e.target.value)}
-              disabled={live || !ollamaPicksApply} aria-label="Caption vision model"
-              title={ollamaPicksApply
-                ? 'Which pulled Ollama vision model writes this run. Your Settings model stays the default and is not changed. Which model writes a caption is not a matter of taste: one that describes things in evasive terms produces captions that are about something slightly other than the images.'
-                : 'Only used when the engine can reach Ollama.'}
-              className={`px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-[11rem] disabled:opacity-40${ollamaPicksApply ? '' : ' opacity-40'}`}>
-              <option value="">Configured model</option>
-              {captionModelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
-          </label>
-          <label className="flex items-center gap-1 text-xs text-content-subtle">
-            <span className="sr-only">Caption vocabulary register</span>
-            <select value={captionVocab} onChange={(e) => setCaptionVocab(e.target.value)}
-              disabled={live} aria-label="Caption vocabulary register"
-              title="How captions name nude or sexual content. Explicit needs an uncensored (abliterated) Ollama vision model. Richer, more explicit captions also make the 🔍 search find more."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
-              {VOCABULARY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
-          </label>
-          <label className="flex items-center gap-1 text-xs text-content-subtle">
-            <span className="sr-only">Caption length</span>
-            <select value={captionLength} onChange={(e) => setCaptionLength(e.target.value)}
-              disabled={live} aria-label="Caption length"
-              title="How much the captioner writes. Concise aims for one short sentence, Detailed for several - a target the model follows loosely, not a hard cap. Standard leaves the prompt untouched. Longer captions give the search more to match on."
-              className="px-2 py-1 rounded-lg bg-app/60 border border-border text-content text-xs max-w-full sm:max-w-[16rem] disabled:opacity-40">
-              {CAPTION_LENGTH_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-            </select>
-          </label>
-          {/* 🔄 The destructive twin, HERE rather than on the pass row: it is what makes
-              the four selects beside it reachable on a finished bank, and the pass row
-              lists seven DIFFERENT passes — a second variant of one of them reads as an
-              eighth pass. Layout, measured in the running app at a 400 px viewport (334 px
-              of usable width): the selects are each on their own line there, so the button
-              takes one more and the options row goes 164 → 191 px. A ninth button on the
-              pass row costs +40 px instead, and pushes this whole row down with it. */}
-          <button type="button" onClick={startRecaption} disabled={!!recaptionInert}
-            aria-label="Re-caption"
-            title={recaptionInert || recaptionNote}
-            className="px-2 py-1 rounded-lg bg-surface border border-border text-content text-xs disabled:opacity-40">
-            {captionRecaptionLabel(counts, captionScope, recaptionInert,
-                                   captionIncludeAsserted)}
-          </button>
-          {/* 🔓 The way out of the protection — rendered ONLY when there is something to
-              protect, so the row gains no width on a bank where nobody has written a
-              caption. It sits AFTER the button it modifies and names its own cost, and
-              the confirmation repeats it: an opt-out of a safeguard must be read twice
-              and reached on purpose, never by leaving a key out of a request. */}
-          {includeAssertedLabel && (
-            <label className="flex items-center gap-1 text-xs text-amber-400/90">
-              <input type="checkbox" checked={captionIncludeAsserted} disabled={live}
-                onChange={(e) => setCaptionIncludeAsserted(e.target.checked)}
-                aria-label="Also re-caption the captions I wrote by hand"
-                className="accent-amber-500" />
-              {includeAssertedLabel}
-            </label>
+              IT NO LONGER GREYS OUT AT ZERO. It used to, and it took the engine, the
+              model, the register and the length pickers down with it — on exactly the
+              bank whose captions you wanted redone with a better model. The window is
+              always reachable; the LAUNCH button inside it is what refuses a run of 0,
+              and it says why. */}
+          <PassButton onClick={() => setPassOpen('caption')} disabled={live}
+            title={selected.size
+              ? `Caption the ${selected.size} selected image(s). Opens the window with the engine, model, register, length and scope.`
+              : `${captionScopeNote(selected.size, counts, captionScope)} Opens the window with the engine, model, register, length and scope.`}>
+            {captionButtonLabel(selected.size, counts, captionScope)}…
+          </PassButton>
+          {/* ⤢ the opt-in angle backfill. Its own button and its own window, never
+              folded into 👥: it is hours of work on a big bank and nobody must pay
+              it by accident. Shown only when there is something to measure. */}
+          {(counts?.angle_backfillable || 0) > 0 && (
+            <PassButton onClick={() => setPassOpen('angles')} disabled={live}
+              title="Measure the head angle of the images a previous build face-scanned without keeping it. Writes the angle and nothing else.">
+              ⤢ Measure head angles…
+            </PassButton>
           )}
         </div>
-        {/* What the run will do, spelled out — including the two things a count alone
-            never says: already-captioned images are skipped, and the bin is out of
-            reach whatever is picked. */}
-        <p className="text-xs text-content-subtle">
-          {captionScopeNote(selected.size, counts, captionScope)}
-          {captionScopeInert && selected.size > 0 && ' The status scope is ignored while a selection is active.'}
-        </p>
-        {/* …and what the OTHER button destroys, in the same place, before the click.
-            Amber because this is the one line on the row that describes a loss, and
-            rendered only while the button can actually run — a warning about an
-            impossible action is what teaches people to stop reading warnings. */}
-        {recaptionNote && (
-          <p className="text-xs text-amber-400/90">{recaptionNote}</p>
-        )}
         {/* Watermark CLEANING — the two manual levels (crop, then inpaint), with
             their own per-level progress. Lives in its own component so the
             "which level can run, and why not" logic stays unit-tested. */}
@@ -2163,7 +2234,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               {angleState.offer && (
                 <p className="m-0 flex flex-wrap items-center gap-2 pl-1 text-[11px] leading-snug text-content-subtle">
                   <span>{angleState.offer.why}</span>
-                  <button type="button" onClick={startAngles} disabled={!!live}
+                  <button type="button" onClick={() => setPassOpen('angles')} disabled={!!live}
                     title={angleState.offer.why}
                     className="rounded-md border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-content transition-colors hover:bg-surface disabled:opacity-50">
                     ⤢ {angleState.offer.label}
@@ -2822,6 +2893,28 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           sourcePath={payload?.source_path}
           onClose={() => setDeleteRejectedOpen(false)}
           onDone={() => { setDeleteRejectedOpen(false); setSelected(new Set()); refreshPayload(); refreshImages() }} />
+      )}
+
+      {/* 🎛 THE PASS LAUNCH WINDOW — one component, nine passes. 👥 routes through
+          the folder preflight, 🏷️ Caption carries its five options and its
+          destructive twin; everything else is the shared three blocks. */}
+      {passOpen && (
+        <PassDialog passId={passOpen} payload={payload} live={live}
+          selectionSize={selected.size}
+          detectorReady={!!caps.watermark_detector}
+          scope={passScopes[passOpen] || ''}
+          onScope={(v) => setPassScope(passOpen, v)}
+          redo={!!passRedo[passOpen]}
+          onRedo={(v) => setPassRedoFor(passOpen, v)}
+          onClose={() => setPassOpen(null)}
+          onLaunch={(run) => (passOpen === 'faces'
+            ? launchFacesFromDialog()
+            : (passOpen === 'caption'
+              ? startCaption(run)
+              : runPass(passOpen, run)))}
+          secondary={passOpen === 'caption' ? captionSecondary : null}>
+          {passOpen === 'caption' ? captionRunControls : null}
+        </PassDialog>
       )}
 
       {launchOpen && (

@@ -7,26 +7,35 @@
    bank existed. Renaming either side would break stored filters and saved queries, so the
    translation lives here and nowhere else.
 
-   THE BIN IS NOT AN OPTION. 'reject' is deliberately absent: you curate from what you
-   might keep, never from what you threw away, and the server refuses it too (400). */
+   THE BIN IS NO LONGER OUT OF REACH — and that is a change of principle, held on purpose.
+   'reject' used to be absent here and refused by the server ("you curate from what you
+   might keep, never from what you threw away"). The maintainer asked to be able to aim a
+   pass at the rejected pile, so it is now an explicit choice: never the default, never
+   part of the default, and the launch window states what it costs (a full captioning call
+   per rejected image — the slowest pass there is) next to the option itself.
 
-// The three scopes, in the order the select shows them. The DEFAULT is first and its id
-// is '' because it must send NOTHING: a run that picks it has to be byte-identical to the
-// pass that existed before this control did — the same contract the vocabulary and length
-// selects follow. The other two ids are the column values themselves.
-export const CAPTION_SCOPE_OPTIONS = [
-  { id: '', label: 'Kept + undecided', short: 'images', statuses: null },
-  { id: 'keep', label: '✓ Kept only', short: 'kept', statuses: ['keep'] },
-  { id: 'pending', label: 'Undecided only', short: 'undecided', statuses: ['pending'] },
-];
+   THE SCOPES THEMSELVES LIVE IN bankPassScope.js, shared with every other pass. One list
+   means the word "Undecided" cannot come to mean two different piles on two screens. */
+import { PASS_SCOPE_OPTIONS, passScopeOption } from './bankPassScope.js';
+
+/** The scopes, in the order the window shows them — the shared list, re-exported under the
+ *  name the caption row has always used so no caller has to be rewritten to follow it. */
+export const CAPTION_SCOPE_OPTIONS = PASS_SCOPE_OPTIONS;
 
 export function captionScopeOption(scopeId) {
-  return CAPTION_SCOPE_OPTIONS.find((o) => o.id === scopeId) || CAPTION_SCOPE_OPTIONS[0];
+  return passScopeOption(scopeId);
 }
 
 /** The `statuses` value to POST, or null when the key must be left out entirely. */
 export function captionScopeStatuses(scopeId) {
   return captionScopeOption(scopeId).statuses;
+}
+
+/** Sum the per-pile figures a scope covers. ONE reader for every scope-shaped count in
+ *  this file, so adding a pile can never leave one of them behind. */
+function pileSum(counts, scopeId, prefix) {
+  return captionScopeOption(scopeId).piles
+    .reduce((n, pile) => n + (Number(counts?.[`${prefix}${pile}`]) || 0), 0);
 }
 
 /** How many images the pass would ACTUALLY caption for this scope.
@@ -37,12 +46,7 @@ export function captionScopeStatuses(scopeId) {
  *  button offering "5 930 flagged" rejected 0 and read as a broken feature.
  *  The server computes these two numbers with the same filter the job uses. */
 export function captionScopeCount(counts, scopeId) {
-  const keep = Number(counts?.caption_todo_keep) || 0;
-  const pending = Number(counts?.caption_todo_pending) || 0;
-  const id = captionScopeOption(scopeId).id;
-  if (id === 'keep') return keep;
-  if (id === 'pending') return pending;
-  return keep + pending;
+  return pileSum(counts, scopeId, 'caption_todo_');
 }
 
 /** Has the server told us the per-scope run sizes yet?
@@ -101,10 +105,9 @@ export function captionScopeNote(selectedSize, counts, scopeId) {
   }
   const n = captionScopeCount(counts, scopeId);
   if (n === 0) {
-    const pile = opt.id === '' ? 'kept or undecided' : opt.short;
-    return `Nothing to caption — every ${pile} image already has one.`;
+    return `Nothing to caption — every ${opt.noun} image already has one.`;
   }
-  const what = opt.id === '' ? 'kept and undecided images' : `${opt.short} images`;
+  const what = `${opt.nounAll} images`;
   return `Captions the ${n} ${what} that have no caption yet. `
     + 'Rejected images are never captioned.';
 }
@@ -143,15 +146,10 @@ export function captionScopeNote(selectedSize, counts, scopeId) {
  *  so the run size becomes the pile itself (server: _caption_scope_q with no extra filter).
  *  Quoting the uncaptioned count on a re-caption button would understate the run. */
 export function captionForcePileSize(counts, scopeId) {
-  const keep = Number(counts?.keep) || 0;
-  const pending = Number(counts?.pending) || 0;
-  const id = captionScopeOption(scopeId).id;
-  if (id === 'keep') return keep;
-  if (id === 'pending') return pending;
   // The default scope is the server's `status != 'reject'` set. keep + pending is that
   // set exactly — the three piles partition the bank, a fact a backend test pins so an
   // extra status value could never make this number drift in silence.
-  return keep + pending;
+  return pileSum(counts, scopeId, '');
 }
 
 /** How many EXISTING captions this scope holds, whoever wrote them.
@@ -170,12 +168,7 @@ export function captionExistingCount(counts, scopeId) {
  *  sends — and 0 is the truthful reading there: nothing is marked, so nothing is spared,
  *  and every sentence below degrades to what it said before this existed. */
 function scopedProvenance(counts, scopeId, prefix) {
-  const keep = Number(counts?.[`${prefix}_keep`]) || 0;
-  const pending = Number(counts?.[`${prefix}_pending`]) || 0;
-  const id = captionScopeOption(scopeId).id;
-  if (id === 'keep') return keep;
-  if (id === 'pending') return pending;
-  return keep + pending;
+  return pileSum(counts, scopeId, `${prefix}_`);
 }
 
 /** Captions a human wrote or corrected — what a forced run KEEPS. */
@@ -268,7 +261,7 @@ export function captionRecaptionDisabledReason(selectedSize, live, counts, scope
   if (!captionCountsKnown(counts)) return 'Waiting for this bank\'s counts.';
   if (captionOverwriteCount(counts, scopeId, includeAsserted) === 0) {
     const opt = captionScopeOption(scopeId);
-    const pile = opt.id === '' ? 'kept or undecided' : opt.short;
+    const pile = opt.noun;
     const mine = captionAssertedCount(counts, scopeId);
     // TWO different zeros, and telling them apart is the whole point of the column:
     // "there is nothing captioned here" sends you to 🏷️ Caption, "the only captions
@@ -301,7 +294,7 @@ export function captionRecaptionNote(selectedSize, live, counts, scopeId,
   const mine = captionAssertedCount(counts, scopeId);
   const unknown = captionUnrecordedCount(counts, scopeId);
   const generated = captionGeneratedCount(counts, scopeId);
-  const what = opt.id === '' ? 'kept and undecided' : opt.short;
+  const what = opt.nounAll;
   const parts = [`🔄 Re-caption rewrites ${run} of the ${pile} ${what} image(s) with the `
     + 'engine and model picked here.'];
   // What it KEEPS comes first when it keeps anything: the reassurance is the news.
@@ -334,7 +327,7 @@ export function captionRecaptionConfirmation(counts, scopeId, includeAsserted = 
   const n = captionOverwriteCount(counts, scopeId, includeAsserted);
   const mine = captionAssertedCount(counts, scopeId);
   const unknown = captionUnrecordedCount(counts, scopeId);
-  const what = opt.id === '' ? 'kept and undecided' : opt.short;
+  const what = opt.nounAll;
   let out = `Re-captioning overwrites the ${n} existing caption(s) among the ${pile} `
     + `${what} image(s).`;
   if (mine > 0 && !includeAsserted) {
