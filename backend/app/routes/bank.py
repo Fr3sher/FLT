@@ -253,6 +253,45 @@ def bank_images(bank_id):
     return jsonify(payload)
 
 
+@bp.get('/bank/<int:bank_id>/facets')
+def bank_facets(bank_id):
+    """The chip counters for the CURRENT filter — same query keys as /images.
+
+    Its own route rather than a slice of the workspace payload: that payload is
+    also the 2 s job poll, and hanging the filter state off it would re-measure
+    every facet twice a second for a question only a filter change can change
+    the answer to. Read-only, and each facet is counted with its OWN value
+    lifted (see facet_counts)."""
+    args = request.args
+
+    def _int(name):
+        v = args.get(name)
+        try:
+            return int(v) if v not in (None, '') else None
+        except ValueError:
+            return None
+
+    subfolder = args.get('subfolder')
+    out = banks.facet_counts(
+        LOCAL_USER, bank_id,
+        status=args.get('status') or None,
+        flag=args.get('flag') or None,
+        cluster=_int('cluster'), group=_int('group'), style=_int('style'),
+        semantic_group=_int('semantic_group'),
+        subfolder=subfolder if subfolder is not None else None,
+        search=args.get('search') or None,
+        exclude=args.get('exclude') or None,
+        tags=args.get('tags') or None,
+        res_bucket=args.get('res_bucket') or None,
+        framing=args.get('framing') or None,
+        origin=args.get('origin') or None,
+        medium=args.get('medium') or None,
+        angle=args.get('angle') or None)
+    if out is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(out)
+
+
 @bp.get('/bank/<int:bank_id>/subfolders')
 def bank_subfolders(bank_id):
     payload = banks.subfolders_payload(LOCAL_USER, bank_id)

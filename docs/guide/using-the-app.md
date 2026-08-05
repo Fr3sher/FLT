@@ -475,7 +475,13 @@ touching the folder itself:
    flipped). The number beside each checkbox is what *that click* would reject —
    still-undecided images only, which is why it is usually smaller than the
    count on the matching filter chip: the chip shows every image carrying the
-   flag, including the ones a previous auto-reject already threw away. Run it
+   flag, including the ones a previous auto-reject already threw away — and it
+   counts them **inside whatever else you have filtered**, so it always states
+   the size of the page it opens. (Each chip is measured with your other filters
+   applied and its own value lifted, so picking one never blanks its
+   neighbours, and a chip stays on offer even when it holds nothing under the
+   current filter. The auto-reject number stays whole-bank on purpose: that pass
+   runs over the bank, not over the view.) Run it
    twice and the second run legitimately says **0 to reject**: there is nothing
    left it is allowed to touch. A flag also warns when its pass never ran, and
    the panel says how many images have **never been scanned** — those are

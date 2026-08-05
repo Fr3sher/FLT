@@ -72,6 +72,14 @@ export const WHATS_NEW = [
     to: '/bank',
   },
   {
+    id: '2026-08-05-bank-chip-counts-follow-the-filters',
+    date: '2026-08-05',
+    title: 'The numbers on the bank filter chips now match what they open',
+    blurb:
+      'Every chip in the bank — 🌫 Blurry, 📺 Noisy, the resolution tiers, 🔎 Origin, 📐 Framing, 🎨 Medium, ⤢ Angle — used to print a total for the whole bank whatever else you had filtered. Pick ✕ Rejected, read "📺 Noisy 4 043", click it, get twelve images. The counts now describe the bank you are actually looking at: each one is measured with your other filters applied. The value you already picked is deliberately left out of its own count, so choosing 🌫 Blurry never zeroes 📺 Noisy next to it and you can always switch to a neighbour without clearing everything first. Chips stay on screen even when they hold nothing under the current filter, for the same reason. Two smaller things went with it: clicking a ✨ Score or ≈ Duplicates chip no longer silently drops the person or style group you were in, and the "showing N of M" line now notices 🔎 Origin, the 🚫 exclude box and the 🏷️ tag chips, which it used to ignore.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-stopping-score-no-longer-throws-away-what-it-computed',
     date: '2026-08-05',
     title: 'Stopping ✨ Score keeps the scores it had already computed',

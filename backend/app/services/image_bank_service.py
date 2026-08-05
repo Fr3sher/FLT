@@ -1717,6 +1717,131 @@ def _apply_text_filters(q, search=None, exclude=None, tags=None):
     return q
 
 
+# The facets the grid composes, in the order _apply_facets applies them. These
+# names are BOTH the keyword arguments below and the ids ``skip`` accepts, which
+# is what lets facet_counts measure a facet with every OTHER filter in force and
+# its own left out. Stored query keys — never rename one without an alias.
+FACETS = ('status', 'flag', 'cluster', 'group', 'semantic_group', 'style',
+          'framing', 'origin', 'medium', 'angle', 'subfolder', 'search',
+          'exclude', 'tags', 'res_bucket')
+
+
+def _apply_facets(q, th, skip=None, *, status=None, flag=None, cluster=None,
+                  group=None, semantic_group=None, style=None, subfolder=None,
+                  search=None, exclude=None, tags=None, res_bucket=None,
+                  framing=None, origin=None, medium=None, angle=None):
+    """Narrow ``q`` by the composing facets and return ``(q, order)``.
+
+    ONE place, because the grid and the chip counters ask the same question and
+    a second copy of these predicates is exactly how the two drift apart — the
+    chip that says 4 043 and opens on 12 rows is that drift, not a rounding
+    error. ``order`` is the flag's worst-first ordering (the caller may override
+    it with an explicit sort); counters ignore it.
+
+    ``skip`` names ONE facet (a FACETS id) to leave OUT. That is the whole
+    counting rule: a facet's own value must never narrow its own counts, or
+    picking "blur" would show its neighbours at 0 and the user could no longer
+    change their mind without clearing everything first."""
+    if status in ('pending', 'keep', 'reject') and skip != 'status':
+        q = q.filter(BankImage.status == status)
+    order = BankImage.id.asc()
+    if skip == 'flag':
+        flag = None
+    if flag == 'flagged':
+        crits = [c for c in (_flag_filter(f, th) for f in _QUALITY_FLAGS)
+                 if c is not None]
+        q = q.filter(or_(*crits))
+    elif flag == 'clean':
+        q = q.filter(BankImage.quality_state == 'ok')
+        # Every quality flag except 'unreadable' (that one IS the quality_state
+        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
+        # from a build that predates one of these scores still counts as clean
+        # for it instead of dropping out of the chip entirely.
+        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
+            q = q.filter(~_flag_filter(f, th))
+    elif flag == 'dups':
+        q = q.filter(BankImage.dup_group.isnot(None))
+        order = (BankImage.dup_group.asc(), BankImage.id.asc())
+    elif flag == 'semantic_dups':
+        q = q.filter(BankImage.semantic_dup_group.isnot(None))
+        order = (BankImage.semantic_dup_group.asc(), BankImage.id.asc())
+    elif flag == 'no_face':
+        # Literally "no face was found" — ONLY face_state == 'no_face'. The other
+        # non-scorable states (low_det / too_small / extreme_pose) DID detect a
+        # face; lumping them in here surfaced photos with visible faces under a
+        # "No face" chip. 'unreadable'/'error' are read failures, not "no face".
+        q = q.filter(BankImage.face_state == 'no_face')
+    elif flag in _QUALITY_FLAGS:
+        crit = _flag_filter(flag, th)
+        if crit is not None:
+            q = q.filter(crit)
+        order = {'blur': BankImage.blur_score.asc(),
+                 'noise': BankImage.noise_score.desc(),
+                 'uniform': BankImage.uniformity_score.asc(),
+                 'small': BankImage.width.asc(),
+                 'soft_detail': BankImage.detail_ratio.asc(),
+                 'bars': BankImage.bars_ratio.desc(),
+                 'unreadable': BankImage.id.asc()}[flag]
+    elif flag in _SCORE_FLAGS:
+        crit = _flag_filter(flag, th)
+        if crit is not None:
+            q = q.filter(crit)
+        # Worst first: least aesthetic / most-confident NSFW at the top.
+        order = {'low_aesthetic': BankImage.aesthetic_score.asc(),
+                 'nsfw': BankImage.nsfw_score.desc(),
+                 'watermark': BankImage.id.asc()}[flag]
+    if cluster is not None and skip != 'cluster':
+        q = q.filter(BankImage.face_cluster == int(cluster))
+    if group is not None and skip != 'group':
+        q = q.filter(BankImage.dup_group == int(group))
+    if semantic_group is not None and skip != 'semantic_group':
+        q = q.filter(BankImage.semantic_dup_group == int(semantic_group))
+    if style is not None and skip != 'style':
+        q = q.filter(BankImage.style_cluster == int(style))
+    if framing in _FRAMING_KEYS and skip != 'framing':
+        # One framing bucket (face/bust/body/back/unknown) — composes with every
+        # other facet. An unknown/absent value simply doesn't filter.
+        q = q.filter(BankImage.framing == framing)
+    if origin in ORIGINS and skip != 'origin':
+        # One provenance state. 'unknown' is a real, selectable answer — it is
+        # what a stripped file honestly is, and the user must be able to see that
+        # pile rather than have it silently merged into "not AI".
+        q = q.filter(BankImage.origin == origin)
+    if medium in MEDIUM_KEYS and skip != 'medium':
+        # One medium bucket. 'unsure' is selectable on purpose — it is the pile
+        # the classifier honestly could not call, and the only way to work
+        # through it is to be able to look at it.
+        q = q.filter(BankImage.medium == medium)
+    if angle in ANGLES and skip != 'angle':
+        # One head-angle bucket, recomputed from the stored yaw at read time (so
+        # re-tuning the two cuts re-slices the bank with no rescan) — see
+        # _angle_case for what 'behind' costs and requires.
+        q = q.filter(_angle_case() == angle)
+    if subfolder is not None and skip != 'subfolder':
+        # '' scopes to root-level files; any other value to that top-level folder
+        # and everything nested under it. startswith() escapes LIKE metachars.
+        if subfolder == '':
+            q = q.filter(~BankImage.relpath.contains(os.sep))
+        else:
+            q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
+    # Full-text over caption + relpath, positive (search) and negative (exclude).
+    q = _apply_text_filters(q, None if skip == 'search' else search,
+                            None if skip == 'exclude' else exclude,
+                            None if skip == 'tags' else tags)
+    if res_bucket in _RES_BOUNDS and skip != 'res_bucket':
+        # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
+        # guards drop unscanned rows (a NULL product would satisfy neither bound
+        # cleanly), so a tier never leaks unscanned images. Composes with the sort.
+        lo, hi = _RES_BOUNDS[res_bucket]
+        area = BankImage.width * BankImage.height
+        q = q.filter(BankImage.width.isnot(None), BankImage.height.isnot(None))
+        if lo:
+            q = q.filter(area >= lo)
+        if hi is not None:
+            q = q.filter(area < hi)
+    return q, order
+
+
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
@@ -1781,100 +1906,12 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         off = max(0, int(offset))
         page = ordered_rows[off:off + max(1, min(500, int(limit)))]
         return {'images': _page_images(page, th), 'total': total, 'offset': off}
-    q = BankImage.query.filter_by(bank_id=bank_id)
-    if status in ('pending', 'keep', 'reject'):
-        q = q.filter(BankImage.status == status)
-    order = BankImage.id.asc()
-    if flag == 'flagged':
-        crits = [c for c in (_flag_filter(f, th) for f in _QUALITY_FLAGS)
-                 if c is not None]
-        q = q.filter(or_(*crits))
-    elif flag == 'clean':
-        q = q.filter(BankImage.quality_state == 'ok')
-        # Every quality flag except 'unreadable' (that one IS the quality_state
-        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
-        # from a build that predates one of these scores still counts as clean
-        # for it instead of dropping out of the chip entirely.
-        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
-            q = q.filter(~_flag_filter(f, th))
-    elif flag == 'dups':
-        q = q.filter(BankImage.dup_group.isnot(None))
-        order = (BankImage.dup_group.asc(), BankImage.id.asc())
-    elif flag == 'semantic_dups':
-        q = q.filter(BankImage.semantic_dup_group.isnot(None))
-        order = (BankImage.semantic_dup_group.asc(), BankImage.id.asc())
-    elif flag == 'no_face':
-        # Literally "no face was found" — ONLY face_state == 'no_face'. The other
-        # non-scorable states (low_det / too_small / extreme_pose) DID detect a
-        # face; lumping them in here surfaced photos with visible faces under a
-        # "No face" chip. 'unreadable'/'error' are read failures, not "no face".
-        q = q.filter(BankImage.face_state == 'no_face')
-    elif flag in _QUALITY_FLAGS:
-        crit = _flag_filter(flag, th)
-        if crit is not None:
-            q = q.filter(crit)
-        order = {'blur': BankImage.blur_score.asc(),
-                 'noise': BankImage.noise_score.desc(),
-                 'uniform': BankImage.uniformity_score.asc(),
-                 'small': BankImage.width.asc(),
-                 'soft_detail': BankImage.detail_ratio.asc(),
-                 'bars': BankImage.bars_ratio.desc(),
-                 'unreadable': BankImage.id.asc()}[flag]
-    elif flag in _SCORE_FLAGS:
-        crit = _flag_filter(flag, th)
-        if crit is not None:
-            q = q.filter(crit)
-        # Worst first: least aesthetic / most-confident NSFW at the top.
-        order = {'low_aesthetic': BankImage.aesthetic_score.asc(),
-                 'nsfw': BankImage.nsfw_score.desc(),
-                 'watermark': BankImage.id.asc()}[flag]
-    if cluster is not None:
-        q = q.filter(BankImage.face_cluster == int(cluster))
-    if group is not None:
-        q = q.filter(BankImage.dup_group == int(group))
-    if semantic_group is not None:
-        q = q.filter(BankImage.semantic_dup_group == int(semantic_group))
-    if style is not None:
-        q = q.filter(BankImage.style_cluster == int(style))
-    if framing in _FRAMING_KEYS:
-        # One framing bucket (face/bust/body/back/unknown) — composes with every
-        # other facet. An unknown/absent value simply doesn't filter.
-        q = q.filter(BankImage.framing == framing)
-    if origin in ORIGINS:
-        # One provenance state. 'unknown' is a real, selectable answer — it is
-        # what a stripped file honestly is, and the user must be able to see that
-        # pile rather than have it silently merged into "not AI".
-        q = q.filter(BankImage.origin == origin)
-    if medium in MEDIUM_KEYS:
-        # One medium bucket. 'unsure' is selectable on purpose — it is the pile
-        # the classifier honestly could not call, and the only way to work
-        # through it is to be able to look at it.
-        q = q.filter(BankImage.medium == medium)
-    if angle in ANGLES:
-        # One head-angle bucket, recomputed from the stored yaw at read time (so
-        # re-tuning the two cuts re-slices the bank with no rescan) — see
-        # _angle_case for what 'behind' costs and requires.
-        q = q.filter(_angle_case() == angle)
-    if subfolder is not None:
-        # '' scopes to root-level files; any other value to that top-level folder
-        # and everything nested under it. startswith() escapes LIKE metachars.
-        if subfolder == '':
-            q = q.filter(~BankImage.relpath.contains(os.sep))
-        else:
-            q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
-    # Full-text over caption + relpath, positive (search) and negative (exclude).
-    q = _apply_text_filters(q, search, exclude, tags)
-    if res_bucket in _RES_BOUNDS:
-        # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
-        # guards drop unscanned rows (a NULL product would satisfy neither bound
-        # cleanly), so a tier never leaks unscanned images. Composes with the sort.
-        lo, hi = _RES_BOUNDS[res_bucket]
-        area = BankImage.width * BankImage.height
-        q = q.filter(BankImage.width.isnot(None), BankImage.height.isnot(None))
-        if lo:
-            q = q.filter(area >= lo)
-        if hi is not None:
-            q = q.filter(area < hi)
+    q, order = _apply_facets(
+        BankImage.query.filter_by(bank_id=bank_id), th,
+        status=status, flag=flag, cluster=cluster, group=group,
+        semantic_group=semantic_group, style=style, subfolder=subfolder,
+        search=search, exclude=exclude, tags=tags, res_bucket=res_bucket,
+        framing=framing, origin=origin, medium=medium, angle=angle)
     explicit = _sort_order(sort)
     if explicit is not None:
         # An explicit sort (resolution / aesthetic / sharpness) wins over the flag
@@ -1900,6 +1937,85 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
             .limit(max(1, min(500, int(limit)))).all()
     return {'images': _page_images(rows, th), 'total': total,
             'offset': max(0, int(offset))}
+
+
+def facet_counts(user_id, bank_id, **f) -> dict | None:
+    """Every chip counter, measured under the filters ACTUALLY in force.
+
+    Same shape (and the same keys) as the matching slices of ``bank_payload`` —
+    'counts', 'flags', 'res_buckets', 'framing', 'origins', 'mediums', 'angles'
+    — so the workspace can swap one for the other without a second code path.
+
+    Why this exists. The payload's numbers are bank-wide, which was RIGHT for the
+    question they were built to answer ("clicking this chip shows exactly these
+    rows") and became wrong the moment any other facet was on. Measured on a
+    50 397-image bank with ✕ Rejected picked: the chips offered "📺 Noisy 1 136"
+    and "🔞 NSFW 20 540" over grids of 527 and 3 364 rows. Those numbers were
+    never lies about the bank; they had simply stopped describing anything the
+    user could see, which from where they sit is the same thing.
+
+    Each facet is counted with EVERY OTHER filter applied and its own left out
+    (``_apply_facets(skip=…)``). Counting a facet with itself applied would show
+    the picked value's neighbours at 0 — a filter you cannot change your mind
+    about without clearing everything first, which is a worse bug than the one
+    being fixed.
+
+    Cost: SEVEN queries whatever the bank's size — one per facet family, each a
+    GROUP BY or a row of conditional SUMs. The bank-wide flag map it replaces
+    spends one query PER FLAG (ten), so the filtered answer is cheaper than the
+    unfiltered one. Nothing here writes."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    th = thresholds()
+    facets = {k: f.get(k) for k in FACETS}
+
+    def pool(skip, extra=None):
+        q, _order = _apply_facets(BankImage.query.filter_by(bank_id=bank_id), th,
+                                  skip, **facets)
+        return q if extra is None else q.filter(extra)
+
+    def by_bucket(skip, col, keys, extra=None):
+        """One GROUP BY over the pool. Rows the column maps to NULL are dropped:
+        "never classified" is not a bucket, and folding it into one would let an
+        unrun pass look like a measured verdict."""
+        rows = (pool(skip, extra).with_entities(col, func.count(BankImage.id))
+                .group_by(col).all())
+        got = {k: n for k, n in rows if k is not None}
+        return {k: int(got.get(k, 0)) for k in keys}
+
+    def summed(q, conditions):
+        """N conditional SUMs in ONE pass over the pool."""
+        if not conditions:
+            return []
+        row = q.with_entities(*[
+            func.coalesce(func.sum(case((c, 1), else_=0)), 0)
+            for c in conditions]).one()
+        return [int(v or 0) for v in row]
+
+    total, pending, keep, reject = pool('status').with_entities(
+        func.count(BankImage.id),
+        *[func.coalesce(func.sum(case((BankImage.status == s, 1), else_=0)), 0)
+          for s in ('pending', 'keep', 'reject')]).one()
+    names = _QUALITY_FLAGS + _SCORE_FLAGS
+    crits = {n: _flag_filter(n, th) for n in names}
+    live = [n for n in names if crits[n] is not None]
+    flags = dict.fromkeys(names, 0)
+    flags.update(zip(live, summed(pool('flag'), [crits[n] for n in live])))
+    return {
+        # 'total' is the filtered pool itself — what "All" would show. The other
+        # three are its status split, each counted with the status facet lifted.
+        'counts': {'total': int(total or 0), 'pending': int(pending or 0),
+                   'keep': int(keep or 0), 'reject': int(reject or 0)},
+        'flags': flags,
+        'res_buckets': by_bucket(
+            'res_bucket', _res_bucket_case(), [b for b, _lo, _hi in _RES_BUCKETS],
+            extra=and_(BankImage.width.isnot(None), BankImage.height.isnot(None))),
+        'framing': by_bucket('framing', BankImage.framing, _FRAMING_KEYS),
+        'origins': by_bucket('origin', BankImage.origin, ORIGINS),
+        'mediums': by_bucket('medium', BankImage.medium, MEDIUM_KEYS),
+        'angles': by_bucket('angle', _angle_case(), ANGLES),
+    }
 
 
 # --- thumbnails -------------------------------------------------------------
