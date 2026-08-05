@@ -68,8 +68,9 @@ export function promoteSummary({ destination, useSelection, selectedCount,
   const n = promoteCount({ useSelection, selectedCount, promotable, size })
   const many = n == null ? 'The kept image(s)' : `The ${n} image(s)`
   if (destination === 'bank') {
-    return `${many} will be COPIED into a brand-new bank, left un-triaged so you can `
-      + 'work on them apart. This bank keeps every one of them, marked as promoted.'
+    return `${many} will be COPIED into a brand-new bank with their analysis and `
+      + 'keep/pending/reject decisions intact, so you can continue working on them '
+      + 'apart. This bank keeps every one of them, marked as promoted.'
   }
   if (!useSelection && !datasetChosen) {
     return 'Kept image(s) not yet in the chosen dataset will be COPIED into it'

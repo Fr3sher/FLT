@@ -42,11 +42,12 @@ test('promoteCount prefers the selection, then the per-target count', () => {
   assert.equal(promoteCount({ useSelection: false }), null)
 })
 
-test('the new-bank summary says copied, un-triaged, and source kept', () => {
+test('the new-bank summary says analysis and triage decisions travel', () => {
   const s = promoteSummary({ destination: 'bank', useSelection: true, selectedCount: 200 })
   assert.match(s, /200 image\(s\)/)
   assert.match(s, /COPIED/)
-  assert.match(s, /un-triaged/)
+  assert.match(s, /analysis/)
+  assert.match(s, /keep\/pending\/reject decisions intact/)
   assert.match(s, /keeps every one of them, marked as promoted/)
 })
 
