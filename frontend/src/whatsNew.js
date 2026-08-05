@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-a-scoring-pass-that-came-back-empty-now-says-why',
+    date: '2026-08-05',
+    title: 'A ✨ Score pass that could not load its models tells you why',
+    blurb:
+      'A scoring pass could finish, announce "done", and leave every image without a single number — with sorting by aesthetics, find crops and variants all greyed out because there was nothing to sort on. The closing line named the head that had gone quiet and stopped there: "(aesthetic + NSFW head unavailable)". Both models are fetched over the internet the first time they are used — the aesthetic predictor from GitHub, the NSFW classifier from Hugging Face — so on a machine that cannot reach them, typically a container without outbound network, both go down together and the whole pass comes back empty for one reason nobody was told. That reason was known all along, in the scoring log, and never made it to the screen. It does now: the sentence carries the actual error, so "no scores" reads as a network problem you can fix rather than a feature that looks broken. Reported by @_nofaceman on Discord.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-upscale-improve-finds-its-lora-on-a-docker-install',
     date: '2026-08-05',
     title: '✨ Upscale & improve stops re-downloading a LoRA you already have',

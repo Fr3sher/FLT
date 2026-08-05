@@ -119,7 +119,8 @@ def _install_stubs(monkeypatch, mod, calls, aes_ok=True, nsfw_ok=True):
 
     head = (lambda emb: [[_Val(7.25)]]) if aes_ok else None
     monkeypatch.setattr(mod, '_load_aesthetic_head',
-                        lambda *a, **k: (head, aes_ok))
+                        lambda *a, **k: (head, aes_ok,
+                                         None if aes_ok else 'URLError: unreachable'))
 
     class _Model:
         def __call__(self, **kw):
@@ -133,7 +134,9 @@ def _install_stubs(monkeypatch, mod, calls, aes_ok=True, nsfw_ok=True):
             return {}
 
     bundle = (_Model(), _Proc(), 1) if nsfw_ok else None
-    monkeypatch.setattr(mod, '_load_nsfw', lambda *a, **k: (bundle, nsfw_ok))
+    monkeypatch.setattr(mod, '_load_nsfw',
+                        lambda *a, **k: (bundle, nsfw_ok,
+                                         None if nsfw_ok else 'OSError: unreachable'))
 
 
 def _run_child(mod, monkeypatch, request):
@@ -534,3 +537,55 @@ def test_stopping_during_the_write_back_keeps_what_landed(
     detail = client.get(f'/api/bank/{bank_id}').get_json()['activity']['detail']
     assert 'Stopped while saving' in detail
     assert 'relaunch finishes from the cache' in detail
+
+
+def test_a_head_that_failed_says_WHY_not_just_that_it_is_unavailable(
+        client, tmp_path, app, monkeypatch, scoring_available):
+    """A degraded pass named the head and stopped there: "(aesthetic + NSFW head
+    unavailable)". Both heads fetch their weights over the network on first use —
+    the LAION MLP from GitHub, the NSFW classifier from Hugging Face — so on an
+    install whose container has no egress BOTH go down at once, the pass reports
+    "done", every score is empty, and sorting by aesthetic stays greyed out with
+    nothing to explain it. The child already knows the exact exception and logs
+    it; it was simply never carried back. It now travels in the child's JSON and
+    lands in the sentence the user actually reads.
+
+    Reported by @_nofaceman (Discord): "it tells me it completed but the sort
+    option remains greyed out"."""
+    bank_id = _mkbank(client, tmp_path, {'a.jpg': _flat(30)})
+    from app.services import image_bank_service as banks
+    script = _fake_child(
+        tmp_path,
+        'out = {"ok": True, "computed": 1, "reused": 0,\n'
+        '       "results": {p: {"state": "ok"} for p in images},\n'
+        '       "clusters": {p: 1 for p in images},\n'
+        '       "head_errors": {"aesthetic": "URLError: <urlopen error '
+        '[Errno -3] Temporary failure in name resolution>",\n'
+        '                       "nsfw": "OSError: We couldn\'t connect to '
+        'huggingface.co"}}')
+    monkeypatch.setattr(banks, '_SCORE_SCRIPT', script)
+    assert client.post(f'/api/bank/{bank_id}/score', json={}).status_code == 202
+
+    detail = client.get(f'/api/bank/{bank_id}').get_json()['activity']['detail']
+    assert 'aesthetic + NSFW head unavailable' in detail, 'the old sentence stays'
+    assert 'name resolution' in detail or 'huggingface.co' in detail, \
+        'the cause the child already knew must reach the user'
+
+
+def test_a_head_failure_with_no_reason_reported_still_reads_cleanly(
+        client, tmp_path, app, monkeypatch, scoring_available):
+    """An older child, or a head that failed without a message, must not produce
+    a dangling "unavailable ()" — the sentence degrades to what it said before."""
+    bank_id = _mkbank(client, tmp_path, {'a.jpg': _flat(30)})
+    from app.services import image_bank_service as banks
+    script = _fake_child(
+        tmp_path,
+        'out = {"ok": True, "computed": 1, "reused": 0,\n'
+        '       "results": {p: {"state": "ok", "nsfw": 0.3} for p in images},\n'
+        '       "clusters": {p: 1 for p in images}}')
+    monkeypatch.setattr(banks, '_SCORE_SCRIPT', script)
+    assert client.post(f'/api/bank/{bank_id}/score', json={}).status_code == 202
+
+    detail = client.get(f'/api/bank/{bank_id}').get_json()['activity']['detail']
+    assert 'aesthetic head unavailable' in detail
+    assert '()' not in detail and 'unavailable —' not in detail
