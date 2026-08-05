@@ -620,6 +620,59 @@ rarely needs a description on every shot). Stop it any time — and when you com
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
 
+## Choosing where a bank pass runs
+
+Every pass button in the bank ends in `…` and opens a **launch window** before
+anything runs. The window is not a settings panel — it says three separate
+things, and keeping them apart is the point.
+
+**This run — where it applies, and how big that is.** Five lines, and each one
+quotes the number of images *that pass* would actually walk:
+
+| Line | What it means |
+|---|---|
+| Kept + undecided | What every pass has always run on. The default; picking it sends exactly the request the app sent before this window existed. |
+| ✓ Kept only | The images you already decided to keep. |
+| Undecided only | The ones you have not ruled on. |
+| ✕ Unkept only (the bin) | Images you rejected. Nothing is deleted or un-rejected — but the run spends its time on shots you set aside, and the window says what that costs for this particular pass. |
+| All three, the bin included | Everything. |
+
+If you have images **selected**, that becomes the first line and wins by
+default — the pass runs on your selection, narrowed by what it still has to do.
+It says *"up to N"*, never a bare N, because the server intersects your selection
+with the pass's own pool and the run can only ever be shorter.
+
+Under those lines sits the **"do it again"** tick: *also re-measure images that
+were already scanned*, *throw the cached embeddings away*, and so on. This is
+where the old **Rescan all** and **Rescore all** buttons went. They were never
+separate passes — they were this scope, wearing a button's clothes — so they now
+sit next to the pool they re-run, unticked, with their price written next to
+them.
+
+**Settings this pass reads.** Only what the *calculation* consumes, with where
+each value lives. 🔎 Scan quality, for instance, reads exactly one of the twelve
+🎚 filter thresholds (`dup_distance`), and it reads it for the duplicate grouping
+at the end — not for the measuring.
+
+**Not decided here.** The knobs that only change how the grid is **sorted and
+flagged**. Those re-apply the moment you save them, with no pass at all. The
+sharpness, noise and aesthetic thresholds live here: nudging one costs you
+nothing.
+
+Three passes **refuse a partial scope**, and the window shows the option greyed
+out with the reason rather than hiding it: **✨ Score**, **👥 Group by person**
+and **✂ Find crops & variants** each produce one numbering of the *whole* bank,
+recomputed from scratch on every run. Handed a slice, they would number that
+slice from 1 and land those ids on top of unrelated groups already saved.
+
+Two things the scope does **not** cover, stated in the windows that need it:
+🔎 Scan's duplicate grouping always covers the whole bank (it works from stored
+hashes and renumbers them together), and 🎨 Classify medium also runs chained
+inside ✨ Score with the default scope.
+
+A run with **nothing to do** is refused before it starts, with the reason and a
+suggestion — not launched and then reported as a success.
+
 ## When a folder is already one person
 
 Scraped material usually arrives sorted: one folder per person. **👤 Group by
@@ -1272,10 +1325,37 @@ The 🔄 rotate button needs no undo entry: turn the other way and the image is
 byte-for-byte the original again.
 ## Find more images like this one — by attribute, not by look
 
-Every captioned tile in a bank carries a 🏷️ badge. **Click it** and that image's
-caption opens as a row of chips in the filter bar: `woman`, `red`, `dress`,
-`balcony`. Tick the ones you care about and the grid narrows to the images whose
-captions mention them.
+**Select an image** in a captioned bank and its tags are already there, in the
+filter bar: `woman`, `red`, `dress`, `balcony`. Tick the ones you care about and
+the grid narrows to the images whose captions mention them. No extra click, no
+badge to find.
+
+**Select several and the row counts.** Each chip carries how many of your
+selected images cite it — `red dress 7 / 12` means 7 of the 12 captioned images
+you picked mention it. That is deliberately *not* an intersection: keeping only
+the tags every single image shares would print 12 next to each survivor (a number
+that says nothing) and usually leave you with one word. What you want to know is
+that a tag describes over half of what you selected.
+
+The row is honest about what it did **not** count, on its own lines:
+
+- images in your selection with **no caption yet** — named, not folded into the
+  denominator, so `7 / 12` always means 7 of 12 images that had something to say;
+- images whose caption held **no word worth filtering on** (`a photo of her`) —
+  a different problem with a different fix;
+- a selection **too large to read in one request**, which says how many images it
+  left out rather than quietly shrinking the total.
+
+Tick a chip and the row **holds still** while the filter runs, even though
+filtering clears the selection — it keeps showing the tags of the selection you
+filtered *from*.
+
+The 🏷️ **badge on a tile** is still there, in the bottom-right corner next to ▶
+and ⛶ where the tile's actions live. It reads one image's tags *without*
+selecting it. On an image with no caption — or a caption with no word worth
+filtering on — the badge stays visible and greyed, and its tooltip says which of
+the two it is: a feature that silently disappears is indistinguishable from one
+that was never built.
 
 This is the readable cousin of **🎯 Similar to selected**, and the difference is
 worth knowing because they fail differently:
@@ -1815,11 +1895,11 @@ cached, and only the grouping is left. That grouping is the slow tail of the pas
 — about **8 seconds over 5 000 images and 3 minutes over 23 000** — so on a big
 bank it is worth letting it finish.
 
-**Rescore all** appears next to ✨ Score once a bank has scores. It is the
+**Rescore all** is the last line of ✨ Score's launch window, unticked. It is the
 opposite intent: throw the cache away and recompute everything, for a bank you
 scored with a different setup or whose results you no longer trust. It costs a
-full pass, which is why it is a separate button — ✨ Score itself has always
-meant "cover the whole bank", and it still does.
+full pass, which is why it is a deliberate tick and never a default — ✨ Score
+itself has always meant "cover the whole bank", and it still does.
 
 One more thing a relaunch fixes on its own: if the aesthetic head or the NSFW
 model could not be downloaded during an earlier run, the images scored in that

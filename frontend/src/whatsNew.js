@@ -48,11 +48,35 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-every-bank-pass-asks-where-to-run-before-it-runs',
+    date: '2026-08-05',
+    title: 'Every bank pass now asks where to run — kept, undecided, unkept, or your selection',
+    blurb:
+      'Pressing 🔎 Scan, 🏷️ Caption, 📐 Classify framing or any other pass used to fire immediately on whatever the app had decided was its pool. Each of them now opens a window first, and that window says three separate things. Where the run applies: kept only, undecided only, unkept (the bin), all three, or the images you have selected — each line quoting the number of images IT would actually touch, so a scope with nothing to do is refused before the click rather than reported as a success afterwards. What the pass reads: only the settings its calculation consumes, with where they live, so you stop guessing whether nudging a threshold costs you a rescan. And what is NOT decided there: the knobs that only re-sort and re-flag the grid, retunable any time with no pass at all. "Rescan all" and "Rescore all" were never separate actions and no longer pretend to be — they are a tick box in their pass\'s window, next to the pool they re-run and with their price written next to them. Three passes refuse a partial scope, and now say so instead of quietly not offering it: ✨ Score, 👥 Group by person and ✂ Find crops & variants each produce one numbering of the whole bank, and handed a slice they would land fresh group ids on top of unrelated groups already saved. Aiming a pass at the bin is offered everywhere it makes sense, always with what that run costs, and never as a default.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-05-the-launch-all-report-names-every-step',
+    date: '2026-08-05',
+    title: 'The Launch-all report calls every step by the name on its button',
+    blurb:
+      'Two of the eight steps in the "Last Launch-all run" summary printed their internal identifier instead of their name — you would read "semantic_dedup" and "framing" in your own report and have no way to tell which button that was. They are now "✂ Find crops & variants" and "📐 Classify framing", the exact words on the buttons you pressed. The fallback that made the omission invisible is now guarded by a test that reads the server\'s own step list, so a ninth step cannot ship nameless.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-05-select-images-and-see-their-tags-with-how-often-each-is-cited',
+    date: '2026-08-05',
+    title: 'Select images and their tags are right there, with how often each is cited',
+    blurb:
+      'Once a bank is captioned, selecting an image now shows its tags immediately — no extra click, no hunting for a badge. Select several and you get the tags across the whole selection, each with how many of them mention it: "red dress 7 / 12" tells you at a glance that over half of what you picked is that, which is the judgement you were making anyway. Ticking a chip filters the bank exactly as before, and the row holds still while it does. It is honest about its own reach: images with no caption yet are counted apart and named, so are captions whose every word was a grammar word, and a selection too large to read in one go says how many it left out instead of quietly shrinking the denominator. The 🏷️ button on a tile has also moved out of the badge cluster in the top-left corner — that corner is a state readout where nothing is clickable — down to the bottom-right next to ▶ and ⛶, where the tile\'s other actions live. When an image has no caption, or a caption with no word worth filtering on, the button stays visible and says which of the two it is, instead of disappearing and reading as a feature that does not exist.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-stopping-score-no-longer-throws-away-what-it-computed',
     date: '2026-08-05',
     title: 'Stopping ✨ Score keeps the scores it had already computed',
     blurb:
-      'Pressing Stop during a scoring pass used to leave your images exactly as they were: the work reached a cache on disk, but not a single image got its aesthetic or NSFW number. Now everything it computed is written to your images before the pass ends, and the closing line tells you how many were scored, how many are left, and how many were reused from the cache instead of recomputed — so a relaunch is visibly paying only for the rest. The 🎨 style groups are the one thing that still needs a full pass to land, because those ids are a single numbering of the whole bank and half of one would mix two unrelated styles under the same chip; a stopped pass now leaves the previous grouping untouched and says so, rather than writing a contradiction. Two more things that were quietly wrong: a run where the aesthetic or NSFW model could not be downloaded no longer wipes the scores your bank already had, and the images scored during such a window are picked up again once the missing piece is back, instead of staying half-scored forever. Finally, "Rescore all" sits next to ✨ Score once a bank has scores, for when you do want everything recomputed from scratch.',
+      'Pressing Stop during a scoring pass used to leave your images exactly as they were: the work reached a cache on disk, but not a single image got its aesthetic or NSFW number. Now everything it computed is written to your images before the pass ends, and the closing line tells you how many were scored, how many are left, and how many were reused from the cache instead of recomputed — so a relaunch is visibly paying only for the rest. The 🎨 style groups are the one thing that still needs a full pass to land, because those ids are a single numbering of the whole bank and half of one would mix two unrelated styles under the same chip; a stopped pass now leaves the previous grouping untouched and says so, rather than writing a contradiction. Two more things that were quietly wrong: a run where the aesthetic or NSFW model could not be downloaded no longer wipes the scores your bank already had, and the images scored during such a window are picked up again once the missing piece is back, instead of staying half-scored forever. Finally, "Rescore all" is available for when you do want everything recomputed from scratch — it is the last line of ✨ Score\'s launch window, unticked, with its price next to it.',
     to: '/bank',
   },
   {

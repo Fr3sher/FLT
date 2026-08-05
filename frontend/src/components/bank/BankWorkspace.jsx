@@ -58,8 +58,12 @@ import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
 // Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
 import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort.js'
-// 🏷️ One image's caption → the chips you can filter by (pure/testable).
-import { captionChips, tagsParam, tagFilterSummary } from './bankTags.js'
+// 🏷️ One image's caption → the chips you can filter by, and the same chips over a
+// whole SELECTION with how often each was cited (pure/testable).
+import {
+  captionChips, tagsParam, tagFilterSummary,
+  selectionTagCounts, selectionTagsNotes, tagCountLabel,
+} from './bankTags.js'
 // 🔤 Text search wording — "closest", never "matching" — plus the cold-start and
 // CLIP-limitation copy. Pure/testable (node --test cannot parse this JSX).
 import {
@@ -87,6 +91,14 @@ import {
 } from './autoRejectReadiness.js'
 
 const PAGE_SIZE = 120
+/* How many off-page captions the 🏷️ row will fetch for a selection.
+   Not a taste call: `ids=` travels in the query string, and a few thousand
+   integers build a request line the server refuses outright (the same limit the
+   "show selected" view already lives with). 500 ids ≈ 3.5 kB, comfortably under
+   it. Whatever the cap leaves out is DISCLOSED in the row — a count over 500 of
+   3 200 images presenting itself as "your selection" is the very defect this
+   surface exists to end. */
+const TAG_CAPTION_FETCH_CAP = 500
 
 const FLAG_LABEL = {
   blur: '🌫 Blurry', noise: '📺 Noisy', uniform: '⬜ Flat',
@@ -625,6 +637,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // a standing preference like the sort order.
   const [tagSource, setTagSource] = useState(null)
   const [tagPicked, setTagPicked] = useState(() => new Set())
+  // 🏷️ …and the SELECTION's tags, which need no click at all. `tagFreeze` is the
+  // snapshot taken the instant a chip is ticked: applying a filter clears the
+  // selection (setF does, and must — the ids no longer match what is on screen),
+  // so without this the row would compute the answer and then delete the question.
+  const [tagFreeze, setTagFreeze] = useState(null)
   const [subfolders, setSubfolders] = useState([])
   // 👤 Folder-level person assertions ("this subfolder is one person").
   const [folderPersons, setFolderPersons] = useState([])
@@ -966,26 +983,108 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // 🏷️ Open the chip row on an image, with nothing ticked yet: reading the tags
   // is not the same act as filtering by them, and auto-applying all of them would
   // usually return that one image alone.
+  //
+  // It CLEARS the selection, because the selection now drives the same row: with
+  // one live, this button would set a source the row never reads and read as dead.
   const openTagPicker = (img) => {
     setTagSource(img)
     setTagPicked(new Set())
+    setTagFreeze(null)
+    setSelected(new Set())
     if (filter.tags) setF({ tags: null })
   }
 
   // Tick / untick one chip and re-filter immediately — the grid IS the feedback,
   // so an Apply button would only add a click between the question and its answer.
-  const toggleTag = (tag) => {
+  //
+  // `basis` is the row the chip was clicked in. When it is the LIVE selection it
+  // is frozen first: setF empties the selection on the next line, and a row that
+  // vanished the moment you used it would read as a crash.
+  const toggleTag = (tag, basis = null) => {
     const next = new Set(tagPicked)
     if (next.has(tag)) next.delete(tag); else next.add(tag)
     setTagPicked(next)
+    if (basis && basis.kind === 'selection' && !basis.frozen) {
+      setTagFreeze({ ...basis, frozen: true })
+    }
     setF({ tags: tagsParam(next) })
   }
 
   const clearTags = () => {
     setTagSource(null)
+    setTagFreeze(null)
     setTagPicked(new Set())
     if (filter.tags) setF({ tags: null })
   }
+
+  // --- 🏷️ The captions the tag row counts over ------------------------------
+  // Every image the grid has ever rendered leaves its caption here, so ticking
+  // tiles on the page costs ZERO requests. Only ids the grid never showed — what
+  // "Select all in filter" produces — are fetched, and only those.
+  const captionCache = useRef(null)
+  if (captionCache.current === null) captionCache.current = new Map()
+  const [captionsSeen, setCaptionsSeen] = useState(0)
+  useEffect(() => {
+    let added = false
+    for (const im of page.images || []) {
+      if (!captionCache.current.has(im.id)) added = true
+      captionCache.current.set(im.id, im.caption || '')
+    }
+    if (added) setCaptionsSeen((n) => n + 1)
+  }, [page])
+
+  // The ids we never rendered. Fetched in ONE request and capped: `ids=` rides in
+  // the QUERY STRING, and a selection of a few thousand integers builds a request
+  // line the server rejects outright. What the cap leaves out is stated in the row
+  // rather than folded silently into the denominator.
+  useEffect(() => {
+    const ids = [...selected]
+    const missing = ids.filter((id) => !captionCache.current.has(id))
+    if (!missing.length) return undefined
+    const batch = missing.slice(0, TAG_CAPTION_FETCH_CAP)
+    let cancelled = false
+    const t = setTimeout(async () => {
+      try {
+        const qs = new URLSearchParams({
+          ids: batch.join(','), limit: String(batch.length),
+        })
+        const d = await apiFetch(`/api/bank/${bankId}/images?${qs}`, { background: true })
+        if (cancelled) return
+        for (const im of d.images || []) captionCache.current.set(im.id, im.caption || '')
+        setCaptionsSeen((n) => n + 1)
+      } catch { /* the row then counts what it has and says how many it could not read */ }
+    }, 300)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [selected, bankId])
+
+  // A new selection replaces a frozen one: a snapshot of last question's images
+  // sitting above a fresh selection is a row that describes something else.
+  useEffect(() => { if (selected.size) setTagFreeze(null) }, [selected])
+
+  const selectionTags = useMemo(() => {
+    if (!selected.size) return null
+    const ids = [...selected]
+    const known = ids.filter((id) => captionCache.current.has(id))
+    return {
+      kind: 'selection',
+      ...selectionTagCounts(known.map((id) => captionCache.current.get(id))),
+      unread: ids.length - known.length,
+      size: ids.length,
+    }
+    // captionsSeen is the dependency that matters — the cache is a ref, so React
+    // cannot see it change on its own.
+  }, [selected, captionsSeen])
+
+  /* WHICH row is on screen, in priority order. A frozen selection outranks a live
+     one (it IS the live one, held still while its filter runs); a selection
+     outranks the 🏷️ button, because it is the more recent gesture. */
+  const tagRow = tagFreeze || selectionTags || (tagSource ? {
+    kind: 'image',
+    name: tagSource.name,
+    ...selectionTagCounts([tagSource.caption]),
+    unread: 0,
+    size: 1,
+  } : null)
 
   // Debounce the search box, then apply it as a filter (page 1, selection cleared).
   useEffect(() => {
@@ -2050,34 +2149,73 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             alter. Ticking re-filters immediately; the sentence spells out that
             several chips mean AND, because a set that shrinks with every click
             is only obvious once you already know the rule. */}
-        {tagSource && (
+        {/* IT OPENS ON ITS OWN NOW, on the selection. Asked for in these words:
+            "when the captions are already done and you select an image, show the
+            tags in every case. When several images are selected, show the tags in
+            common with the number of times it was cited."
+
+            So there is no second click between selecting and reading: select one
+            captioned image and its chips are here; select twelve and each chip
+            carries how many of them cite it. The 🏷️ button on a tile is still the
+            way to read an image's tags WITHOUT selecting it.
+
+            THE NUMBER IS A FRACTION, never a bare count — see bankTags.js. "7"
+            alone is unreadable without knowing what it is out of, and "7 / 12" is
+            the whole judgement: this tag describes over half of what you picked. */}
+        {tagRow && (
           <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <GroupLabel>🏷️ Tags of {tagSource.name}</GroupLabel>
+              <GroupLabel>
+                {tagRow.kind === 'image' ? `🏷️ Tags of ${tagRow.name}`
+                  : tagRow.size === 1 ? '🏷️ Tags of the selected image'
+                    : `🏷️ Tags across ${tagRow.size} selected images`}
+              </GroupLabel>
               <span className="text-[11px] text-content-subtle">
                 attributes you pick — unlike 🎯 Similar, which matches the look
               </span>
+              {tagRow.frozen && (
+                <span className="rounded border border-border px-1.5 text-[11px] text-content-subtle">
+                  held from the selection you filtered on
+                </span>
+              )}
               <button type="button" onClick={clearTags}
                 className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-content-muted hover:text-content">
                 ✕ Close
               </button>
             </div>
-            {captionChips(tagSource.caption).length === 0 ? (
+            {tagRow.rows.length === 0 ? (
               <p className="m-0 text-xs text-content-muted">
-                This caption has no word worth filtering on.
+                {tagRow.uncaptioned > 0 && tagRow.counted === 0
+                  ? (tagRow.size === 1
+                    ? 'This image has no caption yet — run 🏷️ Caption and its tags appear here.'
+                    : `None of these ${tagRow.size} images has a caption yet — run 🏷️ Caption on them and their tags appear here.`)
+                  : 'No caption here has a word worth filtering on.'}
               </p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
-                {captionChips(tagSource.caption).map((tag) => (
-                  <Chip key={tag} active={tagPicked.has(tag)} onClick={() => toggleTag(tag)}
-                    title={tagPicked.has(tag)
-                      ? `Stop requiring “${tag}”`
-                      : `Show only images whose caption mentions “${tag}”`}>
-                    {tag}
-                  </Chip>
-                ))}
+                {tagRow.rows.map(({ tag, count }) => {
+                  const n = tagCountLabel(count, tagRow.counted)
+                  return (
+                    <Chip key={tag} active={tagPicked.has(tag)}
+                      onClick={() => toggleTag(tag, tagRow)}
+                      title={tagPicked.has(tag)
+                        ? `Stop requiring “${tag}”`
+                        : `Show only images whose caption mentions “${tag}”`
+                          + (n ? ` — cited by ${count} of the ${tagRow.counted} captioned images you selected` : '')}>
+                      {tag}
+                      {n && <span className="ml-1 text-[10px] text-content-subtle">{n}</span>}
+                    </Chip>
+                  )
+                })}
               </div>
             )}
+            {/* What was counted, and everything that was NOT. Each shortfall gets
+                its own line: "no caption yet" and "captioned but word-less" have
+                different fixes, and a cap the row hit is not the same fact as
+                either. Silence on any of them is a denominator that lies. */}
+            {selectionTagsNotes(tagRow, tagRow.unread).map((note) => (
+              <p key={note} className="m-0 text-[11px] leading-snug text-content-subtle">{note}</p>
+            ))}
             {tagPicked.size > 0 && (
               <p className="m-0 text-[11px] text-content-muted">
                 {tagFilterSummary(tagPicked)} Matched as whole words, in captions
