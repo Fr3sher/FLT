@@ -293,8 +293,14 @@ def bank_faces(bank_id):
 
 @bp.post('/bank/<int:bank_id>/score')
 def bank_score(bank_id):
-    """Aesthetic + NSFW + style scoring pass (bank-scoring extra). 202/409/503."""
-    return _start(banks.start_score, _app(), LOCAL_USER, bank_id)
+    """Aesthetic + NSFW + style scoring pass (bank-scoring extra). 202/409/503.
+
+    {rescore: true} throws the cached embeddings away and recomputes everything —
+    the ✨ Score button itself always ran, and still runs, the complete pass (it
+    just skips what is already computed)."""
+    data = request.get_json(silent=True) or {}
+    return _start(banks.start_score, _app(), LOCAL_USER, bank_id,
+                  rescore=bool(data.get('rescore')))
 
 
 @bp.post('/bank/<int:bank_id>/semantic-dedup')

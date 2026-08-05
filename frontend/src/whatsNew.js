@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-stopping-score-no-longer-throws-away-what-it-computed',
+    date: '2026-08-05',
+    title: 'Stopping ✨ Score keeps the scores it had already computed',
+    blurb:
+      'Pressing Stop during a scoring pass used to leave your images exactly as they were: the work reached a cache on disk, but not a single image got its aesthetic or NSFW number. Now everything it computed is written to your images before the pass ends, and the closing line tells you how many were scored, how many are left, and how many were reused from the cache instead of recomputed — so a relaunch is visibly paying only for the rest. The 🎨 style groups are the one thing that still needs a full pass to land, because those ids are a single numbering of the whole bank and half of one would mix two unrelated styles under the same chip; a stopped pass now leaves the previous grouping untouched and says so, rather than writing a contradiction. Two more things that were quietly wrong: a run where the aesthetic or NSFW model could not be downloaded no longer wipes the scores your bank already had, and the images scored during such a window are picked up again once the missing piece is back, instead of staying half-scored forever. Finally, "Rescore all" sits next to ✨ Score once a bank has scores, for when you do want everything recomputed from scratch.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-04-the-quality-scan-no-longer-takes-the-app-away-with-it',
     date: '2026-08-04',
     title: 'The 🔎 quality scan leaves the rest of the bank usable',

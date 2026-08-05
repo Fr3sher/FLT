@@ -1065,7 +1065,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
     }
     if (run) await run()
   }
-  const startScore = () => act(() => postJson(`/api/bank/${bankId}/score`, {}), null)
+  // ✨ Score always covers the WHOLE bank and skips what is already computed —
+  // `rescore` is the explicit "recompute it all" lane (new model, scores you no
+  // longer trust), exactly like the quality pass's "Rescan all".
+  const startScore = (rescore) => act(
+    () => postJson(`/api/bank/${bankId}/score`, rescore ? { rescore: true } : {}),
+    null)
   const startSemanticDedup = () => act(
     () => postJson(`/api/bank/${bankId}/semantic-dedup`, {}), null)
   const startFraming = () => act(() => postJson(`/api/bank/${bankId}/framing`, {}), null)
@@ -1623,13 +1628,19 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               : 'Install the Quality tools (Setup) to sort by person'}>
             👥 Group by person
           </PassButton>
-          <PassButton onClick={startScore} disabled={live || !caps.bank_scoring}
+          <PassButton onClick={() => startScore(false)} disabled={live || !caps.bank_scoring}
             title={caps.bank_scoring
-              ? `Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". Runs in the background${
+              ? `Rate every non-rejected image for aesthetics (1–10), flag NSFW, and group by visual style — one CLIP pass. Powers a smarter "keep best". Already-scored images are reused, so stopping and relaunching costs only what is left. Runs in the background${
                 holdsTheGpu(scoreDevice) ? ', and holds the GPU (ComfyUI is unloaded and training cannot start) for its duration' : ' on the CPU, leaving the GPU free'}.`
               : 'Install the Bank scoring extra (Setup ▸ Quality tools) to score aesthetics / NSFW / style'}>
             ✨ Score{!caps.bank_scoring && ' (needs setup)'}
           </PassButton>
+          {scored > 0 && caps.bank_scoring && (
+            <PassButton onClick={() => startScore(true)} disabled={live}
+              title="Recompute every score from scratch, ignoring the cached embeddings — for a new model or results you no longer trust. Costs a full pass.">
+              Rescore all
+            </PassButton>
+          )}
           <PassButton onClick={startMedium} disabled={live || !caps.bank_scoring}
             title={caps.bank_scoring
               ? 'Sort every scored image into photograph / anime / 3D render / illustration — read off the CLIP embeddings ✨ Score already computed, so no image is looked at again and the GPU stays free. It answers “unsure” rather than guessing: measured on a real 23 500-image bank, it named 2 anime drawings and no wrong verdict.'
