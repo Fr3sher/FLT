@@ -64,7 +64,6 @@ export const WHATS_NEW = [
     to: '/datasets?section=training',
   },
   {
-  },
     id: '2026-08-05-re-caption-keeps-the-captions-you-wrote-yourself',
     date: '2026-08-05',
     title: 'Re-caption no longer destroys the captions you wrote yourself',
