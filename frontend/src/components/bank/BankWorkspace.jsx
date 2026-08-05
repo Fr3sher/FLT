@@ -83,6 +83,9 @@ import {
 import {
   flagCandidateLabel, flagPrereq, pickedCandidates, unscannedNotice,
 } from './autoRejectReadiness.js'
+// 🗃️ Chip counters — the number a chip PRINTS (measured under the filters in
+// force) is not the number that decides the chip EXISTS (bank-wide).
+import { chipCounts, facetDataKey, isFacetFiltered } from './bankFacetCounts.js'
 
 const PAGE_SIZE = 120
 
@@ -574,6 +577,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const toast = useToast()
   const { caps, loading: capsLoading, refresh: refreshCaps } = useCapabilities()
   const [payload, setPayload] = useState(null)
+  // The chip counters measured under the ACTIVE filter (null = nothing filtered,
+  // so the payload's bank-wide numbers are the honest answer). See
+  // bankFacetCounts.js for why these are two maps and not one.
+  const [facets, setFacets] = useState(null)
   // `sort` opens on whatever order this bank was last reviewed in (per bank, not
   // global — see gridSort.bankSortStorageKey). Every other facet starts empty on
   // purpose: an order is a habit, a filter is a question you asked once.
@@ -785,6 +792,26 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   }, [bankId, filter, offset, filterParams, showSelected, selectedOrder])
 
   useEffect(() => { refreshImagesRef.current = refreshImages }, [refreshImages])
+
+  // The chip counters, re-measured whenever the filter — or the data under it —
+  // moves. Skipped entirely while nothing is filtered: there the payload's
+  // bank-wide numbers ARE the answer, so the unfiltered bank costs exactly what
+  // it did before. `sort` is stripped: reordering the same rows cannot change a
+  // count, and leaving it in would re-fetch every time the user changes the
+  // grid's order. A failed fetch keeps the last read rather than falling back to
+  // the bank-wide totals — flashing 4 043 for one tick is the very bug this
+  // replaces.
+  const facetDeps = facetDataKey(payload?.counts, payload?.thresholds)
+  useEffect(() => {
+    if (!isFacetFiltered(filter)) { setFacets(null); return undefined }
+    let alive = true
+    const params = filterParams(filter)
+    delete params.sort
+    apiFetch(`/api/bank/${bankId}/facets?${new URLSearchParams(params)}`)
+      .then((d) => { if (alive) setFacets(d) })
+      .catch(() => { /* transient — the chips keep their last read */ })
+    return () => { alive = false }
+  }, [bankId, filter, filterParams, facetDeps])
 
   useEffect(() => {
     // Opening ANOTHER bank without unmounting (the workspace is not keyed by id)
@@ -1421,38 +1448,48 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // ↩ the live offer, minus the one the user already waved away.
   const offer = undoOffer(payload)
   const undoBar = offer && offer.at !== undoDismissedAt ? offer : null
-  const flags = payload?.flags || {}
-  // The OTHER question, kept as its own map: `flags` is "every image carrying
-  // this flag" (what the chip filters to, rejected ones included) and
-  // `flags_actionable` is "what 🧹 Auto-reject would flip" (undecided only).
-  // Overwriting the first with the second would have silently shrunk every
-  // chip's count to the undecided pile.
+  // `print` = what each chip SHOWS, measured under the filters in force; `wide` =
+  // the bank-wide truth, which is what decides a chip is offered at all. Keeping
+  // visibility on `wide` is deliberate: chips that disappeared as a filter
+  // emptied them would leave no way back to the values you just excluded.
+  const { print: chipPrint, wide: chipWide, filtered: chipsFiltered } =
+    chipCounts(payload, facets)
+  const flags = chipPrint.flags
+  // A THIRD question, kept as its own map and deliberately NOT filtered:
+  // `flags` is "images this chip would show" and `flags_actionable` is "what
+  // 🧹 Auto-reject would flip" — a pass that runs over the whole bank, not over
+  // the current view, so narrowing its number to the filter would under-promise
+  // exactly as badly as the chips used to over-promise.
   const flagsActionable = payload?.flags_actionable || {}
-  const resBuckets = payload?.res_buckets || {}
+  const resBuckets = chipPrint.resBuckets
   // Only surface tiers that actually hold scanned images (plus the active one,
   // so a tier you're filtering on never vanishes mid-review).
   const shownResBuckets = RES_BUCKETS.filter(
-    (b) => (resBuckets[b.id] || 0) > 0 || filter.resBucket === b.id)
+    (b) => (chipWide.resBuckets[b.id] || 0) > 0 || filter.resBucket === b.id)
   const clusters = payload?.clusters || []
   const styleClusters = payload?.style_clusters || []
-  const framingCounts = payload?.framing || {}
+  const framingCounts = chipPrint.framing
   const framingClassified = counts?.framing_classified || 0
   // Only surface framing chips once the pass has classified something (plus the
   // active one, so a chip you're filtering on never vanishes mid-review).
   const shownFramings = FRAMING_BUCKETS.filter(
-    (b) => (framingCounts[b.id] || 0) > 0 || filter.framing === b.id)
+    (b) => (chipWide.framing[b.id] || 0) > 0 || filter.framing === b.id)
   // Origin chips appear as soon as the quality scan has measured anything. All
   // three are shown together once any is non-zero: hiding 'ai' at 0 would read as
   // "no AI images here", when what it means is "none that still carry metadata".
-  const originCounts = payload?.origins || {}
-  const originMeasured = ORIGIN_BUCKETS.reduce((n, b) => n + (originCounts[b.id] || 0), 0)
+  const originCounts = chipPrint.origins
+  const originMeasured = ORIGIN_BUCKETS.reduce(
+    (n, b) => n + (chipWide.origins[b.id] || 0), 0)
   // 🎨 Medium / ⤢ Angle — same "only show what holds something, plus the active
   // one" rule as the framing and resolution rows.
-  const mediumCounts = payload?.mediums || {}
-  const shownMediums = shownBuckets(MEDIUM_BUCKETS, mediumCounts, filter.medium)
-  const mediumNote = mediumLimits(mediumCounts, counts?.medium_classified)
-  const angleCounts = payload?.angles || {}
-  const shownAngles = shownBuckets(ANGLE_BUCKETS, angleCounts, filter.angle)
+  const mediumCounts = chipPrint.mediums
+  const shownMediums = shownBuckets(MEDIUM_BUCKETS, chipWide.mediums, filter.medium)
+  // The limits sentence is about the MEASUREMENT, not about the current view: it
+  // weighs the buckets against how many rows the pass classified bank-wide, so
+  // it reads the wide map or it would announce a fake blind spot on every filter.
+  const mediumNote = mediumLimits(chipWide.mediums, counts?.medium_classified)
+  const angleCounts = chipPrint.angles
+  const shownAngles = shownBuckets(ANGLE_BUCKETS, chipWide.angles, filter.angle)
   const angleState = angleReadiness(payload)
   const visionReady = !!caps.ollama?.vision_model_ready
   // The explicit lane only spells acts out with an uncensored (abliterated) vision
@@ -1505,10 +1542,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const autoRejectNotice = unscannedNotice(counts)
   const autoRejectPicked = pickedCandidates(rejectFlags, flagsActionable)
   const canPromote = (counts?.keep || 0) > 0 || selected.size > 0
-  // Is any facet narrowing the grid? Drives the "N shown of TOTAL" readout.
-  const isFiltered = !!(filter.status || filter.flag || filter.cluster != null
-    || filter.style != null || filter.subfolder != null || filter.search
-    || filter.resBucket || filter.framing || filter.medium || filter.angle)
+  // Is any facet narrowing the grid? Drives the "N shown of TOTAL" readout AND
+  // the chip counters, which is why it is one shared predicate: two lists of
+  // facet keys drift, and the one here used to be missing 🔎 Origin, 🚫 exclude
+  // and the 🏷️ tag chips — so a grid narrowed by those said it was showing
+  // everything.
+  const isFiltered = isFacetFiltered(filter)
 
   // The ONE recommended next step, from the counters the header strip already
   // reads. Advisory only — draws an amber "Next step" accent on that zone.
@@ -2016,7 +2055,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </div>
         )}
 
-        {/* Filters — grouped by facet so the chips read as a system, not a wall */}
+        {/* Filters — grouped by facet so the chips read as a system, not a wall.
+            While anything is filtered the numbers describe the FILTERED bank, and
+            the row says so: a count that silently changed meaning would be worse
+            than the bank-wide one it replaces. */}
+        {chipsFiltered && (
+          <p className="m-0 text-[11px] leading-snug text-content-subtle">
+            Counts below follow the active filters. Each chip is counted with the
+            others applied and its own value lifted, so you can always switch to
+            a neighbour.
+          </p>
+        )}
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
           <FilterGroup label="Status">
             <Chip active={!filter.status && !filter.flag && filter.cluster == null && filter.style == null}
@@ -2037,12 +2086,17 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             <Chip active={filter.flag === 'clean'} onClick={() => setF({ flag: filter.flag === 'clean' ? null : 'clean' })}>✨ Clean</Chip>
           </FilterGroup>
 
-          {/* Score-derived flags — only surfaced once their pass has produced data. */}
+          {/* Score-derived flags — only surfaced once their pass has produced data.
+              These used to clear the person/style cluster on click, and the ≈
+              Duplicates chips cleared the cluster too. That silently undid a
+              filter the user had set — and now that each chip PRINTS the size of
+              the page it opens, it would also have made that number wrong.
+              A chip toggles its own facet and nothing else. */}
           {availableScoreFlags.length > 0 && (
             <FilterGroup label="Score">
               {availableScoreFlags.map((f) => (
                 <Chip key={f} active={filter.flag === f}
-                  onClick={() => setF({ flag: filter.flag === f ? null : f, cluster: null, style: null })}
+                  onClick={() => setF({ flag: filter.flag === f ? null : f })}
                   title={f === 'watermark' ? 'Overlaid watermark detected' : 'Sorted worst-first'}>
                   {FLAG_LABEL[f]} {flags[f] ?? 0}
                 </Chip>
@@ -2051,13 +2105,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           )}
 
           <FilterGroup label="Groups">
-            <Chip active={filter.flag === 'dups'} onClick={() => setF({ flag: filter.flag === 'dups' ? null : 'dups', cluster: null })}
+            <Chip active={filter.flag === 'dups'} onClick={() => setF({ flag: filter.flag === 'dups' ? null : 'dups' })}
               title="Exact / resized duplicate groups (perceptual hash) with their resolution panel">
               ≈ Duplicates {payload?.dup?.unresolved ?? 0}
             </Chip>
             {(payload?.semantic_dup?.groups ?? 0) > 0 && (
               <Chip active={filter.flag === 'semantic_dups'}
-                onClick={() => setF({ flag: filter.flag === 'semantic_dups' ? null : 'semantic_dups', cluster: null })}
+                onClick={() => setF({ flag: filter.flag === 'semantic_dups' ? null : 'semantic_dups' })}
                 title="Semantic near-duplicates — same shot, different crop/compression — with their resolution panel">
                 ✂ Same shot {payload?.semantic_dup?.unresolved ?? 0}
               </Chip>

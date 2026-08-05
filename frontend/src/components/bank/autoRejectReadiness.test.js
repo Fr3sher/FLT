@@ -24,9 +24,13 @@ test('the auto-reject popover counts from flags_actionable, never from flags', (
   // The facet chips keep the OTHER map: "show me every blurry image" rightly
   // includes the ones a previous pass rejected.
   assert.match(ws, /\{FLAG_LABEL\[f\]\} \{flags\[f\] \?\? 0\}/);
-  // Two payload fields, two questions — the second was added, not substituted.
-  assert.match(ws, /const flags = payload\?\.flags \|\| \{\}/);
+  // Two maps, two questions — the second was added, not substituted. The chip
+  // map now comes from the FILTERED counters (a chip prints the size of the page
+  // it opens); the auto-reject map deliberately still comes from the payload,
+  // because that pass runs over the whole bank and not over the current view.
+  assert.match(ws, /const flags = chipPrint\.flags/);
   assert.match(ws, /const flagsActionable = payload\?\.flags_actionable \|\| \{\}/);
+  assert.doesNotMatch(ws, /flagsActionable = (chipPrint|facets)/);
 });
 
 test('the Launch all dialog shows the same honest count and is fed it', () => {
