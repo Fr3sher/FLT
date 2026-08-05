@@ -4542,7 +4542,14 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     # (no Ollama) failed a release on it while two agents read it as a flake.
     if bank_jobs.running(bank_id):
         raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
-    use_detector = watermark_detector.available()
+    # WHICH route, resolved once, from the setting both surfaces read. 'auto' —
+    # the default — resolves exactly the way this line used to read the probe
+    # directly, so an untouched install behaves identically. A pinned 'detector'
+    # with no extra installed does not refuse: it runs the vision route and
+    # carries the reason into the job's own progress line (`note`), because a
+    # silent fallback is how a user changes a detector and sees nothing change.
+    resolution = watermark_detector.resolve_backend()
+    use_detector = resolution['backend'] == 'detector'
     if not use_detector and not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
                            '(Settings ▸ Local tools)')
@@ -4550,11 +4557,12 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     if reason:
         raise RuntimeError(reason)
     return bank_jobs.start(app, bank_id, 'watermark',
-                           _watermark_job(bank_id, rescan, use_detector=use_detector),
+                           _watermark_job(bank_id, rescan, use_detector=use_detector,
+                                          note=resolution['detail'] if resolution['fell_back'] else ''),
                            total=_watermark_scan_query(bank_id, rescan).count())
 
 
-def _watermark_job(bank_id, rescan, use_detector=False):
+def _watermark_job(bank_id, rescan, use_detector=False, note=''):
     if use_detector:
         return _watermark_detector_job(bank_id, rescan)
 
@@ -4568,7 +4576,11 @@ def _watermark_job(bank_id, rescan, use_detector=False):
         if not bank:
             return
         rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
-        bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
+        # `note` is set only when the user PINNED the detector and it could not
+        # run. Said at the start (so it is visible while the pass runs) and again
+        # in the final sentence (so it survives the pass).
+        bank_jobs.progress(job, done=0, total=len(rows),
+                           detail=(f'watermark scan — ℹ {note}' if note else 'watermark scan'))
         if not rows:
             return
         row_ids = [r.id for r in rows]
@@ -4680,9 +4692,11 @@ def _watermark_job(bank_id, rescan, use_detector=False):
                 unload_vision_model()  # hand the VRAM back to ComfyUI
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {detected} with a watermark '
-                                           f'so far')
+                                           f'so far' + (f' · ℹ {note}' if note else ''))
             return
         detail = f'done — {detected} with a watermark, {clean} clean'
+        if note:
+            detail += f' · ℹ {note}'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if unanswered:
@@ -5433,11 +5447,16 @@ def _watermark_source_counts(bank_id) -> dict:
 
 
 def _detector_ready() -> bool:
-    """Never raises: a probe that explodes must not 500 the whole panel — it just
+    """Whether the NEXT run will use the detector — which is now the resolved
+    SETTING, not merely "is the extra installed". The panel's sentence says "a new
+    run uses …", so reading availability alone would make it lie the moment a user
+    pinned the vision model on a machine that has the extra.
+
+    Never raises: a probe that explodes must not 500 the whole panel — it just
     means the next run is the vision model, which is the shipped behaviour."""
     try:
         from . import watermark_detector
-        return watermark_detector.available()
+        return watermark_detector.resolve_backend()['backend'] == 'detector'
     except Exception:      # noqa: BLE001
         return False
 

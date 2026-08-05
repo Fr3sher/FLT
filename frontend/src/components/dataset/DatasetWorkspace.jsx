@@ -30,6 +30,9 @@ import DatasetSettingsModal from './DatasetSettingsModal';
 import DatasetToBankDialog from './DatasetToBankDialog';
 import PublishHfModal from './PublishHfModal';
 import WatermarkReviewLightbox, { buildWatermarkRecap } from './WatermarkReviewLightbox';
+import {
+  summarizeFlagged, rejectableFlagged, rejectFlaggedConfirmText, flaggedSourceNote,
+} from './watermarkFlagged.js';
 import { useToast } from '../common/Toast';
 import { pickNativeFolder, FolderBrowserModal } from '../common/FolderPicker';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -243,6 +246,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const [captionOptionsOpen, setCaptionOptionsOpen] = useState(false);
   // Frozen snapshot of the flagged queue when review mode opens (null = closed).
   const [reviewQueue, setReviewQueue] = useState(null);
+  // What the last "Reject all flagged" actually did, in the SERVER's number, and
+  // the way back. The undo exists (Show ▸ Rejected → ✓ Keep) but it only exists
+  // for the user if it is named at the moment it becomes useful.
+  const [rejectFlaggedNote, setRejectFlaggedNote] = useState('');
   const zipInput = useRef(null);   // hidden input for "Import dataset (ZIP)"
   const [refCrop, setRefCrop] = useState(false);
   const [refEdit, setRefEdit] = useState(false);
@@ -322,6 +329,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
     ),
     hasLeakMetadata: Boolean(d?.caption_leak),
     watermarkDetected: navImages.filter((image) => image.watermark_state === 'detected').length,
+    watermarkRejectable: rejectableFlagged(navImages).length,
     smallImageRescue: buildSmallImageRescuePairs(navImages).filter((pair) => !pair.resolved).length,
     unused: navImages.filter((image) => (image.status === 'reject' || image.status === 'failed')
       && !isSmallImageRescueRow(image)).length,
@@ -570,6 +578,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
   const leakingImages = images.filter((i) => i.leak);
   // Overlaid watermarks still awaiting removal → drives the "🧽 Clean (N)" button.
   const watermarkDetected = images.filter((i) => i.watermark_state === 'detected').length;
+  // …and what that pile is really made of: what a bulk reject would move, what it
+  // would refuse to touch, which detector judged, and how many carry no position.
+  const flagged = summarizeFlagged(images);
+  const flaggedNote = flaggedSourceNote(flagged);
   // Style de caption : défaut AUTO (SDXL booru-native → booru tags ; sinon prose),
   // surchargé par le sélecteur. Anima est HYBRIDE (les deux formes sont natives) :
   // le défaut prose n'est qu'un point de départ, basculer sur booru est légitime et
@@ -1059,6 +1071,16 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   {act?.cancelling ? 'Stopping…' : '⏹ Stop'}
                 </button>
               )}
+              {/* Same seam, same promise, for the watermark scan: it was the one
+                  long dataset pass with no way out but closing the tab. */}
+              {act?.kind === 'watermark_detect' && (
+                <button id="ds-watermark-scan-stop" type="button"
+                  onClick={ds.cancelWatermarkScan} disabled={!!act?.cancelling}
+                  title="Stops after the current image finishes — every watermark already found is kept; run 🧽 Find watermarks again to finish the rest."
+                  className="ml-auto shrink-0 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white text-xs font-bold disabled:opacity-50 disabled:cursor-not-allowed">
+                  {act?.cancelling ? 'Stopping…' : '⏹ Stop'}
+                </button>
+              )}
             </div>
           )}
 
@@ -1415,6 +1437,63 @@ export default function DatasetWorkspace({ ds, onBack }) {
                     title="Step through the flagged images one by one — see each detected box and Clean, dismiss a false positive, or reject"
                     className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm disabled:opacity-40 scroll-mt-20">
                     🔍 Review flagged ({watermarkDetected})
+                  </button>
+                )}
+                {/* The shortcut past that review, because it was asked for — and
+                    it says what it costs. The count is `flagged.rejectable`, NOT
+                    watermarkDetected: a small-image rescue row in the batch makes
+                    the SERVER refuse the whole request (400, zero rejected) and a
+                    'failed' row is skipped, so promising the bigger number would
+                    be the bank's "5 930 → 0" defect all over again. Red-tinted
+                    like 🧹 Purge, never the primary colour: this is the shortcut,
+                    the per-image review is still the recommended path. */}
+                {flagged.rejectable > 0 && (
+                  <button id="ds-curation-reject-flagged" type="button" data-workspace-focus
+                    disabled={ds.busy}
+                    onClick={async () => {
+                      if (!window.confirm(rejectFlaggedConfirmText(flagged))) return;
+                      const affected = await ds.batchImages(flagged.rejectableIds, 'reject');
+                      // The server's number, not ours — it is the one that counts
+                      // rows it actually wrote (see batch_image_action).
+                      setRejectFlaggedNote(affected
+                        ? `✓ rejected ${affected} — undo with Show ▸ Rejected in the grid, then ✓ Keep`
+                        : '');
+                    }}
+                    title="The detector is a review flag, not a verdict — it does flag clean images sometimes, which is what 🔍 Review flagged is for. This rejects them all at once instead; rejected images stay on disk and can be brought back."
+                    className="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/30 text-red-300 text-sm disabled:opacity-40 scroll-mt-20">
+                    ✕ Reject all flagged ({flagged.rejectable})
+                  </button>
+                )}
+                {/* Two numbers that differ must never be shown as one. */}
+                {flagged.rejectable > 0 && flagged.heldBack > 0 && (
+                  <p className="m-0 basis-full text-content-subtle text-[0.6875rem]">
+                    {flagged.rejectable} of {flagged.flagged} flagged can be rejected in bulk —
+                    the rest are small-image rescue pairs or failed rows, settled in their own review.
+                  </p>
+                )}
+                {rejectFlaggedNote && (
+                  <p className="m-0 basis-full text-emerald-300/90 text-[0.6875rem]">
+                    {rejectFlaggedNote}
+                  </p>
+                )}
+                {/* Who judged, and how many carry no position. Silent on the
+                    ordinary run (one source, every flag located). */}
+                {flaggedNote && (
+                  <p className="m-0 basis-full text-content-subtle text-[0.6875rem]">
+                    ℹ {flaggedNote}
+                  </p>
+                )}
+                {/* The ONLY way to re-judge images ruled false positives. Without
+                    it, changing the detector leaves a residue of verdicts from the
+                    old one that nothing can ever touch again — a setting that
+                    visibly changes nothing. Shown only when there IS a residue, so
+                    the row does not grow on the ordinary dataset. */}
+                {flagged.dismissed > 0 && (
+                  <button type="button" disabled={ds.busy}
+                    onClick={() => ds.findWatermarks({ includeDismissed: true })}
+                    title="Re-examines the images you ruled false positives too. Use it after changing the watermark detector — a normal scan skips them forever."
+                    className="px-3 py-1.5 rounded-lg bg-surface border border-dashed border-border text-content-subtle text-sm disabled:opacity-40 hover:text-content">
+                    ⟲ Rescan incl. dismissed ({flagged.dismissed})
                   </button>
                 )}
                 {/* Watermark inpainting (LaMa) needs one extra ML package (simple-lama-

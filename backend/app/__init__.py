@@ -206,6 +206,11 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'watermark_state', 'VARCHAR(16)'),
     ('face_dataset_image', 'watermark_bbox', 'TEXT'),
     ('face_dataset_image', 'watermark_regions', 'TEXT'),
+    # Who ruled ('detector' | 'vision') and with what score. Existing rows stay
+    # NULL — read as "before the source was recorded", never attributed to a
+    # route at random (same rule the bank's identical pair already follows).
+    ('face_dataset_image', 'watermark_source', 'VARCHAR(16)'),
+    ('face_dataset_image', 'watermark_score', 'REAL'),
     ('face_dataset_image', 'source_metadata', 'TEXT'),
     # Back-link to the bank_image a promotion copied here. Existing rows keep
     # NULL: a bank that was promoted before this column existed still relies on

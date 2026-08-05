@@ -48,6 +48,30 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-reject-every-flagged-watermark-in-one-click',
+    date: '2026-08-05',
+    title: 'Drop every watermarked image at once — and get them back if you change your mind',
+    blurb:
+      'Reviewing flagged images one by one is still the careful way through a watermark scan, but it is no longer the only way: a dataset\'s curation row now offers ✕ Reject all flagged next to 🔍 Review flagged. The number on the button is what it will really reject, not how many are flagged — small-image rescue pairs and failed rows are left out, because including even one rescue row made the server refuse the whole batch and reject nothing at all. It asks before it acts, tells you exactly what it is about to do, and then tells you the way back: rejected images stay on disk, and Show ▸ Rejected in the grid followed by ✓ Keep brings any of them home. The one thing it does destroy is said out loud beforehand — rejecting clears the watermark flags, so 🔍 Review flagged will be empty afterwards and only a new scan can flag them again.',
+    to: '/datasets?section=curation&panel=reject-flagged',
+  },
+  {
+    id: '2026-08-05-choose-which-engine-finds-your-watermarks',
+    date: '2026-08-05',
+    title: 'Datasets and banks now find watermarks the same way — and you pick which way',
+    blurb:
+      'The two screens had quietly drifted apart: a bank used the fast watermark detector whenever its extra was installed, while a dataset always asked the vision model, one slow question per image, with no way to change it. Both now read one setting — Settings ▸ Captioning & quality ▸ Watermark detection — with three values: Auto, Watermark detector, or Vision model. Auto is the default and behaves exactly as before, so an untouched install changes nothing. Pin the detector without its extra installed and the scan still runs on the vision model rather than failing, and the app says so, with the link to install the extra. Where the two engines genuinely differ, the screen says that too: only the detector can flag an image without knowing where the mark is, and those are now counted apart and left for 🔍 Review instead of being marked failed. A ⟲ Rescan incl. dismissed button appears when you have ruled some flags false positives — the only way to have them judged again by a different engine.',
+    to: '/settings/captioning',
+  },
+  {
+    id: '2026-08-05-stop-a-watermark-scan-without-losing-it',
+    date: '2026-08-05',
+    title: 'A watermark scan can be stopped, and keeps everything it already found',
+    blurb:
+      'Starting 🧽 Find watermarks on a large dataset used to be a commitment: there was no Stop button anywhere, and the only way out was closing the tab and hoping. The progress banner now carries the same ⏹ Stop the captioning pass has. It stops after the image in flight — never mid-inference — and every watermark already found is kept, so running 🧽 Find watermarks again simply picks up where you left off. The live "Scanning… 12/340" counter now actually moves in the tab that started the scan, too; it only ever updated after a page reload before.',
+    to: '/datasets?section=curation&panel=watermarks',
+  },
+  {
     id: '2026-08-04-the-quality-scan-no-longer-takes-the-app-away-with-it',
     date: '2026-08-04',
     title: 'The 🔎 quality scan leaves the rest of the bank usable',

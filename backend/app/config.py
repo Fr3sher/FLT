@@ -367,8 +367,14 @@ DEFAULTS = {
     # locate: run the second (localisation) model on flagged images. Off = images
     #   are flagged with NO box, which the crop/inpaint levels cannot route on —
     #   only worth it to save time on a bank you intend to filter, not clean.
+    # backend: WHICH route 🧽 Find watermarks takes, on BOTH surfaces (bank and
+    #   dataset). 'auto' = the detector when its extra is installed, the vision
+    #   model otherwise — which is exactly what the bank has always done, so
+    #   'auto' changes nothing anywhere. 'detector' / 'vision' pin one route; a
+    #   pinned 'detector' with no extra installed does NOT fail, it runs the
+    #   vision route and SAYS so (see watermark_detector.resolve_backend).
     'watermark_detect': {'python': '', 'models_root': '', 'threshold': 0.94,
-                         'device': 'auto', 'locate': True},
+                         'device': 'auto', 'locate': True, 'backend': 'auto'},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/
     # background), not the face — its own guide says start at 0.5 and that
     # 0.8-1.0 "can prevent edits from applying". 0.9 made every variation a

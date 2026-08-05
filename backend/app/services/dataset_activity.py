@@ -52,7 +52,16 @@ CANCELLABLE_KINDS = ('caption', 'recaption')
 # worker polls. Every kind here is disarmed by begin() so a leaked flag from a
 # previous run can never cancel a fresh one.
 IMPROVE_KINDS = ('improve',)
-STOPPABLE_KINDS = CANCELLABLE_KINDS + IMPROVE_KINDS
+
+# The 🧽 Find watermarks pass. Cooperatively stoppable exactly like captioning —
+# the worker polls between images and keeps every verdict already written — but
+# it gets its OWN arming scope rather than joining CANCELLABLE_KINDS, for the
+# same reason 'improve' does: CANCELLABLE_KINDS is the DEFAULT scope that the
+# caption worker polls and that the caption route clears, so widening it would
+# make one screen's Stop reach into another screen's pass.
+WATERMARK_KINDS = ('watermark_detect',)
+
+STOPPABLE_KINDS = CANCELLABLE_KINDS + IMPROVE_KINDS + WATERMARK_KINDS
 
 # Safety TTL: an entry not touched for this long is purged on read even if end()
 # never ran (process alive but the batch thread died without unwinding). 30 min is

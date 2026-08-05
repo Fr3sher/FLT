@@ -270,6 +270,17 @@ export function useDataset() {
     return () => clearInterval(id);
   }, [captioning, currentId, refresh]);
 
+  // Same poller for a watermark scan, and it is not decoration: `hasActivity`
+  // below only starts once a refresh has ALREADY seen activity ≠ null, and
+  // findWatermarks does not refresh until the pass ends. So in the tab that
+  // launched the scan the "Scanning… N/M" counter never moved and a ⏹ Stop
+  // button in the banner would never appear at all.
+  useEffect(() => {
+    if (!watermarking || !currentId) return undefined;
+    const id = setInterval(() => refresh(currentId), 2000);
+    return () => clearInterval(id);
+  }, [watermarking, currentId, refresh]);
+
   // Persistence layer: a server-side batch (watermark detect/clean, caption,
   // re-caption, analyze faces, classify) advertises itself in the payload's
   // `activity` field. Whenever it's non-null — INCLUDING after a page reload that
@@ -736,19 +747,53 @@ export function useDataset() {
     }
   }, [data, refresh, toast]);
 
-  // Watermark scan (Qwen3-VL, GPU window). Marks kept images with an overlaid
-  // watermark → 🚩 badges + a "Clean (N)" button. Deletes nothing.
-  const findWatermarks = useCallback(() => wrap(async () => {
+  // Watermark scan. WHICH detector runs follows Settings ▸ Captioning & quality ▸
+  // Watermark detection; the server answers with the route it actually took, so a
+  // pinned detector that could not run says so instead of quietly changing nothing.
+  // Marks kept images with an overlaid watermark → 🚩 badges + a "Clean (N)"
+  // button. Deletes nothing. { includeDismissed: true } re-examines the images
+  // ruled false positives — the only way to re-judge them under a new detector.
+  const findWatermarks = useCallback((options) => wrap(async () => {
+    const includeDismissed = !!(options && options.includeDismissed);
     setWatermarking(true);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/watermarks/detect`);
+      const d = await postJson(`/api/dataset/${currentId}/watermarks/detect`,
+        includeDismissed ? { include_dismissed: true } : undefined);
       if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
-      toast.success(`${d.detected || 0} watermark(s) found · ${d.none || 0} clean (of ${d.checked || 0})`);
+      const engine = d.backend === 'detector' ? 'watermark detector' : 'vision model';
+      const head = d.stopped ? 'Stopped —' : '';
+      toast.success(`${head} ${d.detected || 0} watermark(s) found · ${d.none || 0} clean `
+        + `(of ${d.checked || 0}, ${engine})`.trim());
+      // A silent fallback is the failure mode this setting exists to remove: say
+      // what ran and where to install what was asked for. Its own toast, because
+      // it is a different fact from the count and must not be skimmed past.
+      if (d.backend_note) toast.info(d.backend_note);
+      // Flagged with no position: only the detector cascade produces this, and
+      // 🧽 Clean cannot route on it. Named here rather than discovered later.
+      if (d.unlocated) {
+        toast.info(`${d.unlocated} flagged without a position — open 🔍 Review flagged `
+          + 'and draw the zone, or Clean will leave them untouched.');
+      }
       await refresh();
     } finally {
       setWatermarking(false);
     }
   }), [wrap, currentId, refresh, toast]);
+
+  // Graceful Stop for a running watermark scan — same contract as the captioning
+  // Stop: the worker checks a flag between images, so the current image finishes,
+  // every verdict already written is KEPT, and a later 🧽 Find picks up the rest
+  // (detect re-examines every kept row on each pass).
+  const cancelWatermarkScan = useCallback(async () => {
+    const d = await postJson(`/api/dataset/${currentId}/watermarks/detect/cancel`, {});
+    if (d.ok) {
+      toast.info('Stopping after the current image… what is already flagged is kept.');
+      await refresh();   // pull activity.cancelling so the button flips immediately
+    } else {
+      // 409 = the scan already finished on its own between the poll and the click.
+      toast.error(d.error || 'Nothing to stop');
+    }
+  }, [currentId, refresh, toast]);
 
   // Clean the detected watermarks: border marks are CROPPED, small off-center ones
   // INPAINTED (LaMa), the rest flagged for manual review. The backend resolves the
@@ -1556,7 +1601,7 @@ export function useDataset() {
            deleteDataset, updateSettings, setCurrentId, setRef, addExtraRef, removeExtraRef,
            generate, importFiles, scrapeImport, resolveSmallImageRescue, improveImage, reimproveImage, improveBatch, classify, caption, recaption, recaptionImages,
            setStatus, setCaption, mirrorImage, rotateImage, crop, cropRef, cropExtraRef, recropRefAuto, editReference, retryReferenceEdit, canRetryReferenceEdit, keepEditedReference, discardEditedReference, setDatasetTrainType, setDatasetFidelity, deleteImage, batchImages, replaceCaptions, writeCaptionFiles, openDatasetFolder, cancelPending, cancelCaption, regenerate, analyzeFaces, scoreFace,
-           findWatermarks, cleanWatermarks, cleanWatermarkImages, restoreWatermarkImage, dismissWatermarks, saveWatermarkRegions,
+           findWatermarks, cancelWatermarkScan, cleanWatermarks, cleanWatermarkImages, restoreWatermarkImage, dismissWatermarks, saveWatermarkRegions,
            purgeUnused, exportZip, exportBackup, exportZipFor, exportBackupFor, importBackup, importDatasetZip, importDatasetFolder,
            backupEverything, backupJob, downloadBackup, openBackupsFolder, dismissBackup, restoreJob, dismissRestore,
            refresh, train, stopTraining, continueTraining, continueTrainingInCloud,

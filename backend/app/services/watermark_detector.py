@@ -97,6 +97,67 @@ def available() -> bool:
     return bool(probe_watermark_detect().get('ok'))
 
 
+# The three values of `watermark_detect.backend`, in the shape the captioning
+# backend setting already uses ('auto' first, then one id per engine). Same word,
+# same order, same meaning — a second vocabulary for the same idea is how two
+# screens end up obeying two rules, which is the very thing this setting fixes.
+BACKENDS = ('auto', 'detector', 'vision')
+
+# Where the extra is installed from, named in full because a fallback notice that
+# does not say what to click is just an apology.
+INSTALL_ROUTE = 'Setup ▸ Quality tools ▸ Watermark detector'
+
+
+def configured_backend() -> str:
+    """The persisted choice, normalised. Anything unknown (a hand-edited config)
+    reads as 'auto' rather than aborting a scan."""
+    value = str(cfg.get('watermark_detect.backend') or 'auto').strip().lower()
+    return value if value in BACKENDS else 'auto'
+
+
+def resolve_backend(requested: str | None = None) -> dict:
+    """Which route a watermark scan will actually take, and whether that is what
+    the user asked for.
+
+    Returns ``{'requested', 'backend', 'fell_back', 'detail'}`` where ``backend``
+    is 'detector' or 'vision' — never 'auto', because 'auto' is a question, not a
+    route.
+
+    The three cases, and why they differ:
+
+    * ``auto`` (the default) — the detector when its extra probes ready, the
+      vision model otherwise. This is byte-for-byte what the bank has always
+      done, so leaving the setting alone changes nothing on either surface.
+      ``fell_back`` stays False: nothing was overridden, the user asked for
+      "whatever is fastest".
+    * ``detector`` pinned, extra missing — the pass STILL RUNS, on the vision
+      route, and ``fell_back`` is True with the probe's own sentence in
+      ``detail``. Refusing would be worse (a scan the user wanted, not run) and
+      running silently would be worse still: the user would change a detector and
+      see nothing change.
+    * ``vision`` pinned — the vision model, always. No probe, no surprise.
+    """
+    requested = (requested or configured_backend())
+    requested = requested if requested in BACKENDS else 'auto'
+    if requested == 'vision':
+        return {'requested': requested, 'backend': 'vision',
+                'fell_back': False, 'detail': ''}
+    from ..capabilities import probe_watermark_detect
+    probe = probe_watermark_detect()
+    if probe.get('ok'):
+        return {'requested': requested, 'backend': 'detector',
+                'fell_back': False, 'detail': ''}
+    if requested == 'auto':
+        return {'requested': requested, 'backend': 'vision',
+                'fell_back': False, 'detail': ''}
+    reason = str(probe.get('detail') or 'the watermark detector is not installed')
+    return {
+        'requested': requested, 'backend': 'vision', 'fell_back': True,
+        'detail': (f'the vision model ran this scan: {reason}. '
+                   f'Install the detector from {INSTALL_ROUTE}, then run it again.'),
+    }
+
+
 def threshold() -> float:
     """The score at or above which an image counts as watermarked.
 

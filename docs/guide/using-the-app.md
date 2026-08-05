@@ -1653,6 +1653,43 @@ a separate copy. A rotated image is shown unrotated here, because the whole
 watermark lane works on your original file, which the ↻ turn never changed.
 
 
+## Reject every flagged image at once
+
+In a dataset, **🧽 Find watermarks** flags the kept images that carry an overlaid
+mark. The recommended way through the pile is **🔍 Review flagged**, one image at
+a time — the detector is a review flag, not a verdict, and it *does* flag clean
+images sometimes. When you would rather drop the whole pile and move on,
+**✕ Reject all flagged (N)** does exactly that.
+
+Four things worth knowing before you click it:
+
+- **The number is the number.** `N` is what the button will really reject, not
+  how many are flagged. Small-image rescue pairs are excluded (the server refuses
+  a batch containing one, so including them would reject *nothing*) and failed
+  rows are excluded (the server skips them). If the two differ, the row says so
+  in plain text rather than showing you the bigger figure.
+- **Nothing is deleted.** Rejected images stay on disk and simply leave the
+  training set. To bring any of them back: **Show ▸ Rejected** in the grid,
+  select, then **✓ Keep**.
+- **It clears the watermark flags.** That is the one thing rejecting destroys:
+  after the click, 🔍 Review flagged is empty and nothing records which images
+  had been flagged. Re-run 🧽 Find watermarks to flag them again.
+- **Stop is available while a scan runs.** The ⏹ Stop button in the progress
+  banner ends the scan at the next image; everything already judged is kept, and
+  running 🧽 Find watermarks again finishes the rest.
+
+Which engine does the flagging is a setting — **Settings ▸ Captioning & quality ▸
+Watermark detection** — and it applies to datasets and banks alike. *Auto* uses
+the optional watermark detector when it is installed and the vision model
+otherwise, which is what the app has always done. Pin *Watermark detector*
+without the extra installed and the scan still runs, on the vision model, and
+says so with the link to install it. Only the detector can flag an image
+**without a position**; those are counted apart, 🧽 Clean leaves them alone, and
+you can draw the zone in 🔍 Review flagged. Images you dismissed as false
+positives are skipped by every later scan — **⟲ Rescan incl. dismissed** is the
+only way to have them judged again, which is what you want after changing engine.
+
+
 ## A bank and a dataset never share files
 
 A dataset and an image bank can hand images to each other in both directions,

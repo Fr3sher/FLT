@@ -225,6 +225,17 @@ class FaceDatasetImage(db.Model):
     # Correction manuelle : JSON list de bbox normalisées. NULL conserve le bbox
     # automatique comme source effective ; [] est un override explicite vide.
     watermark_regions = db.Column(Text, nullable=True)
+    # WHICH detector ruled on this row: 'detector' (the SigLIP2 cascade extra) |
+    # 'vision' (the Ollama vision model) | NULL = unknown, never guessed. Same
+    # vocabulary and same reason as bank_image.watermark_source, which came
+    # first: a dataset can already hold verdicts from BOTH routes today —
+    # promotion copies a bank's watermark_state across — and the two disagree at
+    # the margins, so "why is this one flagged?" has to stay answerable per image
+    # rather than per dataset. watermark_score is the cascade's 0..1 score
+    # (NULL on the vision route, which has none). Additive columns (create_app
+    # migration); rows written before them stay NULL and read as 'unknown'.
+    watermark_source = db.Column(String(16), nullable=True)
+    watermark_score = db.Column(Float, nullable=True)
     # Métadonnées de provenance génériques, sérialisées en JSON. La première
     # intégration prise en charge est Pexels : plateforme, page photo et crédit
     # photographe. Toute écriture passe par la validation stricte du service.
