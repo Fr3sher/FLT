@@ -16,14 +16,19 @@ import {
 const counts = { keep: 40, pending: 900, reject: 60, caption_todo_keep: 12,
   caption_todo_pending: 300 };
 
-test('exactly three scopes, and the bin is not one of them', () => {
-  assert.equal(CAPTION_SCOPE_OPTIONS.length, 3);
+test('the bin is offered, and it is never the default', () => {
   const ids = CAPTION_SCOPE_OPTIONS.map((o) => o.id);
-  assert.deepEqual(ids, ['', 'keep', 'pending']);
-  // Not a stylistic check: offering the rejected pile would mean curating from the
-  // bin, and the server refuses it with a 400.
-  const wire = JSON.stringify(CAPTION_SCOPE_OPTIONS);
-  assert.ok(!wire.includes('reject'), 'reject must never be an offered scope');
+  assert.deepEqual(ids, ['', 'keep', 'pending', 'reject', 'all']);
+  // THE CHANGE OF PRINCIPLE, pinned. The bin used to be unreachable and the server
+  // answered 400 for it; the maintainer asked to be able to aim a pass at it. What
+  // must NOT change is where a click lands by accident:
+  assert.equal(CAPTION_SCOPE_OPTIONS[0].id, '', 'the default must come first');
+  assert.equal(captionScopeStatuses(''), null,
+    'the default still sends nothing at all');
+  assert.ok(!CAPTION_SCOPE_OPTIONS[0].piles.includes('reject'),
+    'the default scope must never include the rejected pile');
+  assert.deepEqual(captionScopeStatuses('reject'), ['reject'],
+    'the bin is reachable only by naming it');
 });
 
 test('the wire carries the stored column values, the labels carry the human words', () => {

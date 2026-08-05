@@ -198,12 +198,18 @@ def test_bank_takes_the_route_the_setting_names(client, app, tmp_path, monkeypat
                                          (lambda job: None))[1])
     real_job = svc._watermark_job
 
-    def spy(bank_id_, rescan, use_detector=False, note=''):
+    # `statuses`/`ids` are named rather than swallowed by a `**kwargs`: this test
+    # is about WHICH ROUTE the setting picks, and a scoped run must pick the same
+    # one as an unscoped run. Absorbing them would let a future change route a
+    # scoped scan somewhere else without a single test going red.
+    def spy(bank_id_, rescan, use_detector=False, statuses=None, ids=None, note=''):
         taken['note'] = note
+        taken['scope'] = (statuses, ids)
         if not use_detector:
             taken['route'] = 'vision'
             return lambda job: None
-        return real_job(bank_id_, rescan, use_detector=True, note=note)
+        return real_job(bank_id_, rescan, use_detector=True,
+                        statuses=statuses, ids=ids, note=note)
     monkeypatch.setattr(svc, '_watermark_job', spy)
     with app.app_context():
         svc.start_watermark(app, 'local', bank_id, rescan=True)

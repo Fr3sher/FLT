@@ -1289,12 +1289,15 @@ def bank_payload(user_id, bank_id) -> dict | None:
     no_caption = or_(BankImage.caption.is_(None), BankImage.caption == '')
     asserted = caption_origin.protected_clause(BankImage)
     unrecorded = caption_origin.unrecorded_clause(BankImage)
-    (todo_keep, todo_pending, asserted_keep, asserted_pending,
-     unrecorded_keep, unrecorded_pending) = (
+    (todo_keep, todo_pending, todo_reject, asserted_keep, asserted_pending,
+     asserted_reject, unrecorded_keep, unrecorded_pending, unrecorded_reject) = (
         db.session.query(
             _cap_sum('keep', no_caption), _cap_sum('pending', no_caption),
+            _cap_sum('reject', no_caption),
             _cap_sum('keep', asserted), _cap_sum('pending', asserted),
-            _cap_sum('keep', unrecorded), _cap_sum('pending', unrecorded))
+            _cap_sum('reject', asserted),
+            _cap_sum('keep', unrecorded), _cap_sum('pending', unrecorded),
+            _cap_sum('reject', unrecorded))
         .filter(BankImage.bank_id == bank_id).one())
     counts = {
         'total': total,
@@ -1317,12 +1320,19 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # …and the caption-pass sizes of the two scopes it can be aimed at.
         'caption_todo_keep': int(todo_keep or 0),
         'caption_todo_pending': int(todo_pending or 0),
+        # …and the third pile, now that a caption run can be aimed at the bin.
+        # The keys keep their historical names — several of them are read by
+        # shipped clients and by localStorage-backed screens, so the set GROWS,
+        # it is never renamed.
+        'caption_todo_reject': int(todo_reject or 0),
         # …and the two figures 🔄 Re-caption needs to stop lumping "what you wrote"
         # together with "what nobody recorded".
         'caption_asserted_keep': int(asserted_keep or 0),
         'caption_asserted_pending': int(asserted_pending or 0),
+        'caption_asserted_reject': int(asserted_reject or 0),
         'caption_unrecorded_keep': int(unrecorded_keep or 0),
         'caption_unrecorded_pending': int(unrecorded_pending or 0),
+        'caption_unrecorded_reject': int(unrecorded_reject or 0),
         # Images a dataset REALLY holds today (back-link), plus the ones promoted
         # before that link existed (legacy flag). Counting the flag alone kept
         # advertising copies the user had since deleted.
@@ -1352,6 +1362,59 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # price the click before the user makes it instead of after.
         'angle_backfillable': base.filter(BankImage.face_state.isnot(None),
                                           BankImage.face_yaw.is_(None)).count(),
+    }
+    # 🎛 WHAT EACH PASS WOULD REALLY DO, PER PILE. The launch dialogs put a
+    # number on every scope line, and that number has to be the number the run
+    # walks — the whole reason these exist. So each entry is computed from the
+    # SAME clause its pass's pool filters on (_scan_todo_clause,
+    # _watermark_todo_clause, …), never from a second copy of the predicate.
+    #
+    # Two figures per pass, because every one of these dialogs offers two runs:
+    #   todo — what is left to do in that pile (the plain button);
+    #   all  — the pile itself (the "do it again anyway" line: rescan / rescore /
+    #          force), which is counts.keep/pending/reject and is NOT repeated
+    #          here. The client adds it from `counts`, so the two can never drift.
+    #
+    # Cost: three conditional sums per pass in one query each, the shape _cap_sum
+    # already proved free on a 100 000-image bank.
+    all_by_status = {'keep': counts['keep'], 'pending': counts['pending'],
+                     'reject': counts['reject']}
+    pass_scopes = {
+        'scan': {'todo': _todo_by_status(bank_id, _scan_todo_clause()),
+                 'all': dict(all_by_status)},
+        # ⚠️ WATERMARK'S "all" IS NOT THE PILE. Even a rescan leaves 'dismissed'
+        # rows alone (the user already ruled on them), so quoting counts.keep on
+        # its rescan line would offer images the run provably skips. This is the
+        # exact shape of the defect these numbers exist to prevent, and it is why
+        # every 'all' here is a measured query rather than a reused total.
+        'watermark': {'todo': _todo_by_status(bank_id, _watermark_todo_clause()),
+                      'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
+        'framing': {'todo': _todo_by_status(bank_id, BankImage.framing.is_(None)),
+                    'all': dict(all_by_status)},
+        'medium': {'todo': _todo_by_status(bank_id, BankImage.medium.is_(None)),
+                   'all': dict(all_by_status)},
+        # ⤢ has no "do it again" lane at all: a measured yaw is a measured yaw.
+        # Both figures are the same pool, said twice rather than left absent.
+        'angles': {'todo': _todo_by_status(bank_id, _angle_todo_clause()),
+                   'all': _todo_by_status(bank_id, _angle_todo_clause())},
+        # 👥 takes no scope (its clusters are one numbering of the whole bank),
+        # but its dialog still has to quote the ONE number it will run on — and
+        # that number is not the pile: rows in a folder the user declared to be a
+        # single person are skipped entirely.
+        'faces': {'todo': _todo_by_status(bank_id, or_(
+            BankImage.face_cluster_origin.is_(None),
+            BankImage.face_cluster_origin != 'asserted')),
+            'all': dict(all_by_status)},
+        # Caption's three are already computed above, by the same rule and with
+        # the same filter the job uses. Mirrored here so one client-side reader
+        # serves every dialog; the flat caption_todo_* keys stay for the callers
+        # that already read them. Its 'all' is the pile — what a FORCED run walks
+        # before the "keep what you wrote" protection, which bankCaptionScope.js
+        # subtracts from the caption_asserted_* figures.
+        'caption': {'todo': {'keep': int(todo_keep or 0),
+                             'pending': int(todo_pending or 0),
+                             'reject': int(todo_reject or 0)},
+                    'all': dict(all_by_status)},
     }
     framing = _framing_counts(bank_id)
     flags, flags_actionable = _flag_counts(bank_id, th)
@@ -1413,6 +1476,8 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
         'counts': counts, 'flags': flags,
+        # Per-pass × per-pile run sizes — see the comment where they are built.
+        'pass_scopes': pass_scopes,
         # A SECOND map, not a replacement: 'flags' answers the facet's question
         # ("show me these") and 'flags_actionable' answers the button's ("how
         # many would this reject"). Overwriting the first would have broken the
@@ -1943,9 +2008,103 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     return out
 
 
-def start_scan(app, user_id, bank_id, rescan=False, regroup=False):
+# --- THE SCOPE OF A PASS, in one place ---------------------------------------
+#
+# Every per-image pass used to hard-code `status != 'reject'` and offer nothing.
+# The launch dialogs ask the user WHERE to run instead, so the filter became a
+# parameter — and a parameter needs exactly one definition, because two copies of
+# a pool filter is precisely how a button comes to announce a number it does not
+# act on (the 🧹 Auto-reject "5 930 flagged / 0 moved" defect, and the reason
+# _caption_scope_q was written this way in the first place).
+#
+# THE DEFAULT IS `None`, AND IT IS NOT "all". None keeps the historical
+# `status != 'reject'` filter, so a caller that sends no scope posts the
+# byte-identical request it posted before these options existed.
+#
+# 'reject' IS reachable now, and that is a change of principle held deliberately
+# behind an explicit choice: the bin is work you already threw away, and every
+# pass that reaches it spends real time (GPU, in most cases) on images you
+# decided against. It is never a default, never part of the default, and the
+# dialog that offers it says what it costs.
+PASS_SCOPES = ('keep', 'pending', 'reject')
+
+
+def normalize_pass_statuses(statuses, allowed=PASS_SCOPES):
+    """Validate a per-run scope → a canonical list, or None for "as before".
+
+    None / [] → None, meaning the pass keeps its own historical filter. Anything
+    outside ``allowed`` raises ValueError → 400, exactly like a bad vocabulary."""
+    if statuses is None:
+        return None
+    if isinstance(statuses, str):       # a lone 'keep' is a scope of one
+        statuses = [statuses]
+    if not isinstance(statuses, (list, tuple, set)):
+        raise ValueError('invalid statuses: expected a list of statuses')
+    want = []
+    for s in statuses:
+        if not isinstance(s, str):
+            raise ValueError('invalid status: expected status names')
+        v = s.strip().lower()
+        if not v:
+            continue
+        if v not in allowed:
+            raise ValueError(f'invalid status: {v}')
+        want.append(v)
+    if not want:
+        return None
+    # Canonical order + dedup, so ['pending','keep'] and ['keep','pending'] are
+    # one value and never two code paths.
+    return [s for s in PASS_SCOPES if s in want]
+
+
+def _scope_clause(statuses):
+    """The WHERE fragment for a scope. None → the historical non-rejected set."""
+    if statuses is None:
+        return BankImage.status != 'reject'
+    return BankImage.status.in_(statuses)
+
+
+def _scoped_pool(bank_id, statuses=None, ids=None):
+    """The rows a pass may touch: this bank, this scope, and — when the user made
+    a selection — only those ids. The selection is INTERSECTED with the scope,
+    never widened, the same contract the caption pass has always had."""
+    q = BankImage.query.filter_by(bank_id=bank_id).filter(_scope_clause(statuses))
+    if ids:
+        q = q.filter(BankImage.id.in_([int(i) for i in ids][:_SQL_IN_CHUNK]))
+    return q
+
+
+def _todo_by_status(bank_id, todo_clause):
+    """{'keep': n, 'pending': n, 'reject': n} — how much work THIS pass has left
+    in each pile, in ONE query.
+
+    ``todo_clause`` must be the SAME expression the pass's pool filters on. That
+    is the whole contract of this helper: a counter written from a second copy of
+    the predicate is a counter that will disagree with the run, which is the one
+    defect these dialogs exist to prevent. Shape and cost copied from _cap_sum —
+    three conditional sums cost nothing on a 100 000-image bank."""
+    def _sum(status):
+        cond = BankImage.status == status
+        if todo_clause is not None:
+            cond = and_(cond, todo_clause)
+        return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+    keep, pending, reject = (
+        db.session.query(_sum('keep'), _sum('pending'), _sum('reject'))
+        .filter(BankImage.bank_id == bank_id).one())
+    return {'keep': int(keep or 0), 'pending': int(pending or 0),
+            'reject': int(reject or 0)}
+
+
+def start_scan(app, user_id, bank_id, rescan=False, regroup=False,
+               statuses=None, ids=None):
     """Launch the quality pass. Raises BankJobBusy when a job is already live,
     ValueError when the bank is unknown.
+
+    ``statuses`` / ``ids`` narrow WHAT IS MEASURED (see _scoped_pool). They do
+    NOT narrow the duplicate re-grouping in the tail of the pass: that step
+    re-reads every stored hash in the bank and renumbers all of it, because a
+    grouping derived from a subset would renumber groups the user has already
+    worked with. The dialog says so rather than letting the two read as one.
 
     ``regroup`` asks for the duplicate grouping EXPLICITLY, whatever the scan
     itself finds. That is what the 🎚 threshold panel's "↻ Re-group duplicates"
@@ -1955,24 +2114,33 @@ def start_scan(app, user_id, bank_id, rescan=False, regroup=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    total = _scan_pool(bank_id, rescan).count()
+    want = normalize_pass_statuses(statuses)
+    total = _scan_pool(bank_id, rescan, want, ids).count()
     return bank_jobs.start(app, bank_id, 'scan',
-                           _scan_job(bank_id, rescan, regroup=regroup),
+                           _scan_job(bank_id, rescan, regroup=regroup,
+                                     statuses=want, ids=ids),
                            total=total)
 
 
-def _scan_pool(bank_id, rescan):
-    """What the quality pass has to look at. Rejected images are OUT, like every
-    other pass: on a 30 000-image bank two thirds of a rescan went to shots the
-    user had already thrown away.
+def _scan_todo_clause():
+    """The "not measured yet" half of the scan pool, on its own — so the counter
+    and the pool are one expression, never two that can drift."""
+    return or_(BankImage.quality_state.is_(None),
+               and_(BankImage.quality_state == 'ok', BankImage.origin.is_(None)))
+
+
+def _scan_pool(bank_id, rescan, statuses=None, ids=None):
+    """What the quality pass has to look at. With no scope given, rejected images
+    are OUT like they always were: on a 30 000-image bank two thirds of a rescan
+    went to shots the user had already thrown away.
 
     Skipping them cannot swallow a FIRST scan: an image is only rejected by hand
     (after it was scanned) or by this very pass when it turns out unreadable, so
     a never-scanned image is still pending here. Un-reject one and it comes back
-    into the pool on its own — that is why the filter is `!= reject` rather than
-    an explicit pending/keep list."""
-    q = (BankImage.query.filter_by(bank_id=bank_id)
-         .filter(BankImage.status != 'reject'))
+    into the pool on its own — that is why the DEFAULT filter is `!= reject`
+    rather than an explicit pending/keep list. A scope given explicitly replaces
+    it, bin included, because at that point the user has said so."""
+    q = _scoped_pool(bank_id, statuses, ids)
     if not rescan:
         # Never-scanned rows, PLUS rows a previous build scanned before the
         # provenance signals existed. Retrofitting the bank the user already has
@@ -1983,19 +2151,18 @@ def _scan_pool(bank_id, rescan):
         # on a readable file (one of ai/camera/unknown, never NULL) — keying off
         # detail_ratio would re-pick flat images forever, since those legitimately
         # measure nothing.
-        q = q.filter(or_(BankImage.quality_state.is_(None),
-                         and_(BankImage.quality_state == 'ok',
-                              BankImage.origin.is_(None))))
+        q = q.filter(_scan_todo_clause())
     return q
 
 
-def _scan_job(bank_id, rescan, regroup=False):
+def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
         items = [(r.id, r.relpath) for r in
-                 _scan_pool(bank_id, rescan).order_by(BankImage.id.asc()).all()]
+                 _scan_pool(bank_id, rescan, statuses, ids)
+                 .order_by(BankImage.id.asc()).all()]
         bank_jobs.progress(job, done=0, total=len(items), detail='quality scan')
         thumbs = _thumbs_dir(bank_id)
         thumbs.mkdir(parents=True, exist_ok=True)
@@ -4081,7 +4248,32 @@ def _resolve_face_device():
     return ('cuda' if use_gpu else 'cpu'), use_gpu
 
 
-def start_faces(app, user_id, bank_id, angles_only=False):
+def _angle_todo_clause():
+    """Face-scanned rows with no measured yaw — the ⤢ backfill's whole pool."""
+    return and_(BankImage.face_state.isnot(None), BankImage.face_yaw.is_(None))
+
+
+def _angle_pool(bank_id, statuses=None, ids=None):
+    """The ⤢ angle backfill's rows.
+
+    ⚠️ ITS HISTORICAL DEFAULT IS NOT THE OTHER PASSES' DEFAULT. This lane never
+    filtered on status at all — rejected rows were measured too, and nobody
+    decided that: the `if angles_only` branch simply carried no status clause
+    while the `else` branch did. Passing statuses=None keeps that behaviour
+    exactly (the whole bank, bin included), because changing it silently would
+    move work the user can see counted in `angle_backfillable`. A scope given
+    explicitly narrows it — which is the only thing this lane gains, since it
+    writes nothing but `face_yaw` and leaves every cluster alone, so a partial
+    run cannot renumber anything."""
+    q = BankImage.query.filter_by(bank_id=bank_id).filter(_angle_todo_clause())
+    if statuses is not None:
+        q = q.filter(BankImage.status.in_(statuses))
+    if ids:
+        q = q.filter(BankImage.id.in_([int(i) for i in ids][:_SQL_IN_CHUNK]))
+    return q
+
+
+def start_faces(app, user_id, bank_id, angles_only=False, statuses=None, ids=None):
     """Launch the face embedding + person clustering pass over the bank's
     non-rejected images. Needs the face-scoring extra (Setup ▸ Quality tools).
 
@@ -4100,9 +4292,18 @@ def start_faces(app, user_id, bank_id, angles_only=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    # The identity lane takes NO scope, and refusing it is the design (see the
+    # docstring): person clusters are one numbering of the whole bank.
+    want = normalize_pass_statuses(statuses) if angles_only else None
+    scope_ids = ids if angles_only else None
+    if not angles_only and (statuses or ids):
+        raise ValueError(
+            '👥 Group by person always covers the whole bank: the person clusters '
+            'are one numbering computed from every face at once, so a partial run '
+            'would renumber groups you have already worked with')
     q = BankImage.query.filter_by(bank_id=bank_id)
     if angles_only:
-        q = q.filter(BankImage.face_state.isnot(None), BankImage.face_yaw.is_(None))
+        q = _angle_pool(bank_id, want, scope_ids)
         # BEFORE the install probe, and the order is the point: sending someone
         # to install a 300 MB extra so they can do work that does not exist is a
         # true sentence that answers the wrong question. (Same reasoning as the
@@ -4122,7 +4323,8 @@ def start_faces(app, user_id, bank_id, angles_only=False):
     total = q.count() if angles_only \
         else max(q.count() - _asserted_image_count(bank_id), 0)
     return bank_jobs.start(app, bank_id, 'angles' if angles_only else 'faces',
-                           _faces_job(bank_id, angles_only), total=total)
+                           _faces_job(bank_id, angles_only, want, scope_ids),
+                           total=total)
 
 
 def _asserted_image_count(bank_id) -> int:
@@ -4131,18 +4333,17 @@ def _asserted_image_count(bank_id) -> int:
                     BankImage.face_cluster_origin == 'asserted').count())
 
 
-def _faces_job(bank_id, angles_only=False):
+def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
     def run(job):
         import json as _json
         import sys
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        q = BankImage.query.filter_by(bank_id=bank_id)
         if angles_only:
-            q = q.filter(BankImage.face_state.isnot(None),
-                         BankImage.face_yaw.is_(None))
+            q = _angle_pool(bank_id, statuses, ids)
         else:
+            q = BankImage.query.filter_by(bank_id=bank_id)
             # Asserted rows are EXCLUDED from the identity lane, not merely
             # preserved: the user already told us who is in them, so paying an
             # embedding to re-derive it is exactly the cost "Single person here"
@@ -4617,7 +4818,14 @@ def _chain_medium_after_score(job, bank_id) -> str:
     before = (BankImage.query.filter_by(bank_id=bank_id)
               .filter(BankImage.medium.isnot(None)).count())
     try:
-        _medium_job(bank_id, False)(job)
+        # NO SCOPE, explicitly. The scope of a 🎨 Medium run is a per-run choice
+        # made in its own dialog and stored nowhere, so there is nothing here to
+        # read — inventing one would make this chained pass and the button
+        # disagree about the same word. The chain therefore always runs the
+        # DEFAULT pool (every non-rejected row with no verdict yet), which is
+        # byte-identical to what it did before the scopes existed, and the
+        # dialog says so under "not decided here".
+        _medium_job(bank_id, False, None, None)(job)
     except Exception as e:  # noqa: BLE001 — see the docstring
         logger.warning('bank %s: chained medium pass failed', bank_id,
                        exc_info=True)
@@ -4629,7 +4837,21 @@ def _chain_medium_after_score(job, bank_id) -> str:
 
 
 # --- watermark pass (reuses the dataset Qwen3-VL overlaid-mark detector) -----
-def _watermark_scan_query(bank_id, rescan):
+def _watermark_not_dismissed():
+    return or_(BankImage.watermark_state.is_(None),
+               BankImage.watermark_state != 'dismissed')
+
+
+def _watermark_todo_clause():
+    """The "not answered yet" half, on its own — one expression for the pool and
+    for the counter that prices it."""
+    return and_(_watermark_not_dismissed(),
+                or_(BankImage.watermark_state.is_(None),
+                    and_(BankImage.watermark_state == 'detected',
+                         BankImage.watermark_bbox.is_(None))))
+
+
+def _watermark_scan_query(bank_id, rescan, statuses=None, ids=None):
     """The rows the detection pass should look at.
 
     Not a rescan = "finish the job": rows never scanned, PLUS rows flagged
@@ -4638,10 +4860,7 @@ def _watermark_scan_query(bank_id, rescan):
     levels forever, so a plain re-run adopts them instead of asking the user to
     guess. 'dismissed' rows are never re-examined (the user already ruled), even
     on a rescan — same anti-frustration rule as the dataset detector."""
-    q = (BankImage.query.filter_by(bank_id=bank_id)
-         .filter(BankImage.status != 'reject')
-         .filter(or_(BankImage.watermark_state.is_(None),
-                     BankImage.watermark_state != 'dismissed')))
+    q = _scoped_pool(bank_id, statuses, ids).filter(_watermark_not_dismissed())
     if not rescan:
         q = q.filter(or_(BankImage.watermark_state.is_(None),
                          and_(BankImage.watermark_state == 'detected',
@@ -4649,7 +4868,7 @@ def _watermark_scan_query(bank_id, rescan):
     return q
 
 
-def start_watermark(app, user_id, bank_id, rescan=False):
+def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Launch the overlaid-watermark scan over the bank's non-rejected images.
 
     TWO routes, and which one runs is decided here, once:
@@ -4691,15 +4910,17 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
+    want = normalize_pass_statuses(statuses)
     return bank_jobs.start(app, bank_id, 'watermark',
                            _watermark_job(bank_id, rescan, use_detector=use_detector,
+                                          statuses=want, ids=ids,
                                           note=resolution['detail'] if resolution['fell_back'] else ''),
-                           total=_watermark_scan_query(bank_id, rescan).count())
+                           total=_watermark_scan_query(bank_id, rescan, want, ids).count())
 
 
-def _watermark_job(bank_id, rescan, use_detector=False, note=''):
+def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None, note=''):
     if use_detector:
-        return _watermark_detector_job(bank_id, rescan)
+        return _watermark_detector_job(bank_id, rescan, statuses, ids)
 
     def run(job):
         import json as _json
@@ -4710,7 +4931,7 @@ def _watermark_job(bank_id, rescan, use_detector=False, note=''):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
+        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
         # `note` is set only when the user PINNED the detector and it could not
         # run. Said at the start (so it is visible while the pass runs) and again
         # in the final sentence (so it survives the pass).
@@ -4843,7 +5064,7 @@ def _watermark_job(bank_id, rescan, use_detector=False, note=''):
     return run
 
 
-def _watermark_detector_job(bank_id, rescan):
+def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
     """The same pass, run by the dedicated detector extra instead of the vision
     model. Deliberately the same SHAPE as the vision job above, because the two
     have to be interchangeable: same resume semantics, same per-image commit,
@@ -4865,7 +5086,7 @@ def _watermark_detector_job(bank_id, rescan):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
+        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
         if not rows:
             return
@@ -5676,7 +5897,20 @@ def watermark_levels(user_id, bank_id) -> dict | None:
 
 
 # --- framing pass (reuses the dataset face/bust/body/back classifier) -------
-def start_framing(app, user_id, bank_id, rescan=False):
+def _framing_pool(bank_id, rescan, statuses=None, ids=None):
+    """The rows the framing pass will classify.
+
+    ONE definition, called by the launch (to price the run) and by the job (to do
+    it). It used to be written out twice, identically — which is exactly the
+    structure that lets a button announce a number it does not act on the moment
+    somebody edits one copy."""
+    q = _scoped_pool(bank_id, statuses, ids)
+    if not rescan:
+        q = q.filter(BankImage.framing.is_(None))
+    return q
+
+
+def start_framing(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Classify every non-rejected image by SHOT TYPE (face / bust / body / back),
     reusing the SAME Qwen3-VL classifier the datasets use (CLASSIFY_PROMPT). Feeds
     the 📐 Framing filter chips and the coverage advice. Needs the vision model
@@ -5701,14 +5935,13 @@ def start_framing(app, user_id, bank_id, rescan=False):
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-    if not rescan:
-        q = q.filter(BankImage.framing.is_(None))
+    want = normalize_pass_statuses(statuses)
     return bank_jobs.start(app, bank_id, 'framing',
-                           _framing_job(bank_id, rescan), total=q.count())
+                           _framing_job(bank_id, rescan, want, ids),
+                           total=_framing_pool(bank_id, rescan, want, ids).count())
 
 
-def _framing_job(bank_id, rescan):
+def _framing_job(bank_id, rescan, statuses=None, ids=None):
     def run(job):
         from .face_dataset_service import CLASSIFY_PROMPT, _parse_classify
         from .vision_ollama import describe_image_ollama, unload_vision_model
@@ -5717,11 +5950,8 @@ def _framing_job(bank_id, rescan):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        q = (BankImage.query.filter_by(bank_id=bank_id)
-             .filter(BankImage.status != 'reject'))
-        if not rescan:
-            q = q.filter(BankImage.framing.is_(None))
-        rows = q.order_by(BankImage.id.asc()).all()
+        rows = (_framing_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='framing')
         if not rows:
             return
@@ -5817,7 +6047,16 @@ def medium_prereq(bank_id=None) -> str | None:
     return clip_text_encoder.unavailable_reason()
 
 
-def start_medium(app, user_id, bank_id, rescan=False):
+def _medium_pool(bank_id, rescan, statuses=None, ids=None):
+    """The rows 🎨 Medium will classify — ONE definition for the launch, the job
+    and the counter, for the same reason as _framing_pool."""
+    q = _scoped_pool(bank_id, statuses, ids)
+    if not rescan:
+        q = q.filter(BankImage.medium.is_(None))
+    return q
+
+
+def start_medium(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Classify every SCORED image by MEDIUM (photograph / anime / 3D render /
     illustration, or an honest 'unsure') from the CLIP embedding the ✨ Score pass
     already cached.
@@ -5844,11 +6083,10 @@ def start_medium(app, user_id, bank_id, rescan=False):
     reason = medium_prereq(bank_id)
     if reason:
         raise RuntimeError(reason)
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-    if not rescan:
-        q = q.filter(BankImage.medium.is_(None))
-    return bank_jobs.start(app, bank_id, 'medium', _medium_job(bank_id, rescan),
-                           total=q.count())
+    want = normalize_pass_statuses(statuses)
+    return bank_jobs.start(app, bank_id, 'medium',
+                           _medium_job(bank_id, rescan, want, ids),
+                           total=_medium_pool(bank_id, rescan, want, ids).count())
 
 
 def _medium_prototype_matrix():
@@ -5866,7 +6104,7 @@ def _medium_prototype_matrix():
     return names, np.stack(rows).astype('float32')
 
 
-def _medium_job(bank_id, rescan):
+def _medium_job(bank_id, rescan, statuses=None, ids=None):
     def run(job):
         import numpy as np
         bank = db.session.get(ImageBank, bank_id)
@@ -5875,10 +6113,8 @@ def _medium_job(bank_id, rescan):
         bank_jobs.progress(job, done=0, detail='medium pass — encoding prototypes')
         names, P = _medium_prototype_matrix()
         emb_by_path = _load_score_embeddings(bank)
-        q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-        if not rescan:
-            q = q.filter(BankImage.medium.is_(None))
-        rows = q.order_by(BankImage.id.asc()).all()
+        rows = (_medium_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='medium pass')
         base = os.path.realpath(bank.source_path)
         prefix = os.path.normcase(base + os.sep)
@@ -5929,7 +6165,16 @@ def _medium_job(bank_id, rescan):
 # stored in the column ('keep' / 'pending'); the UI says "Kept" and "Undecided".
 # Renaming either would break stored queries, so the wire keeps the column's
 # vocabulary and the translation happens in the label.
-CAPTION_SCOPES = ('keep', 'pending')
+# 'reject' JOINED THIS TUPLE, and it is a change of principle, held on purpose.
+# The bin used to be unreachable ("you curate from what you might keep, never
+# from what you threw away") and that is still the right DEFAULT — it is not in
+# the default scope, and a request without `statuses` never touches it. But a
+# rejected image is not a deleted one: people un-reject, promote out of the bin,
+# and search by caption across the whole bank. Refusing to caption it was a rule
+# the app enforced on the user rather than a fact about the data, and the launch
+# dialog is where the cost of aiming a GPU pass at the bin can finally be stated
+# instead of assumed.
+CAPTION_SCOPES = PASS_SCOPES
 
 
 def _normalize_caption_statuses(statuses):
@@ -5938,29 +6183,8 @@ def _normalize_caption_statuses(statuses):
     None / [] → None, which means the pass keeps its original
     ``status != 'reject'`` filter: a client that sends no scope is
     byte-identical to before this option existed. Anything outside
-    CAPTION_SCOPES — 'reject' first among them — raises ValueError → 400,
-    exactly like a bad vocabulary or length."""
-    if statuses is None:
-        return None
-    if isinstance(statuses, str):       # a lone 'keep' is a scope of one
-        statuses = [statuses]
-    if not isinstance(statuses, (list, tuple, set)):
-        raise ValueError('invalid caption statuses: expected a list of statuses')
-    want = []
-    for s in statuses:
-        if not isinstance(s, str):
-            raise ValueError('invalid caption status: expected status names')
-        v = s.strip().lower()
-        if not v:
-            continue
-        if v not in CAPTION_SCOPES:
-            raise ValueError(f'invalid caption status: {v}')
-        want.append(v)
-    if not want:
-        return None
-    # Canonical order + dedup, so ['pending','keep'] and ['keep','pending'] are
-    # one value and never two code paths.
-    return [s for s in CAPTION_SCOPES if s in want]
+    CAPTION_SCOPES raises ValueError → 400, exactly like a bad vocabulary."""
+    return normalize_pass_statuses(statuses, CAPTION_SCOPES)
 
 
 def _caption_name_option(name, value):
@@ -5984,10 +6208,7 @@ def _caption_scope_q(bank_id, statuses):
     ONE definition, called by the launch (to price the run) and by the job (to do
     it). Two copies of this filter is precisely how a button comes to announce a
     number it does not act on."""
-    q = BankImage.query.filter_by(bank_id=bank_id)
-    if statuses is None:
-        return q.filter(BankImage.status != 'reject')
-    return q.filter(BankImage.status.in_(statuses))
+    return _scoped_pool(bank_id, statuses)
 
 
 def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
@@ -6023,10 +6244,12 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
     it CHAINS JoyCaption then Ollama on what JoyCaption missed, so forcing 'joycaption'
     removes the Ollama half rather than "picking one of two".
 
-    ``statuses`` picks the SCOPE of the run: ['keep'], ['pending'] or ['keep','pending']
-    (CAPTION_SCOPES). None = the historical non-rejected set, byte-identical to before.
-    'reject' is refused — the bin is never captioned. When ``ids`` are also given the
-    two INTERSECT (the selection is narrowed by the scope, never widened).
+    ``statuses`` picks the SCOPE of the run: any combination of CAPTION_SCOPES
+    ('keep' | 'pending' | 'reject'). None = the historical non-rejected set,
+    byte-identical to before. ['reject'] aims the pass AT THE BIN, which is never a
+    default and never part of one — it is reachable only because the caller asked for
+    it by name. When ``ids`` are also given the two INTERSECT (the selection is
+    narrowed by the scope, never widened).
 
     ``force`` rewrites captions that already exist — and, since captions carry an
     origin (services/caption_origin.py), it now SPARES the ones a human wrote or

@@ -84,7 +84,10 @@ test('the exclude filter is wired like every other facet', () => {
 test('the 🏷️ tag chips are wired, and live where filters live', () => {
   // The chips come from the pure module (node --test cannot parse JSX, so the
   // extraction logic is unit-tested there and only the WIRING is greppable).
-  assert.match(BANK, /import \{ captionChips, tagsParam, tagFilterSummary \} from '\.\/bankTags\.js'/)
+  // The whole tag lane comes from that one module — including the selection
+  // aggregation, so there is never a second copy of "what is a tag" in the JSX.
+  assert.match(BANK, /captionChips, tagsParam, tagFilterSummary,[\s\S]{0,120}?from '\.\/bankTags\.js'/)
+  assert.match(BANK, /selectionTagCounts, selectionTagsNotes, tagCountLabel,/)
   // Its OWN payload key — never folded into search/exclude/push_down.
   assert.match(BANK, /if \(f\.tags\) params\.tags = f\.tags/)
   assert.match(BANK, /setF\(\{ tags: tagsParam\(next\) \}\)/)

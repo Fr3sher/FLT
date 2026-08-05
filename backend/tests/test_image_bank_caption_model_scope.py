@@ -180,10 +180,15 @@ def test_scope_still_skips_already_captioned_rows_unless_force(client, tmp_path,
 
 
 def test_invalid_scope_is_400(client, tmp_path, app):
+    """A status that is not a status is still a 400.
+
+    ⚠️ 'reject' LEFT THIS LIST on purpose. The bin used to be refused outright;
+    the launch dialogs now offer it as an explicit choice, so it is a VALID scope
+    (see test_the_bin_is_reachable_only_by_asking_for_it). Everything that is not
+    one of the three column values is still rejected the same way it always was."""
     _use_ollama_backend(app)
     bank_id, _ = _mkbank(client, tmp_path, {'a.png': _flat()})
-    for bad in (['reject'], ['keep', 'reject'], ['deleted'], 'reject',
-                [None], [3], 5, {'keep': True}):
+    for bad in (['deleted'], 'garbage', [None], [3], 5, {'keep': True}):
         r = client.post(f'/api/bank/{bank_id}/caption', json={'statuses': bad})
         assert r.status_code == 400, (bad, r.get_json())
         assert 'status' in r.get_json()['error']

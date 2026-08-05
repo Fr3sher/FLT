@@ -18,8 +18,11 @@ test('only the model select is width-capped, and the other four are not truncate
   // Only the MODEL select needs it — Ollama refs run long and it overflows on its own
   // (measured: 430 px asked at a 360 px width). The other four take max-w-full with a
   // 16rem ceiling from sm up: never wider than the column, readable everywhere else.
+  // 'Caption scope' is no longer a <select>: it became the radio list in the
+  // window's THIS RUN block, where each pile carries its own count. The other four
+  // moved inside the window unchanged, keeping the width rules measured here.
   const capped = { 'Caption vision model': /max-w-\[11rem\]/ };
-  for (const label of ['Caption scope', 'Caption engine', 'Caption vision model',
+  for (const label of ['Caption engine', 'Caption vision model',
     'Caption vocabulary register', 'Caption length']) {
     const i = ws.indexOf(`aria-label="${label}"`);
     assert.ok(i > 0, `${label} select is missing`);
@@ -32,30 +35,40 @@ test('only the model select is width-capped, and the other four are not truncate
     } else {
       assert.ok(!/max-w-\[11rem\]/.test(tag),
         `${label} select is capped at 11rem and truncates its own options`);
-      assert.match(tag, /max-w-full sm:max-w-\[16rem\]/,
+      assert.match(tag, /sm:max-w-\[16rem\]/,
         `${label} select has no width bound at all`);
     }
   }
 });
 
-test('the caption options live on their own row, not on the pass-button row', () => {
-  const eyebrow = ws.indexOf('<GroupLabel>Caption options</GroupLabel>');
-  assert.ok(eyebrow > 0, 'the Caption options group label is missing');
-  const passes = ws.indexOf('<GroupLabel>Analysis passes</GroupLabel>');
-  assert.ok(passes > 0 && passes < eyebrow, 'the options row must follow the pass row');
-  // …and the caption button must NOT be inside it.
-  assert.ok(ws.indexOf('captionButtonLabel(selected.size') < eyebrow);
+test('the caption options live INSIDE the caption window, not spread under the panel', () => {
+  // WHERE THEY WENT, and why. They used to wrap onto their own row beneath the pass
+  // buttons, where four <select>s and a destructive button read as bank-wide settings
+  // rather than as one run's options — and where they greyed out with 🏷️ Caption on a
+  // fully captioned bank. The maintainer's ask was literal: "this way we can gather
+  // all the caption options". They are now the window's own block.
+  const controls = ws.indexOf('const captionRunControls = (');
+  assert.ok(controls > 0, 'the caption run controls block is missing');
+  assert.ok(!ws.includes('<GroupLabel>Caption options</GroupLabel>'),
+    'the old options row is still rendered under the panel');
+  // The window is what the pass button opens…
+  assert.match(ws, /onClick=\{\(\) => setPassOpen\('caption'\)\}/);
+  // …and the controls are handed to PassDialog, not rendered on the panel.
+  assert.match(ws, /passOpen === 'caption' \? captionRunControls : null/);
 });
 
 test('every new option is spread-if-set, so an untouched run posts the old body', () => {
-  const call = ws.slice(ws.indexOf('const startCaption'),
+  const opts = ws.slice(ws.indexOf('const captionRunOptions'),
     ws.indexOf('const cancelJob'));
-  assert.match(call, /\.\.\.\(captionEngine \? \{ backend: captionEngine \} : \{\}\)/);
-  assert.match(call, /\.\.\.\(captionModel \? \{ ollama_model: captionModel \} : \{\}\)/);
-  assert.match(call, /captionScopeStatuses\(captionScope\)/);
-  // The scope key is omitted while a selection is live — the server intersects the
-  // two, so sending both could caption fewer images than the button promises.
-  assert.match(call, /!selected\.size && captionScopeStatuses\(captionScope\)/);
+  assert.match(opts, /\.\.\.\(captionEngine \? \{ backend: captionEngine \} : \{\}\)/);
+  assert.match(opts, /\.\.\.\(captionModel \? \{ ollama_model: captionModel \} : \{\}\)/);
+  // The scope now rides through the SHARED body builder every pass uses, and it is
+  // spread-if-set there — a run left on the default omits `statuses` entirely, and a
+  // selection sends image_ids instead. The window never produces both, because the
+  // selection and the piles are radio buttons in one group.
+  const body = ws.slice(ws.indexOf('const passBody'), ws.indexOf('const runPass'));
+  assert.match(body, /\.\.\.\(statuses \? \{ statuses \} : \{\}\)/);
+  assert.match(body, /imageIds === 'selection' && selected\.size \? \{ image_ids/);
 });
 
 test('the engine picker never offers "none" — captioning with nothing is not a pass', () => {
@@ -105,14 +118,14 @@ test('no surface in the bank sends people to the wrong tab for the vision model'
 test('the normal caption pass never sends force', () => {
   // The whole safety story rests on this: 🏷️ Caption fills blanks and nothing else.
   // A stray `force` here would turn the everyday button into the destructive one.
-  const call = ws.slice(ws.indexOf('const startCaption'),
+  const call = ws.slice(ws.indexOf('const captionRunOptions'),
     ws.indexOf('const cancelJob'));
   assert.ok(!/force/.test(call), '🏷️ Caption must never post force');
 });
 
 test('re-caption posts force, and asks before it does', () => {
   const call = ws.slice(ws.indexOf('const startRecaption'),
-    ws.indexOf('const startRecaption') + 1400);
+    ws.indexOf('const startRecaption') + 2200);
   // The confirmation comes FIRST — after the post there is nothing left to confirm.
   const confirmAt = call.indexOf('window.confirm(captionRecaptionConfirmation');
   const postAt = call.indexOf('postJson');
@@ -128,7 +141,7 @@ test('re-caption never carries a selection', () => {
   // unknowable client-side. This button goes inert instead of quoting a guess —
   // sending image_ids would be exactly the number-that-differs-from-the-action bug.
   const call = ws.slice(ws.indexOf('const startRecaption'),
-    ws.indexOf('const startRecaption') + 1400);
+    ws.indexOf('const startRecaption') + 2200);
   assert.ok(!/image_ids/.test(call), 're-caption must not post image_ids');
   assert.match(ws, /const recaptionInert = captionRecaptionDisabledReason\(\s*selected\.size/);
 });
@@ -137,23 +150,37 @@ test('re-caption carries the same per-run options as the normal pass', () => {
   // Making the engine and model reachable on a finished bank IS the feature; a
   // re-caption that dropped them would redo the captions with the old model.
   const call = ws.slice(ws.indexOf('const startRecaption'),
-    ws.indexOf('const startRecaption') + 1400);
+    ws.indexOf('const startRecaption') + 2200);
+  // The four per-run dials ride through the SAME helper the normal pass uses, so
+  // they cannot come to disagree — which is exactly how a re-caption would quietly
+  // redo everything with the old model.
+  assert.ok(call.includes('...captionRunOptions()'), 're-caption drops the run options');
+  assert.ok(call.includes('statuses: captionScopeStatuses(captionScope)'),
+    're-caption drops the scope');
+  const opts = ws.slice(ws.indexOf('const captionRunOptions'),
+    ws.indexOf('const startCaption'));
   for (const key of ['vocabulary: captionVocab', 'length: captionLength',
-    'backend: captionEngine', 'ollama_model: captionModel',
-    'statuses: captionScopeStatuses(captionScope)']) {
-    assert.ok(call.includes(key), `re-caption drops ${key}`);
+    'backend: captionEngine', 'ollama_model: captionModel']) {
+    assert.ok(opts.includes(key), `the shared run options drop ${key}`);
   }
 });
 
-test('the button and the amber warning both live on the options row', () => {
-  const eyebrow = ws.indexOf('<GroupLabel>Caption options</GroupLabel>');
+test('the button and the amber warning both live in the caption window', () => {
+  // 🔄 Re-caption is a SECOND launch button in the window's footer, next to the
+  // normal one — not a tenth button on the pass row, and not a pass of its own.
+  const secondary = ws.indexOf('const captionSecondary = (');
+  assert.ok(secondary > 0, 'the re-caption footer block is missing');
   const button = ws.indexOf('{captionRecaptionLabel(counts, captionScope, recaptionInert,');
-  assert.ok(button > eyebrow, 're-caption must sit on the options row');
-  // The pass row above it must not have grown a ninth button.
-  assert.ok(ws.indexOf('onClick={startRecaption}') > eyebrow);
+  assert.ok(button > secondary, 're-caption must sit in the window footer');
+  assert.ok(ws.indexOf('onClick={startRecaption}') > secondary);
+  assert.match(ws, /secondary=\{passOpen === 'caption' \? captionSecondary : null\}/);
   // The warning is rendered, and only when the helper has something to say.
   assert.match(ws, /\{recaptionNote && \(/);
   assert.match(ws, /text-amber-400\/90">\{recaptionNote\}/);
+  // …and when it CANNOT run, the reason is on screen rather than only in a tooltip:
+  // on a bank whose only captions are hand-written, that sentence is the sole place
+  // the protection is visible.
+  assert.match(ws, /\{recaptionInert && \(/);
   // The label is handed the inert reason, so a button that cannot run stops quoting
   // a number — the tooltip carries the reason instead.
   // ...and the opt-out state, so the number on the button follows the tick box
@@ -191,7 +218,7 @@ test('the opt-out is a separate, unticked gesture that only shows when it matter
   //   - the key is spread in ONLY when ticked, so an untouched panel posts the
   //     same body it posted before this existed;
   const call = ws.slice(ws.indexOf('const startRecaption'),
-    ws.indexOf('const startRecaption') + 1600);
+    ws.indexOf('const startRecaption') + 2200);
   assert.match(call, /captionIncludeAsserted \? \{ include_asserted: true \} : \{\}/);
   //   - and the control is rendered only when the helper has a label, i.e. only
   //     when there is something to protect.

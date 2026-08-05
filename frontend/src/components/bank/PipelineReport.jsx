@@ -5,10 +5,21 @@ import { useState } from 'react'
  * headline counts. Persisted on the bank, so it's still here when the user
  * reopens it. Collapsible; hidden while a job is live (the progress bar owns
  * that moment). */
-const STEP_LABEL = {
+/* One entry per PIPELINE_STEPS value on the server (image_bank_service.py), and
+ * the words are the ones on the BUTTONS — a report is read by the person who
+ * pressed them.
+ *
+ * TWO WERE MISSING FOR AS LONG AS THEY HAVE EXISTED, and the report showed the
+ * raw identifiers instead: `semantic_dedup` and `framing`. The maintainer read
+ * "semantic_dedup" in his own report and concluded he did not know what it was —
+ * he did, it is the ✂ button he uses. The `|| s.step` fallback below is what made
+ * the omission invisible, so pipelineStepLabels.contract.test.js now fails if a
+ * step ships without its label rather than letting the fallback absorb it. */
+export const STEP_LABEL = {
   scan: '🔎 Scan quality', auto_reject: '🧹 Auto-reject',
-  score: '✨ Score', watermark: '🚩 Watermarks',
-  faces: '👥 Group by person', caption: '🏷️ Caption',
+  score: '✨ Score', semantic_dedup: '✂ Find crops & variants',
+  watermark: '🚩 Watermarks', faces: '👥 Group by person',
+  framing: '📐 Classify framing', caption: '🏷️ Caption',
 }
 const STATUS_STYLE = {
   done: { icon: '✅', cls: 'text-emerald-300' },

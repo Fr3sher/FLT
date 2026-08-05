@@ -18,6 +18,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { BANK_PASSES } from '../src/components/bank/bankPasses.js'
 
 // CRLF-normalised: these files are checked out with native line endings on
 // Windows and every pattern below spans lines.
@@ -25,20 +26,50 @@ const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8').replac
 const workspace = read('../src/components/bank/BankWorkspace.jsx')
 const route = read('../../backend/app/routes/bank.py')
 const service = read('../../backend/app/services/image_bank_service.py')
+const passes = read('../src/components/bank/bankPasses.js')
 
 test('the ✨ Score button posts nothing extra — its meaning is unchanged', () => {
-  assert.match(workspace,
-    /const startScore = \(rescore\) => act\(\s*\(\) => postJson\(`\/api\/bank\/\$\{bankId\}\/score`, rescore \? \{ rescore: true \} : \{\}\)/)
-  assert.match(workspace, /onClick=\{\(\) => startScore\(false\)\}/)
+  // The body is built by the SHARED builder now: `rescore` is spread in only when
+  // the window's redo line is ticked, so an untouched run posts `{}` exactly as it
+  // always did. The key itself is named in ✨ Score's spec, not at the call site.
+  const body = workspace.slice(workspace.indexOf('const passBody'),
+    workspace.indexOf('const runPass'))
+  assert.match(body, /spec\?\.redo && redo \? \{ \[spec\.redo\.key\]: true \} : \{\}/)
+  assert.match(passes, /key: 'rescore'/)
+  assert.match(workspace, /onClick=\{\(\) => setPassOpen\('score'\)\}/)
 })
 
-test('"Rescore all" is a separate intent, shown only when there is something to redo', () => {
-  const m = workspace.match(/\{scored > 0 && caps\.bank_scoring && \([\s\S]{0,600}?Rescore all/)
-  assert.ok(m, 'the Rescore all button must be gated on scored > 0')
-  assert.match(m[0], /onClick=\{\(\) => startScore\(true\)\}/)
-  // Its price is stated where the user hovers — a full pass is not free.
-  assert.match(m[0], /ignoring the cached embeddings/)
-  assert.match(m[0], /Costs a full pass/)
+test('"Rescore all" is a separate intent, and it is now a line in ✨ Score\'s window', () => {
+  // WHERE IT WENT. It was a second button on the pass row, shown only when there
+  // was something to redo. It is the same intent, in the same place as every other
+  // scope decision: the last line of the window's THIS RUN block, unticked, next to
+  // the pool it re-runs. What must not change is that it stays EXPLICIT and priced.
+  const spec = BANK_PASSES.score
+  assert.ok(spec, 'the ✨ Score spec is missing')
+  assert.equal(spec.redo?.key, 'rescore')
+  assert.match(spec.redo.label, /Throw the cached embeddings away and recompute everything/)
+  assert.match(spec.redo.note, /Costs a full pass/)
+  // …and it is never pre-ticked: the workspace boots every redo flag off.
+  assert.match(workspace, /const \[passRedo, setPassRedo\] = useState\(\{\}\)/)
+  assert.match(workspace, /redo=\{!!passRedo\[passOpen\]\}/)
+})
+
+test('✨ Score refuses a partial scope, visibly, with the reason', () => {
+  // The style ids are one numbering of the whole bank. Offering "kept only" would
+  // renumber a sub-population onto groups already stored — so the option is shown
+  // DISABLED with its objection, never removed and never obeyed.
+  //
+  // Read off the VALUES, not the source: the earlier version matched across the
+  // `+` of a wrapped string literal, so re-flowing the sentence turned it red
+  // while every user-visible word was unchanged. What is pinned is the objection
+  // the user READS, and that both refusals say the same thing — a scope refused
+  // for one reason and a selection refused for another would read as two bugs.
+  const spec = BANK_PASSES.score
+  assert.equal(typeof spec.scopes, 'string', 'the scope must be refused, not offered')
+  assert.equal(spec.selection, spec.scopes)
+  assert.match(spec.scopes, /^The style grouping is one numbering of the WHOLE bank/)
+  assert.match(spec.scopes,
+    /number that part from 1 and land those ids on top of unrelated groups already saved/)
 })
 
 test('the plain ✨ Score button tells the user a relaunch is cheap', () => {
