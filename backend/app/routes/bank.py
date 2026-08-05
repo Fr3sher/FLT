@@ -457,7 +457,13 @@ def bank_caption(bank_id):
     same keys and same validation as the dataset caption options. {statuses} picks
     the scope: ["keep"], ["pending"] or ["keep","pending"]; "reject" is refused. Every
     one of these keys is optional, and a body without them runs exactly the pass that
-    ran before they existed. 202/409/503/400."""
+    ran before they existed.
+
+    {force:true} SPARES the captions a human wrote or corrected (caption_origin =
+    'asserted'); {include_asserted:true} is the explicit opt-out that rewrites those
+    too. Its default is False and it is meaningless without force — the destructive
+    reading of this endpoint is never the one you get by omitting a key.
+    202/409/503/400."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_caption, _app(), LOCAL_USER, bank_id,
                   ids=data.get('image_ids') or None, force=bool(data.get('force')),
@@ -465,7 +471,8 @@ def bank_caption(bank_id):
                   length=data.get('length') or None,
                   backend=data.get('backend') or None,
                   ollama_model=data.get('ollama_model') or None,
-                  statuses=data.get('statuses') or None)
+                  statuses=data.get('statuses') or None,
+                  include_asserted=bool(data.get('include_asserted')))
 
 
 @bp.post('/bank/<int:bank_id>/pipeline')

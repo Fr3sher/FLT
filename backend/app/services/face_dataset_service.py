@@ -34,8 +34,8 @@ from ..extensions import db
 from ..models import (CanvasImageNode, CanvasNodePosition, FaceDataset,
                       FaceDatasetImage, LoraTestImage)
 from .. import config as cfg
-from . import (bank_transfer_metadata, dataset_activity, image_encoding,
-               reference_edit_jobs, trash)
+from . import (bank_transfer_metadata, caption_origin, dataset_activity,
+               image_encoding, reference_edit_jobs, trash)
 from .dataset_storage import dataset_path, ensure_dataset_dir
 from .image_provenance import provenance_metrics
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
@@ -1895,7 +1895,8 @@ def _matches_reimprove_state(row, img, state):
 
 
 def _transition_reimprove_candidate(img, old_state, parent, label, prompt, job_id,
-                                    expected_transition_caption):
+                                    expected_transition_caption,
+                                    expected_transition_caption_origin=None):
     """CAS one improvement into its in-flight replacement state.
 
     The job has already been queued, but a status click can land while enqueue is
@@ -1925,6 +1926,12 @@ def _transition_reimprove_candidate(img, old_state, parent, label, prompt, job_i
                        | (FaceDatasetImage.caption == ''))
         values['caption'] = case(
             (still_blank, expected_transition_caption), else_=FaceDatasetImage.caption)
+        # The stamp moves in the SAME case(), on the same condition, inside the
+        # same statement — a second UPDATE could land between the two and leave a
+        # caption whose recorded author is another caption's.
+        values['caption_origin'] = case(
+            (still_blank, expected_transition_caption_origin),
+            else_=FaceDatasetImage.caption_origin)
     result = db.session.execute(
         update(FaceDatasetImage)
         .where(*_matches_reimprove_state(FaceDatasetImage, img, old_state))
@@ -1944,11 +1951,18 @@ def _restore_reimprove_candidate_after_trash_failure(
     # Restore the exact old caption only while it is still what this transition
     # would have written.  A caption changed during Trash I/O wins instead.
     restore_values = {field: value for field, value in old_state.items()
-                      if field != 'caption'}
+                      if field not in ('caption', 'caption_origin')}
+    still_ours = _nullable_equals(FaceDatasetImage.caption,
+                                  expected_transition_caption)
     restore_values['caption'] = case(
-        (_nullable_equals(FaceDatasetImage.caption, expected_transition_caption),
-         old_state['caption']),
-        else_=FaceDatasetImage.caption)
+        (still_ours, old_state['caption']), else_=FaceDatasetImage.caption)
+    # Same condition, same statement: a Trash failure that restored the old
+    # sentence but not its stamp would quietly demote a hand-written caption to
+    # "origin never recorded", i.e. re-writable — a protection lost to an error
+    # path nobody watches.
+    restore_values['caption_origin'] = case(
+        (still_ours, old_state.get('caption_origin')),
+        else_=FaceDatasetImage.caption_origin)
     result = db.session.execute(
         update(FaceDatasetImage)
         .where(*_matches_reimprove_state(FaceDatasetImage, img, transient))
@@ -2150,13 +2164,22 @@ _UNSET = object()
 def set_image_caption(user_id, image_id, caption, short=_UNSET):
     """Save one image's long caption; optionally its short variant. `short` defaults to a
     sentinel so a caller that only edits the long caption (the inline grid textarea) never
-    wipes an existing short — only the expanded editor passes `short` to touch it."""
+    wipes an existing short — only the expanded editor passes `short` to touch it.
+
+    THIS IS THE APP'S ONLY CAPTION EDITOR, so it is where the 'asserted' stamp is
+    born: what is saved here is a human's words, and a forced caption pass must
+    skip it rather than overwrite it (services/caption_origin.py). Clearing the
+    box clears the stamp with the text — protection follows the sentence, never a
+    marker left behind on an empty field. The two captions are stamped
+    independently: typing a long one does not claim authorship of a short one the
+    dual-caption pass derived."""
     img = _owned_image(user_id, image_id)
     if not img:
         return False
-    img.caption = _cap_caption(caption) or None
+    caption_origin.stamp(img, _cap_caption(caption) or None, caption_origin.ASSERTED)
     if short is not _UNSET:
-        img.caption_short = _cap_caption(short) or None
+        caption_origin.stamp(img, _cap_caption(short) or None, caption_origin.ASSERTED,
+                             field='caption_short')
     db.session.commit()
     return True
 
@@ -2879,8 +2902,16 @@ _BACKUP_EXTENSION_CANONICAL = {
 
 # Champs snapshotés tels quels par ligne image (job_id/klein_model exclus : liés
 # à la machine source — un backup restauré ne peut pas « regénérer »).
+# ⚠️ 'caption_origin'/'caption_short_origin' are in this tuple ON PURPOSE and must
+# stay: this is the ONLY place the backup knows about them (the column names exist
+# nowhere else in the export/restore path), and dropping them would not lose a
+# caption — it would lose the PROTECTION on every hand-written caption, silently,
+# at the first backup round-trip, leaving a restored dataset that a forced pass
+# happily overwrites.
 _BACKUP_IMG_FIELDS = ('filename', 'source', 'framing', 'variation_label', 'status',
-                      'caption', 'caption_short', 'variation_prompt', 'face_score', 'face_state',
+                      'caption', 'caption_short',
+                      'caption_origin', 'caption_short_origin',
+                      'variation_prompt', 'face_score', 'face_state',
                       'upscale_ratio', 'watermark_state', 'watermark_bbox',
                       'watermark_regions', 'parent_image_id', 'derivation_kind',
                       'fail_reason', 'fail_kind', 'source_metadata',
@@ -3405,7 +3436,10 @@ def replace_in_captions(user_id, dataset_id, find, replace, mode='text'):
             new = ', '.join(out)
         new = _cap_caption(new) or None
         if new != img.caption:
-            img.caption = new
+            # A find/replace is a CORRECTION, so the row becomes the user's even
+            # when a model wrote the sentence it started from: cleaning a term out
+            # of 200 captions is exactly the work a later forced pass must not undo.
+            caption_origin.stamp(img, new, caption_origin.ASSERTED)
             changed += 1
     if changed:
         db.session.commit()
@@ -3446,7 +3480,10 @@ def batch_image_action(user_id, dataset_id, image_ids, action):
         return n
     for img in rows:
         if action == 'clear_caption':
-            img.caption = None
+            # The stamp goes with the text. An 'asserted' marker left on a row with
+            # no caption would be a row every future pass skips — permanently blank,
+            # for a reason nothing on screen could explain.
+            caption_origin.stamp(img, None, None)
         else:
             # Never resurrect a failed generation into keep/reject — the tile has
             # no file; regenerate is the only way out of 'failed'.
@@ -4923,7 +4960,8 @@ def face_crop_to_square_webp(image_bytes: bytes, size: int = 1024, pad: float = 
 # --- Import + classify (Qwen3-VL) ------------------------------------------
 @_serialize_dataset_ingest
 def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, stats=None,
-                  source_metadata=None, captions=None, bank_image_ids=None,
+                  source_metadata=None, captions=None, caption_origins=None,
+                  bank_image_ids=None,
                   framings=None, bank_analysis_snapshots=None,
                   watermark_states=None, watermark_bboxes=None,
                   watermark_regions=None, dedupe_seen=None):
@@ -4988,6 +5026,11 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             else _existing_dhash_rows(dataset_id)) if dedupe else None
     metadata_by_index = list(source_metadata) if source_metadata is not None else []
     captions_by_index = list(captions) if captions is not None else []
+    # Parallel to ``captions`` and travelling WITH it. Without this list a bank
+    # caption a human wrote or corrected arrives in the dataset stamped as
+    # nothing, i.e. re-writable — the protection would survive exactly one hop.
+    caption_origins_by_index = (list(caption_origins)
+                                if caption_origins is not None else [])
     bank_ids_by_index = list(bank_image_ids) if bank_image_ids is not None else []
     framings_by_index = list(framings) if framings is not None else []
     snapshots_by_index = (list(bank_analysis_snapshots)
@@ -4998,6 +5041,19 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
 
     def bank_id_at(i):
         return bank_ids_by_index[i] if i < len(bank_ids_by_index) else None
+
+    def caption_origin_at(i, cap):
+        """The stamp that rides with this caption — validated, never trusted raw.
+
+        An unknown token would be stored and then compared against 'asserted'
+        forever without ever matching, which is a protection that silently is
+        not one. A caption with no stamp stays NULL: "never recorded".
+        """
+        if not (cap or '').strip():
+            return None
+        value = (caption_origins_by_index[i]
+                 if i < len(caption_origins_by_index) else None)
+        return value if value in caption_origin.VALUES else None
 
     def framing_at(i):
         # A head crop IS a face by construction; otherwise take the caller's value
@@ -5118,6 +5174,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
         img = FaceDatasetImage(dataset_id=dataset_id, source='import', status='keep',
                                filename=fn, framing=framing_at(index),
                                upscale_ratio=scale, caption=cap,
+                               caption_origin=caption_origin_at(index, cap),
                                bank_image_id=bank_id_at(index),
                                bank_analysis_snapshot=analysis_snapshot,
                                watermark_state=watermark_state_at(index),
@@ -5204,7 +5261,13 @@ def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
                         if stats is not None:
                             stats['captions_kept'] = stats.get('captions_kept', 0) + 1
                     else:
-                        row.caption = _cap_caption(incoming)
+                        # A .txt sidecar is work done by a human in another tool —
+                        # the whole point of the round-trip. It lands 'asserted',
+                        # which is the same rule the branch above already applies by
+                        # hand ("a caption written HERE is never overwritten"),
+                        # generalised so a LATER forced pass honours it too.
+                        caption_origin.stamp(row, _cap_caption(incoming),
+                                             caption_origin.ASSERTED)
                         db.session.commit()
                         if stats is not None:
                             stats['captions_applied'] = \
@@ -5215,8 +5278,10 @@ def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
         cap = _cap_caption(incoming) if incoming else None
         if cap and stats is not None:
             stats['captions'] = stats.get('captions', 0) + 1
-        img = FaceDatasetImage(dataset_id=dataset_id, source='import', status='keep',
-                               filename=fn, caption=cap)
+        img = FaceDatasetImage(
+            dataset_id=dataset_id, source='import', status='keep', filename=fn,
+            caption=cap,
+            caption_origin=caption_origin.ASSERTED if cap else None)
         db.session.add(img)
         db.session.commit()
         if fp is not None:
@@ -6127,7 +6192,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
             except OSError:
                 data = b''
             final = _enforce_concept_omission(joycap, leak_re, data, concept_desc) or joycap
-            img.caption = _cap_caption(final)
+            caption_origin.stamp(img, _cap_caption(final), caption_origin.JOYCAPTION)
             db.session.commit()
             n += 1
             _writer(report, CAPTION_WRITER_JOYCAPTION)
@@ -6179,11 +6244,14 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                 except Exception as e:  # noqa: BLE001 - refine best-effort
                     logger.warning('caption concept: Qwen refine failed (%s)', e)
                 refined = (refined or '').strip().strip('"').strip()
-                # Which engine's prose ends up stored, decided branch by branch — the
-                # 'auto' concept path can produce all three on ONE dataset.
+                # Which engine gets the credit follows the text through the three
+                # outcomes below, rather than being decided by the branch we are in:
+                # a Joy draft kept because the refine was unusable is JoyCaption's
+                # sentence, not Qwen's.
                 writer = CAPTION_WRITER_REFINED
                 if _refine_output_ok(refined, joycap):
                     final = refined
+                    origin = caption_origin.OLLAMA
                 else:
                     # Unusable refine (reasoning trace / loop) -> direct Qwen caption
                     # (natively omits the concept), else keep the Joy draft.
@@ -6199,6 +6267,7 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     alt = (alt or '').strip().strip('"').strip()
                     final = alt or joycap
                     writer = CAPTION_WRITER_OLLAMA if alt else CAPTION_WRITER_JOYCAPTION
+                    origin = caption_origin.OLLAMA if alt else caption_origin.JOYCAPTION
                 final = _enforce_concept_omission(final, leak_re, data, concept_desc,
                                                   describe=describe) or final
                 # Re-read only now: everything above is model work measured in
@@ -6213,16 +6282,19 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     final = _enforce_concept_omission(joycap, leak_re, data, concept_desc,
                                                       describe=describe) or joycap
                     writer = CAPTION_WRITER_JOYCAPTION
+                    origin = caption_origin.JOYCAPTION
                     if not _usable_caption(final):
                         # force=re-do-all: overwrite any stale pre-fix caption with blank
                         # (trigger-only is valid for a concept LoRA) rather than retain it.
+                        # The stamp is cleared WITH the text: a blanked row must not keep
+                        # an origin describing a sentence that no longer exists.
                         if force and (img.caption or ''):
-                            img.caption = ''
+                            caption_origin.stamp(img, '', None)
                             db.session.commit()
                         logger.info('caption concept: no usable caption for image %s '
                                     '-> left blank', image_id)
                         continue
-                img.caption = _cap_caption(final)
+                caption_origin.stamp(img, _cap_caption(final), origin)
                 db.session.commit()
                 n += 1
                 _writer(report, writer)
@@ -6246,13 +6318,13 @@ def _caption_concept(ds, force, backend, token=None, image_ids=None,
                     vanished += 1
                     continue
                 if _usable_caption(cap):
-                    img.caption = _cap_caption(cap)
+                    caption_origin.stamp(img, _cap_caption(cap), caption_origin.OLLAMA)
                     db.session.commit()
                     n += 1
                     _writer(report, CAPTION_WRITER_OLLAMA)
                 else:
                     if force and (img.caption or ''):
-                        img.caption = ''
+                        caption_origin.stamp(img, '', None)
                         db.session.commit()
                     logger.info('caption concept: no usable direct caption for image '
                                 '%s -> left blank', image_id)
@@ -6435,7 +6507,8 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                         dataset_activity.bump(token)
                         continue
                     cleaned = cleaner(cap) or cap
-                    img.caption = _cap_caption(cleaned)
+                    caption_origin.stamp(img, _cap_caption(cleaned),
+                                         caption_origin.JOYCAPTION)
                     db.session.commit()
                     n += 1
                     _writer(report, CAPTION_WRITER_JOYCAPTION)
@@ -6483,7 +6556,10 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
                             dataset_activity.bump(token)
                             continue
                         cleaned = cleaner(cap) or cap
-                        img.caption = _cap_caption(cleaned)
+                        # Which engine wrote THIS row, not which backend was asked
+                        # for: in 'auto' the two branches both write inside one run.
+                        caption_origin.stamp(img, _cap_caption(cleaned),
+                                             caption_origin.OLLAMA)
                         db.session.commit()
                         n += 1
                         _writer(report, CAPTION_WRITER_OLLAMA)
@@ -6532,9 +6608,12 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
                       same as the dataset pass). The Ollama phase overlaps several calls
                       (see vision_pool), so a stop drains what is in flight — a couple of
                       seconds — and every drained answer is still handed to on_caption.
-    on_caption(path, caption) : fired as each caption lands, for incremental persistence.
-                      ALWAYS called on the caller's own thread, never on a worker, so it
-                      is free to use the database session.
+    on_caption(path, caption, engine) : fired as each caption lands, for incremental
+                      persistence. ALWAYS called on the caller's own thread, never on a
+                      worker, so it is free to use the database session. `engine` is the
+                      one that ACTUALLY wrote this caption ('joycaption' | 'ollama'),
+                      which under the 'auto' backend differs from image to image inside
+                      one run — the caller records it as the caption's origin.
     progress(done, total)     : progress callback (every handled image, captioned or not).
 
     Best-effort: a totally unavailable engine raises RuntimeError (so the caller can
@@ -6557,11 +6636,14 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
     ollama_model = (ollama_model or '').strip() or None
     done = 0
 
-    def _emit(p, cap):
+    def _emit(p, cap, engine=None):
         nonlocal done
         out[p] = cap
         if on_caption:
-            on_caption(p, cap)
+            # The ENGINE rides with the caption so the caller can record who wrote
+            # it. Third argument, defaulted on the callback side, so a handler
+            # written before this seam existed still works unchanged.
+            on_caption(p, cap, engine)
         done += 1
         if progress:
             progress(done, total)
@@ -6592,7 +6674,7 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
         for p in remaining:
             cap = (jc.get(p) or '').strip().strip('"').strip()
             if cap:
-                _emit(p, _cap_caption(cap))
+                _emit(p, _cap_caption(cap), caption_origin.JOYCAPTION)
             else:
                 still.append(p)
         remaining = still
@@ -6622,7 +6704,7 @@ def caption_paths(paths, *, prompt=None, backend=None, ollama_model=None,
             nonlocal done
             cap = (cap or '').strip().strip('"').strip()
             if cap:
-                _emit(path, _cap_caption(cap))
+                _emit(path, _cap_caption(cap), caption_origin.OLLAMA)
             else:
                 done += 1  # handled-but-empty still advances the bar
                 if progress:
@@ -6891,7 +6973,11 @@ def derive_short_captions(user_id, dataset_id, image_ids=None, force=False, mode
             if img is None:      # deleted DURING its own generation
                 vanished += 1
                 continue
-            img.caption_short = _cap_caption(short) or None
+            # The SHORT gets its own stamp, on its own column: this pass derives it
+            # with a text model while the long caption above it may well have been
+            # typed by hand. One origin for the two would mislabel one of them.
+            caption_origin.stamp(img, _cap_caption(short) or None,
+                                 caption_origin.OLLAMA, field='caption_short')
             db.session.commit()
             n += 1
     finally:
@@ -8415,7 +8501,12 @@ def _improve_existing_image_locked(user_id, image_id, engine=None):
     candidate = FaceDatasetImage(
         dataset_id=img.dataset_id, source='generated', status='pending',
         parent_image_id=img.id, derivation_kind=KLEIN_IMAGE_IMPROVE,
+        # The stamp travels with the sentence it describes: a candidate that
+        # inherits a hand-written caption inherits the protection on it, or the
+        # first forced pass would rewrite the words on the copy while sparing them
+        # on the original.
         framing=img.framing, caption=img.caption,
+        caption_origin=img.caption_origin,
         variation_label=label, variation_prompt=stored_prompt,
         # The generated candidate remains derived from the credited source.
         # Revalidate before copying so a malformed legacy row cannot surface.
@@ -8544,11 +8635,18 @@ def _reimprove_image_locked(user_id, image_id):
     # refusal must leave the current result on screen, not a broken tile.
     from ..job_queue import queue_manager
     old_state = {field: getattr(img, field) for field in (
-        'filename', 'caption', 'status', 'fail_reason', 'fail_kind', 'job_id',
+        'filename', 'caption', 'caption_origin', 'status', 'fail_reason',
+        'fail_kind', 'job_id',
         'variation_label', 'variation_prompt', 'framing',
         'watermark_state', 'watermark_bbox', 'watermark_regions')}
+    # The caption the transition will write, AND who wrote it — the two are read
+    # from the same row so an inherited parent caption arrives with the parent's
+    # authorship rather than as an anonymous string.
     expected_transition_caption = (old_state['caption']
                                    if old_state['caption'] else parent.caption)
+    expected_transition_caption_origin = (old_state['caption_origin']
+                                          if old_state['caption']
+                                          else parent.caption_origin)
     old_path = _img_path(img) if img.filename else None
     job_id = _enqueue_improve(
         engine, user_id=user_id, source=parent, source_path=source_path,
@@ -8562,7 +8660,8 @@ def _reimprove_image_locked(user_id, image_id):
         parent_rekept = _rekeep_pending_parent_for_reimprove(img)
         if not _transition_reimprove_candidate(
                 img, old_state, parent, label, prompt, job_id,
-                expected_transition_caption):
+                expected_transition_caption,
+                expected_transition_caption_origin):
             # The status/file/job snapshot changed after enqueue. Rolling back
             # also undoes a just-applied parent fallback; the except path below
             # cancels this unlinked job and maps the race to a 409.
@@ -8964,7 +9063,9 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
         img.klein_model = (engine if target in API_ENGINES or target == KREA_ENGINE
                            else model)
         img.filename = None
-        img.caption = None
+        # The row loses its file AND its words; the stamp goes with them, or the
+        # regenerated image would be born already protected against captioning.
+        caption_origin.stamp(img, None, None)
         img.status = 'pending'
         img.job_id = new_job_id
         img.fail_reason = None

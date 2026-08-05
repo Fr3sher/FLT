@@ -52,8 +52,8 @@ from sqlalchemy import and_, case, func, or_, text
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import (bank_jobs, bank_transfer_metadata, bank_undo, image_encoding,
-               path_guard, trash)
+from . import (bank_jobs, bank_transfer_metadata, bank_undo, caption_origin,
+               image_encoding, path_guard, trash)
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _dataset_ingest_lock,
                                    _existing_dhash_rows, _hamming, _SCRAPE_DL_WORKERS,
@@ -1271,14 +1271,31 @@ def bank_payload(user_id, bank_id) -> dict | None:
     # moves 0 reads as a broken feature, and it is the counter's fault. One query,
     # two conditional sums, so telling the truth costs nothing on a 100 000-image
     # bank.
-    todo_keep, todo_pending = (
+    #
+    # THREE figures per pile, not one, because 🔄 Re-caption has three different
+    # things to say and folding any two of them would be a lie of a familiar kind:
+    #   caption_todo_*     : no caption at all — what a normal pass writes;
+    #   caption_asserted_* : a caption a HUMAN wrote — what a forced pass now SKIPS
+    #                        (services/caption_origin.py), so "keeping the 3 you
+    #                        wrote" is a measured number and not a hope;
+    #   caption_unrecorded_*: a caption whose author was never recorded — rewritten
+    #                        like any other, but it is NOT "machine-written", and
+    #                        the screen must not claim it is.
+    # Whatever is left (pile − the three) is machine-written and rewritten in silence.
+    def _cap_sum(status, condition):
+        return func.coalesce(func.sum(
+            case((and_(BankImage.status == status, condition), 1), else_=0)), 0)
+
+    no_caption = or_(BankImage.caption.is_(None), BankImage.caption == '')
+    asserted = caption_origin.protected_clause(BankImage)
+    unrecorded = caption_origin.unrecorded_clause(BankImage)
+    (todo_keep, todo_pending, asserted_keep, asserted_pending,
+     unrecorded_keep, unrecorded_pending) = (
         db.session.query(
-            func.coalesce(
-                func.sum(case((BankImage.status == 'keep', 1), else_=0)), 0),
-            func.coalesce(
-                func.sum(case((BankImage.status == 'pending', 1), else_=0)), 0))
-        .filter(BankImage.bank_id == bank_id)
-        .filter(or_(BankImage.caption.is_(None), BankImage.caption == '')).one())
+            _cap_sum('keep', no_caption), _cap_sum('pending', no_caption),
+            _cap_sum('keep', asserted), _cap_sum('pending', asserted),
+            _cap_sum('keep', unrecorded), _cap_sum('pending', unrecorded))
+        .filter(BankImage.bank_id == bank_id).one())
     counts = {
         'total': total,
         'scanned': base.filter(BankImage.quality_state.isnot(None)).count(),
@@ -1300,6 +1317,12 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # …and the caption-pass sizes of the two scopes it can be aimed at.
         'caption_todo_keep': int(todo_keep or 0),
         'caption_todo_pending': int(todo_pending or 0),
+        # …and the two figures 🔄 Re-caption needs to stop lumping "what you wrote"
+        # together with "what nobody recorded".
+        'caption_asserted_keep': int(asserted_keep or 0),
+        'caption_asserted_pending': int(asserted_pending or 0),
+        'caption_unrecorded_keep': int(unrecorded_keep or 0),
+        'caption_unrecorded_pending': int(unrecorded_pending or 0),
         # Images a dataset REALLY holds today (back-link), plus the ones promoted
         # before that link existed (legacy flag). Counting the flag alone kept
         # advertising copies the user had since deleted.
@@ -5814,7 +5837,8 @@ def _caption_scope_q(bank_id, statuses):
 
 
 def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
-                  length=None, backend=None, ollama_model=None, statuses=None):
+                  length=None, backend=None, ollama_model=None, statuses=None,
+                  include_asserted=False):
     """Launch the caption pass over a selection (``ids``) or, when empty, every
     non-rejected readable image. Reuses the dataset caption engines (JoyCaption /
     Ollama per Settings) through a dataset-free descriptive brick; the captions
@@ -5848,7 +5872,18 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
     ``statuses`` picks the SCOPE of the run: ['keep'], ['pending'] or ['keep','pending']
     (CAPTION_SCOPES). None = the historical non-rejected set, byte-identical to before.
     'reject' is refused — the bin is never captioned. When ``ids`` are also given the
-    two INTERSECT (the selection is narrowed by the scope, never widened)."""
+    two INTERSECT (the selection is narrowed by the scope, never widened).
+
+    ``force`` rewrites captions that already exist — and, since captions carry an
+    origin (services/caption_origin.py), it now SPARES the ones a human wrote or
+    corrected, the way the embeddings pass spares an asserted face cluster. Rows
+    whose origin was never recorded (every row that predates the column) are
+    rewritten: their authorship cannot be recovered, and sparing them would make
+    this button inert on every bank that exists today. ``include_asserted`` is the
+    explicit way OUT of that protection — a separate opt-in, never a default,
+    for the person who does want their own captions redone by a better model.
+    It means nothing without ``force`` and is ignored there (an unforced pass
+    only ever touches rows with no caption at all)."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
@@ -5881,18 +5916,26 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
     q = _caption_scope_q(bank_id, want)
     if ids is not None:
         q = q.filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK]))
+    keep_asserted = bool(force) and not include_asserted
     if not force:
         q = q.filter(or_(BankImage.caption.is_(None), BankImage.caption == ''))
+    elif keep_asserted:
+        # The protection, in the SAME query that prices the run — so the number
+        # the button quotes is the number the job walks. Two definitions of this
+        # filter is exactly how a button comes to announce work it does not do.
+        q = q.filter(caption_origin.unprotected_clause(BankImage))
     total = q.count()
     return bank_jobs.start(app, bank_id, 'caption',
                            _caption_job(bank_id, ids, force, vocab, size,
                                         backend=engine, ollama_model=model,
-                                        statuses=want),
+                                        statuses=want,
+                                        keep_asserted=keep_asserted),
                            total=total)
 
 
 def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
-                 backend=None, ollama_model=None, statuses=None):
+                 backend=None, ollama_model=None, statuses=None,
+                 keep_asserted=False):
     def run(job):
         from .face_dataset_service import caption_paths, caption_preset_instructions
         from ..gpu_window import gpu_exclusive_vision_window
@@ -5907,8 +5950,16 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             rows.sort(key=lambda r: r.id)
         else:
             rows = q.order_by(BankImage.id.asc()).all()
+        skipped_asserted = 0
         if not force:
             rows = [r for r in rows if not (r.caption or '').strip()]
+        elif keep_asserted:
+            # Same rule as the launch filter, re-applied on the rows the job
+            # actually loaded: a caption can be typed in the seconds between
+            # pricing the run and starting it, and the newer word wins.
+            spared = [r for r in rows if caption_origin.is_protected(r)]
+            skipped_asserted = len(spared)
+            rows = [r for r in rows if not caption_origin.is_protected(r)]
         by_path = {}
         for r in rows:
             p = abs_image_path(bank, r)
@@ -5920,7 +5971,7 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             return
         captioned = vanished = 0
 
-        def _on_caption(path, caption):
+        def _on_caption(path, caption, engine=None):
             nonlocal captioned, vanished
             image_id = by_path.get(path)
             if image_id is None:
@@ -5931,7 +5982,10 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
                             'skipping its caption', image_id)
                 vanished += 1
                 return
-            row.caption = caption
+            # WHICH engine wrote this row, reported by the engine that wrote it —
+            # not the backend that was asked for. 'auto' chains both, so the
+            # requested value would mislabel roughly half the bank.
+            caption_origin.stamp(row, caption, caption_origin.engine_origin(engine))
             db.session.commit()
             captioned += 1
 
@@ -5957,6 +6011,11 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             bank_jobs.progress(job, detail=f'cancelled — {captioned} captioned so far')
             return
         detail = f'done — {captioned} captioned'
+        if skipped_asserted:
+            # Named in the RESULT, not only in the warning before the click: the
+            # user has to be able to see afterwards that the protection did
+            # something, otherwise it is a promise with no evidence.
+            detail += f', {skipped_asserted} kept (written by you)'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         bank_jobs.progress(job, detail=detail)
@@ -6854,6 +6913,11 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
     """
     values = {
         'caption': row.caption,
+        # WHO wrote that caption travels with it. This is THE path that used to
+        # destroy hand-written work: a caption typed in the Dataset editor landed
+        # in the Bank as an anonymous string, and the Bank's forced pass had no
+        # way left to tell it from one of its own.
+        'caption_origin': row.caption_origin,
         'framing': row.framing if row.framing in _BANK_TRANSFER_FRAMINGS else None,
         'watermark_state': (row.watermark_state
                             if row.watermark_state in _BANK_TRANSFER_WATERMARK_STATES
@@ -7134,6 +7198,11 @@ def _bank_copy_values(row: BankImage, copied_path) -> dict:
                    for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
     values.update({
         'caption': row.caption,
+        # Beside 'caption', deliberately NOT among the fields blanked above: the
+        # analysis results are about pixels this Bank has not looked at, but the
+        # authorship of a sentence is a fact about the sentence and copying it
+        # without its author is what turns a protected caption into a rewritable one.
+        'caption_origin': row.caption_origin,
         'source_metadata': _source_metadata_storage(row.source_metadata),
         # Both are image-specific review outputs.  The copied image may have
         # been cleaned, rotated, or replaced after the source verdict, so no
@@ -7283,7 +7352,7 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
                 break
             chunk = rows[c0:c0 + _PROMOTE_CHUNK]
             blobs, chunk_rows = [], []
-            caps, frms, source_meta, snapshots = [], [], [], []
+            caps, cap_origins, frms, source_meta, snapshots = [], [], [], [], []
             watermark_states, watermark_bboxes, watermark_regions = [], [], []
             for r in chunk:
                 # RESOLVED path: a watermark-cleaned image must reach the dataset
@@ -7296,6 +7365,11 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
                     # Carry the bank caption onto the dataset image (parallel to blobs),
                     # so a captioned selection lands already captioned.
                     caps.append(r.caption)
+                    # ...and WHO wrote it, in the list parallel to it. A caption
+                    # the user corrected in the Bank must come back to a Dataset
+                    # still marked as theirs, or the round-trip launders it into
+                    # something the next forced pass overwrites.
+                    cap_origins.append(r.caption_origin)
                     # Carry the framing the bank's classify pass already wrote, so
                     # the dataset's Composition counter is right the moment the
                     # promotion lands (it only tallies rows that HAVE a framing).
@@ -7318,7 +7392,8 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
             if blobs:
                 new_ids, bad = import_images(
                     user_id, dataset_id, blobs, dedupe=True, stats=stats,
-                    captions=caps, bank_image_ids=[r.id for r in chunk_rows],
+                    captions=caps, caption_origins=cap_origins,
+                    bank_image_ids=[r.id for r in chunk_rows],
                     framings=frms, source_metadata=source_meta,
                     bank_analysis_snapshots=snapshots,
                     watermark_states=watermark_states,

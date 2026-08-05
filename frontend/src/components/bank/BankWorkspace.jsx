@@ -45,6 +45,7 @@ import {
 // Which pile the caption pass is aimed at, and the number the button quotes (pure).
 import {
   CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown,
+  captionIncludeAssertedLabel,
   captionRecaptionConfirmation, captionRecaptionDisabledReason, captionRecaptionLabel,
   captionRecaptionNote, captionScopeCount,
   captionScopeDisabledReason, captionScopeNote, captionScopeStatuses,
@@ -686,6 +687,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   // WHICH PILE this run captions: '' = kept + undecided (today's behaviour, sends
   // nothing), 'keep', or 'pending'. Never 'reject' — the bin is not curated from.
   const [captionScope, setCaptionScope] = useState('')
+  /* The ESCAPE HATCH, and the reason it is a piece of state and not a request key: it has
+     to be visible, deliberate and re-read in the confirmation. Never persisted, so it
+     resets with the panel — an opt-out of a protection is not a preference. */
+  const [captionIncludeAsserted, setCaptionIncludeAsserted] = useState(false)
   // Coverage advice (idea by @antonp) — a collapsible read-only panel, fetched
   // on demand (and refreshed whenever it's open and the bank changes).
   const [coverageOpen, setCoverageOpen] = useState(false)
@@ -1105,10 +1110,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
      - `statuses` rides WITHOUT the `!selected.size` guard the normal pass needs,
        precisely because a selection makes this button inert instead. */
   const startRecaption = () => {
-    if (captionRecaptionDisabledReason(selected.size, live, counts, captionScope)) return
-    if (!window.confirm(captionRecaptionConfirmation(counts, captionScope))) return
+    if (captionRecaptionDisabledReason(selected.size, live, counts, captionScope,
+                                       captionIncludeAsserted)) return
+    if (!window.confirm(captionRecaptionConfirmation(counts, captionScope,
+                                                     captionIncludeAsserted))) return
     return act(() => postJson(`/api/bank/${bankId}/caption`, {
       force: true,
+      // Sent ONLY when ticked. Omitting the key is the protected reading, on this
+      // side as on the server's — the destructive one is never the default shape
+      // of the request.
+      ...(captionIncludeAsserted ? { include_asserted: true } : {}),
       ...(captionVocab ? { vocabulary: captionVocab } : {}),
       ...(captionLength ? { length: captionLength } : {}),
       ...(captionEngine ? { backend: captionEngine } : {}),
@@ -1458,9 +1469,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const captionScopeInert = captionScopeDisabledReason(selected.size, live)
   const captionRunSize = captionScopeCount(counts, captionScope)
   // 🔄 Re-caption: inert (and why), plus the sentence that names what it destroys.
+  const includeAssertedLabel = captionIncludeAssertedLabel(counts, captionScope)
   const recaptionInert = captionRecaptionDisabledReason(
-    selected.size, live, counts, captionScope)
-  const recaptionNote = captionRecaptionNote(selected.size, live, counts, captionScope)
+    selected.size, live, counts, captionScope, captionIncludeAsserted)
+  const recaptionNote = captionRecaptionNote(selected.size, live, counts, captionScope,
+                                             captionIncludeAsserted)
   const scored = counts?.scored || 0
   // ⚖️ Can a balanced pick even run? Answered BEFORE the click when we already
   // know (Score missing; coverage says nothing is classified) — otherwise the
@@ -1731,8 +1744,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             aria-label="Re-caption"
             title={recaptionInert || recaptionNote}
             className="px-2 py-1 rounded-lg bg-surface border border-border text-content text-xs disabled:opacity-40">
-            {captionRecaptionLabel(counts, captionScope, recaptionInert)}
+            {captionRecaptionLabel(counts, captionScope, recaptionInert,
+                                   captionIncludeAsserted)}
           </button>
+          {/* 🔓 The way out of the protection — rendered ONLY when there is something to
+              protect, so the row gains no width on a bank where nobody has written a
+              caption. It sits AFTER the button it modifies and names its own cost, and
+              the confirmation repeats it: an opt-out of a safeguard must be read twice
+              and reached on purpose, never by leaving a key out of a request. */}
+          {includeAssertedLabel && (
+            <label className="flex items-center gap-1 text-xs text-amber-400/90">
+              <input type="checkbox" checked={captionIncludeAsserted} disabled={live}
+                onChange={(e) => setCaptionIncludeAsserted(e.target.checked)}
+                aria-label="Also re-caption the captions I wrote by hand"
+                className="accent-amber-500" />
+              {includeAssertedLabel}
+            </label>
+          )}
         </div>
         {/* What the run will do, spelled out — including the two things a count alone
             never says: already-captioned images are skipped, and the bin is out of

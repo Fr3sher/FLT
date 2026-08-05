@@ -1126,23 +1126,36 @@ runs the same pass with the same engine, model, register and length you picked o
 that row, on the pile the scope select names — and it **overwrites** the captions
 that are already there.
 
-**It tells you the number before you click, in two places.** The button quotes
-what it will rewrite ("🔄 Re-caption 1 240 kept" — the whole pile, captioned or
-not), and the amber line under the row quotes what it will *destroy*: how many of
-those images already carry a caption. The confirmation repeats both. Neither
-number is an estimate; both come from the same count the pass itself uses.
+**It keeps the captions you wrote yourself.** Every caption now records who wrote
+it — JoyCaption, Ollama, or you. "You" means: typed or corrected in a dataset's
+caption box, changed by a find/replace across a dataset, or brought back as `.txt`
+sidecars from another tool. That record travels with the text through
+**Import to bank**, bank-to-bank copies, promotion back to a dataset, and backup
+restores, so a caption you wrote in a dataset three steps ago is still recognised
+as yours here. Re-caption skips those rows, exactly as the person pass skips a
+subfolder you declared to hold one person.
 
-**There is no undo, and no way to spare hand-written captions.** This app stores
-one caption per image and records nothing about who wrote it — a caption you typed
-or corrected yourself and one a model produced are the same text in the same
-column. So a guard that "protected your edits" would have to guess, and would
-guess wrong in both directions. The honest version is the one you get: it
-overwrites everything in the pile and says so first. The bank's ↩ Undo covers
-keep/reject decisions only; it has never covered captions.
+**It tells you three numbers before you click, and never merges two of them.**
+The button quotes what it will rewrite (the pile, minus what it spares). The amber
+line under the row breaks the rest apart: how many captions it *keeps* because you
+wrote them, how many it overwrites **whose author was never recorded**, and how
+many a model wrote. The confirmation repeats them. None is an estimate; they all
+come from the same count the pass itself uses, so the figure on the button is the
+number of images that change.
 
-The case to be careful about is a bank built with **Import to bank** from a
-dataset whose captions you had corrected by hand: those corrections came along,
-and nothing on screen marks them.
+**"Origin never recorded" is the one to read carefully.** Captions written before
+the app started keeping track carry no author, and there is no way to work one out
+after the fact. Those are re-captioned — sparing them would make this button do
+nothing at all on any bank that already exists — so if you hand-wrote captions in
+an older version, they are in that count. It is stated separately from the
+machine-written ones for exactly that reason.
+
+**If you do want your own captions redone**, tick **"Also rewrite the N caption(s)
+I wrote"** next to the button. It only appears when there is something to protect,
+it is never pre-ticked, and the confirmation names it again.
+
+**There is still no undo.** The bank's ↩ Undo covers keep/reject decisions only;
+it has never covered captions, and this change does not add one.
 
 **It works by pile, never on a selection.** With images selected the button goes
 inert and says why: a selection can cover pages that were never loaded, so the

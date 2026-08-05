@@ -147,6 +147,21 @@ class FaceDatasetImage(db.Model):
     # concept/aesthetic omitted) and stored WITHOUT the trigger; the trigger is prepended at
     # export like the long. Additive column (migration in create_app). NULL = no short yet.
     caption_short = db.Column(Text, nullable=True)
+    # WHO wrote each of the two captions above. NULL = never recorded (what every
+    # row that predates these columns carries, and what a caption-free row keeps) |
+    # 'asserted' = a human typed, corrected or imported the text | 'joycaption' /
+    # 'ollama' = the engine that produced it. Same two vocabularies, same reasons,
+    # as face_cluster_origin and watermark_source on BankImage — and the same
+    # consequence for the first: a FORCED caption pass SKIPS 'asserted' rows so it
+    # never silently overwrites the user's own words. NULL is re-captionable on
+    # purpose: sparing it would make Re-caption inert on every existing dataset,
+    # and the screen counts it separately instead of calling it machine-written.
+    # The short caption has its OWN column because it has its own writers on both
+    # sides (the expanded editor types it; the dual-caption pass derives it), and
+    # the two cross constantly — one column for two texts would mislabel one of
+    # them. See services/caption_origin.py. Additive columns (see _SCHEMA_ADDITIONS).
+    caption_origin = db.Column(String(16), nullable=True)
+    caption_short_origin = db.Column(String(16), nullable=True)
     job_id = db.Column(String(36), nullable=True, index=True)
     variation_prompt = db.Column(String(500), nullable=True)    # RAW catalog prompt (regenerate)
     klein_model = db.Column(String(255), nullable=True)         # UNET used (regenerate)
@@ -373,6 +388,18 @@ class BankImage(db.Model):
     # dataset on promotion, so a promoted selection starts already captioned. NULL =
     # not captioned yet. Additive column — created by db.create_all(), no migration.
     caption = db.Column(Text, nullable=True)
+    # WHO wrote that caption. NULL = never recorded (every row that predates this
+    # column, and every uncaptioned row) | 'asserted' = a human wrote or corrected
+    # it — usually in a Dataset, the only place this app offers a caption editor,
+    # and carried here by the Dataset -> Bank import | 'joycaption' / 'ollama' =
+    # the engine that produced it. Exactly the two vocabularies already on this
+    # table (face_cluster_origin's 'asserted', watermark_source's engine name),
+    # and 'asserted' keeps its meaning: 🔄 Re-caption SKIPS those rows rather than
+    # overwriting a human's words with a model's. NULL rows ARE re-captioned (their
+    # origin was never recorded and cannot be recovered), and the button counts
+    # them apart from the machine-written ones instead of pretending they are the
+    # same thing. See services/caption_origin.py. Additive column (_SCHEMA_ADDITIONS).
+    caption_origin = db.Column(String(16), nullable=True)
     # Portable source provenance shared with Dataset images. The only currently
     # accepted shape is normalized Pexels attribution; services validate/canonicalize
     # it before writing. Keeping it on the Bank makes Bank -> Dataset -> Bank
