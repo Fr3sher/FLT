@@ -118,6 +118,15 @@ test('the angle backfill is offered only when there is something to measure, and
 test('the angle row says which pass is missing instead of showing an empty bucket', () => {
   const noPass = angleReadiness({ counts: {}, angles: {} })
   assert.match(noPass.note, /Person groups/)
+  const noFace = angleReadiness({
+    faces_scanned: 12,
+    counts: { angle_measured: 0, angle_backfillable: 0 },
+    angles: {},
+  })
+  assert.match(noFace.note, /12 images were face-checked/)
+  assert.match(noFace.note, /no measurable head angle/)
+  assert.doesNotMatch(noFace.note, /Run|Person groups/)
+  assert.equal(noFace.offer, null)
   const noFraming = angleReadiness({
     counts: { angle_measured: 500, framing_classified: 0 },
     angles: { frontal: 400, behind: 0 },

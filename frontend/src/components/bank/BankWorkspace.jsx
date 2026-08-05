@@ -15,6 +15,7 @@ import FolderSyncNote from './FolderSyncNote'
 import RelocateBankDialog from './RelocateBankDialog'
 import BankReviewLightbox from './BankReviewLightbox'
 import BankWatermarkPanel from './BankWatermarkPanel'
+import BankOverview from './BankOverview.jsx'
 // 👤 "Single person here" — a folder the user declares to hold one person.
 import SubfolderPersonPanel from './SubfolderPersonPanel'
 import { assertionFor, folderMarker, scanOffer, suggestionFor } from './folderPerson.js'
@@ -133,7 +134,7 @@ const RES_BUCKETS = [
   { id: 'res_025_1', label: '0.25–1 MP' },
   { id: 'res_1_2', label: '1–2 MP' },
   { id: 'res_2_4', label: '2–4 MP' },
-  { id: 'res_gt_4', label: '> 4 MP' },
+  { id: 'res_gt_4', label: '≥ 4 MP' },
 ]
 // Framing buckets — ids MUST mirror backend _FRAMING_KEYS. Face/bust/body/back
 // are the character composition axes; 'unknown' is a parseable-but-unclassed shot.
@@ -1917,6 +1918,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           onDismiss={() => setDismissedReportAt(payload.pipeline_report.finished_at)} />
       )}
 
+      {/* At xl the workflow uses the available width: the action-heavy Analyze
+          zone and the read-only, bank-wide overview sit side by side. Below xl
+          this remains the same simple vertical flow. */}
+      <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
+      <div className="min-w-0 xl:col-span-7">
       {/* ① Analyze — run the analysis passes (or 🚀 Launch all) on the dump.
           Grouping + accent only; every pass keeps its own endpoint/behaviour. */}
       <ZoneSection zone={analyzeZone} accented={activeStep === 'analyze'}>
@@ -2058,6 +2064,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         )}
       </div>
       </ZoneSection>
+      </div>
+      <div className="min-w-0 xl:col-span-5 xl:sticky xl:top-20">
+        <BankOverview payload={payload} />
+      </div>
+      </div>
 
       {/* ② Triage — browse by facet/cluster and Keep/Reject to decide what stays.
           Stays fully visible; density was never the complaint. */}
@@ -2678,6 +2689,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       </div>
       </ZoneSection>
 
+      {/* The two short finishing zones share a row on wide screens. Promote
+          stays visible while a long Curate result is reviewed; phones retain
+          the natural Curate → Promote stack. */}
+      <div className="grid gap-4 xl:grid-cols-12 xl:items-start">
+      <div className="min-w-0 xl:col-span-8">
       {/* ③ Curate — optional refinement (diverse/similar/coverage). Always
           accessible, but never the accented "next step". */}
       <ZoneSection zone={curateZone} accented={false}>
@@ -3010,9 +3026,11 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           balanceReason={balanceReady.reason} />
       )}
       </ZoneSection>
+      </div>
 
       {/* ④ Promote — ship the kept set into a dataset, or clear rejects off
           disk. Same actions/handlers as before — just grouped as the last step. */}
+      <div className="min-w-0 xl:col-span-4 xl:sticky xl:top-20">
       <ZoneSection zone={promoteZone} accented={activeStep === 'promote'}>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={() => setPromoteOpen(true)} disabled={live || !canPromote}
@@ -3037,6 +3055,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
         </button>
       </div>
       </ZoneSection>
+      </div>
+      </div>
 
       {filter.flag === 'dups' ? (
         <DupGroupsPanel bankId={bankId} live={live} kind="exact"

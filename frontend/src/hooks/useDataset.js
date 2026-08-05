@@ -1130,9 +1130,11 @@ export function useDataset() {
   const batchImages = useCallback(async (ids, action, { silent = false } = {}) => {
     if (!ids || !ids.length) return 0;
     const d = await postJson(`/api/dataset/${currentId}/images/batch`, { ids, action });
-    if (!d.ok) { toast.error(d.error || 'Unexpected error'); return 0; }
-    if (!silent) toast.success(`${d.affected} image(s) updated`);
+    if (!d.ok) { toast.error(d.error || 'Unexpected error'); return null; }
     await refresh();
+    if (!silent) toast.success(action === 'delete'
+      ? `${d.affected} ${d.affected === 1 ? 'image' : 'images'} deleted`
+      : `${d.affected} image(s) updated`);
     return d.affected;
   }, [currentId, refresh, toast]);
 

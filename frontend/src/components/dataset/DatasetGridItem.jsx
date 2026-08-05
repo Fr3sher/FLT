@@ -245,16 +245,18 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
           {canRegenerate && (
             <button type="button"
               onClick={(e) => { e.stopPropagation(); onRegenerate?.(img.id); }}
+              disabled={busy}
               title="Regenerate this variation (new seed)"
               aria-label="Regenerate this variation (new seed)"
-              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">🔄</button>
+              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] disabled:cursor-not-allowed disabled:opacity-45">🔄</button>
           )}
           {canRegenerate && (
             <button type="button"
               onClick={(e) => { e.stopPropagation(); setEditingPrompt(true); }}
+              disabled={busy}
               title="Edit the prompt, then regenerate this variation"
               aria-label="Edit the prompt, then regenerate this variation"
-              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">✏️</button>
+              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] disabled:cursor-not-allowed disabled:opacity-45">✏️</button>
           )}
           {rerunImprove && (
             <button type="button"
@@ -280,14 +282,16 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
           )}
           {url && (
             <button type="button" onClick={(e) => { e.stopPropagation(); onCrop(img); }}
+              disabled={busy}
               title="Crop" aria-label="Crop"
-              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px]">✂</button>
+              className="px-1.5 py-0.5 rounded bg-black/60 text-white text-[10px] disabled:cursor-not-allowed disabled:opacity-45">✂</button>
           )}
           {!isRescueDerived && (
             <button type="button"
               onClick={(e) => { e.stopPropagation(); if (window.confirm('Permanently delete this image?')) onDelete(img.id); }}
+              disabled={busy}
               title="Delete permanently" aria-label="Delete permanently"
-              className="px-1.5 py-0.5 rounded bg-red-700/80 text-white text-[10px]">🗑</button>
+              className="px-1.5 py-0.5 rounded bg-red-700/80 text-white text-[10px] disabled:cursor-not-allowed disabled:opacity-45">🗑</button>
           )}
         </div>
         {editingPrompt && (
@@ -307,8 +311,9 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
       ) : (
         <div className="dataset-grid-item__actions flex gap-1 p-1.5">
           <button type="button" onClick={() => onStatus(img.id, img.status === 'keep' ? 'pending' : 'keep')}
+            disabled={busy}
             title="Keep" aria-label="Keep" aria-pressed={img.status === 'keep'}
-            className={`flex-1 py-1 rounded text-[11px] ${img.status === 'keep' ? 'bg-green-600 text-white' : 'bg-surface text-content-muted'}`}>✓</button>
+            className={`flex-1 py-1 rounded text-[11px] disabled:cursor-not-allowed disabled:opacity-45 ${img.status === 'keep' ? 'bg-green-600 text-white' : 'bg-surface text-content-muted'}`}>✓</button>
           <button type="button"
             onClick={() => {
               // Rejecting a GENERATED image offers an immediate retry of the same
@@ -321,34 +326,38 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
               }
               onStatus(img.id, img.status === 'reject' ? 'pending' : 'reject');
             }}
+            disabled={busy}
             title="Reject (offers a regeneration)" aria-label="Reject" aria-pressed={img.status === 'reject'}
-            className={`flex-1 py-1 rounded text-[11px] ${img.status === 'reject' ? 'bg-red-600 text-white' : 'bg-surface text-content-muted'}`}>✕</button>
+            className={`flex-1 py-1 rounded text-[11px] disabled:cursor-not-allowed disabled:opacity-45 ${img.status === 'reject' ? 'bg-red-600 text-white' : 'bg-surface text-content-muted'}`}>✕</button>
         </div>
       )}
       {img.status === 'keep' && (
         <div className="m-1.5 mt-0 flex flex-col gap-1">
           <div className="dataset-grid-item__actions flex items-center justify-end gap-1">
             <button type="button" onClick={() => setCaptionEditorOpen(true)}
+              disabled={busy}
               title="Open a larger caption editor"
               aria-label="Expand caption editor"
-              className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-content-muted hover:text-content">
+              className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-content-muted hover:text-content disabled:cursor-not-allowed disabled:opacity-45">
               ⛶ Expand
             </button>
             {cap && (
               <button type="button"
                 onClick={() => { editingRef.current = false; setCap(''); onCaption(img.id, ''); }}
+                disabled={busy}
                 title="Delete this image's caption (then “Caption” regenerates it via JoyCaption)"
                 aria-label="Delete this image's caption"
-                className="rounded border border-red-500/40 bg-red-500/15 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/25">
+                className="rounded border border-red-500/40 bg-red-500/15 px-1.5 py-0.5 text-[10px] text-red-300 hover:bg-red-500/25 disabled:cursor-not-allowed disabled:opacity-45">
                 🗑 Caption
               </button>
             )}
           </div>
           <textarea value={cap} onChange={(e) => setCap(e.target.value)}
+            disabled={busy}
             onFocus={() => { editingRef.current = true; }}
             onBlur={() => {
               editingRef.current = false;
-              if (cap !== (img.caption || '')) onCaption(img.id, cap);
+              if (!busy && cap !== (img.caption || '')) onCaption(img.id, cap);
             }}
             onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); e.currentTarget.blur(); } }}
             rows={2} placeholder={datasetKind === 'style'
@@ -372,6 +381,9 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
              copy is only advanced on a success — otherwise a failed save would
              show the new text on a tile the server never accepted. */
           onSave={async (nextCaption, nextShort) => {
+            if (busy) {
+              return { ok: false, error: 'Wait for auto-triage to finish before saving.' };
+            }
             // Persist when either field changed; `nextShort` is undefined unless dual is on.
             const changed = nextCaption !== (img.caption || '')
               || (nextShort !== undefined && nextShort !== (img.caption_short || ''));
