@@ -479,7 +479,13 @@ const TOPICS = [
      'button greyed out', 'greyed out', 'disabled', 'cannot caption',
      'already captioned', 'nothing to caption', 'model picker does nothing',
      'undo captions', 'undo', 'lost my captions', 'destroyed', 'edited by hand',
-     'hand written', 'manual caption', 'bank', 'triage', 'caption', 'captions'],
+     'hand written', 'manual caption', 'bank', 'triage', 'caption', 'captions',
+     // The protection and its way out: what someone types when they want to know
+     // whether their own words are safe, or when they want them redone anyway.
+     'who wrote this caption', 'caption origin', 'provenance', 'authorship',
+     'skipped my captions', 'it kept my captions', 'why was it skipped',
+     'origin never recorded', 'unknown origin', 'also rewrite the ones i wrote',
+     'include my captions', 'rewrite my own captions', 'asserted'],
     '/bank', 'using-the-app', 'redo-the-captions-of-a-bank-with-a-different-model'),
   action('bank-exclude-words', 'Hide bank images that already carry a word',
     ['exclude', 'exclude words', 'hide', 'hide images', 'without', 'not',

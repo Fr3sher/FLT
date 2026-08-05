@@ -116,16 +116,26 @@ export function captionScopeNote(selectedSize, counts, scopeId) {
  * model and the pile selects down with it. The dials added beside them would be unreachable
  * on exactly the bank whose captions you want to redo with a better model.
  *
- * WHAT IT DESTROYS, and why we can only count it, never spare it: nothing in this app records
- * WHO wrote a caption. BankImage.caption is one column, written by the pass and copied as-is
- * by the dataset→bank and bank→bank imports; there is no `edited` flag, no second column, no
- * per-caption timestamp. A guard that "protected the hand-written ones" would have to guess
- * from the text — it would mostly skip captions written by a different model and let real
- * short corrections through, and its rule would be invisible from the screen. So the honest
- * design is the one the Dataset already ships: overwrite, but say the number first, and say
- * that hand-edits are in it. bank_undo covers (status, reject_reason) and says in its own
- * header that it offers undo for nothing else — so there is no undo to promise here either.
- */
+ * WHAT IT NOW SPARES. Captions carry an origin (backend services/caption_origin.py, the
+ * 'asserted' token BankImage.face_cluster_origin already uses), so the pass SKIPS the ones a
+ * human wrote or corrected instead of warning that it cannot tell them apart. That warning
+ * used to be the honest thing to say; it is now the wrong thing to do.
+ *
+ * THREE COUNTS, THREE SENTENCES, and they are never merged:
+ *   - what the run REWRITES — the number the button quotes, and the number the job walks;
+ *   - what it KEEPS BECAUSE YOU WROTE IT — the protection, stated as a measured figure;
+ *   - what it rewrites WHOSE ORIGIN WAS NEVER RECORDED — every caption written before the
+ *     column existed. Those are re-captioned (their authorship cannot be recovered, and
+ *     sparing them would make this button inert on every bank that exists today) but they
+ *     are NOT "generated captions", and calling them that would be the app claiming to know
+ *     something it does not. On a bank that predates the column this figure is the whole
+ *     overwrite, which is exactly the warning the user needs.
+ *
+ * THE WAY OUT is a separate tick (`includeAsserted`), offered only when there is something
+ * to protect, never pre-ticked, and named in its own confirmation. Someone who deliberately
+ * wants their own captions redone by a better model must be able to; they must not get there
+ * by leaving a key out of a request. bank_undo covers (status, reject_reason) and says in its
+ * own header that it offers undo for nothing else — there is no undo to promise here either. */
 
 /** How many images a FORCED run of this scope really walks — captioned or not.
  *
@@ -144,28 +154,99 @@ export function captionForcePileSize(counts, scopeId) {
   return keep + pending;
 }
 
-/** How many EXISTING captions a forced run of this scope would overwrite.
+/** How many EXISTING captions this scope holds, whoever wrote them.
  *
  *  The pile minus the part of it that has no caption yet. Both terms come from the same
  *  payload, computed by the same server filter the job uses, so this is arithmetic on
  *  measured numbers rather than a second definition of "captioned". */
-export function captionOverwriteCount(counts, scopeId) {
+export function captionExistingCount(counts, scopeId) {
   return Math.max(
     0, captionForcePileSize(counts, scopeId) - captionScopeCount(counts, scopeId));
 }
 
-/** The re-caption button's words: the number it will REWRITE (the whole pile), never the
- *  smaller overwrite figure — the button must not quote less than it touches. The count of
- *  destroyed captions belongs to the sentence and the confirmation, which have the room to
- *  name it for what it is.
+/** Per-scope reader for the two provenance figures the server sends.
+ *
+ *  Both DEFAULT TO 0 when the keys are absent, which is what a server that predates them
+ *  sends — and 0 is the truthful reading there: nothing is marked, so nothing is spared,
+ *  and every sentence below degrades to what it said before this existed. */
+function scopedProvenance(counts, scopeId, prefix) {
+  const keep = Number(counts?.[`${prefix}_keep`]) || 0;
+  const pending = Number(counts?.[`${prefix}_pending`]) || 0;
+  const id = captionScopeOption(scopeId).id;
+  if (id === 'keep') return keep;
+  if (id === 'pending') return pending;
+  return keep + pending;
+}
+
+/** Captions a human wrote or corrected — what a forced run KEEPS. */
+export function captionAssertedCount(counts, scopeId) {
+  return scopedProvenance(counts, scopeId, 'caption_asserted');
+}
+
+/** Has the server sent the provenance breakdown at all?
+ *
+ *  A payload that predates it is not a bank of machine-written captions — it is a bank
+ *  whose captions have no recorded author, which is the SAME state the column stores as
+ *  NULL. Reading the absence as "generated" would put an attribution on screen that
+ *  nothing measured, on the exact side that costs the user work. */
+export function captionProvenanceKnown(counts) {
+  return counts != null && counts.caption_unrecorded_keep !== undefined;
+}
+
+/** Captions whose author was never recorded — rewritten, and counted apart.
+ *
+ *  With no breakdown at all, EVERY existing caption falls here: unknown is what we
+ *  actually know. That also makes the fallback the safe one — the sentence the user
+ *  reads is the cautious one, not the confident one. */
+export function captionUnrecordedCount(counts, scopeId) {
+  if (!captionProvenanceKnown(counts)) {
+    return Math.max(0, captionExistingCount(counts, scopeId)
+      - captionAssertedCount(counts, scopeId));
+  }
+  return scopedProvenance(counts, scopeId, 'caption_unrecorded');
+}
+
+/** Captions a model wrote, on the record — rewritten without ceremony.
+ *
+ *  A REMAINDER, deliberately: the pile is partitioned into blank / asserted / unrecorded /
+ *  the rest, so these four always add up to it. Asking the server for a fifth number that
+ *  could disagree with the other four is how two counts of the same thing start to drift. */
+export function captionGeneratedCount(counts, scopeId) {
+  return Math.max(0, captionExistingCount(counts, scopeId)
+    - captionAssertedCount(counts, scopeId)
+    - captionUnrecordedCount(counts, scopeId));
+}
+
+/** How many images the forced run REALLY walks — the pile, minus what it spares.
+ *
+ *  This is the number the button quotes, and it must equal the number the server's own
+ *  filter selects (image_bank_service.start_caption). `includeAsserted` is the opt-out:
+ *  with it the run is the whole pile again. */
+export function captionRecaptionRunSize(counts, scopeId, includeAsserted = false) {
+  const pile = captionForcePileSize(counts, scopeId);
+  if (includeAsserted) return pile;
+  return Math.max(0, pile - captionAssertedCount(counts, scopeId));
+}
+
+/** How many existing captions the run DESTROYS — what it rewrites, minus the blanks. */
+export function captionOverwriteCount(counts, scopeId, includeAsserted = false) {
+  const existing = captionExistingCount(counts, scopeId);
+  if (includeAsserted) return existing;
+  return Math.max(0, existing - captionAssertedCount(counts, scopeId));
+}
+
+/** The re-caption button's words: the number of images it will REWRITE — the pile minus
+ *  what it spares, never the pile itself once a protection exists. A button that says 40
+ *  and moves 37 is the same defect as one that says 5 930 and moves 0, just smaller.
  *
  *  AND IT DROPS THE NUMBER WHEN IT CANNOT RUN. An inert button still quoting "24 images"
- *  is the same defect one rung down: a figure on screen that no click will act on. Pass
+ *  is that defect one rung down: a figure on screen that no click will act on. Pass
  *  the inert reason (or '') and the label falls back to the bare verb. */
-export function captionRecaptionLabel(counts, scopeId, inertReason = '') {
+export function captionRecaptionLabel(counts, scopeId, inertReason = '',
+                                      includeAsserted = false) {
   if (inertReason || !captionCountsKnown(counts)) return '🔄 Re-caption';
   const opt = captionScopeOption(scopeId);
-  return `🔄 Re-caption ${captionForcePileSize(counts, scopeId)} ${opt.short}`;
+  return `🔄 Re-caption ${captionRecaptionRunSize(counts, scopeId, includeAsserted)} ${opt.short}`;
 }
 
 /** Is the re-caption button inert right now, and why? '' when it is live.
@@ -175,7 +256,8 @@ export function captionRecaptionLabel(counts, scopeId, inertReason = '') {
  *  selected images already carry a caption. For a destructive button, "I cannot give you
  *  the number" means "I do not run": re-caption works by pile, and says so. 🏷️ Caption
  *  still honours the selection, so nothing the user could do before is lost. */
-export function captionRecaptionDisabledReason(selectedSize, live, counts, scopeId) {
+export function captionRecaptionDisabledReason(selectedSize, live, counts, scopeId,
+                                               includeAsserted = false) {
   if (live) return 'A pass is already running on this bank.';
   if (selectedSize > 0) {
     return 'Re-caption works on a whole pile, not on a selection: how many of the '
@@ -184,40 +266,97 @@ export function captionRecaptionDisabledReason(selectedSize, live, counts, scope
       + 'cannot state. Clear the selection to re-caption by pile.';
   }
   if (!captionCountsKnown(counts)) return 'Waiting for this bank\'s counts.';
-  if (captionOverwriteCount(counts, scopeId) === 0) {
+  if (captionOverwriteCount(counts, scopeId, includeAsserted) === 0) {
     const opt = captionScopeOption(scopeId);
     const pile = opt.id === '' ? 'kept or undecided' : opt.short;
+    const mine = captionAssertedCount(counts, scopeId);
+    // TWO different zeros, and telling them apart is the whole point of the column:
+    // "there is nothing captioned here" sends you to 🏷️ Caption, "the only captions
+    // here are yours and I am keeping them" sends you to the tick box. Rendering
+    // both as "nothing to re-caption" would hide the protection at the one moment
+    // it is doing all the work.
+    if (mine > 0 && !includeAsserted) {
+      return `Nothing left to re-caption — the only ${mine} caption(s) in this pile are `
+        + 'ones you wrote or corrected, and Re-caption keeps those. Tick '
+        + '"Also rewrite the ones I wrote" to redo them anyway.';
+    }
     return `Nothing to re-caption — no ${pile} image has a caption yet. `
       + 'Use 🏷️ Caption to write them first.';
   }
   return '';
 }
 
-/** The warning under the row. '' when the button is inert, because a warning about an
- *  action that cannot happen is noise that teaches people to skip warnings. */
-export function captionRecaptionNote(selectedSize, live, counts, scopeId) {
-  if (captionRecaptionDisabledReason(selectedSize, live, counts, scopeId)) return '';
+/** The warning under the row: THREE facts, never folded into one number.
+ *
+ *  '' when the button is inert, because a warning about an action that cannot happen is
+ *  noise that teaches people to skip warnings. */
+export function captionRecaptionNote(selectedSize, live, counts, scopeId,
+                                     includeAsserted = false) {
+  if (captionRecaptionDisabledReason(selectedSize, live, counts, scopeId, includeAsserted)) {
+    return '';
+  }
   const opt = captionScopeOption(scopeId);
   const pile = captionForcePileSize(counts, scopeId);
-  const n = captionOverwriteCount(counts, scopeId);
+  const run = captionRecaptionRunSize(counts, scopeId, includeAsserted);
+  const mine = captionAssertedCount(counts, scopeId);
+  const unknown = captionUnrecordedCount(counts, scopeId);
+  const generated = captionGeneratedCount(counts, scopeId);
   const what = opt.id === '' ? 'kept and undecided' : opt.short;
-  return `🔄 Re-caption rewrites all ${pile} ${what} image(s) with the engine and model `
-    + `picked here, overwriting the ${n} caption(s) they already carry. Captions you `
-    + 'wrote or corrected by hand look exactly like generated ones to this app — they '
-    + 'are overwritten too, and no undo covers captions.';
+  const parts = [`🔄 Re-caption rewrites ${run} of the ${pile} ${what} image(s) with the `
+    + 'engine and model picked here.'];
+  // What it KEEPS comes first when it keeps anything: the reassurance is the news.
+  if (mine > 0 && !includeAsserted) {
+    parts.push(`It keeps the ${mine} caption(s) you wrote or corrected by hand.`);
+  } else if (mine > 0) {
+    parts.push(`Including the ${mine} caption(s) you wrote or corrected by hand, because `
+      + 'you ticked the box.');
+  }
+  if (unknown > 0) {
+    parts.push(`It overwrites ${unknown} caption(s) whose origin was never recorded — `
+      + 'written before this app tracked who writes a caption, so anything you typed back '
+      + 'then is among them.');
+  }
+  if (generated > 0) {
+    parts.push(`It overwrites ${generated} caption(s) a model wrote.`);
+  }
+  parts.push('No undo covers captions.');
+  return parts.join(' ');
 }
 
 /** The confirmation, worded on the Dataset's own re-caption prompt
  *  (dataset/captionCategory.js: "Re-captioning overwrites the N existing caption(s).
- *  <rule> Continue?") so the app asks this question one way, not two. The bank adds the
- *  two facts the dataset does not have to state: which pile, and that hand-edits are
- *  indistinguishable and unrecoverable. */
-export function captionRecaptionConfirmation(counts, scopeId) {
+ *  <rule> Continue?") so the app asks this question one way, not two. The bank adds what
+ *  the dataset does not have to state: which pile, what is spared, and which part of the
+ *  loss is the app admitting it does not know who wrote what. */
+export function captionRecaptionConfirmation(counts, scopeId, includeAsserted = false) {
   const opt = captionScopeOption(scopeId);
   const pile = captionForcePileSize(counts, scopeId);
-  const n = captionOverwriteCount(counts, scopeId);
+  const n = captionOverwriteCount(counts, scopeId, includeAsserted);
+  const mine = captionAssertedCount(counts, scopeId);
+  const unknown = captionUnrecordedCount(counts, scopeId);
   const what = opt.id === '' ? 'kept and undecided' : opt.short;
-  return `Re-captioning overwrites the ${n} existing caption(s) among the ${pile} `
-    + `${what} image(s). Captions you wrote or corrected by hand cannot be told apart `
-    + 'from generated ones and are overwritten too. This cannot be undone. Continue?';
+  let out = `Re-captioning overwrites the ${n} existing caption(s) among the ${pile} `
+    + `${what} image(s).`;
+  if (mine > 0 && !includeAsserted) {
+    out += ` The ${mine} caption(s) you wrote or corrected by hand are kept.`;
+  } else if (mine > 0) {
+    out += ` The ${mine} caption(s) you wrote or corrected by hand are overwritten too — `
+      + 'that is what the box you ticked does.';
+  }
+  if (unknown > 0) {
+    out += ` ${unknown} of them have no recorded author and may include captions you `
+      + 'wrote before this app started keeping track.';
+  }
+  return `${out} This cannot be undone. Continue?`;
+}
+
+/** The opt-out's own label, and whether to offer it at all.
+ *
+ *  Returns '' when there is nothing to protect — a tick box that would change nothing is
+ *  a control that teaches people to tick boxes. It also quotes the number, so the gesture
+ *  and its cost are read in one line rather than one being buried in a warning. */
+export function captionIncludeAssertedLabel(counts, scopeId) {
+  const mine = captionAssertedCount(counts, scopeId);
+  if (!captionCountsKnown(counts) || mine <= 0) return '';
+  return `Also rewrite the ${mine} caption(s) I wrote`;
 }

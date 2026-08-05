@@ -147,7 +147,7 @@ test('re-caption carries the same per-run options as the normal pass', () => {
 
 test('the button and the amber warning both live on the options row', () => {
   const eyebrow = ws.indexOf('<GroupLabel>Caption options</GroupLabel>');
-  const button = ws.indexOf('{captionRecaptionLabel(counts, captionScope, recaptionInert)}');
+  const button = ws.indexOf('{captionRecaptionLabel(counts, captionScope, recaptionInert,');
   assert.ok(button > eyebrow, 're-caption must sit on the options row');
   // The pass row above it must not have grown a ninth button.
   assert.ok(ws.indexOf('onClick={startRecaption}') > eyebrow);
@@ -156,7 +156,9 @@ test('the button and the amber warning both live on the options row', () => {
   assert.match(ws, /text-amber-400\/90">\{recaptionNote\}/);
   // The label is handed the inert reason, so a button that cannot run stops quoting
   // a number — the tooltip carries the reason instead.
-  assert.match(ws, /captionRecaptionLabel\(counts, captionScope, recaptionInert\)/);
+  // ...and the opt-out state, so the number on the button follows the tick box
+  // rather than quoting the whole pile while the run spares part of it.
+  assert.match(ws, /captionRecaptionLabel\(counts, captionScope, recaptionInert,\s+captionIncludeAsserted\)/);
   assert.match(ws, /title=\{recaptionInert \|\| recaptionNote\}/);
 });
 
@@ -176,4 +178,25 @@ test('re-caption has a help topic pointing at a real guide anchor', () => {
   const headings = [...guide.matchAll(/^## (.+)$/gm)].map((m) => markdownHeadingId(m[1]));
   assert.ok(headings.includes(anchor[1]),
     `no guide heading resolves to #${anchor[1]}`);
+});
+
+test('the opt-out is a separate, unticked gesture that only shows when it matters', () => {
+  // The protection's way out. Three properties, and each one is a way this could
+  // quietly become the default instead of an exception:
+  //   - it starts false, so the destructive reading is never what you get by
+  //     doing nothing;
+  const boot = ws.slice(ws.indexOf('const [captionIncludeAsserted'),
+    ws.indexOf('const [captionIncludeAsserted') + 120);
+  assert.match(boot, /useState\(false\)/);
+  //   - the key is spread in ONLY when ticked, so an untouched panel posts the
+  //     same body it posted before this existed;
+  const call = ws.slice(ws.indexOf('const startRecaption'),
+    ws.indexOf('const startRecaption') + 1600);
+  assert.match(call, /captionIncludeAsserted \? \{ include_asserted: true \} : \{\}/);
+  //   - and the control is rendered only when the helper has a label, i.e. only
+  //     when there is something to protect.
+  assert.match(ws, /\{includeAssertedLabel && \(/);
+  assert.match(ws, /const includeAssertedLabel = captionIncludeAssertedLabel\(/);
+  // The confirmation is handed the same state, so what it says matches what runs.
+  assert.match(call, /captionRecaptionConfirmation\(counts, captionScope,\s+captionIncludeAsserted\)/);
 });

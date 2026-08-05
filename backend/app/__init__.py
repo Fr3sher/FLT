@@ -298,6 +298,18 @@ _SCHEMA_ADDITIONS = (
     # person" declaration wrote it with no inference. Additive: a database that
     # never gains it simply has no assertions and clusters exactly as before.
     ('bank_image', 'face_cluster_origin', 'VARCHAR(10)'),
+    # WHO wrote a caption: NULL = never recorded | 'asserted' (a human) |
+    # 'joycaption'/'ollama' (the engine). Deliberately NO server default: NULL is
+    # the value that carries meaning here, and back-filling every existing row
+    # with 'joycaption' or with 'asserted' would BOTH be a claim nobody measured
+    # — the first would make Re-caption destroy hand-written work it just
+    # promised to spare, the second would freeze every bank that exists today.
+    # A row that predates the column keeps NULL, is re-captioned as it always
+    # was, and is counted on screen as "origin never recorded". See
+    # services/caption_origin.py.
+    ('bank_image', 'caption_origin', 'VARCHAR(16)'),
+    ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
+    ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread

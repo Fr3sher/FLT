@@ -1,11 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  CAPTION_SCOPE_OPTIONS, captionButtonLabel, captionCountsKnown,
-  captionForcePileSize, captionOverwriteCount, captionRecaptionConfirmation,
+  CAPTION_SCOPE_OPTIONS, captionAssertedCount, captionButtonLabel, captionCountsKnown,
+  captionExistingCount, captionForcePileSize, captionGeneratedCount,
+  captionIncludeAssertedLabel, captionOverwriteCount, captionProvenanceKnown,
+  captionRecaptionConfirmation,
   captionRecaptionDisabledReason, captionRecaptionLabel, captionRecaptionNote,
-  captionScopeCount, captionScopeDisabledReason, captionScopeNote,
-  captionScopeStatuses,
+  captionRecaptionRunSize, captionScopeCount, captionScopeDisabledReason,
+  captionScopeNote, captionScopeStatuses, captionUnrecordedCount,
 } from './bankCaptionScope.js';
 
 /* The bank caption scope: three options, two vocabularies, and one number that has to
@@ -180,11 +182,15 @@ test('re-caption is inert when there is no caption to overwrite', () => {
   assert.equal(captionRecaptionDisabledReason(0, false, counts, 'keep'), '');
 });
 
-test('the warning names both numbers, the hand-edits and the missing undo', () => {
+test('with nothing recorded, the warning says so instead of claiming "generated"', () => {
+  // This payload carries NO provenance breakdown, which is exactly what a bank
+  // captioned before the column looks like. The honest reading of that is "nobody
+  // recorded who wrote these", never "a model wrote these".
   const note = captionRecaptionNote(0, false, counts, 'keep');
   assert.match(note, /40/);                       // what it rewrites
   assert.match(note, /28/);                       // what it destroys
-  assert.match(note, /by hand/i);
+  assert.match(note, /never recorded/i);
+  assert.ok(!/a model wrote/i.test(note), 'unknown authorship must not read as generated');
   assert.match(note, /no undo/i);
 });
 
@@ -206,7 +212,9 @@ test('the confirmation is the Dataset\'s sentence, plus the two bank facts', () 
   assert.match(q, /Continue\?$/);
   // …and the two things the dataset never has to say.
   assert.match(q, /40 kept image\(s\)/);
-  assert.match(q, /cannot be told apart/i);
+  // The bank's own admission: this payload records no author for any of them, and the
+  // question says that rather than pretending the losses are all machine-written.
+  assert.match(q, /no recorded author/i);
   assert.match(q, /cannot be undone/i);
 });
 
@@ -215,4 +223,104 @@ test('the confirmation names the right pile for each scope', () => {
     /900 undecided image\(s\)/);
   assert.match(captionRecaptionConfirmation(counts, ''),
     /940 kept and undecided image\(s\)/);
+});
+
+/* 🔒 PROVENANCE — three counts that must never be folded into two.
+
+   The fixture below is the interesting bank: of 40 kept images, 12 have no caption,
+   5 carry one the user wrote, 9 carry one whose author was never recorded, and the
+   remaining 14 were written by a model. Every assertion here is arithmetic on that
+   partition, so a helper that started double-counting would break several at once. */
+const mixed = {
+  keep: 40, pending: 900, reject: 60,
+  caption_todo_keep: 12, caption_todo_pending: 300,
+  caption_asserted_keep: 5, caption_asserted_pending: 100,
+  caption_unrecorded_keep: 9, caption_unrecorded_pending: 200,
+};
+
+test('the four provenance buckets partition the pile exactly', () => {
+  // blank + yours + unknown + machine = the pile. If these ever stopped adding up,
+  // one of the sentences on screen would be describing images that are not there.
+  const sum = captionScopeCount(mixed, 'keep')
+    + captionAssertedCount(mixed, 'keep')
+    + captionUnrecordedCount(mixed, 'keep')
+    + captionGeneratedCount(mixed, 'keep');
+  assert.equal(sum, captionForcePileSize(mixed, 'keep'));
+  assert.equal(captionGeneratedCount(mixed, 'keep'), 14);
+});
+
+test('the run size is the pile MINUS what the pass spares', () => {
+  // The number on the button has to be the number of rows that change. Quoting the
+  // pile while sparing 5 of it is the same defect as quoting 5 930 and moving 0.
+  assert.equal(captionRecaptionRunSize(mixed, 'keep'), 35);
+  assert.equal(captionRecaptionLabel(mixed, 'keep'), '🔄 Re-caption 35 kept');
+  // …and with the opt-out, the pile again — because that is what will really run.
+  assert.equal(captionRecaptionRunSize(mixed, 'keep', true), 40);
+  assert.equal(captionRecaptionLabel(mixed, 'keep', '', true), '🔄 Re-caption 40 kept');
+});
+
+test('the overwrite count drops the captions the pass keeps', () => {
+  assert.equal(captionExistingCount(mixed, 'keep'), 28);   // 40 - 12
+  assert.equal(captionOverwriteCount(mixed, 'keep'), 23);  // 28 - 5 spared
+  assert.equal(captionOverwriteCount(mixed, 'keep', true), 28);
+});
+
+test('the warning names all three things, and never merges two of them', () => {
+  const note = captionRecaptionNote(0, false, mixed, 'keep');
+  assert.match(note, /rewrites 35 of the 40/);
+  assert.match(note, /keeps the 5 caption\(s\) you wrote/i);
+  assert.match(note, /overwrites 9 caption\(s\) whose origin was never recorded/i);
+  assert.match(note, /overwrites 14 caption\(s\) a model wrote/i);
+  assert.match(note, /no undo/i);
+});
+
+test('ticking the opt-out changes the warning instead of hiding it', () => {
+  const note = captionRecaptionNote(0, false, mixed, 'keep', true);
+  assert.match(note, /rewrites 40 of the 40/);
+  assert.match(note, /because you ticked the box/i);
+  assert.ok(!/keeps the 5/i.test(note), 'it must not still promise to keep them');
+});
+
+test('the confirmation says what is kept, and what has no known author', () => {
+  const q = captionRecaptionConfirmation(mixed, 'keep');
+  assert.match(q, /^Re-captioning overwrites the 23 existing caption\(s\)/);
+  assert.match(q, /5 caption\(s\) you wrote or corrected by hand are kept/i);
+  assert.match(q, /9 of them have no recorded author/i);
+  const opted = captionRecaptionConfirmation(mixed, 'keep', true);
+  assert.match(opted, /^Re-captioning overwrites the 28 existing caption\(s\)/);
+  assert.match(opted, /are overwritten too/i);
+});
+
+test('the opt-out is offered only when there is something to protect', () => {
+  // A tick box that would change nothing is a control that teaches people to tick
+  // boxes. '' is the signal not to render it at all.
+  assert.equal(captionIncludeAssertedLabel(mixed, 'keep'),
+    'Also rewrite the 5 caption(s) I wrote');
+  assert.equal(captionIncludeAssertedLabel(counts, 'keep'), '');
+  assert.equal(captionIncludeAssertedLabel(null, 'keep'), '');
+});
+
+test('a pile whose only captions are yours says so, and points at the way out', () => {
+  // Two different zeros. "Nothing is captioned here" sends you to 🏷️ Caption;
+  // "the only captions here are yours" sends you to the tick box. Rendering both
+  // as one message hides the protection at the moment it does all the work.
+  const mineOnly = { keep: 10, pending: 0, caption_todo_keep: 7,
+    caption_todo_pending: 0, caption_asserted_keep: 3, caption_asserted_pending: 0,
+    caption_unrecorded_keep: 0, caption_unrecorded_pending: 0 };
+  const why = captionRecaptionDisabledReason(0, false, mineOnly, 'keep');
+  assert.match(why, /only 3 caption\(s\)/i);
+  assert.match(why, /Also rewrite/i);
+  // …and ticking it makes the button live again.
+  assert.equal(captionRecaptionDisabledReason(0, false, mineOnly, 'keep', true), '');
+});
+
+test('a payload with no provenance at all degrades to "never recorded"', () => {
+  // A server that predates the breakdown is not a bank of machine-written captions.
+  // Reading its silence as "generated" would put an attribution on screen that
+  // nothing measured, on the exact side that costs the user work.
+  assert.equal(captionProvenanceKnown(counts), false);
+  assert.equal(captionUnrecordedCount(counts, 'keep'), 28);
+  assert.equal(captionGeneratedCount(counts, 'keep'), 0);
+  // …and nothing is spared, so the button quotes the whole pile exactly as before.
+  assert.equal(captionRecaptionLabel(counts, 'keep'), '🔄 Re-caption 40 kept');
 });
