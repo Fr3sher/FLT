@@ -784,7 +784,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             || act.kind === 'improve'
             // Editing the reference is an API call (ChatGPT / Nano Banana) — no GPU,
             // ComfyUI is never touched, so never claim it is paused.
-            || act.kind === 'edit_reference';
+            || act.kind === 'edit_reference'
+            // Dataset → Bank is a reserved filesystem copy. It blocks edits to
+            // keep one coherent source generation, but does not touch the GPU.
+            || act.kind === 'bank_export';
           const label = {
             watermark_detect: `Scanning for watermarks…${prog}`,
             watermark_clean: `Cleaning watermarks…${prog}`,
@@ -795,6 +798,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             generate: `Generating variations…${prog}`,
             improve: `Queuing improvements…${prog}`,
             edit_reference: 'Editing reference…',
+            bank_export: `Copying into a Bank…${prog}`,
           }[act.kind];
           if (label) {
             const detailed = act.detail || label;
