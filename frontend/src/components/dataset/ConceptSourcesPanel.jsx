@@ -107,6 +107,12 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   const [items, setItems] = useState(restoredScan.items);
   const [page, setPage] = useState(restoredScan.page);
   const [paginated, setPaginated] = useState(restoredScan.paginated);
+  // Time-budget truncation (backend `partial`, cf. gdl.enumerate): the listing
+  // was cut short before every album/page could be explored. Deliberately NOT
+  // persisted across reloads (scraperState.js) — it describes the scan that just
+  // ran, not a durable property of the saved items; a stale "truncated" banner
+  // surviving a page reload would be its own lie.
+  const [partial, setPartial] = useState(false);
   const [scanning, setScanning] = useState(false);
   // Gallery-listing scans (PornPics category/tag/search): OFF = one cover per
   // matched gallery (the keyword-relevant shot), ON = every photo of each gallery.
@@ -171,6 +177,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
         return [...prev, ...additions];
       });
       setPaginated(!!body.paginated);
+      setPartial(!!body.partial);
       setPage(responsePage);
       if (isFreshScan) {
         setActiveScanUrl(target);
@@ -264,7 +271,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
     setPexelsKeyword(''); setPexelsLocale('fr-FR'); setPexelsOrientation('');
     setWebsearchKeyword(''); setWebsearchSafe(false);
     setActiveScanUrl(''); setActivePlatform(''); setItems([]); setPage(0);
-    setPaginated(false); setFullAlbums(false); setRescueSmall(false);
+    setPaginated(false); setPartial(false); setFullAlbums(false); setRescueSmall(false);
     setSelected(new Set()); setBroken(new Set());
   };
 
@@ -615,6 +622,17 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               );
             })}
           </div>
+
+          {partial && (
+            // Truncated by the scan's time budget (backend `partial`) — the items
+            // above are valid, but the listing was cut short before it could be
+            // fully explored, and it can happen even when `paginated` is false
+            // (a truncated album dive still looks "final" otherwise, cf. the
+            // gdl.enumerate `from_albums` note). Say so in plain English.
+            <p className="text-[0.6875rem] text-amber-500">
+              This scan ran out of time before finishing the full listing — some images may be missing.
+            </p>
+          )}
 
           {paginated && (
             <button type="button" onClick={() => runScan(page + 1)} disabled={scanning}

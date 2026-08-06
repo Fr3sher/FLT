@@ -50,6 +50,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-scan-truncation-and-blocked-pages',
+    date: '2026-08-06',
+    title: 'A blocked page says so — even on a slow scan',
+    blurb: 'A gallery scan that hit both a login wall and the time budget used to report "nothing here" instead of the real reason. It now shows the actual block. And when a scan is cut short by the time limit, the picker tells you some images may be missing instead of quietly presenting a partial list as the whole thing.',
+  },
+  {
     id: '2026-08-06-bank-scrape-keeps-provenance',
     date: '2026-08-06',
     title: 'Images scraped into a bank keep their source',

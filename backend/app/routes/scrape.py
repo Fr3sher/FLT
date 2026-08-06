@@ -65,6 +65,15 @@ def scrape_scan():
     match.page = page
     match.include_albums = bool(data.get('include_albums'))
     items, err = match.source.scan(match)
+    # `partial` (cf. gdl.enumerate / gdl._ResultList) : le budget de temps global a
+    # coupé la récursion d'albums avant d'avoir tout exploré — les items présents
+    # restent valides, il en manque potentiellement. Lu directement sur `items` :
+    # `_ResultList` porte l'attribut sur le retour qu'`enumerate()` produit, que la
+    # source le renvoie tel quel (universal.py, gdl_source.py, erome.py,
+    # image_sites.py, civitai.py, sexcom.py — TOUTES les sources gdl-backed) sans
+    # avoir besoin de le relayer explicitement. Une source non gdl-backed (Pexels,
+    # Reddit…) renvoie une liste ordinaire → `getattr` retombe sur False.
+    partial = bool(getattr(items, 'partial', False))
     if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,
                         'url_type': result.url_type.value}), 502
@@ -97,6 +106,13 @@ def scrape_scan():
         'paginated': bool(paginated),
         'page': page,
         'category': getattr(match.source, 'category', 'video'),
+        # True = the listing was cut short by the scan's time budget before every
+        # album/page could be explored: the items shown are valid, but there may
+        # be more. Compounds with `from_albums` clearing `paginated` above (cf.
+        # gdl.enumerate docstring) — without this flag a truncated result looked
+        # exactly like a complete one, with no "Load more" and no hint anything
+        # was cut.
+        'partial': partial,
     })
 
 
