@@ -703,6 +703,12 @@ def dataset_face_mask_preview(dataset_id):
     done_already = len(paths) - len(todo)
 
     def _work(job):
+        if done_already:
+            # The bar opens where the previous pass left off. Seeded HERE and not
+            # after start() returns: under TESTING the job runs inline, so a seed
+            # placed outside would land after the pass instead of before it —
+            # and in production it would race the first real progress line.
+            fmp.progress(job, {'done': done_already, 'total': len(paths)})
         if not todo:
             # Everything was already detected before the stop — there is nothing
             # left to run, only a result to publish. Paying an InsightFace load
@@ -748,10 +754,6 @@ def dataset_face_mask_preview(dataset_id):
         fmp.clear_partial(dataset_id)
 
     job, started = fmp.start(app, dataset_id, _work, total=len(paths), fp=fp)
-    if started and done_already:
-        # The bar starts where the previous pass left off, from the first frame:
-        # a resume that opened at 0 would look like a restart.
-        fmp.progress(job, {'done': done_already, 'total': len(paths)})
     return jsonify({'ok': True, 'started': started,
                     **fmp.snapshot(dataset_id, fp, total=len(paths))}), 202
 
@@ -776,8 +778,9 @@ def dataset_face_mask_preview_stop(dataset_id):
     if gate:
         return gate
     stopped = fmp.request_stop(dataset_id)
-    _, fp = _face_preview_kept(dataset_id)
-    return jsonify({'ok': True, 'stopping': stopped, **fmp.snapshot(dataset_id, fp)})
+    by_path, fp = _face_preview_kept(dataset_id)
+    return jsonify({'ok': True, 'stopping': stopped,
+                    **fmp.snapshot(dataset_id, fp, total=len(by_path))})
 
 
 @bp.get('/dataset/<int:dataset_id>/train/face-mask-preview')
