@@ -623,7 +623,7 @@ def manual_command(action) -> str:
                   or _bank_scoring_env_python())
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install '
-                f'"{_requirement_spec("transnetv2-pytorch")}"')
+                f'"{_requirement_spec("transnetv2-pytorch")}" "{_requirement_spec("av")}"')
     if action == 'bank_siglip2':
         # A manual SigLIP2 repair may honour an explicit semantic override, but
         # must never inherit Score's borrowed GPU interpreter. With no explicit
@@ -2582,7 +2582,7 @@ def _run_shot_detect(action) -> int:
             'shot_detect.python points at an environment this app did not create,',
             'so nothing was installed into it — borrowed environments are checked,',
             'never changed. To add the detector there yourself, run:',
-            f'  "{configured}" -m pip install torch transnetv2-pytorch',
+            f'  "{configured}" -m pip install torch transnetv2-pytorch av',
             'Or clear shot_detect.python and click Install again — the app then uses',
             'its own scoring environment, which already has torch.',
         ):
@@ -2606,8 +2606,14 @@ def _run_shot_detect(action) -> int:
     if rc != 0:
         _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
+    # av rides along because the WORKER decodes with PyAV in this same
+    # environment (infer/shot_detect_infer.py imports av before torch sees a
+    # frame). Without it the model loads, the probe used to say ready, and
+    # every file failed with ModuleNotFoundError: av — 246/246 on the first
+    # real bank this install met.
     rc = _run_pip(action, [python, '-m', 'pip', 'install',
-                           _requirement_spec('transnetv2-pytorch')])
+                           _requirement_spec('transnetv2-pytorch'),
+                           _requirement_spec('av')])
     if rc != 0:
         return rc
     if not _verify_shot_detect_import(action, python):
@@ -2629,7 +2635,7 @@ def _verify_shot_detect_import(action, python) -> bool:
         return True
     _append(action, 'verifying the install (first import — this also warms it)…')
     try:
-        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch'],
+        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch, av'],
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-shot-detection-installs-its-decoder',
+    date: '2026-08-06',
+    title: 'Shot detection no longer fails every file right after a clean install',
+    blurb:
+      'The 🎞️ Shot detection install put the model in place but not the decoder it reads files with — so the install reported success, the readiness badge turned green, and then every single file answered "failed shot detection". The install now carries PyAV into the same environment, the badge only turns green when the worker can actually open a file, and a contract test holds the three ends (worker, installer, probe) to the same list. If you hit this: Setup → 🎞️ Shot detection → ↻ Reinstall, then run Find shots again — your files were never the problem.',
+    to: '/setup',
+  },
+  {
     id: '2026-08-06-video-extras-installable-from-setup',
     date: '2026-08-06',
     title: 'The video extras can now be installed where the app said they were',

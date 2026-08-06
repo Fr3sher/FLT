@@ -1802,3 +1802,44 @@ def test_run_bank_siglip2_reports_failure_when_semantic_python_cannot_be_saved(
     log = setup_installer._runs['bank_siglip2']['log']
     assert any('could not be saved' in line for line in log)
     assert not any(line.startswith('SigLIP2 ready') for line in log)
+
+
+# --- The decoder the shot-detect worker dies without ------------------------------
+# infer/shot_detect_infer.py decodes with PyAV in the SAME environment as the
+# model — `import av` runs before torch ever sees a frame. The install shipped
+# torch + transnetv2 without av, and the capability probe did not import av
+# either: install green, probe green, and then EVERY file of the first real
+# bank answered "failed shot detection" (ModuleNotFoundError: No module named
+# 'av', 246/246 files, found live the day the wave landed). These two tests
+# pin the whole chain: what the worker imports, the installer installs and the
+# probe checks.
+
+def test_shot_detect_install_carries_the_decoder_its_worker_dies_without(
+        app, monkeypatch, tmp_path):
+    from app import setup_installer
+    calls = []
+    monkeypatch.setattr(setup_installer, '_run_pip',
+                        lambda a, cmd: (calls.append(list(cmd)), 0)[1])
+    monkeypatch.setattr(setup_installer, '_verify_shot_detect_import',
+                        lambda a, p: True)
+    managed = str(tmp_path / 'envs' / 'bank_scoring' / 'Scripts' / 'python.exe')
+    monkeypatch.setattr(setup_installer, '_bank_scoring_env_python', lambda: managed)
+    monkeypatch.setattr(setup_installer, '_ensure_bank_scoring_env',
+                        lambda a, **k: managed)
+    saved = {}
+    monkeypatch.setattr(setup_installer.cfg, 'save_config',
+                        lambda p: saved.update(p))
+    with app.app_context():
+        setup_installer._runs['shot_detect'] = setup_installer._new_run()
+        rc = setup_installer._run_shot_detect('shot_detect')
+    assert rc == 0
+    flat = [arg for cmd in calls for arg in cmd]
+    assert any(a == 'av' or a.startswith('av>') or a.startswith('av=')
+               for a in flat), f'no av spec in the pip calls: {flat}'
+
+
+def test_shot_detect_capability_probe_imports_what_the_worker_imports():
+    """The probe and the worker must agree on the environment's contents; a
+    probe that skips av says "ready" about a worker that cannot open one file."""
+    from app import capabilities
+    assert 'av' in capabilities.CAPABILITY_IMPORTS['shot_detect']
