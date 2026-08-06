@@ -52,6 +52,56 @@ def test_the_frame_is_extracted_larger_than_an_embedding_thumbnail():
     assert wm.FRAME_LONG_SIDE > video_clip_search.EMBED_LONG_SIDE
 
 
+# --- the contract this pass BORROWS ------------------------------------------------
+
+def test_the_detector_yields_exactly_the_fields_this_pass_unpacks():
+    """The one test that had to exist and did not.
+
+    This module does not own `watermark_detector.scan` — the image lane does —
+    and it consumes its tuple positionally. That tuple grew a `fingerprint`
+    field between two branches: this pass went on unpacking five values, and the
+    only symptom would have been `ValueError: too many values to unpack` on the
+    first shot of the first real run, in production, on a pass a user had just
+    waited for. Every test here stayed green through it, because they stub the
+    detector — the stub agreed with the stale assumption, which is precisely
+    what a stub does.
+
+    So the arity is read off the REAL generator's source and pinned. Read rather
+    than called: invoking `scan` needs torch, transformers and ~0.9 GB of
+    weights, and a contract test that only runs on a fully-equipped machine is a
+    contract test that never runs.
+    """
+    import ast
+    import inspect
+
+    from app.services import watermark_detector
+
+    source = inspect.getsource(watermark_detector)
+    yields = [n for n in ast.walk(ast.parse(source))
+              if isinstance(n, ast.Yield) and isinstance(n.value, ast.Tuple)]
+    assert yields, 'no tuple yield found — did watermark_detector.scan move?'
+    arities = {len(y.value.elts) for y in yields}
+    assert arities == {len(wm.SCAN_FIELDS)}, (
+        f'the detector yields {arities} fields, this pass unpacks '
+        f'{len(wm.SCAN_FIELDS)} ({", ".join(wm.SCAN_FIELDS)})')
+
+
+def test_the_pass_reads_the_score_from_the_field_the_detector_puts_it_in():
+    """Arity alone is not the contract: two same-length tuples with the fields
+    in a different order would pass the test above and attach a fingerprint
+    string to a numeric threshold. The names and their ORDER are what this pass
+    depends on."""
+    assert wm.SCAN_FIELDS.index('score') == 2
+    assert wm.SCAN_FIELDS.index('state') == 1
+    assert wm.SCAN_FIELDS[0] == 'path'
+    from app.services import watermark_detector
+    # The detector's own docstring names them in yield order — the one place it
+    # states the contract to a reader rather than to a machine.
+    doc = watermark_detector.scan.__doc__ or ''
+    for field in wm.SCAN_FIELDS:
+        assert field in doc, f'{field} is not named in the detector contract'
+
+
 # --- the pass ----------------------------------------------------------------------
 
 def test_each_shot_gets_its_score_stored(app, monkeypatch):
@@ -227,13 +277,21 @@ def _fake_frames(monkeypatch):
 def _fake_detector(monkeypatch, by_name):
     """The detector child, stubbed. Keyed on the frame's FILENAME because that is
     what the real generator echoes back, and attaching one clip's verdict to
-    another clip's row is the single worst thing this pass could do."""
+    another clip's row is the single worst thing this pass could do.
+
+    The tuple is built from ``wm.SCAN_FIELDS`` rather than typed out, so this
+    stub cannot quietly keep agreeing with a contract the detector has moved on
+    from — which is exactly how the five-field version of it stayed green while
+    the real generator had grown a sixth."""
     import os
 
     def scan(paths, **kw):
         for p in paths:
             state, score = by_name.get(os.path.basename(p), ('error', None))
-            yield (p, state, score, [], None if state != 'error' else 'boom')
+            row = {'path': p, 'state': state, 'score': score, 'regions': [],
+                   'fingerprint': 'stub-fingerprint',
+                   'error': None if state != 'error' else 'boom'}
+            yield tuple(row[f] for f in wm.SCAN_FIELDS)
     monkeypatch.setattr(wm, '_scan_frames', scan)
 
 

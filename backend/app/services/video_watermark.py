@@ -108,9 +108,20 @@ def _write_frames(src_path, times, dest_dir, stem, long_side=None):
     return write(src_path, times, dest_dir, stem, long_side=long_side)
 
 
+# The detector's per-image result, field by field, in yield order. Declared as
+# DATA rather than left implicit in a `for a, b, c ... in` line, because this
+# module does not own this contract and cannot see it change: the detector grew
+# a `fingerprint` field between two branches, this pass kept unpacking five
+# values, and the only symptom would have been a ValueError on the first shot of
+# the first real run. The tests could not catch it either — they stub the
+# detector, so the stub simply agreed with the stale assumption.
+# test_video_watermark.py now pins this tuple against the real generator.
+SCAN_FIELDS = ('path', 'state', 'score', 'regions', 'fingerprint', 'error')
+
+
 def _scan_frames(paths, **kwargs):
-    """The detector seam. A generator of ``(path, state, score, regions, error)``
-    in input order — the image lane's own contract, unchanged."""
+    """The detector seam. A generator of one ``SCAN_FIELDS``-shaped tuple per
+    image, in input order — the image lane's own contract, borrowed whole."""
     from .watermark_detector import scan
     return scan(paths, **kwargs)
 
@@ -207,7 +218,14 @@ def _scan_bank(bank, rows, scratch, on_clip, should_stop):
         # a watermark_state on purpose: that is exactly what puts them back in
         # the next run's queue.
         try:
-            for path, state, score, _regions, _err in _scan_frames(
+            # `fingerprint` is read and dropped on purpose. It exists so the
+            # image lane can tell a verdict about a file apart from a verdict
+            # about a file that has since been edited — a real question there,
+            # and a meaningless one here: the thing being scanned is a scratch
+            # JPEG this pass wrote seconds ago and deletes on the way out. The
+            # staleness question for a shot is its BOUNDS, and a re-cut already
+            # clears the whole blob.
+            for path, state, score, _regions, _fingerprint, _err in _scan_frames(
                     list(by_path), should_cancel=should_stop):
                 clip = by_path.pop(path, None)
                 if clip is None:
