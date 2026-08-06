@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   SEMANTIC_CACHE_SENTENCE, SCORE_STAYS_CLIP_SENTENCE,
   defaultPipelineStepKeys, normalizeSemanticEngine, pipelineStepKeys,
+  offersSemanticGpuPython, semanticDeviceNote,
   semanticEnginePatchBody, semanticEngineState, semanticIndexActionLabel,
   semanticPrerequisite, semanticPurposeSentence,
 } from './bankSemanticEngine.js'
@@ -103,4 +104,51 @@ test('visible copy preserves Score ownership, both caches and both groupings', (
   assert.match(SEMANTIC_CACHE_SENTENCE, /both same-shot groupings/)
   assert.match(SEMANTIC_CACHE_SENTENCE, /starts nothing automatically/)
   assert.match(SEMANTIC_CACHE_SENTENCE, /deletes nothing/)
+})
+
+
+// ── Which device the index really uses, and the way out ──────────────────────
+
+const siglip2 = (device, extra = {}) => semanticEngineState(
+  { semantic: { engine: 'siglip2', ready: true, device, ...extra },
+    counts: { total: 10 } },
+  { bank_siglip2: true })
+
+test('an idle card under a CPU index is named, and the borrow route offered', () => {
+  const note = semanticDeviceNote(siglip2({ requested: 'auto', device: 'cpu', gpu: false }), true)
+  assert.equal(note.tone, 'warn')
+  assert.match(note.text, /CPU/)
+  // The offer names what it will NOT do, because that is the objection.
+  assert.match(note.text, /nothing is installed into it/)
+  assert.ok(offersSemanticGpuPython(
+    siglip2({ requested: 'auto', device: 'cpu', gpu: false }), true))
+})
+
+test('an index already on the GPU says nothing at all', () => {
+  const state = siglip2({ requested: 'auto', device: 'cuda', gpu: true })
+  assert.equal(semanticDeviceNote(state, true), null)
+  assert.equal(offersSemanticGpuPython(state, true), false)
+})
+
+test('a card-less machine is never sold a GPU Python', () => {
+  const state = siglip2({ requested: 'auto', device: 'cpu', gpu: false })
+  const note = semanticDeviceNote(state, false)
+  assert.equal(note.tone, 'info')
+  assert.ok(!/CUDA/.test(note.text), 'no CUDA pitch to a machine with no card')
+  assert.equal(offersSemanticGpuPython(state, false), false)
+})
+
+test('a deliberate CPU preference is explained, not treated as a problem', () => {
+  const state = siglip2({ requested: 'cpu', device: 'cpu', gpu: false })
+  assert.equal(semanticDeviceNote(state, true).tone, 'info')
+  assert.equal(offersSemanticGpuPython(state, true), false)
+})
+
+test('CLIP, an uninstalled engine or an unknown device stay silent', () => {
+  assert.equal(semanticDeviceNote(semanticEngineState({ semantic: { engine: 'clip' } }), true), null)
+  assert.equal(semanticDeviceNote(
+    semanticEngineState({ semantic: { engine: 'siglip2', ready: true } },
+                        { bank_siglip2: false }), true), null)
+  // No device reported (older payload) is UNKNOWN — never "it is on the CPU".
+  assert.equal(semanticDeviceNote(siglip2(null), true), null)
 })

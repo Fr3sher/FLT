@@ -66,6 +66,14 @@ export const WHATS_NEW = [
     to: '/setup',
   },
   {
+    id: '2026-08-06-semantic-index-borrows-a-gpu-python',
+    date: '2026-08-06',
+    title: 'Build the SigLIP 2 index on the GPU you already have',
+    blurb:
+      '✨ Score could already borrow a CUDA Python from ai-toolkit or ComfyUI instead of crawling on the CPU. The SigLIP 2 semantic index could not, so it kept indexing in the app’s own CPU-only environment even on a machine with a 4090 sitting idle. The Semantic engine panel now says which device the index will really use, and offers the same picker. It checks each interpreter dependency by dependency — and the list is the right one: SigLIP 2 never needs OpenCLIP or timm, so a ComfyUI venv Score refuses can be perfectly good here. Nothing is ever installed into an environment the app did not build: the pinned weights live in your data folder, and Setup ▸ Quality tools keeps installing into the app’s own Python even after you borrow one.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-video-extras-installable-from-setup',
     date: '2026-08-06',
     title: 'The video extras can now be installed where the app said they were',
