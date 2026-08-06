@@ -21,6 +21,14 @@ def test_websearch_metadata_without_a_usable_source_url_is_dropped():
             {'platform': 'websearch', 'source_url': value}) is None
 
 
+def test_websearch_metadata_with_control_characters_is_dropped():
+    for value in ('https://blog.example.test/post\x0042',
+                  'https://blog.example.test/post/42\nmore',
+                  'https://blog.example.test/\x01post/42'):
+        assert normalize_source_metadata(
+            {'platform': 'websearch', 'source_url': value}) is None
+
+
 def test_a_websearch_scan_item_yields_its_provenance():
     item = {'url': 'https://cdn.example.test/photo.jpg', 'platform': 'websearch',
             'source_url': 'https://blog.example.test/post/42', 'title': 'x'}

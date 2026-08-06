@@ -730,7 +730,8 @@ def _safe_public_https_url(value):
     if not isinstance(value, str):
         return None
     trimmed = value.strip()
-    if not trimmed or len(trimmed) > _SOURCE_URL_MAX_CHARS:
+    if (not trimmed or len(trimmed) > _SOURCE_URL_MAX_CHARS
+            or any(ord(ch) < 32 for ch in trimmed)):
         return None
     try:
         parsed = urlsplit(trimmed)
