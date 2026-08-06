@@ -335,7 +335,17 @@ def test_bank_list_says_whether_its_counts_come_from_a_walk(client, app, tmp_pat
     assert cold[bank_id]['folder_sync']['walked'] is False
     assert cold[bank_id]['folder_sync']['age'] is None
 
-    assert client.get('/api/banks?rescan=1').get_json()['rescanned'] is True
+    # The RESCAN's OWN answer must carry it too, not just the next plain load.
+    # It did not, and a screenshot caught what a green test had not: the page
+    # said "counts are what the app knew last time" under a toast saying the
+    # folders had just been checked. Asserting the next request was measuring a
+    # proxy for the thing that renders.
+    rescanned = client.get('/api/banks?rescan=1').get_json()
+    assert rescanned['rescanned'] is True
+    hot = {b['id']: b for b in rescanned['banks']}
+    assert hot[bank_id]['folder_sync']['walked'] is True
+    assert hot[bank_id]['folder_sync']['age'] >= 0
+
     warm = {b['id']: b for b in client.get('/api/banks').get_json()['banks']}
     assert warm[bank_id]['folder_sync']['walked'] is True
     assert warm[bank_id]['folder_sync']['age'] >= 0

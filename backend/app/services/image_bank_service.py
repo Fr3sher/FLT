@@ -890,6 +890,16 @@ def refresh_banks(user_id, force=False) -> dict:
         res = refresh_bank(user_id, bank_id, force=force)
         if res is not None:
             out[bank_id] = res
+    # SAME SHAPE as folder_sync_state, or the page that renders both would call
+    # the answer to a rescan stale — it did, until a screenshot showed the note
+    # still reading "what the app knew last time" right under the toast saying
+    # the folders had just been checked. A bank a running pass owns is not
+    # walked even under force, and reports its real (older) age.
+    now = time.monotonic()
+    for bank_id, res in out.items():
+        last = _folder_sync.get(bank_id)
+        res['walked'] = last is not None
+        res['age'] = round(now - last['at'], 1) if last else None
     return out
 
 
