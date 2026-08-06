@@ -1358,10 +1358,10 @@ The 🔄 rotate button needs no undo entry: turn the other way and the image is
 byte-for-byte the original again.
 ## Find more images like this one — by attribute, not by look
 
-**Select an image** in a captioned bank and its tags are already there, in the
-filter bar: `woman`, `red`, `dress`, `balcony`. Tick the ones you care about and
-the grid narrows to the images whose captions mention them. No extra click, no
-badge to find.
+**Select an image** in a captioned bank and its tags are already there: beside
+the gallery on desktop, or in the filter bar on a phone. Tick `woman`, `red`,
+`dress` or `balcony` and the grid narrows to the images whose captions mention
+them. No extra click, no badge to find.
 
 **Select several and the row counts.** Each chip carries how many of your
 selected images cite it — `red dress 7 / 12` means 7 of the 12 captioned images

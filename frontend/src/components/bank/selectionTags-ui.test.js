@@ -29,6 +29,25 @@ test('one selected image reads as one image, several read as several', () => {
   assert.match(ws, /🏷️ Tags of \$\{tagRow\.name\}/);
 });
 
+test('the tag inspector sits to the right of the Bank gallery on desktop', () => {
+  assert.match(ws, /xl:grid-cols-\[minmax\(0,1fr\)_20rem\]/);
+  assert.match(ws, /<aside aria-label="Image tags"/);
+  assert.match(ws, /hidden xl:col-start-2 xl:row-start-1 xl:block xl:sticky xl:top-20/);
+  assert.match(ws, /xl:max-h-\[calc\(100vh-6rem\)\] xl:overflow-y-auto/);
+  assert.match(ws, /className="min-w-0 xl:col-start-1 xl:row-start-1"/);
+  assert.ok(ws.indexOf('<aside aria-label="Image tags"')
+    < ws.indexOf("{filter.flag === 'dups' ? ("));
+});
+
+test('mobile keeps the tag inspector in the filter zone', () => {
+  assert.match(ws, /<div className="xl:hidden">\s*<SelectionTagsPanel/);
+  assert.match(ws, /onToggle=\{\(tag\) => toggleTag\(tag, tagRow\)\}/);
+  const mobile = ws.indexOf('<div className="xl:hidden">');
+  const filters = ws.indexOf('{/* Filters — grouped by facet');
+  const gallery = ws.indexOf("{filter.flag === 'dups' ? (");
+  assert.ok(mobile < filters && filters < gallery);
+});
+
 test('every chip carries a FRACTION, never a bare count', () => {
   // "7" alone cannot be read; "7 / 12" is the judgement. tagCountLabel returns ''
   // for a single image, so the one-image row is unchanged.

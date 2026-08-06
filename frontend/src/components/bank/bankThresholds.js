@@ -49,14 +49,13 @@ export const BANK_SECTION = 'bank';
    arrives at these controls: "why is this junk still here?" has a different
    answer from "why are these two copies not grouped?".
 
-   `defaultOpen` decides what is visible without a click. The two open groups
-   are the ones a mixed dump actually gets retuned on; the other three are
-   answers to narrower questions and stay folded, which is also what keeps the
-   panel readable at 400 px. */
+   `defaultOpen` decides what is visible without a click. Every group starts
+   folded when the parent panel opens, so the user expands only the question
+   they need and the panel stays readable at 400 px. */
 export const THRESHOLD_GROUPS = [
-  { id: 'quality', emoji: '🌫', label: 'Image quality', defaultOpen: true,
+  { id: 'quality', emoji: '🌫', label: 'Image quality', defaultOpen: false,
     blurb: 'Is the picture technically good enough to train on?' },
-  { id: 'duplicates', emoji: '≈', label: 'Duplicates', defaultOpen: true,
+  { id: 'duplicates', emoji: '≈', label: 'Duplicates', defaultOpen: false,
     blurb: 'Have I already got this shot?' },
   { id: 'resolution', emoji: '📐', label: 'Size & framing', defaultOpen: false,
     blurb: 'Is there enough real picture in the file?' },
