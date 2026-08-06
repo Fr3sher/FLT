@@ -50,6 +50,30 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-video-watermark-flag',
+    date: '2026-08-06',
+    title: 'Spot the watermarked shots before they teach your LoRA a logo',
+    blurb:
+      'Rushes come off stock sites and other people\'s uploads, and a logo sitting in the same corner of every frame is the most consistent thing in your dataset — so it is the first thing a LoRA learns to draw. You cannot catch that by scrolling 90-pixel thumbnails. The new 🔖 Watermarks pass runs the same detector the image bank uses over each shot\'s sharpest frame and flags what it finds. Nothing is deleted: it is an amber flag you can filter on and act on. Needs the watermark detector from Setup; the cut sits in 🎚 Quality cuts at the measured 0.94, and a shot the pass has not judged is never called clean.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-06-video-duplicate-shots',
+    date: '2026-08-06',
+    title: 'Find the takes you already have, without watching them twice',
+    blurb:
+      'Ten near-identical takes of one gesture do not teach a model ten things — they teach it one thing ten times as loudly, and that is how a LoRA ends up unable to do anything else. The new ✂ Duplicates pass compares your shots to each other and groups the near-identical ones, keeping the sharpest of each pile unflagged so you know which one to keep. It costs no GPU and no waiting: it reuses the frame vectors 🔎 Find scenes already cached, so it is dot products over a file you already have. Flags only — nothing is rejected or deleted for you.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-06-video-flag-chips',
+    date: '2026-08-06',
+    title: 'Act on a quality flag instead of just reading it',
+    blurb:
+      'The amber flags in a video bank could be read one shot at a time and nothing more. There is now a row of chips above the gallery — "Barely moves (14)", "Same as another shot (31)" — and pressing one narrows the grid to exactly those shots, so you can select them and reject the lot in one gesture. The counts cover the shots currently loaded and the row says so when there are more to load.',
+    to: '/video-bank',
+  },
+  {
     id: '2026-08-04-video-minimum-length',
     date: '2026-08-04',
     title: 'Half-second flash cuts stop cluttering your triage',

@@ -66,6 +66,34 @@ UNMEASURED = object()
 _LUMA_SANE_LOW = 0.06
 _LUMA_SANE_HIGH = 0.97
 
+# The clip-level sharpness score, named once. Other passes rank shots by it (the
+# dedup pass keeps the sharpest member of a near-duplicate pile), and a second
+# copy of the string is how one of them would keep reading a key nobody writes.
+SHARPNESS_KEY = 'sharpness_p90'
+
+# Keys OTHER passes write into the same metrics_json blob. They describe the same
+# clip and are read by the same `verdicts()`, but they are produced by passes with
+# their own cost, their own cancel and their own reasons to fail — so the metrics
+# scan, which rewrites the blob wholesale, must carry them across rather than
+# erase a dedup or watermark verdict every time somebody re-measures a bank.
+ADVISORY_KEYS = ('duplicate_group', 'duplicate_of',
+                 'watermark_score', 'watermark_state')
+
+
+def merge_advisory(previous, summary):
+    """`summary` with the advisory verdicts of `previous` carried over.
+
+    The metrics pass measures ONE clip's frames and knows nothing about its
+    neighbours or its watermarks; re-running it must not be a way to silently
+    lose the two verdicts that took a separate pass to produce. The bounds are
+    unchanged by a re-measure — a re-CUT clears the whole blob, which is a
+    different gesture and the correct one."""
+    out = dict(summary)
+    for key in ADVISORY_KEYS:
+        if previous and key in previous:
+            out[key] = previous[key]
+    return out
+
 
 def percentile(values, p):
     """Linear-interpolation percentile. None for an empty list — never 0.0, which
@@ -202,7 +230,8 @@ def summarise(frames, fps, audio=UNMEASURED):
 # and a label in FLAG_LABELS; a test pins the two lists against each other.
 THRESHOLD_KEYS = ('min_duration_s', 'motion_floor', 'motion_ceiling',
                   'luma_floor', 'freeze_max', 'sharpness_floor',
-                  'first_frame_floor', 'silence_max', 'audio_floor')
+                  'first_frame_floor', 'silence_max', 'audio_floor',
+                  'watermark_max')
 
 
 def verdicts(scores, thresholds, duration_s=None):
@@ -288,6 +317,28 @@ def verdicts(scores, thresholds, duration_s=None):
         # Its own flag, not a silent one: a quiet clip can be normalised and a
         # silent one cannot be rescued at all. Same split as freeze vs still.
         flags.add('quiet')
+
+    # ── The two verdicts other passes produced ───────────────────────────────
+    # They read the same `scores` blob and obey the same rule as everything
+    # above: no measurement, no flag. What differs is only where the number came
+    # from — a dedup over the search vectors, and a classifier over one frame.
+
+    # ✂ Near-duplicate. The flag is the ABSENCE of representative status, not the
+    # presence of a group: every member of a pile carries `duplicate_group` (the
+    # grid says "1 of 3"), and exactly one of them carries `duplicate_of: None`
+    # because it is the one being kept. Flagging the whole pile would tell the
+    # user to drop all of it, which is the opposite of what the pass found.
+    if scores.get('duplicate_of') is not None:
+        flags.add('duplicate')
+
+    # 🔖 Watermark. Read at the same read time as every other cut, so moving the
+    # threshold re-sorts the bank with no rescan — and a frame the detector could
+    # not judge stores a None score and is therefore never flagged, exactly like
+    # a clip with no audio track is never 'silent'.
+    mark = scores.get('watermark_score')
+    mark_max = thresholds.get('watermark_max')
+    if mark is not None and mark_max is not None and mark > mark_max:
+        flags.add('watermark')
 
     return flags
 

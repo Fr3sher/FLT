@@ -62,6 +62,15 @@ export const PASS_REQUIREMENTS = {
   // Same shape as embed: frames are decoded here, the model runs in the ✨ Score
   // interpreter, and THAT requirement is checked server-side with its own sentence.
   caption: ['decode'],
+  // ✂ Near-duplicates need NOTHING from the video extra, and that is the point
+  // of building them on the vectors 🔎 Find scenes already cached: the pass
+  // re-reads an .npz and does dot products. Requiring `decode` here would grey
+  // the button out on a machine that can perfectly well answer the question.
+  dedup: [],
+  // 🔖 Watermarks decode ONE frame per shot, like every other reading pass. The
+  // detector's own environment and weights are a separate install step, checked
+  // server-side with its own sentence — the same split as embed and caption.
+  watermark: ['decode'],
   pipeline: ['decode', 'detect'],
   promote: ['encode'],
 }

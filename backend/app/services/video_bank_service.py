@@ -526,7 +526,15 @@ def _clip_row(clip: VideoClip, relpaths: dict, thresholds=None) -> dict:
     # cut needed the metrics pass, so skipping the unmeasured clips was free. The
     # duration cut does not — its input is the bounds — and a bank straight out of
     # detection is exactly where the flash-cut clutter is worst.
-    flags = (sorted(video_metrics.verdicts(measured, thresholds,
+    #
+    # The WHOLE blob goes to `verdicts`, not the 'ok'-only `measured` view. Two
+    # of the verdicts in it are written by other passes — the near-duplicate
+    # pass reads the search VECTORS and the watermark pass reads one frame, so
+    # both can legitimately have judged a clip the metrics pass never measured.
+    # Passing `measured` dropped every one of those flags with no error to see.
+    # Nothing else changes: an 'unreadable' summary carries every score as None,
+    # and a None score has never produced a flag.
+    flags = (sorted(video_metrics.verdicts(metrics, thresholds,
                                            duration_s=duration_s))
              if thresholds is not None else [])
     return {
@@ -590,9 +598,14 @@ def metrics_dry_run(user_id, bank_id, thresholds) -> dict:
     rows = VideoClip.query.filter_by(bank_id=bank_id).all()
     clips = []
     for row in rows:
+        # The WHOLE blob, for the same reason `_clip_row` passes the whole blob:
+        # two of the cuts read verdicts written by other passes, which can have
+        # judged a clip the metrics decode never measured. Filtering on
+        # metrics_state here made the preview answer "0 would be flagged" over a
+        # bank the grid then flags — the two must describe the same bank.
+        # Nothing else moves: an 'unreadable' summary carries every score as
+        # None, and `verdicts` never flags an absent reading.
         scores = json.loads(row.metrics_json) if row.metrics_json else None
-        if scores is not None and scores.get('metrics_state') != 'ok':
-            scores = None
         clips.append((scores, round(row.end_s - row.start_s, 3)))
     return video_metrics.dry_run(clips, thresholds)
 
@@ -1062,6 +1075,103 @@ def _embed_job(bank_id, reembed, use_gpu):
         detail = f'done — {out["embedded"]} shot(s) searchable'
         if out['unreadable']:
             detail += f', {out["unreadable"]} could not be read'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def start_dedup(app, user_id, bank_id, threshold=None):
+    """✂ Group near-identical shots. Refused up front — with the sentence that
+    says what to do — when the bank has no vectors: this pass reads what 🔎 Search
+    cached and produces nothing without it, and a 202 followed by "0 groups"
+    would read as "no duplicates in this bank".
+
+    No GPU window and no capability check: it re-reads an .npz and does dot
+    products. That is the whole point of building it on the embeddings that
+    already exist."""
+    from .video_clip_search import load_embeddings
+    _require_free_bank(user_id, bank_id)
+    if not load_embeddings(bank_id):
+        raise ValueError('run 🔎 Find scenes first — near-duplicates reuse the '
+                         'frame vectors it caches')
+    return bank_jobs.start(app, job_key(bank_id), 'dedup',
+                           _dedup_job(bank_id, threshold))
+
+
+def _dedup_job(bank_id, threshold):
+    def run(job):
+        from . import video_clip_dedup
+        bank_jobs.progress(job, done=0, total=0, detail='comparing shots')
+        out = video_clip_dedup.run_dedup(
+            bank_id, threshold, should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["groups"]} near-duplicate group(s)'
+        if out['flagged']:
+            detail += f', {out["flagged"]} shot(s) flagged'
+        # Said out loud rather than folded into the total: "no duplicates" and
+        # "most of the bank was never embedded" are the same sentence otherwise.
+        if out['unevaluated']:
+            detail += f' — {out["unevaluated"]} shot(s) had no vectors to compare'
+        bank_jobs.progress(job, detail=detail)
+        return out
+    return run
+
+
+def _watermark_available():
+    """None when this install can look for watermarks, else the sentence saying
+    why not."""
+    from .video_watermark import unavailable_reason
+    return unavailable_reason()
+
+
+def start_watermark(app, user_id, bank_id, rescan=False):
+    """🔖 Look for a watermark on each shot's ambassador frame.
+
+    Refused up front when the detector is not installed, for the same reason the
+    embed pass refuses on a missing CLIP environment: a 202 followed by a job
+    that dies on an import is the same information delivered ten minutes later
+    and harder to read.
+
+    Serialised against training and the vision passes when it will really use the
+    card — this is a torch model, and the guarantee the whole app is built on is
+    that no pass races a training run."""
+    from ..capabilities import watermark_detect_gpu_available
+    _require_free_bank(user_id, bank_id)
+    reason = _watermark_available()
+    if reason:
+        raise RuntimeError(reason)
+    use_gpu = watermark_detect_gpu_available()
+    if use_gpu:
+        busy = _gpu_busy_reason()
+        if busy:
+            raise RuntimeError(busy)
+    return bank_jobs.start(app, job_key(bank_id), 'watermark',
+                           _watermark_job(bank_id, bool(rescan), use_gpu))
+
+
+def _watermark_job(bank_id, rescan, use_gpu):
+    def run(job):
+        from contextlib import nullcontext
+
+        from ..gpu_window import gpu_exclusive_vision_window
+        from . import video_watermark
+        total = len(video_watermark.pending_clips(bank_id, rescan))
+        bank_jobs.progress(job, done=0, total=total,
+                           detail=f'looking for watermarks ({"GPU" if use_gpu else "CPU"})')
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
+                  else nullcontext())
+        with window:
+            out = video_watermark.run_watermark(
+                bank_id, rescan,
+                on_clip=lambda: bank_jobs.bump(job),
+                should_stop=lambda: bank_jobs.cancelled(job))
+        detail = f'done — {out["detected"]} shot(s) carry a mark'
+        if out['unreadable']:
+            detail += f', {out["unreadable"]} could not be judged'
+        # The detector dying is a RESULT, and the sentence has to survive to the
+        # UI: everything it judged before that is kept, and "0 detected" on its
+        # own would read as a clean bank.
+        if out['error']:
+            detail = f'stopped — {out["error"]} ({out["scanned"]} shot(s) judged)'
         bank_jobs.progress(job, detail=detail)
         return out
     return run

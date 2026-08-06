@@ -195,9 +195,29 @@ def measure_one(bank, clip):
             summary = video_metrics.summarise([], fps)
     if summary.get('sharpest_frame_s') is not None:
         summary['sharpest_frame_s'] += clip.start_s
+    # The blob is SHARED with the passes that write the near-duplicate and
+    # watermark verdicts, and this line replaces it wholesale. Carrying those
+    # keys across is what stops a "measure again" from silently undoing two other
+    # passes — a loss with nothing to see, since the flags simply stop appearing.
+    # A re-CUT is the gesture that legitimately drops them, and it clears the
+    # whole blob (video_bank_service._forget_measurements).
+    summary = video_metrics.merge_advisory(_previous(clip), summary)
     clip.metrics_json = json.dumps(summary)
     db.session.commit()                      # the resume contract, per clip
     return summary['metrics_state']
+
+
+def _previous(clip):
+    """What was in the clip's blob before this measurement. A corrupt one reads
+    as empty — a bad blob must cost the advisory verdicts, never the re-measure
+    that would have repaired it."""
+    if not clip.metrics_json:
+        return {}
+    try:
+        loaded = json.loads(clip.metrics_json)
+    except (ValueError, TypeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
 def _audio_of(path, clip):

@@ -50,6 +50,8 @@ export const PASS_LABELS = {
   measure: 'Measure quality',
   embed: 'Find scenes',
   caption: 'Describe shots',
+  dedup: '✂ Duplicates',
+  watermark: '🔖 Watermarks',
   pipeline: 'Run everything',
   promote: 'Build the dataset',
 }
@@ -62,6 +64,8 @@ export const PASS_RUNNING_LABELS = {
   measure: 'Measuring clips',
   embed: 'Looking at shots',
   caption: 'Describing shots',
+  dedup: 'Comparing shots',
+  watermark: 'Looking for watermarks',
   pipeline: 'Running everything',
   promote: 'Building the dataset',
 }

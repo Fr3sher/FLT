@@ -24,6 +24,7 @@ import VideoClipGrid from './VideoClipGrid'
 import VideoClipLightbox from './VideoClipLightbox'
 import VideoClipSearchBox from './VideoClipSearchBox'
 import { matchLine, captionStyleLabel } from './videoClipSearch'
+import { filterByFlag, flagChips, flagFilterNote } from './videoMetricsFilter'
 import PromoteVideoDialog from './PromoteVideoDialog'
 
 const PAGE = 120
@@ -69,6 +70,10 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   const [captionStyle, setCaptionStyle] = useState(null)
   const [search, setSearch] = useState(null)
   const [searching, setSearching] = useState(false)
+  // ⚑ Which verdict the grid is narrowed to, or null. Client-side over the shots
+  // already loaded — the status filter is a server-side query and this is not,
+  // which is a real difference and the reason the chip row carries a note.
+  const [flag, setFlag] = useState(null)
   // The last job we announced, so a finished pass is toasted ONCE instead of on
   // every poll for as long as the server keeps its snapshot.
   const announced = useRef(null)
@@ -110,7 +115,10 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   // has nothing to say about another, and leaving it on screen while the chips
   // moved would show "keep only" over shots the search found in every bucket.
   useEffect(() => {
-    setSelected([]); setAnchor(null); setSearch(null); setOpenIndex(null)
+    // The flag chip goes with them: it was computed over the previous bucket's
+    // clips, and a chip left pressed over a page it never counted narrows the
+    // grid to something the user did not ask for.
+    setSelected([]); setAnchor(null); setSearch(null); setOpenIndex(null); setFlag(null)
     loadClips(false)
   }, [bankId, status, sourceId])                          // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -139,7 +147,13 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
   // otherwise. Paging is hidden under a search on purpose: the ranking is a
   // fixed top-N, and a "Load more" that re-ran the filter would silently replace
   // the ranking with something ordered by file and start time.
-  const shownClips = search ? (search.clips || []) : clips
+  // The flag filter applies to a ranking too: "which of these results do I
+  // already have twice" is a question about the ranking, and a chip row that
+  // went inert under a search would be the one place it is most useful.
+  const baseClips = search ? (search.clips || []) : clips
+  const shownClips = filterByFlag(baseClips, flag)
+  const chips = flagChips(baseClips)
+  const flagNote = search ? '' : flagFilterNote(clips.length, total)
   const matchLines = search
     ? Object.fromEntries((search.results || []).map((r) => [r.clip_id, matchLine(r)]))
     : null
@@ -340,8 +354,11 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
+        {/* ✂ and 🔖 sit AFTER embed on purpose: duplicates reuse the vectors
+            that pass caches, so running them before it is the one order that
+            produces an honest-looking empty answer. */}
         {['pipeline', 'probe', 'detect', 'thumbs', 'measure', 'embed',
-          'caption'].map((pass) => {
+          'caption', 'dedup', 'watermark'].map((pass) => {
           const blocked = passBlockedBy(capability, pass)
           const primary = pass === 'pipeline'
           return (
@@ -463,11 +480,43 @@ export default function VideoBankWorkspace({ bankId, onBack, onGone }) {
         )}
       </div>
 
+      {/* ⚑ The verdicts, as chips you can act on. Every flag in this lane used
+          to be a badge you read one shot at a time — which is fine for "too much
+          motion" and useless for "you already have this shot", where the whole
+          point is rejecting the pile in one gesture. */}
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-[0.6875rem] font-semibold text-content-muted">⚑ Flagged:</span>
+          {chips.map((c) => (
+            <button key={c.flag} type="button"
+              onClick={() => setFlag((f) => (f === c.flag ? null : c.flag))}
+              aria-pressed={flag === c.flag}
+              className={`rounded-full border px-2.5 py-1 text-[0.6875rem] font-semibold transition-colors ${
+                flag === c.flag
+                  ? 'border-amber-400/70 bg-amber-500/20 text-amber-100'
+                  : 'border-border bg-surface text-content-muted hover:bg-surface-raised'}`}>
+              {c.label} ({c.count})
+            </button>
+          ))}
+          {flag && (
+            <button type="button" onClick={() => setFlag(null)}
+              className="rounded-full border border-border bg-surface px-2.5 py-1 text-[0.6875rem] text-content-muted hover:bg-surface-raised">
+              show all ✕
+            </button>
+          )}
+        </div>
+      )}
+      {/* The counts cover the LOADED page, and a chip that read like a bank-wide
+          total would be a wrong number rather than a filter. */}
+      {flagNote && <p className="text-[0.6875rem] text-content-subtle">{flagNote}</p>}
+
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-content-muted">
           {selected.length
             ? `${selected.length} selected`
-            : (search ? `${shownClips.length} found` : `${clips.length} of ${total} shown`)}
+            : (flag
+              ? `${shownClips.length} flagged`
+              : (search ? `${shownClips.length} found` : `${clips.length} of ${total} shown`))}
         </span>
         <button type="button" onClick={() => triage(selected, 'keep')} disabled={!selected.length}
           className="rounded-md bg-emerald-600/80 px-2.5 py-1 font-semibold text-white hover:bg-emerald-600 disabled:opacity-30">

@@ -415,10 +415,28 @@ DEFAULTS = {
     # Quality cuts of the 🎬 video bank — all None, because published thresholds
     # measurably do not transfer between corpora. See video_metrics.THRESHOLD_KEYS
     # for the canonical list; anything missing here still reads as None.
+    # watermark_max is the ONE cut here that ships with a number, and the reason
+    # is that it is not a corpus statistic. Motion and sharpness are properties
+    # of someone's footage (which is why the published defaults land at the 7th
+    # percentile of this machine's bank); a watermark score is a CLASSIFIER's
+    # probability, calibrated with the model itself — so the image lane's
+    # measurement transfers where a motion floor does not. 0.94 is that
+    # measurement (see watermark_detect.threshold above: 110 hand-labelled images
+    # of a 29 759-image bank; 0.94 flagged none of the 55 clean ones and still
+    # caught 54 of the 55 marked ones). Set it to null to flag nothing.
+    #
+    # duplicate_threshold is a COMPUTE-time setting, not a read-time cut, which is
+    # why it is not in video_metrics.THRESHOLD_KEYS: changing it means re-running
+    # the ✂ Duplicates pass (instant — it re-reads the vectors 🔎 Search cached,
+    # no GPU). 0.96 is inherited from the image lane's semantic near-duplicate cut
+    # over the SAME CLIP space (bank.semantic_dup_threshold); no video-pair
+    # calibration exists yet, and video_clip_dedup says so out loud.
     'video_bank': {'min_duration_s': None,
                    'motion_floor': None, 'motion_ceiling': None,
                    'luma_floor': None, 'freeze_max': None,
-                   'sharpness_floor': None},
+                   'sharpness_floor': None,
+                   'watermark_max': 0.94,
+                   'duplicate_threshold': 0.96},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/
     # background), not the face — its own guide says start at 0.5 and that
     # 0.8-1.0 "can prevent edits from applying". 0.9 made every variation a

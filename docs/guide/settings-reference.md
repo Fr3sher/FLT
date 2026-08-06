@@ -1169,11 +1169,15 @@ this app's material, so they are stated as adjustable rather than tuned.
 | `shot_detect.device` | `auto` | `auto` \| `cuda` \| `cpu`. The network runs on 48×27 frames and is never the bottleneck — decoding is. CPU is a perfectly reasonable choice, and it leaves the GPU free for captioning and training. |
 
 **Video bank quality cuts:** the thresholds behind the video bank's amber flags.
-All default to **empty = no cut** — that is a decision, not an omission: published
-thresholds measurably do not transfer between collections, so the app never ships
-one. Set them from **Video bank → 🎚 Quality cuts**, where **Preview** shows how
-many shots each value would flag before you apply it. Raw scores stay stored, so
-changing any of these re-sorts every bank instantly, without rescanning.
+The cuts that describe your *footage* default to **empty = no cut** — that is a
+decision, not an omission: published thresholds measurably do not transfer between
+collections, so the app never ships one. `watermark_max` is the exception and the
+reason is worth knowing: it does not measure your footage, it reads a *classifier's*
+probability, which is calibrated with the model rather than with your material — so
+the image lane's measurement transfers where a motion floor does not. Set them from
+**Video bank → 🎚 Quality cuts**, where **Preview** shows how many shots each value
+would flag before you apply it. Raw scores stay stored, so changing any of these
+re-sorts every bank instantly, without rescanning.
 
 | Key | Default | Role |
 |---|---|---|
@@ -1183,6 +1187,8 @@ changing any of these re-sorts every bank instantly, without rescanning.
 | `video_bank.luma_floor` | *(empty)* | Flags shots whose darkest frame falls below this brightness (`black`). |
 | `video_bank.freeze_max` | *(empty)* | Flags shots where more than this share of frames do not move (`freeze`). |
 | `video_bank.sharpness_floor` | *(empty)* | Flags shots whose sharpest stretch stays below this (`soft`). |
+| `video_bank.watermark_max` | `0.94` | Flags shots whose watermark score exceeds this (`watermark`), after the **🔖 Watermarks** pass has scored them. This model's scores are compressed hard against 1, so 0.94 is the measured cut and not the 0.5 a probability normally implies — on a 110-image hand-labelled sample it flagged none of the 55 clean images and still caught 54 of the 55 marked ones. Lower it toward 0.92 to catch the faintest marks and hand-check a few clean shots. A shot the pass has not judged carries no score and is **never** flagged — that is "not evaluated", not "clean". Set it to empty to flag nothing. |
+| `video_bank.duplicate_threshold` | `0.96` | Cosine similarity at or above which two shots are grouped as near-duplicates by the **✂ Duplicates** pass, comparing them at their closest pair of embedded frames. Not a read-time cut like the rows above: changing it means re-running that pass — which is instant and costs no GPU, since it re-reads the frame vectors **🔎 Find scenes** already cached. **Where the number comes from:** it is inherited from the image bank's `bank.semantic_dup_threshold`, measured over the *same* CLIP space, and no video-pair calibration exists yet. Comparing shots at their closest frame pair also reaches any given value more easily than a single-image comparison does, so **raise** it if your bank over-groups. |
 
 **Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
 

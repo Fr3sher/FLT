@@ -25,6 +25,12 @@ export const FLAG_LABELS = {
   soft_start: 'Soft first frame',
   silent: 'Mostly silent',
   quiet: 'Very quiet',
+  // The two verdicts that come from their OWN pass rather than from the metrics
+  // decode. "Same as another shot" names the finding from the user's side — the
+  // group's representative is deliberately NOT flagged, so a chip here always
+  // means "you already have this one".
+  duplicate: 'Same as another shot',
+  watermark: 'Watermark',
   unmeasured: 'Not measured yet',
 }
 
@@ -45,6 +51,38 @@ export function flagCounts(clips) {
     for (const f of flags) counts[f] = (counts[f] || 0) + 1
   }
   return counts
+}
+
+/** The flag chips to offer, most-hit first — [{flag, label, count}].
+ *
+ * Built from what the grid HOLDS rather than from a bank-wide count, and the
+ * caption below says so (see `flagFilterNote`). A chip that silently searched
+ * only the loaded page while reading like a bank-wide total is how a user
+ * concludes their bank has twelve duplicates when it has ninety.
+ *
+ * 'unmeasured' rides along as a pseudo-flag: "nothing was measured" is the state
+ * people most need to select, and it is the one no verdict can express. */
+export function flagChips(clips) {
+  const counts = flagCounts(clips)
+  return Object.keys(FLAG_LABELS)
+    .filter((flag) => counts[flag] > 0
+      || (flag === 'unmeasured' && counts.unmeasured > 0))
+    .map((flag) => ({ flag, label: FLAG_LABELS[flag], count: counts[flag] || 0 }))
+    .sort((a, b) => b.count - a.count || a.flag.localeCompare(b.flag))
+}
+
+/** The sentence under the flag chips, or '' when there is nothing to warn about.
+ *
+ * The chips count the LOADED page, not the bank. With everything loaded that is
+ * the whole truth and the note stays out of the way; with a page of 120 out of
+ * 900 it is a quarter of an answer, and saying so is the difference between a
+ * filter and a wrong number. */
+export function flagFilterNote(loaded, total) {
+  const have = Number(loaded) || 0
+  const all = Number(total) || 0
+  if (all <= have) return ''
+  return `Counted over the ${have} shots loaded, not all ${all} — load more to `
+    + 'count the rest.'
 }
 
 /** The clips a flag chip selects. `'unmeasured'` is a pseudo-flag over the
@@ -107,6 +145,15 @@ export function thresholdFields() {
       hint: 'Flags clips quieter than this overall. dBFS is negative: -40 is '
         + 'very quiet, -12 is a healthy level. A clip with no sound track is '
         + 'never flagged — that is not a defect, it is the file.' },
+    // The one cut here that arrives with a number, because it is not a property
+    // of your footage but of a classifier — see config.py. It reads what the
+    // 🔖 Watermarks pass stored; a shot that pass never judged is never flagged.
+    { key: 'watermark_max', flag: 'watermark', direction: 'above',
+      label: 'Watermark score',
+      hint: 'Flags clips whose watermark score exceeds this, after the '
+        + '🔖 Watermarks pass has run. The scores sit close to 1, so 0.94 is the '
+        + 'measured cut, not 0.5 — lower it to catch faint marks and hand-check '
+        + 'a few clean shots. Shots that pass has not judged are never flagged.' },
   ]
 }
 

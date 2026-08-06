@@ -706,6 +706,26 @@ const TOPICS = [
   // and from the two failures that look like bugs: a search that returns nothing
   // because the pass never ran, and a "without" that returns exactly what was
   // excluded — which is CLIP ignoring the word, not the app ignoring the user.
+  // Searched for by the SYMPTOM — "I have the same shot twenty times", "my LoRA
+  // only draws one pose" — long before anyone looks for a control called dedup.
+  action('video-duplicate-shots', 'Find near-identical shots (✂ Duplicates)',
+    ['duplicate', 'duplicates', 'near duplicate', 'same shot twice', 'retake',
+     'retakes', 'takes', 'repeated shots', 'identical clips', 'dedup',
+     'deduplicate', 'too many similar clips', 'my lora only does one thing',
+     'overrepresented', 'same as another shot', 'duplicate threshold',
+     'representative', 'which one to keep', 'run find scenes first'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  action('video-watermark-flag', 'Find watermarked shots (🔖 Watermarks)',
+    ['watermark', 'watermarks', 'watermarked', 'logo', 'logos', 'stock footage',
+     'shutterstock', 'getty', 'corner logo', 'burned in logo', 'my lora draws a logo',
+     'watermark score', 'watermark cut', 'watermark detector', 'detector weights',
+     'not downloaded', 'ambassador frame'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
+  action('video-flag-chips', 'Filter the gallery by a quality flag',
+    ['flag chips', 'filter by flag', 'flagged shots', 'select flagged',
+     'reject all flagged', 'amber chips', 'show only flagged', 'counts loaded',
+     'load more to count', 'not measured yet'],
+    '/video-bank', 'using-the-app', 'measure-your-shots-and-choose-your-own-cuts'),
   action('video-bank-search', 'Find scenes by typing a word',
     ['find scenes', 'search shots', 'search clips', 'search by words',
      'text search video', 'find a shot', 'find the scene', 'where is the shot with',

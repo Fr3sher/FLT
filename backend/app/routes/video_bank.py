@@ -372,6 +372,37 @@ def video_bank_caption(bank_id):
                   style=data.get('style'))
 
 
+@bp.post('/video-bank/<int:bank_id>/dedup')
+def video_bank_dedup(bank_id):
+    """✂ Group near-identical shots. Body {threshold?}. 202/400/404/409.
+
+    NO capability check, deliberately, and it is the only heavy-sounding pass
+    here without one: this reads the vectors 🔎 Find scenes already cached and
+    does dot products. A bank with no vectors is a 400 with the sentence naming
+    the pass to run first — the service raises it, `_start` turns it into the
+    status code."""
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_dedup, _app(), LOCAL_USER, bank_id,
+                  threshold=data.get('threshold'))
+
+
+@bp.post('/video-bank/<int:bank_id>/watermark')
+def video_bank_watermark(bank_id):
+    """🔖 Look for a watermark on each shot's ambassador frame. Body {rescan?}.
+
+    Two 503s that are NOT the same sentence, the same split as the embed pass:
+    the decode extra is missing (no frame to extract at all), or the watermark
+    detector's own environment and weights are not there. Collapsing them is how
+    someone installs the wrong thing twice."""
+    from .. import capabilities
+    cap = capabilities.probe_video()
+    if not cap['decode']:
+        return jsonify({'error': cap['detail']}), 503
+    data = request.get_json(silent=True) or {}
+    return _start(bank_id, svc.start_watermark, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
 @bp.patch('/video-bank/<int:bank_id>/clip/<int:clip_id>/caption')
 def video_bank_clip_caption(bank_id, clip_id):
     """Store the caption a HUMAN wrote for one shot. Body {caption}.
