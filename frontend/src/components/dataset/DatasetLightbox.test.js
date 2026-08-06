@@ -10,6 +10,7 @@ const hook = readFileSync(new URL('../../hooks/useDataset.js', import.meta.url),
 const grid = readFileSync(new URL('./DatasetGrid.jsx', import.meta.url), 'utf8');
 const settings = readFileSync(new URL('../settings/ScrapingSection.jsx', import.meta.url), 'utf8');
 const attribution = readFileSync(new URL('./PexelsAttribution.jsx', import.meta.url), 'utf8');
+const sourceAttribution = readFileSync(new URL('./SourceAttribution.jsx', import.meta.url), 'utf8');
 
 test('lightbox exposes an accessible responsive image improvement action', () => {
   // ONE button per engine, from the shared pure module — the labels, the
@@ -136,10 +137,26 @@ test('manual improvement candidates cannot use the unrelated generic regenerate 
     derivation_kind: 'klein_image_improve', parent_image_id: 2 }), false);
 });
 
-test('curation grid and lightbox render the persisted safe Pexels attribution', () => {
+test('curation grid and lightbox render provenance through ONE dispatching component', () => {
+  // Two sources used to mean two stacked, independently-fail-closed components
+  // rendered at every site — twelve more recorded as debt would have meant
+  // twelve stacked components at each. Both render sites now feed the SAME
+  // `img.source_metadata` to a single dispatcher instead.
   const gridItem = readFileSync(new URL('./DatasetGridItem.jsx', import.meta.url), 'utf8');
-  assert.match(gridItem, /<PexelsAttribution metadata=\{img\.source_metadata\}/);
-  assert.match(lightbox, /<PexelsAttribution metadata=\{img\.source_metadata\}/);
+  assert.match(gridItem, /<SourceAttribution metadata=\{img\.source_metadata\}/);
+  assert.match(lightbox, /<SourceAttribution metadata=\{img\.source_metadata\}/);
+  assert.doesNotMatch(gridItem, /<PexelsAttribution\b|<WebImageSource\b/);
+  assert.doesNotMatch(lightbox, /<PexelsAttribution\b|<WebImageSource\b/);
+
+  // The dispatcher is a lookup table keyed by platform, fail-closed on both an
+  // unrecognized platform (no entry => no renderer => null) and, per-platform,
+  // whatever its own renderer's payload validation still refuses.
+  assert.match(sourceAttribution, /pexels:\s*PexelsAttribution/);
+  assert.match(sourceAttribution, /websearch:\s*WebImageSource/);
+  assert.match(sourceAttribution, /if \(!Renderer\) return null;/);
+
+  // The Pexels wording/links guarantee itself still lives in PexelsAttribution.jsx
+  // — moved under the dispatcher, not narrowed by it.
   assert.match(attribution, /Photo by\{' '\}/);
   assert.match(attribution, /rel="noopener noreferrer"/);
   assert.match(attribution, /attribution\.photographerUrl/);

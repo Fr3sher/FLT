@@ -17,8 +17,7 @@ import {
 } from './lightboxActionPlacement';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { displayLabel } from '../../utils/labels';
-import PexelsAttribution from './PexelsAttribution';
-import WebImageSource from './WebImageSource';
+import SourceAttribution from './SourceAttribution';
 
 const COMPARE_HELP = 'Show the original this image was made from, next to it, at the same scale.';
 
@@ -251,9 +250,7 @@ export default function DatasetLightbox({
           <span className="px-1.5 py-0.5 rounded text-[10px] bg-white/10 text-white/80">
             {img.source === 'import' ? 'real' : 'generated'}{img.framing ? ` · ${img.framing}` : ''}
           </span>
-          <PexelsAttribution metadata={img.source_metadata}
-            className="text-[11px] text-white/70" />
-          <WebImageSource metadata={img.source_metadata}
+          <SourceAttribution metadata={img.source_metadata}
             className="text-[11px] text-white/70" />
           <span className="text-white/50 text-[11px]">
             {inCompare
