@@ -633,6 +633,21 @@ def bank_angles(bank_id):
                   angles_only=True, **_scope(data))
 
 
+@bp.get('/bank/<int:bank_id>/activity')
+def bank_activity(bank_id):
+    """The live job alone — what the progress banner and its Stop button need.
+
+    Deliberately NOT the workspace payload: that one runs ~60 bank-wide
+    aggregates and is polled every 2 s while a pass runs, which is exactly when
+    it is slowest. This route reads one indexed row and an in-memory job
+    snapshot, so the banner keeps arriving on a 50 000-image bank. No source
+    folder re-walk either — this is the poll, not the open."""
+    payload = banks.bank_activity(LOCAL_USER, bank_id)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
 @bp.get('/bank/<int:bank_id>/coverage')
 def bank_coverage(bank_id):
     """Read-only coverage advice (idea by @antonp): what the kept set leans on and

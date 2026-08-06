@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-big-banks-open-instantly-and-stop-answers-again',
+    date: '2026-08-06',
+    title: 'Big Banks open in a second again — and Stop answers while a pass runs',
+    blurb:
+      'A Bank of 50 000 images took over 12 seconds to load its workspace, and more than 28 while a pass was running — long enough that the progress bar and its Stop button never arrived, so a running scan could not be stopped. The workspace was re-checking the location of every single image on disk, twice each, on every 2-second refresh; it now remembers what it already resolved. The progress bar has also moved to its own tiny request, so it keeps ticking and Stop keeps working no matter how large the Bank or how busy the pass. Measured on a 50 397-image Bank: 18.5 s to 1.5 s, and the progress bar answers in 1 ms.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-each-bank-can-choose-clip-or-siglip2-without-losing-work',
     date: '2026-08-06',
     title: 'Each Bank can choose CLIP or SigLIP 2 — switching keeps every result',
