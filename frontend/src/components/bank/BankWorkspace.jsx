@@ -2034,6 +2034,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             their own per-level progress. Lives in its own component so the
             "which level can run, and why not" logic stays unit-tested. */}
         <BankWatermarkPanel bankId={bankId} live={live}
+          onFind={() => setPassOpen('watermark')}
           onChanged={async () => { await refreshPayload(); await refreshImages() }} />
         {scoreNote && (
           <p className={`text-xs ${scoreNote.tone === 'warn'
@@ -3141,7 +3142,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {passOpen && (
         <PassDialog passId={passOpen} payload={payload} live={live}
           selectionSize={selected.size}
-          detectorReady={!!caps.watermark_detector}
+          detectorReady={!!caps.watermark_detect}
           scope={passScopes[passOpen] || ''}
           onScope={(v) => setPassScope(passOpen, v)}
           redo={!!passRedo[passOpen]}

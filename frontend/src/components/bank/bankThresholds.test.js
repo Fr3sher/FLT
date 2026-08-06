@@ -174,10 +174,10 @@ test('every threshold belongs to a declared group and every group has members', 
   for (const g of THRESHOLD_GROUPS) {
     assert.ok(thresholdsInGroup(g.id).length > 0, `${g.id} is not empty`);
   }
-  // The often-retuned groups stay open; the narrower ones fold. Two open groups
-  // is what keeps this readable on a 400 px screen.
-  assert.deepEqual(THRESHOLD_GROUPS.filter((g) => g.defaultOpen).map((g) => g.id),
-    ['quality', 'duplicates']);
+  // Opening the parent "Filter thresholds" panel reveals the group headings,
+  // never all their controls at once. Every inner group starts folded.
+  assert.equal(THRESHOLD_GROUPS.filter((g) => g.defaultOpen).length, 0,
+    'opening Filter thresholds must leave every inner group folded');
 });
 
 test('every threshold says when it takes effect, using a declared phrase', () => {
