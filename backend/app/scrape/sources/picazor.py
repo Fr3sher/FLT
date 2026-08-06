@@ -296,6 +296,15 @@ def scan(validation):
                 # présence d'UN média précis est garantie). Résultat vide
                 # légitime, même convention que gdl.GdlError kind='empty'.
                 return None, GdlError("Picazor: no media found in this listing.", 'empty')
+            if len(items) > MAX_ITEMS:
+                # Cas limite mais sans ambiguïté (contrairement au profil paginé
+                # ci-dessous) : la page a livré PLUS d'items que MAX_ITEMS en un
+                # seul parse, on sait avec certitude qu'on en jette — pas une
+                # supposition sur « aurait-il pu y en avoir plus », la preuve est
+                # déjà dans la liste avant la troncature `[:MAX_ITEMS]`.
+                result = ResultList(items[:MAX_ITEMS])
+                result.partial = True
+                return result, None
             return items[:MAX_ITEMS], None
 
         # --- Profil paginé (cas par défaut : PROFILE) ---------------------- #
@@ -305,6 +314,7 @@ def scan(validation):
         total_pages = None
         page = start_page
         interrupted = False
+        capped = False
 
         for _ in range(MAX_PAGES):
             page_url = f"{BASE_URL}/fr/{creator}" + (f"/page/{page}" if page > 1 else "")
@@ -341,10 +351,25 @@ def scan(validation):
                     break
 
             if len(all_items) >= MAX_ITEMS:
+                # Plafond MAX_ITEMS atteint : on ne peut pas distinguer « le
+                # profil a EXACTEMENT MAX_ITEMS médias » de « il en restait plus
+                # après » (les pages suivantes ne sont jamais regardées). On
+                # choisit le côté honnête : marquer PARTIEL même si ça peut être
+                # un faux positif rare — un vrai plafond caché par erreur est pire
+                # qu'une bannière « peut-être plus » de trop.
+                capped = True
                 break
             page += 1
             if page > total_pages:
                 break
+        else:
+            # La boucle a épuisé ses MAX_PAGES itérations sans qu'aucun `break`
+            # n'ait déclaré ni la fin naturelle (page > total_pages) ni le
+            # plafond MAX_ITEMS : on sait alors que `page <= total_pages`
+            # (sinon on aurait `break`), donc des pages restent au-delà du
+            # garde-fou temps MAX_PAGES — troncature silencieuse avant cette
+            # correction (cf. commentaire MAX_PAGES en tête de module).
+            capped = True
 
         if not all_items:
             # Toutes les pages parcourues (ou la 1re a échoué SANS items déjà
@@ -352,7 +377,7 @@ def scan(validation):
             # la boucle) sans un seul média : profil légitimement vide, même
             # convention que gdl.GdlError kind='empty'.
             return None, GdlError("Picazor: no media found for this profile.", 'empty')
-        if interrupted:
+        if interrupted or capped:
             result = ResultList(all_items[:MAX_ITEMS])
             result.partial = True
             return result, None

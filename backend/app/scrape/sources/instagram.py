@@ -256,10 +256,18 @@ def _scan_profile(loader, username):
     posts_seen = 0
     posts_failed = 0
     timed_out = False
+    capped = False
     started = time.time()
     try:
         for post in profile.get_posts():
             if len(items) >= SCAN_LIMIT:
+                # Plafond SCAN_LIMIT atteint : on ne regarde jamais le post
+                # suivant, donc on ne peut pas savoir si le profil s'arrêtait
+                # PILE là ou continuait — même limite de détection que
+                # picazor.py (cf. son commentaire). Côté honnête : PARTIEL même
+                # au risque d'un faux positif rare sur un profil qui aurait
+                # EXACTEMENT SCAN_LIMIT publications.
+                capped = True
                 break
             if time.time() - started > PROFILE_SCAN_TIMEOUT:
                 logger.warning("Timeout scan profil %s (%ds), %d items.",
@@ -284,6 +292,9 @@ def _scan_profile(loader, username):
             for item in converted:
                 items.append(item)
                 if len(items) >= SCAN_LIMIT:
+                    # Même plafond, atteint cette fois en cours de carrousel :
+                    # même limite de détection / même choix honnête que ci-dessus.
+                    capped = True
                     break
     except Exception as e:
         # Erreur pendant l'itération paginée (souvent rate-limit en cours de route).
@@ -329,14 +340,18 @@ def _scan_profile(loader, username):
         # gdl.GdlError kind='empty'.
         return None, GdlError(f"No media found for profile {username}.", 'empty')
 
-    if timed_out or posts_failed:
+    if timed_out or posts_failed or capped:
         # Récolte non garantie complète : soit le plafond de temps a coupé
         # l'itération avant la fin, soit certains posts ont échoué à la
-        # conversion pendant que d'autres réussissaient. Les items présents
-        # restent valides — signal `partial` plutôt que de les jeter, même
-        # convention que `base.ResultList.partial` (réutilisée telle quelle),
-        # lue par `routes/scrape.py` sur l'objet retourné sans changement côté
-        # route.
+        # conversion pendant que d'autres réussissaient, soit le plafond
+        # SCAN_LIMIT a été atteint (`capped` — avant cette correction ce
+        # troisième cas retombait tout droit dans le `return items[:SCAN_LIMIT],
+        # None` final, une liste ordinaire sans signal de troncature : un
+        # profil de 5000 posts ressemblait à un profil de 50). Les items
+        # présents restent valides — signal `partial` plutôt que de les jeter,
+        # même convention que `base.ResultList.partial` (réutilisée telle
+        # quelle), lue par `routes/scrape.py` sur l'objet retourné sans
+        # changement côté route.
         result = ResultList(items[:SCAN_LIMIT])
         result.partial = True
         return result, None
