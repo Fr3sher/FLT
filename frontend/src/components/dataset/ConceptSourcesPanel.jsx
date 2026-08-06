@@ -22,6 +22,7 @@ import PexelsAttribution from './PexelsAttribution';
 import SettingsLink from '../common/SettingsLink';
 import KleinModelSetting from '../shared/KleinModelSetting';
 import { localEngineUnavailableReason } from '../../utils/localEngineReason';
+import { scrapeDepsBanner } from '../../utils/scrapeDeps';
 import {
   buildPexelsSearchUrl,
   buildWebSearchUrl,
@@ -309,15 +310,17 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
         ))}
       </div>
 
-      {/* Scrape extras (curl_cffi, gallery-dl, cloudscraper…) live in the
-          optional requirements-scrape.txt. Pexels enumeration uses its official
-          API, while thumbnail proxying and imports still need curl_cffi. */}
+      {/* Scrape extras live in the optional requirements-scrape.txt. The names
+          are NOT written here: the banner used to recite three of them while the
+          backend probe watches seven, so an install flagged because `ddgs` or
+          `yt_dlp` was absent got a warning that mentioned neither. It now quotes
+          what the probe actually reported missing (caps.scrape_deps_detail). */}
       {caps.scrape_deps === false && (
         <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-2 flex flex-col gap-1.5">
           <p className="text-amber-200 text-[0.6875rem]">
-            ⚠ The optional scraper packages are not installed (curl_cffi, gallery-dl,
-            cloudscraper…). Install them for image previews and imports. Pexels uses
-            its official API for listing, but still needs curl_cffi to fetch images.
+            {scrapeDepsBanner(caps.scrape_deps_detail)} Install them for image previews,
+            imports, the keyless web image search and video sources. Pexels uses its
+            official API for listing, but still needs curl_cffi to fetch images.
           </p>
           <InstallRunner action="scrape_extras" buttonLabel="⬇ Install scraper extras"
             onDone={() => refresh(true)} />

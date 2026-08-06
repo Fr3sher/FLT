@@ -8,7 +8,7 @@ import { deriveSetupSteps, deriveCapabilitySummary, SETUP_STEP_IDS, kleinMissing
   aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS } from '../hooks/useSetupSteps'
 import SettingsLink from '../components/common/SettingsLink'
 import GuidedSteps from '../components/setup/GuidedSteps'
-import { ML_INSTALL_CARDS } from '../components/setup/mlInstallCards'
+import { ML_INSTALL_CARDS, cardInstalled } from '../components/setup/mlInstallCards'
 import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
@@ -60,16 +60,23 @@ const STATUS_META = {
 // useSetupSteps.js) back to the wizard step that installs/configures it, so clicking a
 // row jumps straight to that step. Most entries match a step's own `unlocks` wording
 // 1:1 (Captioning, Face-similarity scoring, Person masks, LoRA training, Test Studio).
-// Two don't, and are set by where the control actually lives: "Klein (local)" is
+// Three don't, and are set by where the control actually lives: "Klein (local)" is
 // downloaded from the comfyui step's body (toolBody('comfyui') has the one-click
 // installers), not the image step — the image step only has the API-key fields and a
 // note pointing at ComfyUI. "Auto-framing & head-crop" is the ollama step's other two
 // unlocks (Auto-classify framing / Auto head-crop), just phrased differently here.
+// "Krea 2 Edit (local)" is the third, and it had NO entry at all: its row rendered a
+// ✗ and led nowhere, which teaches the user something is missing and gives them no
+// way to reach it. Its one-click installer is KreaInstallCard, and that card is
+// mounted ONLY inside InstallEverything — i.e. on the 'install' screen, not on any
+// tool step (the comfyui step has Klein's weights, never Krea's). Hence 'install',
+// which is a SCREEN and not a step id — see screenOf().
 const CAPABILITY_STEP_ID = {
   'Nano Banana (Gemini)': 'image',
   'ChatGPT (gpt-image-2)': 'image',
   'OpenRouter': 'image',
   'Klein (local)': 'comfyui',
+  'Krea 2 Edit (local)': 'install',
   'Captioning': 'ollama',
   'Auto-framing & head-crop': 'ollama',
   'Face-similarity scoring': 'quality',
@@ -77,6 +84,7 @@ const CAPABILITY_STEP_ID = {
   'Watermark inpainting': 'quality',
   'Video bank — reading files': 'quality',
   'Video bank — shot detection': 'quality',
+  'Video bank — clip encoding': 'quality',
   // Same step as the four rows above: each has its own one-click card in the
   // quality step's install list (mlInstallCards.js) — bank scoring/SigLIP2/the
   // watermark detector were already there; the scraping-extras card was added
@@ -1095,7 +1103,8 @@ export default function SetupPage() {
           )}
           <div className="space-y-3">
             {ML_CAPS.map((c) => {
-              const present = !!caps[c.cap]
+              // Every piece the action installs, not just the first — see cardInstalled.
+              const present = cardInstalled(c, caps)
               return (
                 <div key={c.action} className="rounded-md border border-border bg-surface-raised p-3 space-y-2">
                   <div className="flex items-center justify-between gap-2">
@@ -1213,7 +1222,17 @@ export default function SetupPage() {
   const INSTALL = SCREENS.indexOf('install')   // the install/reinstall step, after config
   const isReady = (id) => stepById[id].status === 'ready' || stepById[id].disabled
   const toolIdx = (id) => SETUP_STEP_IDS.indexOf(id)
-  const screenOf = (id) => SETUP_STEP_IDS.indexOf(id) + 1   // welcome=0, tools=1..N
+  // welcome=0, tools=1..N — and, for the two screens that are not tool steps
+  // ('install', 'done'), their index in SCREENS. Without that second lookup a
+  // capability row pointing at the install/repair menu (Krea 2 Edit, whose only
+  // one-click installer lives there) silently resolved to -1+1 = 0 and dumped the
+  // user on the welcome screen. Unknown ids still fall back to welcome, as before.
+  const screenOf = (id) => {
+    const i = SETUP_STEP_IDS.indexOf(id)
+    if (i >= 0) return i + 1
+    const j = SCREENS.indexOf(id)
+    return j > 0 ? j : 0
+  }
   const allReady = SETUP_STEP_IDS.every(isReady)
   const nextUnfinished = (fromIdx) => {
     for (let i = fromIdx + 1; i < SETUP_STEP_IDS.length; i += 1)

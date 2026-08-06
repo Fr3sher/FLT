@@ -10,7 +10,9 @@
  * mlInstallCards.test.js pins every strip hint to a card here.
  *
  * `action` is the backend install action (setup_installer.INSTALL_ACTIONS),
- * `cap` the /api/capabilities key that turns the card's badge green.
+ * `cap` the /api/capabilities key that turns the card's badge green — or an
+ * ARRAY of keys when one action installs several pieces that fail apart (the
+ * video card ships PyAV *and* a bundled ffmpeg; see cardInstalled below).
  */
 export const ML_INSTALL_CARDS = [
   { action: 'face_scoring', cap: 'face_scoring', icon: '🎭', title: 'Face-similarity scoring',
@@ -27,7 +29,7 @@ export const ML_INSTALL_CARDS = [
   { action: 'watermark_detect', cap: 'watermark_detect', icon: '🚩',
     title: 'Watermark detector (faster 🚩 Find)',
     body: "Makes the Bank's 🚩 Find watermarks pass roughly ten times faster and lets it run without Ollama: a small classifier scores each image (~0.14 s instead of ~1.7 s asking the vision model in words), and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint have something to work on. Adds ~0.9 GB of weights into the scoring Python it shares with ✨ Score. Without it nothing breaks — the vision model keeps doing the same job, slower." },
-  { action: 'video', cap: 'video_decode', icon: '🎬',
+  { action: 'video', cap: ['video_decode', 'video_encode'], icon: '🎬',
     title: 'Video decoding (the 🎬 Video bank reads your files)',
     body: 'Lets the Video bank open your files at all: read their length, size and frame rate, grab thumbnails, measure quality and cut the clips you promote. Two small packages (PyAV + a bundled ffmpeg) into the app\'s own Python — no torch, no GPU. Without it a video bank can list files and nothing more, and every pass names this install as the missing piece.' },
   { action: 'shot_detect', cap: 'video_detect', icon: '🎞️',
@@ -40,5 +42,25 @@ export const ML_INSTALL_CARDS = [
   // extras" advice from that banner led back to a page with nothing to click.
   { action: 'scrape_extras', cap: 'scrape_deps', icon: '🔎',
     title: 'Scraping extras (gallery links & keyless web image search)',
-    body: 'Installs curl_cffi, gallery-dl and cloudscraper — what gallery-URL scraping and the keyless web image search use to fetch thumbnails and full images. Pexels enumeration works without it (its official API); fetching the actual images still needs curl_cffi. Without it, scraping is limited to sources with no anti-bot layer.' },
+    body: 'Installs curl_cffi, gallery-dl, cloudscraper, ddgs and yt-dlp — what gallery-URL scraping, the keyless web image search and the video sources use to enumerate and fetch media. Pexels enumeration works without it (its official API); fetching the actual images still needs curl_cffi. Without it, scraping is limited to sources with no anti-bot layer.' },
 ]
+
+/** The capability keys a card's install is responsible for, always as a list. */
+export function cardCaps(card) {
+  return Array.isArray(card.cap) ? card.cap : [card.cap]
+}
+
+/** True only when EVERY piece the card installs is present.
+ *
+ *  One action, one badge — but not one probe. `video` installs PyAV and a
+ *  bundled ffmpeg, and capabilities.probe_video() reports them apart because
+ *  they fail apart: imageio-ffmpeg hands back a path whether or not its binary
+ *  download finished, so decoding can be green on a machine with no encoder.
+ *  Reading only the first key badged that machine "✓ Installed" while the Video
+ *  bank could not cut a clip — and hid the ↻ Reinstall that fixes it behind a
+ *  green tick.
+ */
+export function cardInstalled(card, caps) {
+  const c = caps || {}
+  return cardCaps(card).every((k) => !!c[k])
+}
