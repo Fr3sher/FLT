@@ -44,7 +44,24 @@ test('non-zero Bank segments use exact widths and remain physically visible', ()
   assert.doesNotMatch(page, /width: `\$\{row\.percent\}%`/)
 })
 
+test('the overview is open by default and folds without tying its state to live payload refreshes', () => {
+  assert.match(overview, /const \[open, setOpen\] = useState\(true\)/)
+  assert.match(overview, /onClick=\{\(\) => setOpen\(\(value\) => !value\)\}/)
+  assert.match(overview, /aria-expanded=\{open\}/)
+  assert.match(overview, /aria-controls=\{contentId\}/)
+  assert.match(overview, /<div id=\{contentId\} hidden=\{!open\}/)
+  assert.doesNotMatch(overview, /useState\([^)]*payload/)
+})
+
+test('the overview header and live total stay visible while its details fold', () => {
+  const detailsAt = overview.indexOf('<div id={contentId}')
+  assert.ok(detailsAt > 0)
+  assert.ok(overview.indexOf('📊 Bank overview') < detailsAt)
+  assert.ok(overview.indexOf('{totalText}') < detailsAt)
+})
+
 test('the overview has an explicit unavailable state before bank data arrives', () => {
-  assert.match(overview, /if \(!model\.available\)/)
+  assert.match(overview, /!model\.available \? \(/)
   assert.match(overview, /Overview unavailable — waiting for bank data/)
+  assert.match(overview, /'Total unavailable'/)
 })

@@ -38,6 +38,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -441,8 +442,60 @@ def analysis_image_path(bank: ImageBank, row: BankImage, *,
 
 
 # --- CRUD -------------------------------------------------------------------
+class BankSourceFolderUnavailable(RuntimeError):
+    """The owned Bank exists, but its recorded source is not an existing folder."""
+
+
 def get_bank(user_id, bank_id) -> ImageBank | None:
     return ImageBank.query.filter_by(id=bank_id, user_id=user_id).first()
+
+
+def _open_host_folder(path: str) -> None:
+    """Reveal/explore a validated directory without executing the target."""
+    if os.name == 'nt':
+        os.startfile(path, 'explore')  # noqa: S606 - validated local directory
+    elif sys.platform == 'darwin':
+        # ``open <bundle>.app`` launches it. Finder's reveal mode selects the
+        # target instead, which is the folder-button contract even for bundles.
+        subprocess.Popen(['/usr/bin/open', '-R', path], shell=False)
+    else:
+        subprocess.Popen(['xdg-open', path], shell=False)
+
+
+def open_bank_source_folder(user_id, bank_id) -> str | None:
+    """Open one owned Bank's server-stored source folder in the host explorer.
+
+    The caller supplies only the Bank id: no client-provided filesystem path
+    reaches this boundary.  Unlike training-folder helpers this never creates a
+    directory; a moved, disconnected or file-valued source is an explicit error.
+    ``None`` deliberately conflates an unknown Bank with another user's Bank.
+    """
+    if (isinstance(bank_id, bool) or not isinstance(bank_id, int)
+            or not 1 <= bank_id <= (1 << 63) - 1):
+        return None
+
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        return None
+    stored_path = bank.source_path
+    if (not isinstance(stored_path, str) or not stored_path
+            or not os.path.isabs(stored_path)):
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory')
+    try:
+        # strict=True proves every component still exists before opening it and
+        # resolves junctions/symlinks. Do not impose a drive-letter whitelist:
+        # reachable UNC shares are absolute, legitimate Bank sources on Windows.
+        path = os.path.realpath(stored_path, strict=True)
+    except (OSError, TypeError, ValueError) as exc:
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory') from exc
+    if not os.path.isdir(path):
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory')
+    _open_host_folder(path)
+    logger.info('opened Bank source folder: bank=%s path=%s', bank.id, path)
+    return path
 
 
 def _serialized_bank_mutation(kind):

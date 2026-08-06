@@ -1298,6 +1298,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     const grouped = groupPinnedBatchBySource({
       nodes: Object.values(map),
       placed: [{ imageId: img.id, ...geo, image: img }],
+      graph: lane?.graph,
     });
     onSaveImageNodes?.(dsId, grouped.rows.map((row) => ({
       image_id: row.imageId, x: row.x, y: row.y, w: row.w, h: row.h,
@@ -1368,7 +1369,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       });
       if (!res.placed.length) continue;
       const grouped = groupPinnedBatchTogether({
-        nodes: Object.values(laneMap), placed: res.placed,
+        nodes: Object.values(laneMap), placed: res.placed, graph: lane?.graph,
       });
       placedTotal += res.placed.length;
       skippedTotal += res.skipped.length;

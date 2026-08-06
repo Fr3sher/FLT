@@ -691,6 +691,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [scoringPythonOpen, setScoringPythonOpen] = useState(false)
   const [dismissedReportAt, setDismissedReportAt] = useState(null)
   const [relocating, setRelocating] = useState(false)
+  const [openingSourceFolder, setOpeningSourceFolder] = useState(false)
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
   const [showAutoReject, setShowAutoReject] = useState(false)
   // 🎚 The threshold editor folds away: the chips are the daily gesture, the
@@ -948,6 +949,18 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       .then((d) => { if (alive) setOllamaModels(d?.models || []) })
     return () => { alive = false }
   }, [])
+
+  const openSourceFolder = async () => {
+    if (openingSourceFolder) return
+    setOpeningSourceFolder(true)
+    try {
+      await postJson(`/api/bank/${bankId}/open-source-folder`, {})
+    } catch (e) {
+      toast.error(e?.message || 'Could not open the bank source folder')
+    } finally {
+      setOpeningSourceFolder(false)
+    }
+  }
 
   const runFolderPerson = async (call, success) => {
     setFolderPersonBusy(true)
@@ -1863,6 +1876,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
               title={payload.source_path}>
               {payload.source_path}
             </p>
+            <button type="button" onClick={openSourceFolder}
+              disabled={openingSourceFolder} aria-busy={openingSourceFolder}
+              title="Open this Bank's source folder in the system file explorer."
+              className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:cursor-wait disabled:opacity-60">
+              {openingSourceFolder ? 'Opening…' : '📂 Open folder'}
+            </button>
             {/* Cold path. The folder-sync note below offers this too, but only once
                 the folder is already gone — and the real move is PLANNED: you look
                 for the option before you drag 30 000 files to another drive, not

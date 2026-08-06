@@ -52,6 +52,8 @@ _BUSY_WRITE_EXEMPT_ENDPOINTS = frozenset({
     'bank.bank_select_balanced',
     'bank.bank_select_similar',
     'bank.bank_search_text',
+    # Read-only host integration: opening Explorer/Finder never mutates the Bank.
+    'bank.bank_open_source_folder',
     # The one write that must stay reachable precisely while a job is live.
     'bank.bank_cancel',
 })
@@ -192,6 +194,21 @@ def bank_get(bank_id):
         return jsonify({'error': 'not found'}), 404
     payload['folder_sync'] = sync
     return jsonify(payload)
+
+
+@bp.post('/bank/<int:bank_id>/open-source-folder')
+def bank_open_source_folder(bank_id):
+    """Open the owned Bank's recorded source; the client supplies no path."""
+    try:
+        path = banks.open_bank_source_folder(LOCAL_USER, bank_id)
+    except banks.BankSourceFolderUnavailable as exc:
+        return jsonify({'error': str(exc)}), 409
+    except Exception:
+        current_app.logger.exception('could not open Bank source folder')
+        return jsonify({'error': 'could not open the bank source folder'}), 500
+    if path is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True})
 
 
 @bp.post('/bank/<int:bank_id>/flag-preview')
