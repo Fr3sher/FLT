@@ -43,7 +43,7 @@ import threading
 import time
 import uuid
 import warnings
-from collections import deque
+from collections import OrderedDict, deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from functools import wraps
@@ -293,6 +293,59 @@ def abs_image_path(bank: ImageBank, row: BankImage) -> str | None:
     the app should display or copy once a watermark has been cleaned — every
     reader must go through resolved_image_path() instead (see its docstring)."""
     return _abs_under(os.path.realpath(bank.source_path), row.relpath)
+
+
+_POLL_PATH_LOCK = threading.RLock()
+_POLL_PATH_CACHE: 'OrderedDict[int, tuple[str, dict[str, str | None]]]' = OrderedDict()
+# ~250 000 resolved relpaths across all banks: five banks the size of the one that
+# produced this fix, a few tens of MB of strings. Whole banks are evicted, oldest
+# first, so a cache miss costs exactly what the uncached code always cost.
+_POLL_PATH_BUDGET = 250_000
+
+
+def _poll_path_memo(bank: ImageBank) -> tuple[str, dict[str, str | None]]:
+    """``(resolved bank folder, relpath -> containment-checked absolute path)``
+    for paths a POLL only ever uses as comparison keys.
+
+    ⚠️ Read this before reusing it anywhere else. ``_abs_under`` is a directory
+    escape guard, and this memoizes its verdict. That is sound HERE and nowhere
+    obvious else, because the caller (:func:`_semantic_eligible_paths`) never
+    opens, serves, copies or writes these paths — it hands them to the semantic
+    cache inspector as a membership set deciding which cached rows count toward
+    ``ok / total``. A path is a key here, not a capability. Every path that DOES
+    become a capability — serving bytes, cleaning, promoting, deleting — still
+    goes through :func:`abs_image_path` and pays the live guard on every call.
+
+    The verdict is memoized including its REJECTIONS: a relpath that escapes the
+    bank folder is remembered as ``None`` and can never be promoted to allowed by
+    a later hit. The whole map is dropped when the bank's resolved folder changes.
+
+    Why it exists: the workspace polls ``bank_payload`` every 2 s, and this list
+    was resolved from scratch each time — ``os.path.realpath`` twice per image,
+    and on Windows each one OPENS the file through ``nt._getfinalpathname``.
+    Measured on a 50 397-image bank (36 870 eligible): 147 502 syscalls and 12.5 s
+    per poll, 28.9 s while a pass ran. Requests issued every 2 s that take 12 s
+    pile up, and this payload carries the job banner — so the bank became
+    unreadable AND its Stop button unreachable, which is how it was reported.
+    """
+    base = os.path.realpath(bank.source_path)
+    with _POLL_PATH_LOCK:
+        entry = _POLL_PATH_CACHE.get(bank.id)
+        if entry is None or entry[0] != base:
+            entry = (base, {})
+        _POLL_PATH_CACHE[bank.id] = entry
+        _POLL_PATH_CACHE.move_to_end(bank.id)
+        while (len(_POLL_PATH_CACHE) > 1
+               and sum(len(m) for _b, m in _POLL_PATH_CACHE.values())
+               > _POLL_PATH_BUDGET):
+            _POLL_PATH_CACHE.popitem(last=False)
+    return entry
+
+
+def reset_poll_path_memo() -> None:
+    """Forget every memoized poll-path verdict (tests, bank deletion)."""
+    with _POLL_PATH_LOCK:
+        _POLL_PATH_CACHE.clear()
 
 
 def _clean_dir(bank_id) -> Path:
@@ -1844,6 +1897,29 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'dataset_conflict': bank_dataset_conflict(user_id, bank_id),
         'thresholds': th,
     }
+
+
+def bank_activity(user_id, bank_id) -> dict | None:
+    """JUST the live job — the handful of bytes the progress banner and its Stop
+    button need. ``None`` when the bank is gone.
+
+    ⏱ WHY THIS EXISTS AS ITS OWN CALL. The banner used to ride on
+    :func:`bank_payload`, the heaviest read on the page: ~60 full-table aggregates
+    over the bank, ~1.4 s on a 50 397-image bank at rest and worse under the write
+    load of the very pass the banner is reporting. That payload is polled every
+    2 s WHILE A JOB RUNS, so the one moment the user needs the Stop button is the
+    one moment the request carrying it cannot land. It was reported as "I can't
+    see my banks and I can't even stop the scan because I have no progress bar" —
+    followed by seven Stop clicks in 20 ms against a UI that answered nothing.
+
+    Nothing here touches the filesystem and only one indexed row is read, so the
+    banner's cost no longer depends on the size of the bank at all. The full
+    payload keeps its own, slower refresh: counts advancing a few seconds late is
+    a cosmetic delay, a Stop button that never arrives is not.
+    """
+    if not get_bank(user_id, bank_id):
+        return None
+    return {'activity': bank_jobs.get(bank_id)}
 
 
 def flag_preview(user_id, bank_id, overrides=None) -> dict | None:
@@ -3462,12 +3538,25 @@ def _semantic_eligible_paths(bank: ImageBank) -> tuple[int, tuple[str, ...]]:
     that resolver hashes clean sources and can materialise/prune rotations.  Raw
     and clean paths are deterministic; already-materialised rotation filenames
     are enumerated once from the app-owned directory, with no image stat/SHA.
+
+    ⏱ It also must not walk the disk. Two things keep it off it, and both are
+    pinned by tests:
+      * the bank folder is resolved ONCE, not once per row — the principle
+        ``test_curation_selection_cost.py`` already pins for the curation pool;
+      * each row's containment verdict is memoized per bank (:func:`_poll_path_memo`,
+        read its warning), so the 2 s poll re-resolves only relpaths it has never
+        seen. Steady state: zero filesystem calls for a 36 870-row pool, where it
+        used to be 147 502.
+    Only the four columns this needs are selected: hydrating whole ORM rows to
+    read a relpath is the other half of the cost on a 50 000-image bank.
     """
-    rows = (BankImage.query.filter_by(bank_id=bank.id)
-            .filter(BankImage.status != 'reject')
-            .order_by(BankImage.id.asc()).all())
+    rows = (db.session.query(
+        BankImage.id, BankImage.relpath, BankImage.rotation,
+        BankImage.watermark_clean_method)
+        .filter(BankImage.bank_id == bank.id, BankImage.status != 'reject')
+        .order_by(BankImage.id.asc()).all())
     rotated = {}
-    if any(getattr(row, 'rotation', None) for row in rows):
+    if any(row.rotation for row in rows):
         try:
             for candidate in _rotated_dir(bank.id).iterdir():
                 if candidate.is_file():
@@ -3476,17 +3565,22 @@ def _semantic_eligible_paths(bank: ImageBank) -> tuple[int, tuple[str, ...]]:
                         rotated.setdefault(int(prefix), []).append(candidate)
         except OSError:
             pass
+    base, resolved = _poll_path_memo(bank)
     paths = []
-    for row in rows:
-        turn = int(getattr(row, 'rotation', None) or 0)
+    for image_id, relpath, rotation, clean_method in rows:
+        turn = int(rotation or 0)
         if turn:
             marker = f'.r{turn}.'
-            paths.extend(str(candidate) for candidate in rotated.get(row.id, ())
+            paths.extend(str(candidate) for candidate in rotated.get(image_id, ())
                          if marker in candidate.name)
-        elif row.watermark_clean_method:
-            paths.append(str(clean_image_path(bank.id, row.id)))
+        elif clean_method:
+            paths.append(str(clean_image_path(bank.id, image_id)))
         else:
-            raw = abs_image_path(bank, row)
+            try:
+                raw = resolved[relpath]
+            except KeyError:
+                raw = _abs_under(base, relpath)
+                resolved[relpath] = raw
             if raw is not None:
                 paths.append(raw)
     return len(rows), tuple(paths)
