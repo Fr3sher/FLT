@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-setup-counts-the-video-pieces',
+    date: '2026-08-06',
+    title: 'Setup now counts the video pieces — and its repair menu can reach them',
+    blurb:
+      'The setup wizard could certify "12 of 12 capabilities ready" on a machine whose Video bank could not open a single file: the two video pieces were not counted, not listed in the Install-or-repair menu, and the wizard skipped its own install screen because everything it DID count was green. The summary now counts 14 — reading video files and shot detection included, each ✗ row clickable to where it installs — and 🎬 Video decoding and 🎞️ Shot detection sit in the Install or repair individually menu like every other component.',
+    to: '/setup',
+  },
+  {
     id: '2026-08-06-shot-detection-installs-its-decoder',
     date: '2026-08-06',
     title: 'Shot detection no longer fails every file right after a clean install',

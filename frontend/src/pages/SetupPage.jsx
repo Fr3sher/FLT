@@ -75,6 +75,8 @@ const CAPABILITY_STEP_ID = {
   'Face-similarity scoring': 'quality',
   'Person masks': 'quality',
   'Watermark inpainting': 'quality',
+  'Video bank — reading files': 'quality',
+  'Video bank — shot detection': 'quality',
   'LoRA training': 'training',
   'Test Studio': 'comfyui',
 }
