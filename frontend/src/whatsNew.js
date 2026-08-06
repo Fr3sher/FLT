@@ -50,6 +50,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-cap-hit-scans-say-so',
+    date: '2026-08-06',
+    title: 'A capped scan says there might be more',
+    blurb: 'Picazor, RedGifs and Instagram scans stop at a built-in limit to stay fast. Hitting that limit used to look exactly like a profile that genuinely had that few posts. Now the picker flags it, the same "some images may be missing" banner used for a scan cut short by a block or a timeout.',
+  },
+  {
     id: '2026-08-06-scan-truncation-and-blocked-pages',
     date: '2026-08-06',
     title: 'A blocked page says so — even on a slow scan',
