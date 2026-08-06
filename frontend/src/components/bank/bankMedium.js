@@ -125,12 +125,16 @@ export function angleReadiness(payload) {
   const counts = payload?.counts || {};
   const measured = counts.angle_measured || 0;
   const backfillable = counts.angle_backfillable || 0;
+  const facesScanned = payload?.faces_scanned || 0;
   const buckets = payload?.angles || {};
   const behind = buckets.behind || 0;
   const framed = counts.framing_classified || 0;
   const notes = [];
   if (!measured && !backfillable) {
-    notes.push('Run 🎭 Person groups to measure head angles.');
+    notes.push(facesScanned
+      ? `${facesScanned} image${facesScanned === 1 ? ' was' : 's were'} face-checked, `
+        + 'but no measurable head angle was found — there is nothing to backfill.'
+      : 'Run 🎭 Person groups to measure head angles.');
   }
   if (measured && !behind && !framed) {
     notes.push('“From behind” also needs the 📐 Framing pass — without it a '

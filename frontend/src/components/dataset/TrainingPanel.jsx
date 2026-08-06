@@ -78,8 +78,10 @@ import {
   TRAINING_MODE_LORA,
   cloudTierEstimateView,
   denseQuantizeTarget,
+  denseTurboWarning,
   fullTransformerArtifactFiles,
   fullTransformerArtifactView,
+  fullTransformerBaseLabel,
   fullTransformerFp8Note,
   fullTransformerUnavailableReason,
   hfCloudTokenReadiness,
@@ -275,6 +277,10 @@ export function FullTransformerAdvancedRecipe({
   samplePromptsText = '', setSamplePromptsText = null, saveSamplePrompts = null,
   samplePromptsDefault = [], maxSamplePrompts = 8,
   quantizeTarget = null, suggestedQuantizePath = '',
+  // The base the emitted config will actually carry. Computed, never a
+  // literal: this card used to state "Official Krea 2 Raw" over a recipe that
+  // can now be Turbo or a local checkpoint.
+  baseSummary = 'official Krea 2 Raw',
 }) {
   const explicitSteps = String(stepsOverride || '').trim();
   const factClass = 'rounded-lg border border-sky-400/20 bg-app/45 px-2.5 py-2';
@@ -352,7 +358,9 @@ export function FullTransformerAdvancedRecipe({
       <dl className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         <div className={factClass}>
           <dt className="text-content-subtle text-[0.625rem] uppercase">Model</dt>
-          <dd className="m-0 mt-0.5 text-content">Official Krea 2 Raw · full transformer · unquantized</dd>
+          <dd className="m-0 mt-0.5 text-content">
+            {baseSummary} · full transformer · unquantized
+          </dd>
         </div>
         <div className={factClass}>
           <dt className="text-content-subtle text-[0.625rem] uppercase">Locked · batch &amp; precision</dt>
@@ -576,6 +584,92 @@ export function FullTransformerAdvancedRecipe({
   );
 }
 // FULL_TRANSFORMER_ADVANCED_RECIPE_END
+
+/** The base a FULL-MODEL run fine-tunes: the Raw/Turbo switch, the Krea 2
+ * checkpoints installed on this machine, and a local file.
+ *
+ * It exists because the family/variant/base controls live in the LoRA-only
+ * branch of the Advanced section, so a dense recipe had no visible way to
+ * choose anything — the owner's report was literally "I still can't see where
+ * to put the turbo option". The values are the same state the LoRA lane
+ * writes (one stored column each), so nothing new is persisted and no alias is
+ * owed.
+ *
+ * It is a top-level component rather than inline JSX for one reason: inline
+ * JSX inside the panel is unreachable for a test. The panel only enters
+ * full-model mode from an effect, and effects do not run under
+ * renderToStaticMarkup, so this markup could never be EXECUTED by the suite —
+ * exactly the shape that shipped two white screens before (see
+ * tests/support/mountJsx.mjs). As its own component it is mounted for real, in
+ * each of its three states. */
+export function DenseBasePicker({
+  variant, setVariant, base, setBase, customBase, setCustomBase,
+  currentBases = [], customSupported = false, baseNote = null,
+  baseSummary = 'official Krea 2 Raw', busy = false,
+}) {
+  // A picked checkpoint IS the base: the backend resolver returns it whatever
+  // the variant says, so a live Raw/Turbo switch would offer a choice with no
+  // effect — the exact class of lie this lane is being corrected for.
+  const customPicked = !!String(base || '').trim();
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-sky-400/25 bg-app/40 px-3 py-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-content-muted text-[0.625rem] uppercase">
+          Base to fine-tune
+        </span>
+        <select value={variant} onChange={(e) => setVariant(e.target.value)}
+          disabled={busy || customPicked}
+          aria-label="Krea 2 base for full-model training"
+          title="Raw is Krea's official recommendation. Turbo is allowed and untested for full-model training — the notice above says exactly what is unknown."
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] disabled:opacity-50">
+          <option value="base">Raw (recommended)</option>
+          <option value="turbo">Turbo (few-step)</option>
+        </select>
+        <select value={customBase ? CUSTOM_BASE_SENTINEL : base}
+          onChange={(e) => {
+            const v = e.target.value;
+            if (v === CUSTOM_BASE_SENTINEL) { setCustomBase(true); setBase(''); }
+            else { setCustomBase(false); setBase(v); }
+          }}
+          disabled={busy}
+          aria-label="Full-model base checkpoint"
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] max-w-[230px]">
+          <option value="">Official Krea 2 — by variant</option>
+          {currentBases.filter((b) => b.value).map((b) => (
+            <option key={b.value} value={b.value}>
+              {b.label}{baseOptionSuffix(b)}
+            </option>
+          ))}
+          {customSupported && (
+            <option value={CUSTOM_BASE_SENTINEL}>Custom weights… (local file)</option>
+          )}
+        </select>
+      </div>
+      {customBase && customSupported && (
+        <input type="text" value={base} onChange={(e) => setBase(e.target.value)}
+          disabled={busy}
+          spellCheck={false}
+          placeholder={'C:\\path\\to\\your-krea2-model.safetensors'}
+          aria-label="Full-model custom weights path"
+          className="px-2 py-1 rounded-lg border border-border bg-surface text-content text-[0.75rem] font-mono w-full max-w-[520px]" />
+      )}
+      {baseNote && (
+        <span className={`text-[0.625rem] leading-relaxed ${
+          baseNote.level === 'error' ? 'text-red-300' : 'text-amber-300'}`}>
+          {baseNote.level === 'error' ? '⛔' : '⚠️'} {baseNote.text}
+        </span>
+      )}
+      <span className="text-content-subtle text-[0.625rem] leading-relaxed">
+        This run will train <b className="text-content-muted font-medium">{baseSummary}</b>.
+        {customPicked
+          ? ' A local checkpoint IS the base, so the Raw/Turbo switch does not apply to it. It travels to the rented GPU through a private repository on your own Hugging Face account.'
+          : ' Raw is the non-distilled checkpoint Krea recommends fine-tuning.'}
+        {' '}A ComfyUI-scaled fp8 export cannot be loaded for training and is refused with its reason —
+        pick the bf16/fp16 build of the same model.
+      </span>
+    </div>
+  );
+}
 
 /** Panneau d'entraînement LoRA : lance l'UI ai-toolkit (pause ComfyUI),
  * affiche l'état, liste les checkpoints et importe celui choisi.
@@ -1914,6 +2008,12 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   const zimageRecipe = trainType === 'zimage'
     ? describeZImageRecipe({ variant, base, baseLabel, customBase })
     : null;
+  // The dense recipe's base, computed from the SAME selection the backend
+  // resolves from — and the untested-Turbo notice that rides with it, shown
+  // before the GPU is rented rather than in the run log afterwards.
+  const denseBaseSummary = fullTransformerBaseLabel({
+    baseModel: base, baseLabel, variant });
+  const denseTurboNotice = denseTurboWarning({ baseModel: base, variant });
   const effectiveTargetSteps = stepsN ?? stepsInfo?.steps ?? null;
   const zimageTurboLongRun = trainType === 'zimage'
     && isLongZImageTurboRun({ variant, steps: effectiveTargetSteps });
@@ -2051,7 +2151,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     !caps.cloud_training
       ? 'Cloud training needs a vast.ai API key — add it in Settings'
     : fullMode && !fullTransformerEligible
-      ? (fullTransformerReason || 'Full-model training requires the official Krea 2 Raw base')
+      ? (fullTransformerReason || 'Full-model training is a Krea 2 recipe')
     : cloudFamilyBlock
       ? cloudFamilyBlock
     : (vaePath || tePath)
@@ -2421,7 +2521,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             ].filter(Boolean).join(' ') || undefined}
             onKeyDown={onTrainingModeKeyDown}
             onClick={() => onTrainingModeChange(TRAINING_MODE_FULL_TRANSFORMER)}
-            title={fullTransformerReason || 'Experimental · Krea 2 Raw · cloud-only'}
+            title={fullTransformerReason || `Experimental · ${denseBaseSummary} · cloud-only`}
             className={`px-2.5 py-1 rounded-md text-[0.75rem] font-semibold transition-colors disabled:opacity-40 ${
               fullMode ? 'bg-sky-500/25 text-sky-100' : 'text-content-muted hover:text-content'}`}>
             Full model
@@ -2538,7 +2638,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <span className="ml-auto text-content-subtle text-[0.625rem]"
           title="The configuration the next run will use — change it in Advanced options below">
           {fullMode ? (
-            <>Full model · official Krea 2 Raw · cloud · {stepsOverride.trim() ? `${stepsN} steps` : 'adaptive steps'}</>
+            <>Full model · {denseBaseSummary} · cloud · {stepsOverride.trim() ? `${stepsN} steps` : 'adaptive steps'}</>
           ) : (<>
           {sliderOn ? '🎚 slider (Beta) · ' : ''}base “{zimageRecipe?.baseLabel || baseLabel}”{zimageRecipe ? ` · ${zimageRecipe.adapterActive ? 'Turbo adapter v2 ON' : 'no training adapter'}` : ''} · {sliderOn ? 'unmasked (slider)' : maskedRembgMissing ? 'unmasked (rembg missing)' : masked ? 'masked' : 'unmasked'} · {advResLabel} · {stepsOverride.trim() ? `${stepsN} steps` : sliderOn ? `${stepsInfo?.steps ?? 1000} steps (slider policy)` : 'adaptive steps'}{advNetworkType === 'lokr' ? ` · LoKr${advLokrFactor ? ` factor ${advLokrFactor}` : ''}` : ''}{advEma ? ` · EMA ${advEma}` : ''}
           </>)}
@@ -2555,12 +2655,25 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           </p>
           <p className="m-0 mt-1 text-amber-100/95">
             The ~26 GB model is uploaded using a dedicated <code>HF_CLOUD_TOKEN</code>. A tightly scoped
-            fine-grained token is recommended: read access only to Krea 2 Raw and write access to a single
-            dedicated Hugging Face namespace containing only LDS deliveries. A global write token is also
+            fine-grained token is recommended: read access only to the Krea 2 base this run uses
+            ({denseBaseSummary}) and write access to a single dedicated Hugging Face namespace
+            containing only LDS deliveries. A global write token is also
             accepted with a warning. Configure it in{' '}
             <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>.
             {' '}Stopping the run or hitting the runtime cap may lose the latest full-model checkpoint if it has not been uploaded.
           </p>
+        </div>
+      )}
+
+      {/* Turbo in dense mode: allowed, and UNMEASURED. Said here — above the
+          launch buttons, before a GPU is rented — and phrased as what is
+          unknown. It promises no result and predicts no failure, and it never
+          blocks: the product decision is warn and let through. */}
+      {fullMode && denseTurboNotice && (
+        <div role="status" id="dense-turbo-warning"
+          className="rounded-lg border border-amber-400/45 bg-amber-500/[0.09] px-3 py-2 text-[0.75rem] leading-relaxed">
+          <div className="font-semibold text-amber-100">⚠ {denseTurboNotice.title}</div>
+          <p className="m-0 mt-1 text-amber-100/90">{denseTurboNotice.body}</p>
         </div>
       )}
 
@@ -2731,7 +2844,7 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
             <>
               ⚙️ Full-model recipe · steps · prompts · LR · resolution · checkpoints
               <span className="ml-2 font-normal text-sky-200/80 text-[0.6875rem]">
-                Krea 2 Raw · cloud
+                {denseBaseSummary} · cloud
               </span>
             </>
           ) : (
@@ -2746,7 +2859,19 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
         <div className="px-3 pt-1 flex flex-col gap-2">
           {/* FULL_TRANSFORMER_ADVANCED_BRANCH_START — no LoRA control may escape
               the false branch below: the backend ignores all of them in dense. */}
-          {fullMode ? (
+          {fullMode ? (<>
+            {/* DENSE_BASE_PICKER_START — the control the owner could not find.
+                Its markup lives in the DenseBasePicker component above so a
+                test can execute it; what has to stay HERE is the fact that the
+                full-model arm renders it at all. */}
+            <DenseBasePicker
+              variant={variant} setVariant={setVariant}
+              base={base} setBase={setBase}
+              customBase={customBase} setCustomBase={setCustomBase}
+              currentBases={currentBases} customSupported={customSupported}
+              baseNote={baseNote} baseSummary={denseBaseSummary}
+              busy={trainingModeBusy} />
+            {/* DENSE_BASE_PICKER_END */}
             <FullTransformerAdvancedRecipe
               stepsOverride={stepsOverride}
               setStepsOverride={setStepsOverride}
@@ -2758,8 +2883,9 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
               maxSamplePrompts={advMaxPrompts}
               quantizeTarget={denseQuantizeTarget(cloudLastHere || {})}
               suggestedQuantizePath={looksAbsoluteBase(base) ? String(base).trim() : ''}
+              baseSummary={denseBaseSummary}
               disabled={trainingModeBusy || cloudActiveHere} />
-          ) : (<>
+          </>) : (<>
           {/* LORA_ADVANCED_CONTROLS_START */}
           {/* --- Presets : réglages nommés, ré-applicables et partageables en JSON.
                Appliquer REMPLACE les réglages explicites du dataset ; les clés
@@ -4471,8 +4597,16 @@ function CloudLaunchDialog({
   const fullMode = normalizeTrainingMode(trainingMode) === TRAINING_MODE_FULL_TRANSFORMER;
   // Custom base ('' = official): the launch stays blocked until the private
   // repo on the user's HF account carries the base (pushed once, reused).
-  const isCustomBase = !fullMode && !!String(base || '').trim();
+  // Dense runs are no longer excluded — the transport is the same private repo
+  // and the same pod-side rewrite; excluding them here would have left the
+  // lifted refusal with no way to actually get the weights to the GPU.
+  const isCustomBase = !!String(base || '').trim();
   const [customBaseReady, setCustomBaseReady] = useState(!isCustomBase);
+  // Last chance to read it before the money is committed.
+  const turboNotice = fullMode ? denseTurboWarning({ baseModel: base, variant }) : null;
+  // The dialog has no catalog labels, so a custom base falls back to its file
+  // name — never the full path (paste-safe, and this string is user-visible).
+  const denseBase = fullTransformerBaseLabel({ baseModel: base, variant });
 
   useEffect(() => {
     let alive = true;
@@ -4577,8 +4711,8 @@ function CloudLaunchDialog({
             </p>
           ) : (
             <p className="m-0 rounded-lg border border-amber-400/35 bg-amber-500/[0.08] px-3 py-2 text-amber-100 text-[0.75rem] leading-relaxed">
-              This run requires an <code>HF_CLOUD_TOKEN</code> that can read <code>krea/Krea-2-Raw</code> and
-              write the delivery repository. A tightly scoped fine-grained token is recommended. A global
+              This run requires an <code>HF_CLOUD_TOKEN</code> that can read the Krea 2 base it
+              trains from ({denseBase}) and write the delivery repository. A tightly scoped fine-grained token is recommended. A global
               write token is also accepted with a warning. Configure it in{' '}
               <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">Settings ▸ Local tools</SettingsLink>
               {' '}before renting the GPU.
@@ -4592,6 +4726,13 @@ function CloudLaunchDialog({
             <span className="font-semibold">Hugging Face delivery blocked.</span>{' '}{hfTokenIssue}{' '}
             Fix <SettingsLink section="local-tools" focus="HF_CLOUD_TOKEN" tone="warning">HF_CLOUD_TOKEN in Settings ▸ Local tools</SettingsLink>,
             then reload the offers. Launch stays disabled to prevent renting a GPU without a delivery path.
+          </div>
+        )}
+
+        {turboNotice && (
+          <div role="status"
+            className="rounded-lg border border-amber-400/45 bg-amber-500/[0.09] px-3 py-2 text-amber-100 text-[0.75rem] leading-relaxed">
+            <span className="font-semibold">⚠ {turboNotice.title}.</span>{' '}{turboNotice.body}
           </div>
         )}
 
@@ -4646,7 +4787,7 @@ function CloudLaunchDialog({
         )}
 
         <p className="m-0 text-content-subtle text-[0.6875rem]">
-          {fullMode ? `${trainingModeLabel(trainingMode)} · Krea 2 Raw` : `${data?.steps ?? steps ?? '—'} steps · ${_FAMILY_LABEL[data?.family || trainType] || (data?.family || trainType)}`}
+          {fullMode ? `${trainingModeLabel(trainingMode)} · ${denseBase}` : `${data?.steps ?? steps ?? '—'} steps · ${_FAMILY_LABEL[data?.family || trainType] || (data?.family || trainType)}`}
           {keptCount != null ? ` · ${keptCount} img` : ''}
           {budget > 0 ? ` · this month: $${spent.toFixed(2)} of $${budget.toFixed(2)}` : ''}
           {fullMode

@@ -182,6 +182,13 @@ def test_the_quality_scan_skips_an_image_deleted_under_it(bank_ctx, monkeypatch)
 def _run_subprocess_pass(monkeypatch, banks, pass_fn, kind, victim, results):
     """Delete an image from inside the inference child — the hour-long wait the
     pass hands its path list to."""
+    from app.services import bank_transfer_metadata as transfer
+
+    # The real children bind every verdict to the exact bytes they decoded.
+    # Keep this deletion-focused double faithful to that wire contract.
+    for path, result in results.items():
+        result.setdefault('fingerprint', transfer.content_fingerprint_path(path))
+
     def fake_drive(job, python, script, payload, cache_path, progress_re, window):
         _delete_image(victim)
         return {'ok': True, 'results': results, 'clusters': {}}, [], 0
@@ -243,8 +250,12 @@ def test_the_caption_pass_skips_an_image_deleted_under_it(bank_ctx, monkeypatch)
 
     bank_id, ids = bank_ctx
 
+    # **_over absorbs the per-run engine/model overrides the pass now forwards. This
+    # double is about SURVIVING A DELETION, not about the caption config, and pinning
+    # the real function's exact signature here would make every new option a false
+    # failure in a test that never looks at one.
     def fake_caption_paths(paths, extra_instructions=None, should_cancel=None,
-                           on_caption=None, progress=None):
+                           on_caption=None, progress=None, **_over):
         for i, p in enumerate(paths):
             if i == 1:
                 _delete_image(ids[1])
@@ -262,11 +273,16 @@ def test_the_caption_pass_skips_an_image_deleted_under_it(bank_ctx, monkeypatch)
 def _flag_watermarks(ids, manual=False):
     """Put every image in the cleaning pool: flagged, with something to act on."""
     from app.extensions import db
-    from app.models import BankImage
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
     for i in ids:
         row = db.session.get(BankImage, i)
+        bank = db.session.get(ImageBank, row.bank_id)
         row.watermark_state = 'detected'
         row.watermark_bbox = json.dumps([0.0, 0.9, 1.0, 1.0])
+        row.watermark_fingerprint = transfer.content_fingerprint_path(
+            banks.abs_image_path(bank, row))
         if manual:
             row.watermark_regions = json.dumps([[0.0, 0.9, 1.0, 1.0]])
     db.session.commit()

@@ -126,6 +126,28 @@ class ArchiveAwareRequest(Request):
     def max_content_length(self, value):
         self._forced_max_content_length = value
 
+    def _raise_if_declared_body_is_too_large(self):
+        """Apply the selected ceiling on Flask/Werkzeug versions before 2.3.
+
+        Older Werkzeug guarded multipart parsing but its raw ``get_data``
+        stream did not consult Flask's ``MAX_CONTENT_LENGTH`` at all.  Keep the
+        same endpoint-aware limit for both entry paths so an ordinary upload
+        cannot bypass its 64 MiB ceiling merely by using a non-form body.
+        """
+        limit = self.max_content_length
+        if (limit is not None and self.content_length is not None
+                and self.content_length > limit):
+            from werkzeug.exceptions import RequestEntityTooLarge
+            raise RequestEntityTooLarge()
+
+    def _load_form_data(self):
+        self._raise_if_declared_body_is_too_large()
+        return super()._load_form_data()
+
+    def get_data(self, *args, **kwargs):
+        self._raise_if_declared_body_is_too_large()
+        return super().get_data(*args, **kwargs)
+
 
 def _positive_env_int(name, default):
     """Read a positive integer without making a bad optional env var fatal."""
@@ -206,6 +228,11 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'watermark_state', 'VARCHAR(16)'),
     ('face_dataset_image', 'watermark_bbox', 'TEXT'),
     ('face_dataset_image', 'watermark_regions', 'TEXT'),
+    # Who ruled ('detector' | 'vision') and with what score. Existing rows stay
+    # NULL — read as "before the source was recorded", never attributed to a
+    # route at random (same rule the bank's identical pair already follows).
+    ('face_dataset_image', 'watermark_source', 'VARCHAR(16)'),
+    ('face_dataset_image', 'watermark_score', 'REAL'),
     ('face_dataset_image', 'source_metadata', 'TEXT'),
     # Back-link to the bank_image a promotion copied here. Existing rows keep
     # NULL: a bank that was promoted before this column existed still relies on
@@ -219,6 +246,7 @@ _SCHEMA_ADDITIONS = (
     # Versioned, byte-fingerprinted Bank analysis used by the durable Bank <-> Dataset
     # transfer path. Legacy Dataset rows simply have no snapshot to restore.
     ('face_dataset_image', 'bank_analysis_snapshot', 'TEXT'),
+    ('face_dataset_image', 'transfer_metadata', 'TEXT'),
     ('training_run_record', 'settings', 'TEXT'),
     # Full launch freeze: caption text, per-image content hashes, environment.
     # NULL on every run recorded before it existed — the compare panel says so.
@@ -261,6 +289,10 @@ _SCHEMA_ADDITIONS = (
     # rows remain NULL, just like they were before source attribution was added.
     ('bank_image', 'source_metadata', 'TEXT'),
     ('bank_image', 'semantic_dup_group', 'INTEGER'),
+    # The visible semantic_dup_group is a projection of the selected engine.
+    # These nullable lanes retain both partitions across engine switches.
+    ('bank_image', 'clip_semantic_dup_group', 'INTEGER'),
+    ('bank_image', 'siglip2_semantic_dup_group', 'INTEGER'),
     ('bank_image', 'framing', 'VARCHAR(8)'),
     # Bank watermark CLEANING (two manual levels) — the detected bbox is now kept
     # (the scan used to parse it and throw it away) and the cleaned blob's method
@@ -291,10 +323,16 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'medium', 'VARCHAR(16)'),
     ('bank_image', 'medium_margin', 'REAL'),
     ('bank_image', 'face_yaw', 'REAL'),
+    # Exact-byte authority shared by every Bank analysis lane.  Existing rows
+    # stay NULL and enter the explicit legacy compatibility path until a pass
+    # re-attests them; inventing a backfill hash would falsely bless stale data.
+    ('bank_image', 'analysis_fingerprint', 'VARCHAR(64)'),
+    ('bank_image', 'watermark_fingerprint', 'VARCHAR(64)'),
     # ⬆ Promote's second destination: the bank a selection was copied into.
     # Additive and independent of promoted_dataset_id — a database that never
     # gains it simply never shows the "promoted to a bank" badge.
     ('bank_image', 'promoted_bank_id', 'INTEGER'),
+    ('bank_image', 'transfer_metadata', 'TEXT'),
     # Manual quarter-turn of a bank image (degrees clockwise, NULL = untouched).
     # Additive: a database that never gains it simply has no rotated images.
     ('bank_image', 'rotation', 'INTEGER'),
@@ -303,7 +341,22 @@ _SCHEMA_ADDITIONS = (
     # person" declaration wrote it with no inference. Additive: a database that
     # never gains it simply has no assertions and clusters exactly as before.
     ('bank_image', 'face_cluster_origin', 'VARCHAR(10)'),
+    # WHO wrote a caption: NULL = never recorded | 'asserted' (a human) |
+    # 'joycaption'/'ollama' (the engine). Deliberately NO server default: NULL is
+    # the value that carries meaning here, and back-filling every existing row
+    # with 'joycaption' or with 'asserted' would BOTH be a claim nobody measured
+    # — the first would make Re-caption destroy hand-written work it just
+    # promised to spare, the second would freeze every bank that exists today.
+    # A row that predates the column keeps NULL, is re-captioned as it always
+    # was, and is counted on screen as "origin never recorded". See
+    # services/caption_origin.py.
+    ('bank_image', 'caption_origin', 'VARCHAR(16)'),
+    ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
+    ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    # Per-Bank semantic engine. The non-null default makes every historical row
+    # byte-for-byte compatible with the CLIP behaviour it already had.
+    ('image_bank', 'semantic_engine', "VARCHAR(16) NOT NULL DEFAULT 'clip'"),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread
     # never honoured it. Additive — existing runs simply carry NULL.
@@ -360,6 +413,37 @@ def _apply_additive_migrations():
                 db.session.commit()
         except Exception:
             db.session.rollback()  # a failed ALTER must never block boot
+    # Before the engine selector there was only ``semantic_dup_group`` and its
+    # space was necessarily CLIP.  Copy that visible partition into the durable
+    # lane (or into SigLIP2 for Banks already switched by an intermediate build)
+    # so the first switch after this migration cannot erase existing work.  The
+    # NULL guard makes this safe and idempotent on every boot.
+    try:
+        db.session.execute(text("""
+            UPDATE bank_image
+               SET clip_semantic_dup_group = semantic_dup_group
+             WHERE clip_semantic_dup_group IS NULL
+               AND semantic_dup_group IS NOT NULL
+               AND bank_id IN (
+                   SELECT id FROM image_bank
+                    WHERE LOWER(TRIM(COALESCE(semantic_engine, 'clip')))
+                          != 'siglip2'
+               )
+        """))
+        db.session.execute(text("""
+            UPDATE bank_image
+               SET siglip2_semantic_dup_group = semantic_dup_group
+             WHERE siglip2_semantic_dup_group IS NULL
+               AND semantic_dup_group IS NOT NULL
+               AND bank_id IN (
+                   SELECT id FROM image_bank
+                    WHERE LOWER(TRIM(COALESCE(semantic_engine, 'clip')))
+                          = 'siglip2'
+               )
+        """))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()  # legacy backfill is best-effort, boot stays open
     # Same loop, same discipline: idempotent (IF NOT EXISTS), additive only, and
     # fail-open — a database that cannot take an index still boots, just slower.
     for table, col in _INDEX_ADDITIONS:

@@ -12,6 +12,7 @@ import FolderSyncNote from '../components/bank/FolderSyncNote'
 import RelocateBankDialog from '../components/bank/RelocateBankDialog'
 import BankScrapePanel from '../components/bank/BankScrapePanel'
 import BankLaneTabs from '../components/videobank/BankLaneTabs'
+import { bankListOverview } from '../components/bank/bankOverview.js'
 
 const CURRENT_KEY = 'bankCurrentId'
 
@@ -43,6 +44,41 @@ function BankPreviewStrip({ bank, onOpen }) {
           +{extra}
         </span>
       )}
+    </div>
+  )
+}
+
+const BANK_STATUS_TONE = {
+  keep: 'bg-emerald-400', pending: 'bg-amber-300', reject: 'bg-rose-400',
+}
+
+function BankListSummary({ bank }) {
+  const summary = bankListOverview(bank)
+  return (
+    <div className="space-y-1.5">
+      {summary.total > 0 ? (
+        <div className="flex h-2 overflow-hidden rounded-full bg-surface-raised" role="img"
+          aria-label={summary.status.map((row) => `${row.label}: ${row.value}, ${row.percent}%`).join('; ')}>
+          {summary.status.filter((row) => row.value > 0).map((row) => (
+            <span key={row.id} className={BANK_STATUS_TONE[row.id]}
+              style={{ width: `${row.widthPercent}%`, minWidth: '1px' }} />
+          ))}
+        </div>
+      ) : summary.total === 0
+        ? <p className="text-[11px] text-content-subtle">No images.</p>
+        : <p className="text-[11px] text-amber-300/90">Curation totals unavailable.</p>}
+      <ul className="flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-content-muted">
+        {summary.status.map((row) => (
+          <li key={row.id} className="tabular-nums">{row.label} <span className="text-content">{row.value ?? '—'}</span>
+            {row.percent != null && <span className="text-content-subtle"> · {row.percent}%</span>}</li>
+        ))}
+      </ul>
+      <div className="flex items-center gap-2 text-[11px]">
+        <span className="text-content-muted">Quality</span>
+        <span className={summary.scanPercent == null ? 'text-amber-300/90' : 'text-content-subtle'}>
+          {summary.scanText}
+        </span>
+      </div>
     </div>
   )
 }
@@ -201,7 +237,7 @@ export default function BankPage() {
         // column is sized on max-content, so the unbreakable source PATH inside
         // a card stretched it past the viewport and scrolled the whole page
         // sideways on a phone — with `truncate` never getting a chance to fire.
-        <ul className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+        <ul className="grid gap-3 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
           {banks.map((b) => (
             <li key={b.id}
               className="flex min-w-0 flex-col gap-2 rounded-lg border border-border bg-surface p-4">
@@ -224,9 +260,7 @@ export default function BankPage() {
                 {b.source_path}
               </p>
               <BankPreviewStrip bank={b} onOpen={() => open(b.id)} />
-              <p className="text-xs text-content-muted">
-                {b.total} image(s) · {b.scanned} scanned · <span className="text-emerald-300">{b.keep} kept</span> · <span className="text-rose-300">{b.reject} rejected</span>
-              </p>
+              <BankListSummary bank={b} />
               <FolderSyncNote sync={b.folder_sync}
                 onRelocate={() => setRelocating(b)} />
               <button type="button" onClick={() => open(b.id)}

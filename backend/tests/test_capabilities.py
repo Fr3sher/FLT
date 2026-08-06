@@ -593,6 +593,78 @@ def test_import_probe_budget_matches_the_scoring_probe(app):
     assert capabilities._IMPORT_TIMEOUT >= scoring_python.PROBE_TIMEOUT
 
 
+def test_siglip2_probe_checks_pinned_weights_before_heavy_import(app, monkeypatch):
+    from app import capabilities
+    from app.services import bank_semantic_models as assets
+    calls = []
+    monkeypatch.setattr(assets, 'weights_present', lambda: False)
+    monkeypatch.setattr(
+        capabilities, '_cached_import',
+        lambda *args, **kwargs: calls.append(args) or True)
+    with app.app_context():
+        result = capabilities.probe_bank_siglip2()
+    assert result['ok'] is False
+    assert result['model'] == assets.MODEL_ID
+    assert calls == []
+
+
+def test_siglip2_probe_uses_its_own_import_contract(app, monkeypatch):
+    from app import capabilities, config
+    from app.services import bank_semantic_models as assets
+    seen = []
+    monkeypatch.setattr(assets, 'weights_present', lambda: True)
+    monkeypatch.setattr(
+        capabilities, '_cached_import',
+        lambda name, python, expression: seen.append(
+            (name, python, expression)) or True)
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': '/borrowed/score/python'},
+            'bank_semantic': {'python': '/managed/semantic/python'},
+        })
+        result = capabilities.probe_bank_siglip2()
+    assert result['ok'] is True
+    assert seen == [(
+        'bank_siglip2', '/managed/semantic/python',
+        capabilities.CAPABILITY_IMPORTS['bank_siglip2'])]
+
+
+def test_score_probe_remains_scoped_to_score_python(app, monkeypatch):
+    from app import capabilities, config
+    seen = []
+    monkeypatch.setattr(
+        capabilities, '_cached_import',
+        lambda name, python, expression: seen.append((name, python)) or True)
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': '/borrowed/score/python'},
+            'bank_semantic': {'python': '/managed/semantic/python'},
+        })
+        assert capabilities.probe_bank_scoring()['ok'] is True
+    assert seen == [('bank_scoring', '/borrowed/score/python')]
+
+
+def test_siglip2_cuda_probe_uses_semantic_python_and_unknown_means_cpu(
+        app, monkeypatch):
+    from app import capabilities, config
+    seen = []
+
+    def state(name, python, expression):
+        seen.append((name, python, expression))
+        return None
+
+    monkeypatch.setattr(capabilities, '_cached_import_state', state)
+    monkeypatch.setattr(capabilities, 'gpu_vram_gb', lambda: 24.0)
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': '/borrowed/gpu/python'},
+            'bank_semantic': {'python': '/managed/cpu/python'},
+        })
+        assert capabilities.bank_siglip2_gpu_available() is False
+    assert len(seen) == 1
+    assert seen[0][0:2] == ('bank_siglip2_gpu', '/managed/cpu/python')
+
+
 def test_unanswered_cuda_probe_does_not_read_as_no_cuda(app, monkeypatch):
     """The GPU-exclusive window is decided by bank_scoring_gpu_available(). A
     probe that never answered must not be reported as 'this interpreter has no

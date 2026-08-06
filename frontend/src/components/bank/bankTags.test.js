@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   captionChips, captionStyle, tagsParam, tagFilterSummary, MAX_CHIPS,
+  selectionTagCounts, selectionTagsNotes, tagCountLabel,
 } from './bankTags.js';
 
 // ---- which shape is this caption? ------------------------------------------
@@ -86,4 +87,105 @@ test('the summary SPELLS OUT that several chips mean AND', () => {
   assert.match(two, /ALL of/, 'AND must be stated, not inferred from the chips');
   assert.match(two, /“red” \+ “dress”/);
   assert.equal(tagFilterSummary(new Set()), '');
+});
+
+// ---- the tags of a SELECTION, with how often each was cited ------------------
+
+test('a selection counts every tag, most-cited first, not the intersection', () => {
+  const stats = selectionTagCounts([
+    'a woman, red dress, balcony',
+    'a woman, red dress, kitchen',
+    'a woman, blue dress, balcony',
+  ]);
+  // "a woman" is in all three; "red dress" and "balcony" in two. An INTERSECTION
+  // would keep only "a woman" and print 3 next to it — the count would carry no
+  // information at all, and the two-thirds tags would vanish.
+  assert.deepEqual(stats.rows, [
+    { tag: 'a woman', count: 3 },
+    { tag: 'balcony', count: 2 },
+    { tag: 'red dress', count: 2 },
+    { tag: 'blue dress', count: 1 },
+    { tag: 'kitchen', count: 1 },
+  ]);
+  assert.equal(stats.counted, 3);
+  assert.equal(stats.total, 5);
+});
+
+test('a tag cited twice in ONE caption still counts as one image', () => {
+  // The number means "how many images mention it", not "how many times the word
+  // appears" — a captioner repeating itself must not out-rank a real majority.
+  const stats = selectionTagCounts([
+    'red dress, red dress, red dress, balcony',
+    'red dress, kitchen, evening',
+  ]);
+  assert.equal(stats.rows.find((r) => r.tag === 'red dress').count, 2);
+});
+
+test('a single image gets its tags with NO count next to them', () => {
+  // ONE captioned image keeps CAPTION order: there are no counts to read down,
+  // and the reader expects the chips where he read the words.
+  const stats = selectionTagCounts(['a woman, red dress, balcony']);
+  assert.deepEqual(stats.rows.map((r) => r.tag), ['a woman', 'red dress', 'balcony']);
+  assert.equal(stats.counted, 1);
+  // "1 / 1" on every chip is noise; the single-image row never had a count.
+  assert.equal(tagCountLabel(1, 1), '');
+  assert.equal(tagCountLabel(7, 12), '7 / 12');
+});
+
+test('uncaptioned and word-less images are counted apart, never as each other', () => {
+  const stats = selectionTagCounts([
+    'a woman, red dress',   // counts
+    '',                     // no caption at all
+    null,                   // idem
+    'a photo of her',       // captioned, but every word is a stop word
+  ]);
+  assert.equal(stats.counted, 1);
+  assert.equal(stats.uncaptioned, 2);
+  assert.equal(stats.wordless, 1);
+  assert.equal(stats.size, 4);
+  // The two shortfalls have different fixes, so they get different sentences.
+  const notes = selectionTagsNotes(stats).join(' ');
+  assert.match(notes, /2 selected image\(s\) have no caption yet/);
+  assert.match(notes, /1 selected image\(s\) have a caption with no word/);
+});
+
+test('a selection with no caption anywhere says so instead of rendering nothing', () => {
+  const stats = selectionTagCounts(['', null, undefined]);
+  assert.deepEqual(stats.rows, []);
+  assert.equal(stats.counted, 0);
+  assert.match(selectionTagsNotes(stats).join(' '), /no caption yet/);
+});
+
+test('the row is capped, and says how many tags it is NOT showing', () => {
+  // MAX_CHIPS is a per-CAPTION cap too, so 40 distinct tags need more than one
+  // caption to exist at all — which is exactly the case this cap is for.
+  const captions = [
+    Array.from({ length: 20 }, (_, i) => `taga${i}`).join(', '),
+    Array.from({ length: 20 }, (_, i) => `tagb${i}`).join(', '),
+  ];
+  const stats = selectionTagCounts(captions);
+  assert.equal(stats.rows.length, MAX_CHIPS);
+  assert.equal(stats.total, 40);
+  assert.match(selectionTagsNotes(stats).join(' '),
+    new RegExp(`Showing the ${MAX_CHIPS} most-cited of 40`));
+});
+
+test('images whose caption was never fetched are disclosed, not silently dropped', () => {
+  // The count is honest about its own reach: a row computed over 500 of 3 200
+  // selected images while presenting itself as "your selection" is the same lie
+  // as a launch button quoting a number the pass does not walk.
+  const stats = selectionTagCounts(['a woman, red dress', 'a woman, kitchen']);
+  assert.deepEqual(selectionTagsNotes(stats, 0).filter((n) => /not counted/.test(n)), []);
+  assert.match(selectionTagsNotes(stats, 2700).join(' '),
+    /2700 more selected image\(s\) are not counted/);
+});
+
+test('the denominator counts the images that SPOKE, not the ones selected', () => {
+  // 7 / 12 must mean "7 of the 12 that had tags". Folding the silent ones into
+  // the denominator would quietly deflate every tag on a half-captioned bank.
+  const stats = selectionTagCounts([
+    'red dress', 'red dress', 'balcony', '', '', null,
+  ]);
+  assert.equal(stats.counted, 3);
+  assert.equal(tagCountLabel(2, stats.counted), '2 / 3');
 });

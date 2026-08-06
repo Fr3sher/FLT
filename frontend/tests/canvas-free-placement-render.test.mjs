@@ -64,6 +64,34 @@ test('every zoom the board reaches draws it, not just 100 %', () => {
   }
 })
 
+test('a pinned image names the exact persisted LoRA strength beside its step', () => {
+  const node = img(4, 0, 0, {
+    image: { url: '/i/4.png', record_id: 4, step: 2500, strength: 0.75 },
+  })
+  const html = render(CanvasImageNode, {
+    node, datasetId: 7, laneName: 'ds', boardScale: 1,
+  })
+
+  assert.match(html, />step 2500 · strength 0\.75</)
+  assert.match(html, /aria-label="Pinned image from ds, step 2500 · strength 0\.75\./)
+})
+
+test('zero strength is displayed, while a legacy missing strength is never invented', () => {
+  const zero = render(CanvasImageNode, {
+    node: img(5, 0, 0, {
+      image: { url: '/i/5.png', record_id: 5, step: 3000, strength: 0 },
+    }),
+    datasetId: 7, laneName: 'ds', boardScale: 1,
+  })
+  assert.match(zero, />step 3000 · strength 0</)
+
+  const legacy = render(CanvasImageNode, {
+    node: img(6, 0, 0), datasetId: 7, laneName: 'ds', boardScale: 1,
+  })
+  assert.match(legacy, />step 6000</)
+  assert.doesNotMatch(legacy, /strength/i)
+})
+
 test('a whole STRIP parked above its lane still draws every member in order', () => {
   // A group's tiles are laid out FROM the anchor, so an anchor above the origin
   // is the case where a strip could quietly collapse onto itself.
@@ -85,6 +113,26 @@ test('a whole STRIP parked above its lane still draws every member in order', ()
     assert.ok(lefts[i] > lefts[i - 1], 'members stay in order outside the lane too')
   }
   assert.doesNotMatch(html, /NaN/)
+})
+
+test('each member of a Canvas group keeps its own step and LoRA strength label', () => {
+  const strip = [
+    img(7, 0, 0, {
+      groupId: 'strengths', groupPos: 0,
+      image: { url: '/i/7.png', record_id: 7, step: 1000, strength: 0.55 },
+    }),
+    img(8, 200, 0, {
+      groupId: 'strengths', groupPos: 1,
+      image: { url: '/i/8.png', record_id: 8, step: 2000, strength: 1.2 },
+    }),
+  ]
+  const group = layoutImageNodes(strip).find((row) => row.kind === 'group')
+  const html = render(CanvasImageGroup, {
+    group, datasetId: 7, laneName: 'ds', boardScale: 0.4, dropHint: null,
+  })
+
+  assert.match(html, />step 1000 · strength 0\.55</)
+  assert.match(html, />step 2000 · strength 1\.2</)
 })
 
 test('and the board FITS around it — the picture is reachable, not stranded', () => {

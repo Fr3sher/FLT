@@ -1650,3 +1650,139 @@ def test_borrowed_env_refusal_hands_over_the_floored_command(app, monkeypatch, t
     # QUOTED, like every other hand-over command: pasted into a shell, a bare
     # transformers>=4.57 would redirect into a file named '=4.57'.
     assert any(f'"{spec}"' in l for l in log)
+
+
+def test_bank_siglip2_is_explicit_scoped_action(app):
+    from app import config, setup_installer
+    borrowed = r'C:\borrowed score\python.exe'
+    assert 'bank_siglip2' in setup_installer.INSTALL_ACTIONS
+    assert 'bank_siglip2' in setup_installer._WORKERS
+    assert 'bank_siglip2' in setup_installer._PIP_ACTIONS
+    assert 'bank_siglip2' not in setup_installer._INSTALL_ALL_ORDER
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': borrowed},
+            'bank_semantic': {'python': ''},
+        })
+        command = setup_installer.manual_command('bank_siglip2')
+        managed = setup_installer._bank_scoring_env_python()
+    assert managed in command
+    assert borrowed not in command
+    assert 'pip install torch' in command
+    assert setup_installer._TORCH_CPU_INDEX in command
+    assert 'transformers>=4.49' in command
+    assert 'Pillow' in command
+    assert 'hf_hub_download' in command
+
+
+def test_bank_siglip2_manual_command_honours_only_explicit_semantic_python(app):
+    from app import config, setup_installer
+    borrowed = r'C:\borrowed score\python.exe'
+    semantic = r'C:\explicit semantic\python.exe'
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': borrowed},
+            'bank_semantic': {'python': semantic},
+        })
+        command = setup_installer.manual_command('bank_siglip2')
+    assert semantic in command
+    assert borrowed not in command
+
+
+def test_run_bank_siglip2_keeps_borrowed_score_and_installs_only_managed(
+        app, monkeypatch, tmp_path):
+    from pathlib import Path
+    from app import config, setup_installer
+    from app.services import bank_semantic_models as assets
+    borrowed = tmp_path / 'other-tool' / 'Scripts' / 'python.exe'
+    borrowed.parent.mkdir(parents=True)
+    borrowed.touch()
+    calls = []
+
+    monkeypatch.setattr(
+        setup_installer, '_run_pip',
+        lambda action, command: calls.append(tuple(command)) or 0)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import',
+                        lambda action, python: True)
+    monkeypatch.setattr(assets, 'weights_present', lambda root=None: True)
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': str(borrowed)},
+            'bank_semantic': {'python': ''},
+        })
+        managed = setup_installer._bank_scoring_env_python()
+        Path(managed).parent.mkdir(parents=True, exist_ok=True)
+        Path(managed).touch()
+        setup_installer._runs['bank_siglip2'] = setup_installer._new_run()
+        assert setup_installer._run_bank_siglip2('bank_siglip2') == 0
+        assert config.get('bank_scoring.python') == str(borrowed)
+        assert config.get('bank_semantic.python') == managed
+    assert len(calls) == 3
+    assert all(command[0] == managed for command in calls)
+    assert all(command[0] != str(borrowed) for command in calls)
+
+
+def test_run_bank_siglip2_downloads_only_pinned_files(app, monkeypatch):
+    from app import config, setup_installer
+    from app.services import bank_semantic_models as assets
+    calls = []
+    monkeypatch.setattr(
+        setup_installer, '_ensure_bank_scoring_env',
+        lambda action, *, save_score_python=True: (
+            setup_installer._bank_scoring_env_python()
+            if save_score_python is False else
+            (_ for _ in ()).throw(AssertionError('must not select Score'))))
+    monkeypatch.setattr(
+        setup_installer, '_run_pip',
+        lambda action, command: calls.append(command) or 0)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import',
+                        lambda action, python: True)
+    monkeypatch.setattr(assets, 'weights_present', lambda root=None: True)
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': ''},
+            'bank_semantic': {'python': ''},
+        })
+        setup_installer._runs['bank_siglip2'] = setup_installer._new_run()
+        assert setup_installer._run_bank_siglip2('bank_siglip2') == 0
+        assert config.get('bank_semantic.python') == (
+            setup_installer._bank_scoring_env_python())
+    packages = next(command for command in calls
+                    if 'transformers>=4.49' in command)
+    assert 'Pillow' in packages
+    download = next(command for command in calls if '-c' in command)
+    payload = download[-1]
+    for filename in assets.FILES:
+        assert filename in payload
+    assert assets.REVISION in payload
+
+
+def test_run_bank_siglip2_reports_failure_when_semantic_python_cannot_be_saved(
+        app, monkeypatch):
+    from app import config, setup_installer
+    from app.services import bank_semantic_models as assets
+    calls = []
+    managed = setup_installer._bank_scoring_env_python()
+    monkeypatch.setattr(
+        setup_installer, '_ensure_bank_scoring_env',
+        lambda action, *, save_score_python=True: managed)
+    monkeypatch.setattr(
+        setup_installer, '_run_pip',
+        lambda action, command: calls.append(tuple(command)) or 0)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import',
+                        lambda action, python: True)
+    monkeypatch.setattr(assets, 'weights_present', lambda root=None: True)
+
+    def refuse_save(partial):
+        assert partial == {'bank_semantic': {'python': managed}}
+        raise OSError('config is read-only')
+
+    with app.app_context():
+        config.save_config({'bank_semantic': {'python': ''}})
+        monkeypatch.setattr(setup_installer.cfg, 'save_config', refuse_save)
+        setup_installer._runs['bank_siglip2'] = setup_installer._new_run()
+        assert setup_installer._run_bank_siglip2('bank_siglip2') == 1
+    assert len(calls) == 3, 'save is attempted only after packages and weights'
+    log = setup_installer._runs['bank_siglip2']['log']
+    assert any('could not be saved' in line for line in log)
+    assert not any(line.startswith('SigLIP2 ready') for line in log)

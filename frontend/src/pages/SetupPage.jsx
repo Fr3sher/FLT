@@ -12,6 +12,7 @@ import InstallRunner from '../components/setup/InstallRunner'
 import InstallEverything from '../components/setup/InstallEverything'
 import { HelpBadge } from '../help/HelpMode'
 import { comfyEnumUnavailableReason } from '../utils/comfyEnumSupport.js'
+import { kleinAssetBlocks } from '../utils/kleinAssets.js'
 
 const INPUT_CLASS =
   'mt-1 w-full rounded-md border border-border-strong bg-surface-raised px-3 py-2 text-sm text-content ' +
@@ -452,15 +453,22 @@ export default function SetupPage() {
       // badge is what sent a user with a truncated 9.5 GB UNET to look for a file he
       // already had (zigzag4794, Discord). Three states, three actions — and the
       // word carries the state, not just the colour.
+      // EVERY unreadable Klein file, not just the required trio: the consistency
+      // LoRA is optional, so it was absent from step.kleinBroken — and a corrupted
+      // one therefore rendered "✓ Installed" right under a button offering to
+      // download it. Optional is a reason to say it QUIETLY, never a reason to hide
+      // it. Severity comes from the asset (kleinAssetBlocks), not from the list.
       const kleinBrokenBy = {}
-      ;(step.kleinBroken || []).forEach((i) => { kleinBrokenBy[i.asset] = i })
+      ;(step.kleinBrokenAll || step.kleinBroken || []).forEach((i) => { kleinBrokenBy[i.asset] = i })
       const installBtn = (action, label) => {
         const bad = kleinBrokenBy[action]
         if (bad) {
+          const gates = kleinAssetBlocks(action)
           return (
             <>
-              <p className="break-words text-xs text-rose-300">
-                ⚠ On disk, unreadable — {bad.filename}. Downloading again replaces it.
+              <p className={`break-words text-xs ${gates ? 'text-rose-300' : 'text-amber-400'}`}>
+                ⚠ On disk, unreadable — {bad.filename}.
+                {gates ? '' : ' Klein still generates without it.'} Downloading again replaces it.
               </p>
               <InstallRunner action={action} buttonLabel={`↻ Download ${label.replace(/^⬇ Download /, '')} again`}
                 onDone={() => refresh(true)} />
@@ -1055,6 +1063,9 @@ export default function SetupPage() {
           body: 'Repaints small off-center watermarks (LaMa) during 🧽 Clean instead of only cropping border marks. It can use CUDA or CPU from Settings. Without it, off-center marks are skipped.' },
         { action: 'bank_scoring', cap: 'bank_scoring', icon: '✨', title: 'Bank scoring (aesthetic · NSFW · style)',
           body: "Powers the 🗃️ Bank's ✨ Score pass: rates images for aesthetics (1–10), flags NSFW and groups them by visual style with one CLIP pass — and makes 'keep best' prefer the nicest-looking duplicate. Installs into its own Python (CLIP + a small NSFW model). Without it, the Score button is disabled with this hint." },
+        { action: 'bank_siglip2', cap: 'bank_siglip2', icon: '🧠',
+          title: 'SigLIP 2 semantic engine (optional)',
+          body: "Adds Google's general SigLIP2 Base engine as a per-Bank alternative for semantic search, similarity, diversity and crop/variant detection. CLIP remains installed and keeps doing aesthetic, NSFW, style and medium scoring; switching a Bank never deletes either cache. Downloads one pinned Apache-2.0 checkpoint (~1.5 GB) into an LDS-managed Python only when you click Install. If Score uses a GPU Python you already have, that borrowed environment and your Score selection are never changed." },
         { action: 'watermark_detect', cap: 'watermark_detect', icon: '🚩',
           title: 'Watermark detector (faster 🚩 Find)',
           body: "Makes the Bank's 🚩 Find watermarks pass roughly ten times faster and lets it run without Ollama: a small classifier scores each image (~0.14 s instead of ~1.7 s asking the vision model in words), and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint have something to work on. Adds ~0.9 GB of weights into the scoring Python it shares with ✨ Score. Without it nothing breaks — the vision model keeps doing the same job, slower." },
@@ -1062,9 +1073,10 @@ export default function SetupPage() {
       return (
         <div className="space-y-3">
           <p className="text-sm text-content-muted">
-            Optional helpers installed into this app's own Python environment. Face scoring and masks run on
+            Optional helpers installed into this app's managed ML environments. Face scoring and masks run on
             CPU; watermark inpainting can use CUDA or CPU. The app works fully without them; they just make
-            curation and training cleaner. Install each on its own below, or all at once at the bottom. Already installed?
+            curation and training cleaner. Install each on its own below. The legacy pip bundle at the bottom covers
+            the shared ML requirements only; isolated Bank engines and large model downloads stay explicit. Already installed?
             Use <span className="font-medium text-content">↻ Reinstall</span> to repair or update it.
           </p>
           {caps.python && !caps.python.ml_supported && (

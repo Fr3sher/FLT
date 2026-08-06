@@ -17,72 +17,33 @@ TWO KINDS OF CHECK, on purpose:
   identifier per line) or drop `.privacy-names` next to the repo root — both are
   gitignored. With no list the name check SKIPS and says so: a silent pass would
   be worse than no test.
+
+WHAT THIS FILE DOES NOT SEE — read `scripts/check_release_artifacts.py`:
+it walks `git ls-files`, so untracked and ignored files are invisible to it,
+and it skips the compiled bundle. The archive scan covers exactly that blind
+spot by reading the published ZIP instead. Both import their patterns from
+`scripts/privacy_patterns.py`; there is one table, not two.
 """
 import os
-import re
 import subprocess
+import sys
 
 import pytest
 
 import tests.test_no_personal_data as tnpd  # noqa: E402  (self-import for the seams below)
 
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Appended, not prepended: this must not shadow a backend module for the rest
+# of the pytest session.
+_SCRIPTS = os.path.join(_REPO, 'scripts')
+if _SCRIPTS not in sys.path:
+    sys.path.append(_SCRIPTS)
 
-# Suffixes worth scanning. Binaries, lockfiles and the built bundle are excluded:
-# dist is generated from sources this test already covers.
-_SCANNED = ('.py', '.js', '.jsx', '.mjs', '.md', '.json', '.yml', '.yaml',
-            '.html', '.css', '.bat', '.ps1', '.txt')
+import privacy_patterns as privacy  # noqa: E402  (needs the path above)
+
+# The built bundle and vendored docs stay out: dist is generated from sources
+# this test already covers, and the archive scan reads the shipped bundle itself.
 _SKIP_DIRS = ('frontend/dist/', 'docs/superpowers/', 'node_modules/')
-
-_PATTERNS = {
-    'a Windows user path': re.compile(r'[A-Za-z]:[\/]+Users[\/]+(?!<)[A-Za-z0-9._-]+', re.I),
-    'an email address': re.compile(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b'),
-    'an OpenAI-shaped key': re.compile(r'\bsk-[A-Za-z0-9]{20,}'),
-    'a bearer token': re.compile(r'\bBearer\s+[A-Za-z0-9._-]{20,}'),
-    # CLAUDE.md forbids IPs, but nothing enforced it: two addresses from a real
-    # tailnet reached main and fifteen published releases, one of them under a
-    # comment that said "real tailnet IP" out loud. A tailnet address is a stable
-    # node identity, which is exactly what makes it worth catching — ordinary
-    # RFC1918 LAN addresses stay allowed, they identify nobody.
-    'a tailnet address': re.compile(r'\b100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b'),
-}
-# The block's edges and Tailscale's own documented service address are the only
-# in-block literals a test may name. Anything else is somebody's machine.
-_ALLOWED_TAILNET = ('100.64.0.0', '100.64.0.1', '100.127.255.254', '100.100.100.100')
-# Windows paths are only personal when the account name is one. A documented
-# placeholder is what we WANT contributors to write.
-_PLACEHOLDER_USERS = ('user', 'users', 'username', 'youruser', 'yourname',
-                      'somebody', 'someone', 'me', 'you', 'public', 'default',
-                      'all users', 'test', 'example')
-# RFC 2606 / 6761 reserve these for documentation and tests; a fixture that
-# uses one cannot belong to a person.
-_RESERVED_DOMAINS = ('.example', '.test', '.invalid', '.localhost',
-                     'example.com', 'example.net', 'example.org')
-_ALLOWED_EMAILS = ('noreply@lora-dataset-studio.dev',)
-
-
-def _is_personal_email(found, before):
-    """`before` is the text immediately preceding the match.
-
-    Three ways a match is NOT someone's address, each hit by a real fixture in
-    this repo — the test is worthless if it cries wolf on all of them:
-      * URL userinfo (`https://pexels.com@evil.example/`) — the domain-spoofing
-        tests need exactly this shape;
-      * a reserved documentation domain;
-      * a stub too short to be anyone (`u@x.io`): a one-letter local part or a
-        one-letter domain label is a placeholder, never a real mailbox.
-    """
-    if found in _ALLOWED_EMAILS:
-        return False
-    token = re.split(r'''[\s'"(\[<]''', before)[-1]    # the run glued to the match
-    if '://' in token and '/' not in token.split('://', 1)[1]:
-        return False                                   # userinfo inside a URL
-    local, _, domain = found.rpartition('@')
-    if any(domain.endswith(d) or domain == d for d in _RESERVED_DOMAINS):
-        return False
-    if len(local) < 3 or len(domain.split('.')[0]) < 3:
-        return False
-    return True
 
 
 def _tracked_files():
@@ -109,7 +70,7 @@ def _tracked_files():
     if out.returncode != 0:
         pytest.skip('not a git checkout')
     for rel in out.stdout.splitlines():
-        if not rel.endswith(_SCANNED):
+        if not privacy.is_scannable(rel):
             continue
         if any(rel.startswith(d) for d in _SKIP_DIRS):
             continue
@@ -129,24 +90,9 @@ def test_no_machine_path_email_or_token_in_tracked_files():
     diagnostic containing `C:\Users\<someone>` long before a human noticed."""
     hits = []
     for rel in _tracked_files():
-        # This file necessarily contains the patterns it forbids.
-        if rel.endswith('test_no_personal_data.py'):
-            continue
         body = _read(rel)
-        for label, rx in _PATTERNS.items():
-            for m in rx.finditer(body):
-                found = m.group(0)
-                if label == 'an email address' and not _is_personal_email(
-                        found, body[max(0, m.start() - 80):m.start()]):
-                    continue
-                if label == 'a Windows user path':
-                    account = re.split(r'[\\/]+', found)[-1]
-                    if account.lower() in _PLACEHOLDER_USERS:
-                        continue
-                if label == 'a tailnet address' and found in _ALLOWED_TAILNET:
-                    continue
-                line = body[:m.start()].count('\n') + 1
-                hits.append(f'{rel}:{line} — {label}: {found[:60]}')
+        for line, label, found in privacy.scan_text(body):
+            hits.append(f'{rel}:{line} — {label}: {found[:60]}')
     assert not hits, (
         'personal data in a PUBLIC repo:\n  ' + '\n  '.join(hits[:20]))
 
@@ -180,10 +126,9 @@ def _name_list():
         candidates.append(os.path.join(os.path.dirname(os.path.abspath(common)),
                                        '.privacy-names'))
     for path in candidates:
-        if path and os.path.isfile(path):
-            with open(path, encoding='utf-8') as fh:
-                return [w.strip() for w in fh
-                        if w.strip() and not w.startswith('#')]
+        names = privacy.read_name_list(path)
+        if names is not None:
+            return names
     return None
 
 
@@ -219,11 +164,10 @@ def _unpushed_text(rev_range):
 def test_no_forbidden_name_in_tracked_files():
     """Names come from a list kept OUT of the repo — writing them here to forbid
     them would publish them, which is the whole problem."""
-    names = _name_list()
-    if not names:
+    rx = privacy.name_pattern(_name_list())
+    if rx is None:
         pytest.skip('no name list — set LDS_PRIVACY_NAMES or add .privacy-names '
                     '(gitignored) to enable the name check')
-    rx = re.compile(r'\b(' + '|'.join(re.escape(n) for n in names) + r')\b', re.I)
     hits = []
     for rel in _tracked_files():
         body = _read(rel)

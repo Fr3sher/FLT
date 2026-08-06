@@ -81,10 +81,13 @@ test('the exclude filter is wired like every other facet', () => {
   assert.match(BANK, /aria-label="Clear the exclude filter"/)
 })
 
-test('the 🏷️ tag chips are wired, and live where filters live', () => {
+test('the 🏷️ tag chips are wired to the gallery filters', () => {
   // The chips come from the pure module (node --test cannot parse JSX, so the
   // extraction logic is unit-tested there and only the WIRING is greppable).
-  assert.match(BANK, /import \{ captionChips, tagsParam, tagFilterSummary \} from '\.\/bankTags\.js'/)
+  // The whole tag lane comes from that one module — including the selection
+  // aggregation, so there is never a second copy of "what is a tag" in the JSX.
+  assert.match(BANK, /captionChips, tagsParam, tagFilterSummary,[\s\S]{0,120}?from '\.\/bankTags\.js'/)
+  assert.match(BANK, /selectionTagCounts, selectionTagsNotes, tagCountLabel,/)
   // Its OWN payload key — never folded into search/exclude/push_down.
   assert.match(BANK, /if \(f\.tags\) params\.tags = f\.tags/)
   assert.match(BANK, /setF\(\{ tags: tagsParam\(next\) \}\)/)
@@ -92,8 +95,9 @@ test('the 🏷️ tag chips are wired, and live where filters live', () => {
   assert.match(BANK, /aria-label=\{`Use the tags of \$\{img\.name\} as a filter`\}/)
   // AND is written out for the user, not left to be inferred from the chips.
   assert.match(BANK, /\{tagFilterSummary\(tagPicked\)\}/)
-  // The row renders in the filter zone, NOT inside the review lightbox: that
-  // one walks a frozen snapshot a filter change could not honestly alter.
+  // The row stays with the filter/gallery surface (filter zone on phones,
+  // right-hand gallery inspector on desktop), never inside the review lightbox:
+  // that one walks a frozen snapshot a filter change could not honestly alter.
   const LIGHTBOX = read('../src/components/bank/BankReviewLightbox.jsx')
   assert.doesNotMatch(LIGHTBOX, /captionChips|tagsParam/,
     'filtering is a grid gesture; the review lightbox is a frozen decision run')

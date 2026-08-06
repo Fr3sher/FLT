@@ -238,9 +238,9 @@ Without the pack nothing breaks: upscales still run, they are just capped by the
   - `auto` — tile once the target short edge is past ~1536 px, or when the frame would not fit anyway. This is the recommended setting and the reason the pack is worth installing.
   - `always` — tile any frame bigger than a single tile, including below that crossover.
   - `never` — always full-frame. Pick this if you ever see a seam; the VRAM warning still applies.
-  On `auto` nothing is tiled below the crossover: the model is already at a comfortable size and a grid would only add seams. The pre-#32 rule (tile *only* when the frame would not fit) is deliberately not offered — it is the default the side-by-side refuted.
+  On `auto` nothing is tiled **at or below** the crossover: the model is already at a comfortable size and a grid would only add seams. The crossover has to be *passed*, not just reached — a 1536 px target at the default 1024 px tile runs full-frame, and so does a 768 px one if you dropped the tile to 512. The panel says which lane your configured target will take, so that decision is never silent. The pre-#32 rule (tile *only* when the frame would not fit) is deliberately not offered — it is the default the side-by-side refuted.
 - **Tile size** → `seedvr2.tile_px`. Range `512`–`2048` (snapped to a multiple of 64), default **`1024`** — the contributed value. **This is the memory dial of the engine**: a pass holds one tile at a time, so lowering it to 768 or 512 is what makes a large upscale finish on an 8 GB card, at the cost of more seams and more passes; raising it on a 24 GB card gives fewer seams and more context per tile. It also sizes the model's own **tiled VAE encode/decode**, which runs on the full-frame lane as well — so it lowers VRAM use even with no tiling pack installed. Try this before concluding a big upscale is impossible on your card.
-- **Start tiling above** → `seedvr2.tile_threshold`. Short edge past which `auto` tiles, in pixels. **`0`** (default) = derive it from the tile size (1.5×, i.e. the shipped 1536 px at a 1024 px tile) so the crossover follows the tile you chose. A positive value places it by hand: lower to tile sooner (safer on a small card), higher to keep more targets in a single fast pass. No effect on `always` or `never`.
+- **Start tiling above** → `seedvr2.tile_threshold`. Short edge past which `auto` tiles, in pixels — strictly *above*, so a target equal to this value still runs full-frame. **`0`** (default) = derive it from the tile size (1.5×, i.e. the shipped 1536 px at a 1024 px tile) so the crossover follows the tile you chose. A positive value places it by hand: lower to tile sooner (safer on a small card), higher to keep more targets in a single fast pass. No effect on `always` or `never`.
 
  LDS ports only the tiling itself — the original workflow also chained two further node packs to do arithmetic (counting tiles, normalising a pixel count), one of them GPL-3.0, and that arithmetic is done in Python here instead.
 
@@ -516,6 +516,15 @@ fixed sizes on purpose.
 | `ollama` | Ollama vision model only. |
 | `none` | No auto-captioning — you write them yourself. |
 
+`auto` is a **chain**, not a coin toss: JoyCaption captions the images it can in one
+batch, the Ollama vision model covers whatever is left, and on a **Concept** dataset
+Ollama rewrites JoyCaption's drafts. The two engines write in different styles, so one
+batch can come back in two voices. Every caption pass now reports which engine wrote
+what — in the toast, and on a line under the caption buttons (Captions ▸ Generate
+captions), e.g. *“8 by JoyCaption · 4 by Ollama”*. That line describes the last pass
+of the current session only; nothing is stored per image. Pick a single value above
+(or per dataset, in Captions ▸ ⚙️ Options) if you want one voice across a set.
+
 ### Watermark inpainting
 
 - **Processing device** → `watermark.device`. Where LaMa inpainting runs. Default **`auto`**. Options: `auto` (GPU when available, otherwise CPU), `cuda` (force GPU — pauses ComfyUI while cleaning), `cpu` (keep the GPU free). This only affects the **LaMa** engine.
@@ -567,8 +576,8 @@ with **no rescan**. (The two exceptions are noted below.)
 - **Same-person similarity** → `bank.face_threshold`. Cosine similarity at or above which two faces cluster as the same person in **👥 Group by person**. Default **`0.45`**. Raise it if different people get merged into one cluster; lower it if the same person splits into several. *Applies at the next face pass* (embeddings are cached, so re-clustering is fast).
 - **Aesthetic minimum** → `bank.aesthetic_min`. LAION aesthetic score (~1–10) under which an image is flagged **💔 low aesthetic** — the "keep the nice ones" cut. Default **`5`**. Only images the **✨ Score** pass reached carry a score; an unscored image is never flagged. The score also drives "keep best" on duplicate groups (the nicest-looking copy wins).
 - **NSFW maximum** → `bank.nsfw_max`. NSFW probability (0–1) over which an image is flagged **🔞 NSFW**, to split a mixed SFW/NSFW dump. Default **`0.5`**. Set by the **✨ Score** pass; a review flag, not a verdict.
-- **Same-style similarity** → `bank.style_threshold`. Cosine similarity on the CLIP image embeddings at or above which two images share a visual **🎨 style** (screenshots/memes cluster apart from photoreal) in the **✨ Score** pass. Default **`0.6`**. *Applies at the next scoring pass* (embeddings are cached, so re-clustering at another threshold is fast).
-- **Semantic duplicate similarity** → `bank.semantic_dup_threshold`. Cosine similarity on the *same* CLIP embeddings at or above which two scored images are grouped as a **✂ semantic near-duplicate** — a crop or re-compressed variant of the *same shot* that the perceptual-hash **≈ Duplicates** (stage 1) misses. Default **`0.96`** (much higher than the style threshold: a crop is far closer than merely "same style"). Needs the **✨ Score** pass first (it reuses those embeddings — no extra GPU work). *Re-running at another threshold re-sorts instantly* from the cached embeddings, no re-scan.
+- **Same-style similarity** → `bank.style_threshold`. Cosine similarity on the CLIP image embeddings at or above which two images share a visual **🎨 style** (screenshots/memes cluster apart from photoreal) in the **✨ Score** pass. Default **`0.6`**. *Applies at the next scoring pass* — the embeddings are cached, so re-clustering at another threshold costs **no inference at all**: the pass does not even load the model. It is not instant, though, and the cost is the grouping itself, which compares every image with every other: **~8 s over 5 000 images, ~3 min over 23 000** (measured). Stopping the pass during that phase leaves the previous grouping in place rather than writing half of a new one — the ids are one numbering of the whole bank, so half of them would collide with the other half. **A measured limit, on a big single-subject bank:** the grouping is *transitive* (A groups with B and B with C puts A with C, even if A and C look nothing alike), so on a bank whose images are all of one person a chain of near-neighbours can merge everything into one group. Measured on a 25 058-image bank at the default `0.6`: **one group holding 25 056 of them** — and raising the threshold does not open a middle ground so much as move the cliff (0.8 → one group of 24 735; 0.9 → one of 15 066; 0.95 → the grouping shatters into 19 716 groups, 17 137 of them single images). The end-of-pass line now states the size of the biggest group against the total, so this is visible without opening the database. If your bank is varied, the default behaves; if it is one subject shot over and over, expect the 🎨 style chip to be close to useless whatever the threshold, and use ✂ **Find crops & variants** (a much tighter, per-pair comparison) for the grouping you probably wanted.
+- **Semantic duplicate similarity** → `bank.semantic_dup_threshold`. CLIP cosine similarity at or above which two images are grouped as a **✂ semantic near-duplicate** — a crop or re-compressed variant of the *same shot* that the perceptual-hash **≈ Duplicates** (stage 1) misses. Default **`0.96`**. With CLIP selected it needs **✨ Score** first. SigLIP 2 uses the separate conservative starting value `bank_semantic.siglip2_semantic_dup_threshold`; it deliberately does not inherit the CLIP cutoff, and should be reviewed/calibrated on your Banks. Re-running the grouping reuses the selected cache; no image inference.
 
 - **Which Python runs ✨ Score** → `bank_scoring.python`. **Auto-managed:** leave it empty and Setup ▸ Quality tools builds a dedicated environment and fills it in. It carries **CPU-only PyTorch** on purpose (a first install stays small instead of pulling ~2.5 GB of CUDA wheels on machines with no card), which costs roughly **336 ms per image** instead of ~15 ms on a GPU. On a machine that already has a working CUDA PyTorch — ai-toolkit's venv, ComfyUI's, a conda env — you can point Score at it instead: open a bank and click **⚡ Use a GPU Python I already have** under the CPU warning. The picker checks each candidate *package by package* (`torch`, `open_clip`, `transformers`, `timm`, `numpy`, `Pillow`) and **refuses** any interpreter that can't run the whole pass — CUDA alone is not enough, and a missing `open_clip` would only surface an hour into a run. Nothing is ever installed into an environment the app did not build: a missing package is named with the exact command, for you to run. Reversible at any time (**Back to the app default**), and leaving it alone changes nothing — detection is an offer, never a prerequisite. The picker also accepts a path you type: an interpreter **or** the environment folder holding it (venv, conda/miniconda, uv, a portable bundle, the system Python, another disk), spaces and accents included. No torch or CUDA *version* is required — only that the modules import and `torch.cuda.is_available()` is true. On a machine with no NVIDIA card the picker says so and stops suggesting CUDA; it still lets you borrow an interpreter that already has the packages, to avoid installing them twice. The **Install / ↻ Reinstall** button in Setup ▸ Quality tools honours the same rule: while Score is pointed at a borrowed interpreter it installs nothing and prints the `pip install` command instead — clear the setting (**Back to the app default**) if you want the app to build and fill its own environment again. See *Using the app ▸ Make Score use a GPU Python you already have*.
 
@@ -585,6 +594,7 @@ pure-coverage behaviour this button had before the slider existed** — the chan
 of default does change what a given bank returns. See *Using the app ▸ Curate down
 to the right subset*.
 
+- **Watermark detection** → `watermark_detect.backend`. Which engine **🧽 Find watermarks** uses, on datasets *and* banks. `auto` (default) takes the optional watermark-detector extra when it is installed — ~0.14 s per image and it returns a score — and the Ollama vision model otherwise; that is the behaviour that shipped, so leaving this alone changes nothing. `detector` and `vision` pin one engine. A pinned `detector` with the extra **not** installed does not fail the scan: the vision model runs it and the app says so, naming *Setup ▸ Quality tools ▸ Watermark detector*. The two engines disagree at the margins, and only the detector can flag an image *without* a position — those are counted apart and 🧽 Clean leaves them for 🔍 Review instead of marking them failed. *Applies at the next scan; images already dismissed as false positives are only re-judged by **⟲ Rescan incl. dismissed**.*
 - **Watermark detector sensitivity** → `watermark_detect.threshold`. The score (0–1) at or above which **🚩 Find watermarks** flags an image, *when the optional watermark-detector extra is installed* (Setup ▸ Quality tools). Default **`0.94`**. *Applies at the next scan.*
   This number is **measured, not chosen**, and it is deliberately nowhere near the 0.5 a probability normally implies: the classifier's scores sit hard against 1. On a 110-image sample drawn from a real 29 759-image bank and labelled by eye (2026-08-03, CPU), a threshold of 0.5 would have flagged **52 of the 55 clean images**; 0.94 flagged **none** of them and still caught **54 of the 55** marked ones. The clean images topped out at 0.939 and the marked ones bottomed out at 0.929, so the two populations overlap by about 0.01 — there is no setting that is perfect, only a knee. Lower it towards 0.92 to catch the faintest marks and hand-check a few clean images; raise it towards 0.96 to miss a mark rather than crop anything by mistake.
 - **Watermark detector interpreter** → `watermark_detect.python`. Written by the installer, not edited here. Empty means "use the **Bank scoring** environment", which already carries the two packages this extra needs.
@@ -702,7 +712,7 @@ separate 3.10–3.12 interpreter.
 
 Guard-rails on cost and host quality for rented pods. The card also shows a live **Spent this month** line. Everything here has a sane default — you can leave it all alone and just add the key.
 
-Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token is strongly recommended: grant **`repo.content.read` exactly on `krea/Krea-2-Raw`**, then **`repo.content.read` + `repo.write` on one dedicated HF user or organization namespace containing only LDS deliveries**. [Create a fine-grained token](https://huggingface.co/settings/tokens/new?tokenType=fineGrained). A classic/global token with `role=write` is also accepted, but LDS shows a broad-access warning because it can modify every repository the account can write to; [create a global write token](https://huggingface.co/settings/tokens/new?tokenType=write). Read-only tokens are rejected, and Settings validates the token as soon as it is saved.
+Full-model Krea 2 runs also need `HF_CLOUD_TOKEN`. A separate fine-grained token is strongly recommended: grant **`repo.content.read` exactly on the Krea 2 repository the run trains from** (`krea/Krea-2-Raw`, or `krea/Krea-2-Turbo` for a Turbo run — a scope on either is accepted, and the one this run needs is required), then **`repo.content.read` + `repo.write` on one dedicated HF user or organization namespace containing only LDS deliveries**. [Create a fine-grained token](https://huggingface.co/settings/tokens/new?tokenType=fineGrained). A classic/global token with `role=write` is also accepted, but LDS shows a broad-access warning because it can modify every repository the account can write to; [create a global write token](https://huggingface.co/settings/tokens/new?tokenType=write). Read-only tokens are rejected, and Settings validates the token as soon as it is saved.
 
 | Setting | Key | Default | Range | What it does |
 |---|---|---|---|---|
@@ -730,15 +740,29 @@ panel now names each lock and its reason instead of just greying it out. The
 values below are editable because they change the *result*, not whether the run
 fits.
 
-**Krea 2 Raw only — Turbo is out of scope, not proven impossible.** Turbo is
-speed-distilled, and a dense run rewrites the weights that distillation lives
-in. On the distilled models where this *has* been measured, the result stays a
-valid checkpoint and simply stops being fast (back toward real CFG and 25-30
-steps); for Krea 2 specifically nobody has published the measurement, so for now
-the lane stays shut on missing evidence, not on a known defect. Train dense on
-Raw — the undistilled checkpoint Krea publishes for exactly this — and see the
-dataset guide, §10, for what is known and for the published trick to get the
-speed back afterwards.
+**Raw, Turbo, or a checkpoint of your own — with one warning and one real
+refusal.** The full-model panel has its own base picker: the Raw/Turbo switch,
+the Krea 2 checkpoints installed on this machine, and **Custom weights…** for a
+local `.safetensors`. A custom base travels to the rented GPU through a private
+repository on your Hugging Face account, exactly as it already did for LoRA
+runs, and the launch verifies the pod's own credential can read it before
+anything is rented.
+
+*Turbo is allowed and unmeasured.* Turbo is speed-distilled, and a dense run
+rewrites the weights that distillation lives in. On the distilled models where
+this *has* been measured, the result stays a valid checkpoint and simply stops
+being fast (back toward real CFG and 25-30 steps); for Krea 2 specifically
+nobody has published the measurement. The panel says exactly that before you
+spend anything — Krea's own recommendation is still to train a LoRA on Raw and
+apply it to Turbo — and then lets you through. See the dataset guide, §10, for
+what is known and for the published trick to get the speed back afterwards.
+
+*A structured fp8/int8 export is refused, and that one is mechanical.* A
+ComfyUI scaled-fp8 build (or any `comfy_quant`/int8 repack, including this app's
+own fp8 twin) carries dequantization tensors the architecture never declares,
+and ai-toolkit loads a base with `strict=True` — the load itself raises. Pick
+the bf16/fp16 build of the same model. A **bare** fp8 cast, which adds no key of
+its own, stays allowed and says what it costs.
 
 | Setting | Key | Default | Notes |
 |---|---|---|---|
@@ -1225,7 +1249,11 @@ re-sorts every bank instantly, without rescanning.
 | `face_scoring.models_root` | `''` | Where InsightFace weights are stored/downloaded. |
 | `face_scoring.device` | `'auto'` | Device for the Image-bank face pass. `auto` uses the GPU when the face interpreter exposes CUDA (needs `onnxruntime-gpu` installed in it) and falls back to CPU otherwise; `cpu` forces CPU (never touches the GPU); `cuda` requests the GPU but still falls back to CPU when unavailable. A GPU run is serialized through the GPU-exclusive window so it never competes with a training/scoring pass. |
 | `masks.python` | `''` | Interpreter for the rembg (person-mask) subprocess. |
-| `bank_scoring.text_search_idle_minutes` | How long the 🔤 **Find by text** encoder stays warm after its last query (default `10`, capped at `120`). Loading CLIP costs ~10 s on the CPU; encoding a phrase afterwards costs ~20 ms, so the worker is kept alive to make a refine-and-retry session instant. It holds roughly **2.4 GB of RAM** while it lives, and is released when you close the search panel or when the window elapses. Set to `0` to never keep it warm — every new phrase then pays the ~10 s load, which is the right trade on a memory-tight machine. Already-searched phrases are cached on disk and cost nothing either way. |
+| `bank_scoring.text_search_idle_minutes` | `10` | How long the selected 🔤 **Find by text** encoder stays warm after its last query (capped at `120`). Set `0` to unload after every query. Text caches are separated by engine/model key. |
+| `bank_semantic.python` | `''` | Interpreter for SigLIP 2 image/text workers and capability probes. Setup installs SigLIP 2 into `data/envs/bank_scoring` and records that managed Python here without changing `bank_scoring.python` (so a borrowed GPU Score runtime stays selected and untouched). Empty keeps backward compatibility: use `bank_scoring.python`, then the app Python. |
+| `bank_semantic.models_root` | `''` | SigLIP 2 model cache (empty = `data/models/bank_semantic`). Setup downloads only the pinned files after an explicit click; inference is local-files-only. |
+| `bank_semantic.device` | `'auto'` | Device for the SigLIP 2 image index (`auto`, `cuda`, `cpu`). A GPU run uses the same exclusive window as other Bank ML work. |
+| `bank_semantic.siglip2_semantic_dup_threshold` | `0.97` | SigLIP 2 cosine threshold for **✂ Find crops & variants**. Separate from CLIP because the two spaces are not numerically interchangeable. |
 | `watermark.python` | `''` | Interpreter for the LaMa watermark subprocess. **Auto-managed:** leave it empty and the **Install inpainting** button builds a dedicated Python 3.10-3.12 environment for you (`simple-lama-inpainting` needs Pillow&lt;10, so it can't share the app's own Python) and fills this in automatically. Set it yourself only to point at an environment you already have — a manual value is always respected and never overwritten. |
 
 **Klein consistency LoRA:**
@@ -1337,6 +1365,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `video_caption.model` | Which model writes the 🗣 **Describe shots** captions (empty = the shipped default, `Qwen/Qwen3-VL-4B-Instruct`). Any checkpoint of the **same architecture** is a drop-in; a different architecture fails loudly at load rather than silently misbehaving. Worth changing when the default **talks around** what your footage shows — a caption that names things evasively teaches the trained model to do the same, and nothing in the output reveals it. Pointing this at a model the machine does not have is allowed and downloads it on the first run, but never in silence: the pass says so in its own progress line before captioning anything. Every caption records which model wrote it, so a bank captioned across a change stays readable. |
 | `quantize.python` | Python interpreter that runs the **fp8 conversion** and the **LoRA→base merge** (empty = the one ✨ Score uses, then ai-toolkit's, then the app's own). Both need `torch`, which this app deliberately does **not** install — it is gigabytes and nothing else here needs it — so they run in a subprocess, like the scoring and masking passes. One setting governs both on purpose: "the Python on this machine that has torch" is one fact, and saying it twice is how the two drift apart. The chosen interpreter is probed while the *plan* is drawn: one that lacks the packages disables the button with the reason and the `pip install` line, instead of failing after the click (or after a 26 GB download). `torch` is the only module either of them needs: both read and write the safetensors format themselves rather than memory-mapping it, so an environment with torch alone is enough. |
 | `bank_scoring.python` | Python interpreter that runs the ✨ Score pass (empty = the app's own). Auto-filled by Setup with a CPU-only environment; repointable at any CUDA interpreter already on the machine via the bank's **⚡ Use a GPU Python I already have** picker, which verifies every dependency first and never installs into an environment it did not create. |
+| `bank_semantic.python` | Python interpreter that runs SigLIP 2. New installs record the LDS-managed Bank environment here independently of Score; empty falls back to `bank_scoring.python` for older configs, then the app's own interpreter. |
 | `watermark.python` | Python interpreter used to run the LaMa watermark-inpainting subprocess (empty = reuse `masks.python`, then the current interpreter). |
 | `watermark.device` | LaMa processing device: `auto` (CUDA when available, otherwise CPU), `cuda`, or `cpu`. |
 | `watermark.allow_crop` | When `true` (default), a border watermark is cropped off; when `false`, it is repainted instead. Also editable in the Clean bar. |

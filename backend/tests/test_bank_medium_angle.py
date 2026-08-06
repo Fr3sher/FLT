@@ -94,7 +94,17 @@ def _fake_embeddings(monkeypatch, bank, rows):
     e[0] = 1.0
     by_path = {os.path.normpath(os.path.join(os.path.realpath(bank.source_path),
                                              r.relpath)): e for r in rows}
+    fingerprints = {
+        path: banks.bank_transfer_metadata.content_fingerprint_path(path)
+        for path in by_path}
+    for row in rows:
+        path = os.path.normpath(os.path.join(
+            os.path.realpath(bank.source_path), row.relpath))
+        row.analysis_fingerprint = fingerprints[path]
+    db.session.commit()
     monkeypatch.setattr(banks, '_load_score_embeddings', lambda _b: by_path)
+    monkeypatch.setattr(
+        banks, '_score_embedding_fingerprint', fingerprints.get)
 
 
 def test_medium_pass_writes_a_verdict_only_for_scored_images(app, client, tmp_path,

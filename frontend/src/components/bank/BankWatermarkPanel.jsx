@@ -53,7 +53,7 @@ function LevelCard({ index, title, blurb, state, onRun }) {
   )
 }
 
-export default function BankWatermarkPanel({ bankId, live, onChanged }) {
+export default function BankWatermarkPanel({ bankId, live, onFind, onChanged }) {
   const { caps } = useCapabilities()
   const toast = useToast()
   const [levels, setLevels] = useState(null)
@@ -149,9 +149,8 @@ export default function BankWatermarkPanel({ bankId, live, onChanged }) {
 
       <div className="flex flex-wrap gap-2">
         <LevelCard index={1} title="Find them" state={find}
-          blurb="Scans every non-rejected image for an overlaid logo/URL and records WHERE it sits — the two steps below route on that box."
-          onRun={() => run(`/api/bank/${bankId}/watermark`, {},
-            '🚩 Watermark scan started — Stop any time.')} />
+          blurb="Scans the images you choose for an overlaid logo/URL and records WHERE it sits — the two steps below route on that box."
+          onRun={onFind} />
         <LevelCard index={2} title="Crop it off" state={crop}
           blurb="Cuts the border strip holding the mark. No model, no GPU, and no invented pixel — try this one first."
           onRun={() => run(`/api/bank/${bankId}/watermark/crop`, {},

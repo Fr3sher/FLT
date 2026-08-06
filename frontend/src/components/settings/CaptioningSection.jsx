@@ -10,6 +10,17 @@ const CAPTIONING_OPTIONS = [
   { id: 'none', label: 'None' },
 ]
 
+// Same shape, same word ("backend"), same 'auto'-first order as the captioning
+// engine above — deliberately, because it is the same idea: two interchangeable
+// engines and a default that picks whichever is installed. Read by BOTH 🧽 Find
+// watermarks surfaces (bank and dataset), which used to disagree: the bank had
+// always taken the detector when present, the dataset had never looked.
+const WATERMARK_BACKEND_OPTIONS = [
+  { id: 'auto', label: 'Auto (fastest available)' },
+  { id: 'detector', label: 'Watermark detector (fast, scored)' },
+  { id: 'vision', label: 'Vision model (Ollama)' },
+]
+
 export default function CaptioningSection({ config, setField, configDefaults }) {
   // The bank thresholds below were tuned on a real 36 000-image bank and are
   // re-tuned between releases: the numbers shown when a key is missing, like the
@@ -308,6 +319,41 @@ export default function CaptioningSection({ config, setField, configDefaults }) 
             <p className="mt-0.5 text-xs text-content-muted">NSFW probability (0–1) over which an image is flagged 🔞 NSFW. Set by the ✨ Score pass.</p>
             <ResetToDefault label="NSFW maximum" section="bank" field="nsfw_max"
               config={config} configDefaults={configDefaults} setField={setField} />
+          </div>
+          <div>
+            <label htmlFor="wmdet-backend" className="block text-sm font-medium text-content">
+              Watermark detection
+            </label>
+            <select id="wmdet-backend"
+              value={String(config.watermark_detect?.backend
+                ?? defaultValueAt(configDefaults, 'watermark_detect', 'backend'))}
+              onChange={(e) => setField('watermark_detect', 'backend', e.target.value)}
+              className={INPUT_CLASS}>
+              {WATERMARK_BACKEND_OPTIONS.map((o) => (
+                <option key={o.id} value={o.id}>{o.label}</option>
+              ))}
+            </select>
+            {/* The fallback rule is stated here AND said out loud when it fires
+                (a toast on the dataset, the job's own line on the bank): a
+                setting that silently does nothing is how someone changes a
+                detector, sees no difference, and concludes the app is broken. */}
+            <p className="mt-0.5 text-xs text-content-muted">
+              Which engine 🧽 Find watermarks uses, on datasets and banks alike.
+              <strong> Auto</strong> takes the detector extra when it is installed
+              (~0.14 s per image, and it returns a score) and the vision model
+              otherwise — that is the behaviour that shipped, so leaving this alone
+              changes nothing. Picking <strong>Watermark detector</strong> without the
+              extra installed does not fail the scan: the vision model runs it and the
+              app says so, with the link to install the extra (Setup ▸ Quality tools).
+              The two engines disagree at the margins, and only the detector can flag an
+              image <em>without</em> a position — those are counted apart and 🧽 Clean
+              leaves them for 🔍 Review. Changing this applies at the next scan; images
+              you already dismissed as false positives are only re-judged by
+              <em> ⟲ Rescan incl. dismissed</em>.
+            </p>
+            <ResetToDefault label="Watermark detection" section="watermark_detect"
+              field="backend" config={config} configDefaults={configDefaults}
+              setField={setField} />
           </div>
           <div>
             <label htmlFor="wmdet-threshold" className="block text-sm font-medium text-content">

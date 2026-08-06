@@ -433,7 +433,7 @@ function UpdateBanner() {
 
 function Shell() {
   const { pathname } = useLocation();
-  const canvasRoute = pathname === '/canvas';
+  const wideWorkspaceRoute = pathname === '/canvas' || pathname === '/bank';
   return (
     <>
       <NavBar />
@@ -450,7 +450,7 @@ function Shell() {
       <ComfyRecoveryBanner />
       <UpdateBanner />
       <main id="main-content" tabIndex={-1}
-        className={canvasRoute
+        className={wideWorkspaceRoute
           ? 'mx-auto w-full max-w-[1800px] px-3 py-4 sm:px-4 sm:py-6'
           : 'mx-auto max-w-5xl px-4 py-6'}>
         <Outlet />

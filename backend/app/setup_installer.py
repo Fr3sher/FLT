@@ -241,7 +241,7 @@ _NODE_PACKS = {
 
 INSTALL_ACTIONS = ('ml_extras', 'scrape_extras', 'ollama_model',
                    'face_scoring', 'masks', 'watermark_inpaint',
-                   'bank_scoring',
+                   'bank_scoring', 'bank_siglip2',
                    'watermark_detect',
                    'video', 'shot_detect') + tuple(_MODEL_DOWNLOADS) + tuple(_NODE_PACKS)
 
@@ -342,8 +342,8 @@ _CAPABILITY_ML_ACTIONS = ('face_scoring', 'masks', 'video')
 # 600 s TTL (ml_extras/scrape_extras via -r, the scoped per-capability installs).
 _IMPORT_CACHE_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                          | set(_CAPABILITY_ML_ACTIONS)
-                         | {'watermark_inpaint', 'bank_scoring', 'watermark_detect',
-                            'shot_detect'})
+                         | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2',
+                            'watermark_detect', 'shot_detect'})
 
 # Actions that invoke pip and therefore MUST NOT run concurrently: two pip processes
 # writing the same environment race on a shared package's files/dist-info and corrupt
@@ -359,8 +359,8 @@ _PIP_ACTIONS = (frozenset(_PIP_REQUIREMENTS)
                 # (that sharing is the whole point — it saves a second 2.5 GB
                 # torch), so it must share the pip queue too or the two race on
                 # one environment's dist-info.
-                | {'watermark_inpaint', 'bank_scoring', 'watermark_detect',
-                   'shot_detect'})
+                | {'watermark_inpaint', 'bank_scoring', 'bank_siglip2',
+                   'watermark_detect', 'shot_detect'})
 
 # Transient file-lock errors an install can hit even without concurrency: an antivirus
 # or the search indexer briefly holding a just-written file at the moment pip renames
@@ -619,6 +619,24 @@ def manual_command(action) -> str:
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install '
                 f'"{_requirement_spec("transnetv2-pytorch")}"')
+    if action == 'bank_siglip2':
+        # A manual SigLIP2 repair may honour an explicit semantic override, but
+        # must never inherit Score's borrowed GPU interpreter. With no explicit
+        # semantic target it points at the LDS-managed environment, exactly like
+        # the Install button.
+        python = (str(cfg.get('bank_semantic.python') or '').strip()
+                  or _bank_scoring_env_python())
+        from .services import bank_semantic_models as assets
+        root = assets.models_root()
+        pulls = '; '.join(
+            f"d(repo_id='{assets.MODEL_ID}', filename='{name}', "
+            f"revision='{assets.REVISION}', cache_dir=r'{root}')"
+            for name in assets.FILES)
+        return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
+                f'&&  {_quote(python)} -m pip install "transformers>=4.49" '
+                f'huggingface_hub safetensors sentencepiece Pillow  &&  '
+                f'{_quote(python)} -c "from huggingface_hub import hf_hub_download as d; '
+                f'{pulls}"')
     if action == 'watermark_detect':
         # Packages then weights. The weights line names the FILES on purpose —
         # a bare `snapshot_download` of the SigLIP2 repo pulls its training
@@ -1442,10 +1460,14 @@ def _bank_scoring_env_python() -> str:
     return _venv_python(_bank_scoring_env_dir())
 
 
-def _ensure_bank_scoring_env(action) -> str:
-    """Build (or reuse) the app-managed bank-scoring venv and record it as
-    bank_scoring.python. Returns the venv python on success, '' on failure (an
-    actionable one-liner is logged). Idempotent — mirrors _ensure_watermark_env."""
+def _ensure_bank_scoring_env(action, *, save_score_python=True) -> str:
+    """Build or reuse the app-managed Bank ML venv.
+
+    Score owns the historical environment directory, but other extras may reuse
+    it without changing the user's Score selection. ``save_score_python=False``
+    is therefore required by SigLIP2: a borrowed CUDA Score interpreter remains
+    selected while SigLIP2 is installed into LDS's managed environment.
+    """
     env_dir = _bank_scoring_env_dir()
     env_python = _venv_python(env_dir)
     if not os.path.isfile(env_python):
@@ -1474,11 +1496,12 @@ def _ensure_bank_scoring_env(action) -> str:
         _append(action, 'environment ready')
     else:
         _append(action, f'reusing the bank-scoring environment at {env_dir}')
-    try:
-        cfg.save_config({'bank_scoring': {'python': env_python}})
-    except Exception as e:
-        _append(action, f'warning: could not save bank_scoring.python ({e}); '
-                        'the environment still works for this run')
+    if save_score_python:
+        try:
+            cfg.save_config({'bank_scoring': {'python': env_python}})
+        except Exception as e:
+            _append(action, f'warning: could not save bank_scoring.python ({e}); '
+                            'the environment still works for this run')
     return env_python
 
 
@@ -1577,6 +1600,77 @@ def _verify_bank_scoring_import(action, python) -> bool:
     for line in (proc.stderr or '').strip().splitlines()[-4:]:
         _append(action, f'  {line}')
     return False
+
+
+def _run_bank_siglip2(action) -> int:
+    """Install the optional SigLIP2 semantic engine and its pinned checkpoint.
+
+    It always targets LDS's managed Bank ML venv. Score may keep using a borrowed
+    CUDA interpreter: this action neither installs into it nor changes
+    ``bank_scoring.python``. Only after packages and every pinned weight are ready
+    is ``bank_semantic.python`` switched to the managed interpreter.
+    """
+    from .services import bank_semantic_models as assets
+
+    python = _ensure_bank_scoring_env(action, save_score_python=False)
+    if not python:
+        return 1
+    managed_python = _bank_scoring_env_python()
+    if not _same_path(python, managed_python):
+        _append(action, 'internal error: SigLIP2 did not resolve to the LDS-managed '
+                        'Bank environment; nothing was installed')
+        return 1
+
+    _append(action, f'target interpreter: {python}')
+    _append(action, 'installing CPU torch if needed (the GPU-Python picker remains available)')
+    rc = _run_pip(action, [python, '-m', 'pip', 'install', 'torch',
+                           '--index-url', _TORCH_CPU_INDEX])
+    if rc != 0:
+        return rc
+    rc = _run_pip(action, [python, '-m', 'pip', 'install',
+                           'transformers>=4.49', 'huggingface_hub', 'safetensors',
+                           'sentencepiece', 'Pillow'])
+    if rc != 0:
+        return rc
+    if not _verify_capability_import(action, python):
+        return 1
+
+    root = assets.models_root()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        _append(action, f'could not create {root}: {e}')
+        return 1
+    _append(action, f'downloading {assets.MODEL_ID} (~{assets.DOWNLOAD_MB} MB, '
+                    f'Apache-2.0) to {root}')
+    _append(action, f'pinned revision: {assets.REVISION}')
+    code = (
+        'import json, sys\n'
+        'from huggingface_hub import hf_hub_download\n'
+        'repo, revision, root, files = json.loads(sys.argv[1])\n'
+        'for name in files:\n'
+        '    hf_hub_download(repo_id=repo, filename=name, revision=revision, cache_dir=root)\n'
+        'print("ok")\n'
+    )
+    payload = json.dumps([
+        assets.MODEL_ID, assets.REVISION, str(root), list(assets.FILES)])
+    rc = _run_pip(action, [python, '-c', code, payload])
+    if rc != 0:
+        _append(action, 'SigLIP2 download did not finish — click Install again to resume')
+        return rc
+    if not assets.weights_present(root):
+        _append(action, 'download returned success but at least one pinned model file is missing')
+        return 1
+    try:
+        cfg.save_config({'bank_semantic': {'python': managed_python}})
+    except Exception as e:
+        _append(action, f'SigLIP2 packages and weights are ready, but '
+                        f'bank_semantic.python could not be saved ({e}); the install '
+                        'is reported as failed so Setup never claims a runtime it '
+                        'cannot select after restart')
+        return 1
+    _append(action, 'SigLIP2 ready — each Bank can now choose it without deleting CLIP')
+    return 0
 
 
 def _watermark_detect_python() -> str:
@@ -1857,8 +1951,9 @@ def _verify_capability_import(action, python) -> bool:
 
 _MISSING_MODULE_RE = re.compile(r"No module named ['\"]([\w.]+)['\"]")
 _CAPABILITY_LABEL = {'face_scoring': 'face scoring', 'masks': 'person masks',
-                     'bank_scoring': 'bank scoring',
-                     'watermark_inpaint': 'watermark inpainting'}
+                      'bank_scoring': 'bank scoring',
+                      'bank_siglip2': 'SigLIP2 Bank semantics',
+                      'watermark_inpaint': 'watermark inpainting'}
 
 
 def _is_blocking_invalid(path, spec) -> bool:
@@ -2576,6 +2671,7 @@ _WORKERS = {**{a: _run_ml_extras for a in _PIP_REQUIREMENTS},   # ml_extras + sc
             **{a: _run_ml_capability for a in _CAPABILITY_ML_ACTIONS},  # face_scoring + masks + video
             'watermark_inpaint': _run_watermark_inpaint,
             'bank_scoring': _run_bank_scoring,
+            'bank_siglip2': _run_bank_siglip2,
             'watermark_detect': _run_watermark_detect,
             'shot_detect': _run_shot_detect,
             **{a: _run_model_download for a in _MODEL_DOWNLOADS},

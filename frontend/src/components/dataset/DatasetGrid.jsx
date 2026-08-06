@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import DatasetGridItem from './DatasetGridItem';
 import TileSizeControl from '../shared/TileSizeControl';
 import KleinImproveNote from './KleinImproveNote';
@@ -16,6 +16,14 @@ import {
 import { useCapabilities } from '../../context/CapabilitiesContext';
 import { useToast } from '../common/Toast';
 import { autoTriageAvailable } from './faceScoringGate.js';
+import { bulkActionMessage, createBulkActionGate } from './bulkActionGate.js';
+import {
+  autoTriageFailureMessage,
+  autoTriageOwnershipForResult,
+  createAutoTriageRunGate,
+  runAutoTriageBatches,
+  updateAutoTriageRuns,
+} from './autoTriageApply.js';
 
 const DEFAULT_GREEN = 0.50;
 
@@ -57,7 +65,15 @@ const TILE_SIZE_TITLE = {
    Client-side derivation from the payload the grid already has; applies through
    the same batch endpoint as the manual multi-select, which already allows a
    direct keep<->reject switch (no backend change). */
-function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
+function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy,
+                         applying, onApplyingChange }) {
+  const autoTriageRunGateRef = useRef(null);
+  if (!autoTriageRunGateRef.current) {
+    autoTriageRunGateRef.current = createAutoTriageRunGate(datasetId);
+  }
+  // Invalidate the previous dataset synchronously during render. A passive
+  // effect is too late: its old promise may settle between commit and effect.
+  autoTriageRunGateRef.current.syncDataset(datasetId);
   const [t, setT] = useState(() => faceThresholds?.green ?? DEFAULT_GREEN);
   // Session memory: image id -> the status auto-triage last assigned it
   // ('keep'|'reject'). An image whose CURRENT status still equals this value is
@@ -65,6 +81,7 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
   // by hand since, its status diverges and it drops out (manual decision wins).
   const [owned, setOwned] = useState({});
   const [lastRun, setLastRun] = useState(null); // {kept, rejected, t} of the last Apply
+  const [applyFailure, setApplyFailure] = useState(null);
   const [showHelp, setShowHelp] = useState(false);
 
   // A different dataset = a fresh session (the component isn't remounted on a
@@ -73,6 +90,7 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
   useEffect(() => {
     setOwned({});
     setLastRun(null);
+    setApplyFailure(null);
     setShowHelp(false);
     setT(faceThresholds?.green ?? DEFAULT_GREEN);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -102,15 +120,46 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
   const nothingToDo = !keepIds.length && !rejectIds.length;
 
   const apply = async () => {
-    if (keepIds.length) await onBatch(keepIds, 'keep', { silent: true });
-    if (rejectIds.length) await onBatch(rejectIds, 'reject', { silent: true });
-    // Re-own the WHOLE replay scope at this threshold (incl. images left unchanged)
-    // and forget any previously-owned image no longer in scope (manual override).
-    const next = {};
-    keepTargets.forEach((i) => { next[i.id] = 'keep'; });
-    rejectTargets.forEach((i) => { next[i.id] = 'reject'; });
-    setOwned(next);
-    setLastRun({ kept: keepTargets.length, rejected: rejectTargets.length, t });
+    const runGate = autoTriageRunGateRef.current;
+    if (busy || runGate.hasActive(datasetId)) return;
+    const token = runGate.begin(datasetId);
+    if (!token) return;
+    onApplyingChange(datasetId, token, true);
+    setApplyFailure(null);
+    try {
+      const result = await runAutoTriageBatches({
+        onBatch,
+        keepIds,
+        rejectIds,
+        shouldContinue: () => runGate.isCurrent(token),
+      });
+      if (!runGate.isCurrent(token)) return;
+      const next = autoTriageOwnershipForResult({
+        result, keepTargets, rejectTargets, previousOwnership: owned,
+      });
+      if (!result.ok) {
+        runGate.commit(token, () => {
+          // A successful first POST is already durable even if the second one
+          // failed. Keep those rows in the replay set so Retry/Re-apply can
+          // still re-sort them after refresh changed pending -> keep/reject.
+          setOwned(next);
+          setApplyFailure(result);
+        });
+        return;
+      }
+      // Re-own the WHOLE replay scope at this threshold (incl. images left unchanged)
+      // and forget any previously-owned image no longer in scope (manual override).
+      runGate.commit(token, () => {
+        setOwned(next);
+        setLastRun({ kept: keepTargets.length, rejected: rejectTargets.length, t });
+      });
+    } finally {
+      // `finish` settles this token's dataset even after navigation, but invokes
+      // its callback only while the token still belongs to the visible session.
+      // The parent's token-aware Map means settling A can never unlock B.
+      const settled = runGate.finish(token, () => {});
+      if (settled) onApplyingChange(token.datasetId, token, false);
+    }
   };
 
   return (
@@ -147,14 +196,22 @@ function AutoTriageBar({ images, datasetId, faceThresholds, onBatch, busy }) {
           ? ` (re-sort ${ownedImgs.length}${pending.length ? ` + ${pending.length} new` : ''})`
           : ` (of ${replay.length} undecided)`}
       </span>
-      <button type="button" onClick={apply} disabled={busy || nothingToDo}
+      <button type="button" onClick={apply} disabled={busy || applying || nothingToDo}
         title="Marks only scored images — your manual ✓/✕ choices are never changed"
         className="ml-auto px-3 py-1 rounded-lg bg-surface-raised border border-border text-content text-xs font-semibold disabled:opacity-40 hover:bg-surface">
-        {isReplay ? 'Re-apply' : 'Apply'}
+        {applying ? 'Applying…' : isReplay ? 'Re-apply' : 'Apply'}
       </button>
-      {lastRun && (
-        <span className="text-xs text-emerald-400">
-          ✓ applied: kept {lastRun.kept} · rejected {lastRun.rejected} at ≥ {lastRun.t.toFixed(2)}
+      <span role="status" aria-live="polite" aria-atomic="true"
+        className="text-xs text-emerald-400">
+        {applying
+          ? 'Applying auto-triage…'
+          : lastRun && !applyFailure
+            ? `✓ applied: kept ${lastRun.kept} · rejected ${lastRun.rejected} at ≥ ${lastRun.t.toFixed(2)}`
+            : ''}
+      </span>
+      {applyFailure && (
+        <span role="alert" className="text-xs text-rose-300">
+          {autoTriageFailureMessage(applyFailure)}
         </span>
       )}
     </div>
@@ -199,10 +256,23 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                                       // scores, so it stands down when they can't be
                                       // trusted. Existing scores are NOT deleted.
                                       faceScoringBlocked = null,
-                                      activity = null }) {
+                                      activity = null,
+                                      onBulkBusyChange }) {
   const toast = useToast();
   const { caps } = useCapabilities();
   const [selected, setSelected] = useState(() => new Set());
+  const bulkActionGateRef = useRef(null);
+  if (!bulkActionGateRef.current) bulkActionGateRef.current = createBulkActionGate();
+  const [bulkAction, setBulkAction] = useState(null);
+  // Track Auto-triage by dataset AND opaque run token. Navigation can leave a
+  // request settling in A while B is open; only A stays locked, and a late A
+  // finish cannot delete a newer token for either dataset.
+  const [autoTriageRuns, setAutoTriageRuns] = useState(() => new Map());
+  const setAutoTriageRun = useCallback((runDatasetId, token, active) => {
+    setAutoTriageRuns((previous) => (
+      updateAutoTriageRuns(previous, runDatasetId, token, active)
+    ));
+  }, []);
   // Only the LAUNCH request is tracked locally; the batch's own progress comes
   // from the server (`activity`), so it survives a reload and a closed tab.
   const [launchingImprove, setLaunchingImprove] = useState(false);
@@ -216,7 +286,12 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   // sibling on every render, and a 400-image dataset renders a lot.
   const improvementStates = useMemo(
     () => improvementStateByParent(images), [images]);
-  const bulkBusy = busy || launchingImprove;
+  const autoTriageApplying = autoTriageRuns.has(datasetId);
+  const bulkBusy = busy || launchingImprove || !!bulkAction || autoTriageApplying;
+  useEffect(() => {
+    onBulkBusyChange?.(bulkBusy);
+    return () => onBulkBusyChange?.(false);
+  }, [bulkBusy, onBulkBusyChange]);
   // Which page of the filtered list is on screen. Only the RENDERING is paged:
   // the selection, the bulk actions, auto-triage and every count keep reading
   // the full list (see gridPaging.js).
@@ -235,6 +310,10 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   // Prune ids that vanished (deleted / poll refresh) so stale selections can't act.
   useEffect(() => {
     setSelected((prev) => {
+      // The delete endpoint is synchronous, but refreshes the dataset before
+      // its promise returns. Keep the exact selection visible until that return;
+      // the action's own success path clears it immediately afterwards.
+      if (bulkActionGateRef.current.active?.action === 'delete') return prev;
       const alive = new Set(images
         .filter((i) => i.filename && !isSmallImageRescueRow(i))
         .map((i) => i.id));
@@ -284,17 +363,31 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
     counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
     return counts;
   }, new Map())].map(([reason, count]) => `${count} ${reason}`).join(' · ');
-  const toggle = (id) => setSelected((prev) => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
-  const act = async (action) => {
+  const toggle = (id) => {
     if (bulkBusy) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+  const act = async (action) => {
+    if (bulkBusy || bulkActionGateRef.current.active || !ids.length) return;
     if (action === 'delete'
         && !window.confirm(`Permanently delete the ${ids.length} selected image(s) (files included)?`)) return;
-    await onBatch(ids, action);
-    setSelected(new Set());
+    const actionIds = [...ids];
+    const token = bulkActionGateRef.current.begin(action, actionIds.length);
+    if (!token) return;
+    setBulkAction(token);
+    try {
+      const affected = await onBatch(actionIds, action);
+      // A resolved numeric result is the hook's success contract. On rejection
+      // or an explicit failure, keep the selection ready for a retry.
+      if (typeof affected === 'number') setSelected(new Set());
+    } finally {
+      bulkActionGateRef.current.finish(token);
+      setBulkAction(null);
+    }
   };
   // Hand the whole selection to the server in ONE call. The client keeps the
   // eligibility partition (it already holds the rows, and the confirm must state
@@ -332,7 +425,8 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
       className="flex flex-col gap-2 scroll-mt-20">
       {onBatch && autoTriageAvailable(faceScoringBlocked) && (
         <AutoTriageBar images={images.filter((image) => !isSmallImageRescueRow(image))}
-          datasetId={datasetId} faceThresholds={faceThresholds} onBatch={onBatch} busy={bulkBusy} />
+          datasetId={datasetId} faceThresholds={faceThresholds} onBatch={onBatch}
+          busy={bulkBusy} applying={autoTriageApplying} onApplyingChange={setAutoTriageRun} />
       )}
       <div id="ds-images-bulk" tabIndex={-1}
         className="flex items-center gap-2 flex-wrap text-xs scroll-mt-20">
@@ -354,6 +448,12 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
             <div role="toolbar" aria-label="Bulk actions on the selection"
               className="flex items-center gap-2 flex-wrap rounded-lg border border-indigo-400/40 bg-indigo-500/10 px-2.5 py-1.5 w-full">
               <span className="text-content font-semibold">{selected.size} selected</span>
+              {bulkAction && (
+                <span role="status" aria-live="polite" aria-atomic="true"
+                  className="rounded-md border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-amber-200">
+                  {bulkActionMessage(bulkAction)}
+                </span>
+              )}
               <button type="button" disabled={bulkBusy} onClick={() => act('keep')}
                 className={`${batchBtn} bg-green-600/80 text-white`}>✓ Keep</button>
               <button type="button" disabled={bulkBusy} onClick={() => act('reject')}
@@ -394,7 +494,9 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                 </span>
               )}
               <button type="button" disabled={bulkBusy} onClick={() => act('delete')}
-                className={`${batchBtn} bg-red-500/15 border border-red-500/40 text-red-300`}>🗑 Delete</button>
+                className={`${batchBtn} bg-red-500/15 border border-red-500/40 text-red-300`}>
+                {bulkAction?.action === 'delete' ? bulkActionMessage(bulkAction) : '🗑 Delete'}
+              </button>
               <span className="ml-auto flex gap-2">
                 <button type="button" disabled={bulkBusy}
                   title="Selects every image the current filters show — all pages, not just the tiles on screen"
@@ -428,9 +530,10 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
             onScoreFace={onScoreFace} scoreFaceBusy={Boolean(scoringFaceIds?.has(img.id))}
             faceScoringBusy={Boolean(scoringFaceIds?.size)}
             faceScoringBlocked={faceScoringBlocked}
-            onRegenerate={onRegenerate} onReimprove={onReimprove} onView={onView}
+            onRegenerate={bulkBusy ? undefined : onRegenerate}
+            onReimprove={onReimprove} onView={bulkBusy ? undefined : onView}
             selected={selected.has(img.id)}
-            onToggleSelect={onBatch && !isSmallImageRescueRow(img) ? toggle : undefined}
+            onToggleSelect={onBatch && !bulkBusy && !isSmallImageRescueRow(img) ? toggle : undefined}
             nonce={(nonces && nonces[img.id]) || 0} faceThresholds={faceThresholds}
             tileSize={tileSize} datasetKind={datasetKind} dualCaptions={dualCaptions} />
         ))}

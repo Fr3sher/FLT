@@ -273,8 +273,11 @@ def test_refresh_skips_a_bank_with_a_live_job(client, app, tmp_path, monkeypatch
     bank_id, src = _mkbank(client, tmp_path, {'a.jpg': _photo(seed=1)})
     _write(src, 'b.jpg', _photo(seed=2))
     from app.services import bank_jobs
-    monkeypatch.setattr(bank_jobs, 'running', lambda _bid: True)
-    payload = client.get(f'/api/bank/{bank_id}?refresh=1').get_json()
+    reservation = bank_jobs.reserve(bank_id, 'scan')
+    try:
+        payload = client.get(f'/api/bank/{bank_id}?refresh=1').get_json()
+    finally:
+        bank_jobs.abort(reservation)
     assert payload['folder_sync']['added'] == 0
     assert payload['counts']['total'] == 1
 

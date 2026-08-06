@@ -5,9 +5,11 @@ is hermetic by construction. The two places that DO touch the embeddings child
 (the full face pass and the ~15-image sample check) drive it through
 ``_drive_infer_subprocess``, monkeypatched here exactly as the other bank pass
 tests do. Background jobs run inline under TESTING (see bank_jobs.start)."""
+import hashlib
 import json
 import os
 from collections import deque
+from pathlib import Path
 
 from PIL import Image
 
@@ -23,6 +25,10 @@ def _save(path, im):
 
 def _flat(value=128, size=64):
     return Image.new('RGB', (size, size), (value, value, value))
+
+
+def _fingerprint(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _mkbank(client, tmp_path, files, name='B'):
@@ -181,7 +187,8 @@ def test_face_pass_skips_asserted_images_and_never_reuses_their_id(
         imgs = json.loads(payload)['images']
         seen['images'] = imgs
         return ({'ok': True,
-                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'results': {p: {'state': 'scorable', 'det': 0.9,
+                                 'fingerprint': _fingerprint(p)} for p in imgs},
                  'clusters': {p: 1 for p in imgs}}, deque(), 0)
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
@@ -196,6 +203,44 @@ def test_face_pass_skips_asserted_images_and_never_reuses_their_id(
     assert rows['bob/b1.jpg'][0] == asserted_id + 1           # offset, no collision
     assert rows['bob/b1.jpg'][1] is None
     assert 'skipped (subfolder asserted as one person)' in (job['detail'] or '')
+
+
+def test_face_pass_offsets_past_transferred_asserted_rows_without_a_rule(
+        client, tmp_path, app, monkeypatch):
+    """A transferred assertion still owns its id after its folder rule is gone."""
+    bank_id, _src = _mkbank(client, tmp_path, _TREE)
+    from app.extensions import db
+    from app.models import BankFolderPerson, BankImage
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        asserted = (BankImage.query.filter_by(bank_id=bank_id)
+                    .filter(BankImage.relpath.contains('a1')).one())
+        asserted.face_cluster = 37
+        asserted.face_cluster_origin = 'asserted'
+        db.session.commit()
+        asserted_id = asserted.id
+        assert BankFolderPerson.query.filter_by(bank_id=bank_id).count() == 0
+        assert folder_person.asserted_offset(bank_id) == 37
+
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+
+    def fake_driver(job, python, script, payload, cache_path, rx, window):
+        imgs = json.loads(payload)['images']
+        return ({'ok': True,
+                 'results': {p: {'state': 'scorable', 'det': 0.9,
+                                 'fingerprint': _fingerprint(p)} for p in imgs},
+                 'clusters': {p: 1 for p in imgs}}, deque(), 0)
+
+    monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
+    with app.app_context():
+        banks._faces_job(bank_id)(_fresh_job('faces'))
+        db.session.expire_all()
+        rows = BankImage.query.filter_by(bank_id=bank_id).all()
+        assert next(r for r in rows if r.id == asserted_id).face_cluster == 37
+        computed = [r.face_cluster for r in rows
+                    if r.face_cluster_origin != 'asserted']
+        assert set(computed) == {38}
 
 
 def test_face_pass_total_promises_only_what_it_will_embed(client, tmp_path, app,
@@ -213,6 +258,43 @@ def test_face_pass_total_promises_only_what_it_will_embed(client, tmp_path, app,
     assert job['total'] == 2       # 5 images, 3 of them asserted away
 
 
+def test_face_partition_is_discarded_when_one_effective_input_is_unresolved(
+        client, tmp_path, app, monkeypatch):
+    bank_id, _src = _mkbank(client, tmp_path, _TREE)
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    monkeypatch.setattr(folder_person, 'probe_after_faces', lambda *_a, **_k: '')
+    with app.app_context():
+        bank = db.session.get(ImageBank, bank_id)
+        rows = BankImage.query.filter_by(bank_id=bank_id).all()
+        for row in rows:
+            row.face_cluster = 9
+        broken = rows[0]
+        broken.watermark_fingerprint = transfer.content_fingerprint_path(
+            banks.abs_image_path(bank, broken))
+        broken.watermark_clean_method = 'crop'
+        assert not banks.clean_image_path(bank_id, broken.id).exists()
+        db.session.commit()
+
+        def fake_driver(job, python, script, payload, cache_path, rx, window):
+            paths = json.loads(payload)['images']
+            return ({'ok': True,
+                     'results': {p: {'state': 'scorable', 'det': 0.9,
+                                     'fingerprint': _fingerprint(p)} for p in paths},
+                     'clusters': {p: 1 for p in paths}}, deque(), 0)
+
+        monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
+        job = _fresh_job('faces')
+        banks._faces_job(bank_id)(job)
+        db.session.expire_all()
+        assert {row.face_cluster for row in
+                BankImage.query.filter_by(bank_id=bank_id).all()} == {None}
+        assert 'grouping discarded' in job['detail']
+
+
 # --- the sample check -------------------------------------------------------
 def _run_check(app, bank_id, subfolder, clusters_of, monkeypatch, states=None):
     from app.services import image_bank_service as banks
@@ -224,7 +306,7 @@ def _run_check(app, bank_id, subfolder, clusters_of, monkeypatch, states=None):
         seen['images'] = imgs
         seen['threshold'] = json.loads(payload)['threshold']
         res = {p: {'state': (states or {}).get(os.path.basename(p), 'scorable'),
-                   'det': 0.9} for p in imgs}
+                   'det': 0.9, 'fingerprint': _fingerprint(p)} for p in imgs}
         return ({'ok': True, 'results': res,
                  'clusters': clusters_of(imgs)}, deque(), 0)
 
@@ -249,6 +331,101 @@ def test_sample_check_says_consistent_and_costs_a_sample(client, tmp_path, app,
     sample = data['assertions'][0]['sample']
     assert sample['verdict'] == 'consistent'
     assert sample['faces'] == 1 and sample['sample'] == 15
+
+
+def test_sample_check_measures_cleaned_rotated_effective_bytes(
+        client, tmp_path, app, monkeypatch):
+    """Folder Face evidence follows the same strict displayed-byte identity as
+    the full pass, while the user's asserted person id remains untouched."""
+    files = {os.path.join('anna', f'a{i:03d}.jpg'): _flat(i) for i in range(15)}
+    bank_id, _src = _mkbank(client, tmp_path, files)
+    client.post(f'/api/bank/{bank_id}/folder-person', json={'subfolder': 'anna'})
+
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+    with app.app_context():
+        bank = db.session.get(ImageBank, bank_id)
+        row = (BankImage.query.filter_by(bank_id=bank_id)
+               .order_by(BankImage.id.asc()).first())
+        asserted = (row.face_cluster, row.face_cluster_origin)
+        raw = banks.abs_image_path(bank, row)
+        row.watermark_fingerprint = transfer.content_fingerprint_path(raw)
+        row.watermark_state = 'detected'
+        row.watermark_clean_method = 'crop'
+        row.rotation = 90
+        clean = banks.clean_image_path(bank_id, row.id)
+        clean.parent.mkdir(parents=True, exist_ok=True)
+        _flat(213, size=80).resize((80, 40)).save(clean, 'WEBP')
+        db.session.commit()
+        effective = banks.analysis_image_path(bank, row, refresh_rotation=True)
+        expected_fingerprint = transfer.content_fingerprint_path(effective)
+        row_id = row.id
+
+    _job, seen = _run_check(
+        app, bank_id, 'anna', lambda imgs: {p: 1 for p in imgs}, monkeypatch)
+    assert effective in seen['images']
+    with app.app_context():
+        row = db.session.get(BankImage, row_id)
+        assert row.analysis_fingerprint == expected_fingerprint
+        assert row.face_state == 'scorable'
+        assert (row.face_cluster, row.face_cluster_origin) == asserted
+        # Binding the freshly measured fingerprint must not delete the rotated
+        # derivative and thereby stale the hash-bearing child cache.
+        assert Path(effective).is_file()
+    sample = client.get(
+        f'/api/bank/{bank_id}/folder-persons').get_json()['assertions'][0]['sample']
+    assert sample['verdict'] == 'consistent' and sample['stale'] is False
+
+    with app.app_context():
+        banks.rotate_images(LOCAL_USER, bank_id, [row_id], 90)
+    stale = client.get(
+        f'/api/bank/{bank_id}/folder-persons').get_json()['assertions'][0]['sample']
+    assert stale['verdict'] == 'consistent' and stale['stale'] is True
+
+
+def test_sample_check_discards_report_when_effective_source_switches_midflight(
+        client, tmp_path, app, monkeypatch):
+    files = {os.path.join('anna', f'a{i:03d}.jpg'): _flat(i) for i in range(15)}
+    bank_id, _src = _mkbank(client, tmp_path, files)
+    client.post(f'/api/bank/{bank_id}/folder-person', json={'subfolder': 'anna'})
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+    monkeypatch.setattr(banks, '_resolve_face_device', lambda: ('cpu', False))
+    changed = {}
+
+    def fake_driver(job, python, script, payload, cache_path, rx, window):
+        paths = json.loads(payload)['images']
+        results = {p: {'state': 'scorable', 'det': 0.9,
+                       'fingerprint': _fingerprint(p)} for p in paths}
+        target_path = paths[0]
+        bank = db.session.get(ImageBank, bank_id)
+        row = next(r for r in BankImage.query.filter_by(bank_id=bank_id).all()
+                   if banks.abs_image_path(bank, r) == target_path)
+        clean = banks.clean_image_path(bank_id, row.id)
+        clean.parent.mkdir(parents=True, exist_ok=True)
+        _flat(244, size=48).save(clean, 'WEBP')
+        row.watermark_fingerprint = transfer.content_fingerprint_path(target_path)
+        row.watermark_clean_method = 'crop'
+        changed['id'] = row.id
+        db.session.commit()
+        return ({'ok': True, 'results': results,
+                 'clusters': {p: 1 for p in paths}}, deque(), 0)
+
+    monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
+    job = _fresh_job('folder-check')
+    with app.app_context():
+        folder_person._sample_job(bank_id, 'anna')(job)
+        row = db.session.get(BankImage, changed['id'])
+        assert row.face_state is None
+        assert row.face_cluster_origin == 'asserted'
+    assertion = client.get(
+        f'/api/bank/{bank_id}/folder-persons').get_json()['assertions'][0]
+    assert assertion['sample'] is None
+    assert 'no report saved' in job['detail']
 
 
 def test_sample_check_reuses_the_clustering_threshold(client, tmp_path, app,
@@ -335,7 +512,8 @@ def test_the_saving_is_counted_in_inferences_not_claimed(client, tmp_path, app,
         # would silently measure the probe and call it the pass.
         seen.setdefault('calls', []).append(len(imgs))
         return ({'ok': True,
-                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'results': {p: {'state': 'scorable', 'det': 0.9,
+                                 'fingerprint': _fingerprint(p)} for p in imgs},
                  'clusters': {p: 1 for p in imgs},
                  'group_clusters': {g['name']: {p: 1 for p in g['images']}
                                     for g in (req.get('groups') or [])}},
@@ -373,7 +551,8 @@ def _probe_driver(seen, clusters_of):
         imgs = req['images']
         seen.setdefault('calls', []).append(req)
         return ({'ok': True,
-                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'results': {p: {'state': 'scorable', 'det': 0.9,
+                                 'fingerprint': _fingerprint(p)} for p in imgs},
                  'group_clusters': {g['name']: clusters_of(g['name'], g['images'])
                                     for g in (req.get('groups') or [])}},
                 deque(), 0)
@@ -543,7 +722,8 @@ def test_a_failing_probe_never_turns_a_finished_face_pass_red(
     def fake_driver(job, python, script, payload, cache_path, rx, window):
         imgs = json.loads(payload)['images']
         return ({'ok': True,
-                 'results': {p: {'state': 'scorable', 'det': 0.9} for p in imgs},
+                 'results': {p: {'state': 'scorable', 'det': 0.9,
+                                 'fingerprint': _fingerprint(p)} for p in imgs},
                  'clusters': {p: 1 for p in imgs}}, deque(), 0)
 
     monkeypatch.setattr(banks, '_drive_infer_subprocess', fake_driver)
@@ -643,7 +823,8 @@ def _face_probe_driver(seen, faces, person=lambda name, path: 1):
         seen.setdefault('calls', []).append(req)
         return ({'ok': True,
                  'results': {p: {'state': 'scorable' if has_face(p) else 'no_face',
-                                 'det': 0.9 if has_face(p) else 0.0}
+                                 'det': 0.9 if has_face(p) else 0.0,
+                                 'fingerprint': _fingerprint(p)}
                              for p in req['images']},
                  'group_clusters': {
                      g['name']: {p: person(g['name'], p)

@@ -192,8 +192,9 @@ export function putJson(url, body) {
    idempotent — a video clip's bounds being the first. PUT would claim the body is
    the whole resource, which for a clip carrying a status, a thumbnail state and a
    promotion link it very much is not. */
-export function patchJson(url, body) {
+export function patchJson(url, body, opts = {}) {
   return apiFetch(url, {
+    ...opts,
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',

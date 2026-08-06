@@ -64,6 +64,7 @@ file out of thirty thousand must not cost the other 29 999.
 """
 from __future__ import annotations
 import io
+import hashlib
 import json
 import os
 import sys
@@ -286,10 +287,25 @@ def _overlaps(a, b) -> bool:
             and min(a[3], b[3]) > max(a[1], b[1]))
 
 
+def _file_hash(path):
+    try:
+        digest = hashlib.sha256()
+        with open(path, 'rb') as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.digest()
+    except OSError:
+        return b''
+
+
 def _open(path):
     from PIL import Image
     payload = read_validated_bank_image(path)
-    return Image.open(io.BytesIO(payload)).convert('RGB')
+    digest = hashlib.sha256(payload).digest()
+    return Image.open(io.BytesIO(payload)).convert('RGB'), digest
 
 
 def main():
@@ -321,23 +337,35 @@ def main():
             _log(f'[wmdet] cancelled at {i - 1}/{len(images)}')
             break
         try:
-            image = _open(path)
+            image, payload_hash = _open(path)
             score = ranker.score(image)
+            if _file_hash(path) != payload_hash:
+                raise RuntimeError('image changed while it was analysed')
         except Exception as e:      # noqa: BLE001
             errors += 1
             _emit({'path': path, 'state': 'error', 'score': None, 'regions': [],
+                   'fingerprint': None,
                    'error': f'{type(e).__name__}: {e}'})
             _log(f'[wmdet] {i}/{len(images)} error')
             continue
         if score >= threshold:
             detected += 1
             regions = locator.regions(image) if locator is not None else []
+            if _file_hash(path) != payload_hash:
+                _emit({'path': path, 'state': 'error', 'score': None,
+                       'regions': [], 'fingerprint': None,
+                       'error': 'image changed while it was analysed'})
+                errors += 1
+                detected -= 1
+                continue
             _emit({'path': path, 'state': 'detected', 'score': round(score, 4),
-                   'regions': regions, 'error': None})
+                   'regions': regions, 'fingerprint': payload_hash.hex(),
+                   'error': None})
         else:
             clean += 1
             _emit({'path': path, 'state': 'none', 'score': round(score, 4),
-                   'regions': [], 'error': None})
+                   'regions': [], 'fingerprint': payload_hash.hex(),
+                   'error': None})
         _log(f'[wmdet] {i}/{len(images)} {"detected" if score >= threshold else "none"}')
     _emit({'summary': {'ok': True, 'detected': detected, 'clean': clean,
                        'errors': errors, 'device': device,

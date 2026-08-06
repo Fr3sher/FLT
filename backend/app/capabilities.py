@@ -668,6 +668,8 @@ CAPABILITY_IMPORTS = {
     'face_scoring': 'import insightface, onnxruntime',
     'masks': 'import rembg',
     'bank_scoring': 'import torch, open_clip, transformers',
+    'bank_siglip2': ('import torch, transformers, numpy; from PIL import Image; '
+                     'from transformers import Siglip2Model, AutoProcessor'),
     'watermark_inpaint': 'import simple_lama_inpainting',
     # The detector extra runs backend/infer/watermark_detect_infer.py, which needs
     # torch (both models) and transformers (BOTH heads are transformers-native —
@@ -732,6 +734,21 @@ def bank_scoring_gpu_available() -> bool:
     return state
 
 
+def bank_siglip2_gpu_available() -> bool:
+    """True only when the resolved SigLIP2 interpreter proves CUDA works.
+
+    Unlike Score, the parent sends an explicit device to the SigLIP2 child. An
+    unanswered probe must therefore resolve to CPU: guessing CUDA from the host
+    card (or from Score's borrowed runtime) would tell a CPU-only managed torch
+    build to use a device it cannot open.
+    """
+    from .services import bank_semantic_models as assets
+    state = _cached_import_state(
+        'bank_siglip2_gpu', assets.semantic_python(),
+        'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)')
+    return state is True
+
+
 def probe_masks() -> dict:
     python = cfg.get('masks.python') or sys.executable
     ok = _cached_import('masks', python, CAPABILITY_IMPORTS['masks'])
@@ -784,6 +801,30 @@ def probe_bank_scoring() -> dict:
     ok = _cached_import('bank_scoring', python, CAPABILITY_IMPORTS['bank_scoring'])
     return {'ok': ok,
             'detail': 'torch + open_clip + transformers import OK' if ok else 'import failed'}
+
+
+def probe_bank_siglip2() -> dict:
+    """Optional Bank semantic engine: packages AND the pinned local checkpoint.
+
+    Files are checked before importing torch so an install that never requested
+    SigLIP2 does not pay a heavy subprocess probe on every capability poll.
+    """
+    from .services import bank_semantic_models as assets
+    if not assets.weights_present():
+        return {
+            'ok': False,
+            'detail': ('SigLIP2 weights are not downloaded yet '
+                       '(Setup ▸ Quality tools ▸ SigLIP2 semantic engine)'),
+            'model': assets.MODEL_ID,
+        }
+    python = assets.semantic_python()
+    ok = _cached_import('bank_siglip2', python, CAPABILITY_IMPORTS['bank_siglip2'])
+    return {
+        'ok': ok,
+        'detail': ('torch + transformers + Pillow + pinned SigLIP2 weights ready' if ok
+                   else 'weights are present but this transformers build cannot load SigLIP2'),
+        'model': assets.MODEL_ID,
+    }
 
 
 def probe_watermark_inpaint() -> dict:
@@ -1596,6 +1637,7 @@ def probe(force=False) -> dict:
     face_scoring = probe_face_scoring()
     masks = probe_masks()
     bank_scoring = probe_bank_scoring()
+    bank_siglip2 = probe_bank_siglip2()
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
     video = probe_video()
@@ -1846,6 +1888,12 @@ def probe(force=False) -> dict:
         # Bank scoring extra (CLIP aesthetic + NSFW + style clustering). Gates the
         # bank's "Score (aesthetic · NSFW · style)" button; False → install hint.
         'bank_scoring': bank_scoring['ok'],
+        # Optional, user-selected semantic alternative. It is deliberately not
+        # folded into bank_scoring: CLIP aesthetic scoring remains usable without
+        # the additional 1.5 GB checkpoint.
+        'bank_siglip2': bank_siglip2['ok'],
+        'bank_siglip2_detail': bank_siglip2['detail'],
+        'bank_siglip2_model': bank_siglip2['model'],
         # Lets the front adapt the watermark Clean tooltip: when False, Clean is
         # crop-only (LaMa-routed watermarks are skipped with an install hint).
         'watermark_inpaint': watermark_inpaint['ok'],

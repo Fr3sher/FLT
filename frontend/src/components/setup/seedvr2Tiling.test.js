@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { ceilingLine, tilingStatus, TTP_PACK, TTP_URL } from './seedvr2Tiling.js'
+import { ceilingLine, laneForTarget, tilingStatus, TTP_PACK, TTP_URL } from './seedvr2Tiling.js'
 
 const caps = (comfyui) => ({ comfyui: { reachable: true, ...comfyui } })
 
@@ -62,6 +62,47 @@ test('the ceiling sentence changes with the lane that is actually available', ()
   // With tiling available the warning is gone: keeping it would scare people
   // away from a limit that no longer applies to them.
   assert.doesNotMatch(with_, /run out of memory/)
+})
+
+// --- what today's settings will actually do ---------------------------------
+// The hole these close: the crossover is STRICT and derived as 1.5x the tile,
+// so it lands exactly on numbers people type (1536 at the 1024 default, 768 at
+// a 512 tile). A target sitting ON it ran full-frame in silence — no tiling and
+// no explanation — which reads as "my setting did nothing".
+
+test('a target sitting EXACTLY on the crossover says so, and says it runs whole', () => {
+  const line = laneForTarget('auto', 1536, 1536)
+  assert.match(line, /exactly at the 1536 px crossover/)
+  assert.match(line, /runs full-frame/)
+  // The silence is the defect, so the sentence must also carry a way out.
+  assert.match(line, /raise the target above 1536 px/)
+  assert.match(line, /Start tiling above/)
+  assert.match(line, /Always tile large frames/)
+})
+
+test('one pixel over the crossover is tiled, and the sentence flips with it', () => {
+  assert.match(laneForTarget('auto', 1538, 1536), /is tiled/)
+  assert.doesNotMatch(laneForTarget('auto', 1538, 1536), /full-frame/)
+  // ...and below it reads as "below", not "exactly at".
+  assert.match(laneForTarget('auto', 1080, 1536), /below the 1536 px crossover/)
+})
+
+test('the boundary moves with the tile size, not with a hardcoded 1536', () => {
+  // Someone who drops the tile to 512 to survive on 8 GB gets a 768 crossover —
+  // and 768 is itself a round number people type.
+  assert.match(laneForTarget('auto', 768, 768), /exactly at the 768 px crossover/)
+})
+
+test('the two explicit modes describe themselves and ignore the crossover', () => {
+  assert.match(laneForTarget('never', 2160, 1536), /Nothing is tiled/)
+  assert.match(laneForTarget('always', 800, 1536), /bigger than one tile/)
+})
+
+test('no number to reason about means silence, never a made-up sentence', () => {
+  for (const bad of [undefined, null, 0, -2, 'big']) {
+    assert.equal(laneForTarget('auto', bad, 1536), null)
+    assert.equal(laneForTarget('auto', 1536, bad), null)
+  }
 })
 
 test('the pack is named and linkable', () => {

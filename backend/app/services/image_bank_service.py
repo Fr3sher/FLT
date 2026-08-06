@@ -33,10 +33,12 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import math
 import os
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import uuid
@@ -44,27 +46,35 @@ import warnings
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 
 from PIL import Image, ImageOps
-from sqlalchemy import and_, case, func, or_
+from sqlalchemy import and_, case, func, or_, text
 
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import (bank_jobs, bank_transfer_metadata, bank_undo, image_encoding,
-               path_guard, trash)
+from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
+               dataset_activity, image_encoding, path_guard, trash)
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _dataset_ingest_lock,
                                    _existing_dhash_rows, _hamming, _SCRAPE_DL_WORKERS,
                                    _watermark_regions_payload,
                                    _source_metadata_storage, bank_deterministic_analysis,
                                    import_images, _preserved_import_extension,
+                                   rollback_imported_images,
                                    normalize_watermark_regions)
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
 
 logger = logging.getLogger(__name__)
+
+# At most one SHA-proven path map per engine. Generic analysis writers may bind
+# thousands of rows in one pass; alternating CLIP/SigLIP cache loads per row would
+# defeat the semantic engine's intentionally one-cache array memo.
+_SEMANTIC_GROUP_PROOF_LOCK = threading.RLock()
+_semantic_group_proof_memo = {}
 
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 # Sanity cap — a bank is a triage layer, not a filesystem indexer: this is what
@@ -80,6 +90,35 @@ THUMB_MAX_SIDE = 320
 _COMMIT_EVERY = 25          # scan DB flush cadence
 _PROMOTE_CHUNK = 20         # files per import_images call (bounded memory)
 _SQL_IN_CHUNK = 500         # SQLite bound-variable ceiling is 999
+# --- duplicate regrouping budgets (see rebuild_dup_groups) -------------------
+# Rows written between two commits. The whole regrouping used to be ONE
+# transaction: a global clear plus one UPDATE per group, ~5 000 of them on a
+# 50 000-image bank, measured holding the single SQLite write lock 6 to 9.5 s —
+# past the 5 s busy_timeout, so every other writer in the app died on
+# `database is locked` (3 attempts out of 3) while the progress bar sat at 100 %.
+_DUP_WRITE_ROWS = 2000
+# And the pause AFTER each batch. Without it the next batch re-takes the write
+# lock in the microsecond after the commit, inside the sleep of another writer's
+# busy handler: batching alone still left a concurrent writer waiting 620 ms and
+# refused (measured, test_bank_scan_no_db_lock.py). Five batches on a 50 000-image
+# bank make this 100 ms of wall time in total.
+_DUP_WRITE_YIELD = 0.02
+# Bucket size from which the pairwise comparison goes to numpy. Below it the
+# plain Python loop is cheaper than allocating arrays, and it is bounded by
+# construction (at most 21 pairs).
+_DUP_NUMPY_FROM = 8
+# Ceiling on the cells of ONE comparison block, so peak memory follows this
+# constant and not the bucket size: 2e6 cells ≈ 34 MB of uint64 XOR plus its
+# popcount lookup, freed at every block.
+_DUP_BLOCK_CELLS = 2_000_000
+_POPCOUNT8 = None           # lazily built uint8 popcount table (see _popcount_lut)
+# Semantic cosine grouping is exact, but one request must not turn the 200k Bank
+# ceiling into 20 billion pair checks.  750M still covers a single 36k-image
+# SigLIP2 Bank (648M pairs); larger global partitions need an ANN implementation
+# rather than silently allocating/working without a bound. CLIP normally stays
+# well below this because its historical style clusters partition the work.
+_SEMANTIC_EXACT_PAIR_LIMIT = 750_000_000
+_SEMANTIC_TILE = 512       # at most 512x512 float/bool cells at once
 # A quality pass that keeps finding NOTHING on disk is not looking at a bank of
 # broken images — it is looking at the wrong folder. Bail out after this many
 # absent files (when they are at least half of what has been walked) rather than
@@ -131,12 +170,13 @@ def safe_bank_source(path, *, label: str = 'bank image'):
             yield image
 
 
-def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
-    """Read one live source with both a raw-byte cap and content validation.
+def _read_bounded_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
+    """Take one bounded raw snapshot without claiming it is a valid image.
 
-    This closes the time-of-check/time-of-use gap for paths handed as bytes to
-    Dataset import or Ollama: the exact bounded bytes read are revalidated before
-    any downstream service sees them.
+    The quality scanner needs this lower-level seam so it can bind an
+    ``unreadable`` verdict to the exact malformed bytes it inspected.  Every
+    consumer that needs a usable image must still go through
+    :func:`_read_safe_bank_source_bytes` below.
     """
     _bank_source_size_guard(path, label=label)
     try:
@@ -147,6 +187,17 @@ def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
     if len(raw) > BANK_SOURCE_MAX_BYTES:
         raise ValueError(
             f'{label} is too large (max {BANK_SOURCE_MAX_BYTES // (1024 * 1024)} MiB)')
+    return raw
+
+
+def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
+    """Read one live source with both a raw-byte cap and content validation.
+
+    This closes the time-of-check/time-of-use gap for paths handed as bytes to
+    Dataset import or Ollama: the exact bounded bytes read are revalidated before
+    any downstream service sees them.
+    """
+    raw = _read_bounded_bank_source_bytes(path, label=label)
     try:
         _preserved_import_extension(raw, label=label)
     except MemoryError as exc:
@@ -198,6 +249,29 @@ def _score_cache_path(bank_id) -> Path:
     return _bank_dir(bank_id) / 'score_cache.npz'
 
 
+def _semantic_cache_path(bank_id) -> Path:
+    """The SigLIP2 cache path, fixed for transfer/runtime-cache plumbing."""
+    return bank_semantic_engine.semantic_cache_path(bank_id, 'siglip2')
+
+
+def engine_model_key(engine) -> str:
+    """Public pure wrapper used by routes/tests without importing cache internals."""
+    return bank_semantic_engine.engine_model_key(engine)
+
+
+def semantic_cache_path(bank_or_id, engine=None) -> Path:
+    selected = (engine if engine is not None else
+                getattr(bank_or_id, 'semantic_engine', None))
+    return bank_semantic_engine.semantic_cache_path(bank_or_id, selected)
+
+
+def semantic_counts(bank_or_id, engine=None, total=None, *,
+                    eligible_paths=None) -> dict:
+    return bank_semantic_engine.semantic_counts(
+        bank_or_id, engine=engine, total=total,
+        eligible_paths=eligible_paths)
+
+
 def _abs_under(base: str, relpath: str) -> str | None:
     """The containment-checked realpath of ``relpath`` under an ALREADY resolved
     ``base``. Split out of ``abs_image_path`` so a loop over thousands of rows can
@@ -238,13 +312,37 @@ def _rotated_dir(bank_id) -> Path:
     return _bank_dir(bank_id) / 'rotated'
 
 
-def rotated_image_path(bank_id, image_id, rotation, source: str) -> Path:
-    """Where the turned copy of one image lives. Keyed on the angle AND on the
-    source's extension so a rotated PNG stays a PNG; keyed on the CLEAN state too
-    (via the source name) is unnecessary because every clean change drops the
-    whole derived set (see drop_derived)."""
+def rotated_image_path(bank_id, image_id, rotation, source: str,
+                       source_fingerprint=None) -> Path:
+    """Where the turned copy lives, content-addressed by its exact source.
+
+    A Bank watches a live user folder. Keying only on image id + angle made a
+    same-path replacement reuse the previous file's rotated pixels forever.
+    The full source SHA makes a cached derivative valid for exactly one raw or
+    cleaned generation while preserving the original image format.
+    """
+    source_fingerprint = (source_fingerprint
+                          or bank_transfer_metadata.content_fingerprint_path(source))
+    if not _valid_analysis_fingerprint(source_fingerprint):
+        raise ValueError('rotation source could not be fingerprinted')
     ext = os.path.splitext(source)[1].lower() or '.png'
-    return _rotated_dir(bank_id) / f'{image_id}.r{int(rotation)}{ext}'
+    return (_rotated_dir(bank_id)
+            / f'{image_id}.{source_fingerprint}.r{int(rotation)}{ext}')
+
+
+def _prune_rotated_generations(destination: Path, image_id) -> None:
+    """Best-effort removal of obsolete content-addressed/legacy siblings."""
+    try:
+        candidates = list(destination.parent.glob(f'{image_id}.*.r*'))
+        candidates.extend(destination.parent.glob(f'{image_id}.r*'))
+        for stale in candidates:
+            if stale != destination:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
@@ -262,8 +360,14 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
         return source
     if not turn:
         return source
-    dst = rotated_image_path(bank_id, row.id, turn, source)
+    source_fingerprint = bank_transfer_metadata.content_fingerprint_path(source)
+    if not _valid_analysis_fingerprint(source_fingerprint):
+        return source
+    dst = rotated_image_path(
+        bank_id, row.id, turn, source,
+        source_fingerprint=source_fingerprint)
     if dst.is_file():
+        _prune_rotated_generations(dst, row.id)
         return str(dst)
     try:
         # The generic transform below also checks the pixel budget. This Bank
@@ -273,6 +377,9 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
             pass
         payload = transformed_image_bytes(
             source, rotate_transform(turn), max_source_bytes=BANK_SOURCE_MAX_BYTES)
+        if (bank_transfer_metadata.content_fingerprint_path(source)
+                != source_fingerprint):
+            raise OSError('rotation source changed while it was being read')
         dst.parent.mkdir(parents=True, exist_ok=True)
         # Two simultaneous GETs of the same turned image (grid + lightbox) each
         # build it. A SHARED temp name would make one of them fail on Windows
@@ -288,6 +395,9 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
                     tmp.unlink()
                 except OSError:
                     pass
+        if (bank_transfer_metadata.content_fingerprint_path(source)
+                == source_fingerprint):
+            _prune_rotated_generations(dst, row.id)
         return str(dst)
     except (ValueError, OSError) as e:
         logger.warning('bank image %s could not be rotated: %s', row.id, e)
@@ -319,9 +429,134 @@ def resolved_image_path(bank: ImageBank, row: BankImage) -> str | None:
     return _ensure_rotated(bank.id, row, path)
 
 
+def analysis_image_path(bank: ImageBank, row: BankImage, *,
+                        refresh_rotation=False) -> str | None:
+    """Strict effective path used by every analysis/caption/cache lane.
+
+    Display remains fail-open so a broken derivative never produces a 404.
+    Analysis must fail closed: a requested clean without raw watermark authority,
+    or a rotation that cannot be materialised, may never silently analyse the
+    raw fallback and bless it as though it were the displayed transform.
+    """
+    raw = abs_image_path(bank, row)
+    if not raw or not os.path.isfile(raw):
+        return None
+    path = raw
+    if row.watermark_clean_method:
+        if (not _valid_analysis_fingerprint(row.watermark_fingerprint)
+                or bank_transfer_metadata.content_fingerprint_path(raw)
+                != row.watermark_fingerprint):
+            return None
+        cleaned = clean_image_path(bank.id, row.id)
+        if not cleaned.is_file():
+            return None
+        path = str(cleaned)
+    if getattr(row, 'rotation', None):
+        if refresh_rotation:
+            try:
+                candidate = rotated_image_path(
+                    bank.id, row.id, row.rotation, path)
+                # A completed analysis fingerprint authorises this exact
+                # derivative as the current effective generation. Rebuilding it
+                # would change its stat signature and make the exact Score/Face
+                # caches stale on every pass/promotion, so refresh only an
+                # unbound or mismatched copy.
+                trusted = (candidate.is_file()
+                           and _valid_analysis_fingerprint(
+                               row.analysis_fingerprint)
+                           and bank_transfer_metadata.content_fingerprint_path(
+                               candidate) == row.analysis_fingerprint)
+                if not trusted:
+                    candidate.unlink(missing_ok=True)
+            except (OSError, TypeError, ValueError):
+                return None
+        rotated = _ensure_rotated(bank.id, row, path)
+        if _same_resolved_path(rotated, path):
+            return None
+        path = rotated
+    return path if path and os.path.isfile(path) else None
+
+
 # --- CRUD -------------------------------------------------------------------
+class BankSourceFolderUnavailable(RuntimeError):
+    """The owned Bank exists, but its recorded source is not an existing folder."""
+
+
 def get_bank(user_id, bank_id) -> ImageBank | None:
     return ImageBank.query.filter_by(id=bank_id, user_id=user_id).first()
+
+
+def _open_host_folder(path: str) -> None:
+    """Reveal/explore a validated directory without executing the target."""
+    if os.name == 'nt':
+        os.startfile(path, 'explore')  # noqa: S606 - validated local directory
+    elif sys.platform == 'darwin':
+        # ``open <bundle>.app`` launches it. Finder's reveal mode selects the
+        # target instead, which is the folder-button contract even for bundles.
+        subprocess.Popen(['/usr/bin/open', '-R', path], shell=False)
+    else:
+        subprocess.Popen(['xdg-open', path], shell=False)
+
+
+def open_bank_source_folder(user_id, bank_id) -> str | None:
+    """Open one owned Bank's server-stored source folder in the host explorer.
+
+    The caller supplies only the Bank id: no client-provided filesystem path
+    reaches this boundary.  Unlike training-folder helpers this never creates a
+    directory; a moved, disconnected or file-valued source is an explicit error.
+    ``None`` deliberately conflates an unknown Bank with another user's Bank.
+    """
+    if (isinstance(bank_id, bool) or not isinstance(bank_id, int)
+            or not 1 <= bank_id <= (1 << 63) - 1):
+        return None
+
+    bank = get_bank(user_id, bank_id)
+    if bank is None:
+        return None
+    stored_path = bank.source_path
+    if (not isinstance(stored_path, str) or not stored_path
+            or not os.path.isabs(stored_path)):
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory')
+    try:
+        # strict=True proves every component still exists before opening it and
+        # resolves junctions/symlinks. Do not impose a drive-letter whitelist:
+        # reachable UNC shares are absolute, legitimate Bank sources on Windows.
+        path = os.path.realpath(stored_path, strict=True)
+    except (OSError, TypeError, ValueError) as exc:
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory') from exc
+    if not os.path.isdir(path):
+        raise BankSourceFolderUnavailable(
+            'bank source folder is unavailable or is not a directory')
+    _open_host_folder(path)
+    logger.info('opened Bank source folder: bank=%s path=%s', bank.id, path)
+    return path
+
+
+def _serialized_bank_mutation(kind):
+    """Guard a synchronous ``(user_id, bank_id, ...)`` mutation atomically.
+
+    The HTTP blueprint's busy check remains useful for a fast, friendly refusal,
+    but it can never be the write fence: another thread may reserve the Bank
+    after ``before_request`` returns.  Every decorated service therefore owns a
+    short Bank lease for the whole mutation.  Background jobs/pipelines pass
+    their exact reservation in ``_bank_lease`` and are validated rather than
+    trying to acquire their own non-reentrant slot.
+    """
+    def decorate(fn):
+        @wraps(fn)
+        def guarded(user_id, bank_id, *args, _bank_lease=None, **kwargs):
+            with bank_jobs.mutation_lease(
+                    bank_id, kind, capability=_bank_lease) as lease:
+                return fn(user_id, bank_id, *args, _bank_lease=lease, **kwargs)
+        return guarded
+    return decorate
+
+
+def _job_bank_capability(job):
+    """Return a modern registry capability, not a legacy test/job mapping."""
+    return job if isinstance(job, dict) and '_keys' in job else None
 
 
 def create_bank(user_id, name, folder):
@@ -418,7 +653,7 @@ def _sync_cached(bank_id) -> dict:
     return {**(last['result'] if last else _EMPTY_SYNC), 'added': 0, 'not_added': 0}
 
 
-def refresh_bank(user_id, bank_id, force=False) -> dict | None:
+def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | None:
     """Re-inventory a bank's source folder: register the images that appeared in
     it since the last walk.
 
@@ -442,6 +677,16 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     Returns {'added', 'missing', 'unavailable', 'error', 'not_added', 'limit'},
     or None when the bank is unknown. ``force`` bypasses the cooldown (bank
     opened by hand)."""
+    if _bank_lease is None:
+        try:
+            with bank_jobs.mutation_lease(bank_id, 'folder_sync') as lease:
+                return refresh_bank(
+                    user_id, bank_id, force=force, _bank_lease=lease)
+        except bank_jobs.BankJobBusy:
+            # Polling remains readable while a pass owns the Bank; inventory is
+            # additive and can safely wait for the next refresh.
+            return _sync_cached(bank_id)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
     bank = get_bank(user_id, bank_id)
     if bank is None:
         return None
@@ -453,9 +698,6 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     # them and reports progress against a fixed total). Adding rows underneath
     # it is harmless for the data but would silently fall outside that total —
     # the next refresh, a second later, picks them up.
-    if bank_jobs.running(bank_id):
-        return _sync_cached(bank_id)
-
     folder = bank.source_path
     if not folder or not os.path.isdir(folder):
         return _remember_sync(bank_id, now, {**_EMPTY_SYNC, 'unavailable': True})
@@ -601,7 +843,9 @@ def relocate_preview(user_id, bank_id, folder) -> dict:
     }
 
 
-def relocate_bank(user_id, bank_id, folder, confirm=False) -> dict:
+@_serialized_bank_mutation('relocate')
+def relocate_bank(user_id, bank_id, folder, confirm=False, *,
+                  _bank_lease=None) -> dict:
     """Point a bank at a NEW folder, keeping every row and every analysis.
 
     Moving a bank costs nothing by construction: BankImage.relpath is relative
@@ -615,8 +859,6 @@ def relocate_bank(user_id, bank_id, folder, confirm=False) -> dict:
     rows whose file did not come along keep their analysis and simply read as
     missing in the folder-sync note. Returns the preview dict plus
     {'applied', 'needs_confirm', 'overlaps'}."""
-    if bank_jobs.running(bank_id):
-        raise bank_jobs.BankJobBusy(bank_jobs.get(bank_id)['kind'])
     out = relocate_preview(user_id, bank_id, folder)
     out['needs_confirm'] = out['missing'] > 0
     out['applied'] = False
@@ -653,7 +895,40 @@ def _is_imported_source(path) -> bool:
         return False
 
 
-def delete_bank(user_id, bank_id) -> bool:
+def _remove_partial_import_folder(path, *, context) -> bool:
+    """Permanently remove an app-owned *partial* import folder, fail closed.
+
+    This is deliberately narrower than ordinary Bank deletion, which prefers a
+    recoverable move to Trash.  Failed/cancelled transfers have no user-owned
+    result to recover, though, and leaving their full copy behind is both an
+    orphan and a false "discarded" claim.  Resolve the target immediately before
+    removal and accept only a strict child of ``bank_sources_root``; an arbitrary
+    user source (or the import root itself) is never handed to ``rmtree``.
+    """
+    raw = str(path or '')
+    if not raw:
+        return False
+    if not os.path.lexists(raw):
+        return True
+    try:
+        resolved = os.path.realpath(raw)
+    except (OSError, TypeError, ValueError):
+        return False
+    if not _is_imported_source(resolved):
+        logger.error('%s: refusing to remove an unbounded folder %r', context, raw)
+        return False
+    try:
+        shutil.rmtree(resolved)
+    except Exception:  # noqa: BLE001 — cleanup must report every removal failure
+        logger.error('%s: could not remove partial import folder %s',
+                     context, resolved, exc_info=True)
+        return False
+    return not os.path.lexists(resolved)
+
+
+@_serialized_bank_mutation('delete')
+def delete_bank(user_id, bank_id, *, _allow_busy=False,
+                _bank_lease=None) -> bool:
     """Drop the bank's ROWS and working data (thumbs + face cache). A folder of the
     user's OWN and its images are never touched.
 
@@ -664,8 +939,6 @@ def delete_bank(user_id, bank_id) -> bool:
     bank = get_bank(user_id, bank_id)
     if not bank:
         return False
-    if bank_jobs.running(bank_id):
-        bank_jobs.cancel(bank_id)
     imported_source = bank.source_path if _is_imported_source(bank.source_path) else None
     from . import folder_person
     folder_person.drop_for_bank(bank_id)   # children first — no relationship()
@@ -686,6 +959,44 @@ def delete_bank(user_id, bank_id) -> bool:
 
 
 # --- flags & payloads -------------------------------------------------------
+def _watermark_history_inactive(row: BankImage) -> bool:
+    """Whether copied watermark history is known not to describe this payload.
+
+    A transformed source Bank legitimately has two identities: watermark data
+    belongs to its pristine raw file while effective analysis belongs to its
+    clean/rotated derivative.  After promotion that derivative is baked into a
+    new Bank's raw file and the transform markers are intentionally removed; an
+    unequal pair of exact fingerprints is then historical evidence only.
+    """
+    if row.watermark_clean_method or row.rotation:
+        return False
+    if not _valid_analysis_fingerprint(row.watermark_fingerprint):
+        return True
+    return bool(
+        _valid_analysis_fingerprint(row.analysis_fingerprint)
+        and row.analysis_fingerprint != row.watermark_fingerprint)
+
+
+def _watermark_history_inactive_clause():
+    """SQL mirror of :func:`_watermark_history_inactive`."""
+    return and_(
+        BankImage.watermark_clean_method.is_(None),
+        BankImage.rotation.is_(None),
+        or_(
+            BankImage.watermark_fingerprint.is_(None),
+            func.length(BankImage.watermark_fingerprint) != 64,
+            and_(
+                BankImage.analysis_fingerprint.isnot(None),
+                func.length(BankImage.analysis_fingerprint) == 64,
+                BankImage.watermark_fingerprint.isnot(None),
+                func.length(BankImage.watermark_fingerprint) == 64,
+                BankImage.analysis_fingerprint
+                != BankImage.watermark_fingerprint,
+            ),
+        ),
+    )
+
+
 def image_flags(row: BankImage, th: dict) -> list:
     """Threshold verdicts for one image, recomputed from the raw scores."""
     if row.quality_state == 'unreadable':
@@ -714,7 +1025,8 @@ def image_flags(row: BankImage, th: dict) -> list:
         flags.append('low_aesthetic')
     if row.nsfw_score is not None and row.nsfw_score > th['nsfw_max']:
         flags.append('nsfw')
-    if row.watermark_state == 'detected':
+    if (row.watermark_state == 'detected'
+            and not _watermark_history_inactive(row)):
         flags.append('watermark')
     return flags
 
@@ -749,17 +1061,23 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
     # means the badge disappears when the user deletes the image in the dataset,
     # instead of advertising a copy that is gone.
     promoted = (promoted_by or {}).get(row.id, row.promoted_dataset_id)
-    # A quarter turn transposes what the user SEES. The columns keep the source's
-    # own numbers (a re-scan rewrites them from the file, which never changed), so
-    # the swap happens here, at read time — the payload can never drift out of
-    # sync with the stored angle.
+    # Current scans bind width/height to the same EFFECTIVE bytes as every other
+    # analysis lane, so a SHA-bound row is already in display orientation.  Only
+    # a legacy, unbound rotated row may still carry raw inventory dimensions and
+    # needs the historical read-time transpose.
     rotation = int(row.rotation or 0) % 360
-    width, height = ((row.height, row.width) if rotation in (90, 270)
+    legacy_raw_dimensions = (
+        rotation in (90, 270)
+        and not _valid_analysis_fingerprint(row.analysis_fingerprint))
+    width, height = ((row.height, row.width) if legacy_raw_dimensions
                      else (row.width, row.height))
     # The mask editor's seed, carried ONLY on the rows that can open it: a bank
     # page is thousands of images and the other 99% would pay for three null keys.
+    watermark_active = not _watermark_history_inactive(row)
     mask = {}
-    if row.watermark_state == 'detected' or row.watermark_regions is not None:
+    if watermark_active and (
+            row.watermark_state == 'detected'
+            or row.watermark_regions is not None):
         import json as _json
         try:
             bbox = _json.loads(row.watermark_bbox or '')
@@ -779,15 +1097,16 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'blur_score': row.blur_score, 'noise_score': row.noise_score,
         'uniformity_score': row.uniformity_score,
         'aesthetic_score': row.aesthetic_score, 'nsfw_score': row.nsfw_score,
-        'style_cluster': row.style_cluster, 'watermark_state': row.watermark_state,
+        'style_cluster': row.style_cluster,
+        'watermark_state': row.watermark_state if watermark_active else None,
         'watermark_clean_method': row.watermark_clean_method,
         # Who ruled on THIS image, and with what score. Per image rather than per
         # bank because a bank scanned over weeks holds both routes' verdicts, and
         # "why is this one flagged?" is asked about one tile, not about a bank.
         # NULL source = scanned before the app recorded it; NULL score = the
         # vision route, which writes a sentence and not a number.
-        'watermark_source': row.watermark_source,
-        'watermark_score': row.watermark_score,
+        'watermark_source': row.watermark_source if watermark_active else None,
+        'watermark_score': row.watermark_score if watermark_active else None,
         'detail_ratio': row.detail_ratio, 'bars_ratio': row.bars_ratio,
         'jpeg_quality': row.jpeg_quality,
         'origin': row.origin, 'origin_evidence': row.origin_evidence,
@@ -833,7 +1152,8 @@ def _flag_filter(flag: str, th: dict):
         return and_(BankImage.nsfw_score.isnot(None),
                     BankImage.nsfw_score > th['nsfw_max'])
     if flag == 'watermark':
-        return BankImage.watermark_state == 'detected'
+        return and_(BankImage.watermark_state == 'detected',
+                    ~_watermark_history_inactive_clause())
     ok = BankImage.quality_state == 'ok'
     crit = {
         'blur': BankImage.blur_score < th['sharpness_min'],
@@ -1241,6 +1561,42 @@ def bank_payload(user_id, bank_id) -> dict | None:
     th = thresholds()
     base = BankImage.query.filter_by(bank_id=bank_id)
     total = base.count()
+    # 🏷️ What each caption SCOPE would really caption: in that status AND still
+    # without a caption. NOT counts.keep / counts.pending — the pass skips rows
+    # that already have one, so quoting the status total would advertise a number
+    # the run does not act on. That exact mistake was paid for once already by the
+    # 🧹 Auto-reject counter (see _flag_counts): a button that offers "5 930" and
+    # moves 0 reads as a broken feature, and it is the counter's fault. One query,
+    # two conditional sums, so telling the truth costs nothing on a 100 000-image
+    # bank.
+    #
+    # THREE figures per pile, not one, because 🔄 Re-caption has three different
+    # things to say and folding any two of them would be a lie of a familiar kind:
+    #   caption_todo_*     : no caption at all — what a normal pass writes;
+    #   caption_asserted_* : a caption a HUMAN wrote — what a forced pass now SKIPS
+    #                        (services/caption_origin.py), so "keeping the 3 you
+    #                        wrote" is a measured number and not a hope;
+    #   caption_unrecorded_*: a caption whose author was never recorded — rewritten
+    #                        like any other, but it is NOT "machine-written", and
+    #                        the screen must not claim it is.
+    # Whatever is left (pile − the three) is machine-written and rewritten in silence.
+    def _cap_sum(status, condition):
+        return func.coalesce(func.sum(
+            case((and_(BankImage.status == status, condition), 1), else_=0)), 0)
+
+    no_caption = or_(BankImage.caption.is_(None), BankImage.caption == '')
+    asserted = caption_origin.protected_clause(BankImage)
+    unrecorded = caption_origin.unrecorded_clause(BankImage)
+    (todo_keep, todo_pending, todo_reject, asserted_keep, asserted_pending,
+     asserted_reject, unrecorded_keep, unrecorded_pending, unrecorded_reject) = (
+        db.session.query(
+            _cap_sum('keep', no_caption), _cap_sum('pending', no_caption),
+            _cap_sum('reject', no_caption),
+            _cap_sum('keep', asserted), _cap_sum('pending', asserted),
+            _cap_sum('reject', asserted),
+            _cap_sum('keep', unrecorded), _cap_sum('pending', unrecorded),
+            _cap_sum('reject', unrecorded))
+        .filter(BankImage.bank_id == bank_id).one())
     counts = {
         'total': total,
         'scanned': base.filter(BankImage.quality_state.isnot(None)).count(),
@@ -1259,6 +1615,22 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'pending': base.filter_by(status='pending').count(),
         'keep': base.filter_by(status='keep').count(),
         'reject': base.filter_by(status='reject').count(),
+        # …and the caption-pass sizes of the two scopes it can be aimed at.
+        'caption_todo_keep': int(todo_keep or 0),
+        'caption_todo_pending': int(todo_pending or 0),
+        # …and the third pile, now that a caption run can be aimed at the bin.
+        # The keys keep their historical names — several of them are read by
+        # shipped clients and by localStorage-backed screens, so the set GROWS,
+        # it is never renamed.
+        'caption_todo_reject': int(todo_reject or 0),
+        # …and the two figures 🔄 Re-caption needs to stop lumping "what you wrote"
+        # together with "what nobody recorded".
+        'caption_asserted_keep': int(asserted_keep or 0),
+        'caption_asserted_pending': int(asserted_pending or 0),
+        'caption_asserted_reject': int(asserted_reject or 0),
+        'caption_unrecorded_keep': int(unrecorded_keep or 0),
+        'caption_unrecorded_pending': int(unrecorded_pending or 0),
+        'caption_unrecorded_reject': int(unrecorded_reject or 0),
         # Images a dataset REALLY holds today (back-link), plus the ones promoted
         # before that link existed (legacy flag). Counting the flag alone kept
         # advertising copies the user had since deleted.
@@ -1274,7 +1646,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # (so the UI can show "scored 0/9000" and enable the threshold facets).
         'scored': base.filter(or_(BankImage.aesthetic_score.isnot(None),
                                   BankImage.nsfw_score.isnot(None))).count(),
-        'watermark_scanned': base.filter(BankImage.watermark_state.isnot(None)).count(),
+        'watermark_scanned': base.filter(
+            BankImage.watermark_state.isnot(None),
+            ~_watermark_history_inactive_clause()).count(),
         'framing_classified': base.filter(BankImage.framing.isnot(None)).count(),
         # 🎨 Medium — how many rows the pass has a verdict for ('unsure'
         # included: it IS a verdict). Drives the chip row's appearance and the
@@ -1288,6 +1662,69 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # price the click before the user makes it instead of after.
         'angle_backfillable': base.filter(BankImage.face_state.isnot(None),
                                           BankImage.face_yaw.is_(None)).count(),
+    }
+    # 🎛 WHAT EACH PASS WOULD REALLY DO, PER PILE. The launch dialogs put a
+    # number on every scope line, and that number has to be the number the run
+    # walks — the whole reason these exist. So each entry is computed from the
+    # SAME clause its pass's pool filters on (_scan_todo_clause,
+    # _watermark_todo_clause, …), never from a second copy of the predicate.
+    #
+    # Two figures per pass, because every one of these dialogs offers two runs:
+    #   todo — what is left to do in that pile (the plain button);
+    #   all  — the pile itself (the "do it again anyway" line: rescan / rescore /
+    #          force), which is counts.keep/pending/reject and is NOT repeated
+    #          here. The client adds it from `counts`, so the two can never drift.
+    #
+    # Cost: three conditional sums per pass in one query each, the shape _cap_sum
+    # already proved free on a 100 000-image bank.
+    all_by_status = {'keep': counts['keep'], 'pending': counts['pending'],
+                     'reject': counts['reject']}
+    pass_scopes = {
+        'scan': {'todo': _todo_by_status(bank_id, _scan_todo_clause()),
+                 'all': dict(all_by_status)},
+        # ⚠️ WATERMARK'S "all" IS NOT THE PILE. Even a rescan leaves 'dismissed'
+        # rows alone (the user already ruled on them), so quoting counts.keep on
+        # its rescan line would offer images the run provably skips. This is the
+        # exact shape of the defect these numbers exist to prevent, and it is why
+        # every 'all' here is a measured query rather than a reused total.
+        'watermark': {'todo': _todo_by_status(bank_id, _watermark_todo_clause()),
+                      'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
+        'framing': {'todo': _todo_by_status(bank_id, BankImage.framing.is_(None)),
+                    'all': dict(all_by_status)},
+        # 🎨 Medium is the one pass whose pool is not its work: it computes NO
+        # image inference and reads the CLIP embedding ✨ Score cached, so a row
+        # with no score CANNOT be classified however wide the scope is. Counting
+        # only the pool made the window promise "Classify 2 images" over a run
+        # that could only answer "0 classified, 2 skipped (not scored yet)" —
+        # the same class of defect as a count that does not match the run, one
+        # step earlier. 'blocked' is that subset, measured, per pile.
+        'medium': {'todo': _todo_by_status(bank_id, BankImage.medium.is_(None)),
+                   'all': dict(all_by_status),
+                   'blocked': _todo_by_status(bank_id, and_(
+                       BankImage.medium.is_(None), _unscored_clause())),
+                   'blocked_all': _todo_by_status(bank_id, _unscored_clause())},
+        # ⤢ has no "do it again" lane at all: a measured yaw is a measured yaw.
+        # Both figures are the same pool, said twice rather than left absent.
+        'angles': {'todo': _todo_by_status(bank_id, _angle_todo_clause()),
+                   'all': _todo_by_status(bank_id, _angle_todo_clause())},
+        # 👥 takes no scope (its clusters are one numbering of the whole bank),
+        # but its dialog still has to quote the ONE number it will run on — and
+        # that number is not the pile: rows in a folder the user declared to be a
+        # single person are skipped entirely.
+        'faces': {'todo': _todo_by_status(bank_id, or_(
+            BankImage.face_cluster_origin.is_(None),
+            BankImage.face_cluster_origin != 'asserted')),
+            'all': dict(all_by_status)},
+        # Caption's three are already computed above, by the same rule and with
+        # the same filter the job uses. Mirrored here so one client-side reader
+        # serves every dialog; the flat caption_todo_* keys stay for the callers
+        # that already read them. Its 'all' is the pile — what a FORCED run walks
+        # before the "keep what you wrote" protection, which bankCaptionScope.js
+        # subtracts from the caption_asserted_* figures.
+        'caption': {'todo': {'keep': int(todo_keep or 0),
+                             'pending': int(todo_pending or 0),
+                             'reject': int(todo_reject or 0)},
+                    'all': dict(all_by_status)},
     }
     framing = _framing_counts(bank_id)
     flags, flags_actionable = _flag_counts(bank_id, th)
@@ -1345,10 +1782,18 @@ def bank_payload(user_id, bank_id) -> dict | None:
                  .order_by(BankImage.id.asc()).first())
         style_clusters.append({'id': cid, 'size': size,
                                'cover_image_id': cover.id if cover else None})
+    semantic = semantic_engine_info(user_id, bank_id)
+    counts['semantic_ready'] = bool(semantic and semantic['ready'])
+    counts['semantic_indexed'] = int(
+        semantic['counts']['ok'] if semantic else 0)
     return {
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
+        'semantic_engine': (semantic['engine'] if semantic else
+                            _selected_semantic_engine(bank)),
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
         'counts': counts, 'flags': flags,
+        # Per-pass × per-pile run sizes — see the comment where they are built.
+        'pass_scopes': pass_scopes,
         # A SECOND map, not a replacement: 'flags' answers the facet's question
         # ("show me these") and 'flags_actionable' answers the button's ("how
         # many would this reject"). Overwriting the first would have broken the
@@ -1365,6 +1810,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
         ) if counts['angle_backfillable'] else None,
         'dup': dup,
         'semantic_dup': semantic_dup,
+        'semantic': semantic,
         'clusters': clusters, 'faces_scanned': faces_scanned,
         'style_clusters': style_clusters,
         'activity': bank_jobs.get(bank_id),
@@ -1588,6 +2034,131 @@ def _apply_text_filters(q, search=None, exclude=None, tags=None):
     return q
 
 
+# The facets the grid composes, in the order _apply_facets applies them. These
+# names are BOTH the keyword arguments below and the ids ``skip`` accepts, which
+# is what lets facet_counts measure a facet with every OTHER filter in force and
+# its own left out. Stored query keys — never rename one without an alias.
+FACETS = ('status', 'flag', 'cluster', 'group', 'semantic_group', 'style',
+          'framing', 'origin', 'medium', 'angle', 'subfolder', 'search',
+          'exclude', 'tags', 'res_bucket')
+
+
+def _apply_facets(q, th, skip=None, *, status=None, flag=None, cluster=None,
+                  group=None, semantic_group=None, style=None, subfolder=None,
+                  search=None, exclude=None, tags=None, res_bucket=None,
+                  framing=None, origin=None, medium=None, angle=None):
+    """Narrow ``q`` by the composing facets and return ``(q, order)``.
+
+    ONE place, because the grid and the chip counters ask the same question and
+    a second copy of these predicates is exactly how the two drift apart — the
+    chip that says 4 043 and opens on 12 rows is that drift, not a rounding
+    error. ``order`` is the flag's worst-first ordering (the caller may override
+    it with an explicit sort); counters ignore it.
+
+    ``skip`` names ONE facet (a FACETS id) to leave OUT. That is the whole
+    counting rule: a facet's own value must never narrow its own counts, or
+    picking "blur" would show its neighbours at 0 and the user could no longer
+    change their mind without clearing everything first."""
+    if status in ('pending', 'keep', 'reject') and skip != 'status':
+        q = q.filter(BankImage.status == status)
+    order = BankImage.id.asc()
+    if skip == 'flag':
+        flag = None
+    if flag == 'flagged':
+        crits = [c for c in (_flag_filter(f, th) for f in _QUALITY_FLAGS)
+                 if c is not None]
+        q = q.filter(or_(*crits))
+    elif flag == 'clean':
+        q = q.filter(BankImage.quality_state == 'ok')
+        # Every quality flag except 'unreadable' (that one IS the quality_state
+        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
+        # from a build that predates one of these scores still counts as clean
+        # for it instead of dropping out of the chip entirely.
+        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
+            q = q.filter(~_flag_filter(f, th))
+    elif flag == 'dups':
+        q = q.filter(BankImage.dup_group.isnot(None))
+        order = (BankImage.dup_group.asc(), BankImage.id.asc())
+    elif flag == 'semantic_dups':
+        q = q.filter(BankImage.semantic_dup_group.isnot(None))
+        order = (BankImage.semantic_dup_group.asc(), BankImage.id.asc())
+    elif flag == 'no_face':
+        # Literally "no face was found" — ONLY face_state == 'no_face'. The other
+        # non-scorable states (low_det / too_small / extreme_pose) DID detect a
+        # face; lumping them in here surfaced photos with visible faces under a
+        # "No face" chip. 'unreadable'/'error' are read failures, not "no face".
+        q = q.filter(BankImage.face_state == 'no_face')
+    elif flag in _QUALITY_FLAGS:
+        crit = _flag_filter(flag, th)
+        if crit is not None:
+            q = q.filter(crit)
+        order = {'blur': BankImage.blur_score.asc(),
+                 'noise': BankImage.noise_score.desc(),
+                 'uniform': BankImage.uniformity_score.asc(),
+                 'small': BankImage.width.asc(),
+                 'soft_detail': BankImage.detail_ratio.asc(),
+                 'bars': BankImage.bars_ratio.desc(),
+                 'unreadable': BankImage.id.asc()}[flag]
+    elif flag in _SCORE_FLAGS:
+        crit = _flag_filter(flag, th)
+        if crit is not None:
+            q = q.filter(crit)
+        # Worst first: least aesthetic / most-confident NSFW at the top.
+        order = {'low_aesthetic': BankImage.aesthetic_score.asc(),
+                 'nsfw': BankImage.nsfw_score.desc(),
+                 'watermark': BankImage.id.asc()}[flag]
+    if cluster is not None and skip != 'cluster':
+        q = q.filter(BankImage.face_cluster == int(cluster))
+    if group is not None and skip != 'group':
+        q = q.filter(BankImage.dup_group == int(group))
+    if semantic_group is not None and skip != 'semantic_group':
+        q = q.filter(BankImage.semantic_dup_group == int(semantic_group))
+    if style is not None and skip != 'style':
+        q = q.filter(BankImage.style_cluster == int(style))
+    if framing in _FRAMING_KEYS and skip != 'framing':
+        # One framing bucket (face/bust/body/back/unknown) — composes with every
+        # other facet. An unknown/absent value simply doesn't filter.
+        q = q.filter(BankImage.framing == framing)
+    if origin in ORIGINS and skip != 'origin':
+        # One provenance state. 'unknown' is a real, selectable answer — it is
+        # what a stripped file honestly is, and the user must be able to see that
+        # pile rather than have it silently merged into "not AI".
+        q = q.filter(BankImage.origin == origin)
+    if medium in MEDIUM_KEYS and skip != 'medium':
+        # One medium bucket. 'unsure' is selectable on purpose — it is the pile
+        # the classifier honestly could not call, and the only way to work
+        # through it is to be able to look at it.
+        q = q.filter(BankImage.medium == medium)
+    if angle in ANGLES and skip != 'angle':
+        # One head-angle bucket, recomputed from the stored yaw at read time (so
+        # re-tuning the two cuts re-slices the bank with no rescan) — see
+        # _angle_case for what 'behind' costs and requires.
+        q = q.filter(_angle_case() == angle)
+    if subfolder is not None and skip != 'subfolder':
+        # '' scopes to root-level files; any other value to that top-level folder
+        # and everything nested under it. startswith() escapes LIKE metachars.
+        if subfolder == '':
+            q = q.filter(~BankImage.relpath.contains(os.sep))
+        else:
+            q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
+    # Full-text over caption + relpath, positive (search) and negative (exclude).
+    q = _apply_text_filters(q, None if skip == 'search' else search,
+                            None if skip == 'exclude' else exclude,
+                            None if skip == 'tags' else tags)
+    if res_bucket in _RES_BOUNDS and skip != 'res_bucket':
+        # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
+        # guards drop unscanned rows (a NULL product would satisfy neither bound
+        # cleanly), so a tier never leaks unscanned images. Composes with the sort.
+        lo, hi = _RES_BOUNDS[res_bucket]
+        area = BankImage.width * BankImage.height
+        q = q.filter(BankImage.width.isnot(None), BankImage.height.isnot(None))
+        if lo:
+            q = q.filter(area >= lo)
+        if hi is not None:
+            q = q.filter(area < hi)
+    return q, order
+
+
 def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
                 group=None, style=None, subfolder=None, search=None,
                 semantic_group=None, sort=None, res_bucket=None, framing=None,
@@ -1652,100 +2223,12 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
         off = max(0, int(offset))
         page = ordered_rows[off:off + max(1, min(500, int(limit)))]
         return {'images': _page_images(page, th), 'total': total, 'offset': off}
-    q = BankImage.query.filter_by(bank_id=bank_id)
-    if status in ('pending', 'keep', 'reject'):
-        q = q.filter(BankImage.status == status)
-    order = BankImage.id.asc()
-    if flag == 'flagged':
-        crits = [c for c in (_flag_filter(f, th) for f in _QUALITY_FLAGS)
-                 if c is not None]
-        q = q.filter(or_(*crits))
-    elif flag == 'clean':
-        q = q.filter(BankImage.quality_state == 'ok')
-        # Every quality flag except 'unreadable' (that one IS the quality_state
-        # already pinned to 'ok' above). Each criterion is NULL-safe, so a row
-        # from a build that predates one of these scores still counts as clean
-        # for it instead of dropping out of the chip entirely.
-        for f in ('blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'):
-            q = q.filter(~_flag_filter(f, th))
-    elif flag == 'dups':
-        q = q.filter(BankImage.dup_group.isnot(None))
-        order = (BankImage.dup_group.asc(), BankImage.id.asc())
-    elif flag == 'semantic_dups':
-        q = q.filter(BankImage.semantic_dup_group.isnot(None))
-        order = (BankImage.semantic_dup_group.asc(), BankImage.id.asc())
-    elif flag == 'no_face':
-        # Literally "no face was found" — ONLY face_state == 'no_face'. The other
-        # non-scorable states (low_det / too_small / extreme_pose) DID detect a
-        # face; lumping them in here surfaced photos with visible faces under a
-        # "No face" chip. 'unreadable'/'error' are read failures, not "no face".
-        q = q.filter(BankImage.face_state == 'no_face')
-    elif flag in _QUALITY_FLAGS:
-        crit = _flag_filter(flag, th)
-        if crit is not None:
-            q = q.filter(crit)
-        order = {'blur': BankImage.blur_score.asc(),
-                 'noise': BankImage.noise_score.desc(),
-                 'uniform': BankImage.uniformity_score.asc(),
-                 'small': BankImage.width.asc(),
-                 'soft_detail': BankImage.detail_ratio.asc(),
-                 'bars': BankImage.bars_ratio.desc(),
-                 'unreadable': BankImage.id.asc()}[flag]
-    elif flag in _SCORE_FLAGS:
-        crit = _flag_filter(flag, th)
-        if crit is not None:
-            q = q.filter(crit)
-        # Worst first: least aesthetic / most-confident NSFW at the top.
-        order = {'low_aesthetic': BankImage.aesthetic_score.asc(),
-                 'nsfw': BankImage.nsfw_score.desc(),
-                 'watermark': BankImage.id.asc()}[flag]
-    if cluster is not None:
-        q = q.filter(BankImage.face_cluster == int(cluster))
-    if group is not None:
-        q = q.filter(BankImage.dup_group == int(group))
-    if semantic_group is not None:
-        q = q.filter(BankImage.semantic_dup_group == int(semantic_group))
-    if style is not None:
-        q = q.filter(BankImage.style_cluster == int(style))
-    if framing in _FRAMING_KEYS:
-        # One framing bucket (face/bust/body/back/unknown) — composes with every
-        # other facet. An unknown/absent value simply doesn't filter.
-        q = q.filter(BankImage.framing == framing)
-    if origin in ORIGINS:
-        # One provenance state. 'unknown' is a real, selectable answer — it is
-        # what a stripped file honestly is, and the user must be able to see that
-        # pile rather than have it silently merged into "not AI".
-        q = q.filter(BankImage.origin == origin)
-    if medium in MEDIUM_KEYS:
-        # One medium bucket. 'unsure' is selectable on purpose — it is the pile
-        # the classifier honestly could not call, and the only way to work
-        # through it is to be able to look at it.
-        q = q.filter(BankImage.medium == medium)
-    if angle in ANGLES:
-        # One head-angle bucket, recomputed from the stored yaw at read time (so
-        # re-tuning the two cuts re-slices the bank with no rescan) — see
-        # _angle_case for what 'behind' costs and requires.
-        q = q.filter(_angle_case() == angle)
-    if subfolder is not None:
-        # '' scopes to root-level files; any other value to that top-level folder
-        # and everything nested under it. startswith() escapes LIKE metachars.
-        if subfolder == '':
-            q = q.filter(~BankImage.relpath.contains(os.sep))
-        else:
-            q = q.filter(BankImage.relpath.startswith(subfolder + os.sep))
-    # Full-text over caption + relpath, positive (search) and negative (exclude).
-    q = _apply_text_filters(q, search, exclude, tags)
-    if res_bucket in _RES_BOUNDS:
-        # One resolution tier: [lo, hi) on megapixels (width×height). The NOT-NULL
-        # guards drop unscanned rows (a NULL product would satisfy neither bound
-        # cleanly), so a tier never leaks unscanned images. Composes with the sort.
-        lo, hi = _RES_BOUNDS[res_bucket]
-        area = BankImage.width * BankImage.height
-        q = q.filter(BankImage.width.isnot(None), BankImage.height.isnot(None))
-        if lo:
-            q = q.filter(area >= lo)
-        if hi is not None:
-            q = q.filter(area < hi)
+    q, order = _apply_facets(
+        BankImage.query.filter_by(bank_id=bank_id), th,
+        status=status, flag=flag, cluster=cluster, group=group,
+        semantic_group=semantic_group, style=style, subfolder=subfolder,
+        search=search, exclude=exclude, tags=tags, res_bucket=res_bucket,
+        framing=framing, origin=origin, medium=medium, angle=angle)
     explicit = _sort_order(sort)
     if explicit is not None:
         # An explicit sort (resolution / aesthetic / sharpness) wins over the flag
@@ -1773,6 +2256,85 @@ def list_images(user_id, bank_id, status=None, flag=None, cluster=None,
             'offset': max(0, int(offset))}
 
 
+def facet_counts(user_id, bank_id, **f) -> dict | None:
+    """Every chip counter, measured under the filters ACTUALLY in force.
+
+    Same shape (and the same keys) as the matching slices of ``bank_payload`` —
+    'counts', 'flags', 'res_buckets', 'framing', 'origins', 'mediums', 'angles'
+    — so the workspace can swap one for the other without a second code path.
+
+    Why this exists. The payload's numbers are bank-wide, which was RIGHT for the
+    question they were built to answer ("clicking this chip shows exactly these
+    rows") and became wrong the moment any other facet was on. Measured on a
+    50 397-image bank with ✕ Rejected picked: the chips offered "📺 Noisy 1 136"
+    and "🔞 NSFW 20 540" over grids of 527 and 3 364 rows. Those numbers were
+    never lies about the bank; they had simply stopped describing anything the
+    user could see, which from where they sit is the same thing.
+
+    Each facet is counted with EVERY OTHER filter applied and its own left out
+    (``_apply_facets(skip=…)``). Counting a facet with itself applied would show
+    the picked value's neighbours at 0 — a filter you cannot change your mind
+    about without clearing everything first, which is a worse bug than the one
+    being fixed.
+
+    Cost: SEVEN queries whatever the bank's size — one per facet family, each a
+    GROUP BY or a row of conditional SUMs. The bank-wide flag map it replaces
+    spends one query PER FLAG (ten), so the filtered answer is cheaper than the
+    unfiltered one. Nothing here writes."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    th = thresholds()
+    facets = {k: f.get(k) for k in FACETS}
+
+    def pool(skip, extra=None):
+        q, _order = _apply_facets(BankImage.query.filter_by(bank_id=bank_id), th,
+                                  skip, **facets)
+        return q if extra is None else q.filter(extra)
+
+    def by_bucket(skip, col, keys, extra=None):
+        """One GROUP BY over the pool. Rows the column maps to NULL are dropped:
+        "never classified" is not a bucket, and folding it into one would let an
+        unrun pass look like a measured verdict."""
+        rows = (pool(skip, extra).with_entities(col, func.count(BankImage.id))
+                .group_by(col).all())
+        got = {k: n for k, n in rows if k is not None}
+        return {k: int(got.get(k, 0)) for k in keys}
+
+    def summed(q, conditions):
+        """N conditional SUMs in ONE pass over the pool."""
+        if not conditions:
+            return []
+        row = q.with_entities(*[
+            func.coalesce(func.sum(case((c, 1), else_=0)), 0)
+            for c in conditions]).one()
+        return [int(v or 0) for v in row]
+
+    total, pending, keep, reject = pool('status').with_entities(
+        func.count(BankImage.id),
+        *[func.coalesce(func.sum(case((BankImage.status == s, 1), else_=0)), 0)
+          for s in ('pending', 'keep', 'reject')]).one()
+    names = _QUALITY_FLAGS + _SCORE_FLAGS
+    crits = {n: _flag_filter(n, th) for n in names}
+    live = [n for n in names if crits[n] is not None]
+    flags = dict.fromkeys(names, 0)
+    flags.update(zip(live, summed(pool('flag'), [crits[n] for n in live])))
+    return {
+        # 'total' is the filtered pool itself — what "All" would show. The other
+        # three are its status split, each counted with the status facet lifted.
+        'counts': {'total': int(total or 0), 'pending': int(pending or 0),
+                   'keep': int(keep or 0), 'reject': int(reject or 0)},
+        'flags': flags,
+        'res_buckets': by_bucket(
+            'res_bucket', _res_bucket_case(), [b for b, _lo, _hi in _RES_BUCKETS],
+            extra=and_(BankImage.width.isnot(None), BankImage.height.isnot(None))),
+        'framing': by_bucket('framing', BankImage.framing, _FRAMING_KEYS),
+        'origins': by_bucket('origin', BankImage.origin, ORIGINS),
+        'mediums': by_bucket('medium', BankImage.medium, MEDIUM_KEYS),
+        'angles': by_bucket('angle', _angle_case(), ANGLES),
+    }
+
+
 # --- thumbnails -------------------------------------------------------------
 def _thumb_path(bank_id, row: BankImage) -> Path:
     """Where this image's thumbnail lives. A watermark-cleaned or manually
@@ -1796,7 +2358,8 @@ def drop_derived(bank_id, image_id) -> None:
     points at it once the row's state moved on — so a locked file is not an
     error."""
     for pattern, folder in ((f'{image_id}.*.webp', _thumbs_dir(bank_id)),
-                            (f'{image_id}.r*', _rotated_dir(bank_id))):
+                            (f'{image_id}.r*', _rotated_dir(bank_id)),
+                            (f'{image_id}.*.r*', _rotated_dir(bank_id))):
         try:
             for stale in folder.glob(pattern):
                 try:
@@ -1807,8 +2370,248 @@ def drop_derived(bank_id, image_id) -> None:
             pass
 
 
+def _drop_analysis_thumbnails(bank_id, image_id) -> None:
+    """Remove every thumbnail without touching the current full-size transform."""
+    try:
+        for stale in _thumbs_dir(bank_id).glob(f'{image_id}*.webp'):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 #: Historical alias — external callers/tests may still name the narrow version.
 drop_clean_thumbs = drop_derived
+
+
+def _clear_bank_pixel_analysis(
+        row: BankImage, *, preserve_current_derivative=False) -> None:
+    """Clear effective-byte lanes while preserving raw/user-owned history."""
+    asserted_cluster = (row.face_cluster, row.face_cluster_origin) \
+        if row.face_cluster_origin == 'asserted' else (None, None)
+    for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS:
+        setattr(row, name, None)
+    if asserted_cluster[1] == 'asserted':
+        row.face_cluster, row.face_cluster_origin = asserted_cluster
+    row.analysis_fingerprint = None
+    # A writer that has already validated the current rotated path must not
+    # delete that very path while binding its fingerprint: doing so invalidates
+    # the hash-bearing runtime cache the child just wrote. Explicit mutations
+    # still take the default and discard every old turned copy.
+    if preserve_current_derivative:
+        _drop_analysis_thumbnails(row.bank_id, row.id)
+    else:
+        drop_derived(row.bank_id, row.id)
+        try:
+            (_thumbs_dir(row.bank_id) / f'{row.id}.webp').unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _clear_bank_watermark_analysis(
+        row: BankImage, *, preserve_effective_derivative=False) -> None:
+    """Clear raw-source watermark authority and any clean output it owns.
+
+    A raw watermark verdict is independent from Score/Face/quality lanes.  When
+    the row was never cleaned, rebinding that verdict must not delete a valid
+    rotated derivative: it contains the same effective pixels those lanes
+    measured.  A clean marker is different because removing it changes the
+    effective image and therefore necessarily drops all derived copies.
+    """
+    had_clean = bool(row.watermark_clean_method)
+    for name in bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS:
+        setattr(row, name, None)
+    row.watermark_fingerprint = None
+    row.watermark_clean_method = None
+    if had_clean or not preserve_effective_derivative:
+        try:
+            clean_image_path(row.bank_id, row.id).unlink(missing_ok=True)
+        except OSError:
+            pass
+        drop_derived(row.bank_id, row.id)
+
+
+def _invalidate_effective_analysis(
+        row: BankImage, *, preserve_current_derivative=False) -> None:
+    _clear_bank_pixel_analysis(
+        row, preserve_current_derivative=preserve_current_derivative)
+    row.width = None
+    row.height = None
+
+
+def _valid_analysis_fingerprint(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(ch in '0123456789abcdef' for ch in value))
+
+
+def _strict_semantic_group_for_generation(row: BankImage, path, fingerprint,
+                                          engine) -> int | None:
+    """Return one engine lane only under its own exact cache authority."""
+    selected = bank_semantic_engine.normalize_engine(engine)
+    group = getattr(row, f'{selected}_semantic_dup_group', None)
+    if (group is None or not path
+            or not _valid_analysis_fingerprint(fingerprint)):
+        return None
+    bank = db.session.get(ImageBank, row.bank_id)
+    if bank is None:
+        return None
+    key = str(path)
+    generation = bank_semantic_engine.cache_generation(bank, selected)
+    memo_key = (bank.id, selected, generation)
+    with _SEMANTIC_GROUP_PROOF_LOCK:
+        memo = _semantic_group_proof_memo.get(selected)
+        if memo is not None and memo[0] == memo_key:
+            proofs = memo[1]
+        else:
+            embeddings = bank_semantic_engine.load_semantic_embeddings(
+                bank, engine=selected)
+            proofs = {
+                candidate: bank_semantic_engine.embedding_fingerprint(
+                    candidate, engine=selected)
+                for candidate in embeddings
+            }
+            _semantic_group_proof_memo[selected] = (memo_key, proofs)
+    return int(group) if proofs.get(key) == fingerprint else None
+
+
+def _invalidate_write_generation(row: BankImage, path, fingerprint, *,
+                                 preserve_current_derivative=True) -> None:
+    """Invalidate shared lanes but retain independently proven engine history."""
+    groups = {
+        engine: _strict_semantic_group_for_generation(
+            row, path, fingerprint, engine)
+        for engine in ('clip', 'siglip2')
+    }
+    bank = db.session.get(ImageBank, row.bank_id)
+    selected_engine = _selected_semantic_engine(bank) if bank else 'clip'
+    _invalidate_effective_analysis(
+        row, preserve_current_derivative=preserve_current_derivative)
+    for engine, group in groups.items():
+        if group is not None:
+            setattr(row, f'{engine}_semantic_dup_group', group)
+    row.semantic_dup_group = groups.get(selected_engine)
+
+
+def _prepare_analysis_write(row: BankImage, path, measured_fingerprint) -> bool:
+    """Authorise one lane write for the exact bytes a worker measured.
+
+    The row is always reloaded by callers after inference.  This second digest
+    closes external-file TOCTOU: a result for bytes A cannot be attached after
+    the path became B.  On a real identity change every other derived lane is
+    explicitly invalidated before this job writes its own result and the shared
+    fingerprint in the same transaction.
+    """
+    if not _valid_analysis_fingerprint(measured_fingerprint):
+        return False
+    # ``path`` is what the worker was handed.  It is not necessarily what the
+    # row resolves to NOW: a clean/rotation marker can change while inference is
+    # in flight and the old derivative may remain readable at its old path.  A
+    # digest of that submitted path alone would then authorise the wrong visual
+    # generation.  Re-resolve the live row before considering the result.
+    bank = db.session.get(ImageBank, row.bank_id)
+    current_path = analysis_image_path(bank, row) if bank is not None else None
+    if not _same_resolved_path(current_path, path):
+        current_live = bank_transfer_metadata.content_fingerprint_path(current_path)
+        # Preserve a newer already-authorised generation; otherwise make every
+        # effective lane visibly empty until one of its workers measures current
+        # bytes again.
+        if row.analysis_fingerprint != current_live:
+            _invalidate_write_generation(row, current_path, current_live)
+            row.analysis_fingerprint = current_live
+        return False
+    live = bank_transfer_metadata.content_fingerprint_path(path)
+    if live != measured_fingerprint:
+        # Do not erase a newer, already-authorised row because an old worker
+        # returned late.  When the row itself is stale, leave it as an empty
+        # row tied to the bytes that are now live.
+        if row.analysis_fingerprint != live:
+            _invalidate_write_generation(row, path, live)
+            row.analysis_fingerprint = live
+        return False
+    if row.analysis_fingerprint != measured_fingerprint:
+        _invalidate_write_generation(row, path, measured_fingerprint)
+    row.analysis_fingerprint = measured_fingerprint
+    return True
+
+
+def _restore_proven_siglip2_group(row: BankImage, submitted_path,
+                                  preserved, *, selected_engine,
+                                  accepted_fingerprint=None) -> bool:
+    """Restore an independently SHA-proven SigLIP2 lane after CLIP invalidation."""
+    if preserved is None:
+        return False
+    group, fingerprint = preserved
+    current = accepted_fingerprint == fingerprint
+    if not current:
+        bank = db.session.get(ImageBank, row.bank_id)
+        current_path = analysis_image_path(bank, row) if bank else None
+        current = (
+            _same_resolved_path(current_path, submitted_path)
+            and bank_transfer_metadata.content_fingerprint_path(current_path)
+            == fingerprint)
+    if not current:
+        return False
+    row.siglip2_semantic_dup_group = group
+    if selected_engine == 'siglip2':
+        row.semantic_dup_group = group
+    return True
+
+
+def _prepare_watermark_write(row: BankImage, raw_path,
+                             measured_fingerprint) -> bool:
+    """Authorise watermark geometry for one exact raw, pre-rotation payload."""
+    if not _valid_analysis_fingerprint(measured_fingerprint):
+        return False
+    live = bank_transfer_metadata.content_fingerprint_path(raw_path)
+
+    def rebind(new_fingerprint):
+        """Forget only generations that are actually stale.
+
+        Score normally runs before Watermark in the full pipeline.  The first
+        watermark attestation therefore must not erase the freshly measured
+        effective lanes.  Even after a raw source replacement, a newer Score
+        worker may already have rebound those lanes to the live effective bytes;
+        comparing their shared fingerprint keeps that newer work intact.
+        """
+        bank = db.session.get(ImageBank, row.bank_id)
+        current_path = analysis_image_path(bank, row) if bank is not None else None
+        current_effective = bank_transfer_metadata.content_fingerprint_path(
+            current_path)
+        effective_is_current = (
+            _valid_analysis_fingerprint(row.analysis_fingerprint)
+            and row.analysis_fingerprint == current_effective)
+        had_clean = bool(row.watermark_clean_method)
+        _clear_bank_watermark_analysis(
+            row, preserve_effective_derivative=not had_clean)
+        if not effective_is_current or had_clean:
+            _invalidate_effective_analysis(
+                row, preserve_current_derivative=not had_clean)
+        row.watermark_fingerprint = new_fingerprint
+
+    if live != measured_fingerprint:
+        if row.watermark_fingerprint != live:
+            rebind(live)
+        return False
+    if row.watermark_fingerprint != measured_fingerprint:
+        # NULL means this is the first raw-source attestation, not a generation
+        # change.  No clean transform can be trusted without an attestation, but
+        # an ordinary raw/rotated row keeps every already-proven effective lane.
+        if row.watermark_fingerprint is None and not row.watermark_clean_method:
+            bank = db.session.get(ImageBank, row.bank_id)
+            current_path = (analysis_image_path(bank, row)
+                            if bank is not None else None)
+            current_effective = (
+                bank_transfer_metadata.content_fingerprint_path(current_path))
+            if (_valid_analysis_fingerprint(row.analysis_fingerprint)
+                    and row.analysis_fingerprint != current_effective):
+                _invalidate_effective_analysis(
+                    row, preserve_current_derivative=True)
+            row.watermark_fingerprint = measured_fingerprint
+            return True
+        rebind(measured_fingerprint)
+    return True
 
 
 def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
@@ -1838,11 +2641,19 @@ def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
 def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     """Worker: decode ONE file, compute metrics + dHash + thumbnail. Pure
     filesystem/PIL — no DB access (the job thread owns the session)."""
-    image_id, relpath = item
-    path = os.path.join(src_root, relpath)
+    if len(item) == 2:  # compatibility for the pure worker unit test
+        image_id, relpath = item
+        path = os.path.join(src_root, relpath)
+        tpath = thumbs / f'{image_id}.webp'
+    else:
+        image_id, path, thumb_path = item
+        tpath = Path(thumb_path)
     out = {'id': image_id, 'quality_state': 'unreadable', 'width': None,
            'height': None, 'file_size': None, 'dhash': None, 'metrics': None,
-           'provenance': None}
+           'provenance': None, 'fingerprint': None, 'path': path}
+    if not path:
+        out['quality_state'] = 'missing'
+        return out
     try:
         out['file_size'] = os.path.getsize(path)
     except OSError:
@@ -1854,54 +2665,226 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
             out['quality_state'] = 'missing'
             return out
     try:
-        with safe_bank_source(path, label='bank scan') as im:
-            out['width'], out['height'] = im.size
-            # JPEG fast path: decode at reduced scale — the metrics run on a
-            # ≤1024 working copy anyway, and dHash (9×8) is resize-invariant.
-            im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
-            im.load()
-            out['metrics'] = quality_metrics(im)
-            # Provenance rides along on the SAME decode — re-opening the file for
-            # it would double the I/O of a 36 000-image pass for nothing. It reads
-            # the drafted image (native pixels up to ANALYSIS_MAX_SIDE*2), which is
-            # what the effective-resolution measure needs: it crops, never resizes.
-            out['provenance'] = provenance_metrics(im)
-            out['dhash'] = f'{_dhash(im):016x}'
-            tpath = thumbs / f'{image_id}.webp'
-            if not tpath.is_file():
-                t = im.convert('RGB')
-                t.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
-                t.save(tpath, 'WEBP', quality=72)
+        # Fingerprint the bounded raw snapshot BEFORE Pillow validates it.  A
+        # malformed image is still a stable generation we can safely label
+        # ``unreadable`` and reject; without this digest the strict write fence
+        # would leave it pending and rescan the same broken file forever.
+        payload = _read_bounded_bank_source_bytes(path, label='bank scan')
+        out['file_size'] = len(payload)
+        out['fingerprint'] = bank_transfer_metadata.content_fingerprint_bytes(payload)
+        _preserved_import_extension(payload, label='bank scan')
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as im:
+                out['width'], out['height'] = im.size
+                # JPEG fast path: decode at reduced scale — the metrics run on a
+                # ≤1024 working copy anyway, and dHash (9×8) is resize-invariant.
+                im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
+                im.load()
+                out['metrics'] = quality_metrics(im)
+                # Provenance rides along on the SAME decode — re-opening the file for
+                # it would double the I/O of a 36 000-image pass for nothing.
+                out['provenance'] = provenance_metrics(im)
+                out['dhash'] = f'{_dhash(im):016x}'
+                if not tpath.is_file():
+                    tpath.parent.mkdir(parents=True, exist_ok=True)
+                    t = im.convert('RGB')
+                    t.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
+                    t.save(tpath, 'WEBP', quality=72)
         out['quality_state'] = 'ok'
     except (OSError, ValueError, SyntaxError, MemoryError,
             Image.DecompressionBombError, Image.DecompressionBombWarning):
-        pass  # stays 'unreadable' — surfaced as a flag, never fatal
+        # When bounded validation succeeded before Pillow rejected the image,
+        # ``fingerprint`` still authorises the unreadable verdict.  A failure
+        # before a complete raw snapshot leaves it NULL and parent writes none.
+        pass
     return out
 
 
-def start_scan(app, user_id, bank_id, rescan=False):
+# --- THE SCOPE OF A PASS, in one place ---------------------------------------
+#
+# Every per-image pass used to hard-code `status != 'reject'` and offer nothing.
+# The launch dialogs ask the user WHERE to run instead, so the filter became a
+# parameter — and a parameter needs exactly one definition, because two copies of
+# a pool filter is precisely how a button comes to announce a number it does not
+# act on (the 🧹 Auto-reject "5 930 flagged / 0 moved" defect, and the reason
+# _caption_scope_q was written this way in the first place).
+#
+# THE DEFAULT IS `None`, AND IT IS NOT "all". None keeps the historical
+# `status != 'reject'` filter, so a caller that sends no scope posts the
+# byte-identical request it posted before these options existed.
+#
+# 'reject' IS reachable now, and that is a change of principle held deliberately
+# behind an explicit choice: the bin is work you already threw away, and every
+# pass that reaches it spends real time (GPU, in most cases) on images you
+# decided against. It is never a default, never part of the default, and the
+# dialog that offers it says what it costs.
+PASS_SCOPES = ('keep', 'pending', 'reject')
+
+
+def normalize_pass_statuses(statuses, allowed=PASS_SCOPES):
+    """Validate a per-run scope → a canonical list, or None for "as before".
+
+    None / [] → None, meaning the pass keeps its own historical filter. Anything
+    outside ``allowed`` raises ValueError → 400, exactly like a bad vocabulary."""
+    if statuses is None:
+        return None
+    if isinstance(statuses, str):       # a lone 'keep' is a scope of one
+        statuses = [statuses]
+    if not isinstance(statuses, (list, tuple, set)):
+        raise ValueError('invalid statuses: expected a list of statuses')
+    want = []
+    for s in statuses:
+        if not isinstance(s, str):
+            raise ValueError('invalid status: expected status names')
+        v = s.strip().lower()
+        if not v:
+            continue
+        if v not in allowed:
+            raise ValueError(f'invalid status: {v}')
+        want.append(v)
+    if not want:
+        return None
+    # Canonical order + dedup, so ['pending','keep'] and ['keep','pending'] are
+    # one value and never two code paths.
+    return [s for s in PASS_SCOPES if s in want]
+
+
+def _unscored_clause():
+    """Rows the ✨ Score pass never reached — no aesthetic AND no NSFW value, so
+    no cached CLIP embedding either. The 🎨 Medium pass can do nothing with them,
+    and `medium_prereq` reads the same two columns to decide the bank has been
+    scored at all: one definition, so the window's warning and the pass's
+    "skipped (not scored yet)" can never disagree."""
+    return and_(BankImage.aesthetic_score.is_(None),
+                BankImage.nsfw_score.is_(None))
+
+
+def _scope_clause(statuses):
+    """The WHERE fragment for a scope. None → the historical non-rejected set."""
+    if statuses is None:
+        return BankImage.status != 'reject'
+    return BankImage.status.in_(statuses)
+
+
+def _scoped_pool(bank_id, statuses=None, ids=None):
+    """The rows a pass may touch: this bank, this scope, and — when the user made
+    a selection — only those ids. The selection is INTERSECTED with the scope,
+    never widened, the same contract the caption pass has always had."""
+    q = BankImage.query.filter_by(bank_id=bank_id).filter(_scope_clause(statuses))
+    if ids:
+        q = q.filter(BankImage.id.in_([int(i) for i in ids][:_SQL_IN_CHUNK]))
+    return q
+
+
+def _todo_by_status(bank_id, todo_clause):
+    """{'keep': n, 'pending': n, 'reject': n} — how much work THIS pass has left
+    in each pile, in ONE query.
+
+    ``todo_clause`` must be the SAME expression the pass's pool filters on. That
+    is the whole contract of this helper: a counter written from a second copy of
+    the predicate is a counter that will disagree with the run, which is the one
+    defect these dialogs exist to prevent. Shape and cost copied from _cap_sum —
+    three conditional sums cost nothing on a 100 000-image bank."""
+    def _sum(status):
+        cond = BankImage.status == status
+        if todo_clause is not None:
+            cond = and_(cond, todo_clause)
+        return func.coalesce(func.sum(case((cond, 1), else_=0)), 0)
+    keep, pending, reject = (
+        db.session.query(_sum('keep'), _sum('pending'), _sum('reject'))
+        .filter(BankImage.bank_id == bank_id).one())
+    return {'keep': int(keep or 0), 'pending': int(pending or 0),
+            'reject': int(reject or 0)}
+
+
+# The user-facing word for each pile. Same split every scope surface draws: the
+# column stores 'keep'/'pending'/'reject', the reader sees these.
+_PILE_WORDS = {'keep': 'kept', 'pending': 'undecided', 'reject': 'rejected'}
+
+
+def scope_left_out(todo, statuses):
+    """(n, words) — the work this pass HAS TO DO that its scope will not reach.
+
+    THE DEFECT THIS ANSWERS. 🎨 Medium on a 50 397-image bank reported "0
+    classified, 2 skipped (not scored yet)" in a few seconds and read as "nothing
+    happened". Every figure in it was exact; the one that explained the screen —
+    25 464 rejected images the default scope drops before the pool is even built
+    (_scope_clause: status != 'reject') — was in no sentence anywhere.
+
+    ``todo`` is a _todo_by_status mapping computed from the pass's OWN clause, so
+    what is counted here is work, never mere population. Returns (0, '') when the
+    scope reaches everything there is to do — a pass with nothing to report must
+    stay quiet, or the note becomes noise on every run."""
+    included = set(statuses) if statuses is not None else {'keep', 'pending'}
+    out = [(p, int(todo.get(p) or 0)) for p in PASS_SCOPES if p not in included]
+    out = [(p, n) for p, n in out if n > 0]
+    if not out:
+        return 0, ''
+    return (sum(n for _p, n in out),
+            ' + '.join(f'{n} {_PILE_WORDS[p]}' for p, n in out) if len(out) > 1
+            else _PILE_WORDS[out[0][0]])
+
+
+def _scope_note(bank_id, todo_clause, statuses, ids=None):
+    """The sentence naming what the SCOPE left out, or '' when it left out
+    nothing. Empty for a run aimed at a selection: there the user named the
+    images one by one, and 'left out by the scope' would describe their own
+    click back at them."""
+    if ids:
+        return ''
+    n, words = scope_left_out(_todo_by_status(bank_id, todo_clause), statuses)
+    if not n:
+        return ''
+    return f'; {n} image(s) left out by the scope ({words})'
+
+
+def start_scan(app, user_id, bank_id, rescan=False, regroup=False,
+               statuses=None, ids=None):
     """Launch the quality pass. Raises BankJobBusy when a job is already live,
-    ValueError when the bank is unknown."""
+    ValueError when the bank is unknown.
+
+    ``statuses`` / ``ids`` narrow WHAT IS MEASURED (see _scoped_pool). They do
+    NOT narrow the duplicate re-grouping in the tail of the pass: that step
+    re-reads every stored hash in the bank and renumbers all of it, because a
+    grouping derived from a subset would renumber groups the user has already
+    worked with. The dialog says so rather than letting the two read as one.
+
+    ``regroup`` asks for the duplicate grouping EXPLICITLY, whatever the scan
+    itself finds. That is what the 🎚 threshold panel's "↻ Re-group duplicates"
+    sends: on an already-scanned bank its pool is empty, and the tail of the pass
+    now only regroups when the stored hashes moved — without this flag that
+    button would have quietly become a no-op."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    total = _scan_pool(bank_id, rescan).count()
+    want = normalize_pass_statuses(statuses)
+    total = _scan_pool(bank_id, rescan, want, ids).count()
     return bank_jobs.start(app, bank_id, 'scan',
-                           _scan_job(bank_id, rescan), total=total)
+                           _scan_job(bank_id, rescan, regroup=regroup,
+                                     statuses=want, ids=ids),
+                           total=total)
 
 
-def _scan_pool(bank_id, rescan):
-    """What the quality pass has to look at. Rejected images are OUT, like every
-    other pass: on a 30 000-image bank two thirds of a rescan went to shots the
-    user had already thrown away.
+def _scan_todo_clause():
+    """The "not measured yet" half of the scan pool, on its own — so the counter
+    and the pool are one expression, never two that can drift."""
+    return or_(BankImage.quality_state.is_(None),
+               and_(BankImage.quality_state == 'ok', BankImage.origin.is_(None)))
+
+
+def _scan_pool(bank_id, rescan, statuses=None, ids=None):
+    """What the quality pass has to look at. With no scope given, rejected images
+    are OUT like they always were: on a 30 000-image bank two thirds of a rescan
+    went to shots the user had already thrown away.
 
     Skipping them cannot swallow a FIRST scan: an image is only rejected by hand
     (after it was scanned) or by this very pass when it turns out unreadable, so
     a never-scanned image is still pending here. Un-reject one and it comes back
-    into the pool on its own — that is why the filter is `!= reject` rather than
-    an explicit pending/keep list."""
-    q = (BankImage.query.filter_by(bank_id=bank_id)
-         .filter(BankImage.status != 'reject'))
+    into the pool on its own — that is why the DEFAULT filter is `!= reject`
+    rather than an explicit pending/keep list. A scope given explicitly replaces
+    it, bin included, because at that point the user has said so."""
+    q = _scoped_pool(bank_id, statuses, ids)
     if not rescan:
         # Never-scanned rows, PLUS rows a previous build scanned before the
         # provenance signals existed. Retrofitting the bank the user already has
@@ -1912,19 +2895,22 @@ def _scan_pool(bank_id, rescan):
         # on a readable file (one of ai/camera/unknown, never NULL) — keying off
         # detail_ratio would re-pick flat images forever, since those legitimately
         # measure nothing.
-        q = q.filter(or_(BankImage.quality_state.is_(None),
-                         and_(BankImage.quality_state == 'ok',
-                              BankImage.origin.is_(None))))
+        q = q.filter(_scan_todo_clause())
     return q
 
 
-def _scan_job(bank_id, rescan):
+def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        items = [(r.id, r.relpath) for r in
-                 _scan_pool(bank_id, rescan).order_by(BankImage.id.asc()).all()]
+        rows = (_scan_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
+        items = [
+            (row.id, analysis_image_path(bank, row, refresh_rotation=True),
+             str(_thumb_path(bank_id, row)))
+            for row in rows
+        ]
         bank_jobs.progress(job, done=0, total=len(items), detail='quality scan')
         thumbs = _thumbs_dir(bank_id)
         thumbs.mkdir(parents=True, exist_ok=True)
@@ -1936,6 +2922,7 @@ def _scan_job(bank_id, rescan):
         done = 0
         missing = 0
         vanished = 0
+        hashed = 0      # rows whose STORED hash actually changed (see the tail)
         with ThreadPoolExecutor(max_workers=workers) as ex:
             it = iter(items)
             futures = deque()
@@ -1964,16 +2951,38 @@ def _scan_job(bank_id, rescan):
                     if not bank_jobs.cancelled(job):
                         submit_next()
                     continue
-                row = _live_image(res['id'])
+                # no_autoflush: this re-read is a SELECT, and SQLAlchemy flushes
+                # the session before one by default. That flush takes the single
+                # SQLite write lock at the FIRST image after a mutation and holds
+                # it until the commit 25 images later, so every other writer in
+                # the app queues behind a scan it has nothing to do with —
+                # measured on a live bank: a sort click went from 5.0 ms median
+                # to 327.6 ms (p90 2 183 ms, worst 5 564 ms, one HTTP 500 out of
+                # 62 clicks). Suppressing the flush here took the worst wait to
+                # 16.7 ms with zero failures and no change in scan throughput
+                # (70-81 img/s): the rows are still written, by the commit that
+                # already paces this loop.
+                with db.session.no_autoflush:
+                    row = _live_image(res['id'])
                 if row is None:
                     # Deleted while the pass ran (see _live_image): skip it and
                     # keep going rather than sinking a scan of thousands.
                     vanished += 1
                 else:
+                    source_path = res.get('path')
+                    if not _prepare_analysis_write(
+                            row, source_path, res.get('fingerprint')):
+                        done += 1
+                        if done % _COMMIT_EVERY == 0:
+                            db.session.commit()
+                        bank_jobs.bump(job)
+                        if not bank_jobs.cancelled(job):
+                            submit_next()
+                        continue
+                    if row.dhash != res['dhash']:
+                        hashed += 1
                     row.quality_state = res['quality_state']
                     row.width, row.height = res['width'], res['height']
-                    if res['file_size'] is not None:
-                        row.file_size = res['file_size']
                     row.dhash = res['dhash']
                     if res['metrics']:
                         row.blur_score = res['metrics']['blur_score']
@@ -1997,33 +3006,88 @@ def _scan_job(bank_id, rescan):
                 if not bank_jobs.cancelled(job):
                     submit_next()
         db.session.commit()
-        if not bank_jobs.cancelled(job):
+        if bank_jobs.cancelled(job):
+            return
+        tail = (f' — {missing} file(s) were not on disk and were left '
+                'untouched') if missing else ''
+        if vanished:
+            tail += f', {vanished} skipped (deleted while the pass ran)'
+        # Regroup only when the input to the grouping CHANGED, or when the
+        # caller asked for it on purpose (the 🎚 panel's "↻ Re-group duplicates",
+        # which is how a new dup_distance is applied without decoding anything).
+        #
+        # This is the whole freeze the owner reported. A scan with rescan off has
+        # an empty-to-tiny pool on an already-scanned bank — measured 2 rows out
+        # of 50 397 — and the tail then re-grouped the 50 389 hashed rows anyway:
+        # the bar reached 100 %, said "grouping duplicates", and the app went
+        # away for 96 to 124 s. When no stored hash moved and no row disappeared,
+        # the grouping's input is byte-for-byte what produced the groups already
+        # on screen, so running it can only reproduce them.
+        if regroup or hashed or vanished:
             bank_jobs.progress(job, detail='grouping duplicates')
-            groups = rebuild_dup_groups(bank_id)
-            tail = (f' — {missing} file(s) were not on disk and were left '
-                    'untouched') if missing else ''
-            if vanished:
-                tail += f', {vanished} skipped (deleted while the pass ran)'
-            bank_jobs.progress(
-                job, detail=f'done — {groups} duplicate group(s){tail}')
+            groups = rebuild_dup_groups(
+                bank_id, job=job, _bank_lease=_job_bank_capability(job))
+            if bank_jobs.cancelled(job):
+                return
+            head = f'done — {groups} duplicate group(s)'
+        elif done:
+            head = f'done — {done} image(s) checked, no new hash to group'
+        else:
+            head = 'done — every image was already scanned'
+        bank_jobs.progress(job, detail=f'{head}{tail}' + _scope_note(
+            bank_id, None if rescan else _scan_todo_clause(), statuses, ids))
     return run
 
 
 # --- duplicate groups -------------------------------------------------------
-def rebuild_dup_groups(bank_id, max_distance=None) -> int:
-    """Recompute near-duplicate groups over every hashed image of the bank.
-    Banded prefilter (pigeonhole: two hashes within Hamming d share at least
-    one of d+1 equal bands) keeps this out of the full O(n²) — then candidate
-    pairs are verified exactly and grouped by union-find. Groups of ≥2 get a
-    1-based id ordered by size (biggest first). Returns the group count."""
-    th = thresholds()
-    d = int(th['dup_distance'] if max_distance is None else max_distance)
-    rows = (db.session.query(BankImage.id, BankImage.dhash)
-            .filter(BankImage.bank_id == bank_id, BankImage.dhash.isnot(None))
-            .order_by(BankImage.id.asc()).all())
-    ids = [r[0] for r in rows]
-    hashes = [int(r[1], 16) for r in rows]
-    n = len(ids)
+def _job_progress(job, **values):
+    """bank_jobs.progress for a phase that also runs OUTSIDE a job (tests, and
+    any future caller): no job, no reporting, no branch at every call site."""
+    if job is not None:
+        bank_jobs.progress(job, **values)
+
+
+def _job_cancelled(job) -> bool:
+    return job is not None and bank_jobs.cancelled(job)
+
+
+def _popcount_lut():
+    """256-entry uint8 popcount table, built once.
+
+    numpy only grew `bitwise_count` in 2.0 and the app still ships on 1.26, so
+    the table is the portable way to popcount a whole XOR block in one C pass —
+    which is also the point: the GIL is released for the duration instead of
+    being held by a Python loop over pairs."""
+    global _POPCOUNT8
+    if _POPCOUNT8 is None:
+        import numpy as np
+        _POPCOUNT8 = np.array([bin(i).count('1') for i in range(256)],
+                              dtype='uint8')
+    return _POPCOUNT8
+
+
+def _dup_groups_from_hashes(hashes, d, job=None):
+    """The grouping itself: 64-bit hashes in, groups of ≥2 POSITIONS out, biggest
+    group first and ties broken by the smallest position. None when the job was
+    stopped mid-way (nothing has been written at that point).
+
+    Banded prefilter (pigeonhole: two hashes within Hamming d share at least one
+    of d+1 equal bands) keeps this out of the full O(n²); candidate pairs are
+    then verified exactly and grouped by union-find.
+
+    WHY IT LOOKS LIKE `rebuild_semantic_dup_groups`. The pairs used to be walked
+    in Python, with a `set` of every pair already looked at. That set is not
+    bounded by anything: 13 MB at 2 000 images, 829 MB at 16 000, ~4.3 GB
+    extrapolated at 36 000 — and the garbage collector sweeping it was ~79 % of
+    the wall time (disabling the GC took one measured phase from 68 s to 14 s and
+    a typical handler's p95 from 351 ms back to 22 ms). Comparing a whole block
+    at once in numpy has no such set, releases the GIL while it works, and caps
+    its own memory at `_DUP_BLOCK_CELLS`. The pair set it unions is EXACTLY the
+    one the Python loops produced — same buckets, same `x < y`, same threshold —
+    so the groups are identical, which `test_bank_dup_groups_identity.py` pins
+    against a verbatim copy of the old code.
+    """
+    n = len(hashes)
     parent = list(range(n))
 
     def find(a):
@@ -2044,32 +3108,203 @@ def rebuild_dup_groups(bank_id, max_distance=None) -> int:
         for b in range(bands):
             key = (b, (h >> (b * band_bits)) & ((1 << band_bits) - 1))
             buckets.setdefault(key, []).append(i)
-    seen_pairs = set()
-    for members in buckets.values():
-        if len(members) < 2:
+    work = [m for m in buckets.values() if len(m) >= 2]
+    total = sum(len(m) for m in work)
+    _job_progress(job, done=0, total=total,
+                  detail=f'grouping duplicates — comparing {n} hash(es)')
+    # NumPy is an optional acceleration dependency. Most buckets are tiny and
+    # need no array at all; importing it eagerly made an otherwise pure-Python
+    # quality scan crash at the final grouping step in the lean Flask venv.
+    np = None
+    lut = None
+    seen = 0
+    for members in work:
+        if _job_cancelled(job):
+            return None
+        m = len(members)
+        if m >= _DUP_NUMPY_FROM and np is None:
+            try:
+                import numpy as np_module
+                np = np_module
+            except ImportError:
+                np = False
+        if m < _DUP_NUMPY_FROM or np is False:
+            # Tiny buckets are the majority and an array costs more than the
+            # handful of comparisons it would save.
+            for x in range(m):
+                for y in range(x + 1, m):
+                    a, b = members[x], members[y]
+                    if find(a) != find(b) and _hamming(hashes[a], hashes[b]) <= d:
+                        union(a, b)
+            seen += m
+            _job_progress(job, done=seen)
             continue
-        for x in range(len(members)):
-            for y in range(x + 1, len(members)):
-                a, b = members[x], members[y]
-                if find(a) == find(b) or (a, b) in seen_pairs:
-                    continue
-                seen_pairs.add((a, b))
-                if _hamming(hashes[a], hashes[b]) <= d:
-                    union(a, b)
+        if lut is None:
+            lut = _popcount_lut()
+        arr = np.array([hashes[i] for i in members], dtype='uint64')
+        cols = np.arange(m, dtype='int64')[None, :]
+        step = max(1, min(m, _DUP_BLOCK_CELLS // m))
+        for i0 in range(0, m, step):
+            if _job_cancelled(job):
+                return None
+            block = arr[i0:i0 + step, None] ^ arr[None, :]
+            rows_n = block.shape[0]
+            dist = lut[block.view('uint8').reshape(rows_n, m, 8)].sum(
+                axis=2, dtype='uint8')
+            # `> row index` is the vectorised form of the old `for y in
+            # range(x + 1, ...)`: the diagonal and the mirror pair are skipped,
+            # so each unordered pair is offered to union-find exactly once.
+            keep = (dist <= d) & (cols > np.arange(
+                i0, i0 + rows_n, dtype='int64')[:, None])
+            for a_rel, b in np.argwhere(keep):
+                union(members[i0 + int(a_rel)], members[int(b)])
+            seen += rows_n
+            _job_progress(job, done=min(seen, total))
     comps: dict = {}
     for i in range(n):
         comps.setdefault(find(i), []).append(i)
-    groups = sorted((m for m in comps.values() if len(m) >= 2),
-                    key=lambda m: (-len(m), m[0]))
+    return sorted((m for m in comps.values() if len(m) >= 2),
+                  key=lambda m: (-len(m), m[0]))
+
+
+def rebuild_dup_groups(bank_id, max_distance=None, job=None, *,
+                       _bank_lease=None) -> int:
+    """Recompute near-duplicate groups over every hashed image of the bank.
+    Groups of ≥2 get a 1-based id ordered by size (biggest first). Returns the
+    group count (what was written, when the job was stopped part-way).
+
+    ``job`` makes the phase VISIBLE and STOPPABLE. It used to be neither: no
+    progress, no cancel check anywhere in its body, so a bank of 50 000 images
+    left the progress bar at 100 % under the words "grouping duplicates" for 96
+    to 124 s with no way out — which reads as a dead application, and was
+    reported as one."""
+    if _bank_lease is None:
+        with bank_jobs.mutation_lease(bank_id, 'duplicate_regroup') as lease:
+            return rebuild_dup_groups(
+                bank_id, max_distance=max_distance, job=job,
+                _bank_lease=lease)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
+    th = thresholds()
+    d = int(th['dup_distance'] if max_distance is None else max_distance)
+    bank = db.session.get(ImageBank, bank_id)
+    if not bank:
+        return 0
+    rows = (BankImage.query
+            .filter(BankImage.bank_id == bank_id, BankImage.dhash.isnot(None))
+            .order_by(BankImage.id.asc()).all())
+    # Capture the exact effective identity beside the dHash.  The comparison is
+    # deliberately CPU-only and may take minutes on a large bank; a source file
+    # can be replaced underneath us during that window even though Bank writes
+    # are job-guarded.
+    proven = []
+    invalidated = False
+    for row in rows:
+        path = analysis_image_path(bank, row)
+        live = bank_transfer_metadata.content_fingerprint_path(path)
+        if live is not None and row.analysis_fingerprint == live:
+            try:
+                numeric_hash = int(row.dhash, 16)
+            except (TypeError, ValueError):
+                _invalidate_effective_analysis(row)
+                invalidated = True
+                continue
+            proven.append((row.id, path, live, row.dhash, numeric_hash))
+        elif row.analysis_fingerprint is not None and live is not None:
+            _invalidate_effective_analysis(row)
+            row.analysis_fingerprint = live
+            invalidated = True
+        elif row.analysis_fingerprint is not None:
+            _invalidate_effective_analysis(row)
+            invalidated = True
+    if invalidated:
+        # One changed member makes every old group id suspect.  Clearing the
+        # partition in one statement is safer than leaving old peers pointing at
+        # a group whose changed member has just been removed.
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'dup_group': None}, synchronize_session=False)
+    db.session.commit()
+    ids = [item[0] for item in proven]
+    hashes = [item[4] for item in proven]
+    # Everything below the comparison is pure CPU over data already in memory,
+    # so the session must not sit on a transaction across it — same guard, same
+    # reason, as every inference pass (see _release_db_before_inference).
+    _release_db_before_inference()
+    groups = _dup_groups_from_hashes(hashes, d, job=job)
+    if groups is None:
+        return 0            # stopped before any write: the bank is untouched
+    # Revalidate the COMPLETE input immediately before publishing the global
+    # partition.  A per-row check while writing is too late: group numbers have
+    # meaning only as one coherent result over this captured set.
+    live_rows = {}
+    for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+        live_rows.update({
+            row.id: row for row in BankImage.query.filter(
+                BankImage.bank_id == bank_id,
+                BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
+        })
+    partition_valid = True
+    for image_id, expected_path, expected_fp, expected_dhash, _numeric in proven:
+        row = live_rows.get(image_id)
+        current_path = analysis_image_path(bank, row) if row is not None else None
+        current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
+        if (row is None or row.dhash != expected_dhash
+                or row.analysis_fingerprint != expected_fp
+                or current_fp != expected_fp
+                or not _same_resolved_path(current_path, expected_path)):
+            partition_valid = False
+            # Do not erase a newer, correctly rebound row.  Only invalidate a
+            # row that still advertises the stale identity we captured.
+            if (row is not None and row.analysis_fingerprint == expected_fp
+                    and current_fp != expected_fp):
+                _invalidate_effective_analysis(row)
+                row.analysis_fingerprint = current_fp
+    if not partition_valid:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'dup_group': None}, synchronize_session=False)
+        db.session.commit()
+        return 0
+    _job_progress(job, done=0, total=len(groups),
+                  detail=f'grouping duplicates — writing {len(groups)} group(s)')
     BankImage.query.filter_by(bank_id=bank_id).update(
         {'dup_group': None}, synchronize_session=False)
-    for gid, members in enumerate(groups, start=1):
-        member_ids = [ids[i] for i in members]
-        for i0 in range(0, len(member_ids), _SQL_IN_CHUNK):
-            BankImage.query.filter(
-                BankImage.id.in_(member_ids[i0:i0 + _SQL_IN_CHUNK])).update(
-                {'dup_group': gid}, synchronize_session=False)
     db.session.commit()
+    # ONE prepared statement per batch, and a real pause between batches.
+    #
+    # The clear plus one `UPDATE ... WHERE id IN (…)` per group — about 5 000 of
+    # them on a 50 000-image bank — used to be a single transaction holding the
+    # write lock 6 to 9.5 s, past the 5 s busy_timeout: `database is locked` for
+    # everybody else, 3 attempts out of 3. Splitting it into batches is only half
+    # the fix, and the half that measures nothing on its own:
+    #   • 4 000 separate UPDATE statements cost 0.67 s of pure statement overhead
+    #     whatever the transaction boundaries are; one executemany over the same
+    #     8 000 rows is ~30 ms, so the lock is barely taken at all;
+    #   • and without the pause, the next batch re-takes the lock in the
+    #     microsecond after the commit, inside the sleep of the other writer's
+    #     busy handler. Batching alone left a concurrent writer waiting 620 ms
+    #     and still refused — measured, and the reason this loop yields.
+    # The cost of the trade is stated where the user reads it: groups land
+    # biggest-first, and a stop part-way keeps the ones already written (the
+    # panel already says "the groups are whatever it had reached").
+    stmt = text('UPDATE bank_image SET dup_group = :gid WHERE id = :iid')
+    pending: list = []
+
+    def flush():
+        if not pending:
+            return
+        db.session.execute(stmt, pending)
+        db.session.commit()
+        pending.clear()
+        time.sleep(_DUP_WRITE_YIELD)
+
+    for gid, members in enumerate(groups, start=1):
+        pending.extend({'gid': gid, 'iid': ids[i]} for i in members)
+        if len(pending) >= _DUP_WRITE_ROWS:
+            flush()
+            _job_progress(job, done=gid)
+            if _job_cancelled(job):
+                return gid
+    flush()
+    _job_progress(job, done=len(groups))
     return len(groups)
 
 
@@ -2087,12 +3322,17 @@ def rebuild_dup_groups(bank_id, max_distance=None) -> int:
 #     covers the double-click; a session-long one would hide a real edit.
 _SCORE_MEMO_TTL = 60.0
 _score_memo = None            # (key, at, {path: emb}) — see reset_score_memo()
+_score_hashes = {}            # {path: exact SHA-256 hex} for that one memo
 
 
 def reset_score_memo() -> None:
     """Drop the parsed-score-cache memo (tests; bank deletion)."""
-    global _score_memo
+    global _score_memo, _score_hashes
     _score_memo = None
+    _score_hashes = {}
+    with _SEMANTIC_GROUP_PROOF_LOCK:
+        _semantic_group_proof_memo.clear()
+    bank_semantic_engine.reset_memo()
 
 
 def _load_score_embeddings(bank: ImageBank) -> dict:
@@ -2103,7 +3343,7 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
     signature) is dropped, so a semantic group is never built on an outdated
     embedding. Reads the .npz directly (numpy is in the Flask venv); torch/open_clip
     are NOT needed here — stage 2 costs no new GPU work, it reuses Score's output."""
-    global _score_memo
+    global _score_memo, _score_hashes
     import numpy as np
     path = _score_cache_path(bank.id)
     if not path.is_file():
@@ -2124,10 +3364,15 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
             embs = z['embs']
             sigs = ([str(s) for s in z['sigs']] if 'sigs' in z.files
                     else [''] * len(paths))
+            hashes = z['hashes'] if 'hashes' in z.files else None
+            if (hashes is None or hashes.shape != (len(paths), 32)
+                    or hashes.dtype != np.dtype('uint8')):
+                return {}
     except Exception as e:  # noqa: BLE001 — a corrupt cache = "no embeddings", never fatal
         logger.warning('bank %s score cache unreadable: %s', bank.id, e)
         return {}
     out = {}
+    exact_hashes = {}
     for i, p in enumerate(paths):
         if states[i] != 'ok':
             continue
@@ -2142,18 +3387,245 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
                     continue
             except OSError:
                 continue
+        digest = hashes[i].tobytes()
+        if (digest == b'\0' * 32
+                or bank_transfer_metadata.content_fingerprint_path(p)
+                != digest.hex()):
+            continue
         out[p] = np.asarray(emb, dtype='float32')
+        exact_hashes[p] = digest.hex()
     if key is not None:
         _score_memo = (key, time.time(), out)
+    _score_hashes = exact_hashes
     return out
 
 
-def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
-    """Stage-2 near-duplicate grouping over the CLIP embeddings the ✨ Score pass
-    cached — catches crops and re-compressed variants of the SAME shot that the
-    dHash (stage 1) misses. Returns the group count (groups of ≥2), or None when NO
-    embeddings are available (Score hasn't run) so the caller shows the "run Score
-    first" hint instead of a silent empty result.
+def _score_embedding_fingerprint(path) -> str | None:
+    return _score_hashes.get(str(path))
+
+
+def _selected_semantic_engine(bank) -> str:
+    return bank_semantic_engine.normalize_engine(
+        getattr(bank, 'semantic_engine', None))
+
+
+def _load_semantic_embeddings(bank: ImageBank) -> dict:
+    """Selected Bank embedding space, preserving the exact CLIP legacy seam."""
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        # Exact call is load-bearing for historical tests/mocks and for the
+        # byte-compatible Score cache loader above.
+        return _load_score_embeddings(bank)
+    return bank_semantic_engine.load_semantic_embeddings(bank, engine)
+
+
+def _semantic_embedding_fingerprint(bank: ImageBank, path) -> str | None:
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        return _score_embedding_fingerprint(path)
+    return bank_semantic_engine.embedding_fingerprint(path, engine)
+
+
+def _semantic_total(bank_id, engine=None) -> int:
+    """Rows currently eligible for semantic consumers, in either space."""
+    return (BankImage.query.filter_by(bank_id=bank_id)
+            .filter(BankImage.status != 'reject').count())
+
+
+def _semantic_eligible_paths(bank: ImageBank) -> tuple[int, tuple[str, ...]]:
+    """Return non-reject cache-path candidates without touching image bytes.
+
+    SigLIP2 deliberately indexes the whole Bank so a later restore does not need
+    fresh GPU work.  Readiness is narrower: rejected/deleted rows are not current
+    semantic consumers and must not inflate the workspace's ``ok / total``.
+
+    This runs in the workspace poll.  It must not call ``analysis_image_path``:
+    that resolver hashes clean sources and can materialise/prune rotations.  Raw
+    and clean paths are deterministic; already-materialised rotation filenames
+    are enumerated once from the app-owned directory, with no image stat/SHA.
+    """
+    rows = (BankImage.query.filter_by(bank_id=bank.id)
+            .filter(BankImage.status != 'reject')
+            .order_by(BankImage.id.asc()).all())
+    rotated = {}
+    if any(getattr(row, 'rotation', None) for row in rows):
+        try:
+            for candidate in _rotated_dir(bank.id).iterdir():
+                if candidate.is_file():
+                    prefix = candidate.name.split('.', 1)[0]
+                    if prefix.isdigit():
+                        rotated.setdefault(int(prefix), []).append(candidate)
+        except OSError:
+            pass
+    paths = []
+    for row in rows:
+        turn = int(getattr(row, 'rotation', None) or 0)
+        if turn:
+            marker = f'.r{turn}.'
+            paths.extend(str(candidate) for candidate in rotated.get(row.id, ())
+                         if marker in candidate.name)
+        elif row.watermark_clean_method:
+            paths.append(str(clean_image_path(bank.id, row.id)))
+        else:
+            raw = abs_image_path(bank, row)
+            if raw is not None:
+                paths.append(raw)
+    return len(rows), tuple(paths)
+
+
+def _resolve_semantic_device() -> tuple[str, bool]:
+    """Configured SigLIP2 device resolved against this exact ML Python."""
+    from ..capabilities import bank_siglip2_gpu_available
+    preference = str(cfg.get('bank_semantic.device') or 'auto').strip().lower()
+    if preference not in ('auto', 'cpu', 'cuda'):
+        preference = 'auto'
+    cuda_available = bank_siglip2_gpu_available()
+    use_gpu = preference != 'cpu' and cuda_available
+    return ('cuda' if use_gpu else 'cpu'), use_gpu
+
+
+def semantic_device_info() -> dict:
+    preference = str(cfg.get('bank_semantic.device') or 'auto').strip().lower()
+    if preference not in ('auto', 'cpu', 'cuda'):
+        preference = 'auto'
+    device, use_gpu = _resolve_semantic_device()
+    return {'requested': preference, 'device': device, 'gpu': use_gpu}
+
+
+def _semantic_text_status(engine) -> dict:
+    from . import clip_text_encoder
+    selected = bank_semantic_engine.normalize_engine(engine)
+    try:
+        status = (clip_text_encoder.status() if selected == 'clip'
+                  else clip_text_encoder.status(engine=selected))
+    except TypeError:
+        # Rolling-upgrade compatibility until the paired encoder service lands.
+        status = clip_text_encoder.status()
+    out = dict(status or {})
+    out.setdefault('available', False)
+    out.setdefault('reason', None)
+    out.setdefault('weights_warning', None)
+    out.setdefault('warm', False)
+    out['engine'] = selected
+    out['model_label'] = bank_semantic_engine.engine_model_label(selected)
+    if selected == 'siglip2':
+        from ..capabilities import probe_bank_siglip2
+        probe = probe_bank_siglip2()
+        out['weights_warning'] = None
+        if not probe.get('ok'):
+            out['available'] = False
+            out['reason'] = probe.get('detail') or 'SigLIP2 is not installed'
+    return out
+
+
+def semantic_engine_info(user_id, bank_id) -> dict | None:
+    """Selected semantic space and safe cache coverage, with no local paths."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    engine = _selected_semantic_engine(bank)
+    total, eligible_paths = _semantic_eligible_paths(bank)
+    measured = semantic_counts(
+        bank, engine=engine, total=total, eligible_paths=eligible_paths)
+    counts = {key: measured[key] for key in ('total', 'cached', 'ok', 'stale')}
+    return {
+        'engine': engine,
+        'model_key': measured['model_key'],
+        'model_label': measured['model_label'],
+        'dimension': measured['dimension'],
+        'source': measured['source'],
+        'ready': measured['ready'],
+        'complete': measured['complete'],
+        'needs_index': measured['needs_index'],
+        'error': measured['error'],
+        'counts': counts,
+        'text': _semantic_text_status(engine),
+        'device': (score_device_info(bank_id) if engine == 'clip'
+                   else semantic_device_info()),
+        # A selected SigLIP2 space never repurposes these CLIP-only products.
+        'clip_owned': {'style': True, 'medium': True},
+    }
+
+
+def semantic_index_readiness(user_id, bank_id) -> dict | None:
+    return semantic_engine_info(user_id, bank_id)
+
+
+# Backward/rolling-upgrade aliases used by service and route tests.
+semantic_readiness = semantic_index_readiness
+semantic_engine_readiness = semantic_index_readiness
+
+
+def _semantic_dup_lane(engine):
+    """ORM column holding the durable partition for one semantic engine."""
+    selected = bank_semantic_engine.normalize_engine(engine)
+    return (BankImage.clip_semantic_dup_group if selected == 'clip'
+            else BankImage.siglip2_semantic_dup_group)
+
+
+def set_semantic_engine(user_id, bank_id, engine) -> dict | None:
+    """Atomically swap the active duplicate projection under the mutation fence.
+
+    Embedding caches are independent of these database lanes and are deliberately
+    untouched.  The outgoing active partition is saved before the target lane is
+    restored, so repeated CLIP/SigLIP2 switches are lossless.
+    """
+    if not isinstance(engine, str) or engine not in ('clip', 'siglip2'):
+        raise ValueError('semantic engine must be clip or siglip2')
+    selected = engine
+    with bank_jobs.mutation_lease(bank_id, 'semantic_engine'):
+        bank = get_bank(user_id, bank_id)
+        if not bank:
+            return None
+        previous = _selected_semantic_engine(bank)
+        if previous != selected:
+            outgoing_lane = _semantic_dup_lane(previous)
+            incoming_lane = _semantic_dup_lane(selected)
+            bank.semantic_engine = selected
+            BankImage.query.filter_by(bank_id=bank_id).update(
+                {
+                    outgoing_lane: BankImage.semantic_dup_group,
+                    BankImage.semantic_dup_group: incoming_lane,
+                },
+                synchronize_session=False)
+            db.session.commit()
+            bank_semantic_engine.reset_memo()
+    return semantic_engine_info(user_id, bank_id)
+
+
+def _semantic_dup_threshold(engine, threshold=None) -> float:
+    """One finite cosine threshold for explicit runs and persisted config."""
+    if threshold in (None, ''):
+        if engine == 'clip':
+            raw = thresholds()['semantic_dup_threshold']
+        else:
+            raw = cfg.get('bank_semantic.siglip2_semantic_dup_threshold')
+            if raw in (None, ''):
+                raw = cfg.DEFAULTS['bank_semantic'][
+                    'siglip2_semantic_dup_threshold']
+    else:
+        raw = threshold
+    if isinstance(raw, bool):
+        raise ValueError(
+            'semantic duplicate threshold must be a number between 0 and 1')
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            'semantic duplicate threshold must be a number between 0 and 1') from exc
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(
+            'semantic duplicate threshold must be finite and between 0 and 1')
+    return value
+
+
+def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
+                                _bank_lease=None) -> int | None:
+    """Stage-2 near-duplicate grouping in the Bank's selected semantic space.
+
+    CLIP preserves the historical Score-cache/style-blocking path byte for byte;
+    SigLIP2 reads its independent semantic cache and always compares globally,
+    because ``style_cluster`` remains an explicitly CLIP-owned product.
 
     Cost: a semantic near-dup (cosine ≥ threshold) is necessarily inside one style
     union-find component (that clustering uses style_threshold ≤ threshold), so we
@@ -2162,35 +3634,67 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
     guarantee, so we fall back to a single global block then. Re-running at another
     threshold is CPU-only and near-instant: it re-reads the cached embeddings — no
     GPU, no re-scan."""
+    if _bank_lease is None:
+        with bank_jobs.mutation_lease(bank_id, 'semantic_dedup') as lease:
+            return rebuild_semantic_dup_groups(
+                bank_id, threshold=threshold, _bank_lease=lease)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
     import numpy as np
     bank = db.session.get(ImageBank, bank_id)
     if not bank:
         return None
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    semantic_lane = _semantic_dup_lane(engine)
+    cache_path = (_score_cache_path(bank_id) if engine == 'clip'
+                  else _semantic_cache_path(bank_id))
+    try:
+        cache_stat = cache_path.stat()
+        cache_generation = (cache_stat.st_size, cache_stat.st_mtime_ns)
+    except OSError:
+        return None
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
         return None
     th = thresholds()
-    t = float(threshold if threshold is not None else th['semantic_dup_threshold'])
-    block_by_style = th['style_threshold'] <= t
+    t = _semantic_dup_threshold(engine, threshold)
+    block_by_style = engine == 'clip' and th['style_threshold'] <= t
     rows = (BankImage.query.filter_by(bank_id=bank_id)
             .order_by(BankImage.id.asc()).all())
-    items = []      # (image_id, block_key, emb)
+    path_by_id = {row.id: analysis_image_path(bank, row) for row in rows}
+    preserved_siglip2_groups = (
+        _preserved_siglip2_groups(
+            bank_id, {path: row.id for row in rows
+                      if (path := path_by_id.get(row.id)) is not None})
+        if engine == 'clip' else {})
+    # (image_id, block_key, embedding, path, fingerprint, style_cluster)
+    items = []
     for r in rows:
-        p = abs_image_path(bank, r)
+        p = path_by_id.get(r.id)
         emb = emb_by_path.get(p) if p else None
         if emb is None:
             continue
+        fingerprint = _semantic_embedding_fingerprint(bank, p)
+        prepared = _prepare_analysis_write(r, p, fingerprint)
+        if engine == 'clip':
+            _restore_proven_siglip2_group(
+                r, p, preserved_siglip2_groups.get(r.id),
+                selected_engine=engine,
+                accepted_fingerprint=fingerprint if prepared else None)
+        if not prepared:
+            continue
         block = (r.style_cluster if r.style_cluster is not None else -1) \
             if block_by_style else 0
-        items.append((r.id, block, emb))
-    # A re-run fully recomputes — clear every semantic group first.
-    BankImage.query.filter_by(bank_id=bank_id).update(
-        {'semantic_dup_group': None}, synchronize_session=False)
+        items.append((r.id, block, emb, p, fingerprint, r.style_cluster))
     if not items:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {BankImage.semantic_dup_group: None, semantic_lane: None},
+            synchronize_session=False)
         db.session.commit()
         return 0
+    # Do not retain a SQLite read/write transaction across the O(n²) CPU phase.
+    _release_db_before_inference()
     blocks: dict = {}
-    for idx, (_id, block, _emb) in enumerate(items):
+    for idx, (_id, block, _emb, _path, _fp, _style) in enumerate(items):
         blocks.setdefault(block, []).append(idx)
     parent = list(range(len(items)))
 
@@ -2205,45 +3709,122 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
         if ra != rb:
             parent[rb] = ra
 
-    chunk = 512
+    pair_count = sum(
+        len(members) * (len(members) - 1) // 2
+        for members in blocks.values())
+    if pair_count > _SEMANTIC_EXACT_PAIR_LIMIT:
+        raise ValueError(
+            'this semantic partition is too large for exact same-shot grouping '
+            f'({pair_count:,} candidate pairs; safe limit '
+            f'{_SEMANTIC_EXACT_PAIR_LIMIT:,}). Both semantic caches are unchanged. '
+            'Use CLIP style-blocked grouping or split the Bank; a bounded ANN '
+            'path is required for a larger global SigLIP2 partition.')
+
     for members in blocks.values():
         if len(members) < 2:
             continue
         E = np.stack([items[i][2] for i in members]).astype('float32')
         E /= (np.linalg.norm(E, axis=1, keepdims=True) + 1e-8)
         m = len(members)
-        for i0 in range(0, m, chunk):
-            sims = E[i0:i0 + chunk] @ E.T
-            for a, b in np.argwhere(sims >= t):
-                a += i0
-                if a < b:                       # skip the diagonal + mirror pairs
-                    union(members[int(a)], members[int(b)])
+        # Two-dimensional tiles keep similarity and match-index memory bounded
+        # independently of Bank size.  ``flatnonzero`` sees at most 512 values;
+        # unlike the former 512xN ``argwhere`` it can never materialise millions
+        # of pairs in one allocation when a low threshold creates a dense graph.
+        for i0 in range(0, m, _SEMANTIC_TILE):
+            i1 = min(m, i0 + _SEMANTIC_TILE)
+            for j0 in range(i0, m, _SEMANTIC_TILE):
+                j1 = min(m, j0 + _SEMANTIC_TILE)
+                tile_members = members[i0:i1] + members[j0:j1]
+                first_root = find(tile_members[0])
+                if all(find(member) == first_root for member in tile_members[1:]):
+                    continue  # every possible edge is already represented
+                sims = E[i0:i1] @ E[j0:j1].T
+                same_tile = i0 == j0
+                for local_a in range(i1 - i0):
+                    start = local_a + 1 if same_tile else 0
+                    hits = np.flatnonzero(sims[local_a, start:] >= t) + start
+                    left = members[i0 + local_a]
+                    for local_b in hits:
+                        right = members[j0 + int(local_b)]
+                        if find(left) != find(right):
+                            union(left, right)
     comps: dict = {}
     for i in range(len(items)):
         comps.setdefault(find(i), []).append(i)
     groups = sorted((m for m in comps.values() if len(m) >= 2),
                     key=lambda m: (-len(m), items[m[0]][0]))
+    # The cache, every effective payload, and (when used for blocking) every
+    # style id are one generation.  Refuse the whole semantic partition if any
+    # member moved while the CPU comparison ran.
+    try:
+        cache_stat = cache_path.stat()
+        cache_still_current = (
+            cache_stat.st_size, cache_stat.st_mtime_ns) == cache_generation
+    except OSError:
+        cache_still_current = False
+    item_ids = [item[0] for item in items]
+    live_rows = {}
+    for i0 in range(0, len(item_ids), _SQL_IN_CHUNK):
+        live_rows.update({
+            row.id: row for row in BankImage.query.filter(
+                BankImage.bank_id == bank_id,
+                BankImage.id.in_(item_ids[i0:i0 + _SQL_IN_CHUNK])).all()
+        })
+    partition_valid = cache_still_current
+    for image_id, _block, _emb, expected_path, expected_fp, expected_style in items:
+        row = live_rows.get(image_id)
+        current_path = analysis_image_path(bank, row) if row is not None else None
+        current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
+        clip_invalid = (engine == 'clip' and row is not None
+                        and row.analysis_fingerprint != expected_fp)
+        if (row is None or clip_invalid or current_fp != expected_fp
+                or not _same_resolved_path(current_path, expected_path)
+                or (block_by_style and row.style_cluster != expected_style)):
+            partition_valid = False
+            if (engine == 'clip' and row is not None
+                    and row.analysis_fingerprint == expected_fp
+                    and current_fp != expected_fp):
+                _invalidate_effective_analysis(row)
+                row.analysis_fingerprint = current_fp
+    if not partition_valid:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {BankImage.semantic_dup_group: None, semantic_lane: None},
+            synchronize_session=False)
+        db.session.commit()
+        if not cache_still_current:
+            if engine == 'clip':
+                reset_score_memo()
+            else:
+                bank_semantic_engine.reset_memo()
+        return 0
+    # Publish a complete replacement in one transaction only after validation.
+    BankImage.query.filter_by(bank_id=bank_id).update(
+        {BankImage.semantic_dup_group: None, semantic_lane: None},
+        synchronize_session=False)
     for gid, members in enumerate(groups, start=1):
         member_ids = [items[i][0] for i in members]
         for i0 in range(0, len(member_ids), _SQL_IN_CHUNK):
             BankImage.query.filter(
                 BankImage.id.in_(member_ids[i0:i0 + _SQL_IN_CHUNK])).update(
-                {'semantic_dup_group': gid}, synchronize_session=False)
+                {BankImage.semantic_dup_group: gid, semantic_lane: gid},
+                synchronize_session=False)
     db.session.commit()
     return len(groups)
 
 
 def start_semantic_dedup(app, user_id, bank_id, threshold=None):
-    """Launch the stage-2 semantic near-duplicate pass (CPU, reuses the ✨ Score
-    embeddings — no GPU). ValueError (→400) when Score hasn't produced any usable
-    embedding yet, so the UI shows the clear "run Score first" hint rather than a
-    job that quietly does nothing."""
+    """Launch the CPU semantic near-duplicate pass in the selected space."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    if not _load_score_embeddings(bank):
-        raise ValueError('run ✨ Score first — semantic near-duplicates reuse its '
-                         'embeddings')
+    engine = _selected_semantic_engine(bank)
+    threshold = _semantic_dup_threshold(engine, threshold)
+    if not _load_semantic_embeddings(bank):
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — semantic near-duplicates reuse '
+                             'its embeddings')
+        raise ValueError('run Semantic index first — no SigLIP2 embeddings are '
+                         'available')
     return bank_jobs.start(app, bank_id, 'semantic_dedup',
                            _semantic_dedup_job(bank_id, threshold), total=0)
 
@@ -2251,7 +3832,8 @@ def start_semantic_dedup(app, user_id, bank_id, threshold=None):
 def _semantic_dedup_job(bank_id, threshold):
     def run(job):
         bank_jobs.progress(job, done=0, total=0, detail='finding crops & variants')
-        n = rebuild_semantic_dup_groups(bank_id, threshold)
+        n = rebuild_semantic_dup_groups(
+            bank_id, threshold, _bank_lease=_job_bank_capability(job))
         if n is None:
             bank_jobs.progress(job, detail='no embeddings — run ✨ Score first')
             return
@@ -2302,9 +3884,11 @@ def _best_of(rows):
     return max(rows, key=key)
 
 
+@_serialized_bank_mutation('resolve_dups')
 def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
                  col=BankImage.dup_group, attr='dup_group', reason='duplicate',
-                 respect_existing_keep=True, snapshot=None):
+                 respect_existing_keep=True, snapshot=None, *,
+                 _bank_lease=None):
     """Resolve duplicate groups: keep one member, REJECT the others (a status,
     never a file deletion, so it's reversible). strategy 'best'|'first' applies to
     one group or, when ``group`` is None, to every unresolved group at once;
@@ -2376,14 +3960,14 @@ def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
 
 def resolve_semantic_dups(user_id, bank_id, strategy='best', group=None,
                           keep_ids=None, respect_existing_keep=True,
-                          snapshot=None):
+                          snapshot=None, *, _bank_lease=None):
     """resolve_dups for stage 2 (semantic_dup_group, reject reason
     'semantic_dup')."""
     return resolve_dups(user_id, bank_id, strategy=strategy, group=group,
                         keep_ids=keep_ids, col=BankImage.semantic_dup_group,
                         attr='semantic_dup_group', reason='semantic_dup',
                         respect_existing_keep=respect_existing_keep,
-                        snapshot=snapshot)
+                        snapshot=snapshot, _bank_lease=_bank_lease)
 
 
 # --- statuses & flag application --------------------------------------------
@@ -2391,7 +3975,8 @@ _STATUS_UNDO_LABEL = {'keep': 'Keep images', 'reject': 'Reject images',
                       'pending': 'Set images back to undecided'}
 
 
-def set_status(user_id, bank_id, ids, status) -> int:
+@_serialized_bank_mutation('status')
+def set_status(user_id, bank_id, ids, status, *, _bank_lease=None) -> int:
     """Manual keep/reject/pending on a selection. Returns rows changed.
 
     Snapshots the prior (status, reason) of every row it actually flips, so the
@@ -2420,7 +4005,8 @@ def set_status(user_id, bank_id, ids, status) -> int:
     return n
 
 
-def rotate_images(user_id, bank_id, ids, delta) -> dict:
+@_serialized_bank_mutation('rotate')
+def rotate_images(user_id, bank_id, ids, delta, *, _bank_lease=None) -> dict:
     """Turn a selection by ``delta`` degrees CLOCKWISE (idea by 1Tomber, #17).
 
     The user's files are NEVER written to: the new angle is stored on the row and
@@ -2449,13 +4035,16 @@ def rotate_images(user_id, bank_id, ids, delta) -> dict:
             BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
         for r in rows:
             r.rotation = (int(r.rotation or 0) + step) % 360 or None
-            drop_derived(bank_id, r.id)
+            _invalidate_effective_analysis(r)
             rotations[r.id] = int(r.rotation or 0)
     db.session.commit()
+    reset_score_memo()
     return {'rotated': len(rotations), 'rotations': rotations}
 
 
-def apply_flags(user_id, bank_id, flags, snapshot=None) -> dict:
+@_serialized_bank_mutation('apply_flags')
+def apply_flags(user_id, bank_id, flags, snapshot=None, *,
+                _bank_lease=None) -> dict:
     """Bulk-reject the PENDING images carrying the given flags. Manual ✓/✕
     decisions are never flipped (only status='pending' is touched) — same
     contract as the dataset auto-triage. Returns per-flag reject counts.
@@ -2503,7 +4092,8 @@ def undo_offer(user_id, bank_id) -> dict | None:
     return bank_undo.peek(bank_id)
 
 
-def undo_last(user_id, bank_id) -> dict:
+@_serialized_bank_mutation('undo')
+def undo_last(user_id, bank_id, *, _bank_lease=None) -> dict:
     """Put every row the last bulk decision changed back to what it was.
 
     Three outcomes per row, all counted, because a restore that quietly missed
@@ -2527,8 +4117,6 @@ def undo_last(user_id, bank_id) -> dict:
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    if bank_jobs.running(bank_id):
-        raise RuntimeError('a pass is running on this bank — stop it first')
     snap = bank_undo.take(bank_id)
     if not snap or not snap['rows']:
         raise ValueError('nothing to undo')
@@ -2638,6 +4226,13 @@ def _pool_embeddings(bank, emb_by_path, filters):
     prefix = os.path.normcase(base + os.sep)
     ids, vecs = [], []
     for r in rows:
+        if r.watermark_clean_method or r.rotation:
+            p = analysis_image_path(bank, r)
+            emb = emb_by_path.get(p) if p else None
+            if emb is not None:
+                ids.append(r.id)
+                vecs.append(emb)
+            continue
         # Fast path: the keys of emb_by_path were THEMSELVES produced by
         # _abs_under (the ✨ Score pass walks the same rows), so a lexical
         # normpath that HITS the dict is provably the very string realpath would
@@ -2820,6 +4415,29 @@ def _farthest_point(E, factor, n):
     return chosen
 
 
+def _verified_semantic_result_provenance(bank: ImageBank, captured_engine: str,
+                                         captured_model_key: str) -> dict:
+    """Refresh the selector before publishing an engine-bound result.
+
+    A second browser tab can PATCH the Bank while NumPy ranks a large pool.
+    Returning those old-space ids under the new selector would make the response
+    internally plausible but semantically false, so fail closed and let it retry.
+    """
+    try:
+        db.session.refresh(bank, attribute_names=['semantic_engine'])
+    except Exception as exc:  # deleted/detached/concurrently unavailable
+        raise ValueError(
+            'the Bank changed during semantic selection — retry') from exc
+    current_engine = _selected_semantic_engine(bank)
+    current_model_key = engine_model_key(current_engine)
+    if ((current_engine, current_model_key)
+            != (captured_engine, captured_model_key)):
+        raise ValueError(
+            'the semantic engine changed during selection — retry in the '
+            'current space')
+    return {'engine': captured_engine, 'model_key': captured_model_key}
+
+
 def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
                    filters=None):
     """Farthest-point sampling over the ✨ Score CLIP embeddings, tempered by a
@@ -2868,10 +4486,15 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — diversity sampling reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — diversity sampling reuses its '
+                             'embeddings')
+        raise ValueError('run Semantic index first — diversity sampling needs '
+                         'SigLIP2 embeddings')
     n = max(1, min(int(n), _CURATION_MAX_N))
     try:
         w = 0.0 if typicality is None else float(typicality)
@@ -2881,8 +4504,10 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
     m = len(ids)
     if m <= n:                                   # whole pool already fits
+        provenance = _verified_semantic_result_provenance(
+            bank, engine, model_key)
         return {'image_ids': sorted(ids), 'pool': m, 'requested': n,
-                'typicality': w}
+                'typicality': w, **provenance}
     # Novelty multiplier, in (0, 1] — never 0, so the -inf "already chosen"
     # sentinel below stays -inf (0 × -inf would be a NaN) and so even a fully
     # penalised row stays a last resort rather than an unpickable one.
@@ -2890,8 +4515,10 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     if w > 0.0:
         factor = 10.0 ** (-_TYPICALITY_DECADES * w * _isolation_penalty(E))
     chosen = _farthest_point(E, factor, n)
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'image_ids': sorted(ids[i] for i in chosen),
-            'pool': m, 'requested': n, 'typicality': w}
+            'pool': m, 'requested': n, 'typicality': w, **provenance}
 
 
 # --- balanced selection (coverage of the LABELS, not of the embedding space) --
@@ -3007,10 +4634,15 @@ def select_balanced(user_id, bank_id, n=60, *, axis=_BALANCE_DEFAULT_AXIS,
         raise ValueError('bank not found')
     if axis not in _BALANCE_AXES:
         axis = _BALANCE_DEFAULT_AXIS
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — balanced selection reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — balanced selection reuses its '
+                             'embeddings')
+        raise ValueError('run Semantic index first — balanced selection needs '
+                         'SigLIP2 embeddings')
     n = max(1, min(int(n), _CURATION_MAX_N))
     try:
         w = 0.0 if typicality is None else float(typicality)
@@ -3077,11 +4709,13 @@ def select_balanced(user_id, bank_id, n=60, *, axis=_BALANCE_DEFAULT_AXIS,
     order = {k: i for i, k in enumerate(_FRAMINGS)}
     report.sort(key=lambda b: (order.get(b['framing'], 99),
                                b['cluster'] if b['cluster'] is not None else -1))
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'image_ids': sorted(ids[i] for i in chosen),
             'pool': m, 'requested': n, 'selected': len(chosen),
             'typicality': w, 'axis': axis, 'buckets': report,
             'unlabelled': unlabelled, 'unknown': unknown,
-            'shortfall': max(0, n - len(chosen))}
+            'shortfall': max(0, n - len(chosen)), **provenance}
 
 
 def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=None):
@@ -3098,21 +4732,33 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — reference similarity reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — reference similarity reuses '
+                             'its embeddings')
+        raise ValueError('run Semantic index first — reference similarity needs '
+                         'SigLIP2 embeddings')
     ref = db.session.get(BankImage, int(ref_id))
     if ref is None or ref.bank_id != bank_id:
         raise ValueError('reference image not found in this bank')
-    ref_path = abs_image_path(bank, ref)
+    ref_path = analysis_image_path(bank, ref)
     ref_emb = emb_by_path.get(ref_path) if ref_path else None
     if ref_emb is None:
-        raise ValueError('the reference image has no ✨ Score embedding — score '
-                         'it first (it may have been rejected before Score ran)')
+        if engine == 'clip':
+            raise ValueError('the reference image has no ✨ Score embedding — '
+                             'score it first (it may have been rejected before '
+                             'Score ran)')
+        raise ValueError('the reference image has no SigLIP2 embedding — run '
+                         'Semantic index first')
     ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
     if not ids:
-        return {'results': [], 'image_ids': [], 'pool': 0, 'ref_id': int(ref_id)}
+        provenance = _verified_semantic_result_provenance(
+            bank, engine, model_key)
+        return {'results': [], 'image_ids': [], 'pool': 0,
+                'ref_id': int(ref_id), **provenance}
     rv = np.asarray(ref_emb, dtype='float32')
     rv /= (np.linalg.norm(rv) + 1e-8)
     sims = E @ rv                                 # cosine similarity, (m,)
@@ -3123,8 +4769,10 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
         n = max(1, min(int(n), _CURATION_MAX_N))
         keep = [int(k) for k in order[:n]]
     results = [{'id': ids[k], 'score': round(float(sims[k]), 4)} for k in keep]
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'results': results, 'image_ids': [ids[k] for k in keep],
-            'pool': len(ids), 'ref_id': int(ref_id)}
+            'pool': len(ids), 'ref_id': int(ref_id), **provenance}
 
 
 # ── 🔤 pushing an attribute DOWN a text ranking ──────────────────────────────
@@ -3238,12 +4886,24 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    for value, label in ((query, 'query'), (push_down, 'push_down')):
+        limit_error = clip_text_encoder.query_limit_error(value, label)
+        if limit_error:
+            raise ValueError(limit_error)
     # `-term` inside the query means the same thing as the panel's second field,
     # so both are folded into one excluded phrase before anything is encoded.
     positive, from_query = clip_text_encoder.split_query(query)
     text = clip_text_encoder.normalize_query(positive)
     excl = ', '.join(t for t in (clip_text_encoder.normalize_query(push_down),
                                  clip_text_encoder.normalize_query(from_query)) if t)
+    # The inline ``-term`` shorthand and the dedicated field are individually
+    # bounded above, but joining them can exceed that bound. Validate the exact
+    # strings that will become cache keys so this stays a request error (400),
+    # never a misleading encoder-unavailable response (503).
+    for value, label in ((text, 'query'), (excl, 'combined push_down')):
+        limit_error = clip_text_encoder.query_limit_error(value, label)
+        if limit_error:
+            raise ValueError(limit_error)
     if not text:
         # A bare "-hat" is not a search. Ranking by "least like a hat" would
         # return whatever is least like ANYTHING, which is noise wearing the
@@ -3252,10 +4912,15 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
                          'cannot rank anything')
     weight = _push_down_weight(push_down_weight if push_down_weight is not None
                                else PUSH_DOWN_WEIGHT_DEFAULT)
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — text search ranks the embeddings '
-                         'it computes')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — text search ranks the '
+                             'embeddings it computes')
+        raise ValueError('run Semantic index first — text search ranks the '
+                         'SigLIP2 embeddings it computes')
     filters = filters or {}
     # How many rows the current filter holds AT ALL — the denominator that makes
     # "searched 120 of 400" (and therefore the unscored warning) truthful.
@@ -3263,20 +4928,25 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
     ids, E = _pool_embeddings(bank, emb_by_path, filters)
     # Encode AFTER the cheap refusals: never make someone wait on a CLIP load to
     # then be told their bank was never scored.
-    qv, cached = clip_text_encoder.encode_query(text)
+    qv, cached = (clip_text_encoder.encode_query(text) if engine == 'clip' else
+                  clip_text_encoder.encode_query(text, engine=engine))
     nv = None
     if excl:
         # A second encode, and a second phrase in the same persistent cache — so
         # a repeated exclusion is as free as a repeated query. `cached` stays
         # true only when BOTH halves were already known, because it is shown to
         # promise instant, and half a cache hit is not instant.
-        nv, ncached = clip_text_encoder.encode_query(excl)
+        nv, ncached = (clip_text_encoder.encode_query(excl) if engine == 'clip'
+                       else clip_text_encoder.encode_query(excl, engine=engine))
         cached = bool(cached) and bool(ncached)
+    missing = max(0, int(filtered) - len(ids))
     base = {'query': text, 'cached': bool(cached), 'filtered': int(filtered),
-            'pool': len(ids), 'unscored': max(0, int(filtered) - len(ids)),
+            'pool': len(ids), 'unscored': missing, 'unindexed': missing,
+            'engine': engine, 'model_key': model_key,
             'push_down': excl or None,
             'push_down_weight': round(weight, 3) if excl else None}
     if not ids:
+        _verified_semantic_result_provenance(bank, engine, model_key)
         return {**base, 'results': [], 'image_ids': [], 'score_range': None,
                 'pool_median': None, 'push_down_moved': None,
                 'push_down_median': None}
@@ -3340,6 +5010,7 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
         # which is how it once declared a visibly-reordered grid a failure. When
         # a comparison cannot carry information, the honest output is none: the
         # places-changed count already says what happened.
+    _verified_semantic_result_provenance(bank, engine, model_key)
     return {**base, 'results': results,
             'image_ids': [ids[k] for k in keep], 'score_range': score_range,
             'pool_median': round(float(np.median(sims)), 4),
@@ -3537,7 +5208,9 @@ def start_delete_rejected(app, user_id, bank_id) -> dict:
     total = BankImage.query.filter_by(bank_id=bank_id, status='reject').count()
 
     def _run(job):
-        out = delete_rejected(user_id, bank_id, job=job)
+        out = delete_rejected(
+            user_id, bank_id, job=job,
+            _bank_lease=_job_bank_capability(job))
         job['result'] = out
         bank_jobs.progress(job, detail=delete_rejected_summary(out))
 
@@ -3545,7 +5218,8 @@ def start_delete_rejected(app, user_id, bank_id) -> dict:
     return {'total': total, 'job': job}
 
 
-def delete_rejected(user_id, bank_id, job=None) -> dict:
+@_serialized_bank_mutation('delete_rejected')
+def delete_rejected(user_id, bank_id, job=None, *, _bank_lease=None) -> dict:
     """Delete the SOURCE files of every status='reject' image from disk, then
     drop their bank_image rows.
 
@@ -3655,6 +5329,11 @@ def delete_rejected(user_id, bank_id, job=None) -> dict:
 # always shows an honest count — even in the rare hard-kill case.
 _INFER_CANCEL_GRACE = 15.0   # seconds a cleanly-cancelled child gets before a kill
 _CACHED_RE = re.compile(r'(\d+) image\(s\), (\d+) cached')
+# A step the child cannot count per image (writing a 70 MB cache, the n² style
+# grouping). The sentence is written child-side in user-facing English and shown
+# VERBATIM — a phase nobody translates cannot drift away from what runs. Any
+# infer child may emit these; one that emits none behaves exactly as before.
+_PHASE_RE = re.compile(r'\[phase\] (.+)$')
 
 
 def _safe_kill(proc):
@@ -3673,20 +5352,23 @@ def _read_cache_count(cache_path):
         return None
 
 
-def _stopped_detail(noun, data, cache_path, total):
+def _stopped_detail(noun, data, cache_path, total, suffix='', *,
+                    final='relaunch to finish and cluster'):
     """The honest end-of-pass line when the user Stopped it. Prefers the child's
     own cancel counts, falls back to the flushed sidecar count, and never invents
-    a number it can't back up."""
-    n = data.get('cached')
+    a number it can't back up. ``suffix`` states what reached the DATABASE, which
+    is a different claim from what reached the cache and must not be implied."""
+    n = data.get('ready') if 'ready' in data else data.get('cached')
     if n is None:
         n = _read_cache_count(cache_path)
     if n is None:
-        return 'Stopped — progress saved to cache; relaunch to finish and cluster'
+        return ('Stopped — progress saved to cache'
+                f'{suffix}; {final}')
     n = int(n)
     remaining = data.get('remaining')
     remaining = int(remaining) if remaining is not None else max(0, int(total) - n)
-    return (f'Stopped — {n} {noun} ({remaining} remaining); '
-            'relaunch to finish and cluster')
+    return (f'Stopped — {n} {noun} ({remaining} remaining)'
+            f'{suffix}; {final}')
 
 
 # --- rows that can vanish under a long pass ---------------------------------
@@ -3799,6 +5481,15 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
                 m = progress_re.search(line)
                 if m:
                     bank_jobs.progress(job, done=int(m.group(1)), total=int(m.group(2)))
+                mp = _PHASE_RE.search(line)
+                if mp:
+                    # A step with no per-image counter. The count is CLEARED with
+                    # the sentence, on purpose: leaving "373 / 373" up next to
+                    # "grouping styles…" is what made a working pass look frozen
+                    # behind a full bar. done=total=0 renders as no figure and no
+                    # bar (see ProgressBar), which is the honest shape for a step
+                    # nobody can count.
+                    bank_jobs.progress(job, done=0, total=0, detail=mp.group(1))
                 if not hint['shown']:
                     mc = _CACHED_RE.search(line)
                     if mc:
@@ -3852,7 +5543,32 @@ def _resolve_face_device():
     return ('cuda' if use_gpu else 'cpu'), use_gpu
 
 
-def start_faces(app, user_id, bank_id, angles_only=False):
+def _angle_todo_clause():
+    """Face-scanned rows with no measured yaw — the ⤢ backfill's whole pool."""
+    return and_(BankImage.face_state.isnot(None), BankImage.face_yaw.is_(None))
+
+
+def _angle_pool(bank_id, statuses=None, ids=None):
+    """The ⤢ angle backfill's rows.
+
+    ⚠️ ITS HISTORICAL DEFAULT IS NOT THE OTHER PASSES' DEFAULT. This lane never
+    filtered on status at all — rejected rows were measured too, and nobody
+    decided that: the `if angles_only` branch simply carried no status clause
+    while the `else` branch did. Passing statuses=None keeps that behaviour
+    exactly (the whole bank, bin included), because changing it silently would
+    move work the user can see counted in `angle_backfillable`. A scope given
+    explicitly narrows it — which is the only thing this lane gains, since it
+    writes nothing but `face_yaw` and leaves every cluster alone, so a partial
+    run cannot renumber anything."""
+    q = BankImage.query.filter_by(bank_id=bank_id).filter(_angle_todo_clause())
+    if statuses is not None:
+        q = q.filter(BankImage.status.in_(statuses))
+    if ids:
+        q = q.filter(BankImage.id.in_([int(i) for i in ids][:_SQL_IN_CHUNK]))
+    return q
+
+
+def start_faces(app, user_id, bank_id, angles_only=False, statuses=None, ids=None):
     """Launch the face embedding + person clustering pass over the bank's
     non-rejected images. Needs the face-scoring extra (Setup ▸ Quality tools).
 
@@ -3871,9 +5587,18 @@ def start_faces(app, user_id, bank_id, angles_only=False):
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    # The identity lane takes NO scope, and refusing it is the design (see the
+    # docstring): person clusters are one numbering of the whole bank.
+    want = normalize_pass_statuses(statuses) if angles_only else None
+    scope_ids = ids if angles_only else None
+    if not angles_only and (statuses or ids):
+        raise ValueError(
+            '👥 Group by person always covers the whole bank: the person clusters '
+            'are one numbering computed from every face at once, so a partial run '
+            'would renumber groups you have already worked with')
     q = BankImage.query.filter_by(bank_id=bank_id)
     if angles_only:
-        q = q.filter(BankImage.face_state.isnot(None), BankImage.face_yaw.is_(None))
+        q = _angle_pool(bank_id, want, scope_ids)
         # BEFORE the install probe, and the order is the point: sending someone
         # to install a 300 MB extra so they can do work that does not exist is a
         # true sentence that answers the wrong question. (Same reasoning as the
@@ -3893,7 +5618,8 @@ def start_faces(app, user_id, bank_id, angles_only=False):
     total = q.count() if angles_only \
         else max(q.count() - _asserted_image_count(bank_id), 0)
     return bank_jobs.start(app, bank_id, 'angles' if angles_only else 'faces',
-                           _faces_job(bank_id, angles_only), total=total)
+                           _faces_job(bank_id, angles_only, want, scope_ids),
+                           total=total)
 
 
 def _asserted_image_count(bank_id) -> int:
@@ -3902,18 +5628,17 @@ def _asserted_image_count(bank_id) -> int:
                     BankImage.face_cluster_origin == 'asserted').count())
 
 
-def _faces_job(bank_id, angles_only=False):
+def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
     def run(job):
         import json as _json
         import sys
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        q = BankImage.query.filter_by(bank_id=bank_id)
         if angles_only:
-            q = q.filter(BankImage.face_state.isnot(None),
-                         BankImage.face_yaw.is_(None))
+            q = _angle_pool(bank_id, statuses, ids)
         else:
+            q = BankImage.query.filter_by(bank_id=bank_id)
             # Asserted rows are EXCLUDED from the identity lane, not merely
             # preserved: the user already told us who is in them, so paying an
             # embedding to re-derive it is exactly the cost "Single person here"
@@ -3921,17 +5646,44 @@ def _faces_job(bank_id, angles_only=False):
             q = q.filter(BankImage.status != 'reject',
                          or_(BankImage.face_cluster_origin.is_(None),
                              BankImage.face_cluster_origin != 'asserted'))
+        def asserted_membership():
+            if angles_only:
+                return ()
+            return tuple((int(image_id), cluster_id)
+                         for image_id, cluster_id in (
+                db.session.query(BankImage.id, BankImage.face_cluster)
+                .filter(BankImage.bank_id == bank_id,
+                        BankImage.face_cluster_origin == 'asserted')
+                .order_by(BankImage.id.asc()).all()))
+
+        asserted_generation = asserted_membership()
         rows = q.order_by(BankImage.id.asc()).all()
+        eligible_ids = [r.id for r in rows]
         by_path = {}
+        unresolved_ids = []
         for r in rows:
-            p = abs_image_path(bank, r)
-            if _is_safe_bank_source(p, label='bank face pass'):
+            p = analysis_image_path(bank, r, refresh_rotation=True)
+            if (_is_safe_bank_source(p, label='bank face pass')
+                    and p not in by_path):
                 by_path[p] = r.id
+            else:
+                unresolved_ids.append(r.id)
+                # A strict resolver failure means the row cannot continue to
+                # advertise measurements for an older effective generation.
+                _invalidate_effective_analysis(r)
         paths = list(by_path)
         skipped_asserted = 0 if angles_only else _asserted_image_count(bank_id)
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail='measuring angles' if angles_only else 'face pass')
         if not paths:
+            if not angles_only and eligible_ids:
+                for i0 in range(0, len(eligible_ids), _SQL_IN_CHUNK):
+                    BankImage.query.filter(
+                        BankImage.id.in_(eligible_ids[i0:i0 + _SQL_IN_CHUNK]),
+                        or_(BankImage.face_cluster_origin.is_(None),
+                            BankImage.face_cluster_origin != 'asserted')).update(
+                        {'face_cluster': None}, synchronize_session=False)
+            db.session.commit()
             return
         _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
         th = thresholds()
@@ -3983,12 +5735,23 @@ def _faces_job(bank_id, angles_only=False):
         from . import folder_person
         offset = folder_person.asserted_offset(bank_id)
         done = vanished = 0
+        cluster_valid = not unresolved_ids
+        valid_rows = {}
         for p, image_id in by_path.items():
             row = _live_image(image_id)
             if row is None:      # deleted while the pass ran — see _live_image
                 vanished += 1
                 continue
+            if not angles_only and row.face_cluster_origin == 'asserted':
+                # The user may have asserted this folder while inference was in
+                # flight.  Their newer decision wins and this row can no longer
+                # be a member of the computed partition.
+                cluster_valid = False
+                continue
             res = results.get(p) or {}
+            if not _prepare_analysis_write(row, p, res.get('fingerprint')):
+                cluster_valid = False
+                continue
             # A yaw is written whenever the child measured one. It is never
             # written back as NULL over a value we already have: the ⤢ backfill
             # re-runs on rows that HAVE no angle, and a face that fails detection
@@ -4000,21 +5763,61 @@ def _faces_job(bank_id, angles_only=False):
             if not angles_only:
                 row.face_state = res.get('state')
                 row.face_det = res.get('det')
-                cid = clusters.get(p)
-                row.face_cluster = None if cid is None else int(cid) + offset
+                valid_rows[p] = row
             done += 1
             if done % 200 == 0:
                 db.session.commit()
+        if not angles_only:
+            if asserted_membership() != asserted_generation:
+                cluster_valid = False
+            if cluster_valid and len(valid_rows) == len(by_path):
+                # Revalidate the complete partition after all scalar write-back.
+                # Otherwise an early member can change while later rows are
+                # being committed and still receive a cluster for its old bytes.
+                for p, image_id in by_path.items():
+                    row = _live_image(image_id)
+                    fingerprint = (results.get(p) or {}).get('fingerprint')
+                    live = bank_transfer_metadata.content_fingerprint_path(p)
+                    if (row is None or row.face_cluster_origin == 'asserted'
+                            or row.analysis_fingerprint != fingerprint
+                            or live != fingerprint):
+                        cluster_valid = False
+                        if (row is not None
+                                and row.analysis_fingerprint == fingerprint
+                                and live != fingerprint):
+                            _invalidate_effective_analysis(row)
+                            row.analysis_fingerprint = live
+                        break
+            if cluster_valid and len(valid_rows) == len(by_path):
+                for p, row in valid_rows.items():
+                    cid = clusters.get(p)
+                    row.face_cluster = None if cid is None else int(cid) + offset
+                    row.face_cluster_origin = None
+            else:
+                # Person ids are one partition. If any member changed after
+                # inference, a mixture of old/new numbering is not meaningful.
+                (BankImage.query.filter(
+                    BankImage.bank_id == bank_id,
+                    BankImage.status != 'reject',
+                    or_(BankImage.face_cluster_origin.is_(None),
+                        BankImage.face_cluster_origin != 'asserted')).update(
+                    {'face_cluster': None}, synchronize_session=False))
         db.session.commit()
         if vanished:
             logger.info('bank face pass: %s image(s) were deleted while it ran', vanished)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
-        multi = sum(1 for n in sizes.values() if n >= 2)
+        # Same sentence-with-its-shape as the style grouping, for the same
+        # reason: "1 person cluster of 2+" over a bank where ONE cluster holds
+        # everybody reads as "nobody grouped", the exact opposite of the truth.
         detail = (f'done — {sum(1 for r in results.values() if r.get("yaw") is not None)}'
                   ' angle(s) measured' if angles_only
-                  else f'done — {multi} person cluster(s) of 2+ images')
+                  else 'done — ' + group_summary(
+                      sizes.values(), 'person cluster', th['face_threshold'],
+                      '🎚 Filter thresholds ▸ face_threshold'))
+        if not angles_only and not cluster_valid:
+            detail += ' (person grouping discarded: an image changed during write-back)'
         if skipped_asserted:
             # Never mute: an image the pass did not look at must be reported as
             # such, or "0 clusters" would read as "no one in this bank".
@@ -4063,6 +5866,101 @@ def _resolve_score_device() -> tuple:
     return ('cuda' if use_gpu else 'cpu'), use_gpu
 
 
+_SEMANTIC_SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'bank_semantic_infer.py')
+_SEMANTIC_PROGRESS_RE = re.compile(r'\[semantic\] (\d+)/(\d+)')
+
+
+def start_semantic_index(app, user_id, bank_id, rescan=False):
+    """Build/resume the selected image space; CLIP delegates to Score exactly."""
+    from ..capabilities import probe_bank_siglip2
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        return start_score(app, user_id, bank_id, rescore=bool(rescan))
+    capability = probe_bank_siglip2()
+    if not capability.get('ok'):
+        raise RuntimeError(capability.get('detail') or (
+            'SigLIP2 is not installed (Quality tools step in Setup)'))
+    _device, use_gpu = _resolve_semantic_device()
+    reason = _gpu_busy_reason() if use_gpu else None
+    if reason:
+        raise RuntimeError(reason)
+    # SigLIP2 is a semantic Bank index, not the aesthetic Score pool: the bin is
+    # searchable and participates in near-duplicate grouping too.
+    total = BankImage.query.filter_by(bank_id=bank_id).count()
+    return bank_jobs.start(
+        app, bank_id, 'semantic_index',
+        _semantic_index_job(bank_id, bool(rescan)), total=total)
+
+
+def _semantic_index_job(bank_id, rescan=False):
+    def run(job):
+        import json as _json
+        from contextlib import nullcontext
+
+        from ..gpu_window import gpu_exclusive_vision_window
+        bank = db.session.get(ImageBank, bank_id)
+        if not bank:
+            return
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        paths = []
+        for row in rows:
+            path = analysis_image_path(bank, row, refresh_rotation=True)
+            if _is_safe_bank_source(path, label='bank semantic index'):
+                paths.append(path)
+        device, use_gpu = _resolve_semantic_device()
+        bank_jobs.progress(job, done=0, total=len(paths), detail=(
+            f'SigLIP2 semantic index ({device.upper()})'))
+        if not paths:
+            bank_jobs.progress(job, detail=(
+                'done — nothing to index: this Bank has no readable image'))
+            return
+        _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
+        cache_path = _semantic_cache_path(bank_id)
+        payload = _json.dumps(bank_semantic_engine.image_worker_payload(
+            paths, bank_id, engine='siglip2', device=device, rescan=bool(rescan)))
+        from . import bank_semantic_models
+        python = bank_semantic_models.semantic_python()
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
+                  else nullcontext())
+        _release_db_before_inference()
+        data, stderr_tail, returncode = _drive_infer_subprocess(
+            job, python, _SEMANTIC_SCRIPT, payload, cache_path,
+            _SEMANTIC_PROGRESS_RE, window)
+        bank_semantic_engine.reset_memo()
+        if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
+            bank_jobs.progress(job, detail=_stopped_detail(
+                'images indexed', data, cache_path, len(paths),
+                suffix='; progress is resumable from this cache',
+                final='relaunch to finish'))
+            return
+        if not data.get('ok'):
+            tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
+            raise RuntimeError(tail or (
+                f'SigLIP2 semantic index produced no output (rc={returncode})'))
+        ready = int(data.get('ready') or 0)
+        failed = int(data.get('failed') or 0)
+        computed = int(data.get('computed') or 0)
+        reused = int(data.get('reused') or 0)
+        unreadable = max(0, len(rows) - len(paths))
+        detail = (f'done — {ready} semantic embedding(s) ready '
+                  f'({computed} computed, {reused} reused)')
+        if failed:
+            detail += f', {failed} failed (will retry)'
+        if unreadable:
+            detail += f', {unreadable} unreadable image(s) still need indexing'
+        bank_jobs.progress(job, done=ready, total=len(rows), detail=detail)
+    return run
+
+
+# Public aliases kept explicit for tests/callers that construct the job directly.
+semantic_index_job = _semantic_index_job
+start_semantic = start_semantic_index
+
+
 # CLIP ViT-L/14 measured at ~336 ms/image on CPU against ~15 ms on a recent
 # card. Used only to warn, never to refuse — a slow pass is still a pass.
 SCORE_CPU_MS_PER_IMAGE = 336
@@ -4095,12 +5993,27 @@ def score_device_info(bank_id=None) -> dict:
     return out
 
 
-def start_score(app, user_id, bank_id):
+def start_score(app, user_id, bank_id, rescore=False):
     """Launch the scoring pass (LAION aesthetic + NSFW + style clustering) over
     the bank's non-rejected images. Needs the bank-scoring extra (Setup ▸ Quality
     tools). Serialized against training/vision ONLY when it will really run on
     the GPU: refusing a CPU pass because 'the GPU is busy' would block an hour of
-    work that never wanted the card."""
+    work that never wanted the card.
+
+    The pool is ALWAYS the whole bank, and deliberately so — "already scored" is
+    not a reason to leave an image out. The style ids are a partition computed
+    from every embedding at once, so a pass handed only the unscored rows would
+    number a sub-population from 1 and land those ids on top of unrelated groups
+    already in the database; the semantic-dedup pass, which blocks by
+    style_cluster, would then stop comparing across the seam and miss crops
+    without saying anything. Skipping work is the CHILD's job and it already does
+    it: a cached, unchanged image is never embedded again, and a fully cached
+    bank does not even load CLIP.
+
+    ``rescore=True`` is the explicit "throw the cache away and recompute" lane
+    (same shape as the quality pass's ``rescan``) — for a new model, or scores
+    you no longer trust. The plain ✨ Score button keeps meaning exactly what it
+    always meant: a complete pass that resumes."""
     from ..capabilities import probe_bank_scoring
     bank = get_bank(user_id, bank_id)
     if not bank:
@@ -4114,10 +6027,217 @@ def start_score(app, user_id, bank_id):
         raise RuntimeError(reason)
     total = (BankImage.query.filter_by(bank_id=bank_id)
              .filter(BankImage.status != 'reject').count())
-    return bank_jobs.start(app, bank_id, 'score', _score_job(bank_id), total=total)
+    return bank_jobs.start(app, bank_id, 'score', _score_job(bank_id, rescore),
+                           total=total)
 
 
-def _score_job(bank_id):
+# Rows written between two commits in the score write-back. Small enough that a
+# Stop (or a crash) never costs more than a few seconds of re-run, large enough
+# that we are not committing per row — same trade-off as the duplicate regrouping
+# budget above, and for the same reason: long single transactions hold SQLite's
+# one write lock and everything else in the app dies on "database is locked".
+_SCORE_COMMIT_EVERY = 200
+
+
+def _preserved_siglip2_groups(bank_id, by_path) -> dict:
+    """Exact inactive SigLIP2 groups that a CLIP write may carry through.
+
+    The first Score run can be the first writer of ``analysis_fingerprint`` on a
+    migrated row.  Its generic generation binder clears every pixel-derived
+    field before writing CLIP results.  A SigLIP2 group is independent and may be
+    restored only when that engine's pinned runtime cache proves the same SHA.
+    """
+    wanted_ids = set(by_path.values())
+    if not wanted_ids:
+        return {}
+    rows = (BankImage.query.filter(
+        BankImage.bank_id == bank_id,
+        BankImage.id.in_(wanted_ids),
+        BankImage.siglip2_semantic_dup_group.isnot(None)).all())
+    if not rows:
+        return {}
+    bank = db.session.get(ImageBank, bank_id)
+    if bank is None:
+        return {}
+    embeddings = bank_semantic_engine.load_semantic_embeddings(
+        bank, engine='siglip2')
+    row_by_id = {row.id: row for row in rows}
+    preserved = {}
+    for path, image_id in by_path.items():
+        row = row_by_id.get(image_id)
+        fingerprint = bank_semantic_engine.embedding_fingerprint(
+            path, engine='siglip2')
+        if row is not None and path in embeddings and fingerprint is not None:
+            preserved[image_id] = (
+                row.siglip2_semantic_dup_group, fingerprint)
+    return preserved
+
+
+def _apply_score_results(job, by_path, results, interruptible, *,
+                         preserved_siglip2_groups=None,
+                         selected_engine='clip'):
+    """Write the PER-IMAGE scores (aesthetic, nsfw) back. Returns
+    (written, scored, vanished, stopped).
+
+    Two rules earn their place here:
+
+    * a head's value is written only when the child produced one. It used to be
+      assigned unconditionally from ``res.get(...)``, so a run where the
+      aesthetic weights failed to download did not merely skip that column — it
+      wrote NULL over every aesthetic score the bank already had. Same rule as
+      the face pass and its yaw: never blank a good value because this run had
+      nothing to say.
+    * ``interruptible`` is False on the salvage path (the child was stopped and
+      handed us what it had computed). There, the job flag is ALREADY set, so
+      honouring it would mean discarding the exact GPU work we came to save.
+
+    Whatever it wrote is committed either way: the job registry is in-memory, so
+    a pass that only wrote at the very end lost everything to a restart."""
+    written = scored = vanished = 0
+    stopped = False
+    # The write-back is the parent's own mute step, and on a large bank it is
+    # minutes long: 21 000 rows one at a time, committed in batches. It used to
+    # run under the child's last progress line ("373 / 373"), so the pass looked
+    # finished and hung at the same time. Its own counter starts here.
+    total = len(by_path)
+    bank_jobs.progress(job, done=0, total=total, detail=(
+        f'writing {total} score(s) to the database…'
+        + (' — a few minutes on a bank this size' if total >= 5000 else '')))
+    for p, image_id in by_path.items():
+        res = results.get(p)
+        if res is None:
+            continue          # never reached by this run — leave the row alone
+        row = _live_image(image_id)
+        if row is None:      # deleted while the pass ran — see _live_image
+            vanished += 1
+            continue
+        prepared = _prepare_analysis_write(row, p, res.get('fingerprint'))
+        preserved = (preserved_siglip2_groups or {}).get(image_id)
+        if not prepared:
+            # The child measured a different incarnation of this live path.
+            # Its hash-bearing cache entry is discarded/recomputed next run;
+            # no scalar from it may be attached to the replacement bytes.
+            _restore_proven_siglip2_group(
+                row, p, preserved, selected_engine=selected_engine)
+            continue
+        _restore_proven_siglip2_group(
+            row, p, preserved, selected_engine=selected_engine,
+            accepted_fingerprint=res.get('fingerprint'))
+        if 'aesthetic' in res:
+            row.aesthetic_score = res['aesthetic']
+        if 'nsfw' in res:
+            row.nsfw_score = res['nsfw']
+        # Counted HERE, on the row we actually wrote — not from the child's
+        # report. The child scores a PATH; this loop is the only place that
+        # knows whether the image behind it still exists. Counting the report
+        # made the pass announce "scored 3 image(s), 1 skipped" over a bank of
+        # three, which is two claims that cannot both be true.
+        if res.get('state') == 'ok':
+            scored += 1
+        written += 1
+        if written % _SCORE_COMMIT_EVERY == 0:
+            db.session.commit()
+            bank_jobs.progress(job, done=written)
+            # Stop is honoured HERE and not per row, on purpose: the rows in
+            # hand are already computed, so abandoning them buys nothing except
+            # a relaunch. A bank smaller than one commit therefore always
+            # finishes rather than reporting "stopped after 1 image".
+            if interruptible and bank_jobs.cancelled(job):
+                stopped = True
+                break
+    db.session.commit()
+    return written, scored, vanished, stopped
+
+
+# A style grouping that swallowed almost the whole bank and one that grouped
+# nothing at all are OPPOSITE failures — and until this function existed they
+# printed the same sentence. "1 style group(s) of 2+" was what a bank of 24 931
+# images reported when ONE group held 24 928 of them: read as "almost nothing
+# grouped", when the truth was "everything did". Below these two floors the
+# diagnosis is suppressed entirely — on a handful of images a single group is an
+# ordinary answer, not a symptom, and a warning there would be noise.
+_STYLE_DIAGNOSIS_MIN = 20      # images, under which no verdict is offered
+_STYLE_DOMINANT_SHARE = 0.9    # of the grouped images, in ONE group
+
+
+def group_summary(sizes, noun='style group', threshold=None, setting=''):
+    """The end-of-pass sentence about a CLUSTERING, from the group SIZES.
+
+    Never quotes a count of groups without the shape behind it: the reader has to
+    be able to tell "the threshold is too permissive to separate anything" from
+    "too strict to join anything" without opening the database. Shared by the
+    style grouping and the person clustering — both are one union-find over
+    embeddings, so both fail in exactly these two opposite ways."""
+    sizes = sorted((int(n) for n in sizes), reverse=True)
+    total = sum(sizes)
+    if not total:
+        return f'no {noun} — no image carried a usable embedding'
+    multi = sum(1 for n in sizes if n >= 2)
+    biggest = sizes[0]
+    th = '' if threshold is None else f' ({threshold:g})'
+    where = f' — retune it in {setting} and re-run' if setting else ''
+    if total >= _STYLE_DIAGNOSIS_MIN and biggest >= _STYLE_DOMINANT_SHARE * total:
+        return (f'1 {noun} holds {biggest} of {total} images — the threshold{th} '
+                'is too permissive to separate anything' + where)
+    if total >= _STYLE_DIAGNOSIS_MIN and not multi:
+        return (f'no two images grouped — {len(sizes)} {noun}s of one; the '
+                f'threshold{th} is too strict to join anything' + where)
+    return (f'{multi} {noun}(s) of 2+ '
+            f'(the biggest holds {biggest} of {total} images)')
+
+
+def _write_style_clusters(by_path, clusters, results):
+    """Write the style partition — all of it or none of it.
+
+    ``style_cluster`` is not a per-image measurement, it is one numbering of the
+    whole bank, recomputed (and renumbered) every pass. Half of a new partition
+    next to half of the old one is not "partial progress", it is two different
+    meanings sharing an id space: the 🎨 chip would mix unrelated groups and the
+    semantic-dedup pass, which only compares inside a cluster, would silently
+    stop looking across the seam. So this is deliberately NOT interruptible, and
+    the child hands us ``None`` (not a half-clustering) whenever it was stopped.
+
+    Grouped bulk UPDATEs rather than a write per row: same number of rows, a few
+    hundred statements instead of tens of thousands."""
+    # Revalidate the entire partition immediately before its bulk write.  One
+    # changed member changes the meaning of the global clustering, so unlike
+    # independent scalar scores this lane is all-or-none.
+    for p, image_id in by_path.items():
+        result = results.get(p) or {}
+        row = _live_image(image_id)
+        fingerprint = result.get('fingerprint')
+        if (row is None or row.analysis_fingerprint != fingerprint
+                or bank_transfer_metadata.content_fingerprint_path(p) != fingerprint):
+            all_ids = list(by_path.values())
+            for i0 in range(0, len(all_ids), _SQL_IN_CHUNK):
+                BankImage.query.filter(
+                    BankImage.id.in_(all_ids[i0:i0 + _SQL_IN_CHUNK])).update(
+                    {'style_cluster': None}, synchronize_session=False)
+            db.session.commit()
+            return False
+    by_cid: dict = {}
+    for p, image_id in by_path.items():
+        by_cid.setdefault(clusters.get(p), []).append(image_id)
+    since_commit = 0
+    for cid, ids in by_cid.items():
+        for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+            chunk = ids[i0:i0 + _SQL_IN_CHUNK]
+            BankImage.query.filter(BankImage.id.in_(chunk)).update(
+                {'style_cluster': cid}, synchronize_session=False)
+            since_commit += len(chunk)
+            if since_commit >= _DUP_WRITE_ROWS:
+                db.session.commit()
+                # Same yield the duplicate regrouping needs: without it the next
+                # batch re-takes SQLite's single write lock in the microsecond
+                # after the commit, inside another writer's busy-handler sleep,
+                # and that writer dies on "database is locked".
+                time.sleep(_DUP_WRITE_YIELD)
+                since_commit = 0
+    db.session.commit()
+    return True
+
+
+def _score_job(bank_id, rescore=False):
     def run(job):
         import json as _json
         import sys
@@ -4132,7 +6252,7 @@ def _score_job(bank_id):
                 .order_by(BankImage.id.asc()).all())
         by_path = {}
         for r in rows:
-            p = abs_image_path(bank, r)
+            p = analysis_image_path(bank, r, refresh_rotation=True)
             if _is_safe_bank_source(p, label='bank scoring pass'):
                 by_path[p] = r.id
         paths = list(by_path)
@@ -4143,6 +6263,13 @@ def _score_job(bank_id):
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail=f'scoring pass ({device.upper()})')
         if not paths:
+            # Never leave the label of a pass that did not run: the one-click
+            # tunnel falls back to a count read from the DATABASE when a step
+            # says nothing, so a mute return here reported "scored N image(s)"
+            # over a run that scored none of them.
+            bank_jobs.progress(job, detail=(
+                'done — nothing to score: every image in this bank is either '
+                'rejected or unreadable'))
             return
         _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
         th = thresholds()
@@ -4153,6 +6280,7 @@ def _score_job(bank_id):
             'cache': str(cache_path),
             'cancel_file': str(cache_path) + '.cancel',
             'style_threshold': th['style_threshold'],
+            'rescore': bool(rescore),
         })
         python = cfg.get('bank_scoring.python') or sys.executable
         # The GPU-exclusive window frees ComfyUI's VRAM and blocks any training
@@ -4166,46 +6294,69 @@ def _score_job(bank_id):
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _SCORE_SCRIPT, payload, cache_path, _SCORE_PROGRESS_RE,
             window)
-        # Stopped by the user — say exactly what's kept, never a mute ✗ (the cached
-        # scores/embeddings are safe; relaunching skips them and finishes the rest).
+        score_results = data.get('results') or {}
+        preserved_siglip2_groups = (
+            _preserved_siglip2_groups(bank_id, by_path)
+            if score_results else {})
+        current_bank = db.session.get(ImageBank, bank_id)
+        selected_engine = (
+            _selected_semantic_engine(current_bank) if current_bank else 'clip')
+        # Stopped by the user. The scores the child DID compute are paid GPU work
+        # and land in the database here — the pass used to return empty-handed, so
+        # an hour of inference reached the disk cache and never reached a single
+        # row. The style partition is the one thing that cannot come back with it:
+        # it is global by construction and takes minutes (measured 181 s over
+        # 23 000 images), which is why the child hands us None for it instead of
+        # half of one. Relaunching finishes from the cache and clusters then.
         if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
+            saved = 0
+            if score_results:
+                _, saved, _v, _s = _apply_score_results(
+                    job, by_path, score_results, interruptible=False,
+                    preserved_siglip2_groups=preserved_siglip2_groups,
+                    selected_engine=selected_engine)
+            suffix = (f'; {saved} score(s) saved, style groups need a full pass'
+                      if saved else '')
             bank_jobs.progress(job, detail=_stopped_detail(
-                'images scored', data, cache_path, len(paths)))
+                'images scored', data, cache_path, len(paths), suffix=suffix))
             return
         if not data.get('ok'):
             tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
             raise RuntimeError(tail or f'scoring pass produced no output '
                                        f'(rc={returncode})')
-        results = data.get('results') or {}
+        results = score_results
         clusters = data.get('clusters') or {}
-        done = vanished = scored = 0
-        for p, image_id in by_path.items():
-            row = _live_image(image_id)
-            if row is None:      # deleted while the pass ran — see _live_image
-                vanished += 1
-                continue
-            res = results.get(p) or {}
-            row.aesthetic_score = res.get('aesthetic')
-            row.nsfw_score = res.get('nsfw')
-            row.style_cluster = clusters.get(p)
-            # Counted HERE, on the row we actually wrote — not from the child's
-            # report. The child scores a PATH; this loop is the only place that
-            # knows whether the image behind it still exists. Counting the report
-            # made the pass announce "scored 3 image(s), 1 skipped" over a bank of
-            # three, which is two claims that cannot both be true.
-            if res.get('state') == 'ok':
-                scored += 1
-            done += 1
-            if done % 200 == 0:
-                db.session.commit()
-        db.session.commit()
+        computed = data.get('computed')
+        reused = data.get('reused')
+        written, scored, vanished, stopped = _apply_score_results(
+            job, by_path, results, interruptible=True,
+            preserved_siglip2_groups=preserved_siglip2_groups,
+            selected_engine=selected_engine)
         if vanished:
             logger.info('bank scoring pass: %s image(s) were deleted while it ran',
                         vanished)
+        if stopped:
+            # Stopped while saving. What landed is committed; the partition is
+            # left alone precisely because only part of the bank got its scores.
+            bank_jobs.progress(job, detail=(
+                f'Stopped while saving — {written} image(s) written '
+                # Rows that vanished under the pass are neither written nor
+                # left: counting them here would inflate the only number the
+                # user has to judge how much is still pending.
+                f'({len(paths) - written - vanished} left); nothing was '
+                'recomputed, relaunch finishes from the cache'))
+            return
+        # The last mute step, and the one whose Stop semantics differ from every
+        # other: the partition is written whole or not at all (see
+        # _write_style_clusters), so a Stop landing here does NOT undo it.
+        bank_jobs.progress(job, done=0, total=0, detail=(
+            f'writing the style grouping over {len(clusters)} image(s) — this '
+            'step finishes even if you Stop, because a half-written grouping '
+            'would mix two numberings'))
+        style_written = _write_style_clusters(by_path, clusters, results)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
-        multi = sum(1 for n in sizes.values() if n >= 2)
         # The child's own report — used ONLY to name a head that produced nothing
         # (below). It counts PATHS it was handed, so it is the wrong thing to
         # report as "scored": see the counter in the write-back loop.
@@ -4218,11 +6369,36 @@ def _score_job(bank_id):
         if ok and not any('nsfw' in r for r in ok):
             missing.append('NSFW')
         detail = (f'done — scored {scored} image(s), '
-                  f'{multi} style group(s) of 2+')
+                  + group_summary(sizes.values(), 'style group',
+                                  th['style_threshold'],
+                                  '🎚 Filter thresholds ▸ style_threshold'))
+        if not style_written:
+            detail += ' (style grouping discarded: an image changed during write-back)'
+        # Where the work went. Both numbers count images HANDED to the pass, so
+        # they add up to the pool and never stand in for `scored`, which counts
+        # rows actually written. Saying "scored N" over a bank that recomputed
+        # nothing would be the auto-reject mistake again: a true-looking total
+        # covering an action that did not happen.
+        if reused:
+            detail += (f' · {computed} newly computed, '
+                       f'{reused} reused from cache')
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if missing:
-            detail += f' ({" + ".join(missing)} head unavailable)'
+            detail += f' ({" + ".join(missing)} head unavailable'
+            # WHY, when the child said so. Both heads fetch their weights over the
+            # network on first use, so a host with no egress loses BOTH at once and
+            # the pass reports "done" over a bank whose every score is empty — the
+            # sort stays greyed out and the sentence explained nothing. The child
+            # always knew the exception; it just never travelled. Older children
+            # (a stopped update) send no `head_errors`, so the sentence degrades to
+            # exactly what it said before rather than growing an empty bracket.
+            why = data.get('head_errors') or {}
+            causes = list(dict.fromkeys(
+                str(why[k]) for k in ('aesthetic', 'nsfw') if why.get(k)))
+            if causes:
+                detail += ' — ' + ' · '.join(causes)
+            detail += ')'
         if not bank_jobs.cancelled(job):
             detail += _chain_medium_after_score(job, bank_id)
         bank_jobs.progress(job, detail=detail)
@@ -4255,7 +6431,14 @@ def _chain_medium_after_score(job, bank_id) -> str:
     before = (BankImage.query.filter_by(bank_id=bank_id)
               .filter(BankImage.medium.isnot(None)).count())
     try:
-        _medium_job(bank_id, False)(job)
+        # NO SCOPE, explicitly. The scope of a 🎨 Medium run is a per-run choice
+        # made in its own dialog and stored nowhere, so there is nothing here to
+        # read — inventing one would make this chained pass and the button
+        # disagree about the same word. The chain therefore always runs the
+        # DEFAULT pool (every non-rejected row with no verdict yet), which is
+        # byte-identical to what it did before the scopes existed, and the
+        # dialog says so under "not decided here".
+        _medium_job(bank_id, False, None, None)(job)
     except Exception as e:  # noqa: BLE001 — see the docstring
         logger.warning('bank %s: chained medium pass failed', bank_id,
                        exc_info=True)
@@ -4267,7 +6450,25 @@ def _chain_medium_after_score(job, bank_id) -> str:
 
 
 # --- watermark pass (reuses the dataset Qwen3-VL overlaid-mark detector) -----
-def _watermark_scan_query(bank_id, rescan):
+def _watermark_not_dismissed():
+    return or_(BankImage.watermark_state.is_(None),
+               BankImage.watermark_state != 'dismissed',
+               _watermark_history_inactive_clause())
+
+
+def _watermark_todo_clause():
+    """The "not answered yet" half, on its own — one expression for the pool and
+    for the counter that prices it."""
+    return and_(_watermark_not_dismissed(),
+                or_(_watermark_history_inactive_clause(),
+                    BankImage.watermark_fingerprint.is_(None),
+                    func.length(BankImage.watermark_fingerprint) != 64,
+                    BankImage.watermark_state.is_(None),
+                    and_(BankImage.watermark_state == 'detected',
+                         BankImage.watermark_bbox.is_(None))))
+
+
+def _watermark_scan_query(bank_id, rescan, statuses=None, ids=None):
     """The rows the detection pass should look at.
 
     Not a rescan = "finish the job": rows never scanned, PLUS rows flagged
@@ -4276,18 +6477,13 @@ def _watermark_scan_query(bank_id, rescan):
     levels forever, so a plain re-run adopts them instead of asking the user to
     guess. 'dismissed' rows are never re-examined (the user already ruled), even
     on a rescan — same anti-frustration rule as the dataset detector."""
-    q = (BankImage.query.filter_by(bank_id=bank_id)
-         .filter(BankImage.status != 'reject')
-         .filter(or_(BankImage.watermark_state.is_(None),
-                     BankImage.watermark_state != 'dismissed')))
+    q = _scoped_pool(bank_id, statuses, ids).filter(_watermark_not_dismissed())
     if not rescan:
-        q = q.filter(or_(BankImage.watermark_state.is_(None),
-                         and_(BankImage.watermark_state == 'detected',
-                              BankImage.watermark_bbox.is_(None))))
+        q = q.filter(_watermark_todo_clause())
     return q
 
 
-def start_watermark(app, user_id, bank_id, rescan=False):
+def start_watermark(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Launch the overlaid-watermark scan over the bank's non-rejected images.
 
     TWO routes, and which one runs is decided here, once:
@@ -4315,21 +6511,31 @@ def start_watermark(app, user_id, bank_id, rescan=False):
     # (no Ollama) failed a release on it while two agents read it as a flake.
     if bank_jobs.running(bank_id):
         raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
-    use_detector = watermark_detector.available()
+    # WHICH route, resolved once, from the setting both surfaces read. 'auto' —
+    # the default — resolves exactly the way this line used to read the probe
+    # directly, so an untouched install behaves identically. A pinned 'detector'
+    # with no extra installed does not refuse: it runs the vision route and
+    # carries the reason into the job's own progress line (`note`), because a
+    # silent fallback is how a user changes a detector and sees nothing change.
+    resolution = watermark_detector.resolve_backend()
+    use_detector = resolution['backend'] == 'detector'
     if not use_detector and not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
-                           '(Settings ▸ Captioning & quality)')
+                           '(Settings ▸ Local tools)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
+    want = normalize_pass_statuses(statuses)
     return bank_jobs.start(app, bank_id, 'watermark',
-                           _watermark_job(bank_id, rescan, use_detector=use_detector),
-                           total=_watermark_scan_query(bank_id, rescan).count())
+                           _watermark_job(bank_id, rescan, use_detector=use_detector,
+                                          statuses=want, ids=ids,
+                                          note=resolution['detail'] if resolution['fell_back'] else ''),
+                           total=_watermark_scan_query(bank_id, rescan, want, ids).count())
 
 
-def _watermark_job(bank_id, rescan, use_detector=False):
+def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None, note=''):
     if use_detector:
-        return _watermark_detector_job(bank_id, rescan)
+        return _watermark_detector_job(bank_id, rescan, statuses, ids)
 
     def run(job):
         import json as _json
@@ -4340,8 +6546,12 @@ def _watermark_job(bank_id, rescan, use_detector=False):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
-        bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
+        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
+        # `note` is set only when the user PINNED the detector and it could not
+        # run. Said at the start (so it is visible while the pass runs) and again
+        # in the final sentence (so it survives the pass).
+        bank_jobs.progress(job, done=0, total=len(rows),
+                           detail=(f'watermark scan — ℹ {note}' if note else 'watermark scan'))
         if not rows:
             return
         row_ids = [r.id for r in rows]
@@ -4367,6 +6577,11 @@ def _watermark_job(bank_id, rescan, use_detector=False):
                 # would be asking "is there a watermark?" about our own edit).
                 if row.watermark_clean_method:
                     _discard_clean_blob(bank_id, row)
+                    _invalidate_effective_analysis(row)
+                # Watermark boxes are stored in raw, EXIF-oriented source
+                # coordinates because cleaning consumes ``abs_image_path``.
+                # Rotation/clean derivatives belong to the effective-analysis
+                # lanes and would make the saved geometry unusable here.
                 yield rid, abs_image_path(bank, row)
 
         def ask(item):
@@ -4377,16 +6592,23 @@ def _watermark_job(bank_id, rescan, use_detector=False):
             _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
-            return describe_image_ollama(
-                _read_safe_bank_source_bytes(path, label='bank watermark scan'),
-                WATERMARK_BBOX_PROMPT, num_predict=400,
-                prefer_json=True, fmt='json', keep_alive='5m')
+            payload = _read_safe_bank_source_bytes(
+                path, label='bank watermark scan')
+            fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            try:
+                raw = describe_image_ollama(
+                    payload, WATERMARK_BBOX_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+                return {'raw': raw, 'fingerprint': fingerprint, 'error': None}
+            except Exception as exc:  # noqa: BLE001 — preserve per-image semantics
+                return {'raw': None, 'fingerprint': fingerprint,
+                        'error': f'{type(exc).__name__}: {exc}'}
 
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
                 # The calls overlap (see vision_pool); the loop body — every
                 # database write below — still runs here, on this one thread.
-                for (rid, _path), raw, error in map_vision(
+                for (rid, _path), answer, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
                     # Re-read: the answer we are about to store took ~1.7 s to
@@ -4398,7 +6620,23 @@ def _watermark_job(bank_id, rescan, use_detector=False):
                         vanished += 1
                         bank_jobs.bump(job)
                         continue
-                    if error is not None:  # one bad file never sinks the pass
+                    answer = answer if isinstance(answer, dict) else {}
+                    fingerprint = answer.get('fingerprint')
+                    raw = answer.get('raw')
+                    call_error = error or answer.get('error')
+                    if call_error is not None and not _prepare_watermark_write(
+                            row, _path, fingerprint):
+                        # No verdict is safer than attaching a worker error to
+                        # bytes the worker did not actually read.
+                        bank_jobs.bump(job)
+                        db.session.commit()
+                        continue
+                    if call_error is None and raw is not None and not _prepare_watermark_write(
+                            row, _path, fingerprint):
+                        bank_jobs.bump(job)
+                        db.session.commit()
+                        continue
+                    if call_error is not None:  # one bad file never sinks the pass
                         row.watermark_state = 'error'
                         errors += 1
                     elif raw is None:      # file gone: leave the row as it was
@@ -4453,9 +6691,11 @@ def _watermark_job(bank_id, rescan, use_detector=False):
                 unload_vision_model()  # hand the VRAM back to ComfyUI
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {detected} with a watermark '
-                                           f'so far')
+                                           f'so far' + (f' · ℹ {note}' if note else ''))
             return
         detail = f'done — {detected} with a watermark, {clean} clean'
+        if note:
+            detail += f' · ℹ {note}'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if unanswered:
@@ -4463,11 +6703,13 @@ def _watermark_job(bank_id, rescan, use_detector=False):
                        'nothing — check Ollama in Settings, then run it again)')
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, _watermark_not_dismissed() if rescan
+                              else _watermark_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
 
-def _watermark_detector_job(bank_id, rescan):
+def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
     """The same pass, run by the dedicated detector extra instead of the vision
     model. Deliberately the same SHAPE as the vision job above, because the two
     have to be interchangeable: same resume semantics, same per-image commit,
@@ -4489,7 +6731,7 @@ def _watermark_detector_job(bank_id, rescan):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _watermark_scan_query(bank_id, rescan).order_by(BankImage.id.asc()).all()
+        rows = _watermark_scan_query(bank_id, rescan, statuses, ids).order_by(BankImage.id.asc()).all()
         bank_jobs.progress(job, done=0, total=len(rows), detail='watermark scan')
         if not rows:
             return
@@ -4513,6 +6755,7 @@ def _watermark_detector_job(bank_id, rescan):
             # there a watermark?" about our own edit.
             if row.watermark_clean_method:
                 _discard_clean_blob(bank_id, row)
+                _invalidate_effective_analysis(row)
             path = abs_image_path(bank, row)
             if not path:
                 # No resolvable file. Counted and bumped rather than quietly
@@ -4556,7 +6799,7 @@ def _watermark_detector_job(bank_id, rescan):
         located = 0
         try:
             with window:
-                for path, state, score, regions, error in watermark_detector.scan(
+                for path, state, score, regions, fingerprint, error in watermark_detector.scan(
                         [p for _rid, p in planned],
                         should_cancel=should_cancel, cancel_file=cancel_file):
                     # Match on the path the child echoed, popping it so a bank
@@ -4570,6 +6813,10 @@ def _watermark_detector_job(bank_id, rescan):
                                     'it was being analysed, skipping it', row_id)
                         vanished += 1
                         bank_jobs.bump(job)
+                        continue
+                    if not _prepare_watermark_write(row, path, fingerprint):
+                        bank_jobs.bump(job)
+                        db.session.commit()
                         continue
                     row.watermark_source = 'detector'
                     row.watermark_score = (round(float(score), 4)
@@ -4641,6 +6888,8 @@ def _watermark_detector_job(bank_id, rescan):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, _watermark_not_dismissed() if rescan
+                              else _watermark_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -4673,18 +6922,24 @@ def _clean_pool_query(bank_id):
     return (BankImage.query.filter_by(bank_id=bank_id,
                                       watermark_state='detected')
             .filter(BankImage.status != 'reject')
+            .filter(BankImage.watermark_fingerprint.isnot(None))
+            .filter(func.length(BankImage.watermark_fingerprint) == 64)
+            .filter(~_watermark_history_inactive_clause())
             .filter(or_(BankImage.watermark_bbox.isnot(None),
                         BankImage.watermark_regions.isnot(None))))
 
 
 def _needs_rescan_count(bank_id) -> int:
-    """Rows flagged by an older build that kept no bbox — nothing can route them
-    until a scan re-adopts them (see _watermark_scan_query). A row the user has
-    masked by hand is NOT one of them: it no longer needs the detector."""
+    """Flagged rows whose geometry is not authorised for their current raw."""
     return (BankImage.query.filter_by(bank_id=bank_id, watermark_state='detected')
             .filter(BankImage.status != 'reject')
-            .filter(BankImage.watermark_bbox.is_(None))
-            .filter(BankImage.watermark_regions.is_(None)).count())
+            .filter(or_(
+                and_(BankImage.watermark_bbox.is_(None),
+                     BankImage.watermark_regions.is_(None)),
+                BankImage.watermark_fingerprint.is_(None),
+                func.length(BankImage.watermark_fingerprint) != 64,
+                _watermark_history_inactive_clause(),
+            )).count())
 
 
 def _drop_clean_blob_by_id(bank_id, image_id) -> None:
@@ -4752,6 +7007,17 @@ def _clean_regions(row):
     return ([bbox] if bbox else []), False, None
 
 
+def _current_watermark_source(bank, row) -> tuple[str | None, str | None]:
+    path = abs_image_path(bank, row)
+    if not path or not os.path.isfile(path):
+        return None, None
+    fingerprint = bank_transfer_metadata.content_fingerprint_path(path)
+    if (not _valid_analysis_fingerprint(row.watermark_fingerprint)
+            or fingerprint != row.watermark_fingerprint):
+        return None, fingerprint
+    return path, fingerprint
+
+
 def _source_size(bank, row):
     """(path, W, H) in the browser/VLM's visual orientation.
 
@@ -4759,8 +7025,8 @@ def _source_size(bank, row):
     camera dimensions here would route/crop a 90° JPEG in a different coordinate
     system than both the user and the model saw.
     """
-    path = abs_image_path(bank, row)
-    if not path or not os.path.isfile(path):
+    path, _fingerprint = _current_watermark_source(bank, row)
+    if not path:
         return None, 0, 0
     try:
         with safe_bank_source(path, label='bank watermark') as im:
@@ -4862,6 +7128,7 @@ def _watermark_crop_job(bank_id):
                     failed += 1
                     bank_jobs.bump(job)
                     continue
+                expected_raw_fingerprint = row.watermark_fingerprint
                 route, box = _route_watermark(bbox, width, height, allow_crop=True)
                 if route != 'crop':
                     left += 1              # level 2's job — stays 'detected'
@@ -4875,10 +7142,13 @@ def _watermark_crop_job(bank_id):
                     failed += 1
                     bank_jobs.bump(job)
                     continue
-                if _apply_watermark_crop(str(dst), box):
+                cleaned_ok = _apply_watermark_crop(str(dst), box)
+                generation_ok = _prepare_watermark_write(
+                    row, src, expected_raw_fingerprint)
+                if cleaned_ok and generation_ok:
                     row.watermark_state = 'cleaned'
                     row.watermark_clean_method = 'crop'
-                    drop_derived(bank_id, row.id)
+                    _invalidate_effective_analysis(row)
                     cropped += 1
                 else:
                     _discard_clean_blob(bank_id, row)
@@ -4888,6 +7158,8 @@ def _watermark_crop_job(bank_id):
                 bank_jobs.bump(job)
         finally:
             db.session.commit()
+            if cropped:
+                reset_score_memo()
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {cropped} cropped so far')
             return
@@ -4960,9 +7232,11 @@ def _watermark_inpaint_job(bank_id, method):
         # Klein must NOT take that window — ComfyUI owns the GPU there and
         # holding it would deadlock its worker (same split as the dataset route).
         device = 'cpu' if method == 'klein' else watermark_lama.resolve_device()
-        # (image_id, dst_path, [bbox]) for the single LaMa batch — ids, not ORM
-        # rows: this list is held across a batch that can run for minutes, and a
-        # row deleted in that window must be skippable rather than fatal.
+        # (image_id, dst_path, [bbox], raw_path, raw_fingerprint) for the single
+        # LaMa batch — ids, not ORM rows: this list is held across a batch that
+        # can run for minutes, and a row deleted in that window must be skippable
+        # rather than fatal. The raw identity closes that same minutes-long
+        # window for external source replacements.
         pending = []
         window = (gpu_exclusive_vision_window(flag_ttl=1800)
                   if device == 'cuda' else nullcontext())
@@ -4986,6 +7260,7 @@ def _watermark_inpaint_job(bank_id, method):
                             {'kind': 'failed', 'detail': problem} if problem else None)
                         bank_jobs.bump(job)
                         continue
+                    expected_raw_fingerprint = row.watermark_fingerprint
                     if manual and not boxes:
                         # The user deleted every zone. That is an ANSWER, not a
                         # missing value: repaint nothing, and never fall back to
@@ -5037,10 +7312,12 @@ def _watermark_inpaint_job(bank_id, method):
                         # the panel now states (BankWatermarkPanel → /api/klein-model).
                         ok, err = watermark_klein.inpaint_watermark_klein(
                             bank.user_id, str(dst), [list(b) for b in boxes])
-                        if ok:
+                        generation_ok = _prepare_watermark_write(
+                            row, src, expected_raw_fingerprint)
+                        if ok and generation_ok:
                             row.watermark_state = 'cleaned'
                             row.watermark_clean_method = 'klein'
-                            drop_derived(bank_id, row.id)
+                            _invalidate_effective_analysis(row)
                             counts['klein'] += 1
                         else:
                             _discard_clean_blob(bank_id, row)
@@ -5050,20 +7327,22 @@ def _watermark_inpaint_job(bank_id, method):
                         db.session.commit()
                         bank_jobs.bump(job)
                         continue
-                    pending.append((rid, dst, [list(b) for b in boxes]))
+                    pending.append((rid, dst, [list(b) for b in boxes], src,
+                                    expected_raw_fingerprint))
                     bank_jobs.bump(job)
                 if pending and bank_jobs.cancelled(job):
                     # Stop means stop: the staged copies of rows we never got to
                     # repaint are thrown away rather than running a long batch
                     # after the user asked out (they stay 'detected', retryable).
-                    for pid, _dst, _boxes in pending:
+                    for pid, _dst, _boxes, _src, _fingerprint in pending:
                         _drop_clean_blob_by_id(bank_id, pid)
                     pending = []
                 if pending:
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': str(dst), 'bboxes': boxes}
-                         for _rid, dst, boxes in pending], device=device)
-                    for pid, dst, _boxes in pending:
+                         for _rid, dst, boxes, _src, _fingerprint in pending],
+                        device=device)
+                    for pid, dst, _boxes, src, expected_raw_fingerprint in pending:
                         row = _live_image(pid)
                         if row is None:
                             # Deleted while the batch ran: no row is left to point
@@ -5075,10 +7354,12 @@ def _watermark_inpaint_job(bank_id, method):
                             continue
                         ok, err = results.get(str(dst), (
                             False, {'kind': 'failed', 'detail': 'missing inpaint result'}))
-                        if ok:
+                        generation_ok = _prepare_watermark_write(
+                            row, src, expected_raw_fingerprint)
+                        if ok and generation_ok:
                             row.watermark_state = 'cleaned'
                             row.watermark_clean_method = 'lama'
-                            drop_derived(bank_id, row.id)
+                            _invalidate_effective_analysis(row)
                             counts['inpainted'] += 1
                         else:
                             _discard_clean_blob(bank_id, row)
@@ -5087,6 +7368,8 @@ def _watermark_inpaint_job(bank_id, method):
                             error = err or error
         finally:
             db.session.commit()
+            if counts['inpainted'] or counts['klein']:
+                reset_score_memo()
         done = counts['inpainted'] + counts['klein']
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {done} inpainted so far')
@@ -5113,7 +7396,9 @@ def _watermark_inpaint_job(bank_id, method):
     return run
 
 
-def set_watermark_regions(user_id, bank_id, image_id, regions) -> dict | None:
+@_serialized_bank_mutation('watermark_regions')
+def set_watermark_regions(user_id, bank_id, image_id, regions, *,
+                          _bank_lease=None) -> dict | None:
     """Replace one flagged image's hand-drawn watermark mask (reported missing in
     the Bank by Qeeyana on Reddit — the Dataset had it, the Bank did not).
 
@@ -5138,19 +7423,25 @@ def set_watermark_regions(user_id, bank_id, image_id, regions) -> dict | None:
     normalized = normalize_watermark_regions(regions)
     import json as _json
     stored = _json.dumps(normalized) if normalized is not None else None
-    updated = (BankImage.query
-               .filter_by(id=row.id, bank_id=bank_id, watermark_state='detected')
-               .update({'watermark_regions': stored}, synchronize_session=False))
-    if updated != 1:
-        db.session.rollback()
-        if owned.one_or_none() is None:
-            return None
-        raise RuntimeError('this image is no longer flagged — nothing to mask')
+    bank = db.session.get(ImageBank, bank_id)
+    raw_path = abs_image_path(bank, row) if bank else None
+    expected_raw_fingerprint = row.watermark_fingerprint
+    if not _prepare_watermark_write(
+            row, raw_path, expected_raw_fingerprint):
+        # Keep the fail-closed invalidation performed by the authority check.
+        # Rolling it back would leave stale geometry active after this request
+        # has proved that the source bytes changed.
+        db.session.commit()
+        raise RuntimeError('the source image changed — scan it again before masking')
+    row.watermark_state = 'detected'
+    row.watermark_regions = stored
     db.session.commit()
     return _watermark_regions_payload(row)
 
 
-def undo_watermark_clean(user_id, bank_id, image_ids=None) -> int:
+@_serialized_bank_mutation('watermark_undo')
+def undo_watermark_clean(user_id, bank_id, image_ids=None, *,
+                         _bank_lease=None) -> int:
     """Throw away cleaned versions and re-flag the images. The source was never
     modified, so undoing is just deleting our own blob — which is exactly what
     makes running both levels risk-free. ``image_ids`` empty = every cleaned
@@ -5163,17 +7454,29 @@ def undo_watermark_clean(user_id, bank_id, image_ids=None) -> int:
         ids = [int(i) for i in image_ids]
         q = q.filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK]))
     rows = q.all()
+    restored = 0
     for row in rows:
+        raw_path = abs_image_path(bank, row)
+        expected_raw_fingerprint = row.watermark_fingerprint
+        if not _prepare_watermark_write(
+                row, raw_path, expected_raw_fingerprint):
+            continue
         _discard_clean_blob(bank_id, row)
+        _invalidate_effective_analysis(row)
         # Back to 'detected' with its bbox intact, so it re-enters both levels
         # (e.g. to retry with the other engine).
         row.watermark_state = 'detected'
+        restored += 1
     if rows:
         db.session.commit()
-    return len(rows)
+        if restored:
+            reset_score_memo()
+    return restored
 
 
-def dismiss_watermarks(user_id, bank_id, image_ids) -> int:
+@_serialized_bank_mutation('watermark_dismiss')
+def dismiss_watermarks(user_id, bank_id, image_ids, *,
+                       _bank_lease=None) -> int:
     """Rule a flag a FALSE positive: 'detected' → 'dismissed'. Those images leave
     both cleaning levels and are never re-flagged by a later scan — without this,
     level 2 would happily repaint a legitimate logo on a T-shirt. Mirrors the
@@ -5187,18 +7490,26 @@ def dismiss_watermarks(user_id, bank_id, image_ids) -> int:
     rows = (BankImage.query
             .filter_by(bank_id=bank_id, watermark_state='detected')
             .filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK])).all())
+    dismissed = 0
     for row in rows:
+        raw_path = abs_image_path(bank, row)
+        expected_raw_fingerprint = row.watermark_fingerprint
+        if not _prepare_watermark_write(
+                row, raw_path, expected_raw_fingerprint):
+            continue
         row.watermark_state = 'dismissed'
+        dismissed += 1
     if rows:
         db.session.commit()
-    return len(rows)
+    return dismissed
 
 
 def _watermark_source_counts(bank_id) -> dict:
     """How many SCANNED rows each detection route produced. A row with a state but
     no source predates the column — counted as 'unknown', never attributed."""
     scanned = BankImage.query.filter_by(bank_id=bank_id).filter(
-        BankImage.watermark_state.isnot(None))
+        BankImage.watermark_state.isnot(None),
+        ~_watermark_history_inactive_clause())
     detector = scanned.filter(BankImage.watermark_source == 'detector').count()
     vision = scanned.filter(BankImage.watermark_source == 'vision').count()
     return {'detector': detector, 'vision': vision,
@@ -5206,11 +7517,16 @@ def _watermark_source_counts(bank_id) -> dict:
 
 
 def _detector_ready() -> bool:
-    """Never raises: a probe that explodes must not 500 the whole panel — it just
+    """Whether the NEXT run will use the detector — which is now the resolved
+    SETTING, not merely "is the extra installed". The panel's sentence says "a new
+    run uses …", so reading availability alone would make it lie the moment a user
+    pinned the vision model on a machine that has the extra.
+
+    Never raises: a probe that explodes must not 500 the whole panel — it just
     means the next run is the vision model, which is the shipped behaviour."""
     try:
         from . import watermark_detector
-        return watermark_detector.available()
+        return watermark_detector.resolve_backend()['backend'] == 'detector'
     except Exception:      # noqa: BLE001
         return False
 
@@ -5252,7 +7568,9 @@ def watermark_levels(user_id, bank_id) -> dict | None:
                                                 allow_crop=True)[0] == 'crop':
             croppable += 1
     return {
-        'scanned': base.filter(BankImage.watermark_state.isnot(None)).count(),
+        'scanned': base.filter(
+            BankImage.watermark_state.isnot(None),
+            ~_watermark_history_inactive_clause()).count(),
         # What a plain re-run would still look at. Detection resumes where it
         # stopped (the pass commits every 25 rows), but nothing said so: a
         # progress bar that restarts at 0 each run reads as "it started over
@@ -5271,7 +7589,9 @@ def watermark_levels(user_id, bank_id) -> dict | None:
         'cropped': base.filter_by(watermark_clean_method='crop').count(),
         'inpainted': base.filter(
             BankImage.watermark_clean_method.in_(('lama', 'klein'))).count(),
-        'dismissed': base.filter_by(watermark_state='dismissed').count(),
+        'dismissed': base.filter(
+            BankImage.watermark_state == 'dismissed',
+            ~_watermark_history_inactive_clause()).count(),
         'needs_rescan': _needs_rescan_count(bank_id),
         # WHO ruled on the images already scanned. Surfaced because the two
         # routes are not the same instrument and a bank scanned over weeks can
@@ -5295,7 +7615,20 @@ def watermark_levels(user_id, bank_id) -> dict | None:
 
 
 # --- framing pass (reuses the dataset face/bust/body/back classifier) -------
-def start_framing(app, user_id, bank_id, rescan=False):
+def _framing_pool(bank_id, rescan, statuses=None, ids=None):
+    """The rows the framing pass will classify.
+
+    ONE definition, called by the launch (to price the run) and by the job (to do
+    it). It used to be written out twice, identically — which is exactly the
+    structure that lets a button announce a number it does not act on the moment
+    somebody edits one copy."""
+    q = _scoped_pool(bank_id, statuses, ids)
+    if not rescan:
+        q = q.filter(BankImage.framing.is_(None))
+    return q
+
+
+def start_framing(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Classify every non-rejected image by SHOT TYPE (face / bust / body / back),
     reusing the SAME Qwen3-VL classifier the datasets use (CLASSIFY_PROMPT). Feeds
     the 📐 Framing filter chips and the coverage advice. Needs the vision model
@@ -5316,18 +7649,17 @@ def start_framing(app, user_id, bank_id, rescan=False):
         raise bank_jobs.BankJobBusy((bank_jobs.get(bank_id) or {}).get('kind') or 'background')
     if not probe_ollama_model().get('ok'):
         raise RuntimeError('the vision model is not available '
-                           '(Settings ▸ Captioning & quality)')
+                           '(Settings ▸ Local tools)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-    if not rescan:
-        q = q.filter(BankImage.framing.is_(None))
+    want = normalize_pass_statuses(statuses)
     return bank_jobs.start(app, bank_id, 'framing',
-                           _framing_job(bank_id, rescan), total=q.count())
+                           _framing_job(bank_id, rescan, want, ids),
+                           total=_framing_pool(bank_id, rescan, want, ids).count())
 
 
-def _framing_job(bank_id, rescan):
+def _framing_job(bank_id, rescan, statuses=None, ids=None):
     def run(job):
         from .face_dataset_service import CLASSIFY_PROMPT, _parse_classify
         from .vision_ollama import describe_image_ollama, unload_vision_model
@@ -5336,13 +7668,16 @@ def _framing_job(bank_id, rescan):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        q = (BankImage.query.filter_by(bank_id=bank_id)
-             .filter(BankImage.status != 'reject'))
-        if not rescan:
-            q = q.filter(BankImage.framing.is_(None))
-        rows = q.order_by(BankImage.id.asc()).all()
+        rows = (_framing_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='framing')
+        todo_clause = None if rescan else BankImage.framing.is_(None)
         if not rows:
+            # A pass that ran over nothing used to return MUTE, so the screen
+            # showed the previous pass's line and the click read as ignored.
+            bank_jobs.progress(job, detail=(
+                'done — nothing to classify in this scope'
+                + _scope_note(bank_id, todo_clause, statuses, ids)))
             return
         row_ids = [r.id for r in rows]
         classified = errors = vanished = 0
@@ -5359,7 +7694,8 @@ def _framing_job(bank_id, rescan):
                     vanished += 1
                     bank_jobs.bump(job)
                     continue
-                yield rid, abs_image_path(bank, row)
+                yield rid, analysis_image_path(
+                    bank, row, refresh_rotation=True)
 
         def ask(item):
             """WORKER thread: file + network only, no session. None means the
@@ -5367,16 +7703,22 @@ def _framing_job(bank_id, rescan):
             _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
-            return describe_image_ollama(
-                _read_safe_bank_source_bytes(path, label='bank framing scan'),
-                CLASSIFY_PROMPT, num_predict=400,
-                prefer_json=True, fmt='json', keep_alive='5m')
+            payload = _read_safe_bank_source_bytes(path, label='bank framing scan')
+            fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            try:
+                raw = describe_image_ollama(
+                    payload, CLASSIFY_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+                return {'raw': raw, 'fingerprint': fingerprint, 'error': None}
+            except Exception as exc:  # noqa: BLE001 — one image, not the pass
+                return {'raw': None, 'fingerprint': fingerprint,
+                        'error': f'{type(exc).__name__}: {exc}'}
 
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
                 # The calls overlap (see vision_pool); every write below still
                 # happens here, on this one thread.
-                for (rid, _path), raw, error in map_vision(
+                for (rid, _path), answer, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
                     # Re-read: the classification we are about to store took a
@@ -5388,7 +7730,16 @@ def _framing_job(bank_id, rescan):
                         vanished += 1
                         bank_jobs.bump(job)
                         continue
-                    if error is not None:  # one bad file never sinks the pass
+                    answer = answer if isinstance(answer, dict) else {}
+                    fingerprint = answer.get('fingerprint')
+                    raw = answer.get('raw')
+                    call_error = error or answer.get('error')
+                    if ((call_error is not None or raw is not None)
+                            and not _prepare_analysis_write(
+                                row, _path, fingerprint)):
+                        bank_jobs.bump(job)
+                        continue
+                    if call_error is not None:  # one bad file never sinks the pass
                         errors += 1
                     elif raw is None:      # file gone: leave the row as it was
                         pass
@@ -5415,6 +7766,7 @@ def _framing_job(bank_id, rescan):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if errors:
             detail += f', {errors} unreadable'
+        detail += _scope_note(bank_id, todo_clause, statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -5436,7 +7788,16 @@ def medium_prereq(bank_id=None) -> str | None:
     return clip_text_encoder.unavailable_reason()
 
 
-def start_medium(app, user_id, bank_id, rescan=False):
+def _medium_pool(bank_id, rescan, statuses=None, ids=None):
+    """The rows 🎨 Medium will classify — ONE definition for the launch, the job
+    and the counter, for the same reason as _framing_pool."""
+    q = _scoped_pool(bank_id, statuses, ids)
+    if not rescan:
+        q = q.filter(BankImage.medium.is_(None))
+    return q
+
+
+def start_medium(app, user_id, bank_id, rescan=False, statuses=None, ids=None):
     """Classify every SCORED image by MEDIUM (photograph / anime / 3D render /
     illustration, or an honest 'unsure') from the CLIP embedding the ✨ Score pass
     already cached.
@@ -5463,11 +7824,10 @@ def start_medium(app, user_id, bank_id, rescan=False):
     reason = medium_prereq(bank_id)
     if reason:
         raise RuntimeError(reason)
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-    if not rescan:
-        q = q.filter(BankImage.medium.is_(None))
-    return bank_jobs.start(app, bank_id, 'medium', _medium_job(bank_id, rescan),
-                           total=q.count())
+    want = normalize_pass_statuses(statuses)
+    return bank_jobs.start(app, bank_id, 'medium',
+                           _medium_job(bank_id, rescan, want, ids),
+                           total=_medium_pool(bank_id, rescan, want, ids).count())
 
 
 def _medium_prototype_matrix():
@@ -5485,7 +7845,7 @@ def _medium_prototype_matrix():
     return names, np.stack(rows).astype('float32')
 
 
-def _medium_job(bank_id, rescan):
+def _medium_job(bank_id, rescan, statuses=None, ids=None):
     def run(job):
         import numpy as np
         bank = db.session.get(ImageBank, bank_id)
@@ -5494,10 +7854,8 @@ def _medium_job(bank_id, rescan):
         bank_jobs.progress(job, done=0, detail='medium pass — encoding prototypes')
         names, P = _medium_prototype_matrix()
         emb_by_path = _load_score_embeddings(bank)
-        q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
-        if not rescan:
-            q = q.filter(BankImage.medium.is_(None))
-        rows = q.order_by(BankImage.id.asc()).all()
+        rows = (_medium_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='medium pass')
         base = os.path.realpath(bank.source_path)
         prefix = os.path.normcase(base + os.sep)
@@ -5509,14 +7867,27 @@ def _medium_job(bank_id, rescan):
             # normpath that HITS the cache is provably what realpath would have
             # returned, and realpath is a syscall this loop cannot afford once
             # per row on a 20 000-image bank.
-            p = os.path.normpath(os.path.join(base, r.relpath))
-            emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
-            if emb is None:
-                p2 = _abs_under(base, r.relpath)
-                emb = emb_by_path.get(p2) if p2 else None
+            if r.watermark_clean_method or r.rotation:
+                p = analysis_image_path(bank, r)
+                emb = emb_by_path.get(p) if p else None
+            else:
+                p = os.path.normpath(os.path.join(base, r.relpath))
+                emb = (emb_by_path.get(p)
+                       if os.path.normcase(p).startswith(prefix) else None)
+                if emb is None:
+                    p2 = _abs_under(base, r.relpath)
+                    emb = emb_by_path.get(p2) if p2 else None
+                    if emb is not None:
+                        p = p2
             if emb is None:
                 unscored += 1          # no embedding → stays NULL, honestly
             else:
+                fingerprint = _score_embedding_fingerprint(p)
+                if not _prepare_analysis_write(r, p, fingerprint):
+                    unscored += 1
+                    done += 1
+                    bank_jobs.bump(job)
+                    continue
                 e = np.asarray(emb, dtype='float32')
                 e = e / (float(np.linalg.norm(e)) + 1e-8)
                 sims = P @ e
@@ -5534,6 +7905,9 @@ def _medium_job(bank_id, rescan):
             # Never silent: an image with no ✨ Score embedding CANNOT get a
             # medium, and "0 results" without that sentence reads as a bug.
             detail += f', {unscored} skipped (not scored yet)'
+        detail += _scope_note(bank_id,
+                              None if rescan else BankImage.medium.is_(None),
+                              statuses, ids)
         if bank_jobs.cancelled(job):
             detail = (f'stopped — {classified} classified, '
                       f'{len(rows) - done} left (re-run to finish)')
@@ -5542,8 +7916,61 @@ def _medium_job(bank_id, rescan):
 
 
 # --- caption pass (reuses the dataset caption engines) ----------------------
+# The statuses a caption pass may be AIMED at. 'reject' is absent on purpose and
+# it is not an oversight: you curate from what you might keep, never from the bin
+# — the same rule every other pass on this page follows. Values are the ones
+# stored in the column ('keep' / 'pending'); the UI says "Kept" and "Undecided".
+# Renaming either would break stored queries, so the wire keeps the column's
+# vocabulary and the translation happens in the label.
+# 'reject' JOINED THIS TUPLE, and it is a change of principle, held on purpose.
+# The bin used to be unreachable ("you curate from what you might keep, never
+# from what you threw away") and that is still the right DEFAULT — it is not in
+# the default scope, and a request without `statuses` never touches it. But a
+# rejected image is not a deleted one: people un-reject, promote out of the bin,
+# and search by caption across the whole bank. Refusing to caption it was a rule
+# the app enforced on the user rather than a fact about the data, and the launch
+# dialog is where the cost of aiming a GPU pass at the bin can finally be stated
+# instead of assumed.
+CAPTION_SCOPES = PASS_SCOPES
+
+
+def _normalize_caption_statuses(statuses):
+    """Validate a per-run caption scope, or None for the historical set.
+
+    None / [] → None, which means the pass keeps its original
+    ``status != 'reject'`` filter: a client that sends no scope is
+    byte-identical to before this option existed. Anything outside
+    CAPTION_SCOPES raises ValueError → 400, exactly like a bad vocabulary."""
+    return normalize_pass_statuses(statuses, CAPTION_SCOPES)
+
+
+def _caption_name_option(name, value):
+    """Normalize one free-text caption option, or raise ValueError → 400.
+
+    Every one of these options is a NAME out of a closed list. A non-string reached
+    ``.strip()`` and answered 500 — a bad request rendered as a broken server, while
+    ``statuses`` next door already answered 400 for exactly the same mistake. The
+    validation now matches the promise the route's docstring makes ("invalid → 400")."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f'invalid caption {name}: expected a name, not '
+                         f'{type(value).__name__}')
+    return value.strip().lower() or None
+
+
+def _caption_scope_q(bank_id, statuses):
+    """The rows a caption pass may touch, for this bank and this scope.
+
+    ONE definition, called by the launch (to price the run) and by the job (to do
+    it). Two copies of this filter is precisely how a button comes to announce a
+    number it does not act on."""
+    return _scoped_pool(bank_id, statuses)
+
+
 def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
-                  length=None):
+                  length=None, backend=None, ollama_model=None, statuses=None,
+                  include_asserted=False):
     """Launch the caption pass over a selection (``ids``) or, when empty, every
     non-rejected readable image. Reuses the dataset caption engines (JoyCaption /
     Ollama per Settings) through a dataset-free descriptive brick; the captions
@@ -5560,42 +7987,96 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
 
     ``length`` picks the SIZE preset (one of CAPTION_LENGTHS: 'concise' | 'detailed';
     None/'' = standard, nothing appended) — an axis orthogonal to the register, again
-    the same lane and the same text as the dataset caption."""
+    the same lane and the same text as the dataset caption.
+
+    ``backend`` overrides ``captioning.backend`` for THIS run only (one of
+    CAPTION_BACKENDS) and ``ollama_model`` overrides ``ollama.vision_model`` for THIS
+    run only — the global settings stay the default and are never written. Which model
+    writes a caption is not a matter of taste: a captioner that describes what it sees
+    in evasive terms produces captions that are about something slightly other than the
+    images, and a LoRA trained on them learns to look away too, with nothing in the
+    output to reveal it (measured on the video lane, commit "the model that writes the
+    captions stops being a decision we made"). Both empty → the global settings, so a
+    call without them is byte-identical to before. 'auto' is left alone deliberately:
+    it CHAINS JoyCaption then Ollama on what JoyCaption missed, so forcing 'joycaption'
+    removes the Ollama half rather than "picking one of two".
+
+    ``statuses`` picks the SCOPE of the run: any combination of CAPTION_SCOPES
+    ('keep' | 'pending' | 'reject'). None = the historical non-rejected set,
+    byte-identical to before. ['reject'] aims the pass AT THE BIN, which is never a
+    default and never part of one — it is reachable only because the caller asked for
+    it by name. When ``ids`` are also given the two INTERSECT (the selection is
+    narrowed by the scope, never widened).
+
+    ``force`` rewrites captions that already exist — and, since captions carry an
+    origin (services/caption_origin.py), it now SPARES the ones a human wrote or
+    corrected, the way the embeddings pass spares an asserted face cluster. Rows
+    whose origin was never recorded (every row that predates the column) are
+    rewritten: their authorship cannot be recovered, and sparing them would make
+    this button inert on every bank that exists today. ``include_asserted`` is the
+    explicit way OUT of that protection — a separate opt-in, never a default,
+    for the person who does want their own captions redone by a better model.
+    It means nothing without ``force`` and is ignored there (an unforced pass
+    only ever touches rows with no caption at all)."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    from .face_dataset_service import CAPTION_LENGTHS, CAPTION_VOCABULARIES
-    vocab = (vocabulary or '').strip().lower() or None
+    from .face_dataset_service import (CAPTION_BACKENDS, CAPTION_LENGTHS,
+                                       CAPTION_VOCABULARIES)
+    vocab = _caption_name_option('vocabulary', vocabulary)
     if vocab and vocab not in CAPTION_VOCABULARIES:
         raise ValueError(f'invalid caption vocabulary: {vocab}')
-    size = (length or '').strip().lower() or None
+    size = _caption_name_option('length', length)
     if size and size not in CAPTION_LENGTHS:
         raise ValueError(f'invalid caption length: {size}')
-    backend = (cfg.get('captioning.backend') or 'auto').lower()
-    if backend == 'none':
+    want = _normalize_caption_statuses(statuses)
+    engine = _caption_name_option('backend', backend)
+    if engine and engine not in CAPTION_BACKENDS:
+        raise ValueError(f'invalid captioning backend: {engine}')
+    # Same charset check the Caption Lab uses (never shelled out — it is a JSON
+    # field to the local Ollama server), and the same allow_empty contract.
+    from .ollama_control import normalize_ollama_model_ref
+    model = normalize_ollama_model_ref(ollama_model or '', allow_empty=True) or None
+    # The RESOLVED engine decides whether there is anything to run at all — a
+    # per-run 'none' is refused exactly like the global one, and a per-run engine
+    # rescues a run on an install whose global setting is 'none'.
+    resolved = engine or (cfg.get('captioning.backend') or 'auto').lower()
+    if resolved == 'none':
         raise ValueError('no captioning backend configured (Settings ▸ Captioning & quality)')
     reason = _gpu_busy_reason()
     if reason:
         raise RuntimeError(reason)
     ids = [int(i) for i in ids] if ids else None
-    q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
+    q = _caption_scope_q(bank_id, want)
     if ids is not None:
         q = q.filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK]))
+    keep_asserted = bool(force) and not include_asserted
     if not force:
         q = q.filter(or_(BankImage.caption.is_(None), BankImage.caption == ''))
+    elif keep_asserted:
+        # The protection, in the SAME query that prices the run — so the number
+        # the button quotes is the number the job walks. Two definitions of this
+        # filter is exactly how a button comes to announce work it does not do.
+        q = q.filter(caption_origin.unprotected_clause(BankImage))
     total = q.count()
     return bank_jobs.start(app, bank_id, 'caption',
-                           _caption_job(bank_id, ids, force, vocab, size), total=total)
+                           _caption_job(bank_id, ids, force, vocab, size,
+                                        backend=engine, ollama_model=model,
+                                        statuses=want,
+                                        keep_asserted=keep_asserted),
+                           total=total)
 
 
-def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
+def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
+                 backend=None, ollama_model=None, statuses=None,
+                 keep_asserted=False):
     def run(job):
         from .face_dataset_service import caption_paths, caption_preset_instructions
         from ..gpu_window import gpu_exclusive_vision_window
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        q = BankImage.query.filter_by(bank_id=bank_id).filter(BankImage.status != 'reject')
+        q = _caption_scope_q(bank_id, statuses)
         if ids is not None:
             rows = []
             for i0 in range(0, len(ids), _SQL_IN_CHUNK):
@@ -5603,31 +8084,62 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
             rows.sort(key=lambda r: r.id)
         else:
             rows = q.order_by(BankImage.id.asc()).all()
+        skipped_asserted = 0
         if not force:
             rows = [r for r in rows if not (r.caption or '').strip()]
+        elif keep_asserted:
+            # Same rule as the launch filter, re-applied on the rows the job
+            # actually loaded: a caption can be typed in the seconds between
+            # pricing the run and starting it, and the newer word wins.
+            spared = [r for r in rows if caption_origin.is_protected(r)]
+            skipped_asserted = len(spared)
+            rows = [r for r in rows if not caption_origin.is_protected(r)]
         by_path = {}
         for r in rows:
-            p = abs_image_path(bank, r)
+            p = analysis_image_path(bank, r, refresh_rotation=True)
             if _is_safe_bank_source(p, label='bank caption pass'):
-                by_path[p] = r.id
+                fingerprint = bank_transfer_metadata.content_fingerprint_path(p)
+                if fingerprint is not None:
+                    by_path[p] = (r.id, fingerprint)
         paths = list(by_path)
         bank_jobs.progress(job, done=0, total=len(paths), detail='captioning')
         if not paths:
             return
-        captioned = vanished = 0
+        captioned = vanished = stale = spared_mid_pass = 0
 
-        def _on_caption(path, caption):
-            nonlocal captioned, vanished
-            image_id = by_path.get(path)
-            if image_id is None:
+        def _on_caption(path, caption, engine=None):
+            nonlocal captioned, vanished, stale, spared_mid_pass
+            planned = by_path.get(path)
+            if planned is None:
                 return           # a path this pass never asked about — not ours
+            image_id, expected_fingerprint = planned
             row = _live_image(image_id)
             if row is None:      # deleted while it was being captioned — _live_image
                 logger.info('bank caption pass: image %s was deleted mid-pass, '
                             'skipping its caption', image_id)
                 vanished += 1
                 return
-            row.caption = caption
+            # Inference may take seconds. A tracked rotate/clean or an external
+            # same-path replacement during that window must not attach the
+            # caption computed from A to the now-current pixels B.
+            current_path = analysis_image_path(bank, row, refresh_rotation=True)
+            if (not _same_resolved_path(path, current_path)
+                    or bank_transfer_metadata.content_fingerprint_path(current_path)
+                    != expected_fingerprint):
+                logger.info('bank caption pass: image %s changed mid-pass, '
+                            'skipping its stale caption', image_id)
+                stale += 1
+                return
+            # A caption written while this image was in inference wins unless
+            # the user explicitly allowed overwriting asserted captions.
+            if ((not force and (row.caption or '').strip())
+                    or (keep_asserted and caption_origin.is_protected(row))):
+                spared_mid_pass += 1
+                return
+            # WHICH engine wrote this row, reported by the engine that wrote it —
+            # not the backend that was asked for. 'auto' chains both, so the
+            # requested value would mislabel roughly half the bank.
+            caption_origin.stamp(row, caption, caption_origin.engine_origin(engine))
             db.session.commit()
             captioned += 1
 
@@ -5636,10 +8148,15 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
         # The vocabulary register and the length preset ride in as the SAME appended
         # instructions the dataset pass uses, in the same order (None when neither is
         # set → byte-identical to the plain pass).
+        # The engine and the Ollama model ride the SAME per-call seam the Caption
+        # Lab uses (caption_paths already takes both); None on either means "the
+        # global setting", so a run that picks nothing is byte-identical.
         extra = caption_preset_instructions(vocabulary, length)
         with gpu_exclusive_vision_window(flag_ttl=1800):
             caption_paths(
                 paths,
+                backend=backend,
+                ollama_model=ollama_model,
                 extra_instructions=extra,
                 should_cancel=lambda: bank_jobs.cancelled(job),
                 on_caption=_on_caption,
@@ -5648,8 +8165,22 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
             bank_jobs.progress(job, detail=f'cancelled — {captioned} captioned so far')
             return
         detail = f'done — {captioned} captioned'
+        if skipped_asserted:
+            # Named in the RESULT, not only in the warning before the click: the
+            # user has to be able to see afterwards that the protection did
+            # something, otherwise it is a promise with no evidence.
+            detail += f', {skipped_asserted} kept (written by you)'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
+        if stale:
+            detail += f', {stale} skipped (image changed while captioning)'
+        if spared_mid_pass:
+            detail += f', {spared_mid_pass} kept (newer caption won)'
+        detail += _scope_note(
+            bank_id,
+            None if force else or_(BankImage.caption.is_(None),
+                                   BankImage.caption == ''),
+            statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -5664,6 +8195,9 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None):
 # ranks on sharpness/size, not the aesthetic score that isn't computed yet).
 PIPELINE_STEPS = ('scan', 'auto_reject', 'score', 'semantic_dedup', 'watermark',
                   'faces', 'framing', 'caption')
+_SIGLIP2_PIPELINE_STEPS = (
+    'scan', 'auto_reject', 'score', 'semantic_index', 'semantic_dedup',
+    'watermark', 'faces', 'framing', 'caption')
 # Auto-reject inside the pipeline runs right after the quality scan, so it can
 # only act on the CPU-scan flags (and duplicates). The score-derived flags
 # (low_aesthetic/nsfw/watermark) have no data yet at that point.
@@ -5685,11 +8219,14 @@ PIPELINE_REJECT_FLAGS = tuple(f for f in _QUALITY_FLAGS
                               if f not in _PIPELINE_EXCLUDED_REJECT_FLAGS)
 
 
-def _sanitize_pipeline_steps(steps) -> list:
+def _sanitize_pipeline_steps(steps, engine='clip') -> list:
     """Keep only known steps, in the canonical pipeline order (the client can't
     reorder or invent a pass)."""
     want = set(steps or [])
-    return [s for s in PIPELINE_STEPS if s in want]
+    canonical = (_SIGLIP2_PIPELINE_STEPS
+                 if bank_semantic_engine.normalize_engine(engine) == 'siglip2'
+                 else PIPELINE_STEPS)
+    return [s for s in canonical if s in want]
 
 
 def _score_prereq() -> str | None:
@@ -5702,7 +8239,7 @@ def _score_prereq() -> str | None:
 def _watermark_prereq() -> str | None:
     from ..capabilities import probe_ollama_model
     if not probe_ollama_model().get('ok'):
-        return 'vision model not available (Settings ▸ Captioning & quality)'
+        return 'vision model not available (Settings ▸ Local tools)'
     return None
 
 
@@ -5716,7 +8253,7 @@ def _faces_prereq() -> str | None:
 def _framing_prereq() -> str | None:
     from ..capabilities import probe_ollama_model
     if not probe_ollama_model().get('ok'):
-        return 'vision model not available (Settings ▸ Captioning & quality)'
+        return 'vision model not available (Settings ▸ Local tools)'
     return None
 
 
@@ -5735,7 +8272,7 @@ def start_pipeline(app, user_id, bank_id, steps=None, reject_flags=None,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    steps = _sanitize_pipeline_steps(steps)
+    steps = _sanitize_pipeline_steps(steps, _selected_semantic_engine(bank))
     if not steps:
         raise ValueError('no pipeline steps selected')
     reject_flags = [f for f in (reject_flags or []) if f in PIPELINE_REJECT_FLAGS]
@@ -5770,7 +8307,9 @@ def _bank_counts(bank_id) -> dict:
         'reject': base.filter_by(status='reject').count(),
         'scored': base.filter(or_(BankImage.aesthetic_score.isnot(None),
                                   BankImage.nsfw_score.isnot(None))).count(),
-        'watermark_detected': base.filter(BankImage.watermark_state == 'detected').count(),
+        'watermark_detected': base.filter(
+            BankImage.watermark_state == 'detected',
+            ~_watermark_history_inactive_clause()).count(),
         'framing_classified': base.filter(BankImage.framing.isnot(None)).count(),
         'captioned': base.filter(and_(BankImage.caption.isnot(None),
                                        BankImage.caption != '')).count(),
@@ -5887,11 +8426,14 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         # its second half. The later steps only ADD analysis columns, so undoing
         # this one leaves them consistent.
         snap = bank_undo.Snapshot('Launch all — auto-reject')
-        rejected = (apply_flags(user_id, bank_id, reject_flags, snapshot=snap)
+        capability = _job_bank_capability(job)
+        rejected = (apply_flags(user_id, bank_id, reject_flags, snapshot=snap,
+                                _bank_lease=capability)
                     if reject_flags else {})
         dup_rejected = 0
         if resolve_dups:
-            dup_rejected = resolve_dups_keep_best(user_id, bank_id, snapshot=snap)
+            dup_rejected = resolve_dups_keep_best(
+                user_id, bank_id, snapshot=snap, _bank_lease=capability)
         snap.commit(bank_id)
         n = sum(rejected.values()) + dup_rejected
         entry['counts'] = {'rejected': n, 'by_flag': rejected,
@@ -5913,15 +8455,47 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         entry['counts'] = {'scored': c['scored'], 'style_groups': c['style_groups']}
         entry['detail'] = job.get('detail') or f"scored {c['scored']} image(s)"
         return
+    if step == 'semantic_index':
+        bank = db.session.get(ImageBank, bank_id)
+        if bank is None or _selected_semantic_engine(bank) != 'siglip2':
+            entry['status'], entry['reason'] = (
+                'skipped', 'Semantic index is available only with SigLIP2')
+            return
+        from ..capabilities import probe_bank_siglip2
+        probe = probe_bank_siglip2()
+        if not probe.get('ok'):
+            entry['status'], entry['reason'] = (
+                'skipped', probe.get('detail') or 'SigLIP2 is not installed')
+            return
+        _device, use_gpu = _resolve_semantic_device()
+        reason = _gpu_busy_reason() if use_gpu else None
+        if reason:
+            entry['status'], entry['reason'] = 'skipped', reason
+            return
+        _semantic_index_job(bank_id)(job)
+        measured = semantic_counts(
+            bank, engine='siglip2',
+            total=BankImage.query.filter_by(bank_id=bank_id).count())
+        entry['counts'] = {'semantic_indexed': measured['ok'],
+                           'semantic_total': measured['total']}
+        entry['detail'] = (job.get('detail') or
+                           f"indexed {measured['ok']} image(s) with SigLIP2")
+        return
     if step == 'semantic_dedup':
         # Runs right after Score, reusing its cached embeddings (no GPU). Groups
         # crops/variants for review; resolution stays a UI action (keep best/first
         # /manual) — near-dups are fuzzier than exact dHash, so the overnight run
         # surfaces them rather than auto-rejecting. Skipped-with-reason (never a
         # mute ✗) when Score produced no embeddings.
-        n = rebuild_semantic_dup_groups(bank_id)
+        n = rebuild_semantic_dup_groups(
+            bank_id, _bank_lease=_job_bank_capability(job))
         if n is None:
-            entry['status'], entry['reason'] = 'skipped', 'run ✨ Score first — no embeddings'
+            bank = db.session.get(ImageBank, bank_id)
+            if bank is not None and _selected_semantic_engine(bank) == 'siglip2':
+                reason = 'run Semantic index first — no SigLIP2 embeddings'
+            else:
+                reason = 'run ✨ Score first — no embeddings'
+            entry['status'], entry['reason'] = 'skipped', reason
             return
         entry['counts'] = {'semantic_groups': n}
         entry['detail'] = f'{n} semantic near-duplicate group(s) to review'
@@ -5970,10 +8544,12 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
     entry['status'], entry['reason'] = 'skipped', 'unknown step'
 
 
-def resolve_dups_keep_best(user_id, bank_id, snapshot=None) -> int:
+def resolve_dups_keep_best(user_id, bank_id, snapshot=None, *,
+                           _bank_lease=None) -> int:
     """Auto-resolve every unresolved duplicate group keeping the best member,
     for the pipeline's auto-reject step. Returns the number REJECTED."""
-    out = resolve_dups(user_id, bank_id, strategy='best', snapshot=snapshot)
+    out = resolve_dups(user_id, bank_id, strategy='best', snapshot=snapshot,
+                       _bank_lease=_bank_lease)
     return out.get('rejected', 0)
 
 
@@ -6047,7 +8623,7 @@ def _coverage_embeddings(bank, crit):
     resolution, same fast-path reasoning — see ``_pool_embeddings``.
     """
     import numpy as np
-    emb_by_path = _load_score_embeddings(bank)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
         return None
     rows = (BankImage.query.filter(BankImage.bank_id == bank.id, crit)
@@ -6056,6 +8632,12 @@ def _coverage_embeddings(bank, crit):
     prefix = os.path.normcase(base + os.sep)
     vecs = []
     for r in rows:
+        if r.watermark_clean_method or r.rotation:
+            p = analysis_image_path(bank, r)
+            emb = emb_by_path.get(p) if p else None
+            if emb is not None:
+                vecs.append(emb)
+            continue
         p = os.path.normpath(os.path.join(base, r.relpath))
         emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
         if emb is None:
@@ -6070,15 +8652,20 @@ def _coverage_embeddings(bank, crit):
     return E
 
 
-def _visual_spread(bank, crit) -> dict:
-    """How alike the pool LOOKS, from the cached CLIP embeddings.
+def _visual_spread(bank, crit, *, engine=None) -> dict:
+    """How alike the pool LOOKS, from the selected semantic embeddings.
 
     Returns ``{'scored': m, 'similarity': float|None, 'band': str}`` where band is
     'redundant' | 'leaning' | 'varied' | 'unknown'. 'unknown' with scored 0 means
     the ✨ Score pass has not run (or its cache went stale) — the panel says so
     rather than drawing a bar it did not measure.
     """
-    out = {'scored': 0, 'similarity': None, 'band': 'unknown'}
+    engine = (_selected_semantic_engine(bank) if engine is None
+              else bank_semantic_engine.normalize_engine(engine))
+    calibrated = engine == 'clip'
+    out = {'scored': 0, 'semantic_indexed': 0, 'similarity': None,
+           'band': 'unknown', 'calibrated': calibrated,
+           'engine': engine, 'model_key': engine_model_key(engine)}
     try:
         E = _coverage_embeddings(bank, crit)
     except Exception:
@@ -6087,17 +8674,20 @@ def _visual_spread(bank, crit) -> dict:
         return out
     if E is None or len(E) < 2:
         out['scored'] = 0 if E is None else len(E)
+        out['semantic_indexed'] = out['scored']
         return out
     n = len(E)
     out['scored'] = n
+    out['semantic_indexed'] = n
     if n < _SPREAD_MIN_POOL:
         return out
     s = E.sum(axis=0, dtype='float64')
     sim = (float(s @ s) - n) / (n * n - n)
     sim = max(-1.0, min(1.0, sim))
     out['similarity'] = round(sim, 4)
-    out['band'] = ('redundant' if sim >= _SPREAD_REDUNDANT
-                   else 'leaning' if sim >= _SPREAD_LEANING else 'varied')
+    if calibrated:
+        out['band'] = ('redundant' if sim >= _SPREAD_REDUNDANT
+                       else 'leaning' if sim >= _SPREAD_LEANING else 'varied')
     return out
 
 
@@ -6251,6 +8841,11 @@ def _spread_advice(spread, total) -> list:
     if total < _SPREAD_MIN_POOL:
         return []
     if not spread['scored']:
+        if spread.get('engine') == 'siglip2':
+            return [{'tone': 'info',
+                     'text': 'Run Semantic index to also see how varied the set '
+                             'LOOKS — the labels above cannot tell two hundred '
+                             'near-identical shots from two hundred different ones.'}]
         return [{'tone': 'info',
                  'text': 'Run ✨ Score to also see how varied the set LOOKS — the '
                          'labels above cannot tell two hundred near-identical shots '
@@ -6299,17 +8894,22 @@ def coverage(user_id, bank_id) -> dict | None:
     bank = get_bank(user_id, bank_id)
     if not bank:
         return None
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
     stats = _coverage_stats(bank_id)
     crit = _coverage_pool_crit(bank_id)
 
     captions = [c for (c,) in db.session.query(BankImage.caption)
                 .filter(BankImage.bank_id == bank_id, crit).all()]
     variety = caption_coverage.analyse(captions, kind=_COVERAGE_KIND)
-    spread = _visual_spread(bank, crit)
+    spread = _visual_spread(bank, crit, engine=engine)
     # Nested, because `analyse` returns its own `total`/`axes` and the bank payload
     # already owns `total` — flattening would silently overwrite the pool size.
     stats['variety'] = variety
     stats['visual'] = spread
+    stats['engine'] = engine
+    stats['model_key'] = model_key
+    stats['semantic_indexed'] = int(spread['scored'])
 
     advice = _coverage_advice(stats)
     if stats['total']:
@@ -6322,6 +8922,7 @@ def coverage(user_id, bank_id) -> dict | None:
     # sources rather than as three separate verdicts the user has to merge.
     advice.sort(key=lambda a: 0 if a['tone'] == 'warn' else 1)
     stats['advice'] = advice
+    _verified_semantic_result_provenance(bank, engine, model_key)
     return stats
 
 
@@ -6378,18 +8979,85 @@ def promotable_count(user_id, bank_id, dataset_id) -> int | None:
 _IMPORT_FOLDER_SAFE = re.compile(r'[^A-Za-z0-9 _-]')
 
 
+def _normalize_import_bank_name(name) -> str:
+    if not isinstance(name, str):
+        raise ValueError('name must be text')
+    name = name.strip()
+    if not name:
+        raise ValueError('name is required')
+    if len(name) > 100:
+        raise ValueError('name is too long (max 100 characters)')
+    return name
+
+
 def _import_folder_for(name: str) -> str:
     """A fresh, unused folder under bank_sources_root for an imported bank.
     Suffixes -2, -3… rather than reusing a folder: two imports of the same name
     must never end up sharing (and silently merging) one set of files."""
     stem = _IMPORT_FOLDER_SAFE.sub('_', name).strip() or 'bank'
     root = cfg.bank_sources_root()
+    root.mkdir(parents=True, exist_ok=True)
     candidate = root / stem
     i = 2
-    while candidate.exists():
-        candidate = root / f'{stem}-{i}'
-        i += 1
-    return str(candidate)
+    while True:
+        try:
+            # Reservation and creation are the same atomic filesystem action.
+            # ``exists()`` followed by ``makedirs(exist_ok=True)`` let two
+            # concurrent imports silently share one source folder.
+            os.mkdir(candidate)
+            return str(candidate)
+        except FileExistsError:
+            candidate = root / f'{stem}-{i}'
+            i += 1
+
+
+def _stage_import_bank(user_id, name) -> ImageBank:
+    """Reserve a private folder and FLUSH its still-uncommitted Bank row.
+
+    The generated id can then be reserved in ``bank_jobs`` before the row becomes
+    visible to another request.  Callers either commit it or remove the private
+    folder after rolling the transaction back.
+    """
+    folder = _import_folder_for(name)
+    try:
+        bank = ImageBank(user_id=user_id, name=name, source_path=folder)
+        db.session.add(bank)
+        db.session.flush()
+        return bank
+    except Exception:
+        db.session.rollback()
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _create_import_bank(user_id, name) -> ImageBank:
+    """Reserve a private folder and persist its Bank row as one unit."""
+    bank = _stage_import_bank(user_id, name)
+    folder = bank.source_path
+    try:
+        db.session.commit()
+        return bank
+    except Exception:
+        db.session.rollback()
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _discard_unlaunched_import_bank(user_id, bank_id, folder, *,
+                                    _bank_lease=None):
+    """Remove a staged/committed destination whose worker never took ownership."""
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001 — cleanup must not mask the launch failure
+        logger.warning('bank import: rollback failed', exc_info=True)
+    if bank_id is not None and get_bank(user_id, bank_id) is not None:
+        return _discard_promoted_bank(
+            user_id, bank_id, _bank_lease=_bank_lease)
+    # A flush rolled back the row, so delete_bank has no path from which to find
+    # the folder.  ``folder`` came directly from _import_folder_for; retain the
+    # root check as a final defence against a future caller passing another path.
+    return _remove_partial_import_folder(
+        folder, context='bank import launch cleanup')
 
 
 def _scrape_blob_name(raw: bytes) -> str | None:
@@ -6420,7 +9088,8 @@ def _scrape_blob_name(raw: bytes) -> str | None:
     return f'{hashlib.sha256(raw).hexdigest()[:24]}{ext}'
 
 
-def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
+def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
+                          _bank_lease=None, _created=False) -> dict:
     """🕸 Scrape → BANK: the scraper's second destination.
 
     Downloads the SELECTED scanned images ({'url','title'}) into a bank's source
@@ -6448,19 +9117,23 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
     if len(items) > SCRAPE_IMPORT_MAX:
         raise ValueError(f'max {SCRAPE_IMPORT_MAX} images per import')
 
-    created = False
     if bank_id is not None:
+        if _bank_lease is None:
+            # Preserve the established quick 409 (and its test seam); the
+            # atomic lease immediately below is still authoritative if this
+            # advisory read races a new owner.
+            if bank_jobs.running(bank_id):
+                snap = bank_jobs.get(bank_id) or {}
+                raise bank_jobs.BankJobBusy(
+                    snap.get('kind') or 'background')
+            with bank_jobs.mutation_lease(bank_id, 'scrape_import') as lease:
+                return scrape_import_to_bank(
+                    user_id, items, bank_id=bank_id, name=name,
+                    _bank_lease=lease, _created=_created)
+        bank_jobs.require_reservation(_bank_lease, bank_id)
         bank = get_bank(user_id, bank_id)
         if bank is None:
             raise ValueError('bank not found')
-        # A live pass works off a snapshot of this bank's rows and reports against
-        # a fixed total; refresh_bank also declines to walk underneath it. Adding
-        # files now would land outside both — refuse in the shape the UI knows.
-        if bank_jobs.running(bank.id):
-            # The snapshot can vanish between the two reads (a job that finishes
-            # right here); the refusal must still name something.
-            snap = bank_jobs.get(bank.id) or {}
-            raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
         folder = bank.source_path
         if not folder or not os.path.isdir(folder):
             raise ValueError('this bank\'s folder is unavailable — relocate it first')
@@ -6477,15 +9150,33 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
         name = (name or '').strip()
         if not name:
             raise ValueError('name is required')
-        folder = _import_folder_for(name)
-        os.makedirs(folder, exist_ok=True)
-        bank = ImageBank(user_id=user_id, name=name, source_path=folder)
-        db.session.add(bank)
-        db.session.commit()
-        created = True
+        bank = reservation = None
+        folder = None
+        try:
+            # Make the new row visible only after its mutation reservation is
+            # installed, exactly like the background Bank import paths.
+            bank = _stage_import_bank(user_id, name)
+            folder = bank.source_path
+            reservation = bank_jobs.reserve(bank.id, 'scrape_import')
+            db.session.commit()
+            return scrape_import_to_bank(
+                user_id, items, bank_id=bank.id, name=name,
+                _bank_lease=reservation, _created=True)
+        except Exception:
+            if bank is not None and not bank_jobs.launched(reservation):
+                # Before commit this rolls the staged row back; after commit it
+                # removes the otherwise empty/partial app-owned Bank.
+                _discard_unlaunched_import_bank(
+                    user_id, bank.id, folder, _bank_lease=reservation)
+            raise
+        finally:
+            bank_jobs.abort(reservation)
 
     with ThreadPoolExecutor(max_workers=_SCRAPE_DL_WORKERS) as pool:
         downloaded = list(pool.map(_download_scrape_item, items))
+    # Downloads can be slow. Refresh the capability before the first write so a
+    # stale/purged lease can never publish beside a newer Bank owner.
+    bank_jobs.require_reservation(_bank_lease, bank.id)
 
     skipped: dict[str, int] = {}
     saved = already_there = 0
@@ -6512,8 +9203,9 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
 
     # ONE inventory path for every bank: the same walk that picks up files the
     # user drops in the folder by hand picks these up too. No third insert path.
-    sync = refresh_bank(user_id, bank.id, force=True) or {}
-    return {'bank_id': bank.id, 'name': bank.name, 'created': created,
+    sync = refresh_bank(
+        user_id, bank.id, force=True, _bank_lease=_bank_lease) or {}
+    return {'bank_id': bank.id, 'name': bank.name, 'created': _created,
             'saved': saved, 'already_there': already_there,
             'added': sync.get('added', 0), 'skipped': skipped}
 
@@ -6534,7 +9226,59 @@ def _copied_image_dimensions(path) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analysis: bool) -> dict:
+def _cache_bundle_matches_analysis(bundle, analysis, *, semantic_engine=None) -> dict:
+    """Return only cache lanes that exactly corroborate snapshot scalars."""
+    def same_optional(left, right, tolerance):
+        if left is None or right is None:
+            return left is None and right is None
+        return math.isclose(
+            float(left), float(right), rel_tol=0.0, abs_tol=tolerance)
+
+    def value(name):
+        return analysis.get(name) if isinstance(analysis, dict) else getattr(
+            analysis, name)
+
+    out = {}
+    score = (bundle or {}).get('score')
+    if score is not None:
+        clip_group_needs_embedding = (
+            value('clip_semantic_dup_group') is not None
+            or (semantic_engine == 'clip'
+                and value('semantic_dup_group') is not None))
+        def score_scalar_matches(cache_value, field, tolerance):
+            stored = value(field)
+            # A group-only historical snapshot may not carry optional score
+            # scalars, but any scalar it *does* advertise must still agree.
+            return ((stored is None
+                     and (clip_group_needs_embedding or cache_value is None))
+                    or (stored is not None and cache_value is not None
+                        and same_optional(cache_value, stored, tolerance)))
+
+        if (score['state'] == 'ok'
+                and score_scalar_matches(
+                    score['aesthetic'], 'aesthetic_score', 1e-4)
+                and score_scalar_matches(score['nsfw'], 'nsfw_score', 1e-4)) \
+                or (not clip_group_needs_embedding
+                    and score['state'] == 'error'
+                    and value('aesthetic_score') is None
+                    and value('nsfw_score') is None):
+            out['score'] = score
+    face = (bundle or {}).get('face')
+    if face is not None and face['state'] == value('face_state'):
+        if (same_optional(face['det'], value('face_det'), 1e-3)
+                and same_optional(face['yaw'], value('face_yaw'), 1e-2)):
+            out['face'] = face
+    # The independent semantic lane has no scalar DB columns to corroborate.
+    # Its own exact provenance/model contract was already checked while loading
+    # the sidecar/runtime cache, so retaining it here is the only honest test.
+    semantic = (bundle or {}).get('semantic')
+    if semantic is not None:
+        out['semantic'] = semantic
+    return out
+
+
+def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analysis: bool,
+                             *, analysis_cache_dir=None):
     """The current user-facing Dataset data, plus a compatible old Bank analysis.
 
     The snapshot never gets to overwrite caption/framing/watermark/provenance or
@@ -6543,8 +9287,20 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
     fingerprint.  This is deliberately checked against ``copied_path`` after the
     copy, closing the tiny edit-during-copy race as well.
     """
-    values = {
+    copied_fingerprint = bank_transfer_metadata.content_fingerprint_path(
+        copied_path)
+    transfer_metadata = bank_transfer_metadata.capture_transfer_metadata(
+        row.transfer_metadata, dataset=row,
+        dataset_fingerprint=copied_fingerprint)
+    if transfer_metadata is None:
+        raise RuntimeError('Dataset transfer metadata is malformed or too large')
+    current_values = {
         'caption': row.caption,
+        # WHO wrote that caption travels with it. This is THE path that used to
+        # destroy hand-written work: a caption typed in the Dataset editor landed
+        # in the Bank as an anonymous string, and the Bank's forced pass had no
+        # way left to tell it from one of its own.
+        'caption_origin': row.caption_origin,
         'framing': row.framing if row.framing in _BANK_TRANSFER_FRAMINGS else None,
         'watermark_state': (row.watermark_state
                             if row.watermark_state in _BANK_TRANSFER_WATERMARK_STATES
@@ -6552,28 +9308,138 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
         'watermark_bbox': row.watermark_bbox if isinstance(row.watermark_bbox, str) else None,
         'watermark_regions': (row.watermark_regions
                               if isinstance(row.watermark_regions, str) else None),
+        'watermark_source': (row.watermark_source
+                             if row.watermark_source in ('detector', 'vision') else None),
+        'watermark_score': (float(row.watermark_score)
+                            if isinstance(row.watermark_score, (int, float))
+                            and not isinstance(row.watermark_score, bool)
+                            and 0.0 <= float(row.watermark_score) <= 1.0 else None),
         'source_metadata': _source_metadata_storage(row.source_metadata),
         # Dataset-to-Bank only starts from kept rows.  Keep the current explicit
         # decision should it change while the background copy is waiting, but do
         # not invent a Bank-only 'failed' status for a Dataset failure row.
         'status': (row.status if row.status in _BANK_TRANSFER_STATUSES else 'keep'),
+        'reject_reason': None,
+        'transfer_metadata': transfer_metadata,
         'watermark_clean_method': None,
         # A Bank rotation has already been materialised into the Dataset pixels
         # during promotion.  Restoring it here would turn the copied file twice.
         'rotation': None,
     }
-    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    values = {}
+    compatible = None
+    cache_bundle = {}
+    source_engine = None
     if preserve_analysis:
-        analysis = bank_transfer_metadata.compatible_analysis(
+        compatible = bank_transfer_metadata.compatible_snapshot(
             row.bank_analysis_snapshot, copied_path)
-        if analysis:
-            values.update(analysis)
-        elif row.bank_analysis_snapshot is not None:
-            # A Dataset byte edit (or a rejected legacy payload) must not keep
-            # looking transferable forever.  The compatibility check above is
-            # against the just-copied bytes, so clearing here is race-safe.
-            row.bank_analysis_snapshot = None
-    return values
+        if compatible:
+            values.update(compatible['analysis'])
+            source_engine = bank_transfer_metadata.bank_semantic_engine_for_fingerprint(
+                row.transfer_metadata, copied_fingerprint)
+            cache_ref = compatible.get('cache_ref')
+            if cache_ref:
+                if not analysis_cache_dir:
+                    raise RuntimeError('Bank analysis cache directory is unavailable')
+                loaded = bank_transfer_metadata.read_cache_sidecar(
+                    analysis_cache_dir, cache_ref)
+                if loaded is None:
+                    raise RuntimeError(
+                        'Bank analysis snapshot references a missing or invalid cache')
+                if (source_engine is None and 'score' in loaded
+                        and 'semantic' not in loaded):
+                    # Pre-selector v3 sidecars carried only the historical CLIP
+                    # Score space, so this is the one unambiguous legacy claim.
+                    source_engine = 'clip'
+                cache_bundle = _cache_bundle_matches_analysis(
+                    loaded, compatible['analysis'],
+                    semantic_engine=source_engine)
+                if set(cache_bundle) != set(loaded):
+                    raise RuntimeError(
+                        'Bank analysis cache does not match its snapshot')
+            score_active = any(compatible['analysis'].get(name) is not None for name in (
+                'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
+                'style_cluster'))
+            active_group = values.get('semantic_dup_group')
+            if active_group is not None and source_engine in ('clip', 'siglip2'):
+                lane = f'{source_engine}_semantic_dup_group'
+                # Old v3 snapshots only had the active column.  Promote that
+                # value into its SHA/provenance-bound engine lane on restore.
+                if values.get(lane) is None:
+                    values[lane] = active_group
+            if source_engine in ('clip', 'siglip2'):
+                values['semantic_dup_group'] = values.get(
+                    f'{source_engine}_semantic_dup_group')
+            else:
+                # Keep explicit inactive lanes as sealed history, but never put
+                # an ambiguous legacy group into an arbitrary active space.
+                values['semantic_dup_group'] = None
+            clip_group_active = values.get('clip_semantic_dup_group') is not None
+            siglip2_group_active = (
+                values.get('siglip2_semantic_dup_group') is not None)
+            face_active = (
+                any(compatible['analysis'].get(name) is not None
+                    for name in ('face_state', 'face_det', 'face_yaw'))
+                or (compatible['analysis'].get('face_cluster') is not None
+                    and compatible['analysis'].get('face_cluster_origin') != 'asserted'))
+            if ((score_active and 'score' not in cache_bundle)
+                    or (clip_group_active and 'score' not in cache_bundle)
+                    or (siglip2_group_active and 'semantic' not in cache_bundle)
+                    or (face_active and 'face' not in cache_bundle)):
+                raise RuntimeError(
+                    'Bank analysis snapshot is missing a required '
+                    'Score/Semantic/Face cache')
+        # An incompatible snapshot remains a historical vault. Its SHA prevents
+        # activation, but a later restore of the Dataset bytes may make it useful
+        # again; importing must never destroy that evidence.
+    watermark_names = bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS
+    current_has_watermark = any(
+        current_values.get(name) is not None for name in watermark_names)
+    # Dataset fields are the current user-owned truth. When every visible
+    # watermark column is empty, retain the snapshot's inactive raw-source
+    # history instead of erasing it merely because it was not actionable on the
+    # promoted effective bytes.
+    values.update({
+        name: value for name, value in current_values.items()
+        if current_has_watermark or name not in watermark_names
+    })
+    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    if compatible:
+        values['analysis_fingerprint'] = (
+            compatible['fingerprint']
+            if compatible.get('assurance') == 'exact' else None)
+    else:
+        # Dataset-owned current framing/watermark values are copied from a
+        # synchronously reserved master and can therefore be bound to the exact
+        # destination bytes even when there is no historical Bank snapshot.
+        has_current_pixel_lane = current_values.get('framing') is not None
+        values['analysis_fingerprint'] = (
+            bank_transfer_metadata.content_fingerprint_path(copied_path)
+            if has_current_pixel_lane else None)
+    values['watermark_fingerprint'] = (
+        copied_fingerprint if current_has_watermark
+        else compatible.get('watermark_fingerprint') if compatible
+        else None)
+    return values, compatible, cache_bundle
+
+
+_DATASET_BANK_GENERATION_FIELDS = tuple(dict.fromkeys((
+    *bank_transfer_metadata.DATASET_PORTABLE_FIELDS,
+    'bank_analysis_snapshot', 'transfer_metadata',
+)))
+
+
+def _dataset_bank_generation(row: FaceDatasetImage) -> tuple:
+    return tuple(getattr(row, name) for name in _DATASET_BANK_GENERATION_FIELDS)
+
+
+def _file_generation(path) -> tuple | None:
+    try:
+        stat = os.stat(path)
+        return (stat.st_dev, stat.st_ino, stat.st_size,
+                stat.st_mtime_ns, stat.st_ctime_ns)
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def start_dataset_import(app, user_id, dataset_id, name, preserve_analysis=True):
@@ -6593,95 +9459,313 @@ def start_dataset_import(app, user_id, dataset_id, name, preserve_analysis=True)
     kept ones across).
 
     Background job: hundreds of files is a slow copy, and the bank page already
-    renders bank_jobs progress. The bank row is created FIRST (empty) so the job
-    has a bank_id to report against; a job that dies part-way leaves a bank
-    holding exactly the images it managed to copy, never a phantom row.
+    renders bank_jobs progress. The destination id and folder are staged first,
+    but its row is committed only AFTER the Bank id is reserved; it can therefore
+    never become a visible, writable half-built Bank.
     Raises ValueError (-> 400) on a missing dataset, a blank name, invalid
     preservation mode, or nothing kept."""
     from .dataset_storage import dataset_path
+    dataset_id = dataset_activity.normalize_dataset_id(dataset_id)
     if not isinstance(preserve_analysis, bool):
         raise ValueError('preserve_analysis must be a boolean')
-    name = (name or '').strip()
-    if not name:
-        raise ValueError('name is required')
-    ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
-    if not ds:
-        raise ValueError('dataset not found')
-    rows = (FaceDatasetImage.query
-            .filter_by(dataset_id=dataset_id, status='keep')
-            .filter(FaceDatasetImage.filename.isnot(None))
-            .order_by(FaceDatasetImage.id.asc()).all())
-    if not rows:
-        raise ValueError('nothing to import — keep some images first')
-    if len(rows) > BANK_MAX_FILES:
-        raise ValueError(f'too many images (max {BANK_MAX_FILES})')
-    folder = _import_folder_for(name)
-    os.makedirs(folder, exist_ok=True)
-    bank = ImageBank(user_id=user_id, name=name, source_path=folder)
-    db.session.add(bank)
-    db.session.commit()
-    src_dir = str(dataset_path(dataset_id))
-    bank_jobs.start(
-        app, bank.id, 'dataset_import',
-        _dataset_import_job(bank.id, src_dir,
-                            [(r.id, r.filename) for r in rows], preserve_analysis),
-        total=len(rows))
-    return bank.id
+    name = _normalize_import_bank_name(name)
+    token = None
+    bank = None
+    reservation = None
+    bank_id = None
+    bank_folder = None
+    with _dataset_ingest_lock(user_id, dataset_id):
+        ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        if not ds:
+            raise ValueError('dataset not found')
+        # Reserve BEFORE reading the selected rows.  A query-then-reserve pair
+        # leaves a window in which delete/edit can change the generation that the
+        # worker believes it captured.
+        token = dataset_activity.begin_exclusive(
+            dataset_id, 'bank_export', detail='copying to Bank')
+        if token is None:
+            raise dataset_activity.DatasetActivityBusy(
+                'This dataset already has work in progress. Wait for it to '
+                'finish before copying it to a Bank.')
+        try:
+            rows = (FaceDatasetImage.query
+                    .filter_by(dataset_id=dataset_id, status='keep')
+                    .filter(FaceDatasetImage.filename.isnot(None))
+                    .order_by(FaceDatasetImage.id.asc()).all())
+            if not rows:
+                raise ValueError('nothing to import — keep some images first')
+            if len(rows) > BANK_MAX_FILES:
+                raise ValueError(f'too many images (max {BANK_MAX_FILES})')
+            dataset_activity.progress(token, total=len(rows))
+            src_dir = str(dataset_path(dataset_id))
+            image_rows = []
+            seen_names = set()
+            for row in rows:
+                filename = row.filename
+                if (not isinstance(filename, str) or not filename
+                        or os.path.basename(filename) != filename):
+                    raise RuntimeError('Dataset contains an invalid image filename')
+                key = os.path.normcase(filename)
+                if key in seen_names:
+                    raise RuntimeError('Dataset contains duplicate image filenames')
+                seen_names.add(key)
+                source = os.path.join(src_dir, filename)
+                source_generation = _file_generation(source)
+                if (source_generation is None
+                        or source_generation[2] > BANK_SOURCE_MAX_BYTES):
+                    raise RuntimeError('A kept Dataset image is unavailable or too large')
+                sidecar_generation = None
+                if preserve_analysis:
+                    snapshot = bank_transfer_metadata.parse_snapshot(
+                        row.bank_analysis_snapshot)
+                    cache_ref = snapshot.get('cache_ref') if snapshot else None
+                    if cache_ref:
+                        sidecar_path = os.path.join(
+                            src_dir, '.bank-analysis-cache', f'{cache_ref}.npz')
+                        sidecar_generation = _file_generation(sidecar_path)
+                        if (sidecar_generation is None
+                                or sidecar_generation[2]
+                                > bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES):
+                            raise RuntimeError(
+                                'Bank analysis snapshot references a missing or '
+                                'oversized cache')
+                image_rows.append((
+                    row.id, filename, source_generation,
+                    _dataset_bank_generation(row), sidecar_generation))
+            bank = _stage_import_bank(user_id, name)
+            bank_id, bank_folder = bank.id, bank.source_path
+            reservation = bank_jobs.reserve(
+                bank_id, 'dataset_import', total=len(rows))
+            # The Bank first becomes externally visible with its reservation
+            # already installed.  The worker is launched only after durability.
+            db.session.commit()
+            bank_jobs.start(
+                app, bank_id, 'dataset_import',
+                _dataset_import_job(
+                    bank_id, dataset_id, src_dir, image_rows, token,
+                    preserve_analysis),
+                total=len(rows), reservation=reservation)
+            # Compatibility with tests/integrators that temporarily replace
+            # bank_jobs.start with an inline runner: their runner cannot adopt
+            # our registry entry, so release just that unlaunched reservation.
+            if not bank_jobs.launched(reservation):
+                bank_jobs.abort(reservation)
+        except Exception:
+            bank_jobs.abort(reservation)
+            if bank is not None:
+                _discard_unlaunched_import_bank(
+                    user_id, bank_id, bank_folder)
+            dataset_activity.end(token)
+            raise
+    return bank_id
 
 
-def _dataset_import_job(bank_id, src_dir, image_rows, preserve_analysis=True):
+def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token,
+                        preserve_analysis=True):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
-        if not bank:
-            return
-        copied = missing = failed = 0
-        for i, (image_id, fallback_fn) in enumerate(image_rows, 1):
-            if bank_jobs.cancelled(job):
-                break
-            # Re-read the row for its latest user-authored choices.  The list of
-            # ids still fixes the *selection* at click time, matching the old
-            # filename-only job; a deleted legacy row degrades to a plain copy.
-            row = db.session.get(FaceDatasetImage, image_id)
-            fn = row.filename if row and row.filename else fallback_fn
-            src = os.path.join(src_dir, fn)
-            if not os.path.isfile(src):
-                missing += 1
+        user_id = bank.user_id if bank else None
+
+        def abort(message):
+            if user_id is not None:
+                _fail_discarding_promoted_bank(
+                    job, user_id, bank_id, message)
+            else:
+                bank_jobs.fail(job, message)
+
+        try:
+            if not bank:
+                return
+            copied = 0
+            cache_entries = {}
+            cache_fingerprints = {}
+            compatible_semantic_engines = []
+            group_maps = {
+                name: {} for name in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS}
+            group_next = {
+                name: 1 for name in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS}
+            analysis_cache_dir = os.path.join(src_dir, '.bank-analysis-cache')
+            for i, (image_id, filename, expected_file_generation,
+                    expected_generation, expected_sidecar_generation) in enumerate(
+                        image_rows, 1):
+                if bank_jobs.cancelled(job):
+                    abort('Dataset copy cancelled — the partial Bank was discarded.')
+                    return
+                row = (FaceDatasetImage.query
+                       .filter_by(id=image_id, dataset_id=dataset_id)
+                       .populate_existing().one_or_none())
+                if (row is None or row.filename != filename
+                        or _dataset_bank_generation(row) != expected_generation):
+                    abort('The Dataset changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                src = os.path.join(src_dir, filename)
+                try:
+                    if _file_generation(src) != expected_file_generation:
+                        raise ValueError('source generation changed')
+                    payload = _read_safe_bank_source_bytes(
+                        src, label='dataset-to-bank import')
+                except (OSError, TypeError, ValueError, MemoryError,
+                        Image.DecompressionBombError,
+                        Image.DecompressionBombWarning):
+                    abort('A Dataset image disappeared or became unreadable during '
+                          'copy — the new Bank was discarded.')
+                    return
+                if _file_generation(src) != expected_file_generation:
+                    abort('A Dataset image changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                expected_fingerprint = (
+                    bank_transfer_metadata.content_fingerprint_bytes(payload))
+                if expected_fingerprint is None:
+                    abort('Could not fingerprint a Dataset image — the new Bank '
+                          'was discarded.')
+                    return
+                compatible_now = (bank_transfer_metadata.compatible_snapshot(
+                    row.bank_analysis_snapshot, src) if preserve_analysis else None)
+                cache_ref = (compatible_now.get('cache_ref')
+                             if compatible_now else None)
+                if expected_sidecar_generation is not None and cache_ref:
+                    sidecar_path = os.path.join(
+                        analysis_cache_dir, f'{cache_ref}.npz')
+                    try:
+                        if _file_generation(sidecar_path) != expected_sidecar_generation:
+                            raise OSError('sidecar generation changed')
+                        with open(sidecar_path, 'rb') as sidecar:
+                            sidecar_raw = sidecar.read(
+                                bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES + 1)
+                    except OSError:
+                        sidecar_raw = b''
+                    if (_file_generation(sidecar_path) != expected_sidecar_generation
+                            or len(sidecar_raw) != expected_sidecar_generation[2]
+                            or bank_transfer_metadata.read_cache_sidecar_bytes(
+                                sidecar_raw) is None):
+                        abort('Bank analysis cache changed during copy — the new '
+                              'Bank was discarded.')
+                        return
+                dest = os.path.join(bank.source_path, filename)
+                try:
+                    with open(dest, 'wb') as destination:
+                        destination.write(payload)
+                    size = os.path.getsize(dest)
+                    if (size != len(payload)
+                            or bank_transfer_metadata.content_fingerprint_path(dest)
+                            != expected_fingerprint):
+                        raise OSError('destination bytes did not verify')
+                    values, compatible, cache_bundle = _dataset_row_bank_values(
+                        row, dest, preserve_analysis,
+                        analysis_cache_dir=analysis_cache_dir)
+                except Exception as exc:  # noqa: BLE001 — any partial transfer aborts
+                    logger.warning('dataset import: copy %s failed', filename,
+                                   exc_info=True)
+                    abort('Could not preserve the complete Dataset image and its '
+                          'analysis — the new Bank was discarded.')
+                    return
+                engine_claim = None
+                if compatible:
+                    engine_claim = (
+                        bank_transfer_metadata.bank_semantic_engine_for_fingerprint(
+                            row.transfer_metadata, compatible['fingerprint']))
+                    if (engine_claim is None and 'score' in cache_bundle
+                            and 'semantic' not in cache_bundle):
+                        engine_claim = 'clip'  # unambiguous pre-selector sidecar
+                    compatible_semantic_engines.append(engine_claim)
+                scope = compatible.get('group_scope') if compatible else None
+                for field in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS:
+                    old = values.get(field)
+                    if old is None:
+                        continue
+                    if not scope:
+                        values[field] = None
+                        continue
+                    key = (scope, int(old))
+                    mapped = group_maps[field].get(key)
+                    if mapped is None:
+                        mapped = group_next[field]
+                        group_next[field] += 1
+                        group_maps[field][key] = mapped
+                    values[field] = mapped
+                if engine_claim in ('clip', 'siglip2'):
+                    # Group id remapping is lane-local.  Mirror the selected
+                    # remapped lane last so active and persisted state cannot
+                    # diverge merely because another lane used different ids.
+                    values['semantic_dup_group'] = values.get(
+                        f'{engine_claim}_semantic_dup_group')
+                else:
+                    values['semantic_dup_group'] = None
+                if values.get('face_cluster') is None:
+                    values['face_cluster_origin'] = None
+                db.session.add(BankImage(
+                    bank_id=bank_id, relpath=filename, file_size=size, **values))
+                if cache_bundle and compatible:
+                    cache_entries[dest] = cache_bundle
+                    cache_fingerprints[dest] = compatible['fingerprint']
+                copied += 1
+                if i % 200 == 0:
+                    db.session.commit()
                 bank_jobs.bump(job)
-                continue
-            dest = os.path.join(bank.source_path, fn)
-            try:
-                # Dataset folders can contain legacy/manual files outside the
-                # current import path. Revalidate the exact bytes before they
-                # become a live Bank source instead of trusting an old row.
-                payload = _read_safe_bank_source_bytes(
-                    src, label='dataset-to-bank import')
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, 'wb') as destination:
-                    destination.write(payload)
-                size = os.path.getsize(dest)
-            except (OSError, TypeError, ValueError, MemoryError,
-                    Image.DecompressionBombError, Image.DecompressionBombWarning):
-                # One unreadable/locked file never sinks the whole import — the
-                # bank just ends up with the rest, and the detail line says so.
-                logger.warning('dataset import: copy %s failed', fn, exc_info=True)
-                failed += 1
-                bank_jobs.bump(job)
-                continue
-            values = (_dataset_row_bank_values(row, dest, preserve_analysis)
-                      if row is not None else {'status': 'keep'})
-            db.session.add(BankImage(bank_id=bank_id, relpath=fn, file_size=size,
-                                     **values))
-            copied += 1
-            if i % 200 == 0:
-                db.session.commit()
-            bank_jobs.bump(job)
-        db.session.commit()
-        detail = f'{copied} image(s) imported'
-        if missing:
-            detail += f', {missing} missing on disk'
-        if failed:
-            detail += f', {failed} failed'
-        bank_jobs.progress(job, detail=detail)
+                dataset_activity.bump(activity_token)
+            # A synchronous Dataset mutation may have passed its HTTP busy
+            # check immediately before the export reservation was installed.
+            # Revalidate the complete source generation after the last copy so
+            # an early row cannot change while later rows are still being read.
+            for (image_id, filename, expected_file_generation,
+                 expected_generation, expected_sidecar_generation) in image_rows:
+                current = (FaceDatasetImage.query
+                           .filter_by(id=image_id, dataset_id=dataset_id)
+                           .populate_existing().one_or_none())
+                source = os.path.join(src_dir, filename)
+                if (current is None or current.filename != filename
+                        or _dataset_bank_generation(current) != expected_generation
+                        or _file_generation(source) != expected_file_generation):
+                    abort('The Dataset changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                if expected_sidecar_generation is not None:
+                    current_snapshot = bank_transfer_metadata.parse_snapshot(
+                        current.bank_analysis_snapshot)
+                    current_ref = (current_snapshot.get('cache_ref')
+                                   if current_snapshot else None)
+                    sidecar = (os.path.join(
+                        analysis_cache_dir, f'{current_ref}.npz')
+                               if current_ref else None)
+                    if _file_generation(sidecar) != expected_sidecar_generation:
+                        abort('The Dataset analysis cache changed during copy — '
+                              'the new Bank was discarded and the Dataset was '
+                              'left unchanged.')
+                        return
+            if (compatible_semantic_engines
+                    and compatible_semantic_engines[0] in ('clip', 'siglip2')
+                    and all(engine == compatible_semantic_engines[0]
+                            for engine in compatible_semantic_engines)):
+                bank.semantic_engine = compatible_semantic_engines[0]
+            # Uniform history restores that space; mixed/ambiguous history keeps
+            # the Bank's durable default (CLIP).  In both cases materialise the
+            # active compatibility column from the selected persisted lane.  A
+            # NULL active value beside a non-NULL selected lane would let the
+            # first engine switch save NULL over valid imported history.
+            selected_lane = getattr(
+                BankImage,
+                f'{_selected_semantic_engine(bank)}_semantic_dup_group')
+            BankImage.query.filter_by(bank_id=bank_id).update(
+                {BankImage.semantic_dup_group: selected_lane},
+                synchronize_session=False)
+            db.session.flush()
+            _clear_singleton_copy_duplicate_groups(bank_id)
+            db.session.commit()
+            if not _write_required_transfer_caches(
+                    bank_id, cache_entries, cache_fingerprints):
+                abort('Could not preserve every Score/Face cache and Semantic cache — the new Bank '
+                      'was discarded and the Dataset was left unchanged.')
+                return
+            reset_score_memo()
+            bank_jobs.progress(job, detail=f'{copied} image(s) imported')
+        except Exception:  # noqa: BLE001 — make the advertised operation atomic
+            logger.exception('dataset import crashed; discarding destination Bank')
+            abort('Dataset copy failed — the partial Bank was discarded and the '
+                  'Dataset was left unchanged.')
+        finally:
+            dataset_activity.end(activity_token)
     return run
 
 
@@ -6698,14 +9782,37 @@ def _dataset_import_job(bank_id, src_dir, image_rows, preserve_analysis=True):
 # app rewrites images IN PLACE (re-crop, "Reset to auto", watermark cleaning) and
 # an in-place rewrite reuses the inode, so two "independent" banks would become
 # one at the first edit. Banks never share their files. It costs the bytes.
+_SQLITE_ID_MAX = (1 << 63) - 1
+
+
+def _normalize_promotion_ids(ids) -> list[int]:
+    """Validate and stable-deduplicate an explicit promotion selection."""
+    if ids is None:
+        return []
+    if not isinstance(ids, (list, tuple)):
+        raise ValueError('image_ids must be a list')
+    if len(ids) > BANK_MAX_FILES:
+        raise ValueError(f'too many image ids (max {BANK_MAX_FILES})')
+    out = []
+    seen = set()
+    for value in ids:
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value <= 0 or value > _SQLITE_ID_MAX):
+            raise ValueError('image_ids must contain positive integers')
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
 def _promote_source_rows(bank_id, ids) -> list:
     """The rows a promotion would carry: the explicit selection, or every KEPT
     image when the selection is empty (same rule as promoting to a dataset).
 
     Ordered by relpath so the copy, the count and the size preview all describe
     the same set in the same order."""
-    if ids:
-        wanted = [int(i) for i in ids]
+    wanted = _normalize_promotion_ids(ids)
+    if wanted:
         rows = []
         for i0 in range(0, len(wanted), _SQL_IN_CHUNK):
             rows.extend(BankImage.query.filter(
@@ -6755,42 +9862,56 @@ def start_bank_promote(app, user_id, bank_id, ids, name):
 
     Raises ValueError (-> 400) on a missing bank, a blank name or an empty
     selection, BankJobBusy (-> 409) while another pass runs on the source."""
-    bank = get_bank(user_id, bank_id)
-    if not bank:
-        raise ValueError('bank not found')
-    name = (name or '').strip()
-    if not name:
-        raise ValueError('name is required')
-    rows = _promote_source_rows(bank_id, ids)
-    if not rows:
-        raise ValueError('nothing to promote — keep or select some images first')
-    if len(rows) > BANK_MAX_FILES:
-        raise ValueError(f'too many images (max {BANK_MAX_FILES})')
-    # Checked BEFORE anything is created: bank_jobs.start would raise the same
-    # 409 a moment later, having already left a folder and a row behind.
+    name = _normalize_import_bank_name(name)
+    ids = _normalize_promotion_ids(ids)
+    # Advisory fast-path for the established error shape. The later atomic
+    # multi-Bank reservation remains the real fence if this read races.
     if bank_jobs.running(bank_id):
-        # ``running()`` gets a snapshot internally; a finished job can expire
-        # between that read and this one.  Preserve the established 409 instead
-        # of turning a harmless TTL race into a server error.
         snap = bank_jobs.get(bank_id) or {}
         raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
-    folder = _import_folder_for(name)
-    os.makedirs(folder, exist_ok=True)
-    dest = ImageBank(user_id=user_id, name=name, source_path=folder)
-    db.session.add(dest)
-    db.session.commit()
+    dest = None
+    reservation = None
+    dest_id = None
+    dest_folder = None
     try:
+        # Flush gives the destination an id without making it visible. Reserve
+        # source + destination atomically, then commit, then launch: no request
+        # can ever observe a half-built destination without its write guard.
+        dest = _stage_import_bank(user_id, name)
+        dest_id, dest_folder = dest.id, dest.source_path
+        reservation = bank_jobs.reserve(
+            bank_id, 'bank_promote', reserve_ids=(dest_id,))
+        # Selection is frozen only after source + destination are reserved.
+        # Otherwise a rotate/status request admitted just before this launch can
+        # resume after our query and make the copied generation disagree with
+        # the selection the user confirmed.
+        bank = get_bank(user_id, bank_id)
+        if not bank:
+            raise ValueError('bank not found')
+        dest.semantic_engine = _selected_semantic_engine(bank)
+        rows = _promote_source_rows(bank_id, ids)
+        if not rows:
+            raise ValueError('nothing to promote — keep or select some images first')
+        if len(rows) > BANK_MAX_FILES:
+            raise ValueError(f'too many images (max {BANK_MAX_FILES})')
+        bank_jobs.progress(reservation, total=len(rows))
+        db.session.commit()
         bank_jobs.start(app, bank_id, 'bank_promote',
-                        _bank_promote_job(user_id, bank_id, dest.id,
+                        _bank_promote_job(user_id, bank_id, dest_id,
                                           [r.id for r in rows]),
-                        total=len(rows))
-    except bank_jobs.BankJobBusy:
-        _discard_promoted_bank(user_id, dest.id)   # lost the race: leave nothing
+                        total=len(rows), reserve_ids=(dest_id,),
+                        reservation=reservation)
+        if not bank_jobs.launched(reservation):
+            bank_jobs.abort(reservation)
+    except Exception:
+        bank_jobs.abort(reservation)
+        if dest is not None:
+            _discard_unlaunched_import_bank(user_id, dest_id, dest_folder)
         raise
-    return dest.id
+    return dest_id
 
 
-def _discard_promoted_bank(user_id, dest_bank_id):
+def _discard_promoted_bank(user_id, dest_bank_id, *, _bank_lease=None):
     """Unmake a destination bank that never became one. Uncommitted rows are
     rolled back first, then delete_bank takes the row, the working data and the
     copy folder (it is under bank_sources_root, so it is OURS to remove)."""
@@ -6798,75 +9919,415 @@ def _discard_promoted_bank(user_id, dest_bank_id):
         db.session.rollback()
     except Exception:  # noqa: BLE001 — teardown must not mask the real failure
         logger.warning('bank promote: rollback failed', exc_info=True)
+    bank = get_bank(user_id, dest_bank_id)
+    if bank is None:
+        # Idempotent retry after a successful discard.
+        return True
+    folder = bank.source_path
+    if not _is_imported_source(folder):
+        logger.error('bank promote: refusing to discard destination %s with an '
+                     'unbounded source folder %r', dest_bank_id, folder)
+        return False
+    deleted = False
     try:
-        delete_bank(user_id, dest_bank_id)
+        deleted = delete_bank(
+            user_id, dest_bank_id, _allow_busy=True,
+            _bank_lease=_bank_lease)
     except Exception:  # noqa: BLE001
-        logger.warning('bank promote: could not discard the partial bank',
-                       exc_info=True)
+        # delete_bank commits the row removal before it asks Trash to move the
+        # folder.  A Trash failure can therefore raise after the DB is already
+        # clean; the bounded fallback below must still run.
+        logger.warning('bank promote: normal discard failed; trying bounded '
+                       'partial-folder cleanup', exc_info=True)
+    folder_removed = _remove_partial_import_folder(
+        folder, context=f'bank promote {dest_bank_id} cleanup')
+    row_removed = get_bank(user_id, dest_bank_id) is None
+    if not (row_removed and folder_removed):
+        logger.error('bank promote: incomplete discard for destination %s '
+                     '(delete=%s row_removed=%s folder_removed=%s)',
+                     dest_bank_id, deleted, row_removed, folder_removed)
+        return False
+    return True
 
 
-def _bank_copy_values(row: BankImage, copied_path) -> dict:
-    """Metadata a Bank -> Bank copy can keep without inheriting false links.
+def _fail_discarding_promoted_bank(job, user_id, dest_bank_id, message):
+    """Discard a transfer destination and make cleanup failure user-visible."""
+    if not _discard_promoted_bank(
+            user_id, dest_bank_id,
+            _bank_lease=_job_bank_capability(job)):
+        message = (f'{message} Cleanup also failed: the partial Bank folder '
+                   'could not be removed. Check the application logs and the '
+                   'Bank imports folder.')
+    bank_jobs.fail(job, message)
 
-    The copied image has its own physical size and no derived-clean/rotation
-    artifact yet.  Every copy is remeasured from its destination bytes: a source
-    path can be replaced after its original Bank scan, so even an unchanged
-    resolved path proves nothing about stale technical or ML results.  Caption
-    and source attribution are safe user metadata; framing and watermark review
-    describe pixels, so a new Bank must review them again.  Cluster and
-    duplicate-group ids are container-local, so they are intentionally left
-    blank for the destination to rebuild.  Curation deliberately does not: a
-    copied Bank has always begun as a fresh triage queue.
+
+def _same_resolved_path(left, right) -> bool:
+    """Whether two resolver results identify the same canonical path."""
+    if not left or not right:
+        return False
+    try:
+        return os.path.normcase(os.path.realpath(left)) == os.path.normcase(
+            os.path.realpath(right))
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _bank_row_analysis(row: BankImage) -> dict:
+    values = {
+        name: getattr(row, name)
+        for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
+    }
+    # Rolling-upgrade/manual rows can still have only the historical active
+    # value.  Seal a self-describing v3 snapshot without mutating the source DB.
+    bank = db.session.get(ImageBank, row.bank_id)
+    engine = _selected_semantic_engine(bank) if bank else 'clip'
+    lane = f'{engine}_semantic_dup_group'
+    if values.get('semantic_dup_group') is not None:
+        values[lane] = values['semantic_dup_group']
+    else:
+        values['semantic_dup_group'] = values.get(lane)
+    return values
+
+
+def _raw_source_fingerprint(bank: ImageBank | None,
+                            row: BankImage | None) -> str | None:
+    """Fingerprint the immutable/raw Bank source for lineage checks only.
+
+    Transfer payload readers stay pinned to :func:`analysis_image_path`; this
+    helper deliberately isolates the one raw-path lookup needed to prove that a
+    tracked clean/rotation still descends from the Dataset bytes in its capsule.
     """
-    values = {name: None
-              for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS}
-    values.update(bank_deterministic_analysis(copied_path) or {})
-    values.update({name: None
-                   for name in bank_transfer_metadata.MODEL_ANALYSIS_FIELDS})
+    if bank is None or row is None:
+        return None
+    return bank_transfer_metadata.content_fingerprint_path(
+        abs_image_path(bank, row))
+
+
+_BANK_TRANSFER_GENERATION_FIELDS = (
+    'relpath', 'file_size', 'width', 'height',
+    'caption', 'caption_origin', 'source_metadata',
+    'status', 'reject_reason', 'transfer_metadata',
+    'rotation', 'watermark_clean_method', 'analysis_fingerprint',
+    'watermark_fingerprint',
+    *bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS,
+)
+
+
+def _bank_transfer_generation(row: BankImage) -> tuple:
+    return tuple(
+        getattr(row, name) for name in _BANK_TRANSFER_GENERATION_FIELDS)
+
+
+_SCORE_TRANSFER_FIELDS = (
+    'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
+    'style_cluster')
+_FACE_MEASURED_TRANSFER_FIELDS = ('face_state', 'face_det', 'face_yaw')
+_LEGACY_UNPROVED_TRANSFER_FIELDS = (
+    'framing', 'dup_group')
+
+
+def _has_bank_pixel_analysis(row: BankImage) -> bool:
+    return any(getattr(row, name) is not None
+               for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS)
+
+
+def _has_bank_watermark_analysis(row: BankImage) -> bool:
+    return any(getattr(row, name) is not None
+               for name in bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS)
+
+
+def _complete_legacy_quality_matches(row: BankImage, payload) -> bool:
+    required = ('quality_state', 'blur_score', 'noise_score',
+                'uniformity_score', 'dhash', 'origin')
+    if row.quality_state != 'ok' or any(getattr(row, name) is None
+                                        for name in required):
+        return False
+    fresh = bank_deterministic_analysis(payload)
+    return fresh is not None and all(
+        fresh.get(name) == getattr(row, name)
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS)
+
+
+def _analysis_transfer_assurance(row: BankImage, path, payload, *,
+                                 cache_bundle=None) -> str | None:
+    """Return ``exact`` / ``legacy_tofu`` or refuse full analysis transport.
+
+    ``legacy_tofu`` is deliberately carried as such in the Dataset snapshot and
+    never becomes ``analysis_fingerprint``.  It is the narrow local-compat path
+    for a pre-migration row whose complete Quality lane can be freshly reproduced
+    from these bytes; framing/watermark still have no historical hash.
+    """
+    if not isinstance(payload, bytes):
+        return None
+    fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+    if fingerprint is None:
+        return None
+    stored = getattr(row, 'analysis_fingerprint', None)
+    if stored == fingerprint:
+        return 'exact'
+    if stored is not None:
+        return None
+    available = set(cache_bundle or {})
+    score_active = (any(getattr(row, name) is not None
+                        for name in _SCORE_TRANSFER_FIELDS)
+                    or 'score' in available)
+    semantic_active = 'semantic' in available
+    source_bank = db.session.get(ImageBank, row.bank_id)
+    source_engine = _selected_semantic_engine(source_bank) if source_bank else 'clip'
+    active_group = getattr(row, 'semantic_dup_group', None)
+    clip_group_active = (
+        getattr(row, 'clip_semantic_dup_group', None) is not None
+        or (source_engine == 'clip' and active_group is not None))
+    siglip2_group_active = (
+        getattr(row, 'siglip2_semantic_dup_group', None) is not None
+        or (source_engine == 'siglip2' and active_group is not None))
+    face_measured = any(getattr(row, name) is not None
+                        for name in _FACE_MEASURED_TRANSFER_FIELDS)
+    face_computed_cluster = (row.face_cluster is not None
+                             and row.face_cluster_origin != 'asserted')
+    face_active = face_measured or face_computed_cluster or 'face' in available
+    if score_active and 'score' not in available:
+        return None
+    if (clip_group_active and 'score' not in available):
+        return None
+    if siglip2_group_active and 'semantic' not in available:
+        return None
+    if face_active and 'face' not in available:
+        return None
+
+    # For an unbound legacy row these values are only a narrow TOFU signal. New
+    # scans store effective dimensions; old rotated rows may still store raw
+    # dimensions and therefore safely fail this gate until re-scanned.
+    if row.file_size is not None and int(row.file_size) != len(payload):
+        return None
+    dimensions = _copied_image_dimensions(path)
+    if (row.width is not None and row.height is not None
+            and dimensions != (row.width, row.height)):
+        return None
+
+    deterministic_active = any(
+        getattr(row, name) is not None
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS)
+    unproved_active = any(getattr(row, name) is not None
+                          for name in _LEGACY_UNPROVED_TRANSFER_FIELDS)
+    asserted_group = (row.face_cluster is not None
+                      and row.face_cluster_origin == 'asserted')
+    if deterministic_active or unproved_active or asserted_group:
+        return ('legacy_tofu' if _complete_legacy_quality_matches(row, payload)
+                else None)
+    # Only SHA-bound Score/Semantic/Face cache lanes remain. Every carried pixel fact is
+    # individually proven, so this is exact despite the legacy NULL row marker.
+    return ('exact' if (score_active or semantic_active or face_active
+                        or _has_bank_watermark_analysis(row)) else None)
+
+
+def _row_matches_current_bytes(row: BankImage, path, payload, *, cache_bundle=None) -> bool:
+    return _analysis_transfer_assurance(
+        row, path, payload, cache_bundle=cache_bundle) is not None
+
+
+def _cache_bundle_matches_row(bundle, row: BankImage) -> dict:
+    """Keep only cache lanes whose scalar results agree with the DB row."""
+    bank = db.session.get(ImageBank, row.bank_id)
+    return _cache_bundle_matches_analysis(
+        bundle, row,
+        semantic_engine=_selected_semantic_engine(bank) if bank else 'clip')
+
+
+def _write_required_transfer_caches(bank_id, entries, fingerprints) -> bool:
+    """Write every selected cache lane or report an incomplete destination."""
+    expected = {
+        kind: sum(kind in bundle for bundle in entries.values())
+        for kind in ('score', 'semantic', 'face')
+    }
+    try:
+        actual = bank_transfer_metadata.write_runtime_caches(
+            _score_cache_path(bank_id), _face_cache_path(bank_id), entries,
+            semantic_path=_semantic_cache_path(bank_id),
+            expected_fingerprints=fingerprints)
+    except Exception:  # noqa: BLE001 — destination cleanup owns the failure
+        logger.warning('bank transfer: cache write failed', exc_info=True)
+        return False
+    return actual == expected
+
+
+def _bank_portable_capture(row: BankImage, bank: ImageBank | None) -> dict:
+    """Portable Bank row plus the container-owned semantic-space choice."""
+    values = {
+        name: getattr(row, name, None)
+        for name in bank_transfer_metadata.BANK_PORTABLE_FIELDS
+    }
+    values['semantic_engine'] = (
+        _selected_semantic_engine(bank) if bank is not None else 'clip')
+    return values
+
+
+def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
+                      preserve_analysis_candidate: bool,
+                      source_fingerprint: str | None = None,
+                      source_payload: bytes | None = None,
+                      cache_bundle=None) -> tuple[dict, bool, str | None]:
+    """Metadata for an independent Bank -> Bank file copy.
+
+    The SHA-256 compares the exact validated source bytes with the completed
+    destination.  Quality Scan is deliberately not a prerequisite: a manually
+    kept row may already have paid Score/Semantic/Face work while every quality field is
+    still NULL.
+    """
+    fresh_analysis = bank_deterministic_analysis(copied_path)
+    dimensions = _copied_image_dimensions(copied_path)
+    assurance = (_analysis_transfer_assurance(
+        row, copied_path, source_payload, cache_bundle=cache_bundle)
+                 if preserve_analysis_candidate and isinstance(source_payload, bytes)
+                 else None)
+    preserve_analysis = (
+        preserve_analysis_candidate
+        and isinstance(source_fingerprint, str)
+        and bank_transfer_metadata.content_fingerprint_path(copied_path)
+        == source_fingerprint
+        and assurance is not None
+    )
+    values = {
+        name: None
+        for name in bank_transfer_metadata.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS
+    }
+    values.update({
+        name: None
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS
+    })
+    values.update(fresh_analysis or {})
+    if preserve_analysis:
+        values.update(_bank_row_analysis(row))
     values.update({
         'caption': row.caption,
+        # Authorship is a fact about the caption, independent of whether the
+        # copied pixels required fresh analysis.
+        'caption_origin': row.caption_origin,
         'source_metadata': _source_metadata_storage(row.source_metadata),
-        # Both are image-specific review outputs.  The copied image may have
-        # been cleaned, rotated, or replaced after the source verdict, so no
-        # watermark/framing conclusion is portable to another Bank.
-        'framing': None,
-        'watermark_state': None,
-        'watermark_bbox': None,
-        'watermark_regions': None,
         # The target file IS already cleaned/rotated when the source was resolved.
         # Replaying either pointer would look for a non-existent derived blob or
         # rotate the image a second time.
         'watermark_clean_method': None,
         'rotation': None,
-        # Preserve the historical Bank -> Bank contract: a copy is a fresh
-        # candidate set, never an inherited keep/reject decision.
-        'status': 'pending',
-        'reject_reason': None,
-        # New Bank-local relationships are rebuilt by the normal passes.
-        'dup_group': None,
-        'semantic_dup_group': None,
-        'face_cluster': None,
-        'style_cluster': None,
+        'status': (row.status if row.status in ('pending', 'keep', 'reject')
+                   else 'pending'),
+        'reject_reason': row.reject_reason,
     })
-    values['width'], values['height'] = _copied_image_dimensions(copied_path)
-    return values
+    source_bank = db.session.get(ImageBank, row.bank_id)
+    raw_fingerprint = _raw_source_fingerprint(source_bank, row)
+    transfer_metadata = bank_transfer_metadata.capture_transfer_metadata(
+        row.transfer_metadata, bank=_bank_portable_capture(row, source_bank),
+        bank_fingerprint=source_fingerprint,
+        rebind_dataset_from=raw_fingerprint)
+    if transfer_metadata is None:
+        raise RuntimeError('Bank transfer metadata is malformed or too large')
+    values['transfer_metadata'] = transfer_metadata
+    values['width'], values['height'] = dimensions
+    values['analysis_fingerprint'] = (
+        source_fingerprint if assurance == 'exact'
+        else None if preserve_analysis
+        else (source_fingerprint if fresh_analysis is not None else None))
+    values['watermark_fingerprint'] = (
+        row.watermark_fingerprint if preserve_analysis else None)
+    return values, preserve_analysis, assurance
+
+
+def _clear_singleton_copy_duplicate_groups(bank_id) -> None:
+    """Drop duplicate labels that no longer describe a destination relation."""
+    for field in bank_transfer_metadata.BANK_COPY_DUPLICATE_GROUP_FIELDS:
+        column = getattr(BankImage, field)
+        singleton_groups = [
+            group for group, in (
+                db.session.query(column)
+                .filter(BankImage.bank_id == bank_id, column.isnot(None))
+                .group_by(column)
+                .having(func.count(BankImage.id) == 1)
+                .all()
+            )
+        ]
+        for i0 in range(0, len(singleton_groups), _SQL_IN_CHUNK):
+            (BankImage.query
+             .filter(BankImage.bank_id == bank_id,
+                     column.in_(singleton_groups[i0:i0 + _SQL_IN_CHUNK]))
+             .update({field: None}, synchronize_session=False))
 
 
 def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
-    def run(job):
+    def transfer(job):
         src = db.session.get(ImageBank, src_bank_id)
         dest = db.session.get(ImageBank, dest_bank_id)
         if not src or not dest:
+            if dest is not None:
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'The source Bank disappeared — the new bank was discarded.')
             return
         rows = _promote_source_rows(src_bank_id, ids)
         bank_jobs.progress(job, done=0, total=len(rows), detail='copying')
-        copied, unreadable = [], 0
+        # A corrupted/legacy DB can contain duplicate relpaths, and a Bank from
+        # a case-sensitive volume can contain A.jpg beside a.jpg. Both collapse
+        # onto one destination on Windows. Validate a one-row/one-file mapping
+        # before the first byte is written, including file-vs-directory clashes.
+        target_by_id = {}
+        target_keys = set()
+        destination_root = os.path.abspath(dest.source_path)
+        for row in rows:
+            relpath = row.relpath
+            if (not isinstance(relpath, str) or not relpath
+                    or os.path.isabs(relpath)):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source has an invalid path — the new Bank was '
+                    'discarded.')
+                return
+            normalized = os.path.normpath(relpath)
+            target = os.path.abspath(os.path.join(destination_root, normalized))
+            try:
+                contained = (os.path.commonpath([destination_root, target])
+                             == destination_root and target != destination_root)
+            except (OSError, ValueError):
+                contained = False
+            key = normalized.replace('\\', '/').casefold()
+            if (not contained or key in target_keys
+                    or key in ('.', '..') or key.startswith('../')):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Selected source paths collide in the new Bank — the new '
+                    'Bank was discarded before copying.')
+                return
+            target_keys.add(key)
+            target_by_id[row.id] = target
+        for key in target_keys:
+            parts = key.split('/')
+            if any('/'.join(parts[:i]) in target_keys
+                   for i in range(1, len(parts))):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source path collides with another image folder '
+                    'in the new Bank — the new Bank was discarded before copying.')
+                return
+        copied, unreadable, source_plans = [], 0, []
+        cache_index = bank_transfer_metadata.load_runtime_cache_index(
+            _score_cache_path(src_bank_id), _face_cache_path(src_bank_id),
+            semantic_path=_semantic_cache_path(src_bank_id),
+            wanted_paths=list(dict.fromkeys(
+                path for row in rows
+                for path in (abs_image_path(src, row),
+                             analysis_image_path(src, row)) if path)))
+        cache_entries, cache_fingerprints = {}, {}
         for r in rows:
             if bank_jobs.cancelled(job):
-                break
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Copy cancelled — the partial Bank was discarded.')
+                return
+            expected_generation = _bank_transfer_generation(r)
             # RESOLVED path: a watermark-cleaned image must land cleaned, same
-            # rule as promoting to a dataset.
-            p = resolved_image_path(src, r)
+            # rule as promoting to a dataset.  Analysis is bound to these
+            # effective bytes, so a baked clean/rotation remains transferable
+            # only when its shared fingerprint proves this exact payload.
+            p = analysis_image_path(src, r, refresh_rotation=True)
+            preserve_analysis_candidate = True
             try:
                 # Read + validate the exact bounded bytes before writing. A
                 # `copy2` after a header-only check could race a live folder
@@ -6876,11 +10337,12 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                     p, label='bank-to-bank promotion')
             except (OSError, TypeError, ValueError, MemoryError,
                     Image.DecompressionBombError, Image.DecompressionBombWarning):
-                # One unreadable/locked source costs one image, never the run.
-                unreadable += 1
-                bank_jobs.bump(job)
-                continue
-            target = os.path.join(dest.source_path, r.relpath)
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source image became unreadable — the new Bank '
+                    'was discarded.')
+                return
+            target = target_by_id[r.id]
             try:
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with open(target, 'wb') as target_file:
@@ -6893,26 +10355,90 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                 # the one outcome worse than failing. Unmake it and say so.
                 logger.warning('bank promote: writing the copy failed',
                                exc_info=True)
-                _discard_promoted_bank(user_id, dest_bank_id)
-                bank_jobs.fail(job, 'Could not write the copies — the new bank '
-                                    'was discarded and nothing was changed. '
-                                    'Check the free space on the drive holding '
-                                    "the app's data, then try again. "
-                                    f'({e.strerror or "write failed"})')
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not write the copies — the new bank was discarded '
+                    'and nothing was changed. Check the free space on the drive '
+                    "holding the app's data, then try again. "
+                    f'({e.strerror or "write failed"})')
+                return
+            source_fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                cache_index, p, payload)
+            bundle = _cache_bundle_matches_row(bundle, r)
+            try:
+                values, preserved, assurance = _bank_copy_values(
+                    r, target, size,
+                    preserve_analysis_candidate=preserve_analysis_candidate,
+                    source_fingerprint=source_fingerprint,
+                    source_payload=payload, cache_bundle=bundle)
+            except (RuntimeError, TypeError, ValueError):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not preserve the complete Bank metadata — the new '
+                    'bank was discarded and the source Bank was left unchanged.')
+                return
+            if (_has_bank_pixel_analysis(r) or bundle) and not preserved:
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not prove every analysis lane for the exact source '
+                    'bytes — the new bank was discarded and the source Bank was '
+                    'left unchanged. Re-run the stale analysis passes and try '
+                    'again.')
                 return
             db.session.add(BankImage(
                 bank_id=dest_bank_id, relpath=r.relpath, file_size=size,
-                **_bank_copy_values(r, target)))
+                **values))
+            if preserved:
+                if bundle:
+                    cache_entries[target] = bundle
+                    cache_fingerprints[target] = source_fingerprint
             copied.append(r.id)
+            source_plans.append((
+                r.id, source_fingerprint, expected_generation))
             if len(copied) % 200 == 0:
                 db.session.commit()
             bank_jobs.bump(job)
         if not copied:
-            _discard_promoted_bank(user_id, dest_bank_id)
-            bank_jobs.fail(job, 'Nothing could be copied — the new bank was '
-                                'discarded. The selected files could not be read.')
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Nothing could be copied — the new bank was discarded. The '
+                'selected files could not be read.')
             return
+        # The route-level busy check is advisory; a synchronous mutation could
+        # have passed it just before this transfer reserved the Bank. Revalidate
+        # every source generation after all copies and before publishing caches
+        # or provenance. Any drift discards the complete destination.
+        for source_id, expected_fingerprint, expected_generation in source_plans:
+            current = (BankImage.query
+                       .filter_by(id=source_id, bank_id=src_bank_id)
+                       .populate_existing().one_or_none())
+            current_path = (analysis_image_path(src, current)
+                            if current is not None else None)
+            if (current is None
+                    or _bank_transfer_generation(current) != expected_generation
+                    or bank_transfer_metadata.content_fingerprint_path(
+                        current_path) != expected_fingerprint):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'The source Bank changed during the copy — the new bank was '
+                    'discarded and the source was left unchanged.')
+                return
+        # The selected set is not necessarily the copied set: unreadable files
+        # and cancellation can remove group peers. Flush the rows actually
+        # written, then clear only duplicate/semantic labels left with one member.
+        # Face/style clusters remain useful classifications even as singletons.
+        db.session.flush()
+        _clear_singleton_copy_duplicate_groups(dest_bank_id)
         db.session.commit()
+        if not _write_required_transfer_caches(
+                dest_bank_id, cache_entries, cache_fingerprints):
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Could not preserve every Score/Face cache and Semantic cache — the new bank was '
+                'discarded and the source Bank was left unchanged.')
+            return
+        reset_score_memo()
         # Marked LAST, and only for what really landed: the source keeps its rows
         # (a promotion never removes anything from the bank it came from) and now
         # says where they went, exactly like a promotion to a dataset.
@@ -6927,6 +10453,18 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
         if unreadable:
             detail += f', {unreadable} unreadable'
         bank_jobs.progress(job, detail=detail)
+
+    def run(job):
+        try:
+            return transfer(job)
+        except Exception:  # noqa: BLE001 — destination creation is all-or-nothing
+            db.session.rollback()
+            logger.exception('bank-to-bank promotion crashed')
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Bank copy failed — the partial Bank was discarded and the '
+                'source Bank was left unchanged.')
+            return None
     return run
 
 
@@ -6935,26 +10473,55 @@ def start_promote(app, user_id, bank_id, ids, dataset_id):
     (normalize + perceptual dedup vs the dataset). ``ids`` empty = every KEPT
     image not already on THIS dataset. Background job (a big promotion decodes
     hundreds of files)."""
-    bank = get_bank(user_id, bank_id)
-    if not bank:
-        raise ValueError('bank not found')
-    ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
-    if not ds:
-        raise ValueError('dataset not found')
-    if ids:
-        ids = [int(i) for i in ids]
-    else:
-        ids = [r.id for r in
-               _promotable_query(bank_id, dataset_id)
-               .order_by(BankImage.id.asc()).all()]
-    if not ids:
-        raise ValueError('nothing to promote — keep some images first')
-    return bank_jobs.start(app, bank_id, 'promote',
-                           _promote_job(user_id, bank_id, ids, dataset_id),
-                           total=len(ids))
+    dataset_id = dataset_activity.normalize_dataset_id(dataset_id)
+    ids = _normalize_promotion_ids(ids)
+    activity_token = None
+    reservation = bank_jobs.reserve(bank_id, 'promote')
+    try:
+        # Freeze BOTH ends before selecting rows. Bank first is safe: the only
+        # reverse transfer creates a brand-new Bank id while holding the Dataset
+        # lock, so there is no opposing Dataset->existing-Bank lock order.
+        with _dataset_ingest_lock(user_id, dataset_id):
+            bank = get_bank(user_id, bank_id)
+            if not bank:
+                raise ValueError('bank not found')
+            ds = FaceDataset.query.filter_by(
+                id=dataset_id, user_id=user_id).first()
+            if not ds:
+                raise ValueError('dataset not found')
+            if not ids:
+                ids = [r.id for r in
+                       _promotable_query(bank_id, dataset_id)
+                       .order_by(BankImage.id.asc()).all()]
+            if not ids:
+                raise ValueError('nothing to promote — keep some images first')
+            bank_jobs.progress(reservation, total=len(ids))
+            activity_token = dataset_activity.begin_exclusive(
+                dataset_id, 'bank_import', total=len(ids),
+                detail='copying images from a Bank')
+            if activity_token is None:
+                raise dataset_activity.DatasetActivityBusy(
+                    'This dataset already has work in progress. Wait for it to '
+                    'finish before copying images from a Bank.')
+            result = bank_jobs.start(
+                app, bank_id, 'promote',
+                _promote_job(
+                    user_id, bank_id, ids, dataset_id, activity_token),
+                total=len(ids), reservation=reservation)
+            if not bank_jobs.launched(reservation):
+                # Compatibility for inline test/integration runners that do not
+                # understand explicit reservation adoption.
+                bank_jobs.abort(reservation)
+                dataset_activity.end(activity_token)
+            return result
+    except Exception:
+        bank_jobs.abort(reservation)
+        if activity_token is not None:
+            dataset_activity.end(activity_token)
+        raise
 
 
-def _promote_job(user_id, bank_id, ids, dataset_id):
+def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -6964,91 +10531,260 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
             rows.extend(BankImage.query.filter(
                 BankImage.bank_id == bank_id,
                 BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all())
+        # Byte-identical rows from DIFFERENT Bank sources remain independent,
+        # but retrying the SAME source id is idempotent. The Dataset lock wraps
+        # this query through the final commit, closing double-click/concurrent
+        # job races without merging unrelated provenance.
+        existing_source_ids = set()
+        row_ids = [row.id for row in rows]
+        for i0 in range(0, len(row_ids), _SQL_IN_CHUNK):
+            existing_source_ids.update(
+                source_id for source_id, in db.session.query(
+                    FaceDatasetImage.bank_image_id).filter(
+                        FaceDatasetImage.dataset_id == dataset_id,
+                        FaceDatasetImage.bank_image_id.in_(
+                            row_ids[i0:i0 + _SQL_IN_CHUNK])).all())
+        rows = [row for row in rows if row.id not in existing_source_ids]
         rows.sort(key=lambda r: r.id)
-        bank_jobs.progress(job, done=0, total=len(rows), detail='promoting')
+        already_present = len(existing_source_ids)
+        bank_jobs.progress(
+            job, done=already_present, total=already_present + len(rows),
+            detail='promoting')
+        dataset_activity.progress(
+            activity_token, done=already_present,
+            total=already_present + len(rows), detail='copying images from a Bank')
+        if not rows:
+            bank_jobs.progress(
+                job, detail=f'done — {already_present} already present')
+            dataset_activity.progress(
+                activity_token,
+                detail=f'done — {already_present} already present')
+            return
         stats: dict = {}
-        imported = failed = 0
-        dedupe_seen = _existing_dhash_rows(dataset_id)
-        for c0 in range(0, len(rows), _PROMOTE_CHUNK):
-            if bank_jobs.cancelled(job):
-                break
-            chunk = rows[c0:c0 + _PROMOTE_CHUNK]
-            blobs, chunk_rows = [], []
-            caps, frms, source_meta, snapshots = [], [], [], []
-            watermark_states, watermark_bboxes, watermark_regions = [], [], []
-            for r in chunk:
-                # RESOLVED path: a watermark-cleaned image must reach the dataset
-                # cleaned, otherwise the two cleaning levels were run for nothing.
-                p = resolved_image_path(bank, r)
-                try:
-                    blobs.append(_read_safe_bank_source_bytes(
-                        p, label='bank dataset promotion'))
-                    chunk_rows.append(r)
-                    # Carry the bank caption onto the dataset image (parallel to blobs),
-                    # so a captioned selection lands already captioned.
-                    caps.append(r.caption)
-                    # Carry the framing the bank's classify pass already wrote, so
-                    # the dataset's Composition counter is right the moment the
-                    # promotion lands (it only tallies rows that HAVE a framing).
-                    frms.append(r.framing)
-                    # Preserve compatible source attribution and the current
-                    # watermark review state/mask alongside the normal caption
-                    # fields.  The Dataset importer validates provenance before
-                    # it reaches storage.
-                    source_meta.append(r.source_metadata)
-                    watermark_states.append(r.watermark_state)
-                    watermark_bboxes.append(r.watermark_bbox)
-                    watermark_regions.append(r.watermark_regions)
-                    # The importer recomputes the strict deterministic snapshot
-                    # from the final normalized Dataset WebP; no source score or
-                    # ML verdict is carried through this marker.
-                    snapshots.append(True)
-                except (OSError, TypeError, ValueError, MemoryError,
-                        Image.DecompressionBombError, Image.DecompressionBombWarning):
-                    failed += 1
-            if blobs:
+        imported_ids = []
+        provenance_changes = []
+        cache_index = bank_transfer_metadata.load_runtime_cache_index(
+            _score_cache_path(bank_id), _face_cache_path(bank_id),
+            semantic_path=_semantic_cache_path(bank_id),
+            wanted_paths=[path for row in rows
+                          if (path := analysis_image_path(bank, row))])
+        # One promotion scope, deliberately not the numeric Bank id: backups can
+        # move across installations where ids collide, and separate promotions
+        # of the same Bank must remain separate provenance events.
+        group_scope = uuid.uuid4().hex
+        def abort(message):
+            db.session.rollback()
+            if ((imported_ids or provenance_changes)
+                    and not rollback_imported_images(
+                        user_id, dataset_id, imported_ids,
+                        provenance_changes=provenance_changes)):
+                logger.error('bank promotion rollback did not remove every row')
+                message += ' Automatic rollback was incomplete; inspect the Dataset.'
+            bank_jobs.fail(job, message)
+
+        # Admission pass: no Dataset mutation occurs until every selected row
+        # has an exact readable payload and every advertised analysis lane is
+        # proven by its shared fingerprint plus required cache.
+        plans = []
+        try:
+            for row in rows:
+                if bank_jobs.cancelled(job):
+                    abort('Promotion cancelled before import; nothing was changed.')
+                    return
+                path = analysis_image_path(
+                    bank, row, refresh_rotation=True)
+                payload = _read_safe_bank_source_bytes(
+                    path, label='bank dataset promotion preflight')
+                fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+                bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                    cache_index, path, payload)
+                bundle = _cache_bundle_matches_row(bundle, row)
+                assurance = _analysis_transfer_assurance(
+                    row, path, payload, cache_bundle=bundle)
+                advertised = _has_bank_pixel_analysis(row) or bool(bundle)
+                if advertised and assurance is None:
+                    abort('Could not prove every analysis lane for the exact '
+                          'promoted bytes. Nothing was imported; re-run the stale '
+                          'analysis passes and try again.')
+                    return
+                plans.append((
+                    row.id, fingerprint, _bank_transfer_generation(row)))
+        except (OSError, TypeError, ValueError, MemoryError,
+                Image.DecompressionBombError, Image.DecompressionBombWarning):
+            abort('A selected Bank image is unreadable; nothing was imported.')
+            return
+
+        try:
+            for c0 in range(0, len(plans), _PROMOTE_CHUNK):
+                if bank_jobs.cancelled(job):
+                    abort('Promotion cancelled — imported rows were rolled back.')
+                    return
+                chunk_plans = plans[c0:c0 + _PROMOTE_CHUNK]
+                blobs, chunk_rows = [], []
+                caps, cap_origins, frms, source_meta, snapshots = [], [], [], [], []
+                watermark_states, watermark_bboxes, watermark_regions = [], [], []
+                watermark_sources, watermark_scores = [], []
+                statuses, transfer_metadatas = [], []
+                for row_id, expected_fingerprint, expected_generation in chunk_plans:
+                    row = (BankImage.query
+                           .filter_by(id=row_id, bank_id=bank_id)
+                           .populate_existing().one_or_none())
+                    if (row is None
+                            or _bank_transfer_generation(row)
+                            != expected_generation):
+                        abort('The source Bank changed during promotion; imported '
+                              'rows were rolled back.')
+                        return
+                    path = analysis_image_path(bank, row)
+                    payload = _read_safe_bank_source_bytes(
+                        path, label='bank dataset promotion')
+                    if (bank_transfer_metadata.content_fingerprint_bytes(payload)
+                            != expected_fingerprint):
+                        abort('A source Bank image changed during promotion; '
+                              'imported rows were rolled back.')
+                        return
+                    cache_bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                        cache_index, path, payload)
+                    cache_bundle = _cache_bundle_matches_row(cache_bundle, row)
+                    assurance = _analysis_transfer_assurance(
+                        row, path, payload, cache_bundle=cache_bundle)
+                    advertised = _has_bank_pixel_analysis(row) or bool(cache_bundle)
+                    if advertised and assurance is None:
+                        abort('A source analysis/cache changed during promotion; '
+                              'imported rows were rolled back.')
+                        return
+                    captured = None
+                    if assurance is not None:
+                        captured = bank_transfer_metadata.captured_bank_analysis(
+                            _bank_row_analysis(row), payload,
+                            assurance=assurance, group_scope=group_scope,
+                            cache_bundle=cache_bundle,
+                            watermark_fingerprint=row.watermark_fingerprint)
+                        if captured is None:
+                            abort('Could not seal complete Bank analysis; imported '
+                                  'rows were rolled back.')
+                            return
+                    blobs.append(payload)
+                    chunk_rows.append(row)
+                    caps.append(row.caption)
+                    cap_origins.append(row.caption_origin)
+                    source_meta.append(row.source_metadata)
+                    snapshots.append(captured if captured is not None else True)
+                    raw_fingerprint = _raw_source_fingerprint(bank, row)
+                    transfer_metadata = (
+                        bank_transfer_metadata.capture_transfer_metadata(
+                            row.transfer_metadata,
+                            bank=_bank_portable_capture(row, bank),
+                            bank_fingerprint=expected_fingerprint,
+                            rebind_dataset_from=raw_fingerprint))
+                    if transfer_metadata is None:
+                        abort('Could not preserve complete Bank metadata; imported '
+                              'rows were rolled back.')
+                        return
+                    transfer_metadatas.append(transfer_metadata)
+                    statuses.append(row.status)
+                    # Pixel-derived Dataset columns travel only under the same
+                    # exact/legacy claim as the opaque Bank snapshot.
+                    frms.append(row.framing if captured is not None else None)
+                    watermark_actionable = (
+                        captured is not None
+                        and row.watermark_fingerprint == expected_fingerprint)
+                    watermark_states.append(
+                        row.watermark_state if watermark_actionable else None)
+                    watermark_bboxes.append(
+                        row.watermark_bbox if watermark_actionable else None)
+                    watermark_regions.append(
+                        row.watermark_regions if watermark_actionable else None)
+                    watermark_sources.append(
+                        row.watermark_source if watermark_actionable else None)
+                    watermark_scores.append(
+                        row.watermark_score if watermark_actionable else None)
                 new_ids, bad = import_images(
-                    user_id, dataset_id, blobs, dedupe=True, stats=stats,
-                    captions=caps, bank_image_ids=[r.id for r in chunk_rows],
+                    user_id, dataset_id, blobs, dedupe=False, stats=stats,
+                    captions=caps, caption_origins=cap_origins,
+                    bank_image_ids=[row.id for row in chunk_rows],
                     framings=frms, source_metadata=source_meta,
                     bank_analysis_snapshots=snapshots,
                     watermark_states=watermark_states,
                     watermark_bboxes=watermark_bboxes,
                     watermark_regions=watermark_regions,
-                    dedupe_seen=dedupe_seen)
-                imported += len(new_ids)
-                failed += bad
-                # The dataset row now carries the link back (import_images writes
-                # it, and hands it to the matched row when a dedupe skips the
-                # blob), so 'already promoted here' is a fact we can re-check.
-                # Clear the legacy one-way flag as we go: it would otherwise keep
-                # excluding this image from the target long after the user
-                # deleted it there.
-                #
-                # The exception is an image whose row in the dataset is already
-                # credited to ANOTHER bank (both banks hold the same photo). There
-                # is one column for one owner, so this bank gets no verifiable
-                # trace and keeps the old flag — the alternative is offering the
-                # image on every promotion, forever.
-                unlinked = set(stats.get('bank_unlinked') or ())
-                stats.pop('bank_unlinked', None)
-                for r in chunk_rows:
-                    r.promoted_dataset_id = dataset_id if r.id in unlinked else None
-                db.session.commit()
-            bank_jobs.bump(job, len(chunk))
-        dups = stats.get('duplicates', 0)
+                    watermark_sources=watermark_sources,
+                    watermark_scores=watermark_scores,
+                    statuses=statuses,
+                    transfer_metadatas=transfer_metadatas,
+                    preserve_exact_bytes=True,
+                    created_ids_sink=imported_ids,
+                    provenance_changes_sink=provenance_changes,
+                    _dataset_activity_token=activity_token)
+                if bad or len(new_ids) != len(chunk_rows):
+                    abort('Could not import every selected image; imported rows '
+                          'were rolled back.')
+                    return
+                bank_jobs.bump(job, len(chunk_rows))
+                dataset_activity.bump(activity_token, len(chunk_rows))
+            # Final source-generation fence. It catches any synchronous Bank
+            # write that raced the HTTP busy check after an earlier chunk had
+            # already committed into the Dataset.
+            for row_id, expected_fingerprint, expected_generation in plans:
+                current = (BankImage.query
+                           .filter_by(id=row_id, bank_id=bank_id)
+                           .populate_existing().one_or_none())
+                current_path = (analysis_image_path(bank, current)
+                                if current is not None else None)
+                if (current is None
+                        or _bank_transfer_generation(current)
+                        != expected_generation
+                        or bank_transfer_metadata.content_fingerprint_path(
+                            current_path) != expected_fingerprint):
+                    abort('The source Bank changed during promotion; imported '
+                          'rows were rolled back.')
+                    return
+            # Link the source only after the complete destination is durable.
+            source_ids = [row_id for row_id, _fingerprint, _gen in plans]
+            unlinked = set(stats.get('bank_unlinked') or ())
+            for i0 in range(0, len(source_ids), _SQL_IN_CHUNK):
+                for source_row in (BankImage.query
+                                   .filter(BankImage.bank_id == bank_id,
+                                           BankImage.id.in_(
+                                               source_ids[i0:i0 + _SQL_IN_CHUNK]))):
+                    source_row.promoted_dataset_id = (
+                        dataset_id if source_row.id in unlinked else None)
+            db.session.commit()
+        except Exception:  # noqa: BLE001 — promotion is all-or-nothing
+            logger.exception('bank dataset promotion failed')
+            abort('Promotion failed — imported rows were rolled back.')
+            return
         small = stats.get('small', 0)
-        detail = f'done — {imported} imported'
-        if dups:
-            detail += f', {dups} already in the dataset'
-        if failed:
-            detail += f', {failed} failed'
+        detail = f'done — {len(imported_ids)} imported'
+        if already_present:
+            detail += f', {already_present} already present'
         if small:
             detail += f', {small} under the recommended size'
         bank_jobs.progress(job, detail=detail)
 
     def run_locked(job):
-        with _dataset_ingest_lock(user_id, dataset_id):
+        lock = _dataset_ingest_lock(user_id, dataset_id)
+        acquired = False
+        # Waiting behind another long Dataset operation must keep the Bank
+        # reservation alive; otherwise its one-hour stale TTL could detach this
+        # worker and let a second promotion start beside it.
+        try:
+            while not acquired:
+                acquired = lock.acquire(timeout=1.0)
+                if acquired:
+                    break
+                dataset_activity.progress(
+                    activity_token, detail='waiting for the Dataset write lock')
+                if bank_jobs.cancelled(job):
+                    bank_jobs.progress(job, detail='cancelled before promotion')
+                    return None
+            if bank_jobs.cancelled(job):
+                bank_jobs.progress(job, detail='cancelled before promotion')
+                return None
             return run(job)
+        finally:
+            dataset_activity.end(activity_token)
+            if acquired:
+                lock.release()
 
     return run_locked

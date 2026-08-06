@@ -47,6 +47,47 @@ export function tilingStatus(caps) {
       + 'ComfyUI to lift that limit.' }
 }
 
+/** Which lane TODAY'S settings will send an upscale down, said in one sentence.
+
+    WHY THIS EXISTS. The 'auto' crossover is STRICT — a target must be ABOVE it
+    to be tiled — and the crossover is derived as 1.5x the tile size, so it lands
+    exactly on round numbers people type: 1536 with the default 1024 tile, 768 if
+    they drop the tile to 512 for an 8 GB card. Someone who asks for exactly 1536
+    therefore runs full-frame, and until now NOTHING said so: no tiling, no
+    warning, no line in this panel. The person who reported the tiling lane in the
+    first place (SurpassHR, GitHub #32) hit precisely that and had no way to tell
+    "it decided against tiling" from "my setting did nothing".
+
+    The rule itself is left alone on purpose — 'above' is what the setting says
+    and what a stored `tile_threshold` means — so the fix is to make the decision
+    legible, with the three levers that change it. Returns null when there is no
+    number to reason about rather than inventing one.
+
+    @param mode 'auto' | 'always' | 'never'
+    @param target short-edge target resolution, px
+    @param crossover the crossover 'auto' will really use, px */
+export function laneForTarget(mode, target, crossover) {
+  const px = Number(target)
+  const above = Number(crossover)
+  if (!(px > 0)) return null
+  if (mode === 'never') return `Nothing is tiled: your ${px} px target runs full-frame.`
+  if (mode === 'always') {
+    return `Your ${px} px target is tiled whenever it comes out bigger than one tile.`
+  }
+  if (!(above > 0)) return null
+  if (px > above) {
+    return `Your ${px} px target is above the ${above} px crossover, so it is tiled.`
+  }
+  // The equal case gets the extra half-sentence: "below" surprises nobody,
+  // landing ON the number you were told about does.
+  const where = px === above
+    ? `exactly at the ${above} px crossover, so it runs full-frame — the crossover has to `
+      + 'be passed, not just reached'
+    : `below the ${above} px crossover, so it runs full-frame`
+  return `Your ${px} px target is ${where}. To tile it: raise the target above ${above} px, `
+    + 'lower “Start tiling above”, or pick “Always tile large frames”.'
+}
+
 /** The sentence naming this machine's full-frame ceiling, or null when the card
     is unknown. Never invents a number: an unseen GPU gets silence. */
 export function ceilingLine(caps) {

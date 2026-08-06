@@ -475,7 +475,13 @@ touching the folder itself:
    flipped). The number beside each checkbox is what *that click* would reject —
    still-undecided images only, which is why it is usually smaller than the
    count on the matching filter chip: the chip shows every image carrying the
-   flag, including the ones a previous auto-reject already threw away. Run it
+   flag, including the ones a previous auto-reject already threw away — and it
+   counts them **inside whatever else you have filtered**, so it always states
+   the size of the page it opens. (Each chip is measured with your other filters
+   applied and its own value lifted, so picking one never blanks its
+   neighbours, and a chip stays on offer even when it holds nothing under the
+   current filter. The auto-reject number stays whole-bank on purpose: that pass
+   runs over the bank, not over the view.) Run it
    twice and the second run legitimately says **0 to reject**: there is nothing
    left it is allowed to touch. A flag also warns when its pass never ran, and
    the panel says how many images have **never been scanned** — those are
@@ -510,8 +516,9 @@ always know what's been used where.
 
 **🎨 Curate down to the right subset.** Culling removes the bad shots; curation
 picks the *good* subset — and it's most of what makes a LoRA good. Once **✨
-Score** has run (it caches a CLIP embedding per image), the **Curate** row under
-the selection bar offers two selectors that cost no extra GPU time:
+Score** has run (the default CLIP semantic index), or the Bank's optional
+**SigLIP 2 semantic index** is ready, the **Curate** row under the selection bar
+offers two selectors that cost no extra inference:
 
 - **🎨 Pick diverse** — enter a number and it selects the images that best
   *cover the variety* of what you're looking at (varied angles, outfits, scenes),
@@ -564,12 +571,14 @@ hundred near-identical shots from two hundred different ones, and they say
 nothing about outfits, lighting or camera angle. Two things you may already have
 on disk can, so the panel also reads them when they exist:
 
-- **Visual spread**, from the CLIP embeddings the ✨ Score pass caches. It reports
+- **Visual spread**, from the Bank's selected semantic index. It reports
   the average similarity across the pool — *"91% average similarity — a set this
   repetitive teaches one look"*. The bands were calibrated by measuring real
   banks: an ordinary one sits near 65%, an image plus its nearest neighbours
-  lands around 79-90%. Without ✨ Score it says **Not measured** — never
-  "varied", because nothing looked.
+  lands around 79-90% with CLIP. SigLIP 2 has its own score distribution, so LDS
+  shows its measured similarity but deliberately gives it no *varied/alike* band
+  until that engine has been calibrated on real Banks. Without the selected index
+  it says **Not measured** — never "varied", because nothing looked.
 - **Caption variety**, from the captions the 🏷️ pass wrote, read by the same
   lexicon the dataset Coverage panel uses. It reports which camera views,
   lightings, settings, outfits and expressions your captions mention and which
@@ -619,6 +628,59 @@ pass left **off by default** (it's the slowest GPU pass and a clean-up run
 rarely needs a description on every shot). Stop it any time — and when you come
 back, a saved report at the top of the bank tells you exactly what ran, what was
 skipped and why, with the headline counts.
+
+## Choosing where a bank pass runs
+
+Every pass button in the bank ends in `…` and opens a **launch window** before
+anything runs. The window is not a settings panel — it says three separate
+things, and keeping them apart is the point.
+
+**This run — where it applies, and how big that is.** Five lines, and each one
+quotes the number of images *that pass* would actually walk:
+
+| Line | What it means |
+|---|---|
+| Kept + undecided | What every pass has always run on. The default; picking it sends exactly the request the app sent before this window existed. |
+| ✓ Kept only | The images you already decided to keep. |
+| Undecided only | The ones you have not ruled on. |
+| ✕ Unkept only (the bin) | Images you rejected. Nothing is deleted or un-rejected — but the run spends its time on shots you set aside, and the window says what that costs for this particular pass. |
+| All three, the bin included | Everything. |
+
+If you have images **selected**, that becomes the first line and wins by
+default — the pass runs on your selection, narrowed by what it still has to do.
+It says *"up to N"*, never a bare N, because the server intersects your selection
+with the pass's own pool and the run can only ever be shorter.
+
+Under those lines sits the **"do it again"** tick: *also re-measure images that
+were already scanned*, *throw the cached embeddings away*, and so on. This is
+where the old **Rescan all** and **Rescore all** buttons went. They were never
+separate passes — they were this scope, wearing a button's clothes — so they now
+sit next to the pool they re-run, unticked, with their price written next to
+them.
+
+**Settings this pass reads.** Only what the *calculation* consumes, with where
+each value lives. 🔎 Scan quality, for instance, reads exactly one of the twelve
+🎚 filter thresholds (`dup_distance`), and it reads it for the duplicate grouping
+at the end — not for the measuring.
+
+**Not decided here.** The knobs that only change how the grid is **sorted and
+flagged**. Those re-apply the moment you save them, with no pass at all. The
+sharpness, noise and aesthetic thresholds live here: nudging one costs you
+nothing.
+
+Three passes **refuse a partial scope**, and the window shows the option greyed
+out with the reason rather than hiding it: **✨ Score**, **👥 Group by person**
+and **✂ Find crops & variants** each produce one numbering of the *whole* bank,
+recomputed from scratch on every run. Handed a slice, they would number that
+slice from 1 and land those ids on top of unrelated groups already saved.
+
+Two things the scope does **not** cover, stated in the windows that need it:
+🔎 Scan's duplicate grouping always covers the whole bank (it works from stored
+hashes and renumbers them together), and 🎨 Classify medium also runs chained
+inside ✨ Score with the default scope.
+
+A run with **nothing to do** is refused before it starts, with the reason and a
+suggestion — not launched and then reported as a success.
 
 ## When a folder is already one person
 
@@ -927,13 +989,67 @@ you how many there are and roughly how long it will take on your machine, and
 does nothing until you click. It re-runs the face detector on those images only,
 writes nothing but the angle, and leaves your person groups exactly as they are.
 
+## Set the bank filters from a sentence
+
+At the top of **Triage**, **🗣 Describe the set you want** takes a plain request —
+`an amateur photo set, least polished first` — and moves the bank's own controls:
+medium, quality flags, resolution tier, sort. The chip counters below then say,
+measured, how many images that lands on.
+
+The model never looks at your images and never chooses any. It reads the sentence
+and nothing else, so a wrong reading costs you one glance at chips you can edit,
+not a silent selection you would have to trust. Everything it proposes lands in the
+same filters a click would set, and clearing them is the same gesture as always.
+
+It answers over what your bank has actually measured. The real per-value counts go
+to the model with the request, so it cannot reach for a bucket that holds nothing.
+
+**It says when it cannot.** Asking for what is *in* the pictures — `women
+outdoors` — has nowhere to land while captions cover a small fraction of a bank
+and framing almost none of it. That part of the request comes back as *not
+expressible here* rather than as a filter that would return a few thousand
+convincing, unrelated images.
+
+**It will not turn an exclusion into a search.** The ranker returns *more* of a
+negated thing, not less (`a woman without a bikini` measured 60% bikinis against a
+10.1% baseline), so `without a watermark` is reported back to you instead of being
+quietly sent. To guarantee an absence, use the word-exclude box.
+
+## Choose CLIP or SigLIP 2 for Bank semantics
+
+Each Bank has its own **Semantic engine** choice in **① Analyze**:
+
+- **CLIP** is the compatible default. Its index is the embedding cache already
+  produced by **✨ Score**, so every existing Bank behaves exactly as before.
+- **SigLIP 2** is optional. Install the pinned model once in **Setup ▸ Quality
+  tools**, select it on the Bank, then explicitly build that Bank's semantic
+  index. Selecting it never starts a scan or downloads a model by itself.
+
+The selected engine powers **Find by text**, **Similar to selected**, **Pick
+diverse**, **Balanced pick**, visual spread/coverage and **Find crops &
+variants**. The calibrated aesthetic head, NSFW score, visual-style groups and
+**🎨 Medium** remain on CLIP regardless of this choice.
+
+CLIP and SigLIP 2 use separate, model-versioned caches and separate **same-shot
+group partitions**. Switching swaps the visible partition but keeps both, so
+returning to an engine restores its grouping instead of erasing completed work.
+Both partitions and their exact cache entries travel with the existing analysis
+snapshot on Bank → Dataset, Dataset → Bank and Bank → Bank copies; a changed
+image fails the fingerprint check and is re-indexed instead of receiving stale
+analysis.
+
+The SigLIP 2 index is resumable and stoppable like Score: completed entries are
+written atomically, and a later launch pays only for missing, failed or changed
+images. **Reindex SigLIP 2** rebuilds that cache only; it never touches Score.
+
 ## Find bank images by describing them
 
 Under **Curate**, **🔤 Find by text…** ranks images by how close they are to a
 phrase you type — `brunette outdoors, wide shot`, `red dress against a white
-wall`, `close-up, harsh flash`. It reuses the embeddings **✨ Score** already
-computed, so there is no extra model, no download and no GPU work; searching
-while a LoRA trains is fine.
+wall`, `close-up, harsh flash`. It reads the Bank's selected semantic index:
+the existing **✨ Score** cache for CLIP, or the separate index you explicitly
+built for SigLIP 2. A search itself performs no image inference; searching while
+a LoRA trains is fine.
 
 **It is a ranking, not a filter.** Every image scores *something* against every
 phrase, so a result list always comes back full. The panel therefore reports the
@@ -942,9 +1058,9 @@ are — *"all about equally close"*, *"the last ones are noticeably looser"*, or
 *"the tail is much weaker than the top"*. That spread is the useful signal: it
 says whether you can trust the bottom of the list.
 
-**Do not read those numbers as percentages.** They are much lower than intuition
-suggests. Measured on a real bank (48 images drawn from 8 unrelated datasets,
-using the exact model the app uses — ViT-L/14, `openai` weights):
+**Do not read those numbers as percentages, and do not compare engines by their
+raw values.** The following measurements are specifically for the default CLIP
+ViT-L/14 `openai` space, on a real bank (48 images from 8 unrelated datasets):
 
 | | Range |
 |---|---|
@@ -979,14 +1095,13 @@ just a filter plus a phrase; nothing needs a second search grammar. Results land
 as a normal selection you review with ✓ Keep / ✕ Reject / ⬆ Promote — nothing is
 kept or deleted for you. **Clear search** returns to the full grid.
 
-**Images that were never scored cannot be found by any phrase.** Rather than
-letting them vanish, the summary counts them: *"3 of 27 images in this filter
-have no ✨ Score embedding yet and could NOT be searched."* Run ✨ Score to
-include them.
+**Images missing from the selected index cannot be found by any phrase.** Rather
+than letting them vanish, the summary counts them. Run **✨ Score** for CLIP, or
+complete the explicit **SigLIP 2 index**, to include them.
 
 ### What it is good at, and what it is not
 
-CLIP reads a picture as a whole. It is reliable for **subjects, styles, framing,
+The default CLIP engine reads a picture as a whole. It is reliable for **subjects, styles, framing,
 setting, materials and colour**, and unreliable for three things in particular:
 
 | Ask for | What you actually get | Measured |
@@ -1054,15 +1169,114 @@ brings the likeliest images to the front; the final call stays yours.
 
 ### Why the first search takes a moment
 
-The text encoder is CLIP's other half, and loading it costs about **ten seconds**
-on the CPU. The app therefore keeps it warm after the first search — subsequent
-searches are effectively instant — and releases it once you close the panel or
-after ten idle minutes, because it holds roughly 2.4 GB of RAM while it lives.
-Every phrase you have already searched is also cached on disk, so re-typing one
-is free even after a restart.
+The text encoder is the other half of the selected image/text model. Loading the
+default CLIP encoder costs about **ten seconds** on the CPU; SigLIP 2 also has a
+one-time model load. The app keeps the chosen encoder warm after the first
+search, then releases it when you close the panel or after the idle window.
+Every phrase is cached under that engine's model key, so CLIP and SigLIP 2 text
+vectors can never be mixed and re-typing one is free even after a restart.
 
 On a memory-tight machine you can set `bank_scoring.text_search_idle_minutes` to
 `0`: nothing is ever kept warm, and each new phrase pays the ten seconds instead.
+
+## Choose who captions a bank, and which pile
+
+The 🏷️ **Caption** pass in ① Analyze has its own **Caption options** row, and
+every control on it applies to **that run only** — your Settings stay the
+default and are never rewritten from here.
+
+**Which pile gets captioned.** Three choices, and rejected images are in none of
+them:
+
+- **Kept + undecided** — the default, and exactly what the pass always did.
+- **✓ Kept only** — caption what you have already chosen, and nothing else. This
+  is the cheap one: on a 20 000-image dump where you kept 300, it is 300 vision
+  calls instead of 20 000.
+- **Undecided only** — the opposite errand. Captions feed the 🔍 search and the
+  🏷️ tag chips, so captioning the undecided pile is how you get *tools* to
+  triage it with.
+
+Each option carries its own count, and the button quotes the number it is really
+about to write. That number is **not** the size of the pile: images that already
+have a caption are skipped, so a bank of 4 000 kept images can honestly offer
+"Caption 12 kept". When everything in a pile already has a caption the button
+says so and goes inert.
+
+**A selection wins.** Select images first and the scope select greys out: the
+pass captions your selection, and the button switches to counting it. The server
+would otherwise *intersect* the two, and "Caption 12 selected" could quietly
+write 4.
+
+**Which engine, and which model.** Two more selects on the same row:
+
+- **Caption engine** — *Auto* is a chain, not a coin flip: JoyCaption drafts and
+  Ollama covers whatever it missed. Forcing *JoyCaption only* removes the Ollama
+  half rather than picking one of two.
+- **Caption vision model** — any Ollama model you have pulled. It is only used
+  when the engine can reach Ollama, and it is greyed out otherwise. A model
+  configured elsewhere stays selectable even if it is not in the live list.
+
+This last one matters more than it looks. A captioner that describes plainly
+visible things in evasive terms produces captions that are about something
+slightly *other* than your images — and a LoRA trained on those learns to look
+away too, with nothing in the output to reveal it. The captions read perfectly
+well. That is the problem. If you caption NSFW material, pair the **Explicit**
+register with an uncensored (abliterated) model; the app warns you when the
+model it is about to use does not look like one.
+
+You can change the model between runs on the same bank. 🏷️ **Caption** never
+rewrites anything: it only fills images that have no caption yet, so a second run
+with a different model captions the rest, not the ones already done. To redo the
+ones already done, see the next section.
+
+## Redo the captions of a bank with a different model
+
+🏷️ **Caption** skips images that already have a caption — which is what you want
+until the day it isn't. Once a bank is fully captioned that button reaches zero
+images and goes inert, and on a bank you captioned with a model you have since
+decided was a poor one, "nothing left to caption" is the wrong answer.
+
+🔄 **Re-caption**, at the end of the **Caption options** row, is that answer. It
+runs the same pass with the same engine, model, register and length you picked on
+that row, on the pile the scope select names — and it **overwrites** the captions
+that are already there.
+
+**It keeps the captions you wrote yourself.** Every caption now records who wrote
+it — JoyCaption, Ollama, or you. "You" means: typed or corrected in a dataset's
+caption box, changed by a find/replace across a dataset, or brought back as `.txt`
+sidecars from another tool. That record travels with the text through
+**Import to bank**, bank-to-bank copies, promotion back to a dataset, and backup
+restores, so a caption you wrote in a dataset three steps ago is still recognised
+as yours here. Re-caption skips those rows, exactly as the person pass skips a
+subfolder you declared to hold one person.
+
+**It tells you three numbers before you click, and never merges two of them.**
+The button quotes what it will rewrite (the pile, minus what it spares). The amber
+line under the row breaks the rest apart: how many captions it *keeps* because you
+wrote them, how many it overwrites **whose author was never recorded**, and how
+many a model wrote. The confirmation repeats them. None is an estimate; they all
+come from the same count the pass itself uses, so the figure on the button is the
+number of images that change.
+
+**"Origin never recorded" is the one to read carefully.** Captions written before
+the app started keeping track carry no author, and there is no way to work one out
+after the fact. Those are re-captioned — sparing them would make this button do
+nothing at all on any bank that already exists — so if you hand-wrote captions in
+an older version, they are in that count. It is stated separately from the
+machine-written ones for exactly that reason.
+
+**If you do want your own captions redone**, tick **"Also rewrite the N caption(s)
+I wrote"** next to the button. It only appears when there is something to protect,
+it is never pre-ticked, and the confirmation names it again.
+
+**There is still no undo.** The bank's ↩ Undo covers keep/reject decisions only;
+it has never covered captions, and this change does not add one.
+
+**It works by pile, never on a selection.** With images selected the button goes
+inert and says why: a selection can cover pages that were never loaded, so the
+app cannot count how many of them already have a caption — and it will not run a
+destructive pass on a number it cannot state. Clear the selection to re-caption a
+pile. 🏷️ **Caption** still honours selections as it always did.
 
 ## Review a bank one image at a time
 
@@ -1173,17 +1387,44 @@ The 🔄 rotate button needs no undo entry: turn the other way and the image is
 byte-for-byte the original again.
 ## Find more images like this one — by attribute, not by look
 
-Every captioned tile in a bank carries a 🏷️ badge. **Click it** and that image's
-caption opens as a row of chips in the filter bar: `woman`, `red`, `dress`,
-`balcony`. Tick the ones you care about and the grid narrows to the images whose
-captions mention them.
+**Select an image** in a captioned bank and its tags are already there: beside
+the gallery on desktop, or in the filter bar on a phone. Tick `woman`, `red`,
+`dress` or `balcony` and the grid narrows to the images whose captions mention
+them. No extra click, no badge to find.
+
+**Select several and the row counts.** Each chip carries how many of your
+selected images cite it — `red dress 7 / 12` means 7 of the 12 captioned images
+you picked mention it. That is deliberately *not* an intersection: keeping only
+the tags every single image shares would print 12 next to each survivor (a number
+that says nothing) and usually leave you with one word. What you want to know is
+that a tag describes over half of what you selected.
+
+The row is honest about what it did **not** count, on its own lines:
+
+- images in your selection with **no caption yet** — named, not folded into the
+  denominator, so `7 / 12` always means 7 of 12 images that had something to say;
+- images whose caption held **no word worth filtering on** (`a photo of her`) —
+  a different problem with a different fix;
+- a selection **too large to read in one request**, which says how many images it
+  left out rather than quietly shrinking the total.
+
+Tick a chip and the row **holds still** while the filter runs, even though
+filtering clears the selection — it keeps showing the tags of the selection you
+filtered *from*.
+
+The 🏷️ **badge on a tile** is still there, in the bottom-right corner next to ▶
+and ⛶ where the tile's actions live. It reads one image's tags *without*
+selecting it. On an image with no caption — or a caption with no word worth
+filtering on — the badge stays visible and greyed, and its tooltip says which of
+the two it is: a feature that silently disappears is indistinguishable from one
+that was never built.
 
 This is the readable cousin of **🎯 Similar to selected**, and the difference is
 worth knowing because they fail differently:
 
 | | 🎯 Similar to selected | 🏷️ Tags of this image |
 |---|---|---|
-| Matches on | the whole look (CLIP embeddings) | words *you* ticked |
+| Matches on | the whole look (the selected CLIP or SigLIP 2 index) | words *you* ticked |
 | Works without captions | yes | no |
 | Tells you *why* it matched | no | yes — the chips you ticked |
 
@@ -1554,11 +1795,54 @@ a separate copy. A rotated image is shown unrotated here, because the whole
 watermark lane works on your original file, which the ↻ turn never changed.
 
 
+## Reject every flagged image at once
+
+In a dataset, **🧽 Find watermarks** flags the kept images that carry an overlaid
+mark. The recommended way through the pile is **🔍 Review flagged**, one image at
+a time — the detector is a review flag, not a verdict, and it *does* flag clean
+images sometimes. When you would rather drop the whole pile and move on,
+**✕ Reject all flagged (N)** does exactly that.
+
+Four things worth knowing before you click it:
+
+- **The number is the number.** `N` is what the button will really reject, not
+  how many are flagged. Small-image rescue pairs are excluded (the server refuses
+  a batch containing one, so including them would reject *nothing*) and failed
+  rows are excluded (the server skips them). If the two differ, the row says so
+  in plain text rather than showing you the bigger figure.
+- **Nothing is deleted.** Rejected images stay on disk and simply leave the
+  training set. To bring any of them back: **Show ▸ Rejected** in the grid,
+  select, then **✓ Keep**.
+- **It clears the watermark flags.** That is the one thing rejecting destroys:
+  after the click, 🔍 Review flagged is empty and nothing records which images
+  had been flagged. Re-run 🧽 Find watermarks to flag them again.
+- **Stop is available while a scan runs.** The ⏹ Stop button in the progress
+  banner ends the scan at the next image; everything already judged is kept, and
+  running 🧽 Find watermarks again finishes the rest.
+
+Which engine does the flagging is a setting — **Settings ▸ Captioning & quality ▸
+Watermark detection** — and it applies to datasets and banks alike. *Auto* uses
+the optional watermark detector when it is installed and the vision model
+otherwise, which is what the app has always done. Pin *Watermark detector*
+without the extra installed and the scan still runs, on the vision model, and
+says so with the link to install it. Only the detector can flag an image
+**without a position**; those are counted apart, 🧽 Clean leaves them alone, and
+you can draw the zone in 🔍 Review flagged. Images you dismissed as false
+positives are skipped by every later scan — **⟲ Rescan incl. dismissed** is the
+only way to have them judged again, which is what you want after changing engine.
+
+
 ## A bank and a dataset never share files
 
 A dataset and an image bank can hand images to each other in both directions,
 and both directions **copy**. That is not an implementation detail — it is the
 rule the whole flow rests on:
+
+The files generated for **ai-toolkit are not LDS's dataset registry**. At launch,
+LDS freezes a disposable training export (kept images, captions and a freshly
+generated job config) from its own Dataset rows. Bank/Dataset identity, analysis
+history and comparisons stay in LDS's database plus its SHA-bound snapshot/cache
+sidecars; they are not reconstructed from an old ai-toolkit config file.
 
 - **Bank → dataset** (**⬆ Promote…**) writes new files into the dataset.
 - **Dataset → bank** (**🗃 Import to bank**, on the dataset) copies the dataset's
@@ -1566,8 +1850,8 @@ rule the whole flow rests on:
   Dataset-owned captions, keep/reject curation, framing, watermark and
   provenance. Its dialog defaults to **Reuse compatible final-file analysis**;
   **Start fresh analysis** skips only reuse of prior analysis, not that metadata.
-  The AI **Face** and **Score** results are not reused after normalization or
-  another transformation because they are no longer proved.
+  The AI **Face**, **Score** and **SigLIP 2 semantic** results are not reused after
+  normalization or another transformation because they are no longer proved.
 
 Neither ever *points* at the other's files. The reason is that the two containers
 have opposite contracts. A dataset **owns** its images; a bank merely **points**
@@ -1972,6 +2256,43 @@ Two labels sit next to every target, and both are there to save a wasted week:
 Deleting a video dataset deletes the encoded clips and nothing else: the bank
 keeps every shot and every decision, so you can re-cut at another length or for
 another target without triaging again.
+
+## Stopping Score, and what a relaunch costs
+
+**✨ Score** always covers the whole bank — but it only *computes* what it does
+not already have. Every image it scores is written to a cache next to the bank
+(the CLIP embedding plus the aesthetic and NSFW numbers), and a relaunch reads
+that cache and pays only for the rest. On a bank that is fully scored, the pass
+does not even load the model: it goes straight to the grouping.
+
+So **Stop is safe**, and it is now safe in the database too. When you stop a run,
+the scores it had already computed are written to your images before the pass
+ends — that work was paid for, and it used to reach the cache and never reach a
+single row. The line at the end of the pass says exactly what happened: how many
+images were scored, how many remain, and how many were reused instead of
+recomputed.
+
+One thing does *not* survive a stop: the **🎨 style groups**. Those ids are not a
+per-image measurement, they are a single numbering of the whole bank, computed
+from every embedding at once and renumbered on each pass. Half of one is not
+partial progress — it would put a new group 1 next to an old group 1 and mix two
+unrelated styles under the same chip. So a stopped pass leaves the previous
+grouping alone and says so. Relaunch and it finishes: the scoring part is already
+cached, and only the grouping is left. That grouping is the slow tail of the pass
+— about **8 seconds over 5 000 images and 3 minutes over 23 000** — so on a big
+bank it is worth letting it finish.
+
+**Rescore all** is the last line of ✨ Score's launch window, unticked. It is the
+opposite intent: throw the cache away and recompute everything, for a bank you
+scored with a different setup or whose results you no longer trust. It costs a
+full pass, which is why it is a deliberate tick and never a default — ✨ Score
+itself has always meant "cover the whole bank", and it still does.
+
+One more thing a relaunch fixes on its own: if the aesthetic head or the NSFW
+model could not be downloaded during an earlier run, the images scored in that
+window carry a hole. They are picked up again the next time you run Score, once
+the missing piece is available — an image is never left permanently half-scored
+because a download failed once.
 
 ## The LoRA Canvas (every run on one board)
 

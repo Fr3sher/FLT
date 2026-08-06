@@ -467,13 +467,30 @@ def resolve_klein_text_encoder():
                                 ('qwen_3_8b', 'qwen3_8b', 'qwen-3-8b')))
 
 
+def normalize_rel_model_name(name, sep=os.sep):
+    """A ComfyUI-relative model name respelled with the separator of the host that
+    will OPEN it. Both spellings come in: users paste Windows paths into a Linux
+    config, and the shipped workflow templates were exported from a Windows ComfyUI
+    (node 139 of `improve skin.json` reads ``klein\\realistic.safetensors``). On a
+    Linux install a backslash is a legal FILENAME character, so the unnormalised name
+    describes ONE file that does not exist rather than a file inside ``klein/`` —
+    which is how a LoRA sitting on disk was reported missing and re-downloaded
+    forever. Same rule as resolve_model_ref and lora_test_studio._resolve_lora_abs_path;
+    `sep` is a parameter only so both hosts' behaviour is testable from either one."""
+    if not name:
+        return name
+    return name.replace('\\', '/').replace('/', sep)
+
+
 def _lora_abs(rel_name):
     """Absolute path of a loras-relative name under the FIRST loras search root that
     holds it (base models/loras, then extra_model_paths loras roots), else None. The
     name passed to a LoraLoader stays relative to whichever root contains it — ComfyUI
-    lists it identically from any registered loras folder. No yaml → base root only."""
+    lists it identically from any registered loras folder. No yaml → base root only.
+    Accepts either separator (see normalize_rel_model_name)."""
     if not rel_name:
         return None
+    rel_name = normalize_rel_model_name(rel_name)
     for root in comfy_model_paths.search_roots('loras'):
         cand = os.path.join(root, rel_name)
         if os.path.exists(cand):
@@ -1099,8 +1116,14 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     # source app's ComfyUI and is NOT part of the Klein install — bypass it when
     # its file is absent so ComfyUI doesn't fail validation on a missing LoRA. The
     # consistency LoRA injected above (if any) stays in the chain.
-    base_lora = (workflow.get("139", {}).get("inputs", {}).get("lora_name") or '').replace('/', os.sep)
+    base_lora = normalize_rel_model_name(
+        workflow.get("139", {}).get("inputs", {}).get("lora_name") or '')
     base_lora_path = _lora_abs(base_lora)   # base + extra_model_paths loras roots
+    if "139" in workflow and base_lora_path:
+        # Hand ComfyUI the host spelling too, not just the one the template was
+        # exported with: a LoraLoader validates its value against folder_paths,
+        # which lists names with os.sep — finding the file is only half the job.
+        workflow["139"]["inputs"]["lora_name"] = base_lora
     if "139" in workflow and not base_lora_path:
         # Same rule as the consistency LoRA: bypassing is fine at strength 0 (the node
         # would contribute nothing anyway), but silently dropping it while the user

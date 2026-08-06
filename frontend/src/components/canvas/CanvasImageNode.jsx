@@ -50,6 +50,15 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   onClose, onOpen, boardScale = 1, variant = 'node', box = null, blendNote = null }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
+  // The gallery payload publishes the value persisted on LoraTestImage as
+  // `strength`.  It is nullable on legacy rows: absence stays absent instead
+  // of silently becoming 1.0 (or any other plausible-but-invented value).
+  const rawStrength = img.strength;
+  const strengthLabel = rawStrength != null && String(rawStrength).trim() !== ''
+    && Number.isFinite(Number(rawStrength))
+    ? `strength ${String(rawStrength)}`
+    : null;
+  const imageLabel = strengthLabel ? `${stepLabel} · ${strengthLabel}` : stepLabel;
   const facts = imageFactsLine(img);
   /* 🖼🖼 A MEMBER of a group draws the same picture with the same actions, in a
      box the strip decides (utils/canvasImageGroups.layoutImageNodes) instead of
@@ -110,11 +119,11 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
       tabIndex={0}
       onKeyDown={onKeyDown}
       aria-label={member
-        ? `Pinned image from ${laneName || 'this dataset'}, ${stepLabel}, inside a group. `
+        ? `Pinned image from ${laneName || 'this dataset'}, ${imageLabel}, inside a group. `
           + 'Drag it off the group to take it out. Escape closes it.'
-        : `Pinned image from ${laneName || 'this dataset'}, ${stepLabel}. `
+        : `Pinned image from ${laneName || 'this dataset'}, ${imageLabel}. `
           + 'Arrow keys move it, plus and minus resize it, Escape closes it.'}
-      title={`${stepLabel} · ${facts}`}
+      title={`${imageLabel} · ${facts}`}
       style={{ position: 'absolute', left: geom.x, top: geom.y,
         width: geom.w, height: geom.h }}
       className={'lds-canvas-image group flex flex-col overflow-hidden bg-surface-overlay '
@@ -141,7 +150,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
         + reveal}>
         <span className={'min-w-0 flex-1 truncate text-[0.5625rem] font-semibold tabular-nums '
           + (member ? 'text-white' : 'text-content-muted')}>
-          {stepLabel}
+          {imageLabel}
         </span>
       </header>
       {/* The controls, as ONE cluster pinned to the node's corner and drawn at a
@@ -162,14 +171,14 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
             being crammed onto a thumbnail. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); onOpen?.(node); }}
           title="Open this image full-screen with all its settings"
-          aria-label={`Open ${stepLabel} full-screen`}
+          aria-label={`Open ${imageLabel} full-screen`}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70">🔍</button>
         {/* ✕ closes the node and REMEMBERS where it was. Re-pinning the same
             image from its gallery brings it back here, this size. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); onClose?.(node); }}
           data-testid="canvas-image-close"
           title="Close this image — re-opening it from its gallery puts it back here, at this size"
-          aria-label={`Close the pinned image at ${stepLabel}`}
+          aria-label={`Close the pinned image at ${imageLabel}`}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.875rem] leading-none hover:border-red-400/60 hover:bg-red-500/70">✕</button>
         {/* ⬇ Keep this picture. LAST in the cluster, so it wraps onto its own
             line and 🔍 and ✕ stay at the pixel a hand already knows.
@@ -182,7 +191,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           onClick={(e) => { e.stopPropagation(); dl.download(node.imageId); }}
           data-testid="canvas-image-download"
           title="Download this image — the file name keeps its dataset, run, step and seed"
-          aria-label={`Download the image at ${stepLabel}`}
+          aria-label={`Download the image at ${imageLabel}`}
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
           {dl.busy ? '…' : '⬇'}
         </button>
@@ -216,7 +225,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
         </span>
       )}
       <div className="relative min-h-0 flex-1 bg-black/30">
-        <img src={img.url} alt={`Generated at ${stepLabel}`} draggable={false}
+        <img src={img.url} alt={`Generated at ${imageLabel}`} draggable={false}
           className="h-full w-full select-none object-contain" />
       </div>
       {/* The resize corner. 28 px on purpose — a hairline handle is a desktop-only

@@ -348,6 +348,21 @@ DEFAULTS = {
     #   base model asked plainly outperformed it. A caption that talks around its
     #   subject teaches the trained model to look away. Empty = 'standard'.
     'video_caption': {'model': '', 'style': ''},
+    # Optional second semantic space for Image Bank. Its interpreter is recorded
+    # separately so ✨ Score may borrow a user's CUDA Python without making the
+    # SigLIP2 installer mutate that environment. Existing configs without this
+    # key retain the historical bank_scoring.python fallback at runtime. The
+    # aesthetic MLP is CLIP-specific, while SigLIP2 powers only semantic
+    # search, selection, coverage and near-duplicate grouping. Weights are
+    # installed explicitly in Setup and inference is local-files-only, so
+    # selecting it can never trigger a surprise 1.5 GB download.
+    #
+    # The cosine distribution is not CLIP's. Keep its duplicate calibration in
+    # this separate section so SigLIP2 cannot retune historical CLIP Banks.
+    'bank_semantic': {
+        'python': '', 'models_root': '', 'device': 'auto',
+        'siglip2_semantic_dup_threshold': 0.97,
+    },
     # fp8 quantization runs `fp8_export.py` in a SUBPROCESS, because it needs
     # torch + safetensors and this app deliberately installs without them
     # (gigabytes). Empty -> the same interpreter ✨ Score uses, then ai-toolkit's,
@@ -382,8 +397,14 @@ DEFAULTS = {
     # locate: run the second (localisation) model on flagged images. Off = images
     #   are flagged with NO box, which the crop/inpaint levels cannot route on —
     #   only worth it to save time on a bank you intend to filter, not clean.
+    # backend: WHICH route 🧽 Find watermarks takes, on BOTH surfaces (bank and
+    #   dataset). 'auto' = the detector when its extra is installed, the vision
+    #   model otherwise — which is exactly what the bank has always done, so
+    #   'auto' changes nothing anywhere. 'detector' / 'vision' pin one route; a
+    #   pinned 'detector' with no extra installed does NOT fail, it runs the
+    #   vision route and SAYS so (see watermark_detector.resolve_backend).
     'watermark_detect': {'python': '', 'models_root': '', 'threshold': 0.94,
-                         'device': 'auto', 'locate': True},
+                         'device': 'auto', 'locate': True, 'backend': 'auto'},
     # 🎬 Shot-boundary detection for the video bank (TransNetV2). Declared here so
     # a full-config Save round-trips these keys instead of failing "unknown config
     # section" — the same reason bank_scoring is declared above.
