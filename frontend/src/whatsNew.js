@@ -66,6 +66,14 @@ export const WHATS_NEW = [
     to: '/setup',
   },
   {
+    id: '2026-08-06-bank-page-opens-without-rescanning-everything',
+    date: '2026-08-06',
+    title: 'The Bank page opens in a blink instead of a second',
+    blurb:
+      'Every time you opened 🗃️ Bank, the app re-listed every image in every bank\'s source folder before drawing the page — on a real library of 86 000 images that was a full second of disk work, paid even when you were only passing through. It no longer does: the page opens on what it already knows. A folder is still re-checked automatically when you OPEN its bank, so images you dropped in it show up as before, and a new 🔄 Rescan folders button on the list checks them all at once. The page says how fresh its counts are, and a folder that went missing (unplugged drive, renamed folder) is still flagged straight from the list.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-video-extras-installable-from-setup',
     date: '2026-08-06',
     title: 'The video extras can now be installed where the app said they were',

@@ -612,6 +612,35 @@ def _job_bank_capability(job):
     return job if isinstance(job, dict) and '_keys' in job else None
 
 
+def _walk_image_relpaths(folder, *, onerror=None):
+    """Yield every image file under ``folder``, as a path RELATIVE to it.
+
+    Same strings ``os.path.relpath(os.path.join(root, f), folder)`` returned,
+    obtained by SLICING the walk root instead. ``os.walk`` builds each root by
+    joining onto the folder we handed it, so the folder is always a literal
+    prefix of the root — the relative part is already there and does not have to
+    be recomputed from two absolute paths.
+
+    That recomputation was the cost of the bank list: ``ntpath.relpath`` runs
+    ``abspath`` on both sides and compares them component by component through
+    ``os.path.normcase``, ~10 normcase calls per file. Measured on a real
+    library of 8 banks / 86 493 images, one ``GET /api/banks``:
+    85 821 relpath + 833 762 normcase calls, 2.0 s of the 3.5 s profile. Slicing
+    makes it 0 relpath and one normcase per file (the dedup key, still needed).
+
+    ``folder`` is normalised first, exactly as relpath would: a source_path
+    spelled with a trailing separator or forward slashes must yield the SAME
+    relpaths as before, or a refresh would re-insert the whole bank under
+    differently spelled keys."""
+    folder = os.path.normpath(folder)
+    cut = len(folder) + (0 if folder.endswith(os.sep) else 1)
+    for root, _dirs, files in os.walk(folder, onerror=onerror):
+        head = root[cut:]
+        for f in files:
+            if f.lower().endswith(IMG_EXTS):
+                yield (head + os.sep + f) if head else f
+
+
 def create_bank(user_id, name, folder):
     """Register a folder as a bank: walk it recursively and create one row per
     image file. Instant (no decode) — scoring is the separate scan pass.
@@ -633,16 +662,14 @@ def create_bank(user_id, name, folder):
         raise ValueError(conflict['message'])
     folder = os.path.realpath(folder)
     rels = []
-    for root, _dirs, files in os.walk(folder):
-        for f in files:
-            if f.lower().endswith(IMG_EXTS):
-                rels.append(os.path.relpath(os.path.join(root, f), folder))
-                if len(rels) > BANK_MAX_FILES:
-                    # Bail on the walk itself: a bank pointed at a whole drive
-                    # must not be counted to the end before being refused.
-                    raise ValueError(
-                        f'this folder holds more than {BANK_MAX_FILES:,} images '
-                        '— point the bank at a subfolder, or split it in two')
+    for rel in _walk_image_relpaths(folder):
+        rels.append(rel)
+        if len(rels) > BANK_MAX_FILES:
+            # Bail on the walk itself: a bank pointed at a whole drive
+            # must not be counted to the end before being refused.
+            raise ValueError(
+                f'this folder holds more than {BANK_MAX_FILES:,} images '
+                '— point the bank at a subfolder, or split it in two')
     bank = ImageBank(user_id=user_id, name=name, source_path=folder)
     db.session.add(bank)
     db.session.flush()          # need bank.id for the child rows
@@ -759,15 +786,11 @@ def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | N
              db.session.query(BankImage.relpath).filter_by(bank_id=bank_id)}
     seen, new_rels = set(), []
     try:
-        for root, _dirs, files in os.walk(folder, onerror=lambda _e: None):
-            for f in files:
-                if not f.lower().endswith(IMG_EXTS):
-                    continue
-                rel = os.path.relpath(os.path.join(root, f), folder)
-                key = os.path.normcase(rel)
-                seen.add(key)
-                if key not in known:
-                    new_rels.append(rel)
+        for rel in _walk_image_relpaths(folder, onerror=lambda _e: None):
+            key = os.path.normcase(rel)
+            seen.add(key)
+            if key not in known:
+                new_rels.append(rel)
     except OSError:
         # The folder went away mid-walk (drive unplugged) — report it and keep
         # every row: a partial walk must never be read as "these files are gone".
@@ -810,14 +833,56 @@ def _remember_sync(bank_id, at, result) -> dict:
     return dict(result)
 
 
+def folder_sync_state(user_id) -> dict:
+    """What the bank LIST can say about every source folder WITHOUT walking it —
+    {bank_id: folder_sync}. The cheap counterpart of ``refresh_banks``.
+
+    The list used to force a full re-walk of every bank's folder on every load.
+    That is a side effect a navigation should not pay for: measured on a real
+    library of 8 banks / 86 493 images it cost 690-1 190 ms per load (1 341 to
+    1 777 ms on the reporter's own instance), just to open a page the user may
+    only be passing through.
+
+    What is kept here is what costs one syscall per BANK instead of one per
+    image: whether the folder is still there at all. That is the warning that
+    actually matters on this page (an unplugged drive, a renamed folder), and it
+    is now reported even on a cold process, where the walk-based version had
+    nothing cached to report. The rest of the last known walk (``missing``) rides
+    along, with the per-walk EVENTS zeroed — nothing was added by a call that
+    did not look.
+
+    ``walked`` says whether these numbers come from a walk at all, and ``age``
+    how old it is (seconds, None when never), so the page can SAY that its
+    counts may lag instead of quietly showing stale ones. The walk itself is one
+    click away (``?rescan=1``) and still automatic when a bank is opened."""
+    now = time.monotonic()
+    out = {}
+    for bank_id, source_path in (
+            ImageBank.query
+            .with_entities(ImageBank.id, ImageBank.source_path)
+            .filter_by(user_id=user_id).all()):
+        last = _folder_sync.get(bank_id)
+        state = {**(last['result'] if last else _EMPTY_SYNC),
+                 'added': 0, 'not_added': 0}
+        # The probe beats the cache in BOTH directions: a folder that went away
+        # since the last walk is reported now, and one that came back stops
+        # being reported as gone.
+        state['unavailable'] = not (source_path and os.path.isdir(source_path))
+        state['walked'] = last is not None
+        state['age'] = round(now - last['at'], 1) if last else None
+        out[bank_id] = state
+    return out
+
+
 def refresh_banks(user_id, force=False) -> dict:
-    """refresh_bank() over every bank of the user — {bank_id: result}. Used by
-    the bank list, which is loaded when the user NAVIGATES to the page (never
-    polled), so it forces the walk: opening the tab right after dropping files
-    in a folder must show them, and the cooldown would swallow that. Measured on
-    a real library of 6 banks / 22 000 images: ~175 ms in total, the bulk of it
-    one 15 800-image bank. A bank whose folder is unavailable simply reports it;
-    it never fails the list."""
+    """refresh_bank() over every bank of the user — {bank_id: result}. The
+    EXPLICIT rescan behind the bank list's 🔄 button (and nothing else): it
+    forces the walk, because a user who just clicked it dropped files in a
+    folder a second ago and the cooldown would swallow exactly that.
+
+    Not what a plain page load runs any more — see ``folder_sync_state`` for why
+    and for what the list says instead. A bank whose folder is unavailable
+    simply reports it; it never fails the list."""
     out = {}
     ids = [row.id for row in ImageBank.query.with_entities(ImageBank.id)
            .filter_by(user_id=user_id).all()]
@@ -825,6 +890,16 @@ def refresh_banks(user_id, force=False) -> dict:
         res = refresh_bank(user_id, bank_id, force=force)
         if res is not None:
             out[bank_id] = res
+    # SAME SHAPE as folder_sync_state, or the page that renders both would call
+    # the answer to a rescan stale — it did, until a screenshot showed the note
+    # still reading "what the app knew last time" right under the toast saying
+    # the folders had just been checked. A bank a running pass owns is not
+    # walked even under force, and reports its real (older) age.
+    now = time.monotonic()
+    for bank_id, res in out.items():
+        last = _folder_sync.get(bank_id)
+        res['walked'] = last is not None
+        res['age'] = round(now - last['at'], 1) if last else None
     return out
 
 
@@ -876,12 +951,8 @@ def relocate_preview(user_id, bank_id, folder) -> dict:
     known = {}
     for (rel,) in db.session.query(BankImage.relpath).filter_by(bank_id=bank_id):
         known.setdefault(os.path.normcase(rel), rel)
-    seen = set()
-    for root, _dirs, files in os.walk(target, onerror=lambda _e: None):
-        for f in files:
-            if f.lower().endswith(IMG_EXTS):
-                seen.add(os.path.normcase(
-                    os.path.relpath(os.path.join(root, f), target)))
+    seen = {os.path.normcase(rel) for rel in
+            _walk_image_relpaths(target, onerror=lambda _e: None)}
     hit = seen & set(known)
     gone = sorted(known[k] for k in set(known) - hit)
     return {

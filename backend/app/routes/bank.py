@@ -95,17 +95,26 @@ def banks_list():
     opens on ONE request instead of one per bank. An unknown/junk dataset_id
     simply omits the field (never a 400: the list itself is still valid).
 
-    Every bank's source folder is re-walked first (see refresh_bank): a bank
-    points at a LIVE folder, so images dropped in it after the bank was created
-    show up here instead of needing a rebuild. Strictly additive, ~5 ms a bank,
-    and the per-bank outcome rides back in ``folder_sync`` so the UI can say why
-    the counters moved."""
-    sync = banks.refresh_banks(LOCAL_USER, force=True)
+    A bank points at a LIVE folder, and this route used to re-walk EVERY bank's
+    folder before answering — so merely navigating to the page cost a full
+    inventory of every image in the library (measured on a real one of 8 banks /
+    86 493 images: 690-1 190 ms per load, 1 341-1 777 ms on the reporter's
+    instance). A GET that expensive punishes passing through.
+
+    The walk now happens where it is worth its price: automatically when a bank
+    is OPENED (``GET /bank/<id>``, cooldown-limited, forced on open), and on
+    demand here with ``?rescan=1`` behind the list's 🔄 button. Without it the
+    list still probes each folder's EXISTENCE (one syscall per bank) and reports
+    how old the last walk is, so the page can say its counts may lag instead of
+    showing stale ones silently. ``folder_sync`` carries both shapes."""
+    rescan = request.args.get('rescan') == '1'
+    sync = (banks.refresh_banks(LOCAL_USER, force=True) if rescan
+            else banks.folder_sync_state(LOCAL_USER))
     rows = banks.list_banks(
         LOCAL_USER, dataset_id=request.args.get('dataset_id') or None)
     for row in rows:
         row['folder_sync'] = sync.get(row['id'])
-    return jsonify({'banks': rows})
+    return jsonify({'banks': rows, 'rescanned': rescan})
 
 
 @bp.post('/bank/create')
