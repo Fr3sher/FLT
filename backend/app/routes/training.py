@@ -1664,8 +1664,12 @@ def dataset_train_import(dataset_id):
     # to this dataset; its dataset version rides along into the deployed name.
     if body.get('cloud_run_id'):
         from ..models import CloudTrainingRun
+        from ..services import cloud_run_dataset as crd
         crun = CloudTrainingRun.query.get(int(body['cloud_run_id']))
-        if not crun or crun.dataset_id != dataset_id:
+        # (id, table), not id alone: this route is reached from a FACE dataset,
+        # and a video run of the same id would otherwise pass the check and get
+        # deployed into this dataset's ComfyUI folder.
+        if not crun or not crd.owns(crun, dataset_id):
             return jsonify({'error': 'unknown cloud run'}), 404
         dense_response = _full_transformer_artifact_response(crun)
         if dense_response:
@@ -2594,8 +2598,12 @@ def dataset_train_cloud_checkpoint(dataset_id):
     rid = request.args.get('run_id', type=int)
     if rid is not None:
         from ..models import CloudTrainingRun
+        from ..services import cloud_run_dataset as crd
         run = CloudTrainingRun.query.get(rid)
-        if run and run.dataset_id != dataset_id:
+        # Same (id, table) ownership test: this endpoint SERVES the run's
+        # checkpoint file, so an id-only match would hand a face dataset's caller
+        # the weights of a video run that shares its id.
+        if run and not crd.owns(run, dataset_id):
             run = None
     else:
         run = ct.latest_run_for(dataset_id, request.args.get('train_type'))

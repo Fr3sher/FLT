@@ -64,7 +64,8 @@ DEFAULTS = {
     #                      emptying the trash after it destroyed weights.
     'paths': {'dataset_images_root': '',                       # '' -> DATA_DIR/datasets
               'cloud_runs_dir': '',                            # '' -> DATA_DIR/cloud_runs
-              'checkpoints_dir': ''},                          # '' -> DATA_DIR/checkpoints
+              'checkpoints_dir': '',                           # '' -> DATA_DIR/checkpoints
+              'video_datasets_dir': ''},                       # '' -> DATA_DIR/video_datasets
     'comfyui': {'api_url': 'http://127.0.0.1:8188', 'base_dir': '',
                 'output_dir': '', 'input_dir': '', 'models_dir': '', 'loras_dir': '',
                 # setup_skipped (default False): the user consciously chose "continue
@@ -333,6 +334,20 @@ DEFAULTS = {
     #   "never stay warm": every distinct query pays the ~8 s load, which is the
     #   right trade on a memory-tight machine.
     'bank_scoring': {'python': '', 'text_search_idle_minutes': 10},
+    # 🗣 Which checkpoint writes the video captions. A SETTING rather than a
+    # constant because the choice is not a preference: a model that describes
+    # what it sees in evasive terms produces captions that are about something
+    # slightly other than the footage, and a LoRA trained on those learns to look
+    # away too — with nothing in the output to reveal it. Empty = the shipped
+    # default, so an install that sets nothing captions exactly as before.
+    # Any checkpoint of the same architecture works; see settings-reference.
+    # style: which PROMPT writes the captions — 'standard' (default, the shipped
+    #   wording) or 'plain', which grants explicit permission to name what is on
+    #   screen. Measured to matter MORE than the checkpoint: asked the standard
+    #   way, even an uncensored model describes around explicit footage, and the
+    #   base model asked plainly outperformed it. A caption that talks around its
+    #   subject teaches the trained model to look away. Empty = 'standard'.
+    'video_caption': {'model': '', 'style': ''},
     # Optional second semantic space for Image Bank. Its interpreter is recorded
     # separately so ✨ Score may borrow a user's CUDA Python without making the
     # SigLIP2 installer mutate that environment. Existing configs without this
@@ -390,6 +405,59 @@ DEFAULTS = {
     #   vision route and SAYS so (see watermark_detector.resolve_backend).
     'watermark_detect': {'python': '', 'models_root': '', 'threshold': 0.94,
                          'device': 'auto', 'locate': True, 'backend': 'auto'},
+    # 🎬 Shot-boundary detection for the video bank (TransNetV2). Declared here so
+    # a full-config Save round-trips these keys instead of failing "unknown config
+    # section" — the same reason bank_scoring is declared above.
+    # python: its interpreter. Empty = reuse the bank-scoring environment, which
+    #   already carries torch; a second copy would cost the user ~2.5 GB for
+    #   nothing. Then the app's own, which simply probes unavailable.
+    # threshold: the detector's cut probability at or above which a frame is a
+    #   boundary. 0.5 is the reference implementation's own default and is NOT a
+    #   measured value for this app's material — lower it to cut more finely on
+    #   soft transitions, raise it if dissolves are being split into fragments.
+    # min_shot_frames: shots shorter than this are DROPPED, not merged into a
+    #   neighbour — merging would silently move that neighbour's boundary, and a
+    #   boundary is the one thing the whole lane is built to get right. 5 rejects
+    #   a stray flash cut while leaving real rapid montages intact. Also not a
+    #   measured constant; no labelled sample of "too short" exists yet.
+    # device: auto|cuda|cpu. The network runs on 48x27 frames, so it is never the
+    #   bottleneck — decoding is. CPU is a perfectly reasonable choice here, and
+    #   it leaves the GPU free for captioning and training.
+    'shot_detect': {'python': '', 'threshold': 0.5, 'min_shot_frames': 5,
+                    'device': 'auto'},
+    # 🎬 Video bank quality cuts (wave 2). ALL None by default — a cut that has
+    # not been chosen filters NOTHING. That is a decision, not an omission: the
+    # published thresholds measurably do not transfer between corpora (the public
+    # motion floor lands at the 7th percentile of this machine's own test bank),
+    # so shipping one as a default would silently gut some users' banks. The
+    # dry-run endpoint exists precisely so a user picks cuts against their OWN
+    # distribution. Raw scores persist; flags are recomputed at read time, so
+    # changing any of these re-sorts every bank instantly, no rescan.
+    # Quality cuts of the 🎬 video bank — all None, because published thresholds
+    # measurably do not transfer between corpora. See video_metrics.THRESHOLD_KEYS
+    # for the canonical list; anything missing here still reads as None.
+    # watermark_max is the ONE cut here that ships with a number, and the reason
+    # is that it is not a corpus statistic. Motion and sharpness are properties
+    # of someone's footage (which is why the published defaults land at the 7th
+    # percentile of this machine's bank); a watermark score is a CLASSIFIER's
+    # probability, calibrated with the model itself — so the image lane's
+    # measurement transfers where a motion floor does not. 0.94 is that
+    # measurement (see watermark_detect.threshold above: 110 hand-labelled images
+    # of a 29 759-image bank; 0.94 flagged none of the 55 clean ones and still
+    # caught 54 of the 55 marked ones). Set it to null to flag nothing.
+    #
+    # duplicate_threshold is a COMPUTE-time setting, not a read-time cut, which is
+    # why it is not in video_metrics.THRESHOLD_KEYS: changing it means re-running
+    # the ✂ Duplicates pass (instant — it re-reads the vectors 🔎 Search cached,
+    # no GPU). 0.96 is inherited from the image lane's semantic near-duplicate cut
+    # over the SAME CLIP space (bank.semantic_dup_threshold); no video-pair
+    # calibration exists yet, and video_clip_dedup says so out loud.
+    'video_bank': {'min_duration_s': None,
+                   'motion_floor': None, 'motion_ceiling': None,
+                   'luma_floor': None, 'freeze_max': None,
+                   'sharpness_floor': None,
+                   'watermark_max': 0.94,
+                   'duplicate_threshold': 0.96},
     # consistency_strength: the dx8152 LoRA anchors STRUCTURE (composition/
     # background), not the face — its own guide says start at 0.5 and that
     # 0.8-1.0 "can prevent edits from applying". 0.9 made every variation a
@@ -1133,6 +1201,35 @@ def banks_root() -> Path:
     one subfolder per bank — never the source images, which stay in the user's
     folder untouched."""
     root = _data_dir() / 'banks'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def video_banks_root() -> Path:
+    """Working data of the 🎬 video banks — THUMBNAILS AND NOTHING ELSE.
+
+    The video bank stores bounds, not media: a clip is a pair of timestamps until
+    the moment it is promoted. So unlike banks_root(), which also holds embedding
+    caches, this tree only ever grows by one small .jpg per detected shot, and
+    deleting it costs a thumbnail pass rather than a triage.
+
+    Separate from banks_root() so the two lanes can be sized, moved and cleaned
+    independently in Settings › Storage — a user with four hundred hours of rushes
+    and a user with fifty thousand photos have very different problems."""
+    root = _data_dir() / 'video_banks'
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+def video_datasets_root() -> Path:
+    """Built video training sets: one flat ``<dataset id>/`` per set, holding the
+    encoded ``clip_0001.mp4`` files and their homonym ``.txt`` captions.
+
+    Relocatable, and it is the video lane's equivalent of dataset_images_root() —
+    this is the directory that grows to tens of GB, because unlike the bank it
+    holds real encoded media. NEVER the same tree as dataset_images_root(): the
+    image lane's storage layout is one folder per dataset id too, and sharing the
+    root would make two different tables claim the same folder name."""
+    p = get('paths.video_datasets_dir') or ''
+    root = Path(p) if p else _data_dir() / 'video_datasets'
     root.mkdir(parents=True, exist_ok=True)
     return root
 

@@ -18,7 +18,12 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 30
 _UPLOAD_TIMEOUT = 300
 _UPLOAD_BATCH = 8
-_DATA_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.txt')
+# What upload_dataset ships to the pod. `.mp4` is here because a video dataset is
+# a flat folder of clips with homonym .txt captions, and without it the upload
+# succeeded while carrying ONLY the captions — the pod would then train on a
+# folder with zero samples, after the GPU had been rented. An image dataset folder
+# is written by the exporter and holds no video, so nothing else changes.
+_DATA_EXTS = ('.png', '.jpg', '.jpeg', '.webp', '.txt', '.mp4')
 _STREAM_BLOCK = 1024 * 1024
 
 

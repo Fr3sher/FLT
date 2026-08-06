@@ -55,6 +55,76 @@ API generation follows each provider's billing and content policy. Read the dire
 | **Dataset ↔ bank round trip** | Promote bank keepers into a dataset or copy dataset keepers into a bank while retaining compatible metadata and provenance |
 | **Safe bulk work** | Undo the last bulk decision, tune thresholds where you work, move a bank without losing analysis, or run the full chain overnight |
 
+### Video Bank *(first release — read the limits)*
+
+Turns long source videos into a **video training set**: a flat folder of `.mp4`
+clips with matching `.txt` captions, cut to the exact frame count and frame rate
+the target model accepts.
+
+| Capability | What it provides |
+|---|---|
+| **Folder → video bank** | Point a bank at a folder of videos. It is referenced **in place** and never written to, like the image bank |
+| **Automatic shot detection** | Finds the cuts with TransNetV2, so a long file becomes individually reviewable shots instead of one blob |
+| **Review without waiting** | The grid shows thumbnails; a click plays that shot from the source, so nothing is encoded before you have decided |
+| **Target-aware cutting** | Pick the model you are building for and the clip length offers **only counts that model can actually ingest** — Wan wants 4n+1 frames, LTX 8n+1, MiniMax H3 five modulo seventeen, and none of them will tell you if you get it wrong |
+| **Encode only what you keep** | Cutting a clip means re-encoding it, so that is paid once, at promotion, for the clips you kept. A bank of 400 shots you triage down to 120 encodes 120 files, not 400 |
+| **Fix a bad cut instead of rejecting it** | Trim either bound (by 1 s or one frame *of your source*), split a shot at the playhead, or draw a shot the detector missed. Bounds only — there is no scrubbable timeline. For image-to-video targets the first frame is the conditioning image, so moving a start picks what the model animates from, and the panel says so |
+
+| **Measure every shot, choose your own cuts** | One pass reads every frame and scores stillness, blur, black moments and frozen stretches. Flags mark shots to *look at* — nothing is auto-rejected — and there are **no default thresholds**: a preview shows how many shots each cut would flag against *your* bank's own distribution before you apply it |
+| **Sound measured, not assumed** | For the targets that keep an audio track (LTX, MiniMax H3), every shot is scored for **how much of it is silence** and its **level in dBFS** — because a dataset of silent clips teaches the model to be silent and the file on disk gives nothing away. "No track", "silent" and "not measured yet" stay three different answers |
+| **Cap one source's share** | Optional cap on how many clips a single file contributes, so a 50-clip set is not quietly three videos over-represented. Keeps each source's earliest clips (same bank, same dataset — not a random sample), and the result reports the share it ended up with |
+| **Trim the transition off both ends** | Optional per-export trim of both bounds (0 by default). A clip the trim makes too short for the target's frame count is **dropped, never exported short** — and counted separately from clips that were never long enough, since only one of the two is fixed by lowering the trim |
+| **Train it without leaving the app** | A promoted set gets a ▶ Train button that runs it through the ai-toolkit installed here — no export, no hand-written config. It queues behind the same GPU as everything else: a captioning pass, a ComfyUI render or an image training in flight refuses the launch instead of racing it |
+| **Shots described in words** | A pass writes what HAPPENS in each shot ("a woman turns and walks away"), which becomes the clip's `.txt` — the prompt it trains on. Captions are drafts: editable per shot, and a re-run never overwrites what you wrote |
+| **Spot the shot you already have** | A pass compares every shot to every other and groups the near-identical takes — ten copies of one gesture do not teach a model ten things. Each pile keeps its **sharpest** member unflagged, so you know which one to keep, and flagged shots can be selected and rejected in one gesture. It costs no GPU and no new decode: it reuses the frame vectors *Find a scene* already cached |
+| **Spot the watermarked shots** | A logo burned into the same corner of every frame is the most consistent thing in a dataset, so it is the first thing a LoRA learns to draw — and it is invisible at thumbnail size. An optional pass runs the same detector the image bank uses over each shot's sharpest frame and flags what it finds. Needs the watermark detector from Setup; a shot it could not judge stays **"not evaluated"**, never "clean" |
+| **Find a scene by typing a word** | One pass looks at a few frames of every shot; after it, typing *a woman walking on a beach* ranks the bank instantly and tells you **which second** of each shot matched. Several frames per shot, so a subject that only appears at the end is still findable. It is a **ranking, not a filter** — every shot scores something against every phrase — and the model **ignores "without"**, so `-word` pushes something down instead |
+
+**What it does NOT do yet**, plainly:
+
+- **No aesthetic scoring.** The technical measures above say what is broken, not
+  what is beautiful — quality ranking and "most varied" are still to come.
+  Searching by words ranks shots by what they LOOK like, which is a different
+  question from whether they are any good.
+- **Near-duplicates are found, but the threshold is inherited, not measured on
+  video.** ✂ Duplicates groups shots at a cosine cut carried over from the image
+  bank's own calibration over the same CLIP space; no video-pair calibration
+  exists yet. It also compares two shots at their *closest* pair of frames, which
+  reaches any given cut more easily than a single-image comparison — so on a bank
+  of similar-looking material, expect to raise it.
+- **No audio captioning, and no audio in the search.** The sound is measured
+  (silence and level) but never described, and 🔎 Find scenes reads frames only —
+  "a door slamming" describes nothing it can see.
+- **Captioning is per-shot prose, not tags.** Every promoted clip gets a `.txt`:
+  its caption when it has one, and an **empty** file when it does not. The file is
+  always written, because a missing one crashes one trainer and makes another drop
+  the clip silently — and an empty one trains uncaptioned, which is why the build
+  dialog counts them out loud before encoding.
+- **Training starts here, but only one target is proven here.** A promoted set
+  has a **▶ Train this dataset** button that hands the clips to the ai-toolkit
+  installed on your machine, and the cloud lane rents a pod for the same set. The
+  eight offered targets (Wan 2.1 and 2.2 in their T2V and I2V variants, LTX-2 and
+  2.3, MiniMax H3) are exactly the video architectures that ai-toolkit ships, and
+  each one's settings were read in its code — but **Wan 2.2 14B is the only one a
+  finished run has been through here**, and the card says so on the others.
+  Measured on that run: 24 GB was full, at 170-185 s per step, with the CPU
+  offload that makes 24 GB possible at all. LTX-2 and 2.3 additionally need you to
+  name a base repository, because nothing installed locally states one.
+- **The cloud lane checks before you spend.** The **☁ Train in the cloud** panel
+  shows the GPU and its hourly price up front, refuses targets that are not
+  training-verified, and a target with no verified base repository asks you to
+  name one rather than guessing a repo id that fails once the pod is paid for.
+  Wan 2.2 saves each checkpoint as a **pair** (high-noise and low-noise experts);
+  both files are offered together, because either one alone is a LoRA nothing can
+  load.
+- **MiniMax H3 needs about 43 GB of weights, and will say so rather than fetch
+  them.** They come from `Comfy-Org/MiniMax-H3`. If they are not on your disk the
+  button names the repository and the size and waits for a yes — a first run that
+  quietly downloaded 43 GB would look like a training that had hung.
+- **MiniMax H3 is licence-restricted.** Its community licence grants no rights in
+  the EU, the UK, South Korea or the USA, and the restriction covers the model's
+  outputs, not only the model. Check your own territory before using that profile.
+
 ### Curate, caption and clean
 
 | Capability | What it provides |
@@ -130,8 +200,8 @@ The detailed journey, screenshots and operational notes now live in the [workflo
 
 Directions, not dates. These are discussed openly on the project's Discord, and the most-requested ideas move up the list.
 
-- **🧬 Merge Lab** *(partly shipped)* — baking your LoRAs into a standalone checkpoint has landed, and so has full-model training on Krea 2. What is left is the *lab* part: **model ↔ model** merges with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids), and full-model training beyond Krea 2 and beyond the cloud lane.
-- **🎬 WAN 2.1 / 2.2 video LoRAs** — ai-toolkit already trains WAN and the scraper can already pull video, so the whole pipeline (scrape, curate, caption, train, test) extends naturally to motion. Community-driven.
+- **🧬 Merge Lab** *(partly shipped)* — baking your LoRAs into a standalone checkpoint has landed, and so has full-model training on Krea 2. What is left is the *lab* part: **model ↔ model** merges with guided recipes, judged side by side in the Test Studio (same seeds, A/B grids), and full-model training beyond Krea 2 Raw and beyond the cloud lane.
+- **🎬 Video LoRAs** — *the dataset half exists and training now launches from the app* (see **Video Bank** above): shot detection, quality measures (motion, exposure, freeze, audio), captions that describe the action, keyword search across shots, target-aware cutting into a trainable folder, and a ▶ Train button that runs the set through your local ai-toolkit or a rented pod. What remains is proving the targets beyond Wan 2.2 with a finished run each, and testing the resulting LoRAs in-app. Community-driven.
 - **🧠 Watermark cleaning during import** — cleaning that happens **during import** instead of as a separate errand, and automation you can trust unattended. *(Detection has caught up: a dedicated detector that needs no vision model now ships alongside the Ollama path, and manual two-pass cleaning already works in datasets and in the Image Bank.)*
 - **🧩 More base models** — additional Flux-family bases (Chroma, Qwen-Image…) with the same one-click flow as Krea 2.
 

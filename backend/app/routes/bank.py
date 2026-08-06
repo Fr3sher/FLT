@@ -535,17 +535,27 @@ def bank_watermark_levels(bank_id):
 def bank_watermark_crop(bank_id):
     """Level 1 — crop away the border-band watermarks (CPU/PIL, invents no pixel).
     The source folder is never written to: the crop lands in the bank's own
-    working copy. 202/409/400."""
-    return _start(banks.start_watermark_crop, _app(), LOCAL_USER, bank_id)
+    working copy. 202/409/400.
+
+    Takes the same {statuses}/{image_ids} scope as the other passes — this one
+    produces new image files, so being able to aim it is worth more here than
+    anywhere else. A body without them is the request that shipped before, byte
+    for byte."""
+    data = request.get_json(silent=True) or {}
+    return _start(banks.start_watermark_crop, _app(), LOCAL_USER, bank_id,
+                  **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/watermark/inpaint')
 def bank_watermark_inpaint(bank_id):
     """Level 2 — repaint what is still flagged. {method:'auto'|'lama'|'klein'}.
-    202/409/400/503 (503 carries the actionable reason: engine missing, GPU busy)."""
+    202/409/400/503 (503 carries the actionable reason: engine missing, GPU busy).
+
+    Takes the same {statuses}/{image_ids} scope as the other passes. A body
+    without them repaints exactly what it repainted before."""
     data = request.get_json(silent=True) or {}
     return _start(banks.start_watermark_inpaint, _app(), LOCAL_USER, bank_id,
-                  method=data.get('method') or 'auto')
+                  method=data.get('method') or 'auto', **_scope(data))
 
 
 @bp.post('/bank/<int:bank_id>/watermark/undo')
@@ -631,6 +641,21 @@ def bank_angles(bank_id):
     data = request.get_json(silent=True) or {}
     return _start(banks.start_faces, _app(), LOCAL_USER, bank_id,
                   angles_only=True, **_scope(data))
+
+
+@bp.get('/bank/<int:bank_id>/activity')
+def bank_activity(bank_id):
+    """The live job alone — what the progress banner and its Stop button need.
+
+    Deliberately NOT the workspace payload: that one runs ~60 bank-wide
+    aggregates and is polled every 2 s while a pass runs, which is exactly when
+    it is slowest. This route reads one indexed row and an in-memory job
+    snapshot, so the banner keeps arriving on a 50 000-image bank. No source
+    folder re-walk either — this is the poll, not the open."""
+    payload = banks.bank_activity(LOCAL_USER, bank_id)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
 
 
 @bp.get('/bank/<int:bank_id>/coverage')

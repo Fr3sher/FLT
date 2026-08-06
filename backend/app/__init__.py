@@ -257,6 +257,11 @@ _SCHEMA_ADDITIONS = (
     ('training_run_record', 'note', 'TEXT'),
     ('training_preset', 'dataset_kind', 'VARCHAR(16)'),
     ('training_preset', 'variants', 'TEXT'),
+    # Which table `cloud_training_run.dataset_id` points into. Deliberately
+    # NULLABLE with no server default: every historical run predates the column
+    # and must be READ as 'face_dataset' rather than rewritten by a migration —
+    # see services/cloud_run_dataset.table_of, the only reader of this value.
+    ('cloud_training_run', 'dataset_table', 'VARCHAR(32)'),
     ('lora_test_image', 'error', 'TEXT'),
     ('lora_test_image', 'resolution_multiplier', 'REAL'),
     # WHICH checkpoint produced this image, written at generation time instead of
@@ -361,6 +366,22 @@ _SCHEMA_ADDITIONS = (
     # no groups on it, and every pinned picture keeps the geometry it had.
     ('canvas_image_node', 'group_id', 'VARCHAR(40)'),
     ('canvas_image_node', 'group_pos', 'INTEGER'),
+    # 🎬 Video wave 2: the metrics scan's raw per-clip summary. Additive so a
+    # video bank cut by wave 1 keeps every clip and simply reads "not measured".
+    ('video_clip', 'metrics_json', 'TEXT'),
+    # 🎬 Video wave 3: whether this shot's frames were embedded for 🔎 Search.
+    # Additive so a bank cut and measured by the earlier waves keeps every clip
+    # and simply reads "not searchable yet" until the pass runs.
+    ('video_clip', 'embed_state', 'VARCHAR(12)'),
+    # 🎬 Video wave 5: the shot's caption and whether a human has touched it.
+    # Additive, so every bank cut by the earlier waves keeps its clips and simply
+    # reads "not captioned yet".
+    ('video_clip', 'caption', 'TEXT'),
+    ('video_clip', 'caption_state', 'VARCHAR(12)'),
+    # Which checkpoint wrote the caption. Additive: rows captioned before the
+    # model became configurable read NULL, which is honest — nobody recorded it.
+    ('video_clip', 'caption_model', 'VARCHAR(120)'),
+    ('video_clip', 'caption_style', 'VARCHAR(16)'),
 )
 
 # Indexes that only a FRESH database ever got. `index=True` on a model column is

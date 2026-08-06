@@ -1,5 +1,7 @@
-// =====================================================================//  🎁 What's new — in-app changelog feed (source of truth)
-// =====================================================================//
+// =====================================================================
+//  🎁 What's new — in-app changelog feed (source of truth)
+// =====================================================================
+//
 //  WHY THIS FILE EXISTS
 //  --------------------
 //  The update banner only fires on TAGGED releases. Between releases, features
@@ -64,6 +66,157 @@ export const WHATS_NEW = [
     date: '2026-08-06',
     title: 'Search the web for images by keyword',
     blurb: 'Type what you are looking for instead of hunting for a gallery URL first. No account, no API key. Results come from third-party sites, so check the licence before using one.',
+  },
+  {
+    id: '2026-08-06-video-extras-installable-from-setup',
+    date: '2026-08-06',
+    title: 'The video extras can now be installed where the app said they were',
+    blurb:
+      'The Video bank\'s banner told you "Install the video extra from Setup" — and Setup had no such button: both installs existed, but only for the API. Setup\'s optional-helpers step now carries the two missing cards: 🎬 Video decoding (PyAV + bundled ffmpeg into the app\'s own Python, no torch) and 🎞️ Shot detection (TransNetV2 into the scoring Python, CPU is fine). One click each, live progress, and the banner clears without a restart. A new test holds Setup to every install the video banners promise, so a pass can no longer point at a button that does not exist.',
+    to: '/setup',
+  },
+  {
+    id: '2026-08-06-video-watermark-flag',
+    date: '2026-08-06',
+    title: 'Spot the watermarked shots before they teach your LoRA a logo',
+    blurb:
+      'Rushes come off stock sites and other people\'s uploads, and a logo sitting in the same corner of every frame is the most consistent thing in your dataset — so it is the first thing a LoRA learns to draw. You cannot catch that by scrolling 90-pixel thumbnails. The new 🔖 Watermarks pass runs the same detector the image bank uses over each shot\'s sharpest frame and flags what it finds. Nothing is deleted: it is an amber flag you can filter on and act on. Needs the watermark detector from Setup; the cut sits in 🎚 Quality cuts at the measured 0.94, and a shot the pass has not judged is never called clean.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-06-video-duplicate-shots',
+    date: '2026-08-06',
+    title: 'Find the takes you already have, without watching them twice',
+    blurb:
+      'Ten near-identical takes of one gesture do not teach a model ten things — they teach it one thing ten times as loudly, and that is how a LoRA ends up unable to do anything else. The new ✂ Duplicates pass compares your shots to each other and groups the near-identical ones, keeping the sharpest of each pile unflagged so you know which one to keep. It costs no GPU and no waiting: it reuses the frame vectors 🔎 Find scenes already cached, so it is dot products over a file you already have. Flags only — nothing is rejected or deleted for you.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-06-video-flag-chips',
+    date: '2026-08-06',
+    title: 'Act on a quality flag instead of just reading it',
+    blurb:
+      'The amber flags in a video bank could be read one shot at a time and nothing more. There is now a row of chips above the gallery — "Barely moves (14)", "Same as another shot (31)" — and pressing one narrows the grid to exactly those shots, so you can select them and reject the lot in one gesture. The counts cover the shots currently loaded and the row says so when there are more to load.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-minimum-length',
+    date: '2026-08-04',
+    title: 'Half-second flash cuts stop cluttering your triage',
+    blurb:
+      'Shot detection deliberately keeps very short cuts — a real flash cut is a real shot, and a detector that hides them also hides genuine boundaries. The price was a grid full of half-second shots you scrolled past over and over, and that could never reach a dataset anyway. 🎚 Quality cuts now has a "Minimum length" field: type 1 second and every shorter shot wears an amber flag you can see and sort by. It is the one cut that works straight after detection — it reads the shot bounds, so you do not have to run the measuring pass first — and Preview tells you how many it would flag before you apply it. Nothing is deleted: it is a flag, like every other cut in that panel.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-train-local',
+    date: '2026-08-04',
+    title: 'Your video sets can now be trained here, without leaving the app',
+    blurb:
+      'A promoted video set now carries a ▶ Train this dataset button, and it hands the clips straight to the ai-toolkit already installed on your machine — no export, no copy, no config to write by hand. It shares the GPU with everything else honestly: a captioning pass or a ComfyUI render in flight refuses the launch instead of fighting over the card, and an image training already running blocks it exactly as another video run would. MiniMax H3 is wired in alongside Wan, with the quantisation, the noise schedule, the audio flags and the guidance its own trainer actually expects — a mismatch there does not crash, it just trains a slightly wrong model, which is why each value was read in the installed trainer rather than guessed. Two things it refuses to do quietly. H3 needs about 43 GB of weights: if they are not on your disk the button says so, names the repository and the size, and waits for a yes rather than turning into a silent overnight download. And a set re-promoted to a different target is refused rather than resumed, because the run folder still holds the previous model’s LoRA. Wan 2.2 is the one target a finished run has been through here; the card says plainly which of the others are wired but not yet proven.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-04-video-cloud-training',
+    date: '2026-08-04',
+    title: 'A promoted video dataset can now be trained on a rented GPU without leaving the app',
+    blurb:
+      'Open a video training set in your library and it has a Cloud training panel: pick a step count, click Train in the cloud, and watch the run — the GPU it landed on and what it costs per hour are on screen as soon as the pod has them. When it finishes, the checkpoints are listed by step and downloadable from the same panel. Wan 2.2 saves TWO files per step, the high-noise and low-noise experts, and either one alone is a LoRA nothing can load — so a step is offered as a step, with both of its files, never as a loose file list. A run that failed has a Retry, a run that finished has Train further, and continuing a Wan run sends both experts back to the new pod rather than resuming half of it. Before the job starts, the pod is asked to decode one of the clips you just uploaded with the same decoder the trainer uses; a pod that cannot read them fails in the first minute instead of billing you for hours of training on nothing.',
+    to: '/datasets',
+  },
+  {
+    id: '2026-08-04-video-caption-wording',
+    date: '2026-08-04',
+    title: 'Captions can now speak plainly instead of describing around the subject',
+    blurb:
+      'Next to 🗣 Describe shots there is now a Caption wording choice. Standard is the wording that shipped and stays the default. Plain gives the model explicit permission to name what is actually on screen rather than reaching for vague stand-ins. This came out of a measurement, not a hunch: on real footage, four combinations were compared and the WORDING mattered more than the model did — the stock model asked plainly named things precisely and wrote the best action description of the four, while an uncensored model asked the old way still described around the subject. That matters because a caption that talks around its footage is a dataset defect you cannot see: the text reads perfectly well, the training set looks complete, and the LoRA learns the evasion. Every caption now records which wording produced it, so a bank captioned across a change is still one you can reason about. Pick it per run, or set it once in your config.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-caption-model-choice',
+    date: '2026-08-04',
+    title: 'Captions can now speak plainly — the model that writes them is yours to choose',
+    blurb:
+      'The 🗣 Describe shots pass had one model wired in. On a real corpus that turned out to be a dataset problem rather than a matter of taste: a captioner that describes what it sees in evasive terms produces captions that are about something slightly other than your footage — and a LoRA trained on those learns to look away too, with nothing in the output to reveal it. The captions read perfectly well; they are just not about the shot. So the checkpoint is now a setting, `video_caption.model`. Leave it empty and nothing changes: the same model as before, the same captions. Point it at any checkpoint of the same architecture and the pass uses that instead. Two things come with it. If the model is not on your machine yet, the pass SAYS so in its own progress line before it starts, because the first run downloads it and that should never be a silent twenty-minute wait. And every caption now records which model wrote it, so a bank captioned half before the change and half after is still a bank you can reason about.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-describe-shots',
+    date: '2026-08-04',
+    title: 'Your shots get described — so you can search for what HAPPENS, and so they train on words',
+    blurb:
+      'There is a new 🗣 Describe shots pass. It watches eight frames spread across each shot and writes what happens in it — “a woman turns and walks away”, not an inventory of objects — and that one line does two jobs. It becomes the clip’s .txt sidecar at promotion, which IS the prompt it trains on: until now every promoted clip shipped with an EMPTY prompt, and the trainer accepts that in silence. And it makes 🔎 Find scenes able to answer a question it structurally could not before. CLIP looks at frames, so it finds what a moment LOOKS like; an action is a fact about time and no single frame carries it. With captions the search reads both, and the panel says which halves are running so an empty result can be read correctly. Captions are drafts: open any shot and edit it, and a bulk re-run will not overwrite what you wrote. The promotion now also tells you how many clips are about to ship with no caption at all, before it encodes anything.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-source-cap-knob',
+    date: '2026-08-04',
+    title: 'The per-source cap you could already read about now has a knob',
+    blurb:
+      'The build dialog gains a “Max clips per source” field. The cap itself is not new — it has capped nothing so far because nothing could send it: the setting was implemented and reachable from neither the dialog nor the API. It matters because a 50-clip set that is three videos over-represented looks exactly like a diverse one on disk. Leave it empty for no cap. Each source keeps its EARLIEST clips, so promoting the same bank twice gives the same dataset, and a source with fewer clips than the cap keeps all of them — it trims dominance without punishing scarcity. And when a finished set turns out to lean on one file anyway, the result now says so with the real share instead of leaving you to notice.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-edge-trim',
+    date: '2026-08-04',
+    title: 'Trim the dissolve off both ends of every clip you export',
+    blurb:
+      'A shot boundary is where a cut just happened, so the first and last frames of a detected shot are disproportionately dissolves, fades and leftovers of a transition — and a dataset whose clips all open on half a dissolve teaches the model to open on half a dissolve. The build dialog now has a “Trim each end” field: a number of seconds taken off BOTH bounds of every clip. 0.25 is the common figure; the default is 0, so an existing recipe exports exactly what it exported before. What it will NOT do is hand you a short clip. Frame counts are a property of the target model’s VAE, and ffmpeg happily writes a 32-frame file and exits 0 when asked for 81 — so a clip that no longer supplies the count is dropped rather than exported short. The dialog tells you how many clips the trim will cost before you press the button, and counts them separately from clips that were never long enough: only the first kind is fixed by lowering the trim, and reporting them as one number is how a setting quietly halves a dataset while the material looks to blame.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-audio-metrics',
+    date: '2026-08-04',
+    title: 'Your shots are now listened to, not just looked at',
+    blurb:
+      'For LTX and MiniMax H3 the source’s audio is muxed into every clip you export — and until today nothing had ever listened to it. A shot whose track is a silent stretch, a dropout or a muted camera passed exactly like a shot with sound, because the file on disk is the right length, the right sample rate, and mute. A dataset of silent clips teaches the model to be silent. Measure now reports, per shot, how much of it is silence and its overall level in dBFS, with two new cuts to go with them — Silent share and Loudness floor — raising two different flags on purpose, since a quiet clip can be normalised and a silent one cannot be rescued. Three states are kept strictly apart, because collapsing any two of them makes the bank lie: a file with NO sound track is never flagged (Wan datasets are supposed to look like that), a track that is there and carries nothing is the actual defect, and shots measured before this shipped have no sound reading at all — an audio cut will never flag those, and Measure with re-measure is what fills them in.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-find-scenes',
+    date: '2026-08-04',
+    title: 'Type a word and find the scene, in a folder of rushes with no names',
+    blurb:
+      'A video bank is a haystack whose needles have no names: quality cuts tell you which shots are sharp and which move, and nothing tells you which one has the red car in it. There is now a 🔎 Find scenes box above the gallery. Run the pass once — it looks at a few frames of every shot — then type “a woman walking on a beach” and the gallery is replaced by the shots that look most like it, best first, instantly. Several frames per shot on purpose: a car that only drives into view in the last second would be invisible to a search that had looked at the opening frame, and you would get no hint it had been missed. So every shot contributes a frame near its start, its sharpest frame and one near its end — and every result tells you WHICH SECOND matched, with the player opening right there. Two things it says out loud rather than hiding. It is a ranking, not a filter: every shot scores something against every phrase, so the results always come back full and the line above the gallery tells you how strong the top and the tail really are, plus how many shots have not been looked at yet and could not be searched at all. And “without” does not work — ask for a street without cars and you get cars, because the model ignores the word rather than honouring it. Type “-cars” instead: that pushes them down the ranking, which is a promise the app can actually keep.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-clip-retouch',
+    date: '2026-08-04',
+    title: 'A badly cut shot is no longer a shot you have to throw away',
+    blurb:
+      'Until today, a shot the detector cut one second too early — or one holding a frozen tail — had exactly one available gesture: ✕ Reject, which threw away the eight good seconds to be rid of the bad one. Open any shot and there is now a ✂ Trim & split panel under the player. Nudge either bound by one second or by one frame (one frame OF YOUR FILE, at its own rate), snap a bound to wherever the playhead sits, split a shot in two at the playhead, or draw a shot the detector missed entirely — scrub anywhere in the rush and press ＋ New shot from here. Splitting keeps the decision you were making: split a kept shot and both halves stay kept, so you do not have to find them again among hundreds. One thing worth knowing before you trim: for image-to-video targets, the trainer conditions on the clip’s FIRST frame. Moving a start is therefore not trimming — it is choosing the exact image the model learns to animate from, and the panel says so where the buttons are. Re-cut shots lose their thumbnail and their quality scores on purpose: a thumbnail of a frame the shot no longer contains is not stale, it is wrong. Run Make thumbnails again when you are done cutting. And re-detecting a file no longer destroys the cuts you made by hand.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-quality-flags',
+    date: '2026-08-04',
+    title: 'Your video bank now measures every shot — and tells you which ones to look at',
+    blurb:
+      'One pass reads every frame of every shot and scores what quietly ruins a video dataset: shots that barely move, shots that are all blur, black moments, frozen stretches. Nothing is rejected for you — flagged shots get an amber mark in the grid, and the verdict stays yours. The cuts are yours too: there are deliberately NO default thresholds, because the same number that flags 2% of one bank flags 12% of another. Open 🎚 Quality cuts, set a value, and Preview shows exactly how many shots each cut would flag — per rule, before anything is applied. On a real 4.5-hour test bank the most valuable filter turned out to be the frozen-stretch one: 15% of shots carried a freeze the average could never see. Bonus: thumbnails now come from the SHARPEST measured frame instead of the middle guess.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-04-video-bank',
+    date: '2026-08-04',
+    title: 'Your folder of rushes is now a training set — and a .mp4 is no longer ignored in silence',
+    blurb:
+      'Drop a video into an image bank and until today it was skipped without a word: no row, no warning, nothing to click. Videos now get their own bank. Point it at a folder of rushes and it cuts every file at its shot boundaries, so you triage SHOTS instead of files — a two-hour rush becomes three hundred things you can judge in an afternoon. Click any shot to watch exactly that moment; the grid stays thumbnails, so a bank of hundreds of shots stays as light as a page of photos. Nothing is copied and nothing is re-encoded while you triage: a bank stores where each shot starts and ends, and only the ones you keep are ever encoded. When you build the set, the length menu offers only the frame counts your target model can actually ingest — 29 frames is legal for Wan and illegal for LTX, and no trainer tells you, they just quietly round it down. Two things are written next to the target you pick, because they are what costs a wasted week: whether a LoRA trainer for it is known to exist at all (exactly one of the four), and MiniMax H3’s licence, which grants no rights in the EU, the UK, South Korea or the USA — outputs included. And if a piece is missing, the app names which one: with no ffmpeg you can still scan, cut, watch and triage everything — only the final encode waits.',
+    to: '/video-bank',
+  },
+  {
+    id: '2026-08-06-aim-the-watermark-cleaning-levels',
+    date: '2026-08-06',
+    title: 'Choose which images get cropped or repainted — the two watermark levels no longer fire on one click',
+    blurb:
+      '🚩 Watermarks offered “✂ Auto-crop (16 052)” and “🧽 Inpaint (16 507)” as single buttons: press one and thousands of images were cleaned, with no way to say which. Both now open the same launch window the other passes use — run them on your kept images only, on the undecided ones, on the bin, on all three, or on exactly the images you ticked in the grid. Each line carries the real number for that pile, a run that would touch nothing is refused instead of reporting success, and the window states up front what is reversible: your own files are never written to, the cleaned pixels live in the bank’s own copy, and ↩ Undo cleaning throws them away and re-flags the images — what it cannot reach is an image you already promoted into a dataset, or one whose source file changed on disk since the clean. A run that only covered part of your bank now names what it left out, and flagged images sitting in the bin are reachable at last instead of leaving a dead button. Leave the window alone and both levels behave exactly as before.',
+  },
+  {
+    id: '2026-08-06-big-banks-open-instantly-and-stop-answers-again',
+    date: '2026-08-06',
+    title: 'Big Banks open in a second again — and Stop answers while a pass runs',
+    blurb:
+      'A Bank of 50 000 images took over 12 seconds to load its workspace, and more than 28 while a pass was running — long enough that the progress bar and its Stop button never arrived, so a running scan could not be stopped. The workspace was re-checking the location of every single image on disk, twice each, on every 2-second refresh; it now remembers what it already resolved. The progress bar has also moved to its own tiny request, so it keeps ticking and Stop keeps working no matter how large the Bank or how busy the pass. Measured on a 50 397-image Bank: 18.5 s to 1.5 s, and the progress bar answers in 1 ms.',
+    to: '/bank',
   },
   {
     id: '2026-08-06-each-bank-can-choose-clip-or-siglip2-without-losing-work',
@@ -3489,7 +3642,8 @@ export function markAllSeen(storage, entries = WHATS_NEW) {
 
 // Param-less top-level routes (mirror App.jsx <Routes>).
 const TOP_LEVEL_ROUTES = new Set([
-  '/datasets', '/bank', '/studio', '/cloud', '/canvas', '/guide', '/help', '/setup',
+  '/datasets', '/bank', '/video-bank', '/studio', '/cloud', '/canvas', '/guide',
+  '/help', '/setup',
 ]);
 
 const SETTINGS_IDS = new Set(SETTINGS_SECTIONS.map((s) => s.id));

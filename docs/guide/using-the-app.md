@@ -682,6 +682,20 @@ inside ✨ Score with the default scope.
 A run with **nothing to do** is refused before it starts, with the reason and a
 suggestion — not launched and then reported as a success.
 
+**The two watermark cleaning levels take the same scope**, and they are the two
+where it matters most: ✂ **Auto-crop** and 🧽 **Repaint** are the only actions on
+this page that produce a new image file. Their windows list the same five lines,
+with one difference — their pool is not a pile but *the flagged images carrying a
+usable mark*, so a scope narrows that set and can never widen it. The count on
+each line is the pool the level **walks**; ✂ then crops only the marks that sit
+in a border band, which is the narrower number written on the button itself.
+Both windows state what is reversible before you start: your own files are never
+written to, the cleaned pixels live in the bank's own copy, and ↩ **Undo
+cleaning** deletes those copies and re-flags the images. Undo is bank-wide rather
+than per run, and two things are out of its reach — an image you already promoted
+(that copy was written into the dataset) and an image whose source file changed
+on disk since the clean.
+
 ## When a folder is already one person
 
 Scraped material usually arrives sorted: one folder per person. **👤 Group by
@@ -1974,6 +1988,288 @@ packages, you can skip installing them a second time. It will not be faster.
 reversible at any time, and the note under the passes always says which
 interpreter is in use. If you never open this dialog, nothing changes: an install
 that works today keeps working, untouched.
+
+## The video bank (turn a folder of rushes into shots)
+
+Videos are a different kind of material and they get their own bank. On the
+**🗃️ Bank** page the switch at the top right says which kind you are making —
+**🖼 Images** or **🎬 Video**. This matters more than it looks: an image bank
+skips every `.mp4` you drop into its folder **without a word**, so a folder of
+video used to look like an empty bank.
+
+A video bank triages **shots**, not files. One two-hour rush is not something you
+can judge; the three hundred shots inside it are.
+
+1. **Create it** — name it, point it at the folder. Every `.mp4`, `.mov`, `.mkv`,
+   `.webm` and `.avi` under it (subfolders included) is inventoried in place.
+   Nothing is copied and the folder is never modified.
+2. **▶ Run everything** chains the three passes in the only order that works:
+   **scan** reads what each file is (length, size, frame rate), **find shots**
+   cuts it at its shot boundaries, and **make thumbnails** grabs one frame from
+   the middle of each shot. Each pass is also available on its own, and the box
+   above the buttons always names the one step to take next — run them out of
+   order and each simply finds nothing to do and reports success.
+3. **Triage** — the grid is thumbnails, and only thumbnails. Click one to watch
+   exactly that shot, `←`/`→` to move, `K` to keep, `R` to reject. Filter by
+   status, or click a file in the **Files** list to see only its shots.
+4. **🎬 Build the dataset** encodes what you kept. This is the only step that
+   writes video.
+
+**Nothing is encoded while you triage.** A bank stores where each shot starts and
+ends — no clip file exists until you promote — which is why a bank of hundreds of
+shots costs no disk space, and why the player streams the original file rather
+than a preview.
+
+**A missing piece never disables the whole lane.** The video extra is three
+independent things: reading files, finding shots, and encoding clips. The app
+says which one is missing and what still works — with no ffmpeg, for example, you
+can scan, cut, watch and triage an entire bank, and only the final build waits.
+
+## Measure your shots, and choose your own cuts
+
+**📊 Measure quality** reads every frame of every shot in one pass and scores the
+four things that quietly ruin a video dataset: shots that barely move, shots that
+are all blur, black moments, and frozen stretches. The pass stores raw numbers,
+never verdicts — so changing a threshold later re-sorts the bank instantly, with
+no rescan. Stopping is safe; a re-run picks up where it left off.
+
+Flagged shots get an **amber ⚑ mark** in the grid. Amber, not red, because a flag
+is a reason to *look* — nothing is ever rejected for you. Hover the mark to see
+which cuts a shot tripped.
+
+**There are deliberately no default thresholds.** The same number that flags 2 %
+of one bank flags 12 % of another — a cut only means something against *your*
+bank's own distribution. Open **🎚 Quality cuts**, type a value (leave a field
+empty to disable that cut), and press **👁 Preview**: it answers with how many
+shots each rule would flag, per rule, before anything is applied. If a draft
+would flag most of the bank, the preview says so in as many words instead of
+letting you apply it by accident.
+
+**One cut needs no measuring at all: Minimum length.** Shot detection keeps very
+short cuts on purpose — a real flash cut is a real shot, and a detector that
+refuses to emit one also hides genuine boundaries. The cost is a grid peppered
+with half-second shots you scroll past a hundred times. Type a value in seconds
+and every shorter shot wears the flag, immediately after detection, with no
+measuring pass — this cut reads the shot's own bounds rather than its pixels.
+
+Do not confuse it with the *too short* refusal you may see at promotion. That one
+is your target profile's arithmetic — so many frames at so many fps — and no
+setting on this panel moves it: those shots were never going to land. **Minimum
+length** only decides what gets flagged for your eyes, so you can see and sort
+them *before* spending triage time on them.
+
+Two touches you get for free once shots are measured: thumbnails move from the
+middle-of-shot guess to the **sharpest measured frame**, and the freeze detector
+catches the failure the averages never can — a shot that plays fine and then
+hangs on a still image for a second. On a real 4.5-hour test bank that turned
+out to be the most common defect of all.
+
+**The sound is measured too, for the targets that keep it.** LTX and MiniMax H3
+mux the source's audio into every clip; Wan has no audio at all and forces the
+track off. So the pass also reports, per shot, **how much of it is silence** and
+**its overall level in dBFS** — because a dataset of silent clips teaches the
+model to be silent, and nothing about the file on disk reveals it: it is the
+right length, the right sample rate, and mute. Two cuts go with them, **Silent
+share** and **Loudness floor**, and they raise two different flags on purpose —
+a quiet clip can be normalised, a silent one cannot be rescued.
+
+Three states are kept apart here, and it matters:
+
+- **no sound track** — a property of the file. Never flagged; a Wan dataset is
+  supposed to look like this.
+- **silent** — a track that is there and carries nothing. That is the defect.
+- **not measured** — nobody has listened yet. Shots measured before this shipped
+  carry no sound reading at all, and an audio cut will never flag them. **Run
+  Measure again with re-measure** to fill them in; the pass otherwise skips
+  everything it has already done.
+
+## Retouch a cut: trim, split, or draw a shot by hand
+
+Shot detection is good and it is not right. It cuts a slow dissolve a second
+early, and it happily hands back a shot whose last second is a frozen frame.
+Before this panel existed the only gesture available on either was **✕ Reject** —
+throwing away eight good seconds to be rid of one bad one.
+
+Open any shot and unfold **✂ Trim & split this shot**, under the player:
+
+- **Nudge either bound** by 1 s or by one frame. One frame means one frame *of
+  your source file*, at its own rate — a 25 fps rush steps by 0.040 s, a 59.94 fps
+  one by 0.017 s. The frame counts your target model wants are a different thing
+  entirely, decided at build time.
+- **⇤ playhead** snaps a bound to wherever the video is paused. Scrub to the frame
+  you want, click, save.
+- **✂ Split here** cuts the shot in two at the playhead. The half you were looking
+  at keeps its triage decision, and so does the new one: split a *kept* shot and
+  both halves stay kept, so you never have to find them again among hundreds.
+- **＋ New shot from here** draws a shot the detector missed entirely. The player
+  is pointed at the whole rush, so you can scrub anywhere in the file — not only
+  inside the shot you opened — and mark a boundary that was never found.
+
+**For image-to-video targets, the first frame is the conditioning image.** The
+trainer conditions an i2v sample on the clip's *first* frame, so moving a start is
+not trimming: it is choosing the exact picture the model learns to animate from.
+If the first second of a shot is a dissolve, an i2v LoRA trained on it learns to
+animate dissolves. The panel repeats this line where the buttons are.
+
+**A re-cut shot loses its thumbnail and its quality scores, on purpose.** They
+were measurements *of the old bounds* — a thumbnail showing a frame the shot no
+longer contains is not stale, it is wrong. The tile goes blank and the bank's
+next-step line offers **🖼 Make thumbnails** again; run it once when you are done
+cutting rather than after every edit.
+
+**Limits worth knowing.** A shot must last at least 0.5 s, and both halves of a
+split must too — the buttons say so rather than silently clamping. Retouching is
+refused while a pass is running on the bank (a thumbnail pass mid-edit would
+produce a picture of the old span marked as current), so stop the pass first.
+Re-detecting a file deletes the shots the detector drew and **never** the ones you
+cut by hand; those stay, and may overlap the fresh ones. And editing a shot that
+is already in a built dataset is allowed: the dataset stored its own copy of the
+bounds when it was encoded, so nothing already on disk changes.
+
+## Find scenes in a video bank by typing a word
+
+A folder of rushes is a haystack whose needles have no names. The quality cuts
+tell you which shots are sharp and which move; they cannot tell you which one has
+the red car in it. **🔎 Find scenes** does: type *a woman walking on a beach* and
+the gallery is replaced by the shots that look most like it, best first.
+
+**Run the pass once, search as often as you like.** The 🔎 Find scenes button
+looks at a few frames of every shot and remembers what they look like. It is the
+slow part — it needs the same environment as the image bank's ✨ Score (Setup ▸
+Quality tools, or a Python you already have with torch and open_clip), and on a
+CPU it is minutes rather than seconds. Every search afterwards is instant and
+costs nothing.
+
+**Several frames per shot, not one.** A shot is a span of time, and a thumbnail is
+one instant of it. If a car only drives into view in the last second, a search
+that had looked at the opening frame would never find that shot — and would give
+you no hint that it had missed it. So each shot contributes a frame near its
+start, its sharpest frame, and one near its end, and a shot's score is the best of
+the three. Every result tells you **which second matched**, and opening it starts
+the player right there.
+
+**It is a ranking, not a filter.** Every shot scores something against every
+phrase, so the results always come back full, however wrong the query. The line
+above the gallery says how strong the top and bottom of the ranking are, and how
+many shots could not be searched at all — a shot the pass has not reached cannot
+be found by any phrase, and it would be easy to conclude the scene simply is not
+in the bank.
+
+**What it cannot do**, measured on the model this app uses:
+
+- **“Without” is ignored, not honoured.** Ask for *a street without cars* and you
+  get cars. Type `-cars` instead: that subtracts the unwanted thing from the score
+  and pushes those shots down the ranking. It cannot promise their absence, and
+  the panel says so rather than pretending otherwise.
+- **It cannot count.** *Two people* barely outranks a picture of one.
+- **It cannot hear, and it cannot see motion.** Only still frames are looked at,
+  so *a door slamming* or *panning left* describe nothing it can use.
+- **Left and right carry almost no meaning.**
+
+Searching respects the triage filter you are on, so *keep only* plus a phrase
+ranks what you already decided to keep. Changing the filter clears the search: a
+ranking computed over one bucket has nothing to say about another.
+
+## Describe your shots, and search what happens in them
+
+🔎 Find scenes ranks by what a moment **looks like**. It cannot find an action —
+"turns and walks away" is a fact about *time*, and no single frame carries it. The
+**🗣 Describe shots** pass closes that gap: it watches eight frames spread across
+each shot and writes one or two sentences about what happens in it.
+
+That line does two jobs, and the second is the one nobody sees coming:
+
+- **It is what the clip trains on.** At promotion each clip gets a `.txt` sidecar
+  next to it, and that file *is* the prompt. Before this pass existed every
+  promoted clip shipped with an **empty** one — which the trainer accepts in
+  silence, training the clip on no prompt at all. The build dialog now tells you
+  how many clips are about to go out uncaptioned, before it encodes anything.
+- **It makes the search read words as well as pixels.** Once captions exist,
+  typing a phrase ranks on both, and the panel says which halves are running so
+  that "nothing found" can be read correctly.
+
+**Captions are drafts.** Open any shot and edit the caption under the player; a
+bulk re-run will never overwrite one you wrote. Clearing it puts the shot back in
+the queue. Regenerating over your own words is possible, but you have to ask for
+it by name.
+
+**You can change how plainly they are written.** Next to the button there is a
+**Caption wording** choice: *Standard* (the shipped wording) or *Plain*, which
+gives the model explicit permission to name what is on screen instead of
+describing around it. On adult footage that difference is not cosmetic — a
+captioner asked the standard way produces captions that are *about something
+other than the shot*, and a LoRA trained on those learns the evasion. It was
+measured rather than assumed: the wording turned out to matter **more than the
+model**, and the stock model asked plainly beat an uncensored one asked the old
+way. Every caption records which wording produced it, and the choice is
+remembered as `video_caption.style` if you set it in your config.
+
+**You can change which model writes them.** The pass ships with one checkpoint
+and uses it unless you say otherwise (`video_caption.model` — see *Settings
+reference*). It is worth changing when the default **talks around** what your
+footage shows: a caption that names things evasively is not a style choice, it
+teaches the trained model to look away too, and the captions read perfectly well
+while being about something slightly other than the shot. Any checkpoint of the
+same architecture is a drop-in. If it is not on your machine, the first run
+downloads it — and the pass says so in its progress line before captioning
+anything, rather than sitting at 0 % while gigabytes arrive. Every caption
+records which model wrote it, so a bank captioned across a change stays readable.
+
+**It needs the same environment as ✨ Score** (torch + transformers) and it uses
+the GPU when there is one — a 4B vision model on a CPU is minutes per shot. It
+will not start while a training run owns the card, and stopping is safe: what is
+captioned stays captioned and the next run picks up where it left off.
+
+## Video training sets (and the two things to check before you cut one)
+
+Promoting a video bank builds a flat folder of clips with a `.txt` caption next
+to each one, and lists it in your library under **🎬 Video training sets**.
+
+**You can cap how many clips one source contributes.** A 50-clip set that is
+three videos over-represented looks exactly like a diverse one on disk, and that
+imbalance is the kind that quietly overfits a source. **Max clips per source**
+caps it; leave it empty for no cap. The cap trims dominance without punishing
+scarcity — a file with fewer clips than the cap keeps all of them — and it is
+**not a random sample**: each source keeps its earliest clips, so promoting the
+same bank twice gives you the same dataset. When a finished set leans on one file
+anyway, the result tells you the real share.
+
+**You can trim the edges of every clip.** A shot boundary is where a cut just
+happened, so the first and last frames of a shot are disproportionately
+dissolves, fades and leftovers of a transition — and a dataset whose clips all
+open on half a dissolve teaches the model to open on half a dissolve. **Trim each
+end** takes a number of seconds off *both* bounds; 0.25 is the common figure, and
+the default is 0 so an existing recipe exports exactly what it exported before.
+
+The trim never shortens a clip. Frame counts are a property of the target's VAE,
+so a clip that no longer supplies the count is **dropped, not exported short** —
+ffmpeg would write the short file and exit 0, and ai-toolkit would train it as
+repeated stills without a word. The dialog says how many clips the trim will cost
+*before* you press the button, and those are counted separately from clips that
+were never long enough: only the first kind is fixed by lowering the trim.
+
+**The clip length is chosen in FRAMES, from a menu.** That is not pedantry: the
+legal frame counts are a property of each model's VAE, not of video. 29 frames is
+legal for Wan and illegal for LTX; MiniMax H3 wants counts of the form 17n+5. No
+trainer refuses an illegal count — they round it down in latent space and say
+nothing. So the menu offers only counts the target can actually ingest, with the
+duration shown next to each at that model's own frame rate.
+
+Two labels sit next to every target, and both are there to save a wasted week:
+
+- **Not trainable yet** — the app knows the model's geometry perfectly and no
+  LoRA trainer for it is known to exist. Exactly one target of the four currently
+  clears that bar (Wan 2.1 / 2.2 14B). You can still cut a dataset for the
+  others; just know that today nothing is known to train on it.
+- **Licence limits** — MiniMax H3's Community Licence grants rights **only**
+  inside an "Applicable Territory" that excludes the EU, the UK, South Korea and
+  the USA. The restriction covers the **outputs**, not just the model, so keeping
+  your training private is not a way around it. Check your territory before you
+  build the set, not after.
+
+Deleting a video dataset deletes the encoded clips and nothing else: the bank
+keeps every shot and every decision, so you can re-cut at another length or for
+another target without triaging again.
 
 ## Stopping Score, and what a relaunch costs
 

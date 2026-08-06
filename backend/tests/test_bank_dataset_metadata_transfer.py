@@ -1283,6 +1283,71 @@ def test_legacy_runtime_caches_without_hashes_are_never_transferred(app, tmp_pat
         assert not cache_dir.exists() or not list(cache_dir.glob('*.npz'))
 
 
+def test_complete_legacy_quality_carries_face_scalars_without_an_old_face_hash(
+        app, tmp_path):
+    """An old unhashed Face cache must not discard a proven promotion.
+
+    The scalar face measurements remain portable through the narrow legacy
+    TOFU gate; the unverifiable Face embedding itself deliberately does not.
+    """
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source = _bank_with_analysed_image(app, tmp_path)
+        source.analysis_fingerprint = None
+        db.session.commit()
+        _drop_runtime_cache_hashes(banks._face_cache_path(source_bank.id))
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source.id], 'Legacy face copy')
+        destination = db.session.get(ImageBank, destination_id)
+        assert destination is not None
+        copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        carried = (
+            'face_state', 'face_det', 'face_yaw',
+            'face_cluster', 'face_cluster_origin',
+            'aesthetic_score', 'nsfw_score', 'style_cluster',
+        )
+        for name in carried:
+            assert getattr(copied, name) == getattr(source, name), name
+        assert copied.analysis_fingerprint is None
+        copied_cache = _runtime_cache_payloads(destination, (copied,))
+        copied_path = str(Path(destination.source_path) / copied.relpath)
+        assert set(copied_cache[copied_path]) == {'score'}
+
+        dataset = datasets.create_dataset(
+            'local', 'Legacy face Dataset', 'legacy_face_dataset')
+        banks.start_promote(
+            app, 'local', source_bank.id, [source.id], dataset.id)
+        dataset_row = FaceDatasetImage.query.filter_by(
+            dataset_id=dataset.id).one()
+        snapshot = transfer.parse_snapshot(dataset_row.bank_analysis_snapshot)
+        assert snapshot is not None
+        assert snapshot['assurance'] == 'legacy_tofu'
+        for name in carried:
+            assert snapshot['analysis'][name] == getattr(source, name), name
+
+        returned_id = banks.start_dataset_import(
+            app, 'local', dataset.id, 'Legacy face returned')
+        returned_bank = db.session.get(ImageBank, returned_id)
+        assert returned_bank is not None
+        returned = BankImage.query.filter_by(bank_id=returned_id).one()
+        for name in ('face_state', 'face_det', 'face_yaw',
+                     'aesthetic_score', 'nsfw_score'):
+            assert getattr(returned, name) == getattr(source, name), name
+        assert returned.face_cluster is not None
+        assert returned.face_cluster_origin == 'asserted'
+        assert returned.style_cluster is not None
+        assert returned.analysis_fingerprint is None
+        returned_cache = _runtime_cache_payloads(returned_bank, (returned,))
+        returned_path = str(Path(returned_bank.source_path) / returned.relpath)
+        assert set(returned_cache[returned_path]) == {'score'}
+
+
 def test_same_size_mtime_replacement_cannot_reuse_hashed_runtime_cache(
         app, tmp_path):
     from app.extensions import db

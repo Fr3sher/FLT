@@ -32,9 +32,35 @@ class BankJobBusy(Exception):
         self.kind = kind
 
 
+def _key(bank_id):
+    """The registry slot for a bank id — TWO LANES KEY THIS DIFFERENTLY.
+
+    Numeric ids are normalised to int, and that coercion is load-bearing: the
+    image lane crosses a JSON boundary where the same Bank arrives as ``7`` or
+    ``'7'``, and those have to be one slot or a second pass slips past the
+    serialization.
+
+    Anything NOT numeric passes through unchanged. The video lane deliberately
+    keys on ``'video:<id>'`` (see ``video_bank_service.job_key``) so that video
+    bank 1 and image bank 1 cannot occupy the same slot — their ids overlap by
+    construction, and a collision would refuse a video pass in the name of an
+    image pass the user cannot see. A bare ``int()`` here raised ValueError on
+    that key, which the route layer turned into a 400: every pass in the video
+    lane, from the probe onward, answered "bad request" the moment reservations
+    landed. Two lanes, one registry, and nothing was holding the assumption they
+    share — test_bank_jobs_key_namespaces.py now does.
+    """
+    try:
+        return int(bank_id)
+    except (TypeError, ValueError):
+        return bank_id
+
+
 def _reservation_keys(bank_id, reserve_ids=None):
+    # `reserve_ids` stay strictly numeric: they are IMAGE ids reserved alongside
+    # their bank, a different thing from the bank key itself.
     return tuple(dict.fromkeys(
-        [int(bank_id), *(int(value) for value in (reserve_ids or ())) ]))
+        [_key(bank_id), *(int(value) for value in (reserve_ids or ())) ]))
 
 
 def _drop_job_locked(job):
@@ -103,7 +129,7 @@ def require_reservation(reservation, bank_id):
     themselves.  Exact object identity is the capability: a copied mapping, a
     finished/purged job, or a token for another Bank fails closed.
     """
-    key = int(bank_id)
+    key = _key(bank_id)
     with _lock:
         valid = bool(
             isinstance(reservation, dict)
@@ -132,7 +158,7 @@ def mutation_lease(bank_id, kind, *, capability=None, total=0,
     """
     owned = capability is None
     previous = None
-    key = int(bank_id)
+    key = _key(bank_id)
     if owned:
         with _lock:
             if preserve_finished:
@@ -208,7 +234,7 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
     """
     keys = _reservation_keys(bank_id, reserve_ids)
     with _lock:
-        cur = _jobs.get(int(bank_id))
+        cur = _jobs.get(_key(bank_id))
         if cur:
             ttl = _FINISHED_TTL if cur.get('finished') else _STALE_TTL
             if time.time() - cur.get('_touched', 0) > ttl:

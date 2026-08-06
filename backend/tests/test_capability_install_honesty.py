@@ -45,7 +45,10 @@ def test_every_capability_install_set_covers_its_own_probe_imports():
     # import name differs from (or matches) the distribution name.
     provider = {'rembg': 'rembg', 'onnxruntime': 'onnxruntime',
                 'insightface': 'insightface', 'cv2': 'opencv-python-headless',
-                'numpy': 'numpy', 'simple_lama_inpainting': 'simple-lama-inpainting'}
+                'numpy': 'numpy', 'simple_lama_inpainting': 'simple-lama-inpainting',
+                # 🎬 video lane — the import names differ from the distributions,
+                # which is exactly the drift this guard exists to catch.
+                'av': 'av', 'transnetv2_pytorch': 'transnetv2-pytorch'}
     for action, pkgs in setup_installer._CAPABILITY_PACKAGES.items():
         expr = capabilities.CAPABILITY_IMPORTS.get(action)
         if not expr:

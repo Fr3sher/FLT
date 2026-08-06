@@ -11,6 +11,7 @@ import { datasetFolderNotice } from '../utils/pathRelation'
 import FolderSyncNote from '../components/bank/FolderSyncNote'
 import RelocateBankDialog from '../components/bank/RelocateBankDialog'
 import BankScrapePanel from '../components/bank/BankScrapePanel'
+import BankLaneTabs from '../components/videobank/BankLaneTabs'
 import { bankListOverview } from '../components/bank/bankOverview.js'
 
 const CURRENT_KEY = 'bankCurrentId'
@@ -178,9 +179,13 @@ export default function BankPage() {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-center gap-2">
+      <header className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-bold text-content">🗃️ Image bank</h1>
         <HelpBadge topic="page-bank" />
+        {/* The kind of bank you are making, said WHERE you make one. Until now a
+            .mp4 dropped in this folder was skipped in silence — this is the only
+            place someone with a folder of rushes would ever have looked. */}
+        <BankLaneTabs className="w-full sm:ml-auto sm:w-auto" />
       </header>
       <p className="text-sm text-content-muted max-w-3xl">
         Point the app at a big unsorted folder (a Telegram export, a scrape dump…) and triage it

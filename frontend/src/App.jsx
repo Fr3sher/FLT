@@ -14,6 +14,7 @@ import DockerUpdateInstructions from './components/common/DockerUpdateInstructio
 import PinokioUpdateInstructions from './components/common/PinokioUpdateInstructions'
 import DatasetPage from './pages/DatasetPage'
 import BankPage from './pages/BankPage'
+import VideoBankPage from './pages/VideoBankPage'
 import StudioPage from './pages/StudioPage'
 import SettingsPage from './pages/SettingsPage'
 import SetupPage from './pages/SetupPage'
@@ -482,6 +483,11 @@ function AppInner() {
             <Route path="/" element={<Navigate to="/datasets" replace />} />
             <Route path="/datasets" element={<DatasetPage />} />
             <Route path="/bank" element={<BankPage />} />
+            {/* Its OWN route rather than a sixth nav item: the desktop bar
+                already overflows at 768 px with five workspaces, and these are
+                two kinds of material for one job — the lane switch lives on both
+                bank pages (components/videobank/BankLaneTabs). */}
+            <Route path="/video-bank" element={<VideoBankPage />} />
             <Route path="/guide" element={<GuidePage />} />
             <Route path="/guide/getting-help" element={<Navigate to="/help" replace />} />
             <Route path="/guide/:section" element={<GuidePage />} />

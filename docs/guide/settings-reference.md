@@ -927,9 +927,10 @@ is deliberately not the same as *empty*.
 
 ### Moving a folder to another drive
 
-Three roots can be pointed anywhere: **Dataset images root**
-(`paths.dataset_images_root`), **Cloud run staging** (`paths.cloud_runs_dir`) and
-the **Checkpoint store** (`paths.checkpoints_dir`). All three default to **empty →
+Four roots can be pointed anywhere: **Dataset images root**
+(`paths.dataset_images_root`), **Cloud run staging** (`paths.cloud_runs_dir`),
+the **Checkpoint store** (`paths.checkpoints_dir`) and **Video datasets**
+(`paths.video_datasets_dir`). All four default to **empty →
 a folder inside the app's data directory**; the field's *Reset to default* gives
 that implicit state back rather than writing today's path in.
 
@@ -953,6 +954,8 @@ leaves the app pointing at a half-filled folder.
 - **Dataset images root** → `paths.dataset_images_root`. Where dataset images are stored. Default **empty → `<data dir>/datasets`**. This folder (and every dataset folder under it) is refused as an **image bank** source: a bank points at a live folder and can delete from it, so the two must never share files — see *Using the app → A bank and a dataset never share files*. Moving this root onto a folder an existing bank already uses is not blocked here, but that bank will say so the next time you open it, and its 🗑 Delete rejected will be refused.
 - **Cloud run staging** → `paths.cloud_runs_dir`. The working area of cloud training runs: the exported dataset copy, the sample images and the mirrored log, one `run_<id>` folder per run. Default **empty → `<data dir>/cloud_runs`**. This is the folder that grows to tens of gigabytes, and the one a cleanup empties.
 - **Checkpoint store** → `paths.checkpoints_dir`. Where the `.safetensors` your cloud runs produce are kept, one `run_<id>` folder per run. Default **empty → `<data dir>/checkpoints`**. **No cleanup in the app ever removes a file from here** — only you can, from the Checkpoints panel or by emptying the trash.
+- **Video datasets** → `paths.video_datasets_dir`. The flat folders of `.mp4` clips (plus their homonym `.txt` captions) that a video bank produces when you promote a selection. Default **empty → `<data dir>/video_datasets`**. **This is where the video lane actually uses disk.** A video bank itself stores almost nothing — only timestamps and one small thumbnail per detected shot — because cutting a clip means re-encoding it, and that is paid once, at promotion, for the clips you kept.
+- **Video banks (working data)** → no path setting; it follows the data directory. Holds the shot thumbnails only: never your source videos, which a bank references in place and never writes to, and never the clips, which do not exist until you promote them.
 
 ### Why checkpoints have their own folder
 
@@ -1177,6 +1180,40 @@ These have no UI control — they're for advanced users editing `config.json` by
 |---|---|---|
 | `engines.chatgpt_subscription_model` | `gpt-5.4-mini` | The Codex **router** model used by the subscription lane — not the image model. The subscription lane renders on whatever image model your plan serves; the API-key lane's image model is `engines.chatgpt_image_model`. |
 
+**Shot detection (video bank):** the boundary detector that cuts a long source into
+individual shots. No UI control yet — the defaults are the reference
+implementation's, and neither of the two numbers below has been measured against
+this app's material, so they are stated as adjustable rather than tuned.
+
+| Key | Default | Role |
+|---|---|---|
+| `shot_detect.python` | `''` | Interpreter that runs the detector. Empty means **reuse the Bank scoring environment**, which already carries torch — a second copy would cost you ~2.5 GB for nothing. Written by the installer; you rarely set it by hand. |
+| `shot_detect.threshold` | `0.5` | Cut probability at or above which a frame is treated as a shot boundary. Lower it to cut more finely on soft transitions; raise it if dissolves are being split into fragments. |
+| `shot_detect.min_shot_frames` | `5` | Shots shorter than this are **dropped, not merged** into a neighbour. Merging would silently move that neighbour's boundary, and a boundary is the one thing this whole lane exists to get right. 5 rejects a stray flash cut while leaving real rapid montages intact. |
+| `shot_detect.device` | `auto` | `auto` \| `cuda` \| `cpu`. The network runs on 48×27 frames and is never the bottleneck — decoding is. CPU is a perfectly reasonable choice, and it leaves the GPU free for captioning and training. |
+
+**Video bank quality cuts:** the thresholds behind the video bank's amber flags.
+The cuts that describe your *footage* default to **empty = no cut** — that is a
+decision, not an omission: published thresholds measurably do not transfer between
+collections, so the app never ships one. `watermark_max` is the exception and the
+reason is worth knowing: it does not measure your footage, it reads a *classifier's*
+probability, which is calibrated with the model rather than with your material — so
+the image lane's measurement transfers where a motion floor does not. Set them from
+**Video bank → 🎚 Quality cuts**, where **Preview** shows how many shots each value
+would flag before you apply it. Raw scores stay stored, so changing any of these
+re-sorts every bank instantly, without rescanning.
+
+| Key | Default | Role |
+|---|---|---|
+| `video_bank.min_duration_s` | *(empty)* | Flags shots shorter than this, in seconds (`brief`). The only cut here that needs no measuring pass — it reads the shot bounds, so it works straight after detection. Not the same thing as the promotion's `too short` refusal, which is your target profile's own arithmetic and no setting moves it; this one only decides what gets flagged for your eyes. |
+| `video_bank.motion_floor` | *(empty)* | Flags shots whose average motion falls below this (`still`). |
+| `video_bank.motion_ceiling` | *(empty)* | Flags shots whose busiest moments exceed this (`agitated`). |
+| `video_bank.luma_floor` | *(empty)* | Flags shots whose darkest frame falls below this brightness (`black`). |
+| `video_bank.freeze_max` | *(empty)* | Flags shots where more than this share of frames do not move (`freeze`). |
+| `video_bank.sharpness_floor` | *(empty)* | Flags shots whose sharpest stretch stays below this (`soft`). |
+| `video_bank.watermark_max` | `0.94` | Flags shots whose watermark score exceeds this (`watermark`), after the **🔖 Watermarks** pass has scored them. This model's scores are compressed hard against 1, so 0.94 is the measured cut and not the 0.5 a probability normally implies — on a 110-image hand-labelled sample it flagged none of the 55 clean images and still caught 54 of the 55 marked ones. Lower it toward 0.92 to catch the faintest marks and hand-check a few clean shots. A shot the pass has not judged carries no score and is **never** flagged — that is "not evaluated", not "clean". Set it to empty to flag nothing. |
+| `video_bank.duplicate_threshold` | `0.96` | Cosine similarity at or above which two shots are grouped as near-duplicates by the **✂ Duplicates** pass, comparing them at their closest pair of embedded frames. Not a read-time cut like the rows above: changing it means re-running that pass — which is instant and costs no GPU, since it re-reads the frame vectors **🔎 Find scenes** already cached. **Where the number comes from:** it is inherited from the image bank's `bank.semantic_dup_threshold`, measured over the *same* CLIP space, and no video-pair calibration exists yet. Comparing shots at their closest frame pair also reaches any given value more easily than a single-image comparison does, so **raise** it if your bank over-groups. |
+
 **Imported shot catalogs** — written by the workspace, not meant to be hand-edited (see *Using the app → Your own shot catalog*), but this is where they live so you know what to back up:
 
 | Key | Default | Role |
@@ -1261,6 +1298,7 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `paths.dataset_images_root` | Where dataset images are stored. Empty string defaults to `<data dir>/datasets`. |
 | `paths.cloud_runs_dir` | Working area of cloud training runs (dataset copy, samples, logs). Empty string defaults to `<data dir>/cloud_runs`. |
 | `paths.checkpoints_dir` | Durable store for the checkpoints cloud runs produce. Empty string defaults to `<data dir>/checkpoints`. No cleanup ever removes a file from it. |
+| `paths.video_datasets_dir` | Where promoted video datasets are written — a flat folder of `.mp4` clips with homonym `.txt` captions per dataset. Empty string defaults to `<data dir>/video_datasets`. |
 | `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still be at most 16 Mi-pixels and 8192 px per side; a larger one is rejected and must be converted or resized before import. Not retroactive. Editable in Settings → Captioning & quality. |
 | `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The 16 Mi-pixel / 8192 px-per-side input limit applies to every mode. Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
@@ -1323,6 +1361,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `face_scoring.green` | Similarity score threshold (0–1) above which an image is flagged "green" (strong match). |
 | `face_scoring.orange` | Similarity score threshold (0–1) above which an image is flagged "orange" (borderline match). |
 | `masks.python` | Python interpreter used to run the rembg subprocess (empty = current interpreter). |
+| `video_caption.style` | Which PROMPT writes the captions: `standard` (default, the shipped wording) or `plain`. Measured to matter **more than the checkpoint**: asked the standard way, even an uncensored model describes *around* explicit footage, while the base model asked plainly named things precisely and wrote the best action description of the four combinations tried. `plain` adds explicit permission to state what is visible and what occurs, and forbids the two evasive words the test caught models hiding behind. It matters because a caption that talks around its subject teaches the trained model to look away, and the captions read perfectly well either way. Anything unknown falls back to `standard` — never to `plain`. Also pickable per run, next to the **🗣 Describe shots** button; every caption records the style that produced it. |
+| `video_caption.model` | Which model writes the 🗣 **Describe shots** captions (empty = the shipped default, `Qwen/Qwen3-VL-4B-Instruct`). Any checkpoint of the **same architecture** is a drop-in; a different architecture fails loudly at load rather than silently misbehaving. Worth changing when the default **talks around** what your footage shows — a caption that names things evasively teaches the trained model to do the same, and nothing in the output reveals it. Pointing this at a model the machine does not have is allowed and downloads it on the first run, but never in silence: the pass says so in its own progress line before captioning anything. Every caption records which model wrote it, so a bank captioned across a change stays readable. |
 | `quantize.python` | Python interpreter that runs the **fp8 conversion** and the **LoRA→base merge** (empty = the one ✨ Score uses, then ai-toolkit's, then the app's own). Both need `torch`, which this app deliberately does **not** install — it is gigabytes and nothing else here needs it — so they run in a subprocess, like the scoring and masking passes. One setting governs both on purpose: "the Python on this machine that has torch" is one fact, and saying it twice is how the two drift apart. The chosen interpreter is probed while the *plan* is drawn: one that lacks the packages disables the button with the reason and the `pip install` line, instead of failing after the click (or after a 26 GB download). `torch` is the only module either of them needs: both read and write the safetensors format themselves rather than memory-mapping it, so an environment with torch alone is enough. |
 | `bank_scoring.python` | Python interpreter that runs the ✨ Score pass (empty = the app's own). Auto-filled by Setup with a CPU-only environment; repointable at any CUDA interpreter already on the machine via the bank's **⚡ Use a GPU Python I already have** picker, which verifies every dependency first and never installs into an environment it did not create. |
 | `bank_semantic.python` | Python interpreter that runs SigLIP 2. New installs record the LDS-managed Bank environment here independently of Score; empty falls back to `bank_scoring.python` for older configs, then the app's own interpreter. |

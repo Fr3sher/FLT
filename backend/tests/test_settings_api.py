@@ -269,6 +269,24 @@ def test_put_settings_accepts_and_protects_bank_scoring_section(client):
             == '/data/envs/bank_scoring/py.exe')
 
 
+def test_put_settings_protects_the_shot_detection_interpreter(client):
+    """shot_detect.python is written by its installer and has no Settings input, so
+    the frontend echoes it back as "" on every full Save. Without the guard, saving
+    any unrelated setting silently un-installs shot detection: the probe falls back
+    to the app's own Python, which has no torch, and the capability reads "missing"
+    forever despite a perfect install — the exact defect the other auto-provisioned
+    interpreters already carry a guard for."""
+    from app import config
+    config.save_config({'shot_detect': {'python': '/envs/scoring/py.exe'}})
+    r = client.put('/api/settings', json={'config': {
+        'shot_detect': {'python': '', 'device': 'cuda'},
+    }})
+    assert r.status_code == 200, r.get_json()
+    saved = r.get_json()['config']['shot_detect']
+    assert saved['python'] == '/envs/scoring/py.exe'
+    assert saved['device'] == 'cuda'      # the rest of the section still saves
+
+
 def test_stale_full_config_save_keeps_installed_bank_semantic_python(client):
     """A Settings form opened before SigLIP2 finishes must not undo the install.
 

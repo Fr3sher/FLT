@@ -234,6 +234,97 @@ export const BANK_PASSES = {
     binCost: 'each rejected image is put through the detector',
   },
 
+  /* THE TWO LEVELS THAT PRODUCE A NEW IMAGE.
+   *
+   * Every other entry here computes a verdict: a wrong scope costs time. These
+   * two build a cleaned copy of each image they touch — a real bank offered
+   * "✂ Auto-crop (16 052)" and "🧽 Inpaint (16 507)" from a single click each,
+   * with no way to say WHICH images. That is why they now open a window too.
+   *
+   * They are NOT in BANK_PASS_ORDER on purpose: their buttons live on the 🚩
+   * Watermarks panel, inside the funnel they belong to. A second copy in the
+   * pass row would read as two different actions.
+   *
+   * THEIR POOL IS NOT A PILE. Both act on flagged images that carry something to
+   * act on — a stored box or a mask you drew — so a scope INTERSECTS that set and
+   * can never widen it. The numbers on the scope lines come from that same pool,
+   * per pile, measured server-side from the clause the run itself filters on.
+   */
+  watermark_crop: {
+    id: 'watermark_crop',
+    label: '✂ Auto-crop watermarks',
+    verb: '✂ Crop',
+    endpoint: 'watermark/crop',
+    what: 'Cuts off the border strip holding the mark, on the flagged images whose '
+      + 'mark sits in a border. CPU only — no model, no GPU, and no invented pixel.',
+    scopes: true,
+    selection: true,
+    redo: null,
+    settings: [],
+    notHere: [
+      'WHERE each mark sits — that is 🚩 Find watermarks, and this level only '
+        + 'routes on the box it stored.',
+      'Images whose mask you drew by hand in ▶ Review: a crop cannot express '
+        + 'several zones, or a zone on the subject, so those are 🧽 Inpaint’s.',
+    ],
+    caveats: [
+      'Your own files are never written to — that is what makes this safe to try. '
+        + 'The crop lands in the bank’s own copy, and ↩ Undo cleaning throws every '
+        + 'one of those copies away and re-flags the images. Two things undo does '
+        + 'not reach: an image you already promoted (that copy was written into '
+        + 'the dataset) and an image whose source file changed on disk since the '
+        + 'clean — that one keeps its cleaned copy and has to be re-scanned.',
+      'Undo is bank-wide, not per run: it restores every cleaned image, including '
+        + 'ones cleaned before this one. It also drops the measurements taken from '
+        + 'the cleaned pixels, so ✨ Score has to pass over those rows again.',
+      'The count on each line is the pool this level WALKS, not what it will '
+        + 'change: a mark that is not in a border stays flagged for 🧽 Inpaint. '
+        + 'The number on the ✂ button itself is that narrower, routed figure.',
+    ],
+    binCost: 'each rejected image is decoded and re-encoded into the bank’s working copy',
+  },
+
+  watermark_inpaint: {
+    id: 'watermark_inpaint',
+    label: '🧽 Repaint watermarks',
+    verb: '🧽 Repaint',
+    endpoint: 'watermark/inpaint',
+    what: 'Repaints the marks a crop cannot remove, on every image still flagged. '
+      + 'LaMa is fast and invents little; Klein is slower and also clears a mark '
+      + 'sitting ON the subject.',
+    scopes: true,
+    selection: true,
+    redo: null,
+    settings: [
+      { name: 'Level 3 engine — LaMa or Klein (picked on this panel, for this run)' },
+      { name: 'LaMa models folder, Python and device (Setup ▸ Quality tools)' },
+      { name: 'Klein weights + ComfyUI (Setup ▸ Generation models), when Klein is picked',
+        note: 'A bank has no dataset to inherit a Klein model from, so this pass '
+          + 'resolves it automatically — the panel names the one that will run.' },
+    ],
+    notHere: [
+      'WHERE each mark sits — 🚩 Find watermarks stores the box, and ▶ Review is '
+        + 'where you redraw it.',
+      'Whether a watermarked image is rejected at all — that is the 🚩 flag’s own '
+        + 'chip in the grid.',
+    ],
+    caveats: [
+      'Your own files are never written to. The repaint lands in the bank’s own '
+        + 'copy, and ↩ Undo cleaning throws every one of those copies away and '
+        + 're-flags the images. Two things undo does not reach: an image you '
+        + 'already promoted (that copy was written into the dataset) and an image '
+        + 'whose source file changed on disk since the clean — that one keeps its '
+        + 'cleaned copy and has to be re-scanned.',
+      'Undo is bank-wide, not per run: it restores every cleaned image, including '
+        + 'ones cleaned before this one. It also drops the measurements taken from '
+        + 'the cleaned pixels, so ✨ Score has to pass over those rows again.',
+      'With LaMa, a mark ON the subject is left flagged rather than smeared — '
+        + 'switch the engine to Klein for those. An emptied mask repaints nothing, '
+        + 'on purpose.',
+    ],
+    binCost: 'each rejected image costs a full repaint, the slowest step of the funnel',
+  },
+
   framing: {
     id: 'framing',
     label: '📐 Classify framing',

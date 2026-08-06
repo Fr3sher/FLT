@@ -19,6 +19,7 @@ from urllib.parse import urlsplit
 import requests
 
 from . import config as cfg
+from .services import ffmpeg_tools
 from .utils import comfy_fs
 
 _CACHE_TTL = 30
@@ -37,6 +38,11 @@ _UNKNOWN_TTL = 60
 # answered 'CUDA' to one probe and 'no answer' to the other.
 _IMPORT_TIMEOUT = 90
 _import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
+# These two probes guard workers that are deliberately launched with ``python
+# -s``.  Keep the isolation scoped: Face, Masks and Watermark still honour their
+# configured interpreter's normal site policy, so probing them with different
+# argv would create a false negative.
+_NO_USER_SITE_IMPORT_KEYS = frozenset(('bank_scoring', 'bank_scoring_gpu'))
 
 _ZIMAGE_RE = re.compile(r'z[ -]?image', re.IGNORECASE)
 # Aligned with klein_edit_helper / utils.comfyui (was missing '.sft', so the
@@ -89,14 +95,22 @@ def _http_ok(url, timeout=3, reason=None, *, readiness=False) -> bool:
                 close()
 
 
-def _import_ok(python: str, module_expr: str, timeout=_IMPORT_TIMEOUT):
+def _import_ok(python, module_expr: str, timeout=_IMPORT_TIMEOUT):
     """True/False = the import deterministically succeeded/failed. None = TIMEOUT —
     unknown, NOT a proven absence. The very first `import rembg` after an install
     compiles numba/scikit-image caches while the antivirus scans 40 MB of fresh
     DLLs: measured ~20 s cold vs ~1 s warm — a 20 s timeout read as False showed
-    'Person masks ✗' for 10 min right after a SUCCESSFUL install."""
+    'Person masks ✗' for 10 min right after a SUCCESSFUL install.
+
+    ``python`` is normally one executable path.  The cache layer may pass an
+    argv prefix such as ``(python, '-s')`` when that feature's real worker uses
+    the same isolated contract.
+    """
     try:
-        result = subprocess.run([python, '-c', module_expr], capture_output=True, timeout=timeout)
+        prefix = (list(python) if isinstance(python, (tuple, list))
+                  else [python])
+        result = subprocess.run(
+            [*prefix, '-c', module_expr], capture_output=True, timeout=timeout)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         return None
@@ -123,7 +137,9 @@ def _cached_import_state(key: str, python: str, module_expr: str):
         ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
         if now - cached[0] < ttl:
             return cached[1]
-    ok = _import_ok(python, module_expr)
+    probe_python = ((python, '-s')
+                    if key in _NO_USER_SITE_IMPORT_KEYS else python)
+    ok = _import_ok(probe_python, module_expr)
     _import_cache[cache_key] = (now, ok)
     return ok
 
@@ -676,6 +692,15 @@ CAPABILITY_IMPORTS = {
     # trust_remote_code file no longer loads). Nothing else: no einops, no
     # flash-attn, no vendored modelling code.
     'watermark_detect': 'import torch, transformers',
+    # The video lane is TWO extras, because its two halves belong in two different
+    # environments. PyAV is imported IN-PROCESS by Flask (probing a file, pulling a
+    # thumbnail frame), so it has to live in the app's own interpreter and stays
+    # small. TransNetV2 drags torch, so it rides the environment bank scoring
+    # already manages — the same call the watermark detector made, for the same
+    # ~2.5 GB reason. ffmpeg is not an import at all and is resolved separately
+    # (services/ffmpeg_tools).
+    'video': 'import av',
+    'shot_detect': 'import torch, transnetv2_pytorch',
 }
 
 
@@ -743,6 +768,43 @@ def probe_masks() -> dict:
     python = cfg.get('masks.python') or sys.executable
     ok = _cached_import('masks', python, CAPABILITY_IMPORTS['masks'])
     return {'ok': ok, 'detail': 'rembg import OK' if ok else 'import failed'}
+
+
+def probe_video() -> dict:
+    """The video lane, reported as THREE pieces rather than one verdict.
+
+    Decoding, shot detection and encoding fail independently and are fixed
+    differently — one is a pip package, one is a pip package that drags torch, one
+    is a binary. A single "video unavailable" is how a user ends up reinstalling
+    the wrong thing, and it is the exact shape of the defect this lane is meant to
+    avoid: a .mp4 in an image bank is skipped today with no message at all.
+
+    'ok' means a bank can be taken all the way to a dataset. The parts are
+    reported separately so a caller can still offer what does work — with no
+    encoder you can scan, detect and triage, you just cannot export yet.
+    """
+    decode = _cached_import('video_decode', cfg.get('video.python') or sys.executable,
+                            CAPABILITY_IMPORTS['video'])
+    detect = _cached_import(
+        'video_detect',
+        (cfg.get('shot_detect.python') or cfg.get('bank_scoring.python')
+         or sys.executable),
+        CAPABILITY_IMPORTS['shot_detect'])
+    encode = ffmpeg_tools.ffmpeg_path() is not None
+    missing = []
+    if not decode:
+        missing.append('av (video decoding)')
+    if not detect:
+        missing.append('shot detection (transnetv2-pytorch)')
+    if not encode:
+        missing.append('ffmpeg (clip encoding)')
+    return {
+        'ok': bool(decode and detect and encode),
+        'detail': 'video extra ready' if not missing else 'missing: ' + ', '.join(missing),
+        'decode': bool(decode),
+        'detect': bool(detect),
+        'encode': bool(encode),
+    }
 
 
 def probe_bank_scoring() -> dict:
@@ -1593,6 +1655,7 @@ def probe(force=False) -> dict:
     bank_siglip2 = probe_bank_siglip2()
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
+    video = probe_video()
     joycaption = probe_joycaption(aitoolkit)
     models = _scan_models()
     # Klein engine readiness is now honest tri-component: the graph needs the UNET
@@ -1858,6 +1921,16 @@ def probe(force=False) -> dict:
         # The measured flag threshold, published so the panel and the Settings
         # field quote the SAME number the pass will actually use.
         'watermark_detect_threshold': _watermark_detect_threshold(),
+        # The video lane, reported as its three independent pieces. A single
+        # boolean would be a lie here: decoding, shot detection and encoding come
+        # from three different installs and fail apart. The front uses the parts to
+        # say WHICH one to fix — never "video unavailable", which is how a user
+        # reinstalls the wrong thing.
+        'video': video['ok'],
+        'video_detail': video['detail'],
+        'video_decode': video['decode'],
+        'video_detect': video['detect'],
+        'video_encode': video['encode'],
         # Klein-inpaint (V2, quality) readiness = same as the Klein engine (ComfyUI
         # reachable + Klein models on disk). The custom-node preflight is a clean-time
         # 409. Greys the batch's "Klein (quality)" option when False.

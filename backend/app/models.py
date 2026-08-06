@@ -870,6 +870,13 @@ class CloudTrainingRun(db.Model):
     __tablename__ = 'cloud_training_run'
     id = db.Column(db.Integer, primary_key=True)
     dataset_id = db.Column(db.Integer, nullable=False)
+    # WHICH TABLE `dataset_id` points into: 'face_dataset' or 'video_dataset'.
+    # The two share one integer space, so without this a video run and a face
+    # dataset of the same id are indistinguishable and every consumer resolves
+    # the wrong row in silence. NULL on every row that predates the column, and
+    # read as 'face_dataset' — see services/cloud_run_dataset.table_of, which is
+    # the only place allowed to answer this question.
+    dataset_table = db.Column(db.String(32))
     run_name = db.Column(db.String(255))          # local run identity (lt._run_name)
     job_name = db.Column(db.String(255))          # unique remote job/dataset name
     status = db.Column(db.String(32), default='preparing')
@@ -1140,3 +1147,232 @@ class CanvasImageNode(db.Model):
     dataset = db.relationship('FaceDataset')
     __table_args__ = (db.UniqueConstraint('dataset_id', 'image_id',
                                           name='uq_canvas_image_node'),)
+
+
+# ---------------------------------------------------------------------------
+# 🎬 Video lane — a SEPARATE set of tables, on purpose.
+#
+# The image lane rests on one invariant: one row = one file. `BankImage.relpath`
+# is relative to the bank's source_path, every reader resolves it to a path, the
+# dedup hashes a file, the promotion copies a file. The video lane cannot hold
+# that invariant — a two-hour rush is ONE file and four hundred training clips.
+#
+# Bolting temporal bounds onto BankImage would have meant a migration over tables
+# that already carry tens of thousands of rows in user databases, plus every
+# existing pass learning to say "not applicable" for video rows. These tables are
+# NEW, so db.create_all() creates them and no migration is needed at all, and not
+# one line of the image lane changes.
+# ---------------------------------------------------------------------------
+
+
+class VideoBank(db.Model):
+    """A triage bank over a folder of SOURCE VIDEOS, referenced in place.
+
+    Same promise as the image bank: the source folder is never written to. The
+    video bank keeps that promise more literally than one might expect — it
+    stores no media at all beyond thumbnails, because cutting a clip means
+    re-encoding it, and we only pay that at promotion, for the clips actually
+    kept. What lives here is bounds and decisions."""
+    __tablename__ = 'video_bank'
+    id = db.Column(Integer, primary_key=True)
+    user_id = db.Column(String(36), nullable=False, index=True, default='local')
+    name = db.Column(String(100), nullable=False)
+    source_path = db.Column(Text, nullable=False)      # absolute folder, read-only
+    # Persisted summary of the last pipeline run (JSON), same role as
+    # ImageBank.pipeline_report: the outcome is still there tomorrow morning.
+    pipeline_report = db.Column(Text, nullable=True)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(DateTime, default=db.func.current_timestamp(),
+                           onupdate=db.func.current_timestamp())
+
+    def __repr__(self):
+        return f'<VideoBank {self.id} {self.name}>'
+
+
+class VideoSource(db.Model):
+    """One source FILE of a video bank — the level the image lane does not have.
+
+    It exists because the facts a file carries (duration, native fps, resolution,
+    codec) are not facts a clip carries, and because a probe that fails must fail
+    once per file rather than once per clip. `fps_native` is the SOURCE's rate and
+    is never what a clip is encoded at: the target profile decides that. Reading
+    this column at encode time is precisely how a 16 fps target ends up with
+    accelerated motion."""
+    __tablename__ = 'video_source'
+    id = db.Column(Integer, primary_key=True)
+    bank_id = db.Column(
+        Integer, db.ForeignKey('video_bank.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    relpath = db.Column(Text, nullable=False)          # relative to bank.source_path
+    file_size = db.Column(Integer, nullable=True)
+    duration_s = db.Column(Float, nullable=True)
+    fps_native = db.Column(Float, nullable=True)       # the SOURCE's rate, never the target's
+    width = db.Column(Integer, nullable=True)
+    height = db.Column(Integer, nullable=True)
+    codec = db.Column(String(24), nullable=True)
+    # NULL = not probed yet | 'ok' | 'unreadable'. Mirrors BankImage.quality_state's
+    # vocabulary so "the file is broken" reads the same in both lanes.
+    probe_state = db.Column(String(12), nullable=True)
+    # NULL = shot detection has not run on this file | 'ok' | 'error'. Separate from
+    # probe_state because a file can be perfectly readable and still fail detection.
+    detect_state = db.Column(String(12), nullable=True)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+
+    def __repr__(self):
+        return f'<VideoSource {self.id} bank={self.bank_id} {self.relpath}>'
+
+
+class VideoClip(db.Model):
+    """One detected shot — the unit of work of the whole video lane.
+
+    BOUNDS ARE PTS SECONDS, AND THAT IS THE CANONICAL FORM. The detector reasons
+    in frame indices on a decoded stream, which is frame-exact and tempting, but
+    scraped material is routinely variable-frame-rate: index n corresponds to no
+    stable instant there, while a presentation timestamp does. `ffmpeg -ss` takes
+    seconds too. The frame indices are kept because they are what the detector
+    actually said, and they make a disagreement debuggable — but nothing cuts
+    from them.
+
+    Sub-second precision is not a nicety: rounding a bound to the nearest second
+    on a 2-second clip moves a quarter of the sample."""
+    __tablename__ = 'video_clip'
+    id = db.Column(Integer, primary_key=True)
+    bank_id = db.Column(
+        Integer, db.ForeignKey('video_bank.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    source_id = db.Column(
+        Integer, db.ForeignKey('video_source.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    start_s = db.Column(Float, nullable=False)
+    end_s = db.Column(Float, nullable=False)
+    start_frame = db.Column(Integer, nullable=True)    # informative; never cut from
+    end_frame = db.Column(Integer, nullable=True)
+    # Which detector drew this boundary: 'transnetv2' | 'manual'. Persisted rather
+    # than derived because a bank is worked on over days and can hold both, and
+    # "why is this cut here?" has to be answerable per clip.
+    detector = db.Column(String(16), nullable=True)
+    # NULL = no thumbnail yet | 'ok' | 'error'. The thumbnail is the ONLY media the
+    # bank writes, and the gallery shows nothing else — there is deliberately no
+    # per-clip preview file to hover, because that would mean encoding every clip
+    # including the ones about to be rejected.
+    thumb_state = db.Column(String(12), nullable=True)
+    # Quality metrics (wave 2): the RAW per-clip summary the metrics scan wrote,
+    # as JSON — motion_mean/motion_p95, luma_min/luma_mean, sharpness_p90,
+    # freeze_ratio, sharpest_frame_s, metrics_state. RAW scores only, never
+    # verdicts: flags are recomputed at read time against the bank's thresholds
+    # (services/video_metrics.verdicts), so retuning a cut re-sorts the bank with
+    # no rescan — the same philosophy as the image lane's quality columns, and it
+    # matters more here because decoding is ~85 % of this lane's cost. One JSON
+    # column rather than eight scalar ones: the summary is written and read as a
+    # unit, and adding a metric to the scan must not need a migration.
+    # NULL = the scan has not reached this clip. Additive — see _SCHEMA_ADDITIONS.
+    metrics_json = db.Column(Text, nullable=True)
+    # 🔎 Search pass: NULL = never embedded | 'ok' | 'unreadable'. Only the STATE
+    # lives here; the vectors themselves are a .npz next to the bank's thumbnails
+    # (services/video_clip_search), for the same reason the image lane keeps its
+    # ✨ Score embeddings out of SQLite — three 768-float rows per clip over a bank
+    # of thousands is a blob store, not a column, and every reader of it wants the
+    # whole matrix at once rather than one row. The state is here because it is
+    # what the resume contract and the counters read, and both must be answerable
+    # without touching numpy. Additive — see _SCHEMA_ADDITIONS.
+    embed_state = db.Column(String(12), nullable=True)
+    # 🗣 Caption: what HAPPENS in this shot, in prose. Two things at once, and the
+    # second is why it is a column rather than a search index: it is the text the
+    # 🔎 hybrid search matches literally, AND it is what the promotion writes into
+    # the clip's `.txt` sidecar — which IS the training prompt. An empty sidecar
+    # is not a neutral default: ai-toolkit trains it as an empty prompt and says
+    # nothing (see video_clip_export.write_sidecar).
+    caption = db.Column(Text, nullable=True)
+    # NULL = never captioned | 'ok' (generated) | 'edited' (a human corrected it,
+    # and a bulk re-run must not overwrite that) | 'error'. The 'edited' state is
+    # the whole reason this is not derivable from `caption is not None`: a
+    # generated caption is a draft, and losing a correction to the next pass is
+    # the one thing that would stop anyone from ever editing one.
+    caption_state = db.Column(String(12), nullable=True)
+    # WHICH checkpoint wrote this caption. NULL for a caption a human typed and
+    # for a clip that has none — nothing wrote those, so nothing is claimed.
+    #
+    # A column rather than a key inside a JSON blob because the question it
+    # answers is per-ROW and asked at read time: two checkpoints do not produce
+    # comparable captions, and changing the setting mid-corpus is exactly what
+    # making it configurable invites. A bank captioned half by one and half by
+    # another has to stay readable, which means every row saying which — and a
+    # JSON field would make "show me what the old model wrote" a full-table
+    # parse instead of a filter.
+    caption_model = db.Column(String(120), nullable=True)
+    # And WHICH prompt style produced it. Same reasoning as the model, and the
+    # measurement says it matters more: the prompt turned out to dominate how
+    # plainly a caption describes its footage, so two styles do not write
+    # comparable captions any more than two checkpoints do. NULL for a human's
+    # caption and for a failed one.
+    caption_style = db.Column(String(16), nullable=True)
+    # Triage decision — the same three words as the image lane.
+    status = db.Column(String(10), nullable=False, default='pending', index=True)
+    reject_reason = db.Column(String(16), nullable=True)
+    # Set once the clip has been encoded into a video dataset. A REAL foreign key
+    # with SET NULL, unlike the image lane's plain integer: throwing away a badly
+    # cut dataset must cost the encode, not the triage. The clips stay, they just
+    # stop claiming to have been promoted.
+    promoted_dataset_id = db.Column(
+        Integer, db.ForeignKey('video_dataset.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+
+    def __repr__(self):
+        return f'<VideoClip {self.id} src={self.source_id} {self.start_s}-{self.end_s}>'
+
+
+class VideoDataset(db.Model):
+    """A built video training set: a flat folder of .mp4 files with homonym .txt
+    captions, plus the memory of HOW it was built.
+
+    `target_profile` is not decoration. It is the key into the target catalogue
+    (services/video_targets.py) that says at which fps and at which length these
+    clips were encoded, and it is stored here rather than recomputed because the
+    files on disk are already committed to it. `fps` and `frames` are DENORMALISED
+    copies of what the profile said at build time — deliberately, so a dataset
+    built last month still reports what it actually contains even if the profile's
+    defaults move."""
+    __tablename__ = 'video_dataset'
+    id = db.Column(Integer, primary_key=True)
+    user_id = db.Column(String(36), nullable=False, index=True, default='local')
+    name = db.Column(String(100), nullable=False)
+    target_profile = db.Column(String(24), nullable=False)
+    fps = db.Column(Integer, nullable=True)            # as encoded, not as configured now
+    frames = db.Column(Integer, nullable=True)         # clip length actually used
+    width = db.Column(Integer, nullable=True)
+    height = db.Column(Integer, nullable=True)
+    output_dir = db.Column(Text, nullable=False)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+    updated_at = db.Column(DateTime, default=db.func.current_timestamp(),
+                           onupdate=db.func.current_timestamp())
+
+    def __repr__(self):
+        return f'<VideoDataset {self.id} {self.name} {self.target_profile}>'
+
+
+class VideoDatasetClip(db.Model):
+    """One encoded .mp4 of a video dataset, and the memory of where it came from.
+
+    The provenance columns are what make this more than a directory listing. The
+    dataset holds finished clips, but each one still names its source file and the
+    bounds it was cut at — so a later re-export to a different target is a re-encode
+    from the original, not a re-scan from scratch. `source_clip_id` is intentionally
+    NOT a foreign key: the bank it points into is a scratch container the user is
+    free to delete, and the provenance must outlive it."""
+    __tablename__ = 'video_dataset_clip'
+    id = db.Column(Integer, primary_key=True)
+    dataset_id = db.Column(
+        Integer, db.ForeignKey('video_dataset.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    filename = db.Column(String(255), nullable=False)   # clip_0001.mp4
+    caption = db.Column(Text, nullable=True)            # written to the homonym .txt
+    source_bank_id = db.Column(Integer, nullable=True)
+    source_clip_id = db.Column(Integer, nullable=True)
+    src_relpath = db.Column(Text, nullable=True)
+    start_s = db.Column(Float, nullable=True)
+    end_s = db.Column(Float, nullable=True)
+    created_at = db.Column(DateTime, default=db.func.current_timestamp())
+
+    def __repr__(self):
+        return f'<VideoDatasetClip {self.id} ds={self.dataset_id} {self.filename}>'
