@@ -29,13 +29,6 @@ def _host_vetted(url):
     return any(host == d or host.endswith('.' + d) for d in VETTED_DOMAINS)
 
 
-def _gdl_unsupported(err):
-    """True ssi gallery-dl a renvoyé le kind 'unsupported' (extracteur absent) — on
-    matche la POSITION du kind, pas le tail stderr (évite un faux positif sur une
-    erreur réseau 'unsupported protocol')."""
-    return bool(err) and err.lower().startswith('gallery-dl : unsupported')
-
-
 class UniversalSource(Source):
     name = 'universal'
     priority = 0
@@ -62,8 +55,10 @@ class UniversalSource(Source):
         ok, abs_path, err = gdl.download(url, dest_dir, filename)
         if ok and abs_path:
             return True, os.path.basename(abs_path), None
-        # 2) gallery-dl ne supporte pas → yt-dlp, mais seulement si l'hôte est vetté.
-        if _gdl_unsupported(err):
+        # 2) gallery-dl ne supporte pas le site → yt-dlp, mais seulement si l'hôte
+        #    est vetté (atténuation SSRF, cf. spec décision #6). On teste le KIND,
+        #    jamais le texte du message.
+        if getattr(err, 'kind', None) == 'unsupported':
             if not _host_vetted(url):
                 return False, None, "Site not supported (gallery-dl) and host not vetted for yt-dlp."
             return netfetch.download_via_ytdlp(url, dest_base)

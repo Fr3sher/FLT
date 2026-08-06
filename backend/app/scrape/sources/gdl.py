@@ -42,6 +42,24 @@ def classify_exit(returncode):
     return 'toolerror'
 
 
+class GdlError(str):
+    """Message d'erreur gallery-dl porteur de son `kind` classifié.
+
+    Sous-classe de `str` : tous les appelants qui la traitent comme un message
+    continuent de fonctionner sans changement. `kind` (cf. classify_exit) est LA
+    donnée sur laquelle brancher ; la phrase, elle, n'est que pour l'utilisateur.
+
+    Pourquoi cette classe existe : universal.py comparait l'erreur à
+    'gallery-dl : unsupported' — une forme que PERSONNE n'émettait (espace
+    parasite) — ce qui a rendu le repli yt-dlp injoignable sans qu'aucun test ne
+    rougisse. Un kind transporté comme donnée ne peut plus se perdre ainsi."""
+
+    def __new__(cls, message, kind=None):
+        obj = super().__new__(cls, message)
+        obj.kind = kind
+        return obj
+
+
 def _media_item(entry, platform):
     """Entrée gallery-dl type 3 = [3, media_url, meta] → item schéma commun, ou None."""
     if not isinstance(entry, (list, tuple)) or len(entry) < 3:
@@ -81,22 +99,22 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
         proc = subprocess.run(cmd, capture_output=True, text=True,
                               timeout=GDL_TIMEOUT, shell=False)
     except subprocess.TimeoutExpired:
-        return None, f"gallery-dl: timed out ({GDL_TIMEOUT}s)."
+        return None, GdlError(f"gallery-dl: timed out ({GDL_TIMEOUT}s).", 'network')
     except Exception as e:
         logger.warning("gallery-dl: échec %s: %s", url, e)
-        return None, f"gallery-dl: failed ({e})."
+        return None, GdlError(f"gallery-dl: failed ({e}).", 'toolerror')
 
     stdout = (proc.stdout or '').strip()
     if not stdout:
         kind = classify_exit(proc.returncode)
         last = ((proc.stderr or '').strip().splitlines() or ['no data'])[-1]
-        return None, f"gallery-dl: {kind or 'empty output'} ({last[:200]})."
+        return None, GdlError(f"gallery-dl: {kind or 'empty output'} ({last[:200]}).", kind)
     try:
         data = json.loads(stdout)
     except (ValueError, TypeError) as e:
-        return None, f"gallery-dl: unreadable response ({e})."
+        return None, GdlError(f"gallery-dl: unreadable response ({e}).", 'toolerror')
     if not isinstance(data, list):
-        return None, "gallery-dl: unexpected format."
+        return None, GdlError("gallery-dl: unexpected format.", 'toolerror')
     return data, None
 
 
@@ -133,7 +151,7 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
         # AVANT de conclure « aucun média » (le bug d'origine d'erome).
         sentinel = _error_sentinel(entries)
         if sentinel:
-            return None, sentinel
+            return None, GdlError(sentinel, 'toolerror')
 
         items = []
         for entry in entries:
@@ -186,10 +204,10 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
         # qu'un faux « aucun média » (cas d'une source derrière une protection DDoS-Guard).
         if album_errors:
             return None, album_errors[0]
-        return None, "gallery-dl: no media found."
+        return None, GdlError("gallery-dl: no media found.", 'empty')
     except Exception as e:  # garde-fou ultime
         logger.exception("gdl.enumerate: erreur inattendue")
-        return None, f"gallery-dl: unexpected error ({e})."
+        return None, GdlError(f"gallery-dl: unexpected error ({e}).", 'toolerror')
 
 
 def download(url, dest_dir, filename, *, cookies=None, extra_opts=None):
@@ -211,15 +229,15 @@ def download(url, dest_dir, filename, *, cookies=None, extra_opts=None):
                               timeout=DOWNLOAD_TIMEOUT, shell=False)
     except subprocess.TimeoutExpired:
         # NB : un éventuel fichier partiel n'est pas nettoyé ici (hors périmètre).
-        return False, None, "gallery-dl: download timed out."
+        return False, None, GdlError("gallery-dl: download timed out.", 'network')
     except Exception as e:
         logger.warning("gallery-dl download: échec %s: %s", url, e)
-        return False, None, f"gallery-dl: failed ({e})."
+        return False, None, GdlError(f"gallery-dl: failed ({e}).", 'toolerror')
 
     if proc.returncode:
         kind = classify_exit(proc.returncode)
         last = ((proc.stderr or '').strip().splitlines() or [''])[-1]
-        return False, None, f"gallery-dl: {kind or 'failed'} ({last[:200]})."
+        return False, None, GdlError(f"gallery-dl: {kind or 'failed'} ({last[:200]}).", kind)
 
     # Chemin produit : 1) parser le stdout (gallery-dl imprime les chemins écrits) ;
     # 2) repli = le fichier le plus récent apparu dans dest_dir.
@@ -231,4 +249,4 @@ def download(url, dest_dir, filename, *, cookies=None, extra_opts=None):
     if after:
         newest = max((os.path.join(dest_dir, f) for f in after), key=os.path.getmtime)
         return True, newest, None
-    return False, None, "gallery-dl: no file produced."
+    return False, None, GdlError("gallery-dl: no file produced.", 'toolerror')
