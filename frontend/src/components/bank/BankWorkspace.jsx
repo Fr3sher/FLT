@@ -38,7 +38,7 @@ import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } f
 import { busyRefusal } from './bankPassRun.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
 // Wording that adapts to the machine (a card-less box is never sold CUDA).
-import { openerLabel } from './scoringPython.js'
+import { openerLabel, PICKER_PROFILES } from './scoringPython.js'
 // Reuse the dataset's register list so the Bank lane never drifts from it — and the
 // same ENGINE list, so "which engine" means the same thing on both surfaces.
 import {
@@ -785,7 +785,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [passOpen, setPassOpen] = useState(null)
   // ✨ Score's interpreter picker — reuse a CUDA Python this machine already has
   // instead of downloading another torch. Opened from the CPU warning.
-  const [scoringPythonOpen, setScoringPythonOpen] = useState(false)
+  // Which interpreter picker is open, if any: a PICKER_PROFILES key ('scoring'
+  // for ✨ Score, 'semantic' for the SigLIP 2 index) or '' for none. One dialog
+  // serves both — the profile decides the endpoint and the wording.
+  const [pythonPickerFor, setPythonPickerFor] = useState('')
   const [dismissedReportAt, setDismissedReportAt] = useState(null)
   const [relocating, setRelocating] = useState(false)
   const [openingSourceFolder, setOpeningSourceFolder] = useState(false)
@@ -2183,6 +2186,8 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
       <BankSemanticEngine state={semanticState} capsLoading={capsLoading}
         switching={semanticSwitching} disabled={semanticOperationBusy} live={live}
+        gpuPresent={scoreGpuPresent}
+        onPickPython={() => setPythonPickerFor('semantic')}
         onChange={changeSemanticEngine}
         onIndex={() => {
           // The visible “Reindex” promise and the request body agree on first
@@ -2296,7 +2301,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             not a fix to chase. */}
         {!capsLoading && (scoreNote?.tone === 'warn' || !caps.bank_scoring) && (
           <div>
-            <button type="button" onClick={() => setScoringPythonOpen(true)}
+            <button type="button" onClick={() => setPythonPickerFor('scoring')}
               className={`rounded-md border px-2 py-1 text-xs font-medium ${scoreGpuPresent
                 ? 'border-amber-400/50 text-amber-300 hover:bg-amber-500/10'
                 : 'border-border text-content-muted hover:bg-surface-raised hover:text-content'}`}>
@@ -3370,11 +3375,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           onCancel={() => setPreflight(null)} />
       )}
 
-      {scoringPythonOpen && (
-        <ScoringPythonDialog onClose={() => setScoringPythonOpen(false)}
+      {pythonPickerFor && (
+        <ScoringPythonDialog profile={PICKER_PROFILES[pythonPickerFor]}
+          onClose={() => setPythonPickerFor('')}
           onChanged={async () => {
-            // The pass reads bank_scoring_gpu_available(); force both probes so
-            // the CPU warning and the "holds the GPU" tooltip agree at once.
+            // The passes read bank_scoring_gpu_available() /
+            // bank_siglip2_gpu_available(); force both probes so the CPU warning
+            // and the "holds the GPU" tooltip agree at once.
             await refreshCaps(true)
             await refreshPayload()
           }} />

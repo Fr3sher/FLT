@@ -1993,6 +1993,47 @@ reversible at any time, and the note under the passes always says which
 interpreter is in use. If you never open this dialog, nothing changes: an install
 that works today keeps working, untouched.
 
+
+## Build the SigLIP 2 index on a GPU Python you already have
+
+The **SigLIP 2** semantic engine is the same story with a different dependency
+list. Its index is built by a worker that lives in the app's own environment —
+the CPU-only one — so on a machine with a card the index crawls for the same
+reason Score used to.
+
+SigLIP 2 is the lighter of the two: **92.9 M parameters against 303 M for the
+CLIP ViT-L/14 Score runs**, measured at about **105 ms per image on the CPU**
+rather than 336. Lighter is not free: a 30 000-image bank is still the better
+part of an hour.
+
+The **Semantic engine** panel now tells you which device the index will actually
+use, and when a card is sitting idle it offers the same button, **⚡ Use a GPU
+Python I already have**. It is the same detector, the same dialog and the same
+promise — with one difference that matters:
+
+**The dependency list is SigLIP 2's, not Score's.** The semantic worker never
+imports `open_clip` or `timm`. An interpreter Score refuses for a missing
+OpenCLIP — the most common shape of a ComfyUI venv — can be perfectly good here,
+and refusing it would be a lie about a worker that does not need it. What it
+*does* need is a **Transformers recent enough to carry `Siglip2Model`** (4.49 or
+newer). That one is checked by really looking for the class, not just for the
+package: an older `transformers` imports fine and then dies at model load, an
+hour into an index. Such an interpreter is refused, and the repair line the
+dialog hands you carries the version floor.
+
+**Borrowing an interpreter downloads nothing here.** The pinned SigLIP 2
+checkpoint lives in the app's own data folder, not inside the interpreter, so a
+borrowed Python needs no copy of it.
+
+**Where the index runs is not where anything is installed.** Setup ▸ Quality
+tools always installs SigLIP 2 into the environment the app built, whatever you
+picked in this dialog — including when you later hit Install/repair, which now
+*keeps* your choice instead of quietly putting the index back on the CPU.
+
+Score and the semantic index are chosen separately. Pointing one at an
+interpreter never moves the other, and **Back to the app default** undoes either
+on its own.
+
 ## The video bank (turn a folder of rushes into shots)
 
 Videos are a different kind of material and they get their own bank. On the

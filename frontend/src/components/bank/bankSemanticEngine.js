@@ -98,8 +98,44 @@ export function semanticEngineState(payload, caps = null) {
     total,
     stale: firstFinite(semantic.counts?.stale),
     text: semantic.text || null,
+    // What the index will really run on: {requested, device, gpu}, resolved by
+    // the backend against the SigLIP2 interpreter itself. null on a payload from
+    // before the engine reported it — unknown, never assumed.
+    device: semantic.device && typeof semantic.device === 'object'
+      ? semantic.device : null,
     hasStatus,
   }
+}
+
+/** SigLIP2 measures ~105 ms/image on the CPU here — 4.3× lighter than the CLIP
+ *  ViT-L/14 Score runs, but still an hour on a 30 000-image Bank. Same fix as
+ *  Score's, for the same reason: a card that sits unused because the managed
+ *  environment ships CPU-only torch. Null when there is nothing worth saying —
+ *  CLIP selected, SigLIP2 not installed, or the index already on the GPU. */
+export function semanticDeviceNote(state, gpuPresent = true) {
+  if (!state || state.engine !== 'siglip2' || !state.installed) return null
+  if (!state.device || state.device.gpu) return null
+  if (state.device.requested === 'cpu') {
+    return { tone: 'info', text: 'SigLIP 2 runs on the CPU because that is what '
+      + 'this install asks for (bank_semantic.device).' }
+  }
+  if (!gpuPresent) {
+    return { tone: 'info',
+      text: 'SigLIP 2 runs on the CPU — no NVIDIA GPU detected on this machine.' }
+  }
+  return { tone: 'warn',
+    text: 'SigLIP 2 indexes on the CPU — the app’s own environment ships CPU-only '
+      + 'PyTorch so a first install stays small. If another Python here already has '
+      + 'a working CUDA PyTorch (the one that trains your LoRAs, the one ComfyUI '
+      + 'runs on), the index can borrow it. Nothing is downloaded and nothing is '
+      + 'installed into it.' }
+}
+
+/** Is the "borrow a GPU Python" button worth showing? Only when the note above
+ *  is the actionable one — offering it to a card-less machine, or one that
+ *  asked for the CPU on purpose, would be noise. */
+export function offersSemanticGpuPython(state, gpuPresent = true) {
+  return semanticDeviceNote(state, gpuPresent)?.tone === 'warn'
 }
 
 export function semanticPrerequisite(state) {
