@@ -324,8 +324,16 @@ _CAPABILITY_PACKAGES = {
     #               bank scoring already manages instead of costing a second
     #               ~2.5 GB copy. Its own worker, like watermark_detect; listed
     #               here so the anti-orphan test sees its package covered.
+    #               It carries `av` OF ITS OWN even though `video` installs the
+    #               same package: the two land in DIFFERENT interpreters. `video`
+    #               puts PyAV in the app's own Python because Flask imports it
+    #               in-process; shot detection runs in the bank-scoring
+    #               environment, where `shot_detect_infer._open()` is the single
+    #               decode seam. Without this line the install reported success
+    #               and the capability stayed off — the probe imports av, so it
+    #               kept failing in an environment nothing had put av into.
     'video': ('imageio-ffmpeg', 'av'),
-    'shot_detect': ('transnetv2-pytorch',),
+    'shot_detect': ('transnetv2-pytorch', 'av'),
     #   bank_scoring  has its own worker and its own package tuple
     #                 (_BANK_SCORING_PKGS); only the ONE package whose version
     #                 floor matters is declared in requirements-ml.txt, so it is

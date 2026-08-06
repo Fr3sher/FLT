@@ -50,6 +50,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-pinned-runs-keep-one-grid-per-prompt',
+    date: '2026-08-06',
+    title: 'Pinning a run to the canvas gives each prompt its own grid',
+    blurb:
+      'Pinning everything a run produced onto the ◉ LoRA Canvas used to drop the pictures of several prompts into one another, so a board carrying two or three runs read as one scatter and you could not tell at a glance which image came from which prompt. Each prompt now keeps its own grid, and a fresh grid is moved aside rather than laid over anything already on the board — including the cards, the checkpoint pills and the pictures you placed by hand, which are never touched. The reason for putting a run on the board at all is to SEE which prompt gave what; that is now what you get.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-06-duplicates-headline-counts-what-is-left',
+    date: '2026-08-06',
+    title: 'The duplicates figure counts what you still have to decide',
+    blurb:
+      'The ≈ Duplicates figure on the bank overview counted every group the last analysis found, including the ones you had already resolved — so it sat at the same number no matter how much of the queue you cleared, and there was no way to tell progress from a stuck pass. It now counts what is left to decide, and says so: “groups remaining to resolve”. A bank whose duplicates are all sorted reads zero, which is the whole point of a headline number.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-face-mask-preview-stops-and-resumes',
     date: '2026-08-06',
     title: 'The face-mask preview can be stopped — and picks up where it left off',
