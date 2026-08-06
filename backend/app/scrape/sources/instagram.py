@@ -29,7 +29,7 @@ import time
 import logging
 from pathlib import Path
 
-from .gdl import GdlError
+from .gdl import GdlError, _ResultList
 
 try:
     import instaloader
@@ -252,6 +252,9 @@ def _scan_profile(loader, username):
         return None, _AUTH_ERROR
 
     items = []
+    posts_seen = 0
+    posts_failed = 0
+    timed_out = False
     started = time.time()
     try:
         for post in profile.get_posts():
@@ -260,16 +263,27 @@ def _scan_profile(loader, username):
             if time.time() - started > PROFILE_SCAN_TIMEOUT:
                 logger.warning("Timeout scan profil %s (%ds), %d items.",
                                username, PROFILE_SCAN_TIMEOUT, len(items))
+                timed_out = True
                 break
+            posts_seen += 1
             try:
-                for item in _items_from_post(post):
-                    items.append(item)
-                    if len(items) >= SCAN_LIMIT:
-                        break
+                converted = _items_from_post(post)
             except Exception as e:
                 # Un post cassé ne doit pas tuer le scan entier.
                 logger.debug("Post ignoré (%s) : %s", username, e)
+                posts_failed += 1
                 continue
+            if not converted:
+                # Post chargé sans lever mais aucun média extractible (chaque
+                # accès attribut de `_items_from_post` est déjà isolé dans son
+                # propre `except` — cf. sa docstring) : conversion ratée, compte
+                # comme un échec de post, pas comme « rien à ajouter ».
+                posts_failed += 1
+                continue
+            for item in converted:
+                items.append(item)
+                if len(items) >= SCAN_LIMIT:
+                    break
     except Exception as e:
         # Erreur pendant l'itération paginée (souvent rate-limit en cours de route).
         if items:
@@ -281,13 +295,39 @@ def _scan_profile(loader, username):
         return None, _AUTH_ERROR
 
     if not items:
-        # `profile.get_posts()` a itéré jusqu'au bout sans lever et sans produire
-        # un seul post : compte public légitimement sans publication, pas un échec
-        # (les blocages/erreurs pendant l'itération sont interceptés plus haut par
-        # le `except` et renvoient `_AUTH_ERROR`, une vraie erreur — ce chemin-ci
-        # n'est atteint que par une itération qui s'est terminée proprement).
-        # Résultat vide légitime, même convention que gdl.GdlError kind='empty'.
+        if timed_out:
+            # Le rate-controller d'instaloader DORT au lieu de lever (cf. docstring
+            # de module) : un profil throttled peut heurter `PROFILE_SCAN_TIMEOUT`
+            # sans jamais produire d'exception ni un seul item. Un vrai échec, pas
+            # « le profil n'a rien publié » — avant cette correction ce chemin
+            # retombait dans le kind='empty' juste en dessous.
+            return None, (f"Instagram profile scan timed out after "
+                          f"{PROFILE_SCAN_TIMEOUT}s with no media collected: {username}.")
+        if posts_failed:
+            # Des posts ont été vus mais AUCUN n'a survécu à la conversion
+            # (typiquement un changement de mise en page côté Instagram) : échec
+            # systématique, pas un profil vide.
+            return None, (f"Instagram: {posts_failed} post(s) found for {username} "
+                          f"but none could be read (layout change?).")
+        # `profile.get_posts()` a itéré jusqu'au bout PROPREMENT — sans lever
+        # (le `except` ci-dessus l'aurait intercepté), sans timeout (`timed_out`
+        # resterait False) et sans produire un seul post traitable
+        # (`posts_failed` resterait 0 aussi) : compte public légitimement sans
+        # publication, pas un échec. Résultat vide légitime, même convention que
+        # gdl.GdlError kind='empty'.
         return None, GdlError(f"No media found for profile {username}.", 'empty')
+
+    if timed_out or posts_failed:
+        # Récolte non garantie complète : soit le plafond de temps a coupé
+        # l'itération avant la fin, soit certains posts ont échoué à la
+        # conversion pendant que d'autres réussissaient. Les items présents
+        # restent valides — signal `partial` plutôt que de les jeter, même
+        # convention que `gdl._ResultList.partial` (réutilisée telle quelle),
+        # lue par `routes/scrape.py` sur l'objet retourné sans changement côté
+        # route.
+        result = _ResultList(items[:SCAN_LIMIT])
+        result.partial = True
+        return result, None
     return items[:SCAN_LIMIT], None
 
 
