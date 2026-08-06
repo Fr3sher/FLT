@@ -113,3 +113,89 @@ def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
 
     assert items is None
     assert getattr(err, 'kind', None) == 'toolerror'
+
+
+# --- Énumération générique -----------------------------------------------------
+from app.scrape.sources.base import Match   # noqa: E402  (groupé avec ses tests)
+
+
+def _spy_enumerate(monkeypatch, items=None, err=None):
+    seen = {}
+
+    def fake(url, **kw):
+        seen['url'] = url
+        seen.update(kw)
+        return items, err
+    monkeypatch.setattr(gdl, 'enumerate', fake)
+    return seen
+
+
+def test_scan_returns_every_image_of_the_page(monkeypatch):
+    found = [{'url': f'https://cdn.example.test/{i}.jpg', 'title': '',
+              'thumbnail': None, 'type': 'image', 'platform': 'generic'}
+             for i in range(3)]
+    seen = _spy_enumerate(monkeypatch, items=found)
+    m = Match(url='https://example.test/album/1')
+    m.page = 0
+
+    items, err = UniversalSource().scan(m)
+
+    assert err is None and items == found
+    assert seen['platform'] == 'generic'
+    assert seen['per_album'] == 1          # défaut : une cover par album
+    assert seen['image_range'] == '1-120'
+
+
+def test_scan_dives_into_albums_only_when_asked(monkeypatch):
+    seen = _spy_enumerate(monkeypatch, items=[{'url': 'https://cdn.example.test/a.jpg',
+                                               'title': '', 'thumbnail': None,
+                                               'type': 'image', 'platform': 'generic'}])
+    m = Match(url='https://example.test/albums/')
+    m.page = 0
+    m.include_albums = True
+
+    UniversalSource().scan(m)
+
+    assert seen['per_album'] is None       # plongée intégrale
+
+
+def test_scan_walks_the_listing_window_on_later_pages(monkeypatch):
+    seen = _spy_enumerate(monkeypatch, items=[{'url': 'https://cdn.example.test/a.jpg',
+                                               'title': '', 'thumbnail': None,
+                                               'type': 'image', 'platform': 'generic'}])
+    m = Match(url='https://example.test/album/1')
+    m.page = 2
+
+    UniversalSource().scan(m)
+
+    assert seen['image_range'] == '241-360'
+
+
+def test_a_blocked_scan_is_an_error_never_an_empty_result(monkeypatch):
+    """429/auth/DDoS-Guard doivent remonter. Les faire passer pour « aucune image »
+    est exactement le bug qu'erome a payé."""
+    _spy_enumerate(monkeypatch, err=gdl.GdlError('gallery-dl: auth (429).', 'auth'))
+    m = Match(url='https://example.test/album/1')
+    m.page = 0
+
+    items, err = UniversalSource().scan(m)
+
+    assert items is None
+    assert '429' in err
+
+
+def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypatch):
+    """Repli historique : 1 item vidéo, pour que les hôtes vettés atteignent
+    yt-dlp au téléchargement. Pas de pagination sur un item unique."""
+    _spy_enumerate(monkeypatch,
+                   err=gdl.GdlError('gallery-dl: unsupported (no extractor).', 'unsupported'))
+    m = Match(url='https://x.com/someone/status/1')
+    m.page = 0
+
+    items, err = UniversalSource().scan(m)
+
+    assert err is None
+    assert items == [{'url': 'https://x.com/someone/status/1',
+                      'title': 'https://x.com/someone/status/1',
+                      'thumbnail': None, 'type': 'video', 'platform': 'generic'}]
+    assert m.paginated is False

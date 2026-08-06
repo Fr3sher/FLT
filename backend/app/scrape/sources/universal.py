@@ -21,6 +21,10 @@ VETTED_DOMAINS = (
     'vimeo.com', 'dailymotion.com',
 )
 
+# Fenêtre d'énumération par page : la valeur que le moteur gallery-dl utilise
+# déjà par défaut. Pas de réglage supplémentaire à accorder entre les deux.
+MAX_ITEMS = gdl.DEFAULT_MAX_ITEMS
+
 
 def _host_vetted(url):
     host = (urlparse(url).hostname or '').lower()
@@ -32,7 +36,10 @@ def _host_vetted(url):
 class UniversalSource(Source):
     name = 'universal'
     priority = 0
-    capabilities = Capabilities(is_universal_fallback=True, own_downloader=True)
+    paginated = True
+    category = 'image'
+    capabilities = Capabilities(is_universal_fallback=True, own_downloader=True,
+                                media_kinds=frozenset({'image', 'video'}))
 
     def match(self, url):
         from ..validators import url_validator, Platform
@@ -48,11 +55,26 @@ class UniversalSource(Source):
         return None
 
     def scan(self, match):
-        # Énumération générique : 1 item (yt-dlp gère la vidéo unique) ; gallery-dl
-        # générique étant off par défaut, on reste sur l'item unique au scan.
+        """Énumération générique via gallery-dl (~300 sites). Défaut : les médias
+        directs de la page ; un listing d'albums rend UNE cover par album, la case
+        « Scan full albums » (include_albums) rétablit la plongée."""
         url = match.url
-        return ([{'url': url, 'title': url, 'thumbnail': None,
-                  'type': 'video', 'platform': 'generic'}], None)
+        page = max(0, int(getattr(match, 'page', 0) or 0))
+        items, err = gdl.enumerate(
+            url, platform='generic', max_items=MAX_ITEMS,
+            per_album=None if getattr(match, 'include_albums', False) else 1,
+            image_range=f'{page * MAX_ITEMS + 1}-{(page + 1) * MAX_ITEMS}')
+        if items:
+            return items, None
+        if getattr(err, 'kind', None) == 'unsupported':
+            # gallery-dl n'a pas d'extracteur : on restitue le comportement
+            # historique (1 média) pour que les hôtes vettés atteignent yt-dlp.
+            match.paginated = False
+            return ([{'url': url, 'title': url, 'thumbnail': None,
+                      'type': 'video', 'platform': 'generic'}], None)
+        # Auth / 429 / DDoS-Guard / vide réel : on remonte. Ne JAMAIS déguiser un
+        # blocage en « aucune image trouvée ».
+        return None, err or "Nothing to scan at this URL."
 
     def download(self, url, dest_base):
         # 1) gallery-dl (extracteur dédié) d'abord.
