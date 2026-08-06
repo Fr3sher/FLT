@@ -96,6 +96,17 @@ def test_match_still_accepts_a_public_http_url(monkeypatch):
     assert UniversalSource().match('https://example.test/album/1') is not None
 
 
+def test_classify_exit_none_is_not_silently_a_success():
+    """`subprocess.run` ne produit jamais `returncode=None`, mais un double de
+    test bâclé le peut. `if not returncode` (faussité Python) confondait ce cas
+    avec le code 0 (succès) — puis 'empty' au point d'appel (_run_simulate) : un
+    tool ayant planté sans code de sortie exploitable se serait fait passer
+    pour un scan vide réussi. L'égalité stricte à 0 exclut ce cas ; None reste
+    un échec explicite ('toolerror'), jamais un succès déguisé."""
+    assert gdl.classify_exit(0) is None
+    assert gdl.classify_exit(None) == 'toolerror'
+
+
 def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
     """Quand TOUS les albums échouent via le sentinel type -1 (pas via une
     exception/`_run_simulate` en erreur), l'erreur remontée par `enumerate()`
@@ -184,11 +195,15 @@ def test_a_blocked_scan_is_an_error_never_an_empty_result(monkeypatch):
     assert '429' in err
 
 
-def test_a_genuinely_empty_page_is_an_empty_result_not_an_error(monkeypatch):
+def test_a_genuinely_empty_page_carries_its_kind_for_the_route_to_read(monkeypatch):
     """kind='empty' = gallery-dl a tourné correctement et n'a rien trouvé (post
-    supprimé, album vide, mauvais type de page) : ça DOIT ressembler à un scan
-    vide réussi ([], None), pas à un échec — sinon on ne distingue plus ce cas
-    d'un vrai blocage (auth/429/toolerror), ce que 'empty' existe pour éviter."""
+    supprimé, album vide, mauvais type de page) — un scan vide réussi, pas un
+    échec. `scan()` ne le convertit plus lui-même en ([], None) : cette
+    conversion vit désormais UNE seule fois, au niveau de la route
+    (routes/scrape.py), qui voit TOUTES les sources gdl-backed — pas seulement
+    celle-ci. Refaire la conversion ici serait une duplication morte le jour où
+    cette source a cessé d'être la seule à honorer la règle. `scan()` doit donc
+    juste laisser passer une GdlError dont `.kind` reste lisible."""
     _spy_enumerate(monkeypatch,
                    err=gdl.GdlError('gallery-dl: no media found.', 'empty'))
     m = Match(url='https://example.test/album/1')
@@ -196,7 +211,8 @@ def test_a_genuinely_empty_page_is_an_empty_result_not_an_error(monkeypatch):
 
     items, err = UniversalSource().scan(m)
 
-    assert (items, err) == ([], None)
+    assert items is None
+    assert getattr(err, 'kind', None) == 'empty'
 
 
 def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypatch):
@@ -222,8 +238,10 @@ def test_exit_zero_with_no_stdout_is_classified_empty_not_unclassified(monkeypat
     donc sans ce garde-fou le GdlError produit par `_run_simulate` porte
     kind=None : il ne matche ni 'unsupported' ni 'empty' dans `scan()`, tombe
     dans la branche générique « on remonte l'erreur », et un scan vide légitime
-    répond 502 'empty output' au lieu de [] (cf. `test_a_genuinely_empty_page_
-    is_an_empty_result_not_an_error` qui couvre le même contrat côté scan())."""
+    répond 502 'empty output' au lieu de 200/count=0 (cf.
+    `test_scan_empty_kind_is_200_with_zero_items` dans test_scrape_scan.py, qui
+    couvre ce même contrat au niveau de la route — le seul endroit qui le
+    convertit désormais)."""
     monkeypatch.setattr(gdl.subprocess, 'run',
                         lambda *a, **k: _Proc(returncode=0, stdout='', stderr=''))
 
@@ -239,4 +257,5 @@ def test_exit_zero_with_no_stdout_is_classified_empty_not_unclassified(monkeypat
 
     items, scan_err = UniversalSource().scan(m)
 
-    assert (items, scan_err) == ([], None)
+    assert items is None
+    assert getattr(scan_err, 'kind', None) == 'empty'

@@ -65,9 +65,20 @@ def scrape_scan():
     match.page = page
     match.include_albums = bool(data.get('include_albums'))
     items, err = match.source.scan(match)
-    if err:
+    if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,
                         'url_type': result.url_type.value}), 502
+    if err:
+        # kind='empty' : gallery-dl (ou un moteur équivalent) a tourné sans
+        # incident et n'a juste rien trouvé — un scan vide réussi, pas une panne
+        # (cf. docstring de GdlError, app/scrape/sources/gdl.py). La règle
+        # gouvernante de cette vague — un bloc ne doit jamais paraître vide, un
+        # résultat vide ne doit jamais paraître en échec — se vérifie ICI, au
+        # seul endroit qui voit TOUTES les sources gdl-backed (gdl_source.py,
+        # erome.py, image_sites.py, civitai.py, sexcom.py, universal.py) : avant
+        # cette vérif, seule UniversalSource honorait la règle, les autres
+        # transformaient un « rien ici » légitime en toast d'échec (502).
+        items = []
     # Une source peut être généralement paginable tout en résolvant certaines
     # URLs unitaires. scan() peut alors poser un override sur Match, sans que la
     # route connaisse la plateforme concernée.

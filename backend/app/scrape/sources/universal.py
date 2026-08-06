@@ -3,12 +3,16 @@
 Tente d'abord gallery-dl (extracteurs dédiés de nombreux sites) ; si gallery-dl ne
 supporte pas l'URL (exit code & 64), repli sur yt-dlp — mais SEULEMENT pour les hôtes
 d'une allowlist vettée (atténuation SSRF interim, cf. spec décision #6)."""
+import logging
 import os
+import time
 from urllib.parse import urlparse
 
 from .base import Source, Capabilities, Match
 from . import registry, gdl
 from .. import netfetch
+
+logger = logging.getLogger(__name__)
 
 # Hôtes pour lesquels la branche générique yt-dlp est autorisée (interim SSRF).
 # Coomer/Kemono/Cyberdrop/Bunkr n'y figurent plus : ces sources sont retirées et
@@ -24,6 +28,17 @@ VETTED_DOMAINS = (
 # Fenêtre d'énumération par page : la valeur que le moteur gallery-dl utilise
 # déjà par défaut. Pas de réglage supplémentaire à accorder entre les deux.
 MAX_ITEMS = gdl.DEFAULT_MAX_ITEMS
+
+# Budget de temps global d'un scan (gdl.enumerate deadline). Cette source est le
+# CATCH-ALL des hôtes inconnus (priority=0) — c'est là que vivent les pages
+# pathologiques (listings à des centaines d'albums) qui, sans plafond, peuvent
+# lancer 1 + DEFAULT_MAX_ALBUMS (8) sous-process gallery-dl à GDL_TIMEOUT (60s)
+# chacun dans UNE requête Flask synchrone (~9 min pire cas). 90s = GDL_TIMEOUT
+# (le scan top-level, incompressible, un seul sous-process) + une marge pour
+# ~1 sous-process d'album supplémentaire avant de rendre ce qui a été trouvé :
+# assez pour qu'un petit listing d'albums finisse normalement, trop court pour
+# qu'une page pathologique bloque le worker Flask plusieurs minutes.
+SCAN_BUDGET_SECONDS = 90
 
 
 def _host_vetted(url):
@@ -63,8 +78,24 @@ class UniversalSource(Source):
         items, err = gdl.enumerate(
             url, platform='generic', max_items=MAX_ITEMS,
             per_album=None if getattr(match, 'include_albums', False) else 1,
-            image_range=f'{page * MAX_ITEMS + 1}-{(page + 1) * MAX_ITEMS}')
+            image_range=f'{page * MAX_ITEMS + 1}-{(page + 1) * MAX_ITEMS}',
+            deadline=time.monotonic() + SCAN_BUDGET_SECONDS)
         if items:
+            if getattr(items, 'from_albums', False):
+                # Ces items viennent de la récursion d'albums de gdl.enumerate,
+                # bornée en NOMBRE d'albums (max_albums) jamais par un offset de
+                # page : `--range` (image_range, calculé ci-dessus depuis `page`)
+                # ne borne que les médias TOP-LEVEL, que la récursion d'albums
+                # ignore complètement. Annoncer la pagination enverrait « Charger
+                # plus » vers une fenêtre que rien ne consomme : silence total,
+                # exactement comme le repli `unsupported` juste en dessous coupe
+                # déjà `match.paginated` pour la même raison structurelle.
+                match.paginated = False
+            if getattr(items, 'partial', False):
+                # Budget de temps épuisé en cours de récursion : les items présents
+                # restent valides, seulement incomplets — un scan tronqué vaut
+                # mieux qu'un 502 après plusieurs minutes (cf. gdl.enumerate).
+                logger.info("universal scan: budget épuisé, résultat partiel (%s)", url)
             return items, None
         if getattr(err, 'kind', None) == 'unsupported':
             # gallery-dl n'a pas d'extracteur : on restitue le comportement
@@ -72,15 +103,13 @@ class UniversalSource(Source):
             match.paginated = False
             return ([{'url': url, 'title': url, 'thumbnail': None,
                       'type': 'video', 'platform': 'generic'}], None)
-        if getattr(err, 'kind', None) == 'empty':
-            # gallery-dl a tourné sans incident et n'a rien trouvé (post supprimé,
-            # album vide, mauvais type de page) : un scan vide réussi, PAS un
-            # échec. Le confondre avec 'toolerror' rendrait les deux cas
-            # indiscernables pour cet appelant — exactement ce que 'empty' existe
-            # pour éviter (cf. docstring de GdlError).
-            return [], None
-        # Auth / 429 / DDoS-Guard / erreur outil : on remonte. Ne JAMAIS déguiser
-        # un blocage en « aucune image trouvée ».
+        # Reste (dont kind='empty') : on remonte l'erreur telle quelle. La route
+        # (routes/scrape.py) traite désormais TOUT kind='empty' — de N'IMPORTE
+        # QUELLE source gdl-backed — comme un scan réussi sans résultat (200,
+        # count=0) plutôt qu'un 502 ; dupliquer ce traitement ici serait mort du
+        # jour où cette source a arrêté d'être la SEULE à honorer la règle. Auth /
+        # 429 / DDoS-Guard / erreur outil restent des erreurs à remonter : ne
+        # JAMAIS déguiser un blocage en « aucune image trouvée ».
         return None, err or "Nothing to scan at this URL."
 
     def download(self, url, dest_base):

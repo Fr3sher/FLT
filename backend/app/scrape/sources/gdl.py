@@ -9,6 +9,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import logging
 from urllib.parse import urlparse
 
@@ -30,9 +31,18 @@ EXIT_UNSUPPORTED = 64
 def classify_exit(returncode):
     """Code de sortie gallery-dl → failure_kind ('unsupported'|'auth'|'network'|
     'toolerror') ou None si 0. Le bitmask est OR-combiné ; on teste du plus
-    spécifique (unsupported) au plus générique."""
-    if not returncode:
+    spécifique (unsupported) au plus générique.
+
+    Le test de succès est l'ÉGALITÉ à 0, pas la faussité Python (`not returncode`).
+    `subprocess.run` ne produit jamais `None`, mais un double de test bâclé le
+    peut — `not None` vaut True, ce qui ferait passer ce cas pour un succès (puis
+    'empty' au point d'appel, cf. `_run_simulate`) au lieu d'un échec non
+    classifié. `None` est explicitement `'toolerror'` : ni un succès, ni un code
+    bitmask exploitable."""
+    if returncode == 0:
         return None
+    if returncode is None:
+        return 'toolerror'
     if returncode & EXIT_UNSUPPORTED:
         return 'unsupported'
     if returncode & EXIT_AUTH:
@@ -134,6 +144,25 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
     return data, None
 
 
+class _ResultList(list):
+    """Items renvoyés par `enumerate()`, porteurs de métadonnées de provenance
+    (même patron que `GdlError` sous-classant `str`) : les appelants qui
+    traitent le retour comme une simple liste continuent de fonctionner sans
+    changement ; ceux qui veulent savoir consultent les attributs.
+
+    - `from_albums` : True si TOUS les items proviennent de la récursion
+      d'albums (type 6), pas des médias top-level de la page. `enumerate()` ne
+      borne cette récursion QU'au nombre d'albums (`max_albums`), jamais par un
+      offset de page — donc une source qui annoncerait la pagination sur ces
+      items enverrait « Charger plus » dans le vide (cf. le repli `unsupported`
+      qui, lui, coupe déjà `match.paginated` pour la même raison).
+    - `partial` : True si le budget de temps global (`deadline`) a coupé
+      l'énumération avant d'avoir exploré tous les albums — les items présents
+      restent valides, il en manque potentiellement."""
+    from_albums = False
+    partial = False
+
+
 def _error_sentinel(entries):
     """Si une entrée type -1 (erreur d'extracteur) est présente, renvoie son message."""
     for entry in entries:
@@ -146,7 +175,7 @@ def _error_sentinel(entries):
 
 def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
               max_albums=DEFAULT_MAX_ALBUMS, cookies=None, extra_opts=None,
-              image_range=None, per_album=None):
+              image_range=None, per_album=None, deadline=None):
     """Énumère les médias d'une URL via gallery-dl. Retourne (items, error).
 
     Gère les types de message : -1 (erreur → remontée), 2 (header, ignoré),
@@ -157,7 +186,18 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
 
     `per_album` borne les images remontées PAR ALBUM lors de la récursion type 6
     (per_album=1 → la cover de chaque album, pas son contenu). Ne touche PAS les
-    médias top-level : scanner l'URL d'un album précis rend toujours tout l'album."""
+    médias top-level : scanner l'URL d'un album précis rend toujours tout l'album.
+
+    `deadline` : budget de temps global optionnel, un timestamp ABSOLU
+    `time.monotonic()` (pas une durée) — ça permet à l'appelant comme au test de
+    le poser directement (un deadline déjà expiré déclenche la coupure sans
+    attendre). None (défaut) = pas de budget, comportement historique inchangé
+    pour les appelants qui n'en passent pas. Ne borne QUE la récursion d'albums
+    (jusqu'à 1 + max_albums sous-process gallery-dl, chacun jusqu'à GDL_TIMEOUT) :
+    couper le scan top-level n'aurait aucun sens, un seul sous-process y suffit
+    toujours. Au dépassement : retourne les items déjà collectés (`partial=True`
+    sur le résultat) plutôt qu'une erreur — un scan tronqué reste plus utile
+    qu'un 502 après plusieurs minutes."""
     try:
         entries, err = _run_simulate(url, max_items, cookies, extra_opts,
                                      image_range=image_range)
@@ -188,8 +228,23 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
                     album_urls.append(entry[1])
                     if len(album_urls) >= max_albums:
                         break
+        def _from_albums(collected):
+            """Enveloppe les items collectés via la récursion d'albums avec leur
+            provenance (`from_albums`, `partial`) — cf. docstring de `_ResultList`."""
+            out = _ResultList(collected[:max_items])
+            out.from_albums = True
+            out.partial = timed_out
+            return out
+
         album_errors = []
+        timed_out = False
         for album_url in album_urls:
+            # Budget global dépassé → on s'arrête là où on en est. Vérifié EN DÉBUT
+            # de boucle (jamais pendant un sous-process déjà lancé, cf. docstring) :
+            # au moins la 1ère itération part toujours, même deadline déjà expiré.
+            if deadline is not None and time.monotonic() >= deadline:
+                timed_out = True
+                break
             # per_album posé → borner la simulation elle-même (--range 1-N) : gallery-dl
             # s'arrête après N images au lieu d'énumérer tout l'album pour rien.
             sub, sub_err = _run_simulate(album_url, max_items, cookies, extra_opts,
@@ -215,11 +270,19 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
                         items.append(item)
                         taken += 1
                         if len(items) >= max_items:
-                            return items[:max_items], None
+                            return _from_albums(items), None
                         if per_album and taken >= per_album:
                             break
         if items:
-            return items[:max_items], None
+            return _from_albums(items), None
+        if timed_out:
+            # Budget épuisé avant le moindre item collecté : même convention que
+            # « aucun média trouvé » ci-dessous (kind='empty', PAS une erreur) —
+            # un scan tronqué sans résultat reste un résultat vide légitime, pas
+            # un échec outil (cf. docstring `deadline`).
+            return None, GdlError(
+                "gallery-dl: time budget exhausted before any album could be scanned.",
+                'empty')
         # Tous les albums ont échoué → remonter la 1ère erreur (auth/429) plutôt
         # qu'un faux « aucun média » (cas d'une source derrière une protection DDoS-Guard).
         if album_errors:
