@@ -50,6 +50,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-bank-scrape-keeps-provenance',
+    date: '2026-08-06',
+    title: 'Images scraped into a bank keep their source',
+    blurb: 'Scraping straight into a bank used to drop the Pexels credit or the page a web-search image was found on. It now survives the trip — and shows up again if you later promote that image into a dataset.',
+  },
+  {
     id: '2026-08-06-web-search-image-origin-link',
     date: '2026-08-06',
     title: 'See where a web-search image came from',

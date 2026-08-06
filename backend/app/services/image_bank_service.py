@@ -654,21 +654,31 @@ def create_bank(user_id, name, folder):
 _INSERT_CHUNK = 2000
 
 
-def _insert_bank_images(bank_id, folder, rels) -> int:
+def _insert_bank_images(bank_id, folder, rels, source_metadata_by_relpath=None) -> int:
     """Insert one BankImage per relpath, in chunks, through a CORE insert.
 
     Row-by-row ``db.session.add`` costs ~141 us/file (measured: 7.1 s for a
     50 000-image folder), which at the folder sizes this app now accepts would
     hold the HTTP request open for half a minute. The same rows through a
     chunked core insert cost a fraction of that, and Python-side column defaults
-    (status, timestamps) are applied exactly as the ORM would."""
+    (status, timestamps) are applied exactly as the ORM would.
+
+    ``source_metadata_by_relpath`` is an optional {relpath: stored JSON string}
+    map (already validated + serialized — see ``_source_metadata_storage``) for
+    the scrape → bank intake, so a scraped image's provenance is not lost the
+    moment it lands in a Bank folder and can later ride along on promotion to a
+    Dataset (``_dataset_row_bank_values`` reads this same column back). Every
+    row gets the key, missing entries as None, so all dicts in one chunked
+    insert share the same columns."""
+    lookup = source_metadata_by_relpath or {}
     rows = []
     for rel in rels:
         try:
             size = os.path.getsize(os.path.join(folder, rel))
         except OSError:
             size = None
-        rows.append({'bank_id': bank_id, 'relpath': rel, 'file_size': size})
+        rows.append({'bank_id': bank_id, 'relpath': rel, 'file_size': size,
+                     'source_metadata': lookup.get(rel)})
     # A "this subfolder is one person" assertion is a RULE, not a stamp: a file
     # that lands in an asserted folder joins its person group here, on insert,
     # with no pass and no click (see services/folder_person.py).
@@ -706,7 +716,8 @@ def _sync_cached(bank_id) -> dict:
     return {**(last['result'] if last else _EMPTY_SYNC), 'added': 0, 'not_added': 0}
 
 
-def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | None:
+def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None,
+                 source_metadata_by_relpath=None) -> dict | None:
     """Re-inventory a bank's source folder: register the images that appeared in
     it since the last walk.
 
@@ -729,12 +740,15 @@ def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | N
 
     Returns {'added', 'missing', 'unavailable', 'error', 'not_added', 'limit'},
     or None when the bank is unknown. ``force`` bypasses the cooldown (bank
-    opened by hand)."""
+    opened by hand). ``source_metadata_by_relpath`` — see ``_insert_bank_images``
+    — is threaded through only for the scrape → bank intake; every other caller
+    omits it and new rows get no provenance, exactly as before."""
     if _bank_lease is None:
         try:
             with bank_jobs.mutation_lease(bank_id, 'folder_sync') as lease:
                 return refresh_bank(
-                    user_id, bank_id, force=force, _bank_lease=lease)
+                    user_id, bank_id, force=force, _bank_lease=lease,
+                    source_metadata_by_relpath=source_metadata_by_relpath)
         except bank_jobs.BankJobBusy:
             # Polling remains readable while a pass owns the Bank; inventory is
             # additive and can safely wait for the next refresh.
@@ -795,7 +809,7 @@ def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | N
         not_added = len(new_rels) - keep
         new_rels = new_rels[:keep]
     if new_rels:
-        _insert_bank_images(bank_id, folder, new_rels)
+        _insert_bank_images(bank_id, folder, new_rels, source_metadata_by_relpath)
         db.session.commit()
     return _remember_sync(bank_id, now, {
         'added': len(new_rels),
@@ -9300,7 +9314,11 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
     produce, with thresholds the user moves. Filtering at download time would
     delete the evidence before the triage tool ever sees it. What IS kept from
     that path is the download itself (`_download_scrape_item`: SSRF guard,
-    content-type allow-list, image-magic check, size cap) and the per-request cap.
+    content-type allow-list, image-magic check, size cap) and the per-request cap
+    — AND, like the dataset intake, each item's provenance (validated the same
+    way, via `normalize_source_metadata`/`_source_metadata_storage`), so a Bank
+    image scraped in does not lose its origin the way it used to; promotion to
+    a Dataset already forwards `BankImage.source_metadata` unchanged.
 
     Returns {'bank_id', 'name', 'created', 'saved', 'already_there', 'added',
     'skipped': {...}}. ``added`` is what the folder walk actually inventoried.
@@ -9367,14 +9385,24 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
             bank_jobs.abort(reservation)
 
     with ThreadPoolExecutor(max_workers=_SCRAPE_DL_WORKERS) as pool:
-        downloaded = list(pool.map(_download_scrape_item, items))
+        # Kept paired with its item (not a separate byte list): the blob name is
+        # only known once the bytes are in hand, and that is also the only way to
+        # find back which item's provenance a given blob owns.
+        downloaded = list(zip(items, pool.map(_download_scrape_item, items)))
     # Downloads can be slow. Refresh the capability before the first write so a
     # stale/purged lease can never publish beside a newer Bank owner.
     bank_jobs.require_reservation(_bank_lease, bank.id)
 
     skipped: dict[str, int] = {}
     saved = already_there = 0
-    for reason, raw in downloaded:
+    # relpath (== content-hash blob name, files land flat in the bank folder) ->
+    # stored provenance JSON, handed to the folder walk below so a freshly
+    # inventoried row is born WITH its source instead of the walk having no way
+    # to attach one to a bare file it just found on disk. Validated the same way
+    # as the dataset intake (normalize_source_metadata via _source_metadata_storage)
+    # — never trusted raw from the client.
+    source_metadata_by_blob: dict[str, str] = {}
+    for item, (reason, raw) in downloaded:
         if reason != 'ok' or not raw:
             skipped[reason] = skipped.get(reason, 0) + 1
             continue
@@ -9382,6 +9410,9 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
         if blob_name is None:
             skipped['not_image'] = skipped.get('not_image', 0) + 1
             continue
+        stored_metadata = _source_metadata_storage(item, image_url=item.get('url'))
+        if stored_metadata:
+            source_metadata_by_blob[blob_name] = stored_metadata
         dest = os.path.join(folder, blob_name)
         if os.path.exists(dest):
             already_there += 1
@@ -9398,7 +9429,8 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
     # ONE inventory path for every bank: the same walk that picks up files the
     # user drops in the folder by hand picks these up too. No third insert path.
     sync = refresh_bank(
-        user_id, bank.id, force=True, _bank_lease=_bank_lease) or {}
+        user_id, bank.id, force=True, _bank_lease=_bank_lease,
+        source_metadata_by_relpath=source_metadata_by_blob) or {}
     return {'bank_id': bank.id, 'name': bank.name, 'created': _created,
             'saved': saved, 'already_there': already_there,
             'added': sync.get('added', 0), 'skipped': skipped}
