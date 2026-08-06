@@ -483,6 +483,16 @@ Before you rely on it:
   many images got no face at all. A *partly* masked set is the bad case: the faces
   left unmasked become the only ones the LoRA still learns faces from, so they end
   up over-represented.
+- **You can stop the preview, and it resumes.** On a large set the pass takes a
+  while, so **Stop** is next to it — and what it already found is kept. Start it
+  again and it continues from where it stopped rather than from image 1. The
+  button says what stopping costs at the moment you press it, because that
+  changes: the face detector is loaded before the first image and that load is
+  paid again on every start, so stopping *during* the load gives up only the
+  load, while stopping *during* the analysis keeps every face found so far.
+  Change your kept images and the saved work is dropped instead of reused —
+  boxes detected on photos that left the set would describe a run that no longer
+  exists.
 - **If your concept lives on the face** — an expression, a mouth, a gaze — masking
   the head can erase what you're teaching. The app warns when your description says
   so; it doesn't stop you, because only you know your dataset.
