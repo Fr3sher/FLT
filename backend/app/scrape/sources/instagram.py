@@ -287,10 +287,20 @@ def _scan_profile(loader, username):
     except Exception as e:
         # Erreur pendant l'itération paginée (souvent rate-limit en cours de route).
         if items:
-            # On a déjà des items utiles → on les retourne sans erreur.
+            # On a déjà des items utiles → on les retourne sans erreur, mais la
+            # récolte n'est PAS garantie complète (cas le plus courant : rate-limit
+            # en cours de route) — signal `partial`, même convention que
+            # `gdl._ResultList.partial` / le cas `timed_out`/`posts_failed`
+            # juste en dessous (réutilisée telle quelle), lue par `routes/scrape.py`
+            # sur l'objet retourné sans changement côté route. Avant cette
+            # correction ce chemin renvoyait `items[:SCAN_LIMIT], None` — une
+            # liste ordinaire sans signal de troncature, présentant une récolte
+            # coupée comme complète.
             logger.warning("Itération profil %s interrompue après %d items : %s",
                            username, len(items), e)
-            return items[:SCAN_LIMIT], None
+            result = _ResultList(items[:SCAN_LIMIT])
+            result.partial = True
+            return result, None
         logger.warning("Itération profil %s échouée : %s", username, e)
         return None, _AUTH_ERROR
 
@@ -302,7 +312,8 @@ def _scan_profile(loader, username):
             # « le profil n'a rien publié » — avant cette correction ce chemin
             # retombait dans le kind='empty' juste en dessous.
             return None, (f"Instagram profile scan timed out after "
-                          f"{PROFILE_SCAN_TIMEOUT}s with no media collected: {username}.")
+                          f"{PROFILE_SCAN_TIMEOUT}s ({posts_seen} post(s) checked, "
+                          f"no media collected): {username}.")
         if posts_failed:
             # Des posts ont été vus mais AUCUN n'a survécu à la conversion
             # (typiquement un changement de mise en page côté Instagram) : échec

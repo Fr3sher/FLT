@@ -5,6 +5,8 @@ que pour la famille gallery-dl ; RedGifs répondait 502 sur un profil vide).
 Tout est mocké (client RedGifs) : aucun appel réseau."""
 from types import SimpleNamespace
 
+import requests
+
 from app.scrape.sources import redgifs
 from app.scrape.validators import URLType
 
@@ -86,6 +88,31 @@ def test_scan_reports_a_failure_not_an_empty_success_when_niche_is_rate_limited(
     monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
     monkeypatch.setattr(redgifs.client, 'iter_niche', _rate_limited)
     validation = SimpleNamespace(url_type=URLType.NICHE, value='throttled-niche')
+
+    items, err = redgifs.scan(validation)
+
+    assert items is None
+    assert err is not None
+    assert 'rate' in err.lower() or 'blocked' in err.lower()
+
+
+def test_iter_paged_turns_an_http_429_into_a_failure_not_an_empty_result(monkeypatch):
+    """Unlike the two tests above (which stub `iter_user`/`iter_niche` to raise
+    `RedGifsAbort` directly and therefore never execute `_iter_paged` at all),
+    this one patches at the HTTP layer `_iter_paged` actually calls —
+    `client._get` — so the real `_iter_paged` body runs and must be the thing
+    that turns a 429 into `RedGifsAbort`. A reviewer proved the four tests above
+    passed even with the fix's three `raise RedGifsAbort` reverted to bare
+    `return` in `_iter_paged`, because they never exercised that code path."""
+    class _FakeResponse:
+        status_code = 429
+
+    def _get_429(url, video_id=None):
+        raise requests.HTTPError(response=_FakeResponse())
+
+    monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
+    monkeypatch.setattr(redgifs.client, '_get', _get_429)
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='throttled')
 
     items, err = redgifs.scan(validation)
 

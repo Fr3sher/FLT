@@ -71,8 +71,13 @@ def scrape_scan():
     # `_ResultList` porte l'attribut sur le retour qu'`enumerate()` produit, que la
     # source le renvoie tel quel (universal.py, gdl_source.py, erome.py,
     # image_sites.py, civitai.py, sexcom.py — TOUTES les sources gdl-backed) sans
-    # avoir besoin de le relayer explicitement. Une source non gdl-backed (Pexels,
-    # Reddit…) renvoie une liste ordinaire → `getattr` retombe sur False.
+    # avoir besoin de le relayer explicitement. redgifs.py et instagram.py ne sont
+    # PAS gdl-backed (ports autonomes) mais réutilisent le même `_ResultList` pour
+    # signaler leurs propres troncatures (page RedGifs refusée après une page
+    # réussie, itération Instagram interrompue en cours de route) — même
+    # convention, aucun changement ici. Seule une source qui n'implémente aucune
+    # notion de troncature (Pexels, Reddit…) renvoie une liste ordinaire →
+    # `getattr` retombe alors sur False.
     partial = bool(getattr(items, 'partial', False))
     if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,

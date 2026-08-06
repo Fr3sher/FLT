@@ -43,6 +43,23 @@ class _FakeThrottledProfile:
         yield _FakeThrottledPost()
 
 
+class _FakeSimplePost:
+    """Post unique (pas carrousel) qui se convertit sans problème."""
+    def __init__(self, shortcode):
+        self.shortcode = shortcode
+        self.typename = 'GraphImage'
+        self.is_video = False
+        self.url = f'https://example.invalid/{shortcode}.jpg'
+
+
+class _FakeProfileRateLimitedMidIteration:
+    """Un post cède avec succès, puis l'itération paginée lève (rate-limit en
+    cours de route) — le cas le plus courant : des items utiles sont déjà là."""
+    def get_posts(self):
+        yield _FakeSimplePost('collected1')
+        raise ConnectionError('429 Too Many Requests')
+
+
 class _FakeProfileWhereEveryPostFailsConversion:
     """Deux posts vus, aucun ne survit à la conversion (ex. changement de mise
     en page côté Instagram) — pas la même chose qu'un profil sans publication."""
@@ -94,6 +111,24 @@ def test_scan_profile_timeout_with_zero_items_is_a_failure_not_empty(monkeypatch
     assert err is not None
     assert getattr(err, 'kind', None) != 'empty'
     assert 'timed out' in err.lower()
+
+
+def test_scan_profile_marks_a_mid_iteration_rate_limit_as_partial(monkeypatch):
+    """Sibling of the RedGifs mid-iteration abort: a rate-limit raised by
+    `profile.get_posts()` AFTER at least one post was already collected used to
+    return `items[:SCAN_LIMIT], None` — a plain list with no truncation signal,
+    presenting a one-item harvest as complete. Must now carry `partial=True`,
+    the same convention as `gdl._ResultList.partial`."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileRateLimitedMidIteration()))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='throttled', original_url=None)
+
+    items, err = instagram.scan(validation)
+
+    assert err is None
+    assert len(items) == 1
+    assert getattr(items, 'partial', False) is True
 
 
 def test_scan_profile_where_every_post_fails_conversion_is_a_failure_not_empty(monkeypatch):
