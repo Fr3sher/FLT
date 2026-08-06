@@ -700,7 +700,9 @@ CAPABILITY_IMPORTS = {
     # ~2.5 GB reason. ffmpeg is not an import at all and is resolved separately
     # (services/ffmpeg_tools).
     'video': 'import av',
-    'shot_detect': 'import torch, transnetv2_pytorch',
+    # av: the worker decodes with PyAV in this same environment — a probe that
+    # skips it answers "ready" about a detector that cannot open a single file.
+    'shot_detect': 'import torch, transnetv2_pytorch, av',
 }
 
 

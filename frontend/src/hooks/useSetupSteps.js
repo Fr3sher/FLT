@@ -460,6 +460,12 @@ export function deriveCapabilitySummary(caps) {
     { label: 'Face-similarity scoring', ok: !!c.face_scoring, topic: 'setup-quality' },
     { label: 'Person masks', ok: !!c.masks, topic: 'setup-quality' },
     { label: 'Watermark inpainting', ok: !!c.watermark_inpaint, topic: 'setup-quality' },
+    // Counted for the same reason Krea is (see above): the final screen used to
+    // certify "12 of 12 ready" on a machine whose video lane could not open one
+    // file. A capability that is absent must be visible and counted, never
+    // removed from the denominator.
+    { label: 'Video bank — reading files', ok: !!c.video_decode, topic: 'setup-quality' },
+    { label: 'Video bank — shot detection', ok: !!c.video_detect, topic: 'setup-quality' },
     { label: 'LoRA training', ok: !!c.training_visible, topic: 'setup-training' },
     { label: 'Test Studio', ok: !!c.studio_visible,
       topic: 'setup-comfyui', waitingTopic: WAITING,
@@ -535,6 +541,8 @@ export const INSTALL_ALL_ACTION_LABELS = {
   masks: 'Person masks',
   watermark_inpaint: 'Watermark inpainting',
   watermark_detect: 'Watermark detector',
+  video: 'Video decoding (Video bank)',
+  shot_detect: 'Shot detection (Video bank)',
   ollama_model: 'Vision model (captioning)',
   klein_model: 'Klein model (local generation)',
   klein_text_encoder: 'Klein text encoder',
@@ -737,6 +745,14 @@ export function installCatalog(caps) {
     mlItem('face_scoring'),
     mlItem('masks'),
     item('watermark_inpaint', c.watermark_inpaint, true, ''),   // auto-provisions its own venv
+    // The video extras were installable through the API and NOWHERE on this
+    // screen — the banner in the Video bank said "Install … from Setup" and this
+    // menu had no such row (found live, the day after the lane shipped).
+    // `video` (PyAV) goes into the app's own Python — no torch, always available;
+    // `shot_detect` rides the scoring environment, exactly like the watermark
+    // detector, and the runner refuses the app venv itself.
+    item('video', c.video_decode, true, ''),
+    item('shot_detect', c.video_detect, true, ''),
     item('ollama_model', o.vision_model_ready, o.reachable && modelName,
       !o.reachable ? 'Start Ollama first (the Captioning step).'
         : !modelName ? 'Set a vision model name first (the Captioning step).' : ''),

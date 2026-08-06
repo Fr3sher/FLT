@@ -155,7 +155,7 @@ def test_an_empty_machine_is_not_flagged_as_a_failure(sp, app, client):
     """The other half of the same contract: a genuine 'nothing here' must NOT
     carry the failure flag, or the warning becomes noise everyone learns to
     ignore."""
-    with patch.object(sp, 'candidates', lambda: []):
+    with patch.object(sp, 'candidates', lambda profile=None: []):
         res = client.get('/api/scoring-python')
     body = res.get_json()
     assert body.get('detection_failed') in (None, False)

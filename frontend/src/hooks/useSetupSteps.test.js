@@ -355,6 +355,7 @@ import { installAllPlan, INSTALL_ALL_ORDER } from './useSetupSteps.js';
 const fullCaps = () => ({
   python: { ml_supported: true },
   face_scoring: true, masks: true, watermark_inpaint: true,
+  video_decode: true, video_detect: true,
   ollama: { reachable: true, vision_model_ready: true, vision_model: 'qwen3-vl:8b' },
   // reachable matters for the Krea node pack: an unreachable ComfyUI's node probe
   // fails open, so "nothing missing" from a stopped ComfyUI must not read as
@@ -420,7 +421,8 @@ test('installCatalog lists every app-installable component, present + available'
   // card, this menu is the per-piece repair path each of them also deserves.
   assert.deepEqual(
     installCatalog(fullCaps()).map((c) => c.action),
-    ['face_scoring', 'masks', 'watermark_inpaint', 'ollama_model',
+    ['face_scoring', 'masks', 'watermark_inpaint', 'video', 'shot_detect',
+      'ollama_model',
       'klein_model', 'klein_text_encoder', 'klein_vae', 'klein_lora',
       'krea_nodes', 'krea_model', 'krea_text_encoder', 'krea_vae',
       'krea_identity_lora'],
@@ -435,7 +437,7 @@ test('installCatalog lists every app-installable component, present + available'
 test('installCatalog stays fully available for reinstall when all is green', () => {
   // The menu must never collapse once installed — each item can always be repaired.
   const cat = installCatalog(fullCaps());
-  assert.ok(cat.length === 13 && cat.every((c) => c.available));
+  assert.ok(cat.length === 15 && cat.every((c) => c.available));
 });
 
 test('installCatalog marks missing ML extras not-present but still available', () => {
@@ -582,4 +584,38 @@ test('SetupPage renders the verdict instead of hardcoding the old sentence', () 
   assert.doesNotMatch(page, /set up its venv per its README/);
   assert.match(page, /aitoolkitVerdict\(step, dir\)/);
   assert.match(page, /<SettingsLink section=\{verdict\.settingsSection\}/);
+});
+
+// --- The video extras are countable, listable and repairable ---------------------
+// The wizard certified "12 of 12 capabilities ready" on a machine whose video
+// lane could not cut a single file: the video capabilities were absent from the
+// summary (so the denominator lied — the exact defect the Krea comment in
+// deriveCapabilitySummary documents), absent from installCatalog (so the
+// "Install or repair individually" screen had no row to click), and the wizard
+// skipped the whole install screen because everything it DID count was green.
+// Found live by the first real user, the day after the wave landed.
+test('the capability summary counts the video pieces', () => {
+  const rows = deriveCapabilitySummary({ video_decode: false, video_detect: false });
+  const labels = rows.map((r) => r.label);
+  const decode = rows.find((r) => /video/i.test(r.label) && /read/i.test(r.label));
+  const detect = rows.find((r) => /shot detection/i.test(r.label));
+  assert.ok(decode, `no video-decode row in the summary: ${labels.join(', ')}`);
+  assert.ok(detect, `no shot-detection row in the summary: ${labels.join(', ')}`);
+  assert.equal(decode.ok, false);
+  assert.equal(detect.ok, false);
+  const on = deriveCapabilitySummary({ video_decode: true, video_detect: true });
+  assert.equal(on.find((r) => /shot detection/i.test(r.label)).ok, true);
+});
+
+test('the install catalog offers the video extras for install and repair', () => {
+  const rows = installCatalog({ video_decode: false, video_detect: true });
+  const video = rows.find((r) => r.action === 'video');
+  const shot = rows.find((r) => r.action === 'shot_detect');
+  assert.ok(video, 'no "video" row in installCatalog');
+  assert.ok(shot, 'no "shot_detect" row in installCatalog');
+  assert.equal(video.present, false);
+  assert.equal(shot.present, true);
+  assert.ok(video.available && shot.available);
+  assert.notEqual(video.label, 'video', 'the row shows a raw action id instead of a label');
+  assert.notEqual(shot.label, 'shot_detect', 'the row shows a raw action id instead of a label');
 });

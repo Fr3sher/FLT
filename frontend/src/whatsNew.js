@@ -92,6 +92,61 @@ export const WHATS_NEW = [
     blurb: 'Type what you are looking for instead of hunting for a gallery URL first. No account, no API key. Results come from third-party sites, so check the licence before using one.',
   },
   {
+    id: '2026-08-06-pinned-runs-keep-one-grid-per-prompt',
+    date: '2026-08-06',
+    title: 'Pinning a run to the canvas gives each prompt its own grid',
+    blurb:
+      'Pinning everything a run produced onto the ◉ LoRA Canvas used to drop the pictures of several prompts into one another, so a board carrying two or three runs read as one scatter and you could not tell at a glance which image came from which prompt. Each prompt now keeps its own grid, and a fresh grid is moved aside rather than laid over anything already on the board — including the cards, the checkpoint pills and the pictures you placed by hand, which are never touched. The reason for putting a run on the board at all is to SEE which prompt gave what; that is now what you get.',
+    to: '/canvas',
+  },
+  {
+    id: '2026-08-06-duplicates-headline-counts-what-is-left',
+    date: '2026-08-06',
+    title: 'The duplicates figure counts what you still have to decide',
+    blurb:
+      'The ≈ Duplicates figure on the bank overview counted every group the last analysis found, including the ones you had already resolved — so it sat at the same number no matter how much of the queue you cleared, and there was no way to tell progress from a stuck pass. It now counts what is left to decide, and says so: “groups remaining to resolve”. A bank whose duplicates are all sorted reads zero, which is the whole point of a headline number.',
+    to: '/bank',
+  },
+  {
+    id: '2026-08-06-face-mask-preview-stops-and-resumes',
+    date: '2026-08-06',
+    title: 'The face-mask preview can be stopped — and picks up where it left off',
+    blurb:
+      '"Looking for faces… analyzing image 4 of 153" had no way out: the only choice was to wait for the whole pass or leave the page and lose it. There is a Stop button now, and it keeps what the pass already found — start it again and it resumes at image 5 instead of image 1. The button says what stopping costs at the moment you press it, and the cost changes as the pass runs: during the model load nothing has been analyzed yet, so only the load is given up; once images are being analyzed, every face already found is kept. Change your kept images and the saved work is dropped rather than reused, because boxes from photos that left the set would describe a run that no longer exists.',
+    to: '/datasets?section=training',
+  },
+  {
+    id: '2026-08-06-setup-counts-the-video-pieces',
+    date: '2026-08-06',
+    title: 'Setup now counts the video pieces — and its repair menu can reach them',
+    blurb:
+      'The setup wizard could certify "12 of 12 capabilities ready" on a machine whose Video bank could not open a single file: the two video pieces were not counted, not listed in the Install-or-repair menu, and the wizard skipped its own install screen because everything it DID count was green. The summary now counts 14 — reading video files and shot detection included, each ✗ row clickable to where it installs — and 🎬 Video decoding and 🎞️ Shot detection sit in the Install or repair individually menu like every other component.',
+    to: '/setup',
+  },
+  {
+    id: '2026-08-06-shot-detection-installs-its-decoder',
+    date: '2026-08-06',
+    title: 'Shot detection no longer fails every file right after a clean install',
+    blurb:
+      'The 🎞️ Shot detection install put the model in place but not the decoder it reads files with — so the install reported success, the readiness badge turned green, and then every single file answered "failed shot detection". The install now carries PyAV into the same environment, the badge only turns green when the worker can actually open a file, and a contract test holds the three ends (worker, installer, probe) to the same list. If you hit this: Setup → 🎞️ Shot detection → ↻ Reinstall, then run Find shots again — your files were never the problem.',
+    to: '/setup',
+  },
+  {
+    id: '2026-08-06-bank-page-opens-without-rescanning-everything',
+    date: '2026-08-06',
+    title: 'The Bank page opens in a blink instead of a second',
+    blurb:
+      'Every time you opened 🗃️ Bank, the app re-listed every image in every bank\'s source folder before drawing the page — on a real library of 86 000 images that was a full second of disk work, paid even when you were only passing through. It no longer does: the page opens on what it already knows. A folder is still re-checked automatically when you OPEN its bank, so images you dropped in it show up as before, and a new 🔄 Rescan folders button on the list checks them all at once. The page says how fresh its counts are, and a folder that went missing (unplugged drive, renamed folder) is still flagged straight from the list.',
+  },
+  {
+    id: '2026-08-06-semantic-index-borrows-a-gpu-python',
+    date: '2026-08-06',
+    title: 'Build the SigLIP 2 index on the GPU you already have',
+    blurb:
+      '✨ Score could already borrow a CUDA Python from ai-toolkit or ComfyUI instead of crawling on the CPU. The SigLIP 2 semantic index could not, so it kept indexing in the app’s own CPU-only environment even on a machine with a 4090 sitting idle. The Semantic engine panel now says which device the index will really use, and offers the same picker. It checks each interpreter dependency by dependency — and the list is the right one: SigLIP 2 never needs OpenCLIP or timm, so a ComfyUI venv Score refuses can be perfectly good here. Nothing is ever installed into an environment the app did not build: the pinned weights live in your data folder, and Setup ▸ Quality tools keeps installing into the app’s own Python even after you borrow one.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-video-extras-installable-from-setup',
     date: '2026-08-06',
     title: 'The video extras can now be installed where the app said they were',

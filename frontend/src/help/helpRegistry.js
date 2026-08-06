@@ -278,6 +278,13 @@ const TOPICS = [
       'resolution tier', 'resolution filter', 'filter by resolution', 'megapixel',
       'small images', 'thumbnails', 'low resolution', 'high resolution',
       'promote', 'unsorted',
+      // "I dropped files in the folder and the bank list still shows the old
+      // count" — the list stopped re-walking every source folder on load (it
+      // cost a full disk inventory per visit); opening the bank re-checks its
+      // folder, and 🔄 Rescan folders re-checks them all.
+      'rescan', 'rescan folders', 'refresh folders', 'new files not showing',
+      'added images not showing', 'count not updated', 'counts out of date',
+      'stale count', 'bank list slow', 'bank page slow', 'slow to load',
       'aesthetic', 'score', 'nsfw', 'watermark', 'style', 'subfolder', 'keep best',
       'semantic', 'near-duplicate', 'crop', 'crops', 'variant', 'same shot',
       'caption', 'captions', 'search', 'find', 'tag', 'tags', 'describe',
@@ -1549,7 +1556,10 @@ const TOPICS = [
       // must land here, because this is where it is now installed from — the
       // capability is stored as `face_scoring`, but nobody calls it that.
       'insightface', 'face detection', 'detector', 'install', 'face scoring',
-      'not installed', 'missing', 'onnxruntime', 'ml extras'],
+      'not installed', 'missing', 'onnxruntime', 'ml extras',
+      // The preview can be stopped and picked back up. Searching for the way out
+      // of a long pass must land on the option that started it.
+      'stop', 'cancel', 'resume', 'continue', 'interrupt', 'looking for faces'],
     guide: { chapter: 'dataset-guide', anchor: '8-concept-loras-keeping-faces-out' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'mask-faces-advanced',
@@ -1661,6 +1671,13 @@ const TOPICS = [
      'ai-toolkit', 'comfyui', 'venv', 'environment', 'faster', 'speed up',
      'aesthetic', 'nsfw', 'borrow', 'reuse'],
     '/bank', 'using-the-app', 'make-score-use-a-gpu-python-you-already-have'),
+  action('action-semantic-python', 'Build the SigLIP 2 index on a GPU Python you already have',
+    ['siglip', 'siglip2', 'siglip 2', 'semantic', 'semantic index', 'index', 'embedding',
+     'embeddings', 'gpu', 'cuda', 'cpu', 'slow', 'hours', 'torch', 'pytorch',
+     'transformers', 'siglip2model', 'too old', 'interpreter', 'python',
+     'ai-toolkit', 'comfyui', 'venv', 'environment', 'faster', 'speed up',
+     'borrow', 'reuse', 'device', 'bank'],
+    '/bank', 'using-the-app', 'build-the-siglip-2-index-on-a-gpu-python-you-already-have'),
   action('action-score-resume', 'Stopping ✨ Score, and what a relaunch costs',
     ['score', 'scoring', 'stop', 'stopped', 'cancel', 'resume', 'relaunch', 'restart',
      'rerun', 're-run', 'again', 'cache', 'cached', 'skip', 'already scored',

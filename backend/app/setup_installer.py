@@ -324,8 +324,16 @@ _CAPABILITY_PACKAGES = {
     #               bank scoring already manages instead of costing a second
     #               ~2.5 GB copy. Its own worker, like watermark_detect; listed
     #               here so the anti-orphan test sees its package covered.
+    #               It carries `av` OF ITS OWN even though `video` installs the
+    #               same package: the two land in DIFFERENT interpreters. `video`
+    #               puts PyAV in the app's own Python because Flask imports it
+    #               in-process; shot detection runs in the bank-scoring
+    #               environment, where `shot_detect_infer._open()` is the single
+    #               decode seam. Without this line the install reported success
+    #               and the capability stayed off — the probe imports av, so it
+    #               kept failing in an environment nothing had put av into.
     'video': ('imageio-ffmpeg', 'av'),
-    'shot_detect': ('transnetv2-pytorch',),
+    'shot_detect': ('transnetv2-pytorch', 'av'),
     #   bank_scoring  has its own worker and its own package tuple
     #                 (_BANK_SCORING_PKGS); only the ONE package whose version
     #                 floor matters is declared in requirements-ml.txt, so it is
@@ -623,14 +631,15 @@ def manual_command(action) -> str:
                   or _bank_scoring_env_python())
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install '
-                f'"{_requirement_spec("transnetv2-pytorch")}"')
+                f'"{_requirement_spec("transnetv2-pytorch")}" "{_requirement_spec("av")}"')
     if action == 'bank_siglip2':
-        # A manual SigLIP2 repair may honour an explicit semantic override, but
-        # must never inherit Score's borrowed GPU interpreter. With no explicit
-        # semantic target it points at the LDS-managed environment, exactly like
-        # the Install button.
-        python = (str(cfg.get('bank_semantic.python') or '').strip()
-                  or _bank_scoring_env_python())
+        # ALWAYS the LDS-managed environment — exactly what the Install button
+        # does, and deliberately blind to ``bank_semantic.python``. That key is
+        # now a picker ("run the index in the Python that already has CUDA"), so
+        # reading it here would turn a repair into a pip install inside someone
+        # else's ai-toolkit or ComfyUI venv. Where it RUNS and where we INSTALL
+        # are two different questions; this line only ever answers the second.
+        python = _bank_semantic_install_python()
         from .services import bank_semantic_models as assets
         root = assets.models_root()
         pulls = '; '.join(
@@ -1581,24 +1590,44 @@ def _verify_bank_scoring_import(action, python) -> bool:
     return False
 
 
+def _bank_semantic_install_python() -> str:
+    """Where SigLIP2 is INSTALLED. Always the app-managed Bank ML venv.
+
+    Deliberately takes no argument and reads no interpreter key: ``bank_scoring.python``
+    and ``bank_semantic.python`` say where a pass RUNS, and both can point at an
+    environment the user built (ai-toolkit's, ComfyUI's). Installing into one of
+    those is the one thing this app never does, so the install target is derived
+    from the data folder and nothing else. Enforced by
+    ``test_bank_siglip2_install_ignores_borrowed_semantic_interpreter``."""
+    return _bank_scoring_env_python()
+
+
 def _run_bank_siglip2(action) -> int:
     """Install the optional SigLIP2 semantic engine and its pinned checkpoint.
 
-    It always targets LDS's managed Bank ML venv. Score may keep using a borrowed
-    CUDA interpreter: this action neither installs into it nor changes
-    ``bank_scoring.python``. Only after packages and every pinned weight are ready
-    is ``bank_semantic.python`` switched to the managed interpreter.
+    It always targets LDS's managed Bank ML venv. Score — and now the semantic
+    index itself — may keep using a borrowed CUDA interpreter: this action
+    neither installs into it nor repoints it. ``bank_semantic.python`` is only
+    written when nothing was borrowed, and only after packages and every pinned
+    weight are ready; a user who chose a GPU Python for the index keeps it.
     """
     from .services import bank_semantic_models as assets
+
+    managed_python = _bank_semantic_install_python()
+    configured = (cfg.get('bank_semantic.python') or '').strip()
+    borrowed = bool(configured) and not _same_path(configured, managed_python)
 
     python = _ensure_bank_scoring_env(action, save_score_python=False)
     if not python:
         return 1
-    managed_python = _bank_scoring_env_python()
     if not _same_path(python, managed_python):
         _append(action, 'internal error: SigLIP2 did not resolve to the LDS-managed '
                         'Bank environment; nothing was installed')
         return 1
+    if borrowed:
+        _append(action, f'keeping the selected borrowed semantic interpreter '
+                        f'unchanged: {configured}')
+        _append(action, 'Install/repair targets only the LDS-managed environment below.')
 
     _append(action, f'target interpreter: {python}')
     _append(action, 'installing CPU torch if needed (the GPU-Python picker remains available)')
@@ -1640,14 +1669,22 @@ def _run_bank_siglip2(action) -> int:
     if not assets.weights_present(root):
         _append(action, 'download returned success but at least one pinned model file is missing')
         return 1
-    try:
-        cfg.save_config({'bank_semantic': {'python': managed_python}})
-    except Exception as e:
-        _append(action, f'SigLIP2 packages and weights are ready, but '
-                        f'bank_semantic.python could not be saved ({e}); the install '
-                        'is reported as failed so Setup never claims a runtime it '
-                        'cannot select after restart')
-        return 1
+    if borrowed:
+        # The user's pick already answered "where does the index run", and it was
+        # verified before it was stored. Overwriting it here would silently drag
+        # the pass back onto the CPU right after a repair.
+        _append(action, f'the index keeps running in the interpreter you chose '
+                        f'({configured}) — change it from the Bank\'s Semantic '
+                        'engine panel')
+    else:
+        try:
+            cfg.save_config({'bank_semantic': {'python': managed_python}})
+        except Exception as e:
+            _append(action, f'SigLIP2 packages and weights are ready, but '
+                            f'bank_semantic.python could not be saved ({e}); the install '
+                            'is reported as failed so Setup never claims a runtime it '
+                            'cannot select after restart')
+            return 1
     _append(action, 'SigLIP2 ready — each Bank can now choose it without deleting CLIP')
     return 0
 
@@ -2582,7 +2619,7 @@ def _run_shot_detect(action) -> int:
             'shot_detect.python points at an environment this app did not create,',
             'so nothing was installed into it — borrowed environments are checked,',
             'never changed. To add the detector there yourself, run:',
-            f'  "{configured}" -m pip install torch transnetv2-pytorch',
+            f'  "{configured}" -m pip install torch transnetv2-pytorch av',
             'Or clear shot_detect.python and click Install again — the app then uses',
             'its own scoring environment, which already has torch.',
         ):
@@ -2606,8 +2643,14 @@ def _run_shot_detect(action) -> int:
     if rc != 0:
         _append(action, f'torch install failed (rc={rc}) — see the log above')
         return rc
+    # av rides along because the WORKER decodes with PyAV in this same
+    # environment (infer/shot_detect_infer.py imports av before torch sees a
+    # frame). Without it the model loads, the probe used to say ready, and
+    # every file failed with ModuleNotFoundError: av — 246/246 on the first
+    # real bank this install met.
     rc = _run_pip(action, [python, '-m', 'pip', 'install',
-                           _requirement_spec('transnetv2-pytorch')])
+                           _requirement_spec('transnetv2-pytorch'),
+                           _requirement_spec('av')])
     if rc != 0:
         return rc
     if not _verify_shot_detect_import(action, python):
@@ -2629,7 +2672,7 @@ def _verify_shot_detect_import(action, python) -> bool:
         return True
     _append(action, 'verifying the install (first import — this also warms it)…')
     try:
-        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch'],
+        proc = subprocess.run([python, '-c', 'import torch, transnetv2_pytorch, av'],
                               capture_output=True, text=True, encoding='utf-8',
                               errors='replace', timeout=_WARM_IMPORT_TIMEOUT,
                               creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

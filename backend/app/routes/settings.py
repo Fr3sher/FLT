@@ -358,9 +358,8 @@ def seedvr2_models_list():
                     'vae_choices': vae_choices})
 
 
-@bp.get('/scoring-python')
-def scoring_python_list():
-    """Pythons on this machine that could run the ✨ Score pass, each with a
+def _interpreter_list(profile):
+    """Pythons on this machine that could run one heavy pass, each with a
     per-dependency verdict — the picker behind "use a GPU Python you already
     have". ``?force=1`` re-probes (after the user pip-installed something);
     ``?path=`` adds a hand-typed interpreter to the list. Read-only: nothing is
@@ -373,6 +372,7 @@ def scoring_python_list():
     retrying might well fix. `detection_failed` separates the two, and
     `default_python` stays filled in: it is the one thing we know regardless."""
     from ..services import scoring_python
+    prof = scoring_python.get_profile(profile)
     force = bool(request.args.get('force'))
     if force:
         # "↻ Check again" is what a user clicks right after installing a package
@@ -382,15 +382,17 @@ def scoring_python_list():
         capabilities.clear_import_cache()
     try:
         return jsonify(scoring_python.detect(
-            force=force, extra_path=request.args.get('path') or ''))
+            force=force, extra_path=request.args.get('path') or '',
+            profile=prof))
     except Exception as e:
-        current_app.logger.exception('scoring interpreter detection failed')
+        current_app.logger.exception('%s interpreter detection failed', prof.key)
         try:
-            selected = (cfg.get('bank_scoring.python') or '').strip()
+            selected = (cfg.get(prof.config_key) or '').strip()
         except Exception:      # noqa: BLE001 — a config read that also fails
             selected = ''
         return jsonify({
             'selected': selected,
+            'profile': prof.key,
             'default_python': sys.executable,
             'interpreters': [],
             'detection_failed': True,
@@ -398,22 +400,52 @@ def scoring_python_list():
         })
 
 
-@bp.post('/scoring-python')
-def scoring_python_select():
-    """Point ✨ Score at an interpreter (``{python: "<path>"}``), or back at the
-    app's own (``{python: ""}``). Refuses — 400, with the verdict attached — any
-    interpreter that could not be proven able to run the pass, so a bad pick can
-    never turn an hour of scoring into an import error."""
+def _interpreter_select(profile):
+    """Point one feature at an interpreter (``{python: "<path>"}``), or back at
+    the app's own (``{python: ""}``). Refuses — 400, with the verdict attached —
+    any interpreter that could not be proven able to run the pass, so a bad pick
+    can never turn an hour of work into an import error."""
     from ..services import scoring_python
     body = request.get_json(silent=True) or {}
     try:
-        result = scoring_python.select(body.get('python') or '')
+        result = scoring_python.select(body.get('python') or '', profile=profile)
     except scoring_python.SelectionError as e:
         return jsonify({'error': str(e), 'verdict': e.verdict}), 400
     except Exception as e:
-        current_app.logger.exception('scoring interpreter selection failed')
+        current_app.logger.exception('interpreter selection failed')
         return jsonify({'error': f'could not save the interpreter: {e}'}), 500
     return jsonify(result)
+
+
+@bp.get('/scoring-python')
+def scoring_python_list():
+    """The picker for ✨ Score (``bank_scoring.python``)."""
+    return _interpreter_list('scoring')
+
+
+@bp.post('/scoring-python')
+def scoring_python_select():
+    """Select the interpreter ✨ Score runs in."""
+    return _interpreter_select('scoring')
+
+
+@bp.get('/semantic-python')
+def semantic_python_list():
+    """The same picker for the SigLIP 2 semantic engine (``bank_semantic.python``).
+
+    Same detector, a SHORTER dependency list: the semantic worker never imports
+    open_clip or timm, so an interpreter Score would refuse can be perfectly
+    good here. The pinned SigLIP2 weights live in the app's data folder, not in
+    the interpreter, so a borrowed Python needs no download at all."""
+    return _interpreter_list('semantic')
+
+
+@bp.post('/semantic-python')
+def semantic_python_select():
+    """Select the interpreter the SigLIP 2 index runs in. Execution only — Setup
+    ▸ Quality tools still installs into the app-managed environment and never
+    into a borrowed one."""
+    return _interpreter_select('semantic')
 
 
 @bp.post('/settings/test/<target>')

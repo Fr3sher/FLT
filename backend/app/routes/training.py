@@ -689,26 +689,98 @@ def dataset_face_mask_preview(dataset_id):
         # Nothing kept is a valid answer, not a job. Publish it so a return to the
         # page shows the same thing rather than an inviting button.
         fmp.set_result(dataset_id, _face_preview_payload({}, {}, limit), fp)
-        return jsonify({'ok': True, 'started': False, **fmp.snapshot(dataset_id, fp)})
+        fmp.clear_partial(dataset_id)
+        return jsonify({'ok': True, 'started': False,
+                        **fmp.snapshot(dataset_id, fp, total=0)})
 
     paths = list(by_path)
     app = current_app._get_current_object()
+    # What a previous, STOPPED pass already found on this exact kept set. Guarded
+    # by the same fingerprint as the stored result, so a set that moved yields {}
+    # and this is a full pass again.
+    banked = fmp.partial(dataset_id, fp)
+    todo = [p for p in paths if p not in banked]
+    done_already = len(paths) - len(todo)
 
     def _work(job):
+        if done_already:
+            # The bar opens where the previous pass left off. Seeded HERE and not
+            # after start() returns: under TESTING the job runs inline, so a seed
+            # placed outside would land after the pass instead of before it —
+            # and in production it would race the first real progress line.
+            fmp.progress(job, {'done': done_already, 'total': len(paths)})
+        if not todo:
+            # Everything was already detected before the stop — there is nothing
+            # left to run, only a result to publish. Paying an InsightFace load
+            # to re-derive it would be the exact waste this path exists to avoid.
+            fmp.set_result(dataset_id, _face_preview_payload(banked, by_path, limit), fp)
+            fmp.clear_partial(dataset_id)
+            return
+
+        def _on_progress(rec):
+            # The child counts ITS OWN images, which on a resume are only the
+            # remaining ones. The panel must keep counting the whole kept set, or
+            # a resumed pass would restart its bar at "image 1 of 106" and read
+            # as though the stop had thrown everything away.
+            rec = dict(rec)
+            if rec.get('done') is not None:
+                rec['done'] = rec['done'] + done_already
+            if rec.get('total') is not None:
+                rec['total'] = len(paths)
+            fmp.progress(job, rec)
+
         data = face_mask.detect_faces(
-            paths, on_progress=lambda rec: fmp.progress(job, rec))
+            todo, on_progress=_on_progress,
+            should_stop=lambda: fmp.stop_requested(job))
         if not data.get('ok'):
             # An operation that failed must LOOK failed. The reason travels all the
             # way to the panel instead of dying in a log line.
             fmp.fail(job, data.get('error') or 'face detection failed')
             return
+        merged = {**banked, **(data.get('results') or {})}
+        if data.get('cancelled'):
+            # Stopped. The boxes computed before the stop are the whole point of
+            # asking the child to wind up rather than killing it, so they are
+            # banked for the next start. The stored RESULT is deliberately left
+            # alone: `coverage` is a safety figure over the WHOLE kept set, and
+            # publishing "masked on 12 of 47" for a 153-image set would be a
+            # wrong number rather than a partial one.
+            fmp.remember_partial(dataset_id, merged, fp)
+            fmp.mark_stopped(job)
+            return
         # Zero faces is a RESULT, not a failure: a concept dataset may legitimately
         # hold no people. It publishes like any other pass.
-        fmp.set_result(dataset_id, _face_preview_payload(
-            data.get('results') or {}, by_path, limit), fp)
+        fmp.set_result(dataset_id, _face_preview_payload(merged, by_path, limit), fp)
+        fmp.clear_partial(dataset_id)
 
     job, started = fmp.start(app, dataset_id, _work, total=len(paths), fp=fp)
-    return jsonify({'ok': True, 'started': started, **fmp.snapshot(dataset_id, fp)}), 202
+    return jsonify({'ok': True, 'started': started,
+                    **fmp.snapshot(dataset_id, fp, total=len(paths))}), 202
+
+
+@bp.post('/dataset/<int:dataset_id>/train/face-mask-preview/stop')
+def dataset_face_mask_preview_stop(dataset_id):
+    """Ask the running detection to wind up, KEEPING what it already found.
+
+    Not a kill. The child holds every box it detected in memory until it prints
+    its final JSON line, so killing it would discard the pass — and since the
+    detector load is a fixed price paid before image 1, a discarding Stop would
+    make the retry cost the whole run again. It is asked instead, notices between
+    two images, and hands back what it has; those detections are banked under the
+    kept set's fingerprint and the next start resumes from them.
+
+    The delay is honest and bounded by one image, EXCEPT during the model load
+    (and the first-run download), which nothing can interrupt from outside: a
+    stop asked there lands at the top of the loop, before image 1 — where there
+    is nothing detected to lose anyway. The panel says which of the two costs
+    applies at the moment it offers the button."""
+    gate = _face_preview_guard(dataset_id, require_tool=False)
+    if gate:
+        return gate
+    stopped = fmp.request_stop(dataset_id)
+    by_path, fp = _face_preview_kept(dataset_id)
+    return jsonify({'ok': True, 'stopping': stopped,
+                    **fmp.snapshot(dataset_id, fp, total=len(by_path))})
 
 
 @bp.get('/dataset/<int:dataset_id>/train/face-mask-preview')
@@ -723,9 +795,9 @@ def dataset_face_mask_preview_status(dataset_id):
     gate = _face_preview_guard(dataset_id, require_tool=False)
     if gate:
         return gate
-    _, fp = _face_preview_kept(dataset_id)
+    by_path, fp = _face_preview_kept(dataset_id)
     return jsonify({'ok': True, 'available': face_mask.is_available(),
-                    **fmp.snapshot(dataset_id, fp)})
+                    **fmp.snapshot(dataset_id, fp, total=len(by_path))})
 
 
 def _krea_installed_bases():
