@@ -1538,34 +1538,50 @@ def test_run_ml_capability_pins_pillow_when_targeting_flask_venv(app, monkeypatc
 # never changed". The Install / ↻ Reinstall button used to take that same value
 # as its install TARGET — i.e. pip into the user's ai-toolkit or ComfyUI venv.
 
-def test_run_bank_scoring_refuses_a_borrowed_interpreter(app, monkeypatch, tmp_path):
-    """A bank_scoring.python the app did not build (the borrow case) is refused:
-    return 1, no pip at all, and the log hands over the command instead."""
+def test_run_bank_scoring_repairs_managed_while_preserving_borrowed_selection(
+        app, monkeypatch, tmp_path):
+    """Install is never an operation on the selected borrowed Python.  It repairs
+    LDS's managed venv successfully and leaves the GPU runtime selection intact."""
     from app import setup_installer, config
     borrowed = tmp_path / 'ai-toolkit' / 'venv' / 'Scripts' / 'python.exe'
     borrowed.parent.mkdir(parents=True)
     borrowed.touch()
-
-    def boom(*a, **k):
-        raise AssertionError('must not run pip against a borrowed environment')
-
-    monkeypatch.setattr(setup_installer.subprocess, 'Popen', boom)
+    seen = []
+    monkeypatch.setattr(setup_installer, '_find_base_python',
+                        lambda a: r'C:\pybase\python.exe')
+    monkeypatch.setattr(setup_installer.subprocess, 'Popen',
+                        _fake_venv_popen(seen))
     with app.app_context():
         config.save_config({'bank_scoring': {'python': str(borrowed)}})
+        managed = setup_installer._bank_scoring_env_python()
         setup_installer._runs['bank_scoring'] = setup_installer._new_run()
         rc = setup_installer._run_bank_scoring('bank_scoring')
-    assert rc == 1
+        selected = config.get('bank_scoring.python')
+    assert rc == 0
+    assert selected == str(borrowed)
+    pip_commands = [c for c in seen if c[1:4] == ['-m', 'pip', 'install']]
+    assert pip_commands
+    assert all(c[0] == managed for c in pip_commands)
+    assert all(c[0] != str(borrowed) for c in pip_commands)
     log = setup_installer._runs['bank_scoring']['log']
-    assert any('did not create' in l for l in log)
-    assert any('never changed' in l for l in log)
-    # the way out, both ways: the exact command, and how to go back to the default
-    assert any('-m pip install' in l and str(borrowed) in l for l in log)
-    assert any('bank_scoring.python' in l for l in log)
+    assert any('keeping the selected borrowed' in l for l in log)
+    assert any(managed in l for l in log)
+
+
+def test_bank_scoring_manual_command_never_points_at_borrowed_python(app):
+    from app import config, setup_installer
+    borrowed = r'C:\ComfyUI\python_embeded\python.exe'
+    with app.app_context():
+        config.save_config({'bank_scoring': {'python': borrowed}})
+        command = setup_installer.manual_command('bank_scoring')
+        managed = setup_installer._bank_scoring_env_python()
+    assert managed in command
+    assert borrowed not in command
 
 
 def test_run_bank_scoring_still_installs_into_the_managed_venv(app, monkeypatch):
-    """The refusal must not swallow the normal path: with nothing configured the
-    button still builds the app's own venv and installs into THAT."""
+    """With nothing configured the button builds LDS's venv, installs there and
+    selects it as the Score runtime."""
     from app import setup_installer, config
     seen = []
     monkeypatch.setattr(setup_installer, '_find_base_python', lambda a: r'C:\pybase\python.exe')
@@ -1582,6 +1598,25 @@ def test_run_bank_scoring_still_installs_into_the_managed_venv(app, monkeypatch)
     clip_cmd = next(c for c in seen if any('open_clip' in str(p) for p in c))
     assert clip_cmd[0] == managed
     assert saved == managed
+
+
+def test_bank_scoring_verification_ignores_user_site(app, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from app import setup_installer
+    python = tmp_path / 'managed-python.exe'
+    python.touch()
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(command)
+        return SimpleNamespace(returncode=0, stderr='')
+
+    monkeypatch.setattr(setup_installer.subprocess, 'run', run)
+    with app.app_context():
+        setup_installer._runs['bank_scoring'] = setup_installer._new_run()
+        assert setup_installer._verify_bank_scoring_import(
+            'bank_scoring', str(python)) is True
+    assert seen[0][:3] == [str(python), '-s', '-c']
 
 
 def test_bank_siglip2_is_explicit_scoped_action(app):

@@ -636,7 +636,7 @@ def _start_worker_locked():
     env['PYTHONUTF8'] = '1'
     try:
         proc = subprocess.Popen(
-            [python, _SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            [python, '-s', _SCRIPT], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding='utf-8',
             errors='replace', bufsize=1, env=env,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))

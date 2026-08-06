@@ -29,9 +29,11 @@ What makes this honest rather than hopeful:
 * **Fail safe.** Nothing proven -> nothing changes, and the pass keeps running
   where it runs today. ``select()`` refuses any interpreter it could not verify.
 
-The probe imports ONLY torch (CUDA needs the real module); the other modules are
-resolved with ``find_spec``, which is cheap and does not execute them — the whole
-check is one short subprocess per interpreter, cached.
+The probe really imports every dependency, in an isolated interpreter that
+ignores the process owner's user-site packages (``python -s``).  Merely finding
+a module spec is not enough: a package can be present yet fail while importing
+one of its native or transitive dependencies.  That exact false positive used
+to mark a borrowed ComfyUI Python as GPU-ready while Score itself stayed off.
 """
 import json
 import os
@@ -65,18 +67,20 @@ _PROBE_TTL = 600
 _probe_cache = {}     # normalised path -> (ts, info|None)
 
 _PROBE_CODE = (
-    'import importlib.util as _u, json, sys\n'
+    'import importlib as _i, json, sys\n'
     'mods = ' + repr(list(_DEP_MODULES)) + '\n'
     'found = {}\n'
+    'loaded = {}\n'
     'for m in mods:\n'
     '    try:\n'
-    '        found[m] = _u.find_spec(m) is not None\n'
+    '        loaded[m] = _i.import_module(m)\n'
+    '        found[m] = True\n'
     '    except Exception:\n'
     '        found[m] = False\n'
     'cuda, device, torch_version = False, None, None\n'
     'if found.get("torch"):\n'
     '    try:\n'
-    '        import torch\n'
+    '        torch = loaded["torch"]\n'
     '        torch_version = torch.__version__\n'
     '        cuda = bool(torch.cuda.is_available())\n'
     '        if cuda:\n'
@@ -106,7 +110,7 @@ def _run_probe(python: str):
     UNKNOWN — never a claim that the interpreter is unusable."""
     try:
         proc = subprocess.run(
-            [python, '-c', _PROBE_CODE], capture_output=True, text=True,
+            [python, '-s', '-c', _PROBE_CODE], capture_output=True, text=True,
             encoding='utf-8', errors='replace', timeout=PROBE_TIMEOUT,
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     except Exception:      # noqa: BLE001 — OSError, TimeoutExpired, anything

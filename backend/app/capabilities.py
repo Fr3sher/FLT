@@ -37,6 +37,11 @@ _UNKNOWN_TTL = 60
 # answered 'CUDA' to one probe and 'no answer' to the other.
 _IMPORT_TIMEOUT = 90
 _import_cache = {}  # key -> (ts, ok|None)  — None = unknown, kept briefly
+# These two probes guard workers that are deliberately launched with ``python
+# -s``.  Keep the isolation scoped: Face, Masks and Watermark still honour their
+# configured interpreter's normal site policy, so probing them with different
+# argv would create a false negative.
+_NO_USER_SITE_IMPORT_KEYS = frozenset(('bank_scoring', 'bank_scoring_gpu'))
 
 _ZIMAGE_RE = re.compile(r'z[ -]?image', re.IGNORECASE)
 # Aligned with klein_edit_helper / utils.comfyui (was missing '.sft', so the
@@ -89,14 +94,22 @@ def _http_ok(url, timeout=3, reason=None, *, readiness=False) -> bool:
                 close()
 
 
-def _import_ok(python: str, module_expr: str, timeout=_IMPORT_TIMEOUT):
+def _import_ok(python, module_expr: str, timeout=_IMPORT_TIMEOUT):
     """True/False = the import deterministically succeeded/failed. None = TIMEOUT —
     unknown, NOT a proven absence. The very first `import rembg` after an install
     compiles numba/scikit-image caches while the antivirus scans 40 MB of fresh
     DLLs: measured ~20 s cold vs ~1 s warm — a 20 s timeout read as False showed
-    'Person masks ✗' for 10 min right after a SUCCESSFUL install."""
+    'Person masks ✗' for 10 min right after a SUCCESSFUL install.
+
+    ``python`` is normally one executable path.  The cache layer may pass an
+    argv prefix such as ``(python, '-s')`` when that feature's real worker uses
+    the same isolated contract.
+    """
     try:
-        result = subprocess.run([python, '-c', module_expr], capture_output=True, timeout=timeout)
+        prefix = (list(python) if isinstance(python, (tuple, list))
+                  else [python])
+        result = subprocess.run(
+            [*prefix, '-c', module_expr], capture_output=True, timeout=timeout)
         return result.returncode == 0
     except subprocess.TimeoutExpired:
         return None
@@ -123,7 +136,9 @@ def _cached_import_state(key: str, python: str, module_expr: str):
         ttl = _IMPORT_TTL if cached[1] is not None else _UNKNOWN_TTL
         if now - cached[0] < ttl:
             return cached[1]
-    ok = _import_ok(python, module_expr)
+    probe_python = ((python, '-s')
+                    if key in _NO_USER_SITE_IMPORT_KEYS else python)
+    ok = _import_ok(probe_python, module_expr)
     _import_cache[cache_key] = (now, ok)
     return ok
 

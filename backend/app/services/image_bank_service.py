@@ -5434,6 +5434,12 @@ def _release_db_before_inference():
     db.session.commit()
 
 
+def _infer_subprocess_argv(python, script) -> list:
+    """Use Score's borrowed interpreter without unrelated user-site packages."""
+    return ([python, '-s', script]
+            if script == _SCORE_SCRIPT else [python, script])
+
+
 def _drive_infer_subprocess(job, python, script, payload, cache_path,
                             progress_re, window):
     """Run an infer subprocess, streaming its stderr progress into ``job`` and
@@ -5450,8 +5456,12 @@ def _drive_infer_subprocess(job, python, script, payload, cache_path,
         pass
     hint = {'shown': False}
     with window:
+        # Borrowed ML interpreters (notably ComfyUI portable) must not inherit
+        # unrelated per-user site-packages. The readiness probe uses the same
+        # ``-s`` contract; launching Score differently would turn a green GPU
+        # choice into an open_clip crash once the real pass starts.
         proc = subprocess.Popen(
-            [python, script], stdin=subprocess.PIPE,
+            _infer_subprocess_argv(python, script), stdin=subprocess.PIPE,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding='utf-8', errors='replace',
             creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
@@ -9377,15 +9387,19 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
             clip_group_active = values.get('clip_semantic_dup_group') is not None
             siglip2_group_active = (
                 values.get('siglip2_semantic_dup_group') is not None)
-            face_active = (
-                any(compatible['analysis'].get(name) is not None
-                    for name in ('face_state', 'face_det', 'face_yaw'))
-                or (compatible['analysis'].get('face_cluster') is not None
-                    and compatible['analysis'].get('face_cluster_origin') != 'asserted'))
+            # Face state/detection/yaw are portable scalar facts already sealed
+            # by the snapshot's exact bytes (or its explicit legacy_tofu
+            # assurance).  Only a computed cluster needs the embedding cache to
+            # preserve the relation.  Requiring a cache for scalar-only legacy
+            # rows made Bank -> Dataset succeed but discarded the entire Bank on
+            # the return trip.
+            face_computed_cluster = (
+                compatible['analysis'].get('face_cluster') is not None
+                and compatible['analysis'].get('face_cluster_origin') != 'asserted')
             if ((score_active and 'score' not in cache_bundle)
                     or (clip_group_active and 'score' not in cache_bundle)
                     or (siglip2_group_active and 'semantic' not in cache_bundle)
-                    or (face_active and 'face' not in cache_bundle)):
+                    or (face_computed_cluster and 'face' not in cache_bundle)):
                 raise RuntimeError(
                     'Bank analysis snapshot is missing a required '
                     'Score/Semantic/Face cache')
@@ -10113,7 +10127,15 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
         return None
     if siglip2_group_active and 'semantic' not in available:
         return None
-    if face_active and 'face' not in available:
+    # A computed cluster is a relation backed by the face embeddings and cannot
+    # travel without that runtime lane. Historical scalar measurements
+    # (state/detection/yaw) are different: early face caches carried neither a
+    # SHA nor a stat signature. They may still cross the one-time legacy TOFU
+    # bridge below when the complete deterministic Quality lane reproduces the
+    # current bytes. Requiring the obsolete cache here made one such scalar on
+    # one selected image discard an otherwise fully proven promotion.
+    face_cache_missing = face_active and 'face' not in available
+    if face_computed_cluster and face_cache_missing:
         return None
 
     # For an unbound legacy row these values are only a narrow TOFU signal. New
@@ -10134,6 +10156,10 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
     if deterministic_active or unproved_active:
         return ('legacy_tofu' if _complete_legacy_quality_matches(row, payload)
                 else None)
+    # With no complete deterministic lane there is no TOFU evidence for an
+    # unhashed historical face measurement. Keep failing closed in that case.
+    if face_cache_missing:
+        return None
     # Only SHA-bound Score/Semantic/Face cache lanes remain. Every carried pixel fact is
     # individually proven, so this is exact despite the legacy NULL row marker.
     return ('exact' if (score_active or semantic_active or face_active

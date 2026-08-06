@@ -86,6 +86,16 @@ def test_borrowed_gpu_score_does_not_make_managed_cpu_siglip_request_cuda(app):
             assert banks._resolve_semantic_device() == ('cpu', False)
 
 
+def test_score_child_ignores_user_site_but_other_bank_children_keep_their_contract():
+    from app.services import image_bank_service as banks
+
+    python = r'C:\borrowed\python.exe'
+    assert banks._infer_subprocess_argv(python, banks._SCORE_SCRIPT) == [
+        python, '-s', banks._SCORE_SCRIPT]
+    assert banks._infer_subprocess_argv(python, banks._SEMANTIC_SCRIPT) == [
+        python, banks._SEMANTIC_SCRIPT]
+
+
 def test_a_busy_gpu_no_longer_refuses_a_pass_that_runs_on_the_cpu(app, tmp_path):
     from app.services import image_bank_service as banks
 
