@@ -105,6 +105,17 @@ function semanticPayloadMatches(payload, engine, modelKey = null) {
 }
 
 const PAGE_SIZE = 120
+/* How often the bank-wide counts refresh while a pass runs. The banner ticks
+   every 2 s off /activity; the dashboard follows on this slower beat — plus
+   immediately when the job lands, so the numbers you end on are exact. The
+   payload is ~60 full-table aggregates: on a 50 000-image bank, asking for it
+   every 2 s is what made the workspace unreadable and its Stop button
+   unreachable in the first place.
+   ⏱ A WALL-CLOCK deadline, deliberately, not "every Nth tick". The poll effect
+   re-subscribes whenever the job's `detail` string changes — which is every
+   couple of seconds during a real pass — so a counter living in the effect would
+   reset before it ever reached N and the dashboard would never refresh at all. */
+const FULL_PAYLOAD_MS = 10000
 /* How many off-page captions the 🏷️ row will fetch for a selection.
    Not a taste call: `ids=` travels in the query string, and a few thousand
    integers build a request line the server refuses outright (the same limit the
@@ -866,6 +877,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const [review, setReview] = useState(null)
   const [reviewLoading, setReviewLoading] = useState(false)
   const activityWasLive = useRef(false)
+  // When the dashboard was last pulled in full. A ref, not effect-local state:
+  // the poll effect re-subscribes on every change of the job's `detail`.
+  const fullPayloadAt = useRef(0)
   // 📡 Drives the "we lost contact" note in the progress zone: a failed poll
   // must never render as "no job running".
   const connection = useConnectionStatus()
@@ -1006,11 +1020,33 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       return undefined
     }
     activityWasLive.current = true
-    // background: this 2 s tick is the one that stacked ten "Connection lost"
-    // banners over the whole app when the phone's connection dropped.
-    const t = setInterval(() => refreshPayload({ background: true }), 2000)
-    return () => clearInterval(t)
-  }, [live, refreshPayload, refreshImages, toast, payload?.activity?.error,
+    // ⏱ The 2 s tick asks for the JOB, not the dashboard. It used to re-fetch the
+    // whole bank payload — ~60 bank-wide aggregates plus a per-image path walk —
+    // which took 12.5 s at rest on a 50 397-image bank and 28.9 s while a pass
+    // ran. Requests issued every 2 s that take 12 s stack up, and that payload is
+    // what carries this banner: the bank went blank and Stop stopped answering,
+    // at the one moment both were needed. /activity reads one indexed row.
+    // The dashboard still refreshes, on its own slower beat, and IMMEDIATELY when
+    // the job lands so the final counts are never a poll behind.
+    let dropped = false
+    const tick = async () => {
+      let next = null
+      try {
+        // background: this tick is the one that stacked ten "Connection lost"
+        // banners over the whole app when the phone's connection dropped.
+        next = await apiFetch(`/api/bank/${bankId}/activity`, { background: true })
+      } catch { return }               // transient — the next tick retries
+      if (dropped) return
+      setPayload((p) => (p ? { ...p, activity: next.activity } : p))
+      const landed = !next.activity || next.activity.finished
+      if (landed || Date.now() - fullPayloadAt.current >= FULL_PAYLOAD_MS) {
+        fullPayloadAt.current = Date.now()
+        refreshPayload({ background: true })
+      }
+    }
+    const t = setInterval(tick, 2000)
+    return () => { dropped = true; clearInterval(t) }
+  }, [live, bankId, refreshPayload, refreshImages, toast, payload?.activity?.error,
       payload?.activity?.cancelled, payload?.activity?.detail])
 
   // Keep the coverage panel current: refetch when it opens, and whenever the kept

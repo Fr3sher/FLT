@@ -191,6 +191,13 @@ export const WHATS_NEW = [
     title: 'Choose which images get cropped or repainted — the two watermark levels no longer fire on one click',
     blurb:
       '🚩 Watermarks offered “✂ Auto-crop (16 052)” and “🧽 Inpaint (16 507)” as single buttons: press one and thousands of images were cleaned, with no way to say which. Both now open the same launch window the other passes use — run them on your kept images only, on the undecided ones, on the bin, on all three, or on exactly the images you ticked in the grid. Each line carries the real number for that pile, a run that would touch nothing is refused instead of reporting success, and the window states up front what is reversible: your own files are never written to, the cleaned pixels live in the bank’s own copy, and ↩ Undo cleaning throws them away and re-flags the images — what it cannot reach is an image you already promoted into a dataset, or one whose source file changed on disk since the clean. A run that only covered part of your bank now names what it left out, and flagged images sitting in the bin are reachable at last instead of leaving a dead button. Leave the window alone and both levels behave exactly as before.',
+  },
+  {
+    id: '2026-08-06-big-banks-open-instantly-and-stop-answers-again',
+    date: '2026-08-06',
+    title: 'Big Banks open in a second again — and Stop answers while a pass runs',
+    blurb:
+      'A Bank of 50 000 images took over 12 seconds to load its workspace, and more than 28 while a pass was running — long enough that the progress bar and its Stop button never arrived, so a running scan could not be stopped. The workspace was re-checking the location of every single image on disk, twice each, on every 2-second refresh; it now remembers what it already resolved. The progress bar has also moved to its own tiny request, so it keeps ticking and Stop keeps working no matter how large the Bank or how busy the pass. Measured on a 50 397-image Bank: 18.5 s to 1.5 s, and the progress bar answers in 1 ms.',
     to: '/bank',
   },
   {
