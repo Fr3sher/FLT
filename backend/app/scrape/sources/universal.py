@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 from .base import Source, Capabilities, Match
 from . import registry, gdl
+from .gdl import GdlError
 from .. import netfetch
 
 logger = logging.getLogger(__name__)
@@ -33,12 +34,17 @@ MAX_ITEMS = gdl.DEFAULT_MAX_ITEMS
 # CATCH-ALL des hôtes inconnus (priority=0) — c'est là que vivent les pages
 # pathologiques (listings à des centaines d'albums) qui, sans plafond, peuvent
 # lancer 1 + DEFAULT_MAX_ALBUMS (8) sous-process gallery-dl à GDL_TIMEOUT (60s)
-# chacun dans UNE requête Flask synchrone (~9 min pire cas). 90s = GDL_TIMEOUT
-# (le scan top-level, incompressible, un seul sous-process) + une marge pour
-# ~1 sous-process d'album supplémentaire avant de rendre ce qui a été trouvé :
-# assez pour qu'un petit listing d'albums finisse normalement, trop court pour
-# qu'une page pathologique bloque le worker Flask plusieurs minutes.
-SCAN_BUDGET_SECONDS = 90
+# chacun dans UNE requête Flask synchrone (~9 min pire cas).
+#
+# Alias de `gdl.DEFAULT_SCAN_BUDGET_SECONDS` — cette source n'a plus besoin de sa
+# propre valeur (gdl.enumerate applique désormais ce budget par défaut à TOUT
+# appelant, cf. finding #4/#5), mais la passer explicitement documente ICI, au
+# point d'appel le plus exposé (hôtes arbitraires), que la source en dépend.
+# ATTENTION : ce budget ne borne le scan top-level (1 sous-process, incompressible,
+# jusqu'à GDL_TIMEOUT) qu'INDIRECTEMENT — le pire cas RÉEL est ≈ 2×GDL_TIMEOUT, pas
+# cette constante (cf. docstring de `gdl.DEFAULT_SCAN_BUDGET_SECONDS` — ne PAS
+# gonfler cette valeur en pensant qu'elle plafonne le temps de réponse total).
+SCAN_BUDGET_SECONDS = gdl.DEFAULT_SCAN_BUDGET_SECONDS
 
 
 def _host_vetted(url):
@@ -110,7 +116,14 @@ class UniversalSource(Source):
         # jour où cette source a arrêté d'être la SEULE à honorer la règle. Auth /
         # 429 / DDoS-Guard / erreur outil restent des erreurs à remonter : ne
         # JAMAIS déguiser un blocage en « aucune image trouvée ».
-        return None, err or "Nothing to scan at this URL."
+        #
+        # `err or ...` : filet latent (finding #6) — `gdl.enumerate` ne renvoie
+        # aujourd'hui jamais `([], None)` (voir sa docstring : chaque branche vide
+        # pose un GdlError kind='empty'), mais SI ça arrivait, `err` vaudrait None
+        # et le fallback serait un str NU sans `.kind` → la route le traiterait
+        # comme un vrai échec (502) sur un résultat pourtant vide. Le repli reste
+        # donc lui aussi une GdlError kind='empty', pas une phrase brute.
+        return None, err or GdlError("Nothing to scan at this URL.", 'empty')
 
     def download(self, url, dest_base):
         """Surface héritée sans appelant dans cette app : le vrai chemin de
