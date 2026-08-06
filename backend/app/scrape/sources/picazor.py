@@ -24,6 +24,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .gdl import GdlError
+
 logger = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
@@ -268,6 +270,14 @@ def scan(validation):
                 return None, err
             items = _parse_detail(html, creator)
             if not items:
+                # PAS un résultat vide légitime (kind='empty') : une page de
+                # détail Picazor DÉCRIT toujours un média précis — si la requête a
+                # réussi (pas de blocage Cloudflare, pas de HTTP >=400, cf. `err`
+                # ci-dessus) mais qu'aucune des deux regex (_DETAIL_VIDEO_RE /
+                # _DETAIL_PHOTO_RE) ne matche, c'est que le layout du site a
+                # changé et que le parsing a échoué à extraire un média qui EST
+                # là — un vrai échec outil, pas « rien ici » (cf. finding #3 :
+                # ne jamais convertir un échec réel en résultat vide).
                 return None, "Picazor: no media found on the detail page."
             return items[:MAX_ITEMS], None
 
@@ -278,7 +288,13 @@ def scan(validation):
                 return None, err
             items = _parse_listing(html, creator)
             if not items:
-                return None, "Picazor: no media found in this listing."
+                # Listing chargé sans incident mais aucune vignette 300px_ trouvée :
+                # une catégorie/un filtre légitimement vide (contenu récent, filtre
+                # de niche) est bien plus probable qu'un layout changé pour CE
+                # gabarit (contrairement à la page de détail ci-dessus, où la
+                # présence d'UN média précis est garantie). Résultat vide
+                # légitime, même convention que gdl.GdlError kind='empty'.
+                return None, GdlError("Picazor: no media found in this listing.", 'empty')
             return items[:MAX_ITEMS], None
 
         # --- Profil paginé (cas par défaut : PROFILE) ---------------------- #
@@ -320,7 +336,11 @@ def scan(validation):
                 break
 
         if not all_items:
-            return None, "Picazor: no media found for this profile."
+            # Toutes les pages parcourues (ou la 1re a échoué SANS items déjà
+            # collectés, cf. la sortie anticipée `return None, err` plus haut dans
+            # la boucle) sans un seul média : profil légitimement vide, même
+            # convention que gdl.GdlError kind='empty'.
+            return None, GdlError("Picazor: no media found for this profile.", 'empty')
         return all_items[:MAX_ITEMS], None
 
     except Exception as e:  # garde-fou ultime — ne jamais lever

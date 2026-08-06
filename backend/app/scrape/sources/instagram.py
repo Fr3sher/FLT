@@ -29,6 +29,8 @@ import time
 import logging
 from pathlib import Path
 
+from .gdl import GdlError
+
 try:
     import instaloader
     INSTALOADER_AVAILABLE = True
@@ -279,7 +281,13 @@ def _scan_profile(loader, username):
         return None, _AUTH_ERROR
 
     if not items:
-        return None, f"No media found for profile {username}."
+        # `profile.get_posts()` a itéré jusqu'au bout sans lever et sans produire
+        # un seul post : compte public légitimement sans publication, pas un échec
+        # (les blocages/erreurs pendant l'itération sont interceptés plus haut par
+        # le `except` et renvoient `_AUTH_ERROR`, une vraie erreur — ce chemin-ci
+        # n'est atteint que par une itération qui s'est terminée proprement).
+        # Résultat vide légitime, même convention que gdl.GdlError kind='empty'.
+        return None, GdlError(f"No media found for profile {username}.", 'empty')
     return items[:SCAN_LIMIT], None
 
 
@@ -300,6 +308,13 @@ def _scan_single(loader, shortcode, original_url=None):
         return None, _AUTH_ERROR
 
     if not items:
+        # PAS un résultat vide légitime (kind='empty', finding #3) : un
+        # post/reel Instagram valide PORTE toujours au moins un média — s'il a
+        # chargé sans lever (le `except` ci-dessus l'aurait intercepté) et que
+        # `_items_from_post` renvoie quand même une liste vide, c'est que
+        # chaque accès attribut (shortcode/typename/is_video/url…) a échoué en
+        # silence (chacun est déjà encapsulé dans son propre `except` — cf.
+        # `_items_from_post`) : un vrai échec de conversion, pas « rien ici ».
         return None, f"No usable media for {shortcode}."
     return items[:SCAN_LIMIT], None
 

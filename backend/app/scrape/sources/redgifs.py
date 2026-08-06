@@ -185,8 +185,11 @@ def scan(validation):
         else:
             return None, "Unsupported RedGifs URL type."
 
-        if not items:
-            return None, "No media found for this RedGifs URL."
+        # PROFILE/NICHE vide (pas VIDEO, cf. branche dédiée ci-dessus qui reste une
+        # vraie erreur) : l'API a répondu sans incident, le compte/la niche n'a
+        # juste aucune vidéo publique. Résultat vide LÉGITIME (même convention que
+        # gdl.GdlError kind='empty', app/scrape/sources/gdl.py) — pas un échec
+        # outil : avant cette vague la route répondait 502 sur un profil vide.
         return items, None
     except Exception as e:  # garde-fou : ne jamais propager
         logger.warning(f"[redgifs] erreur de scan: {e}")
