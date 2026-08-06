@@ -256,6 +256,11 @@ export default function DatasetWorkspace({ ds, onBack }) {
   // Filename of the extra reference being cropped (extras have no numeric id).
   const [extraRefCrop, setExtraRefCrop] = useState(null);
   const [viewImg, setViewImg] = useState(null);
+  const [gridBulkBusy, setGridBulkBusy] = useState(false);
+  useEffect(() => {
+    if (gridBulkBusy) setViewImg(null);
+  }, [gridBulkBusy]);
+  useEffect(() => { setGridBulkBusy(false); }, [d?.id]);
   const [captionMode, setCaptionMode] = useState(null);   // null → défaut auto selon train_type
   const [showLeaks, setShowLeaks] = useState(false);       // liste dépliée des captions qui fuient
   const [captionToolsOpen, setCaptionToolsOpen] = useState(false);
@@ -787,7 +792,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
             || act.kind === 'edit_reference'
             // Dataset → Bank is a reserved filesystem copy. It blocks edits to
             // keep one coherent source generation, but does not touch the GPU.
-            || act.kind === 'bank_export';
+            || act.kind === 'bank_export'
+            || act.kind === 'bank_import'
+            || act.kind === 'training_export'
+            || act.kind === 'backup';
           const label = {
             watermark_detect: `Scanning for watermarks…${prog}`,
             watermark_clean: `Cleaning watermarks…${prog}`,
@@ -799,9 +807,15 @@ export default function DatasetWorkspace({ ds, onBack }) {
             improve: `Queuing improvements…${prog}`,
             edit_reference: 'Editing reference…',
             bank_export: `Copying into a Bank…${prog}`,
+            bank_import: `Copying images from a Bank…${prog}`,
+            training_export: 'Freezing the Dataset for training…',
+            backup: `Creating portable backup…${prog}`,
           }[act.kind];
           if (label) {
-            const detailed = act.detail || label;
+            // Copy/freeze details are stable phase names, while done/total lives
+            // beside them. Prefer the count-aware labels so progress stays visible.
+            const detailed = ['bank_export', 'bank_import', 'training_export']
+              .includes(act.kind) ? label : (act.detail || label);
             return `${detailed}${cpu ? '' : ' ComfyUI is paused during the pass.'}`;
           }
         }
@@ -1218,6 +1232,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   onRegenerate={(id, loraStrength, prompt, opts) => ds.regenerate(id, loraStrength, prompt, opts)}
                   onReimprove={ds.reimproveImage} onView={setViewImg}
                   onBatch={ds.batchImages} busy={ds.busy}
+                  onBulkBusyChange={setGridBulkBusy}
                   onImproveBatch={ds.improveBatch} activity={act}
                           subjectType={d.subject_type || 'human'}
                   eligibilityImages={images}
@@ -2085,7 +2100,7 @@ export default function DatasetWorkspace({ ds, onBack }) {
             : undefined}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
-          busy={ds.busy}
+          busy={ds.busy || gridBulkBusy}
           kleinAvailable={Boolean(caps.engines?.klein)}
           subjectType={d.subject_type || 'human'}
           onCrop={viewImgLive._rescueReviewPreview

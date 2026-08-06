@@ -48,8 +48,8 @@ test('a running watermark scan can be stopped from its banner', () => {
 });
 
 test('the scan is polled while it runs, or the Stop would never appear', () => {
-  assert.match(hook, /if \(!watermarking \|\| !currentId\) return undefined;/);
-  assert.match(hook, /\}, \[watermarking, currentId, refresh\]\);/);
+  assert.match(hook, /if \(!localActivityRuns\.has\(`watermark:\$\{currentId\}`\) \|\| !currentId\) return undefined;/);
+  assert.match(hook, /\}, \[localActivityRuns, currentId, refresh\]\);/);
 });
 
 test('the dismissed pile is re-judgeable, or changing engine changes nothing', () => {

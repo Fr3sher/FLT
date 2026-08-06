@@ -282,9 +282,9 @@ export default function DatasetLightbox({
           </span>
         )}
         {onCrop && (
-          <button type="button" onClick={() => onCrop(img)}
+          <button type="button" onClick={() => onCrop(img)} disabled={busy}
             title="Open the crop editor for this image (stretchable box, any ratio)"
-            className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold">
+            className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             ✂ Crop
           </button>
         )}

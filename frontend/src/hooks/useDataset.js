@@ -147,9 +147,43 @@ export function useDataset() {
     setCurrentIdState(resolved);
   }, []);
   const [data, setData] = useState(null);
-  const [busy, setBusy] = useState(false);
-  // Tracks an in-flight captioning pass so the UI can poll progressively.
-  const [captioning, setCaptioning] = useState(false);
+  // Local request locks are Dataset-scoped. A slow request in A may keep A
+  // protected after navigation, but it must not disable unrelated Dataset B;
+  // token ownership also prevents A's late finally from unlocking a newer B run.
+  const [busyRuns, setBusyRuns] = useState(() => new Map());
+  const busyRunsRef = useRef(new Map());
+  const busy = busyRuns.has(String(currentId));
+  // Tracks an in-flight captioning pass by Dataset + opaque run token. A slow
+  // response from A must neither show Captioning on B after navigation nor clear
+  // a newer run that already started on B.
+  const [captioningRuns, setCaptioningRuns] = useState(() => new Map());
+  const captioningRunsRef = useRef(new Map());
+  const beginCaptioningRun = useCallback((datasetId) => {
+    const run = { datasetId, token: Symbol('caption-run') };
+    captioningRunsRef.current.set(String(datasetId), run.token);
+    setCaptioningRuns(new Map(captioningRunsRef.current));
+    return run;
+  }, []);
+  const finishCaptioningRun = useCallback((run) => {
+    const key = String(run.datasetId);
+    if (captioningRunsRef.current.get(key) !== run.token) return;
+    captioningRunsRef.current.delete(key);
+    setCaptioningRuns(new Map(captioningRunsRef.current));
+  }, []);
+  const [localActivityRuns, setLocalActivityRuns] = useState(() => new Map());
+  const localActivityRunsRef = useRef(new Map());
+  const beginLocalActivityRun = useCallback((kind, datasetId) => {
+    const run = { kind, datasetId, token: Symbol(`${kind}-run`) };
+    localActivityRunsRef.current.set(`${kind}:${datasetId}`, run.token);
+    setLocalActivityRuns(new Map(localActivityRunsRef.current));
+    return run;
+  }, []);
+  const finishLocalActivityRun = useCallback((run) => {
+    const key = `${run.kind}:${run.datasetId}`;
+    if (localActivityRunsRef.current.get(key) !== run.token) return;
+    localActivityRunsRef.current.delete(key);
+    setLocalActivityRuns(new Map(localActivityRunsRef.current));
+  }, []);
   // WHO wrote the captions of the last pass: {datasetId, captioned, engines}. The
   // default 'auto' backend chains JoyCaption and the Ollama vision model, which write
   // in visibly different styles, and the app used to report only a count — so
@@ -158,8 +192,6 @@ export function useDataset() {
   // is in-session only (deliberately NOT persisted — see the follow-up note in
   // utils/captionEngines.js).
   const [lastCaptionRun, setLastCaptionRun] = useState(null);
-  const [analyzing, setAnalyzing] = useState(false);
-  const [watermarking, setWatermarking] = useState(false);
   // Per-image cache-bust versions (M1): only the cropped image reloads,
   // plus a separate version counter for the reference photo.
   const [nonces, setNonces] = useState({});
@@ -180,7 +212,6 @@ export function useDataset() {
   const scoringFaceRef = useRef(new Set());
   const [refNonce, setRefNonce] = useState(0);
   const pollRef = useRef(null);
-  const busyRef = useRef(false); // re-entrancy guard for GPU-bound actions (I2)
   // A retry must replay the exact request, including File objects temporarily
   // attached to the modal. Keep those bytes in memory only for this browser
   // session: persisting them in storage would be surprising and can leak space.
@@ -265,10 +296,10 @@ export function useDataset() {
 
   // Poll every 2s while a captioning pass is running so captions appear live.
   useEffect(() => {
-    if (!captioning || !currentId) return undefined;
+    if (!captioningRuns.has(String(currentId)) || !currentId) return undefined;
     const id = setInterval(() => refresh(currentId), 2000);
     return () => clearInterval(id);
-  }, [captioning, currentId, refresh]);
+  }, [captioningRuns, currentId, refresh]);
 
   // Same poller for a watermark scan, and it is not decoration: `hasActivity`
   // below only starts once a refresh has ALREADY seen activity ≠ null, and
@@ -276,10 +307,10 @@ export function useDataset() {
   // launched the scan the "Scanning… N/M" counter never moved and a ⏹ Stop
   // button in the banner would never appear at all.
   useEffect(() => {
-    if (!watermarking || !currentId) return undefined;
+    if (!localActivityRuns.has(`watermark:${currentId}`) || !currentId) return undefined;
     const id = setInterval(() => refresh(currentId), 2000);
     return () => clearInterval(id);
-  }, [watermarking, currentId, refresh]);
+  }, [localActivityRuns, currentId, refresh]);
 
   // Persistence layer: a server-side batch (watermark detect/clean, caption,
   // re-caption, analyze faces, classify) advertises itself in the payload's
@@ -290,7 +321,10 @@ export function useDataset() {
   // the interval isn't torn down and rebuilt on every poll; it stops the moment
   // `activity` clears (the following refresh brings the final state; the completion
   // toast can't be restored — accepted, only the visual state is).
-  const hasActivity = !!data?.activity;
+  const currentActivity = (data && String(data.id) === String(currentId))
+    ? (data.activity || null)
+    : null;
+  const hasActivity = !!currentActivity;
   useEffect(() => {
     if (!hasActivity || !currentId) return undefined;
     const id = setInterval(() => refresh(currentId), 3500);
@@ -384,12 +418,19 @@ export function useDataset() {
 
   // Run a GPU-bound action exclusively (I2): re-entrancy guard + busy flag.
   // A second call while one is in flight is dropped instead of double-firing.
-  const wrap = useCallback(async (fn) => {
-    if (busyRef.current) return undefined;
-    busyRef.current = true;
-    setBusy(true);
+  const wrap = useCallback(async (fn, datasetId = currentIdRef.current) => {
+    const key = String(datasetId);
+    if (busyRunsRef.current.has(key)) return undefined;
+    const token = Symbol('dataset-request');
+    busyRunsRef.current.set(key, token);
+    setBusyRuns(new Map(busyRunsRef.current));
     try { return await fn(); }
-    finally { busyRef.current = false; setBusy(false); }
+    finally {
+      if (busyRunsRef.current.get(key) === token) {
+        busyRunsRef.current.delete(key);
+        setBusyRuns(new Map(busyRunsRef.current));
+      }
+    }
   }, []);
 
   const setRef = useCallback((file, { autoCrop = false } = {}) => wrap(async () => {
@@ -598,41 +639,43 @@ export function useDataset() {
   }), [wrap, currentId, refresh, toast]);
 
   const caption = useCallback((mode) => wrap(async () => {
-    setCaptioning(true);
+    const run = beginCaptioningRun(currentId);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/caption`, mode ? { mode } : {});
+      const d = await postJson(`/api/dataset/${run.datasetId}/caption`, mode ? { mode } : {});
       if (!d.ok) {
         toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
         return;
       }
-      setLastCaptionRun({ datasetId: currentId, captioned: d.captioned, engines: d.engines });
+      setLastCaptionRun({ datasetId: run.datasetId, captioned: d.captioned, engines: d.engines });
       if (d.stopped) toast.info(`Stopped — ${d.captioned} captioned before you stopped; the rest stays uncaptioned.`);
       else toast.success(`${d.captioned} captioned${captionResultSuffix(d.engines)}`);
-      await refresh();
+      await refresh(run.datasetId);
     } finally {
-      setCaptioning(false);
+      finishCaptioningRun(run);
     }
-  }), [wrap, currentId, refresh, toast]);
+  }, currentId), [wrap, currentId, refresh, toast,
+                   beginCaptioningRun, finishCaptioningRun]);
 
   // Re-caption FORCÉ : ré-écrit TOUTES les captions des gardées (après changement de
   // prompt). Handler séparé de `caption` car onClick passe l'event en argument — un
   // `force` positionnel sur `caption` serait toujours truthy.
   const recaption = useCallback((mode) => wrap(async () => {
-    setCaptioning(true);
+    const run = beginCaptioningRun(currentId);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/caption`, { force: true, ...(mode ? { mode } : {}) });
+      const d = await postJson(`/api/dataset/${run.datasetId}/caption`, { force: true, ...(mode ? { mode } : {}) });
       if (!d.ok) {
         toast.error([d.error, d.detail].filter(Boolean).join(' — ') || 'Unexpected error');
         return;
       }
-      setLastCaptionRun({ datasetId: currentId, captioned: d.captioned, engines: d.engines });
+      setLastCaptionRun({ datasetId: run.datasetId, captioned: d.captioned, engines: d.engines });
       if (d.stopped) toast.info(`Stopped — ${d.captioned} re-captioned before you stopped; the rest keeps its previous caption.`);
       else toast.success(`${d.captioned} re-captioned${captionResultSuffix(d.engines)}`);
-      await refresh();
+      await refresh(run.datasetId);
     } finally {
-      setCaptioning(false);
+      finishCaptioningRun(run);
     }
-  }), [wrap, currentId, refresh, toast]);
+  }, currentId), [wrap, currentId, refresh, toast,
+                   beginCaptioningRun, finishCaptioningRun]);
 
   // Graceful Stop for a running captioning batch: the server flips a flag the worker
   // checks between images, so the current image finishes and the rest is left as-is.
@@ -688,9 +731,9 @@ export function useDataset() {
   // Analyse de ressemblance faciale (InsightFace antelopev2, CPU — ~1-2 min, pas de
   // pause ComfyUI). Persiste face_score/face_state -> badges sur la grille.
   const analyzeFaces = useCallback(() => wrap(async () => {
-    setAnalyzing(true);
+    const run = beginLocalActivityRun('analyze', currentId);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/analyze-faces`);
+      const d = await postJson(`/api/dataset/${run.datasetId}/analyze-faces`);
       if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
       // Un scorer cassé disait « 0 analyzed » en VERT : le backend remonte
       // maintenant scoring_error {kind, detail} — dire POURQUOI.
@@ -701,11 +744,12 @@ export function useDataset() {
       const grey = (d.states?.too_small || 0) + (d.states?.no_face || 0)
         + (d.states?.extreme_pose || 0) + (d.states?.low_det || 0);
       toast.success(`${d.analyzed} analyzed · ${d.states?.scorable || 0} scored, ${grey} not scorable`);
-      await refresh();
+      await refresh(run.datasetId);
     } finally {
-      setAnalyzing(false);
+      finishLocalActivityRun(run);
     }
-  }), [wrap, currentId, refresh, toast]);
+  }, currentId), [wrap, currentId, refresh, toast,
+                   beginLocalActivityRun, finishLocalActivityRun]);
 
   // Score one image without launching the dataset-wide scan. Its busy state stays
   // on this tile so independent curation actions remain available elsewhere.
@@ -755,9 +799,9 @@ export function useDataset() {
   // ruled false positives — the only way to re-judge them under a new detector.
   const findWatermarks = useCallback((options) => wrap(async () => {
     const includeDismissed = !!(options && options.includeDismissed);
-    setWatermarking(true);
+    const run = beginLocalActivityRun('watermark', currentId);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/watermarks/detect`,
+      const d = await postJson(`/api/dataset/${run.datasetId}/watermarks/detect`,
         includeDismissed ? { include_dismissed: true } : undefined);
       if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
       const engine = d.backend === 'detector' ? 'watermark detector' : 'vision model';
@@ -774,11 +818,12 @@ export function useDataset() {
         toast.info(`${d.unlocated} flagged without a position — open 🔍 Review flagged `
           + 'and draw the zone, or Clean will leave them untouched.');
       }
-      await refresh();
+      await refresh(run.datasetId);
     } finally {
-      setWatermarking(false);
+      finishLocalActivityRun(run);
     }
-  }), [wrap, currentId, refresh, toast]);
+  }, currentId), [wrap, currentId, refresh, toast,
+                   beginLocalActivityRun, finishLocalActivityRun]);
 
   // Graceful Stop for a running watermark scan — same contract as the captioning
   // Stop: the worker checks a flag between images, so the current image finishes,
@@ -799,13 +844,13 @@ export function useDataset() {
   // INPAINTED (LaMa), the rest flagged for manual review. The backend resolves the
   // configured Auto/GPU/CPU device and reserves ComfyUI only for an actual GPU pass.
   const cleanWatermarks = useCallback((method) => wrap(async () => {
-    setWatermarking(true);
+    const run = beginLocalActivityRun('watermark', currentId);
     // Capture the ids whose file may change IN PLACE so we can cache-bust their
     // thumbnails (same filename → the browser would otherwise show the stale image).
     const detectedIds = (data?.images || [])
       .filter((i) => i.watermark_state === 'detected').map((i) => i.id);
     try {
-      const d = await postJson(`/api/dataset/${currentId}/watermarks/clean`,
+      const d = await postJson(`/api/dataset/${run.datasetId}/watermarks/clean`,
         method ? { method } : undefined);
       if (!d.ok) { toast.error(d.error || 'Unexpected error'); return; }
       // A LaMa inpaint that was attempted and failed surfaces WHY (never silent).
@@ -824,11 +869,12 @@ export function useDataset() {
           return next;
         });
       }
-      await refresh();
+      await refresh(run.datasetId);
     } finally {
-      setWatermarking(false);
+      finishLocalActivityRun(run);
     }
-  }), [wrap, currentId, data, refresh, toast]);
+  }, currentId), [wrap, currentId, data, refresh, toast,
+                   beginLocalActivityRun, finishLocalActivityRun]);
 
   // Review mode (per-image watermark control). These deliberately do NOT use `wrap`
   // (no global busy flag) nor fire a toast: the review lightbox drives them one image
@@ -1583,11 +1629,13 @@ export function useDataset() {
   // for the user who actually clicked (their fetch flow is untouched); this only
   // ADDS the server truth on top. `busy` OR'd with any activity re-disables every
   // concurrent action and shows the amber "in progress" banner after a reload.
-  const activity = data?.activity || null;
+  const activity = currentActivity;
   const actKind = activity?.kind || null;
-  const captioningLive = captioning || actKind === 'caption' || actKind === 'recaption';
-  const analyzingLive = analyzing || actKind === 'analyze_faces';
-  const watermarkingLive = watermarking
+  const captioningLive = captioningRuns.has(String(currentId))
+    || actKind === 'caption' || actKind === 'recaption';
+  const analyzingLive = localActivityRuns.has(`analyze:${currentId}`)
+    || actKind === 'analyze_faces';
+  const watermarkingLive = localActivityRuns.has(`watermark:${currentId}`)
     || actKind === 'watermark_detect' || actKind === 'watermark_clean';
   const busyLive = busy || !!activity;
   const canRetryReferenceEdit = Boolean(retryRequestForReferenceEdit(

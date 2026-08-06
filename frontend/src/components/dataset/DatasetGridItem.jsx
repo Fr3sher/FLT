@@ -155,10 +155,10 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
           </label>
         )}
         {url ? (
-          <button type="button" onClick={() => onView?.(img)}
+          <button type="button" onClick={() => onView?.(img)} disabled={busy}
             title="Inspect (zoom)"
             aria-label={`Inspect ${displayLabel(img.variation_label) || 'the image'} full screen`}
-            className="block w-full h-full cursor-zoom-in">
+            className="block w-full h-full cursor-zoom-in disabled:cursor-not-allowed">
             {/* The tile and the lightbox request the SAME url, so the tile is
                 where the intrinsic size is known FIRST. Recording it here is
                 what lets the lightbox open with its actions already in the

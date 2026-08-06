@@ -256,7 +256,8 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                                       // scores, so it stands down when they can't be
                                       // trusted. Existing scores are NOT deleted.
                                       faceScoringBlocked = null,
-                                      activity = null }) {
+                                      activity = null,
+                                      onBulkBusyChange }) {
   const toast = useToast();
   const { caps } = useCapabilities();
   const [selected, setSelected] = useState(() => new Set());
@@ -287,6 +288,10 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
     () => improvementStateByParent(images), [images]);
   const autoTriageApplying = autoTriageRuns.has(datasetId);
   const bulkBusy = busy || launchingImprove || !!bulkAction || autoTriageApplying;
+  useEffect(() => {
+    onBulkBusyChange?.(bulkBusy);
+    return () => onBulkBusyChange?.(false);
+  }, [bulkBusy, onBulkBusyChange]);
   // Which page of the filtered list is on screen. Only the RENDERING is paged:
   // the selection, the bulk actions, auto-triage and every count keep reading
   // the full list (see gridPaging.js).
@@ -526,7 +531,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
             faceScoringBusy={Boolean(scoringFaceIds?.size)}
             faceScoringBlocked={faceScoringBlocked}
             onRegenerate={bulkBusy ? undefined : onRegenerate}
-            onReimprove={onReimprove} onView={onView}
+            onReimprove={onReimprove} onView={bulkBusy ? undefined : onView}
             selected={selected.has(img.id)}
             onToggleSelect={onBatch && !bulkBusy && !isSmallImageRescueRow(img) ? toggle : undefined}
             nonce={(nonces && nonces[img.id]) || 0} faceThresholds={faceThresholds}

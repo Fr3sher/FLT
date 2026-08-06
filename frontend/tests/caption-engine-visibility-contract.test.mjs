@@ -25,7 +25,7 @@ test('every caption pass carries the engines from the response into the session 
   // Three entry points write captions: caption, re-caption, and the targeted
   // re-caption from the leak panel. A pass that forgets to report is a pass whose
   // result silently loses its author.
-  const stores = src.match(/setLastCaptionRun\(\{ datasetId: currentId, captioned: d\.captioned, engines: d\.engines \}\)/g) || []
+  const stores = src.match(/setLastCaptionRun\(\{ datasetId: (?:currentId|run\.datasetId), captioned: d\.captioned, engines: d\.engines \}\)/g) || []
   assert.equal(stores.length, 3, 'caption, recaption and recaptionImages must each report');
   // The toast that already reports the count now names the writer too.
   const suffixed = src.match(/captionResultSuffix\(d\.engines\)/g) || []
