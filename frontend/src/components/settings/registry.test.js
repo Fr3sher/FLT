@@ -54,7 +54,11 @@ test('Pexels key and attribution markup stay wired without nested controls', () 
   assert.match(panelSource, /<PexelsAttribution metadata=\{it\}/);
   // The url→payload mapping lives in scraperSourceSearch.js (scrapeItemToImportPayload),
   // not inlined in the panel — see scraperSourceSearch.test.js for its behavioural coverage.
-  assert.match(panelSource, /scrapeItemToImportPayload/);
+  // Pinned on the CALL SITE, not just the import: a dangling import with nothing
+  // calling it would still match a bare name-presence check, and the wiring this
+  // test exists to guarantee (selected items are actually mapped before import)
+  // would then be unpinned.
+  assert.match(panelSource, /\.map\(scrapeItemToImportPayload\)/);
   for (const field of ['platform', 'source_url', 'photographer', 'photographer_url']) {
     assert.match(scraperSourceSearchSource, new RegExp(`${field}:`), `selected items forward ${field}`);
   }
