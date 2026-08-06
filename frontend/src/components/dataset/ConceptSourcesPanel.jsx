@@ -31,6 +31,7 @@ import {
   normalizeWebSearchKeyword,
   resolveScanTarget,
   savePexelsAuthorization,
+  scrapeItemToImportPayload,
 } from './scraperSourceSearch';
 
 const thumbFor = (it) =>
@@ -246,16 +247,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
 
   const handleImport = async () => {
     const chosen = items.filter((it) => selected.has(it.url))
-      .map((it) => ({
-        url: it.url,
-        title: it.title || '',
-        ...(it.platform === 'pexels' ? {
-          platform: 'pexels',
-          source_url: it.source_url,
-          photographer: it.photographer,
-          photographer_url: it.photographer_url,
-        } : {}),
-      }));
+      .map(scrapeItemToImportPayload);
     if (chosen.length === 0 || importing) return;
     setImporting(true);
     try {

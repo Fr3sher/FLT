@@ -72,6 +72,24 @@ export function buildWebSearchUrl(keyword, safe = false) {
   return `https://duckduckgo.com/?${params.toString()}`;
 }
 
+/**
+ * Scan item → the payload posted to scrape-import. Pexels items carry
+ * attribution fields websearch items don't have (photographer, photographer_url);
+ * websearch items carry the page they were found on (source_url) instead. Both
+ * need `platform` forwarded or the backend has nothing to key provenance on.
+ */
+export function scrapeItemToImportPayload(it) {
+  const base = { url: it.url, title: it.title || '' };
+  if (it.platform === 'pexels') {
+    return { ...base, platform: 'pexels', source_url: it.source_url,
+      photographer: it.photographer, photographer_url: it.photographer_url };
+  }
+  if (it.platform === 'websearch') {
+    return { ...base, platform: 'websearch', source_url: it.source_url };
+  }
+  return base;
+}
+
 export function loadPexelsAuthorization(storage) {
   const target = storageFor(storage);
   if (!target) return false;

@@ -48,6 +48,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-web-search-image-origin-link',
+    date: '2026-08-06',
+    title: 'See where a web-search image came from',
+    blurb: 'Images you pull in from web search now carry a "Source ↗" link back to the page they were found on, right in the dataset — so you can credit or double-check the origin without hunting for it again.',
+  },
+  {
     id: '2026-08-06-any-gallery-site',
     date: '2026-08-06',
     title: 'Paste a gallery from almost any site',
