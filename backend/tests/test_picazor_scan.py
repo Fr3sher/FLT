@@ -54,3 +54,30 @@ def test_a_populated_listing_still_returns_its_items(monkeypatch):
 
     assert err is None
     assert len(items) == 1
+
+
+def test_profile_scan_marks_a_mid_pagination_failure_as_partial(monkeypatch):
+    """A profile has 3 pages worth of media (per the /fr/{creator}/{index} links
+    on page 1). Page 1 loads fine and yields an item; page 2 gets blocked by
+    Cloudflare mid-pagination. Before this fix, `scan()` degraded gracefully by
+    just `break`ing out of the loop and returning `all_items[:MAX_ITEMS], None`
+    — a plain list with no truncation signal, presenting a harvest cut short by
+    a real HTTP failure as a complete profile. Patches at the HTTP-layer
+    boundary (`_request_html`, same function the real pagination loop calls for
+    every page) so the actual loop logic runs, not a stubbed-out scan()."""
+    html_page1 = '"/uploads/a/b/300px_x.jpg"' + '<a href="/fr/someone/50">50</a>'
+
+    def fake_request_html(url):
+        if url.endswith('/page/2'):
+            return None, "Picazor (Cloudflare) blocked access."
+        return html_page1, None
+
+    monkeypatch.setattr(picazor, '_request_html', fake_request_html)
+    validation = SimpleNamespace(original_url='https://picazor.com/fr/someone',
+                                 value='someone', url_type=None)
+
+    items, err = picazor.scan(validation)
+
+    assert err is None
+    assert len(items) == 1
+    assert getattr(items, 'partial', False) is True

@@ -24,6 +24,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlparse
 
+from .base import ResultList
 from .gdl import GdlError
 
 logger = logging.getLogger(__name__)
@@ -303,13 +304,23 @@ def scan(validation):
         seen = set()
         total_pages = None
         page = start_page
+        interrupted = False
 
         for _ in range(MAX_PAGES):
             page_url = f"{BASE_URL}/fr/{creator}" + (f"/page/{page}" if page > 1 else "")
             html, err = _request_html(page_url)
             if err:
-                # Si on a déjà des items, on dégrade gracieusement sans planter.
+                # Si on a déjà des items, on dégrade gracieusement sans planter —
+                # mais le résultat n'est plus le profil ENTIER, juste ce qu'on a
+                # pu lire avant que Cloudflare/le réseau ne coupe une page
+                # suivante : PARTIEL (`interrupted`), pas complet. Même
+                # convention que redgifs.py/instagram.py (base.ResultList,
+                # cf. finding #3/#2 de la vague précédente) — avant cette
+                # correction ce chemin renvoyait `all_items[:MAX_ITEMS], None`,
+                # une liste ordinaire sans signal de troncature, présentant une
+                # récolte coupée par une panne mi-pagination comme complète.
                 if all_items:
+                    interrupted = True
                     break
                 return None, err
 
@@ -341,6 +352,10 @@ def scan(validation):
             # la boucle) sans un seul média : profil légitimement vide, même
             # convention que gdl.GdlError kind='empty'.
             return None, GdlError("Picazor: no media found for this profile.", 'empty')
+        if interrupted:
+            result = ResultList(all_items[:MAX_ITEMS])
+            result.partial = True
+            return result, None
         return all_items[:MAX_ITEMS], None
 
     except Exception as e:  # garde-fou ultime — ne jamais lever
