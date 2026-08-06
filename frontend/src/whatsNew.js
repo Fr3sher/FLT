@@ -50,6 +50,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-reddit-load-more-no-longer-drops-posts',
+    date: '2026-08-06',
+    title: 'Reddit "Load more" no longer skips posts',
+    blurb: 'On image-heavy subreddits, a batch of posts could hit the per-scan cap mid-way through — and the posts after that point were gone for good, on every page. "Load more" now picks up exactly where the cap cut off, so nothing is left unreachable.',
+  },
+  {
     id: '2026-08-06-scan-truncation-and-blocked-pages',
     date: '2026-08-06',
     title: 'A blocked page says so — even on a slow scan',
