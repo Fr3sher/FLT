@@ -107,6 +107,35 @@ class _Worker:
         self.killed = True
 
 
+def test_siglip2_text_worker_uses_semantic_python(app, monkeypatch):
+    from app.services import bank_semantic_engine
+    from app.services import bank_semantic_models as models
+    from app.services import clip_text_encoder as encoder
+
+    contract = bank_semantic_engine.text_worker_handshake('siglip2')
+    worker = _Worker([{
+        'ok': True, 'ready': True, 'engine': 'siglip2',
+        'model_key': contract['model_key'],
+        'dimension': contract['dimension'],
+    }])
+    seen = {}
+
+    def popen(command, **kwargs):
+        seen['command'] = command
+        return worker
+
+    monkeypatch.setattr(models, 'semantic_python',
+                        lambda: '/managed/semantic/python')
+    monkeypatch.setattr(encoder.subprocess, 'Popen', popen)
+    monkeypatch.setattr(encoder, '_siglip2_proc', None)
+    # Avoid starting the idle-reaper thread; its behaviour is covered separately.
+    monkeypatch.setattr(encoder, '_siglip2_reaper', object())
+    assert encoder._start_siglip2_worker_locked() is worker
+    assert seen['command'] == [
+        '/managed/semantic/python', encoder._SIGLIP2_SCRIPT]
+    encoder._stop_siglip2_worker_locked()
+
+
 def test_siglip2_encoding_never_reuses_the_live_clip_worker(app, monkeypatch):
     from app.services import bank_semantic_engine
     from app.services import clip_text_encoder as encoder

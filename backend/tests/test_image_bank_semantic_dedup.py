@@ -278,13 +278,15 @@ def test_blocking_respects_config_fallback(app, tmp_path, client):
 def test_siglip2_dedup_is_global_and_preserves_clip_analysis_lanes(
         app, tmp_path, client):
     """SigLIP2 must find a pair across unrelated CLIP style blocks, while its
-    independent cache owns only semantic_dup_group — never Score/Medium fields or
-    the shared analysis fingerprint."""
+    independent partition changes only semantic groups when the existing
+    Score/Medium lanes already belong to the same exact byte generation."""
     bank_id, _ = _mkbank(client, tmp_path, {
         'a.jpg': _flat(10), 'b.jpg': _flat(20)})
     with app.app_context():
         from app.extensions import db
         from app.models import BankImage, ImageBank
+        from app.services import bank_transfer_metadata as transfer
+        from app.services import image_bank_service as banks
 
         bank = db.session.get(ImageBank, bank_id)
         bank.semantic_engine = 'siglip2'
@@ -295,8 +297,9 @@ def test_siglip2_dedup_is_global_and_preserves_clip_analysis_lanes(
         rows[0].nsfw_score, rows[1].nsfw_score = 0.01, 0.02
         rows[0].medium, rows[1].medium = 'photo', 'illustration'
         rows[0].medium_margin, rows[1].medium_margin = 0.12, 0.34
-        rows[0].analysis_fingerprint = 'a' * 64
-        rows[1].analysis_fingerprint = 'b' * 64
+        for row in rows:
+            row.analysis_fingerprint = transfer.content_fingerprint_path(
+                banks.analysis_image_path(bank, row))
         before = {
             row.id: (row.style_cluster, row.aesthetic_score, row.nsfw_score,
                      row.medium, row.medium_margin, row.analysis_fingerprint)
@@ -322,6 +325,51 @@ def test_siglip2_dedup_is_global_and_preserves_clip_analysis_lanes(
                      row.medium, row.medium_margin, row.analysis_fingerprint)
             for row in rows
         } == before
+
+
+def test_siglip2_rebuild_invalidates_clip_lanes_from_another_generation(
+        app, tmp_path, client):
+    """A current SigLIP2 proof must not bless CLIP values from other bytes."""
+    bank_id, _ = _mkbank(client, tmp_path, {
+        'a.jpg': _flat(10), 'b.jpg': _flat(20)})
+    with app.app_context():
+        from app.extensions import db
+        from app.models import BankImage, ImageBank
+
+        bank = db.session.get(ImageBank, bank_id)
+        bank.semantic_engine = 'siglip2'
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        for index, row in enumerate(rows):
+            row.style_cluster = 11 + index
+            row.aesthetic_score = 7.1 + index
+            row.nsfw_score = 0.01 + index / 100
+            row.medium = 'photo'
+            row.medium_margin = 0.12
+            row.analysis_fingerprint = chr(ord('a') + index) * 64
+        db.session.commit()
+
+    _write_siglip2_cache(app, bank_id, {
+        'a.jpg': _emb(1.0, 0.0),
+        'b.jpg': _emb(0.98, np.sqrt(1 - 0.98 ** 2)),
+    })
+    with app.app_context():
+        from app.extensions import db
+        from app.models import BankImage, ImageBank
+        from app.services import bank_transfer_metadata as transfer
+        from app.services import image_bank_service as banks
+
+        assert banks.rebuild_semantic_dup_groups(bank_id) == 1
+        bank = db.session.get(ImageBank, bank_id)
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        assert rows[0].semantic_dup_group == rows[1].semantic_dup_group
+        assert rows[0].semantic_dup_group is not None
+        for row in rows:
+            assert (row.style_cluster, row.aesthetic_score, row.nsfw_score,
+                    row.medium, row.medium_margin) == (None,) * 5
+            assert row.analysis_fingerprint == transfer.content_fingerprint_path(
+                banks.analysis_image_path(bank, row))
 
 
 # --- the "run Score first" hint ---------------------------------------------

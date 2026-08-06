@@ -580,7 +580,12 @@ def manual_command(action) -> str:
         return (f'{_quote(python)} -m pip install torch --index-url {_TORCH_CPU_INDEX}  '
                 f'&&  {_quote(python)} -m pip install {pkgs}')
     if action == 'bank_siglip2':
-        python = cfg.get('bank_scoring.python') or _bank_scoring_env_python()
+        # A manual SigLIP2 repair may honour an explicit semantic override, but
+        # must never inherit Score's borrowed GPU interpreter. With no explicit
+        # semantic target it points at the LDS-managed environment, exactly like
+        # the Install button.
+        python = (str(cfg.get('bank_semantic.python') or '').strip()
+                  or _bank_scoring_env_python())
         from .services import bank_semantic_models as assets
         root = assets.models_root()
         pulls = '; '.join(
@@ -1415,10 +1420,14 @@ def _bank_scoring_env_python() -> str:
     return _venv_python(_bank_scoring_env_dir())
 
 
-def _ensure_bank_scoring_env(action) -> str:
-    """Build (or reuse) the app-managed bank-scoring venv and record it as
-    bank_scoring.python. Returns the venv python on success, '' on failure (an
-    actionable one-liner is logged). Idempotent — mirrors _ensure_watermark_env."""
+def _ensure_bank_scoring_env(action, *, save_score_python=True) -> str:
+    """Build or reuse the app-managed Bank ML venv.
+
+    Score owns the historical environment directory, but other extras may reuse
+    it without changing the user's Score selection. ``save_score_python=False``
+    is therefore required by SigLIP2: a borrowed CUDA Score interpreter remains
+    selected while SigLIP2 is installed into LDS's managed environment.
+    """
     env_dir = _bank_scoring_env_dir()
     env_python = _venv_python(env_dir)
     if not os.path.isfile(env_python):
@@ -1447,11 +1456,12 @@ def _ensure_bank_scoring_env(action) -> str:
         _append(action, 'environment ready')
     else:
         _append(action, f'reusing the bank-scoring environment at {env_dir}')
-    try:
-        cfg.save_config({'bank_scoring': {'python': env_python}})
-    except Exception as e:
-        _append(action, f'warning: could not save bank_scoring.python ({e}); '
-                        'the environment still works for this run')
+    if save_score_python:
+        try:
+            cfg.save_config({'bank_scoring': {'python': env_python}})
+        except Exception as e:
+            _append(action, f'warning: could not save bank_scoring.python ({e}); '
+                            'the environment still works for this run')
     return env_python
 
 
@@ -1553,34 +1563,20 @@ def _verify_bank_scoring_import(action, python) -> bool:
 def _run_bank_siglip2(action) -> int:
     """Install the optional SigLIP2 semantic engine and its pinned checkpoint.
 
-    It shares the app-managed Bank scoring venv, but remains a separate action:
-    existing CLIP installs stay green and never inherit a 1.5 GB download. A
-    borrowed interpreter keeps the same checked-never-changed promise as Score.
+    It always targets LDS's managed Bank ML venv. Score may keep using a borrowed
+    CUDA interpreter: this action neither installs into it nor changes
+    ``bank_scoring.python``. Only after packages and every pinned weight are ready
+    is ``bank_semantic.python`` switched to the managed interpreter.
     """
     from .services import bank_semantic_models as assets
 
-    managed_python = _bank_scoring_env_python()
-    configured = (cfg.get('bank_scoring.python') or '').strip()
-    rebuild_managed = (bool(configured)
-                       and _same_path(configured, managed_python)
-                       and not os.path.isfile(managed_python))
-    if configured and not _same_path(configured, managed_python):
-        for line in (
-            'bank_scoring.python points at an environment this app did not create,',
-            'so nothing was installed into it — borrowed environments are checked,',
-            'never changed. Install transformers>=4.49 + the pinned model there',
-            'yourself, or switch ✨ Score back to the app-managed Python first.',
-            f'model: {assets.MODEL_ID} @ {assets.REVISION}',
-        ):
-            _append(action, line)
-        return 1
-    python = (_ensure_bank_scoring_env(action)
-              if not configured or rebuild_managed else configured)
+    python = _ensure_bank_scoring_env(action, save_score_python=False)
     if not python:
         return 1
-    if _is_flask_venv(python):
-        _append(action, "SigLIP2 cannot install into the app's Flask Python. Clear "
-                        'bank_scoring.python and click Install again.')
+    managed_python = _bank_scoring_env_python()
+    if not _same_path(python, managed_python):
+        _append(action, 'internal error: SigLIP2 did not resolve to the LDS-managed '
+                        'Bank environment; nothing was installed')
         return 1
 
     _append(action, f'target interpreter: {python}')
@@ -1622,6 +1618,14 @@ def _run_bank_siglip2(action) -> int:
         return rc
     if not assets.weights_present(root):
         _append(action, 'download returned success but at least one pinned model file is missing')
+        return 1
+    try:
+        cfg.save_config({'bank_semantic': {'python': managed_python}})
+    except Exception as e:
+        _append(action, f'SigLIP2 packages and weights are ready, but '
+                        f'bank_semantic.python could not be saved ({e}); the install '
+                        'is reported as failed so Setup never claims a runtime it '
+                        'cannot select after restart')
         return 1
     _append(action, 'SigLIP2 ready — each Bank can now choose it without deleting CLIP')
     return 0

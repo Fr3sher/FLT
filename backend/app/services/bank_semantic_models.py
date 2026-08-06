@@ -6,6 +6,7 @@ transformers or huggingface_hub in the Flask interpreter.
 """
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from .. import config as cfg
@@ -27,6 +28,18 @@ FILES = (
     'tokenizer.model',
     'tokenizer_config.json',
 )
+
+
+def semantic_python() -> str:
+    """Interpreter used by every SigLIP2 probe and worker.
+
+    ``bank_scoring.python`` is retained only as a read-time compatibility
+    fallback for configs written before SigLIP2 gained its own managed runtime.
+    New installs persist ``bank_semantic.python`` and never repoint Score.
+    """
+    return (str(cfg.get('bank_semantic.python') or '').strip()
+            or str(cfg.get('bank_scoring.python') or '').strip()
+            or sys.executable)
 
 
 def models_root() -> Path:

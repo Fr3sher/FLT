@@ -333,9 +333,11 @@ DEFAULTS = {
     #   "never stay warm": every distinct query pays the ~8 s load, which is the
     #   right trade on a memory-tight machine.
     'bank_scoring': {'python': '', 'text_search_idle_minutes': 10},
-    # Optional second semantic space for Image Bank. It deliberately shares the
-    # managed ✨ Score interpreter (torch + transformers) but not its CLIP cache:
-    # the aesthetic MLP is CLIP-specific, while SigLIP2 powers only semantic
+    # Optional second semantic space for Image Bank. Its interpreter is recorded
+    # separately so ✨ Score may borrow a user's CUDA Python without making the
+    # SigLIP2 installer mutate that environment. Existing configs without this
+    # key retain the historical bank_scoring.python fallback at runtime. The
+    # aesthetic MLP is CLIP-specific, while SigLIP2 powers only semantic
     # search, selection, coverage and near-duplicate grouping. Weights are
     # installed explicitly in Setup and inference is local-files-only, so
     # selecting it can never trigger a surprise 1.5 GB download.
@@ -343,7 +345,7 @@ DEFAULTS = {
     # The cosine distribution is not CLIP's. Keep its duplicate calibration in
     # this separate section so SigLIP2 cannot retune historical CLIP Banks.
     'bank_semantic': {
-        'models_root': '', 'device': 'auto',
+        'python': '', 'models_root': '', 'device': 'auto',
         'siglip2_semantic_dup_threshold': 0.97,
     },
     # fp8 quantization runs `fp8_export.py` in a SUBPROCESS, because it needs

@@ -24,6 +24,21 @@ np = pytest.importorskip('numpy')
 INFER_DIR = Path(__file__).resolve().parents[1] / 'infer'
 
 
+def test_semantic_python_prefers_its_key_then_legacy_score_fallback(app):
+    from app import config
+    with app.app_context():
+        assert config.DEFAULTS['bank_semantic']['python'] == ''
+        config.save_config({
+            'bank_scoring': {'python': '/legacy/score/python'},
+            'bank_semantic': {'python': '/semantic/python'},
+        })
+        assert models.semantic_python() == '/semantic/python'
+        config.save_config({'bank_semantic': {'python': ''}})
+        assert models.semantic_python() == '/legacy/score/python'
+        config.save_config({'bank_scoring': {'python': ''}})
+        assert models.semantic_python() == sys.executable
+
+
 def _load_script(name: str):
     path = INFER_DIR / f'{name}.py'
     spec = importlib.util.spec_from_file_location(f'{name}_test', path)

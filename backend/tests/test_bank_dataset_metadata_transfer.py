@@ -1239,6 +1239,7 @@ def test_legacy_runtime_caches_without_hashes_are_never_transferred(app, tmp_pat
 
     with app.app_context():
         source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        peer = _add_group_peer(source_bank)
         source_path = Path(source_bank.source_path) / source_image.relpath
         for name in transfer.DETERMINISTIC_ANALYSIS_FIELDS:
             setattr(source_image, name, None)
@@ -1255,13 +1256,29 @@ def test_legacy_runtime_caches_without_hashes_are_never_transferred(app, tmp_pat
         assert source_cache[source_key]['face'][2] == b''
 
         destination_id = banks.start_bank_promote(
-            app, 'local', source_bank.id, [source_image.id], 'Legacy cache copy')
-        assert db.session.get(ImageBank, destination_id) is None
+            app, 'local', source_bank.id, [source_image.id, peer.id],
+            'Legacy cache copy')
+        destination = db.session.get(ImageBank, destination_id)
+        assert destination is not None
+        copied = BankImage.query.filter_by(bank_id=destination_id).all()
+        sources = {row.relpath: row for row in (source_image, peer)}
+        assert len(copied) == 2
+        for row in copied:
+            assert _row_values(row, transfer.BANK_DIRECT_COPY_ANALYSIS_FIELDS) == (
+                _row_values(sources[row.relpath],
+                            transfer.BANK_DIRECT_COPY_ANALYSIS_FIELDS))
+            assert row.analysis_fingerprint == hashlib.sha256(
+                (Path(destination.source_path) / row.relpath).read_bytes()).hexdigest()
+        assert _runtime_cache_payloads(destination, copied) == {}
 
         dataset = datasets.create_dataset('local', 'Legacy cache Dataset', 'legacy_cache')
         banks.start_promote(
             app, 'local', source_bank.id, [source_image.id], dataset.id)
-        assert FaceDatasetImage.query.filter_by(dataset_id=dataset.id).count() == 0
+        dataset_row = FaceDatasetImage.query.filter_by(dataset_id=dataset.id).one()
+        snapshot = transfer.parse_snapshot(dataset_row.bank_analysis_snapshot)
+        assert snapshot['analysis']['aesthetic_score'] == source_image.aesthetic_score
+        assert snapshot['analysis']['face_cluster'] == source_image.face_cluster
+        assert snapshot['cache_ref'] is None
         cache_dir = Path(dataset_path(dataset.id)) / '.bank-analysis-cache'
         assert not cache_dir.exists() or not list(cache_dir.glob('*.npz'))
 

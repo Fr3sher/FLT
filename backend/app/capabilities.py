@@ -724,6 +724,21 @@ def bank_scoring_gpu_available() -> bool:
     return state
 
 
+def bank_siglip2_gpu_available() -> bool:
+    """True only when the resolved SigLIP2 interpreter proves CUDA works.
+
+    Unlike Score, the parent sends an explicit device to the SigLIP2 child. An
+    unanswered probe must therefore resolve to CPU: guessing CUDA from the host
+    card (or from Score's borrowed runtime) would tell a CPU-only managed torch
+    build to use a device it cannot open.
+    """
+    from .services import bank_semantic_models as assets
+    state = _cached_import_state(
+        'bank_siglip2_gpu', assets.semantic_python(),
+        'import torch,sys; sys.exit(0 if torch.cuda.is_available() else 1)')
+    return state is True
+
+
 def probe_masks() -> dict:
     python = cfg.get('masks.python') or sys.executable
     ok = _cached_import('masks', python, CAPABILITY_IMPORTS['masks'])
@@ -755,7 +770,7 @@ def probe_bank_siglip2() -> dict:
                        '(Setup ▸ Quality tools ▸ SigLIP2 semantic engine)'),
             'model': assets.MODEL_ID,
         }
-    python = cfg.get('bank_scoring.python') or sys.executable
+    python = assets.semantic_python()
     ok = _cached_import('bank_siglip2', python, CAPABILITY_IMPORTS['bank_siglip2'])
     return {
         'ok': ok,

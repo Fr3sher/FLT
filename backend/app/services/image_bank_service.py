@@ -3475,11 +3475,11 @@ def _semantic_eligible_paths(bank: ImageBank) -> tuple[int, tuple[str, ...]]:
 
 def _resolve_semantic_device() -> tuple[str, bool]:
     """Configured SigLIP2 device resolved against this exact ML Python."""
-    from ..capabilities import bank_scoring_gpu_available
+    from ..capabilities import bank_siglip2_gpu_available
     preference = str(cfg.get('bank_semantic.device') or 'auto').strip().lower()
     if preference not in ('auto', 'cpu', 'cuda'):
         preference = 'auto'
-    cuda_available = bool(bank_scoring_gpu_available())
+    cuda_available = bank_siglip2_gpu_available()
     use_gpu = preference != 'cpu' and cuda_available
     return ('cuda' if use_gpu else 'cpu'), use_gpu
 
@@ -5922,7 +5922,8 @@ def _semantic_index_job(bank_id, rescan=False):
         cache_path = _semantic_cache_path(bank_id)
         payload = _json.dumps(bank_semantic_engine.image_worker_payload(
             paths, bank_id, engine='siglip2', device=device, rescan=bool(rescan)))
-        python = cfg.get('bank_scoring.python') or sys.executable
+        from . import bank_semantic_models
+        python = bank_semantic_models.semantic_python()
         window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
                   else nullcontext())
         _release_db_before_inference()
@@ -10061,6 +10062,11 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
     fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
     if fingerprint is None:
         return None
+    stored = getattr(row, 'analysis_fingerprint', None)
+    if stored == fingerprint:
+        return 'exact'
+    if stored is not None:
+        return None
     available = set(cache_bundle or {})
     score_active = (any(getattr(row, name) is not None
                         for name in _SCORE_TRANSFER_FIELDS)
@@ -10087,12 +10093,6 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
     if siglip2_group_active and 'semantic' not in available:
         return None
     if face_active and 'face' not in available:
-        return None
-
-    stored = getattr(row, 'analysis_fingerprint', None)
-    if stored == fingerprint:
-        return 'exact'
-    if stored is not None:
         return None
 
     # For an unbound legacy row these values are only a narrow TOFU signal. New

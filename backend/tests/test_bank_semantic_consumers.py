@@ -34,6 +34,36 @@ def _uid():
     return LOCAL_USER
 
 
+def test_siglip2_image_worker_uses_semantic_python(
+        app, client, tmp_path, monkeypatch):
+    from app.extensions import db
+    from app.models import ImageBank
+    from app.services import bank_semantic_models as models
+    from app.services import image_bank_service as banks
+
+    bank_id = _bank(client, tmp_path, count=1)
+    seen = {}
+
+    def drive(job, python, script, payload, cache_path, progress_re, window):
+        seen.update(python=python, script=script, payload=payload)
+        return {'ok': True, 'ready': 1, 'computed': 1}, [], 0
+
+    monkeypatch.setattr(models, 'semantic_python',
+                        lambda: '/managed/semantic/python')
+    monkeypatch.setattr(banks, '_resolve_semantic_device',
+                        lambda: ('cpu', False))
+    monkeypatch.setattr(banks, '_drive_infer_subprocess', drive)
+    monkeypatch.setattr(banks.bank_jobs, 'progress', lambda *a, **k: None)
+    monkeypatch.setattr(banks.bank_jobs, 'cancelled', lambda job: False)
+    with app.app_context():
+        bank = db.session.get(ImageBank, bank_id)
+        bank.semantic_engine = 'siglip2'
+        db.session.commit()
+        banks._semantic_index_job(bank_id)(object())
+    assert seen['python'] == '/managed/semantic/python'
+    assert seen['script'] == banks._SEMANTIC_SCRIPT
+
+
 def test_siglip2_selected_consumers_use_one_space_and_report_it(
         app, client, tmp_path, monkeypatch):
     from app.extensions import db

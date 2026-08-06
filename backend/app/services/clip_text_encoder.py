@@ -672,8 +672,8 @@ def _start_worker_locked():
 def _start_siglip2_worker_locked():
     """Spawn the local-only CPU SigLIP2 child and validate its exact space."""
     global _siglip2_proc, _siglip2_reaper
-    from . import bank_semantic_engine
-    python = cfg.get('bank_scoring.python') or sys.executable
+    from . import bank_semantic_engine, bank_semantic_models
+    python = bank_semantic_models.semantic_python()
     env = dict(os.environ)
     env['CUDA_VISIBLE_DEVICES'] = ''
     env['PYTHONUTF8'] = '1'

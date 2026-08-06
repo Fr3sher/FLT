@@ -70,6 +70,22 @@ def test_a_cuda_scoring_pass_still_takes_the_gpu_window(app, tmp_path):
         assert any('CUDA' in (d or '') for d in seen['details'])
 
 
+def test_borrowed_gpu_score_does_not_make_managed_cpu_siglip_request_cuda(app):
+    from app import config
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        config.save_config({
+            'bank_scoring': {'python': '/borrowed/gpu/python'},
+            'bank_semantic': {
+                'python': '/managed/cpu/python', 'device': 'auto'},
+        })
+        with patch('app.capabilities.bank_scoring_gpu_available', lambda: True), \
+             patch('app.capabilities.bank_siglip2_gpu_available', lambda: False):
+            assert banks._resolve_score_device() == ('cuda', True)
+            assert banks._resolve_semantic_device() == ('cpu', False)
+
+
 def test_a_busy_gpu_no_longer_refuses_a_pass_that_runs_on_the_cpu(app, tmp_path):
     from app.services import image_bank_service as banks
 
