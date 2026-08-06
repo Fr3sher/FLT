@@ -6057,13 +6057,21 @@ def _preserved_siglip2_groups(bank_id, by_path) -> dict:
     field before writing CLIP results.  A SigLIP2 group is independent and may be
     restored only when that engine's pinned runtime cache proves the same SHA.
     """
-    wanted_ids = set(by_path.values())
+    wanted_ids = sorted(set(by_path.values()))
     if not wanted_ids:
         return {}
-    rows = (BankImage.query.filter(
-        BankImage.bank_id == bank_id,
-        BankImage.id.in_(wanted_ids),
-        BankImage.siglip2_semantic_dup_group.isnot(None)).all())
+    # Chunked like every other id lookup in this file. `by_path` is the WHOLE
+    # pool the score pass was handed — 33 932 ids on a real bank — and a single
+    # IN() of that size raises "too many SQL variables" against SQLite's 999
+    # ceiling. It failed where it hurts most: this runs on the Stop/salvage path,
+    # so the exception replaced the write-back and threw away 1 225 images of
+    # finished GPU work, which is precisely what that path exists to save.
+    rows = []
+    for i0 in range(0, len(wanted_ids), _SQL_IN_CHUNK):
+        rows.extend(BankImage.query.filter(
+            BankImage.bank_id == bank_id,
+            BankImage.id.in_(wanted_ids[i0:i0 + _SQL_IN_CHUNK]),
+            BankImage.siglip2_semantic_dup_group.isnot(None)).all())
     if not rows:
         return {}
     bank = db.session.get(ImageBank, bank_id)
