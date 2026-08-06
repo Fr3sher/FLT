@@ -214,3 +214,29 @@ def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypat
                       'title': 'https://x.com/someone/status/1',
                       'thumbnail': None, 'type': 'video', 'platform': 'generic'}]
     assert m.paginated is False
+
+
+def test_exit_zero_with_no_stdout_is_classified_empty_not_unclassified(monkeypatch):
+    """gallery-dl peut sortir en code 0 (succès) sans rien écrire sur stdout —
+    une page valide sans média. `classify_exit(0)` renvoie None (pas un kind),
+    donc sans ce garde-fou le GdlError produit par `_run_simulate` porte
+    kind=None : il ne matche ni 'unsupported' ni 'empty' dans `scan()`, tombe
+    dans la branche générique « on remonte l'erreur », et un scan vide légitime
+    répond 502 'empty output' au lieu de [] (cf. `test_a_genuinely_empty_page_
+    is_an_empty_result_not_an_error` qui couvre le même contrat côté scan())."""
+    monkeypatch.setattr(gdl.subprocess, 'run',
+                        lambda *a, **k: _Proc(returncode=0, stdout='', stderr=''))
+
+    entries, err = gdl._run_simulate('https://example.test/album/1', 60, None, None)
+
+    assert entries is None
+    assert getattr(err, 'kind', None) == 'empty'
+
+    _spy_enumerate(monkeypatch,
+                   err=gdl.GdlError('gallery-dl: empty output (no data).', 'empty'))
+    m = Match(url='https://example.test/album/1')
+    m.page = 0
+
+    items, scan_err = UniversalSource().scan(m)
+
+    assert (items, scan_err) == ([], None)

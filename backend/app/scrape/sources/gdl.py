@@ -116,8 +116,15 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
     stdout = (proc.stdout or '').strip()
     if not stdout:
         kind = classify_exit(proc.returncode)
+        if kind is None:
+            # Code 0 (succès) mais rien sur stdout : gallery-dl a tourné sans
+            # incident et n'a juste rien trouvé — un scan vide légitime, PAS un
+            # échec outil non classifié (cf. docstring de GdlError : le kind
+            # 'empty' existe pour que l'appelant ne le confonde pas avec
+            # 'toolerror'). classify_exit() ne renvoie None QUE pour returncode=0.
+            kind = 'empty'
         last = ((proc.stderr or '').strip().splitlines() or ['no data'])[-1]
-        return None, GdlError(f"gallery-dl: {kind or 'empty output'} ({last[:200]}).", kind)
+        return None, GdlError(f"gallery-dl: {kind} ({last[:200]}).", kind)
     try:
         data = json.loads(stdout)
     except (ValueError, TypeError) as e:
