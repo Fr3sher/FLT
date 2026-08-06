@@ -624,13 +624,15 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
           </div>
 
           {partial && (
-            // Truncated by the scan's time budget (backend `partial`) — the items
-            // above are valid, but the listing was cut short before it could be
-            // fully explored, and it can happen even when `paginated` is false
-            // (a truncated album dive still looks "final" otherwise, cf. the
-            // gdl.enumerate `from_albums` note). Say so in plain English.
+            // Backend `partial` now covers at least four causes (time budget,
+            // item cap, page cap, blocked/rate-limited source) — state the
+            // effect, not a specific cause. The items above are valid, but the
+            // listing was cut short before it could be fully explored, and it
+            // can happen even when `paginated` is false (a truncated album dive
+            // still looks "final" otherwise, cf. the gdl.enumerate `from_albums`
+            // note). Say so in plain English.
             <p className="text-[0.6875rem] text-amber-500">
-              This scan ran out of time before finishing the full listing — some images may be missing.
+              This scan stopped before the end of the listing — some images may be missing.
             </p>
           )}
 
