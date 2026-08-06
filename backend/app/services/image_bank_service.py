@@ -1689,6 +1689,25 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # every 'all' here is a measured query rather than a reused total.
         'watermark': {'todo': _todo_by_status(bank_id, _watermark_todo_clause()),
                       'all': _todo_by_status(bank_id, _watermark_not_dismissed())},
+        # ✂ AUTO-CROP AND 🧽 REPAINT — the two levels that produce a new IMAGE.
+        # Their pool is not "the images in that pile": it is the flagged rows
+        # that carry an authorised geometry (_clean_todo_clause), which is why
+        # these two entries exist at all rather than their windows reusing
+        # counts.keep. Neither has a "do it again" lane — a cleaned image leaves
+        # the pool and comes back only through ↩ Undo cleaning — so 'all'
+        # repeats 'todo' rather than being left absent, which would render as a
+        # permanent "counting…".
+        #
+        # ⚠️ WHAT THIS NUMBER IS. It is the pool each level WALKS (the figure its
+        # progress bar counts to), not the number of images it will change: ✂
+        # crops only the marks the router puts in a border band, and that
+        # decision needs each image's real dimensions. The crop window says so in
+        # as many words rather than quoting a routed figure that would cost
+        # thousands of file headers on every payload.
+        'watermark_crop': {'todo': _todo_by_status(bank_id, _crop_todo_clause()),
+                           'all': _todo_by_status(bank_id, _crop_todo_clause())},
+        'watermark_inpaint': {'todo': _todo_by_status(bank_id, _clean_todo_clause()),
+                              'all': _todo_by_status(bank_id, _clean_todo_clause())},
         'framing': {'todo': _todo_by_status(bank_id, BankImage.framing.is_(None)),
                     'all': dict(all_by_status)},
         # 🎨 Medium is the one pass whose pool is not its work: it computes NO
@@ -6930,21 +6949,45 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
 #             left" lane, not a second router.
 # Both reuse the dataset routing/engines verbatim; nothing about the decision
 # logic is re-implemented here.
-def _clean_pool_query(bank_id):
-    """Images a cleaning level can act on: still flagged, with SOMETHING to act
-    on, not rejected. 'cleaned'/'dismissed'/'none' rows are out by construction.
+def _clean_todo_clause():
+    """"Still flagged, geometry authorised for the raw on disk, and SOMETHING to
+    act on" — the cleaning levels' work, with no status in it.
 
-    "Something to act on" is the stored bbox OR a hand-drawn mask: a row the
-    detector left without a box (an older build) becomes cleanable the moment
-    the user draws the zones themselves — that drawing IS the missing box."""
-    return (BankImage.query.filter_by(bank_id=bank_id,
-                                      watermark_state='detected')
-            .filter(BankImage.status != 'reject')
-            .filter(BankImage.watermark_fingerprint.isnot(None))
-            .filter(func.length(BankImage.watermark_fingerprint) == 64)
-            .filter(~_watermark_history_inactive_clause())
-            .filter(or_(BankImage.watermark_bbox.isnot(None),
-                        BankImage.watermark_regions.isnot(None))))
+    Split out of _clean_pool_query so the pool a level WALKS and the per-pile
+    counter its window quotes are ONE expression (the contract of
+    _todo_by_status). "Something to act on" is the stored bbox OR a hand-drawn
+    mask: a row the detector left without a box (an older build) becomes
+    cleanable the moment the user draws the zones themselves — that drawing IS
+    the missing box. The fingerprint conditions are not decoration: a geometry
+    that was not attested against the current raw bytes must never drive a
+    write (see _needs_rescan_count, which counts exactly their complement)."""
+    return and_(BankImage.watermark_state == 'detected',
+                BankImage.watermark_fingerprint.isnot(None),
+                func.length(BankImage.watermark_fingerprint) == 64,
+                ~_watermark_history_inactive_clause(),
+                or_(BankImage.watermark_bbox.isnot(None),
+                    BankImage.watermark_regions.isnot(None)))
+
+
+def _crop_todo_clause():
+    """✂ Auto-crop's own work: the same flagged rows MINUS the hand-masked ones.
+
+    A hand mask is 🧽 Inpaint's material (see _watermark_crop_job) — cropping
+    cannot express several zones, nor a zone on the subject. Counting them here
+    would price a run that can only skip them."""
+    return and_(_clean_todo_clause(), BankImage.watermark_regions.is_(None))
+
+
+def _clean_pool_query(bank_id, statuses=None, ids=None):
+    """Images a cleaning level can act on, inside the run's scope.
+    'cleaned'/'dismissed'/'none' rows are out by construction.
+
+    ``statuses``/``ids`` are the two dials every other pass takes, and they
+    INTERSECT the flagged set — they never widen it. Left alone
+    (``statuses=None``) _scope_clause yields ``status != 'reject'``, which is
+    character for character the filter this pool has always carried, so an
+    untouched run walks exactly the rows it walked before."""
+    return _scoped_pool(bank_id, statuses, ids).filter(_clean_todo_clause())
 
 
 def _needs_rescan_count(bank_id) -> int:
@@ -7089,34 +7132,50 @@ def _stage_clean_copy(bank_id, row, src_path) -> Path:
     return dst
 
 
-def start_watermark_crop(app, user_id, bank_id):
+def start_watermark_crop(app, user_id, bank_id, statuses=None, ids=None):
     """Level 1 — crop away every watermark that sits in a border band. Pure
     CPU/PIL, no model, no GPU: this level is always available. ValueError when
-    there is nothing to crop (the UI disables the button, this is the race)."""
+    there is nothing to crop (the UI disables the button, this is the race).
+
+    ``statuses``/``ids`` narrow WHERE the crop applies, exactly like every other
+    pass, and they intersect the flagged pool rather than widening it. This level
+    WRITES AN IMAGE, so the narrowing matters more here than on a pass that only
+    computes a verdict — but nothing of the user's is overwritten: the crop lands
+    in the bank's own ``clean/`` copy and ↩ Undo cleaning deletes it. Left alone,
+    the pool is the one this level has always walked."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    want = normalize_pass_statuses(statuses)
+    scoped = _clean_pool_query(bank_id, want, ids)
     # Hand-masked rows are level 2's, so they don't count as work for this level:
     # launching a crop that can only skip them would report "0 cropped" and read
     # as a broken button.
-    total = (_clean_pool_query(bank_id)
-             .filter(BankImage.watermark_regions.is_(None)).count())
+    total = scoped.filter(BankImage.watermark_regions.is_(None)).count()
     if not total:
-        if _clean_pool_query(bank_id).count():
+        if scoped.count():
             raise ValueError('the flagged images all carry a hand-edited mask — '
                              'use 🧽 Inpaint, which repaints the zones you drew')
+        # The scope is NAMED in the refusal when there is work outside it. A bare
+        # "run the watermark scan first" on a bank holding thousands of flagged
+        # images in another pile sends the user to re-run a pass that already did
+        # its job.
+        if _clean_pool_query(bank_id, list(PASS_SCOPES)).count():
+            raise ValueError('nothing to crop in this scope — the flagged images '
+                             'are in another pile (kept / undecided / unkept)')
         raise ValueError('no flagged image to clean — run the watermark scan first')
     return bank_jobs.start(app, bank_id, 'watermark_crop',
-                           _watermark_crop_job(bank_id), total=total)
+                           _watermark_crop_job(bank_id, want, ids), total=total)
 
 
-def _watermark_crop_job(bank_id):
+def _watermark_crop_job(bank_id, statuses=None, ids=None):
     def run(job):
         from .face_dataset_service import _apply_watermark_crop, _route_watermark
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _clean_pool_query(bank_id).order_by(BankImage.id.asc()).all()
+        rows = (_clean_pool_query(bank_id, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='auto-crop')
         row_ids = [r.id for r in rows]
         cropped = left = failed = vanished = 0
@@ -7186,6 +7245,10 @@ def _watermark_crop_job(bank_id):
             detail += f', {vanished} skipped (deleted while the pass ran)'
         if failed:
             detail += f', {failed} unreadable'
+        # What the SCOPE never reached, named — otherwise "3 cropped" on a bank
+        # with thousands of flagged images in another pile reads as a broken
+        # level rather than as the narrow run the user asked for.
+        detail += _scope_note(bank_id, _crop_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
@@ -7204,20 +7267,34 @@ def _watermark_inpaint_prereq(method) -> str | None:
     return None
 
 
-def start_watermark_inpaint(app, user_id, bank_id, method='auto'):
+def start_watermark_inpaint(app, user_id, bank_id, method='auto',
+                            statuses=None, ids=None):
     """Level 2 — repaint what is STILL flagged after the crop level.
     ``method``: 'auto'/'lama' (LaMa, non-generative, small off-centre marks; marks
     on the subject stay flagged for manual review) or 'klein' (masked Flux.2 Klein
     through ComfyUI, which also handles on-subject marks). RuntimeError (→ 503) on
-    a missing engine or a busy GPU, ValueError (→ 400) on a bad method / empty pool."""
+    a missing engine or a busy GPU, ValueError (→ 400) on a bad method / empty pool.
+
+    ``statuses``/``ids`` narrow WHERE the repaint applies — the same two dials as
+    every other pass, and the same intersection rule. This level REPAINTS PIXELS,
+    which is why it needed them: 16 000 images repainted from one click was a run
+    nobody could aim. What it writes is the bank's own ``clean/`` copy and never
+    the user's file, so ↩ Undo cleaning takes it back."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
     method = (method or 'auto').lower()
     if method not in ('auto', 'lama', 'klein'):
         raise ValueError("method must be 'auto', 'lama' or 'klein'")
-    total = _clean_pool_query(bank_id).count()
+    want = normalize_pass_statuses(statuses)
+    total = _clean_pool_query(bank_id, want, ids).count()
     if not total:
+        # "Nothing HERE" and "nothing anywhere" are two situations with two
+        # different next moves. Saying "every flagged image is handled" while
+        # thousands sit in another pile is the refusal reading as a lie.
+        if _clean_pool_query(bank_id, list(PASS_SCOPES)).count():
+            raise ValueError('nothing to repaint in this scope — the flagged '
+                             'images are in another pile (kept / undecided / unkept)')
         raise ValueError('nothing left to inpaint — every flagged image is handled')
     problem = _watermark_inpaint_prereq(method)
     if problem:
@@ -7226,10 +7303,11 @@ def start_watermark_inpaint(app, user_id, bank_id, method='auto'):
     if reason:
         raise RuntimeError(reason)
     return bank_jobs.start(app, bank_id, 'watermark_inpaint',
-                           _watermark_inpaint_job(bank_id, method), total=total)
+                           _watermark_inpaint_job(bank_id, method, want, ids),
+                           total=total)
 
 
-def _watermark_inpaint_job(bank_id, method):
+def _watermark_inpaint_job(bank_id, method, statuses=None, ids=None):
     def run(job):
         from contextlib import nullcontext
         from . import watermark_klein, watermark_lama
@@ -7238,7 +7316,8 @@ def _watermark_inpaint_job(bank_id, method):
         bank = _detach_bank(db.session.get(ImageBank, bank_id))
         if not bank:
             return
-        rows = _clean_pool_query(bank_id).order_by(BankImage.id.asc()).all()
+        rows = (_clean_pool_query(bank_id, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
         bank_jobs.progress(job, done=0, total=len(rows), detail='inpainting')
         row_ids = [r.id for r in rows]
         counts = {'inpainted': 0, 'klein': 0, 'review': 0, 'failed': 0,
@@ -7410,6 +7489,9 @@ def _watermark_inpaint_job(bank_id, method):
             detail += f", {counts['failed']} failed"
             if error and error.get('detail'):
                 detail += f" — {error['detail']}"
+        # What the SCOPE never reached, named. Silent when it reached everything,
+        # and silent on a selection — there the user pointed at the images.
+        detail += _scope_note(bank_id, _clean_todo_clause(), statuses, ids)
         bank_jobs.progress(job, detail=detail)
     return run
 
