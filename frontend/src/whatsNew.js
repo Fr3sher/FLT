@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-face-mask-preview-stops-and-resumes',
+    date: '2026-08-06',
+    title: 'The face-mask preview can be stopped — and picks up where it left off',
+    blurb:
+      '"Looking for faces… analyzing image 4 of 153" had no way out: the only choice was to wait for the whole pass or leave the page and lose it. There is a Stop button now, and it keeps what the pass already found — start it again and it resumes at image 5 instead of image 1. The button says what stopping costs at the moment you press it, and the cost changes as the pass runs: during the model load nothing has been analyzed yet, so only the load is given up; once images are being analyzed, every face already found is kept. Change your kept images and the saved work is dropped rather than reused, because boxes from photos that left the set would describe a run that no longer exists.',
+    to: '/datasets?section=training',
+  },
+  {
     id: '2026-08-06-setup-counts-the-video-pieces',
     date: '2026-08-06',
     title: 'Setup now counts the video pieces — and its repair menu can reach them',

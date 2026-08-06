@@ -1556,7 +1556,10 @@ const TOPICS = [
       // must land here, because this is where it is now installed from — the
       // capability is stored as `face_scoring`, but nobody calls it that.
       'insightface', 'face detection', 'detector', 'install', 'face scoring',
-      'not installed', 'missing', 'onnxruntime', 'ml extras'],
+      'not installed', 'missing', 'onnxruntime', 'ml extras',
+      // The preview can be stopped and picked back up. Searching for the way out
+      // of a long pass must land on the option that started it.
+      'stop', 'cancel', 'resume', 'continue', 'interrupt', 'looking for faces'],
     guide: { chapter: 'dataset-guide', anchor: '8-concept-loras-keeping-faces-out' },
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'mask-faces-advanced',
