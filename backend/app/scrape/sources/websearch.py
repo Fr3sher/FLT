@@ -102,15 +102,24 @@ class WebSearchSource(Source):
             results = _images(query=match.query, safesearch=match.safesearch,
                               type_image='photo', max_results=MAX_RESULTS,
                               page=page + 1)
+            if results is None:
+                # Un blocage doux (ratelimit, filtre) peut renvoyer None au lieu
+                # de lever : traiter ça comme une liste vide effacerait la panne
+                # derrière un « aucun résultat » silencieux. Voir la règle du
+                # module — vide ≠ panne déguisée.
+                return None, "Web image search returned no data (search may be blocked)."
+            items = [item for item in (_item(r) for r in results) if item]
         except ImportError:
             return None, _MISSING_DEP
         except Exception as exc:
             # La bibliothèque ne documente pas ses exceptions ; le contrat de
             # scan() est « ne lève jamais ». Un 429 doit dire qu'il a échoué,
-            # surtout PAS « aucun résultat ».
+            # surtout PAS « aucun résultat ». `results` peut être un itérateur
+            # paresseux dont l'I/O réseau se déclenche à l'itération : la
+            # compréhension ci-dessus DOIT rester dans ce try pour que ces
+            # exceptions-là soient aussi rattrapées.
             logger.warning("websearch: la recherche a échoué: %r", exc)
             return None, f"Web image search failed ({exc})."
-        items = [item for item in (_item(r) for r in (results or [])) if item]
         return items, None
 
 

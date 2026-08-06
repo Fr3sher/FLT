@@ -124,6 +124,40 @@ def test_a_failing_library_is_reported_and_never_raises(monkeypatch):
     assert 'failed' in err.lower() and 'ratelimit' in err
 
 
+def test_none_from_the_library_is_reported_not_treated_as_empty(monkeypatch):
+    """Un blocage doux (ratelimit, filtre) peut renvoyer None sans lever.
+    Ça reste une panne, pas une liste vide."""
+    def fake(**kw):
+        return None
+    monkeypatch.setattr(websearch, '_images', fake)
+    m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
+    m.page = 0
+
+    items, err = WebSearchSource().scan(m)
+
+    assert items is None
+    assert err is not None and 'no data' in err.lower()
+
+
+def test_a_lazy_iterator_raising_mid_iteration_is_reported_not_raised(monkeypatch):
+    """`ddgs` peut renvoyer un itérateur paresseux qui fait son I/O réseau à
+    l'itération : si la compréhension de scan() était hors du try, l'exception
+    s'échapperait et casserait le contrat « scan() ne lève jamais »."""
+    def fake(**kw):
+        def generator():
+            yield _RESULT
+            raise RuntimeError('connection reset mid-page')
+        return generator()
+    monkeypatch.setattr(websearch, '_images', fake)
+    m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
+    m.page = 0
+
+    items, err = WebSearchSource().scan(m)
+
+    assert items is None
+    assert 'failed' in err.lower() and 'connection reset' in err
+
+
 def test_a_missing_dependency_says_how_to_install_it(monkeypatch):
     """Le registry importe toutes les sources au démarrage : une dépendance
     optionnelle absente doit donner une consigne, jamais empêcher le boot."""
