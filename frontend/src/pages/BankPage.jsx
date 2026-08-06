@@ -239,7 +239,7 @@ export default function BankPage() {
 
       {/* Second way in: the scraper's own destination. A bank no longer needs a
           folder you prepared by hand — you can fill one straight from the web. */}
-      <BankScrapePanel banks={banks} onDone={refresh} />
+      <BankScrapePanel banks={banks} onDone={() => refresh()} />
 
       <FolderCheckLine banks={banks} busy={rescanning} onRescan={rescan} />
 
@@ -292,7 +292,7 @@ export default function BankPage() {
       {relocating && (
         <RelocateBankDialog bankId={relocating.id} bankName={relocating.name}
           sourcePath={relocating.source_path}
-          onClose={() => setRelocating(null)} onDone={refresh} />
+          onClose={() => setRelocating(null)} onDone={() => refresh()} />
       )}
     </div>
   )
