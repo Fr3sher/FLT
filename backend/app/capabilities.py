@@ -963,13 +963,17 @@ def python_ml_status() -> dict:
 def probe_scrape_deps() -> dict:
     """The scraper's optional Python deps (requirements-scrape.txt). find_spec
     only (no import cost): the scrape stack runs IN-PROCESS, so the app's own
-    interpreter is the one that must see the packages. curl_cffi + gallery_dl
-    are the two hard requirements (picazor/civitai fetch, gallery enumeration);
-    bs4/cloudscraper/instaloader ride along in the same install. Every module the
-    scrape stack imports belongs here: an omission reads as "installed" while the
-    source that needs it still raises at runtime (instaloader did, until 2026-07)."""
+    interpreter is the one that must see the packages (or, for gallery_dl /
+    yt_dlp, the one `python -m` re-launches as a subprocess — same interpreter,
+    same site-packages). curl_cffi + gallery_dl are the two hard requirements
+    (picazor/civitai fetch, gallery enumeration); bs4/cloudscraper/instaloader/
+    ddgs/yt_dlp ride along in the same install. Every module the scrape stack
+    imports (directly or via `python -m`) belongs here: an omission reads as
+    "installed" while the source that needs it still raises at runtime
+    (instaloader did, until 2026-07; ddgs and yt_dlp did too, until this fix)."""
     import importlib.util
-    missing = [m for m in ('curl_cffi', 'gallery_dl', 'bs4', 'cloudscraper', 'instaloader')
+    missing = [m for m in ('curl_cffi', 'gallery_dl', 'bs4', 'cloudscraper', 'instaloader',
+                            'ddgs', 'yt_dlp')
                if importlib.util.find_spec(m) is None]
     return {'ok': not missing,
             'detail': 'scrape deps OK' if not missing else f"missing: {', '.join(missing)}"}
