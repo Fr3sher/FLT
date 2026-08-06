@@ -36,6 +36,22 @@ kept image). Reads recompute it and flag `stale`. A preview shown as fresh after
 the images changed would be worse than no preview at all — the user would trust
 boxes drawn from photos that are no longer in the run.
 
+Stopping, and why it comes with a resume
+----------------------------------------
+A Stop that threw the pass away would be a button that LOOKS like it saves time
+and costs it: the detector load is a fixed price paid before image 1 (measured
+~4-5 s warm on the reference machine, tens of seconds cold, plus a ~350 MB
+download on the very first run), so a discard-everything Stop makes the second
+attempt cost the whole pass again. The faces already found are the expensive
+part, so they are kept: `remember_partial` banks them and the next start hands
+the child only the images that are left.
+
+The cache is guarded by the SAME fingerprint the result is (`fp`), not a second
+mechanism of its own. Resuming onto a kept set that moved would draw boxes from
+photos that are no longer in the run — strictly worse than starting over, which
+is exactly the reasoning that put a fingerprint on the stored result in the first
+place. A mismatch therefore drops the partial rather than repairing it.
+
 In-memory ONLY: a restart empties this, and the worst case is one recomputation.
 """
 from __future__ import annotations
@@ -61,7 +77,8 @@ def fingerprint(entries) -> str:
 
 
 def _slot(dataset_id) -> dict:
-    return _state.setdefault(int(dataset_id), {'job': None, 'result': None})
+    return _state.setdefault(int(dataset_id),
+                             {'job': None, 'result': None, 'partial': None})
 
 
 def _live(job) -> bool:
@@ -69,10 +86,79 @@ def _live(job) -> bool:
 
 
 def public(job) -> dict | None:
-    """The job as the UI sees it — no private bookkeeping."""
+    """The job as the UI sees it — no private bookkeeping.
+
+    `stopping` and `stopped` are separate states on purpose: between the click
+    and the child actually winding up there is a real delay (it only looks at
+    the sentinel between two images), and a button that snapped straight to
+    "Stopped" while the pass was still running would be lying about the one
+    thing the user is watching."""
     if not job:
         return None
-    return {k: job[k] for k in ('phase', 'done', 'total', 'error', 'finished')}
+    out = {k: job[k] for k in ('phase', 'done', 'total', 'error', 'finished')}
+    out['stopping'] = bool(job.get('_stop')) and not job['finished']
+    out['stopped'] = bool(job.get('stopped'))
+    return out
+
+
+def request_stop(dataset_id) -> bool:
+    """Ask the live pass to wind up. True when there was one to ask.
+
+    Only ever sets a flag: the worker polls it, hands the child the sentinel and
+    keeps whatever came back. Nothing is killed from here — the results only
+    exist inside the child until it prints them."""
+    with _lock:
+        job = _slot(dataset_id)['job']
+        if not _live(job):
+            return False
+        job['_stop'] = True
+        job['_touched'] = time.time()
+        return True
+
+
+def stop_requested(job) -> bool:
+    """Polled from the worker thread — must stay cheap and lock-light."""
+    return bool(job) and bool(job.get('_stop'))
+
+
+def mark_stopped(job):
+    """Record that this pass ended because it was ASKED to, not because it
+    failed. Without it a stopped pass is indistinguishable from a finished one
+    and the panel would claim a complete preview over a partial run."""
+    with _lock:
+        job['stopped'] = True
+        job['_touched'] = time.time()
+
+
+def remember_partial(dataset_id, results, fp):
+    """Bank the faces found by a pass that was stopped, under the fingerprint of
+    the set they were computed on."""
+    with _lock:
+        _slot(dataset_id)['partial'] = {'fp': fp, 'results': dict(results or {})}
+
+
+def partial(dataset_id, fp) -> dict:
+    """The banked detections for THIS exact kept set, or {}.
+
+    A fingerprint mismatch drops the bank instead of trying to salvage the rows
+    that might still match: the fingerprint covers the whole set at once, so a
+    mismatch says the set moved and nothing in it can be trusted to still
+    describe what would be trained."""
+    with _lock:
+        slot = _slot(dataset_id)
+        banked = slot.get('partial')
+        if not banked:
+            return {}
+        if fp is None or banked.get('fp') != fp:
+            slot['partial'] = None
+            return {}
+        return dict(banked.get('results') or {})
+
+
+def clear_partial(dataset_id):
+    """Drop the bank — a pass that ran to completion has superseded it."""
+    with _lock:
+        _slot(dataset_id)['partial'] = None
 
 
 def get(dataset_id):
@@ -82,9 +168,15 @@ def get(dataset_id):
         return job if _live(job) else None
 
 
-def snapshot(dataset_id, current_fp=None) -> dict:
-    """What the panel needs on mount and on every poll: the running job (if any)
-    and the last result, flagged `stale` when the kept set moved under it."""
+def snapshot(dataset_id, current_fp=None, total=None) -> dict:
+    """What the panel needs on mount and on every poll: the running job (if any),
+    the last result flagged `stale` when the kept set moved under it, and what a
+    resume would be worth.
+
+    `resume` is published rather than left implicit because the button has to
+    NAME it: "Resume — 47 of 153 already analyzed" is a different offer from
+    "Preview the mask", and a user who cannot see the credit has no reason to
+    believe stopping was safe."""
     with _lock:
         slot = _slot(dataset_id)
         job, result = slot['job'], slot['result']
@@ -95,6 +187,15 @@ def snapshot(dataset_id, current_fp=None) -> dict:
                 current_fp is not None and result.get('fingerprint') != current_fp)
         else:
             out['result'] = None
+        banked = slot.get('partial')
+        # Same gate as the result's `stale`, one step stricter: a stale RESULT is
+        # still shown (labelled), a stale BANK is worth nothing at all, because
+        # resuming from it would silently mix boxes from images that left the set.
+        if banked and current_fp is not None and banked.get('fp') == current_fp:
+            out['resume'] = {'done': len(banked.get('results') or {}),
+                             'total': int(total or 0)}
+        else:
+            out['resume'] = None
         return out
 
 
