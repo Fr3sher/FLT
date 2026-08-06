@@ -338,6 +338,69 @@ function FilterGroup({ label, children }) {
   )
 }
 
+// The selection's caption tags stay visible while the gallery changes. On a
+// desktop this is rendered as a sticky inspector beside the gallery; below xl
+// the same single panel returns above the tiles so it never steals phone width.
+function SelectionTagsPanel({ tagRow, tagPicked, onToggle, onClear }) {
+  return (
+    <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <GroupLabel>
+          {tagRow.kind === 'image' ? `🏷️ Tags of ${tagRow.name}`
+            : tagRow.size === 1 ? '🏷️ Tags of the selected image'
+              : `🏷️ Tags across ${tagRow.size} selected images`}
+        </GroupLabel>
+        <span className="text-[11px] text-content-subtle">
+          attributes you pick — unlike 🎯 Similar, which matches the look
+        </span>
+        {tagRow.frozen && (
+          <span className="rounded border border-border px-1.5 text-[11px] text-content-subtle">
+            held from the selection you filtered on
+          </span>
+        )}
+        <button type="button" onClick={onClear}
+          className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-content-muted hover:text-content">
+          ✕ Close
+        </button>
+      </div>
+      {tagRow.rows.length === 0 ? (
+        <p className="m-0 text-xs text-content-muted">
+          {tagRow.uncaptioned > 0 && tagRow.counted === 0
+            ? (tagRow.size === 1
+              ? 'This image has no caption yet — run 🏷️ Caption and its tags appear here.'
+              : `None of these ${tagRow.size} images has a caption yet — run 🏷️ Caption on them and their tags appear here.`)
+            : 'No caption here has a word worth filtering on.'}
+        </p>
+      ) : (
+        <div className="flex flex-wrap gap-1.5">
+          {tagRow.rows.map(({ tag, count }) => {
+            const n = tagCountLabel(count, tagRow.counted)
+            return (
+              <Chip key={tag} active={tagPicked.has(tag)}
+                onClick={() => onToggle(tag)}
+                title={tagPicked.has(tag)
+                  ? `Stop requiring “${tag}”`
+                  : `Show only images whose caption mentions “${tag}”`
+                    + (n ? ` — cited by ${count} of the ${tagRow.counted} captioned images you selected` : '')}>
+                {tag}
+                {n && <span className="ml-1 text-[10px] text-content-subtle">{n}</span>}
+              </Chip>
+            )
+          })}
+        </div>
+      )}
+      {selectionTagsNotes(tagRow, tagRow.unread).map((note) => (
+        <p key={note} className="m-0 text-[11px] leading-snug text-content-subtle">{note}</p>
+      ))}
+      {tagPicked.size > 0 && (
+        <p className="m-0 text-[11px] text-content-muted">
+          {tagFilterSummary(tagPicked)} Matched as whole words, in captions and file names.
+        </p>
+      )}
+    </div>
+  )
+}
+
 // The individual analysis passes share one quiet, uniform button so they read
 // as a secondary group next to the prominent Launch all / Promote actions.
 function PassButton({ onClick, disabled, title, children }) {
@@ -2220,87 +2283,13 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           )}
         </div>
 
-        {/* 🏷️ Tags of ONE image, as chips you tick. Opened from a tile's 🏷️
-            badge, and rendered HERE — with the other filters — rather than in a
-            popover on the tile or inside ▶ Review: filtering is a grid gesture,
-            it has to stay visible while it is active, and the review lightbox
-            walks a FROZEN snapshot that a filter change could not honestly
-            alter. Ticking re-filters immediately; the sentence spells out that
-            several chips mean AND, because a set that shrinks with every click
-            is only obvious once you already know the rule. */}
-        {/* IT OPENS ON ITS OWN NOW, on the selection. Asked for in these words:
-            "when the captions are already done and you select an image, show the
-            tags in every case. When several images are selected, show the tags in
-            common with the number of times it was cited."
-
-            So there is no second click between selecting and reading: select one
-            captioned image and its chips are here; select twelve and each chip
-            carries how many of them cite it. The 🏷️ button on a tile is still the
-            way to read an image's tags WITHOUT selecting it.
-
-            THE NUMBER IS A FRACTION, never a bare count — see bankTags.js. "7"
-            alone is unreadable without knowing what it is out of, and "7 / 12" is
-            the whole judgement: this tag describes over half of what you picked. */}
+        {/* Phones keep the established placement inside the filter zone. The
+            desktop copy below is display:none here, so only one inspector is
+            visible (and reachable) at any viewport size. */}
         {tagRow && (
-          <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <GroupLabel>
-                {tagRow.kind === 'image' ? `🏷️ Tags of ${tagRow.name}`
-                  : tagRow.size === 1 ? '🏷️ Tags of the selected image'
-                    : `🏷️ Tags across ${tagRow.size} selected images`}
-              </GroupLabel>
-              <span className="text-[11px] text-content-subtle">
-                attributes you pick — unlike 🎯 Similar, which matches the look
-              </span>
-              {tagRow.frozen && (
-                <span className="rounded border border-border px-1.5 text-[11px] text-content-subtle">
-                  held from the selection you filtered on
-                </span>
-              )}
-              <button type="button" onClick={clearTags}
-                className="ml-auto rounded border border-border px-2 py-0.5 text-[11px] text-content-muted hover:text-content">
-                ✕ Close
-              </button>
-            </div>
-            {tagRow.rows.length === 0 ? (
-              <p className="m-0 text-xs text-content-muted">
-                {tagRow.uncaptioned > 0 && tagRow.counted === 0
-                  ? (tagRow.size === 1
-                    ? 'This image has no caption yet — run 🏷️ Caption and its tags appear here.'
-                    : `None of these ${tagRow.size} images has a caption yet — run 🏷️ Caption on them and their tags appear here.`)
-                  : 'No caption here has a word worth filtering on.'}
-              </p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {tagRow.rows.map(({ tag, count }) => {
-                  const n = tagCountLabel(count, tagRow.counted)
-                  return (
-                    <Chip key={tag} active={tagPicked.has(tag)}
-                      onClick={() => toggleTag(tag, tagRow)}
-                      title={tagPicked.has(tag)
-                        ? `Stop requiring “${tag}”`
-                        : `Show only images whose caption mentions “${tag}”`
-                          + (n ? ` — cited by ${count} of the ${tagRow.counted} captioned images you selected` : '')}>
-                      {tag}
-                      {n && <span className="ml-1 text-[10px] text-content-subtle">{n}</span>}
-                    </Chip>
-                  )
-                })}
-              </div>
-            )}
-            {/* What was counted, and everything that was NOT. Each shortfall gets
-                its own line: "no caption yet" and "captioned but word-less" have
-                different fixes, and a cap the row hit is not the same fact as
-                either. Silence on any of them is a denominator that lies. */}
-            {selectionTagsNotes(tagRow, tagRow.unread).map((note) => (
-              <p key={note} className="m-0 text-[11px] leading-snug text-content-subtle">{note}</p>
-            ))}
-            {tagPicked.size > 0 && (
-              <p className="m-0 text-[11px] text-content-muted">
-                {tagFilterSummary(tagPicked)} Matched as whole words, in captions
-                and file names.
-              </p>
-            )}
+          <div className="xl:hidden">
+            <SelectionTagsPanel tagRow={tagRow} tagPicked={tagPicked}
+              onToggle={(tag) => toggleTag(tag, tagRow)} onClear={clearTags} />
           </div>
         )}
 
@@ -3078,14 +3067,28 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       </div>
       </div>
 
-      {filter.flag === 'dups' ? (
-        <DupGroupsPanel bankId={bankId} live={live} kind="exact"
-          onChanged={async () => { await refreshPayload(); await refreshImages() }} />
-      ) : filter.flag === 'semantic_dups' ? (
-        <DupGroupsPanel bankId={bankId} live={live} kind="semantic"
-          onChanged={async () => { await refreshPayload(); await refreshImages() }} />
-      ) : (
-        <>
+      {/* The selected-image tags are an inspector for the gallery, not another
+          full-width filter row. Keep one DOM instance: above the tiles on small
+          screens, and in a sticky right rail from xl upwards. */}
+      <div className={`grid gap-4 ${tagRow
+        ? 'xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start'
+        : 'grid-cols-1'}`}>
+        {tagRow && (
+          <aside aria-label="Image tags"
+            className="hidden xl:col-start-2 xl:row-start-1 xl:block xl:sticky xl:top-20 xl:max-h-[calc(100vh-6rem)] xl:overflow-y-auto">
+            <SelectionTagsPanel tagRow={tagRow} tagPicked={tagPicked}
+              onToggle={(tag) => toggleTag(tag, tagRow)} onClear={clearTags} />
+          </aside>
+        )}
+        <div className="min-w-0 xl:col-start-1 xl:row-start-1">
+        {filter.flag === 'dups' ? (
+          <DupGroupsPanel bankId={bankId} live={live} kind="exact"
+            onChanged={async () => { await refreshPayload(); await refreshImages() }} />
+        ) : filter.flag === 'semantic_dups' ? (
+          <DupGroupsPanel bankId={bankId} live={live} kind="semantic"
+            onChanged={async () => { await refreshPayload(); await refreshImages() }} />
+        ) : (
+          <>
           <ul className={`grid gap-2 ${tileSize === 'S'
             ? 'grid-cols-4 sm:grid-cols-6 lg:grid-cols-8'
             : 'grid-cols-3 sm:grid-cols-4 lg:grid-cols-6'}`}>
@@ -3116,8 +3119,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
                 className="rounded-md border border-border px-2 py-1 text-content disabled:opacity-40">Next →</button>
             </nav>
           )}
-        </>
-      )}
+          </>
+        )}
+        </div>
+      </div>
 
       {promoteOpen && (
         <PromoteDialog bankId={bankId}
