@@ -55,6 +55,30 @@ def _safe_https(value):
     return trimmed
 
 
+def _safe_public_url(value):
+    """Comme `_safe_https`, mais accepte aussi http:// — réservé au SEUL champ
+    `thumbnail`. `image` (le média réellement téléchargé à l'import) reste
+    https-only ; la miniature n'est jamais qu'affichée via le proxy serveur
+    `/api/scrape/thumb`, qui fetch lui-même côté serveur et re-sert en https
+    depuis notre origine (`_validate_public_http_url` y accepte déjà http comme
+    https — aucune fuite de contenu mixte côté navigateur). Beaucoup de sites du
+    web ouvert servent encore leur vignette en clair même quand l'image pleine
+    résolution est en https ; exiger https ici pour rien que forçait le repli
+    sur l'image complète (voir `_item`), payé en bande passante sur une page de
+    résultats de 100+ images."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    trimmed = value.strip()
+    try:
+        parsed = urlsplit(trimmed)
+    except ValueError:
+        return None
+    if (parsed.scheme not in ('http', 'https') or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None):
+        return None
+    return trimmed
+
+
 def _item(result):
     """Résultat ddgs → schéma commun, ou None. `image` = le média DIRECT (ce que
     l'import télécharge), `url` = la page où il a été trouvé (provenance)."""
@@ -67,7 +91,7 @@ def _item(result):
     return {
         'url': image,
         'title': title.strip() if isinstance(title, str) else '',
-        'thumbnail': _safe_https(result.get('thumbnail')) or image,
+        'thumbnail': _safe_public_url(result.get('thumbnail')) or image,
         'type': 'image',
         'platform': PLATFORM,
         'source_url': _safe_https(result.get('url')),

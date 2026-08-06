@@ -171,6 +171,52 @@ def test_a_missing_dependency_says_how_to_install_it(monkeypatch):
     assert 'requirements-scrape.txt' in err
 
 
+# --- thumbnail fallback ---------------------------------------------------------
+# `/api/scrape/thumb` fetches server-side and re-serves from our own https origin
+# (`_validate_public_http_url` already accepts http there — no browser mixed-content
+# concern), and other sources (gallery-dl) pass an unvalidated http thumbnail
+# through unchanged. Requiring https here bought nothing but MORE frequent falls
+# back to the full-size image on a picker page of 100+ results — bandwidth paid
+# for no security this source's own sibling doesn't already skip.
+def test_an_http_thumbnail_is_kept_rather_than_falling_back_to_the_full_image(monkeypatch):
+    _spy_images(monkeypatch, results=[{**_RESULT, 'thumbnail': 'http://cdn.example.test/thumb.jpg'}])
+    m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
+    m.page = 0
+
+    items, err = WebSearchSource().scan(m)
+
+    assert err is None
+    assert items[0]['thumbnail'] == 'http://cdn.example.test/thumb.jpg'
+
+
+def test_a_missing_thumbnail_still_falls_back_to_the_full_image(monkeypatch):
+    _spy_images(monkeypatch, results=[{**_RESULT, 'thumbnail': None}])
+    m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
+    m.page = 0
+
+    items, err = WebSearchSource().scan(m)
+
+    assert err is None
+    assert items[0]['thumbnail'] == items[0]['url'] == 'https://cdn.example.test/photo.jpg'
+
+
+def test_a_thumbnail_with_credentials_or_a_bad_scheme_still_falls_back(monkeypatch):
+    _spy_images(monkeypatch, results=[
+        {**_RESULT, 'thumbnail': 'https://user:pw@cdn.example.test/thumb.jpg'},
+        {**_RESULT, 'image': 'https://cdn.example.test/photo2.jpg',
+         'thumbnail': 'javascript:alert(1)'},
+        {**_RESULT, 'image': 'https://cdn.example.test/photo3.jpg',
+         'thumbnail': 'ftp://cdn.example.test/thumb.jpg'},
+    ])
+    m = WebSearchSource().match('https://duckduckgo.com/?q=portrait')
+    m.page = 0
+
+    items, err = WebSearchSource().scan(m)
+
+    assert err is None
+    assert [it['thumbnail'] for it in items] == [it['url'] for it in items]
+
+
 def test_the_source_is_registered_ahead_of_the_universal_fallback():
     from app.scrape.sources import registry
     match = registry.resolve('https://duckduckgo.com/?q=portrait&iax=images')
