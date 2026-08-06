@@ -351,7 +351,13 @@ const TOPICS = [
      'partial scope', 'whole bank', 'renumber', 'groups', 'style groups',
      'nothing to do', '0 images', 'scan', 'caption', 'framing', 'medium',
      'watermark', 'angles', 'settings this pass reads', 'not decided here',
-     'thresholds', 'bank', 'triage'],
+     'thresholds', 'bank', 'triage',
+     // The two levels that produce new image files joined the same window:
+     // someone looking for "how do I crop only my kept images" must land here,
+     // not nowhere.
+     'auto-crop', 'autocrop', 'crop watermarks', 'crop only', 'inpaint',
+     'repaint', 'clean watermarks', 'which images get cropped', 'undo cleaning',
+     'reversible', 'original files', 'lama', 'klein'],
     '/bank', 'using-the-app', 'choosing-where-a-bank-pass-runs'),
   action('bank-single-person-folder', 'Tell the bank a folder is already one person',
     ['single person', 'one person', 'same person', 'this folder is one person',

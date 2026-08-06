@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-aim-the-watermark-cleaning-levels',
+    date: '2026-08-06',
+    title: 'Choose which images get cropped or repainted — the two watermark levels no longer fire on one click',
+    blurb:
+      '🚩 Watermarks offered “✂ Auto-crop (16 052)” and “🧽 Inpaint (16 507)” as single buttons: press one and thousands of images were cleaned, with no way to say which. Both now open the same launch window the other passes use — run them on your kept images only, on the undecided ones, on the bin, on all three, or on exactly the images you ticked in the grid. Each line carries the real number for that pile, a run that would touch nothing is refused instead of reporting success, and the window states up front what is reversible: your own files are never written to, the cleaned pixels live in the bank’s own copy, and ↩ Undo cleaning throws them away and re-flags the images — what it cannot reach is an image you already promoted into a dataset, or one whose source file changed on disk since the clean. A run that only covered part of your bank now names what it left out, and flagged images sitting in the bin are reachable at last instead of leaving a dead button. Leave the window alone and both levels behave exactly as before.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-06-each-bank-can-choose-clip-or-siglip2-without-losing-work',
     date: '2026-08-06',
     title: 'Each Bank can choose CLIP or SigLIP 2 — switching keeps every result',
