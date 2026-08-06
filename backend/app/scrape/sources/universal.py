@@ -36,6 +36,12 @@ class UniversalSource(Source):
 
     def match(self, url):
         from ..validators import url_validator, Platform
+        # SSRF : le chemin générique est le seul à accepter un hôte arbitraire, et
+        # scan() lance gallery-dl dessus. Refuser ICI signifie qu'aucune source ne
+        # matche et que la route répond 400 AVANT qu'un sous-process ne parte.
+        ok, _err = netfetch._validate_public_http_url(url)
+        if not ok:
+            return None
         result = url_validator.validate_url(url)
         if result.is_valid and result.platform == Platform.GENERIC:
             return Match(url=url, validation=result)

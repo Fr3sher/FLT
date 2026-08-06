@@ -69,6 +69,26 @@ def test_auth_failure_is_reported_and_never_retried_via_ytdlp(monkeypatch, tmp_p
     assert ok is False and 'auth' in err
 
 
+# --- Garde SSRF : la source générique est la SEULE à accepter un hôte arbitraire,
+# et son scan lance désormais gallery-dl dessus. Les sources dédiées matchent des
+# hôtes nommés, une adresse privée ne les a jamais atteintes.
+def test_match_refuses_non_public_urls():
+    src = UniversalSource()
+    for url in ('http://127.0.0.1/gallery',
+                'http://localhost:8080/gallery',
+                'http://192.168.1.10/gallery',
+                'http://[::1]/gallery',
+                'file:///etc/passwd'):
+        assert src.match(url) is None, url
+
+
+def test_match_still_accepts_a_public_http_url():
+    # example.com (pas example.test) : example.test est un domaine de test RFC 2606
+    # SANS enregistrement DNS, donc _validate_public_http_url le rejette (DNS
+    # introuvable) — ce n'est pas un accroc de la garde, juste un mauvais fixture.
+    assert UniversalSource().match('https://example.com/album/1') is not None
+
+
 def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
     """Quand TOUS les albums échouent via le sentinel type -1 (pas via une
     exception/`_run_simulate` en erreur), l'erreur remontée par `enumerate()`
