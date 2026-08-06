@@ -9,6 +9,7 @@ import { bankListSyncToast } from '../components/bank/bankSync'
 import { overlapNotice } from '../components/bank/bankOverlap'
 import { datasetFolderNotice } from '../utils/pathRelation'
 import FolderSyncNote from '../components/bank/FolderSyncNote'
+import FolderCheckLine from '../components/bank/FolderCheckLine'
 import RelocateBankDialog from '../components/bank/RelocateBankDialog'
 import BankScrapePanel from '../components/bank/BankScrapePanel'
 import BankLaneTabs from '../components/videobank/BankLaneTabs'
@@ -102,19 +103,33 @@ export default function BankPage() {
   // spares the round-trip and the "why not?" (see utils/pathRelation.js).
   const [datasets, setDatasets] = useState([])
 
-  const refresh = useCallback(async () => {
+  // ⚠️ Plain loads do NOT re-walk the source folders any more: doing that cost a
+  // full disk inventory of the whole library on every navigation to this page
+  // (690-1 190 ms on a real 8-bank / 86 493-image library). `rescan` is the 🔄
+  // button, and it is the only caller that asks the server to walk.
+  const refresh = useCallback(async ({ rescan = false } = {}) => {
     try {
-      const d = await apiFetch('/api/banks')
+      const d = await apiFetch(`/api/banks${rescan ? '?rescan=1' : ''}`)
       setBanks(d.banks || [])
-      // The server re-walked every source folder before answering: say so when
-      // it found something, so the counters never move without an explanation.
+      if (!rescan) return
+      // A walk just happened: say what it found, so the counters never move
+      // without an explanation — and say so even when it found nothing, because
+      // silence after a click reads as a broken button.
       const note = bankListSyncToast(d.banks)
       if (note) toast[note.type](note.text)
+      else toast.success('Source folders checked — no new image found.')
     } catch (e) {
       toast.error(e?.message || 'Could not load the banks.')
-      setBanks([])
+      if (!rescan) setBanks([])
     }
   }, [toast])
+
+  const [rescanning, setRescanning] = useState(false)
+  const rescan = async () => {
+    if (rescanning) return
+    setRescanning(true)
+    try { await refresh({ rescan: true }) } finally { setRescanning(false) }
+  }
 
   useEffect(() => { if (currentId == null) refresh() }, [currentId, refresh])
 
@@ -225,6 +240,8 @@ export default function BankPage() {
       {/* Second way in: the scraper's own destination. A bank no longer needs a
           folder you prepared by hand — you can fill one straight from the web. */}
       <BankScrapePanel banks={banks} onDone={refresh} />
+
+      <FolderCheckLine banks={banks} busy={rescanning} onRescan={rescan} />
 
       {banks == null ? (
         <p className="text-sm text-content-muted">Loading…</p>

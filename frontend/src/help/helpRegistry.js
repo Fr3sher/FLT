@@ -278,6 +278,13 @@ const TOPICS = [
       'resolution tier', 'resolution filter', 'filter by resolution', 'megapixel',
       'small images', 'thumbnails', 'low resolution', 'high resolution',
       'promote', 'unsorted',
+      // "I dropped files in the folder and the bank list still shows the old
+      // count" — the list stopped re-walking every source folder on load (it
+      // cost a full disk inventory per visit); opening the bank re-checks its
+      // folder, and 🔄 Rescan folders re-checks them all.
+      'rescan', 'rescan folders', 'refresh folders', 'new files not showing',
+      'added images not showing', 'count not updated', 'counts out of date',
+      'stale count', 'bank list slow', 'bank page slow', 'slow to load',
       'aesthetic', 'score', 'nsfw', 'watermark', 'style', 'subfolder', 'keep best',
       'semantic', 'near-duplicate', 'crop', 'crops', 'variant', 'same shot',
       'caption', 'captions', 'search', 'find', 'tag', 'tags', 'describe',

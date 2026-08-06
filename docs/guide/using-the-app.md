@@ -430,10 +430,14 @@ touching the folder itself:
    inventories every image in place (subfolders included). Nothing is copied,
    nothing is modified; rejecting an image is a reversible status, never a file
    deletion. The folder stays LIVE: keep dropping images into it and they are
-   picked up automatically the next time you open the bank list or the bank
-   itself ("42 new image(s) found in the folder"), as undecided images ready
-   for the next scan — your existing keep/reject decisions, scores and captions
-   are never touched. Files you removed from the folder are reported at the top
+   picked up automatically the next time you OPEN the bank ("42 new image(s)
+   found in the folder"), as undecided images ready for the next scan — your
+   existing keep/reject decisions, scores and captions are never touched. The
+   bank LIST does not re-check the folders by itself: on a big library that was
+   a full inventory of every image on disk each time you walked past the page.
+   It tells you how fresh its counts are, and **🔄 Rescan folders** checks them
+   all on demand. A folder that went missing (unplugged drive, renamed folder)
+   is still flagged from the list without any rescan. Files you removed from the folder are reported at the top
    of the bank, never deleted from it, so an unplugged drive can't wipe your
    triage. One bank holds up to **200,000 images**; past that the refresh adds
    as many as fit and tells you how many it left out, so nothing you already
