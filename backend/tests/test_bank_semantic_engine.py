@@ -273,7 +273,13 @@ def _install_ml_stubs(monkeypatch, dimension, *, cancel_file=None):
 
     transformers = types.ModuleType('transformers')
     transformers.AutoProcessor = _Processor
-    transformers.Siglip2Model = _Model
+    # AutoModel, because that is what the workers import: the pinned SigLIP 2
+    # checkpoint is a FIXED-RESOLUTION variant whose config declares
+    # `model_type: siglip`, so naming Siglip2Model by hand made transformers
+    # refuse the weights. A double that stubs a class production no longer calls
+    # is a double that stops proving anything — it would leave every assertion
+    # below green while the real worker died on load.
+    transformers.AutoModel = _Model
     monkeypatch.setitem(sys.modules, 'torch', torch)
     monkeypatch.setitem(sys.modules, 'transformers', transformers)
     return calls

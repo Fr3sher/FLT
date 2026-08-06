@@ -90,7 +90,7 @@ def main() -> int:
     try:
         import numpy as np
         import torch
-        from transformers import AutoProcessor, Siglip2Model
+        from transformers import AutoModel, AutoProcessor
     except Exception as exc:
         _emit({'ok': False, 'ready': False,
                'error': f'ML deps missing: {type(exc).__name__}: {exc}'})
@@ -104,7 +104,16 @@ def main() -> int:
     _log(f'[text] loading {contract["model_key"]} (CPU, local files only)…')
     try:
         processor = AutoProcessor.from_pretrained(contract['model_id'], **model_kwargs)
-        model = Siglip2Model.from_pretrained(contract['model_id'], **model_kwargs)
+        # AutoModel, not Siglip2Model. The pinned checkpoint is a SigLIP 2 model —
+        # SigLIP 2 training, SigLIP 2 weights — but the FIXED-RESOLUTION variants
+        # declare `model_type: siglip` and reuse the SigLIP 1 architecture; only the
+        # NaFlex variants carry `model_type: siglip2`. Naming the class by hand made
+        # transformers build a siglip2 shell around a siglip checkpoint and refuse
+        # the weights outright: "copying a param with shape [768, 3, 16, 16] from
+        # checkpoint, the shape in current model is [768, 768]" — a 16x16 patch
+        # convolution against a linear projection, two different image front-ends.
+        # The config names the class; let it.
+        model = AutoModel.from_pretrained(contract['model_id'], **model_kwargs)
         model.to('cpu').eval()
     except Exception as exc:
         _emit({'ok': False, 'ready': False,
