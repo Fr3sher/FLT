@@ -48,6 +48,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-any-gallery-site',
+    date: '2026-08-06',
+    title: 'Paste a gallery from almost any site',
+    blurb: 'Sites without built-in support used to return a single image. They now list the whole page, using the same engine that already powers PornPics and Civitai. A site the engine does not know still returns one item.',
+  },
+  {
     id: '2026-08-06-web-image-search',
     date: '2026-08-06',
     title: 'Search the web for images by keyword',
