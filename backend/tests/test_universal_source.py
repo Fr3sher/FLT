@@ -86,6 +86,9 @@ def test_match_still_accepts_a_public_http_url(monkeypatch):
     # example.test (domaine de test RFC 2606, SANS enregistrement DNS réel) :
     # on simule la résolution pour rester hermétique (aucun appel réseau) tout
     # en exerçant la vraie branche de classification d'IP du garde SSRF.
+    # RFC 5737 (203.0.113.1, etc.) échoue ici : is_reserved → _ip_is_blocked
+    # le rejette correctement. Adresse publique ordinaire pour tester la branche
+    # accepte; ne cible ni ce poste ni le réseau (la garde cible les données perso).
     monkeypatch.setattr(
         netfetch.socket, 'getaddrinfo',
         lambda *a, **k: [(netfetch.socket.AF_INET, netfetch.socket.SOCK_STREAM,
