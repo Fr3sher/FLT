@@ -338,9 +338,9 @@ function FilterGroup({ label, children }) {
   )
 }
 
-// The selection's caption tags stay visible while the gallery changes. On a
-// desktop this is rendered as a sticky inspector beside the gallery; below xl
-// the same single panel returns above the tiles so it never steals phone width.
+// The selection's caption tags stay visible while the gallery changes. The
+// component is mounted once per responsive position: in the filter zone below
+// xl, and as a sticky inspector beside the gallery on desktop.
 function SelectionTagsPanel({ tagRow, tagPicked, onToggle, onClear }) {
   return (
     <div className="space-y-1.5 rounded-lg border border-emerald-400/30 bg-emerald-500/5 px-2.5 py-2">
@@ -3067,9 +3067,9 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       </div>
       </div>
 
-      {/* The selected-image tags are an inspector for the gallery, not another
-          full-width filter row. Keep one DOM instance: above the tiles on small
-          screens, and in a sticky right rail from xl upwards. */}
+      {/* The selected-image tags are an inspector for the desktop gallery, not
+          another full-width filter row. This responsive mount is hidden below
+          xl; phones keep their established copy in the filter zone above. */}
       <div className={`grid gap-4 ${tagRow
         ? 'xl:grid-cols-[minmax(0,1fr)_20rem] xl:items-start'
         : 'grid-cols-1'}`}>
