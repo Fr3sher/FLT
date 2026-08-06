@@ -40,8 +40,11 @@ venv/
 .pytest-basetemp-*/
 **/.pytest-basetemp-*/
 
-# node
-frontend/node_modules/
+# node — every variant, not just the exact name: a stray copy or junction
+# (node_modules_x, node_modules.bak, node_modules-old, ...) of this vendored
+# tree must never become publishable, and it trips the privacy guard on
+# third-party package-maintainer content it has no business scanning.
+frontend/node_modules*/
 
 # packaging build artifacts — release ZIP and optional local legacy bundle
 packaging/build/

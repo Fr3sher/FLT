@@ -44,7 +44,12 @@ import privacy_patterns as privacy  # noqa: E402  (needs the path above)
 
 # The built bundle and vendored docs stay out: dist is generated from sources
 # this test already covers, and the archive scan reads the shipped bundle itself.
-_SKIP_DIRS = ('frontend/dist/', 'docs/superpowers/', 'node_modules/')
+# node_modules is matched by PREFIX (not an exact segment) so a stray copy or
+# junction of the vendored tree — node_modules_x, node_modules.bak, ... — stays
+# out too: it is still third-party content, not repo content, and the guard
+# must not learn to look away from anything more than that.
+_SKIP_DIRS = ('frontend/dist/', 'docs/superpowers/')
+_SKIP_DIR_PREFIXES = ('frontend/node_modules', 'node_modules')
 
 
 def _tracked_files():
@@ -74,6 +79,8 @@ def _tracked_files():
         if not privacy.is_scannable(rel):
             continue
         if any(rel.startswith(d) for d in _SKIP_DIRS):
+            continue
+        if any(rel.startswith(p) for p in _SKIP_DIR_PREFIXES):
             continue
         yield rel
 
@@ -319,3 +326,36 @@ def test_the_name_check_actually_flags_a_new_unstaged_file(tmp_path, monkeypatch
 
     assert any(h.startswith('brand_new.py') for h in hits)
     assert not any(h.startswith('secret.txt') for h in hits)
+
+
+# --- the fifth leak: a SIBLING of the vendored tree, not the tree itself -------
+# `frontend/node_modules_x` — a junction pointing at the real `node_modules` —
+# showed up next to it. `.gitignore` only listed the exact path
+# `frontend/node_modules/`, so the sibling was neither ignored nor skipped: it
+# became a scan candidate and the guard correctly, uselessly, flagged
+# third-party package-maintainer emails and a name from a dependency's LICENSE.
+# The guard did nothing wrong — the ignore rule and the skip list were both too
+# narrow. Both now match on the `node_modules` PREFIX, not the exact segment.
+
+def test_guard_stays_quiet_on_a_vendored_tree_variant():
+    """A real probe directory in THIS repo, not a fake one — `frontend/` is where
+    `.gitignore` and `_SKIP_DIRS` both key off a literal prefix, so only a probe
+    planted there proves the prefix match actually fires. Removed in `finally`
+    no matter what: leaving it behind would recreate the exact bug this pins."""
+    probe_dir = os.path.join(_REPO, 'frontend', 'node_modules_probe')
+    probe_file = os.path.join(probe_dir, 'package.json')
+    try:
+        os.makedirs(probe_dir, exist_ok=True)
+        with open(probe_file, 'w', encoding='utf-8') as fh:
+            fh.write('{"maintainer": "someone@example.test"}\n')
+
+        scanned = set(tnpd._tracked_files())
+
+        assert 'frontend/node_modules_probe/package.json' not in scanned, (
+            'a node_modules variant is not being skipped — the guard would fail '
+            'on vendored third-party content again')
+    finally:
+        if os.path.exists(probe_file):
+            os.remove(probe_file)
+        if os.path.isdir(probe_dir):
+            os.rmdir(probe_dir)
