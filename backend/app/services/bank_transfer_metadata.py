@@ -4,7 +4,8 @@ Version 3 keeps row metadata in the Dataset row and large ML embeddings in one
 small, bounded NPZ sidecar per image.  The JSON contains no path and the sidecar
 contains no path/signature: both are authorised by the enclosing SHA-256 of the
 exact Dataset bytes.  A restored Bank writes fresh destination paths and stat
-signatures into its runtime caches.
+signatures into its CLIP, SigLIP2 and Face runtime caches. Older two-lane
+sidecars remain readable.
 
 Version 2 deterministic-only snapshots remain readable for existing datasets
 and backups.  Transformation markers, promotion pointers and source paths are
@@ -48,7 +49,13 @@ MODEL_ANALYSIS_FIELDS = (
     'face_state', 'face_det', 'aesthetic_score', 'nsfw_score',
 )
 
-BANK_COPY_DUPLICATE_GROUP_FIELDS = ('dup_group', 'semantic_dup_group')
+SEMANTIC_DUPLICATE_GROUP_FIELDS = (
+    'semantic_dup_group',
+    'clip_semantic_dup_group',
+    'siglip2_semantic_dup_group',
+)
+BANK_COPY_DUPLICATE_GROUP_FIELDS = (
+    'dup_group', *SEMANTIC_DUPLICATE_GROUP_FIELDS)
 BANK_LOCAL_GROUP_FIELDS = (
     *BANK_COPY_DUPLICATE_GROUP_FIELDS, 'face_cluster', 'style_cluster',
 )
@@ -64,6 +71,14 @@ BANK_DIRECT_COPY_ANALYSIS_FIELDS = (
     'face_cluster', 'face_cluster_origin', 'style_cluster',
 )
 
+# Version 3 predates the two durable engine lanes.  Its outer schema and version
+# stay unchanged: old snapshots have this exact analysis key set and are expanded
+# with NULL lanes on read, while newly written v3 snapshots carry all fields.
+_LEGACY_V3_BANK_ANALYSIS_FIELDS = tuple(
+    name for name in BANK_DIRECT_COPY_ANALYSIS_FIELDS
+    if name not in ('clip_semantic_dup_group',
+                    'siglip2_semantic_dup_group'))
+
 BANK_TRANSFORM_STALE_ANALYSIS_FIELDS = tuple(
     name for name in BANK_DIRECT_COPY_ANALYSIS_FIELDS
     if name not in DETERMINISTIC_ANALYSIS_FIELDS
@@ -77,7 +92,8 @@ BANK_TRANSFORM_STALE_ANALYSIS_FIELDS = tuple(
 BANK_ANALYSIS_LANE_FIELDS = {
     'quality': (*DETERMINISTIC_ANALYSIS_FIELDS, 'dup_group'),
     'score': ('aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
-              'semantic_dup_group', 'style_cluster'),
+              'style_cluster'),
+    'semantic': SEMANTIC_DUPLICATE_GROUP_FIELDS,
     'face': ('face_state', 'face_det', 'face_yaw', 'face_cluster',
              'face_cluster_origin'),
     'watermark': ('watermark_state', 'watermark_bbox', 'watermark_regions',
@@ -115,7 +131,7 @@ DATASET_PORTABLE_FIELDS = (
 BANK_PORTABLE_FIELDS = (
     'relpath', 'file_size', 'watermark_clean_method', 'rotation',
     'status', 'reject_reason', 'promoted_dataset_id', 'promoted_bank_id',
-    'created_at',
+    'created_at', 'semantic_engine',
 )
 DATASET_RESTORE_FIELDS = (
     'source', 'variation_label', 'caption_short', 'caption_short_origin',
@@ -125,7 +141,8 @@ DATASET_PIXEL_RESTORE_FIELDS = ('face_score', 'face_state', 'upscale_ratio')
 
 _PORTABLE_INTEGER_FIELDS = frozenset((
     'parent_image_id', 'bank_image_id', 'file_size', 'width', 'height',
-    'dup_group', 'semantic_dup_group', 'face_cluster', 'style_cluster',
+    'dup_group', *SEMANTIC_DUPLICATE_GROUP_FIELDS,
+    'face_cluster', 'style_cluster',
     'rotation', 'promoted_dataset_id', 'promoted_bank_id',
 ))
 _PORTABLE_FLOAT_FIELDS = frozenset((
@@ -150,6 +167,7 @@ _PORTABLE_TEXT_LIMITS = {
     'watermark_clean_method': 32, 'analysis_fingerprint': 128,
     'watermark_fingerprint': 128, 'reject_reason': 64,
     'medium': 32, 'face_cluster_origin': 32,
+    'semantic_engine': 16,
 }
 _PORTABLE_INVALID = object()
 
@@ -169,6 +187,7 @@ _FACE_STATES = frozenset(
     ('scorable', 'no_face', 'low_det', 'too_small', 'extreme_pose',
      'unreadable', 'error'))
 _SCORE_STATES = frozenset(('ok', 'error'))
+_SEMANTIC_STATES = frozenset(('ok', 'error'))
 _FRAMINGS = frozenset(('face', 'bust', 'body', 'back', 'unknown'))
 _WATERMARK_STATES = frozenset(
     ('none', 'detected', 'dismissed', 'cleaned', 'failed', 'error'))
@@ -176,10 +195,15 @@ _WATERMARK_SOURCES = frozenset(('detector', 'vision'))
 _MEDIUMS = frozenset(('photo', 'anime', 'render3d', 'illustration', 'unsure'))
 _FACE_CLUSTER_ORIGINS = frozenset(('asserted',))
 
-_SIDECAR_KEYS = frozenset((
+_SIDECAR_KEYS_V1 = frozenset((
     'score_present', 'score_state', 'score_aes', 'score_nsfw', 'score_emb',
     'face_present', 'face_state', 'face_det', 'face_bfrac', 'face_yaw',
     'face_emb',
+))
+_SIDECAR_KEYS = frozenset((*_SIDECAR_KEYS_V1,
+    'semantic_present', 'semantic_engine', 'semantic_model_id',
+    'semantic_revision', 'semantic_model_key', 'semantic_dimension',
+    'semantic_state', 'semantic_emb',
 ))
 
 
@@ -266,6 +290,9 @@ def parse_transfer_metadata(value) -> dict | None:
     dataset_analysis_fingerprint = value.get('dataset_analysis_fingerprint')
     if ((value.get('bank') is not None and bank is None)
             or (value.get('dataset') is not None and dataset is None)):
+        return None
+    if bank is not None and bank.get('semantic_engine') not in (
+            None, 'clip', 'siglip2'):
         return None
     if (bank_fingerprint is not None
             and (not isinstance(bank_fingerprint, str)
@@ -400,6 +427,21 @@ def dataset_restore_values(value, fingerprint=None) -> dict:
             None, 'asserted', 'joycaption', 'ollama'):
         out['caption_short_origin'] = None
     return out
+
+
+def bank_semantic_engine_for_fingerprint(value, fingerprint=None) -> str | None:
+    """Return the source Bank choice only when it is bound to these exact bytes.
+
+    Dataset rows can come from several Banks. Callers therefore collect this
+    per-row value and restore it only when every compatible row agrees.
+    """
+    parsed = parse_transfer_metadata(value)
+    stored = parsed.get('bank') if parsed else None
+    if (not stored or not isinstance(fingerprint, str)
+            or parsed.get('bank_fingerprint') != fingerprint):
+        return None
+    engine = stored.get('semantic_engine')
+    return engine if engine in ('clip', 'siglip2') else None
 
 
 def is_content_addressed_cache_ref(value) -> bool:
@@ -550,7 +592,9 @@ def _optional_group(value):
 
 def normalized_full_analysis(value) -> dict | None:
     """Validate every Bank analysis field accepted by a v3 snapshot."""
-    if not isinstance(value, dict) or set(value) != set(BANK_DIRECT_COPY_ANALYSIS_FIELDS):
+    if not isinstance(value, dict) or set(value) not in (
+            set(BANK_DIRECT_COPY_ANALYSIS_FIELDS),
+            set(_LEGACY_V3_BANK_ANALYSIS_FIELDS)):
         return None
     deterministic = _normalized_partial_deterministic({
         name: value.get(name) for name in DETERMINISTIC_ANALYSIS_FIELDS
@@ -813,6 +857,40 @@ def _normalized_score_cache(value):
         return None
 
 
+def _normalized_semantic_cache(value):
+    """Validate one portable SigLIP2 vector and its complete provenance."""
+    if not isinstance(value, dict) or set(value) != {
+            'state', 'engine', 'model_id', 'revision', 'model_key',
+            'dimension', 'embedding'}:
+        return None
+    try:
+        from . import bank_semantic_models as assets
+        if (value.get('engine') != 'siglip2'
+                or value.get('model_id') != assets.MODEL_ID
+                or value.get('revision') != assets.REVISION
+                or value.get('model_key') != assets.MODEL_KEY
+                or isinstance(value.get('dimension'), bool)
+                or int(value.get('dimension')) != assets.DIMENSION):
+            return None
+        state = _optional_token(value.get('state'), _SEMANTIC_STATES)
+        embedding = _normalized_vector(value.get('embedding'), assets.DIMENSION)
+        if state is None or embedding is None:
+            return None
+        norm = math.sqrt(sum(component * component for component in embedding))
+        if ((state == 'ok'
+             and not math.isclose(norm, 1.0, rel_tol=1e-3, abs_tol=1e-4))
+                or (state == 'error' and norm != 0.0)):
+            return None
+        return {
+            'state': state, 'engine': 'siglip2',
+            'model_id': assets.MODEL_ID, 'revision': assets.REVISION,
+            'model_key': assets.MODEL_KEY, 'dimension': assets.DIMENSION,
+            'embedding': embedding,
+        }
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 def _normalized_face_cache(value):
     if not isinstance(value, dict) or set(value) != {
             'state', 'det', 'bbox_frac', 'yaw', 'embedding'}:
@@ -834,7 +912,8 @@ def _normalized_face_cache(value):
 
 
 def normalized_cache_bundle(value) -> dict | None:
-    if not isinstance(value, dict) or not set(value).issubset({'score', 'face'}):
+    if (not isinstance(value, dict)
+            or not set(value).issubset({'score', 'semantic', 'face'})):
         return None
     out = {}
     if value.get('score') is not None:
@@ -842,6 +921,11 @@ def normalized_cache_bundle(value) -> dict | None:
         if score is None:
             return None
         out['score'] = score
+    if value.get('semantic') is not None:
+        semantic = _normalized_semantic_cache(value.get('semantic'))
+        if semantic is None:
+            return None
+        out['semantic'] = semantic
     if value.get('face') is not None:
         face = _normalized_face_cache(value.get('face'))
         if face is None:
@@ -862,6 +946,7 @@ def write_cache_sidecar(root, cache_bundle) -> str | None:
         return None
     staged = root / f'.sidecar-{secrets.token_hex(16)}.npz'
     score = bundle.get('score')
+    semantic = bundle.get('semantic')
     face = bundle.get('face')
     nan = float('nan')
     arrays = {
@@ -873,6 +958,21 @@ def write_cache_sidecar(root, cache_bundle) -> str | None:
             score['nsfw'] if score and score['nsfw'] is not None else nan], (1,)),
         'score_emb': npz_transport.floats(
             score['embedding'] if score else (0.0,) * 768, (768,)),
+        'semantic_present': npz_transport.uint8([semantic is not None], (1,)),
+        'semantic_engine': npz_transport.unicode([
+            semantic['engine'] if semantic else '']),
+        'semantic_model_id': npz_transport.unicode([
+            semantic['model_id'] if semantic else '']),
+        'semantic_revision': npz_transport.unicode([
+            semantic['revision'] if semantic else '']),
+        'semantic_model_key': npz_transport.unicode([
+            semantic['model_key'] if semantic else '']),
+        'semantic_dimension': npz_transport.int32([
+            semantic['dimension'] if semantic else 0], (1,)),
+        'semantic_state': npz_transport.unicode([
+            semantic['state'] if semantic else '']),
+        'semantic_emb': npz_transport.floats(
+            semantic['embedding'] if semantic else (0.0,) * 768, (768,)),
         'face_present': npz_transport.uint8([face is not None], (1,)),
         'face_state': npz_transport.unicode([face['state'] if face else '']),
         'face_det': npz_transport.floats([face['det'] if face else 0.0], (1,)),
@@ -908,21 +1008,31 @@ def write_cache_sidecar(root, cache_bundle) -> str | None:
 
 def _cache_bundle_from_arrays(arrays) -> dict | None:
     try:
-        if arrays is None or set(arrays) != _SIDECAR_KEYS:
+        if arrays is None or set(arrays) not in (_SIDECAR_KEYS_V1, _SIDECAR_KEYS):
             return None
+        extended = set(arrays) == _SIDECAR_KEYS
         shapes = {
             'score_present': (1,), 'score_state': (1,),
             'score_aes': (1,), 'score_nsfw': (1,), 'score_emb': (768,),
             'face_present': (1,), 'face_state': (1,), 'face_det': (1,),
             'face_bfrac': (1,), 'face_yaw': (1,), 'face_emb': (512,),
         }
+        if extended:
+            shapes.update({
+                'semantic_present': (1,), 'semantic_engine': (1,),
+                'semantic_model_id': (1,), 'semantic_revision': (1,),
+                'semantic_model_key': (1,), 'semantic_dimension': (1,),
+                'semantic_state': (1,), 'semantic_emb': (768,),
+            })
         if any(arrays[name].shape != shape for name, shape in shapes.items()):
             return None
         out = {}
         score_present = arrays['score_present'].uint8()
+        semantic_present = arrays['semantic_present'].uint8() if extended else 0
         face_present = arrays['face_present'].uint8()
-        if score_present not in (0, 1) or face_present not in (0, 1) \
-                or not (score_present or face_present):
+        if (score_present not in (0, 1) or semantic_present not in (0, 1)
+                or face_present not in (0, 1)
+                or not (score_present or semantic_present or face_present)):
             return None
         score_state = arrays['score_state'].string(0)
         score_aes = arrays['score_aes'].float(0)
@@ -946,6 +1056,30 @@ def _cache_bundle_from_arrays(arrays) -> dict | None:
               or not math.isnan(score_nsfw)
               or any(value != 0.0 for value in score_embedding)):
             return None
+        if extended:
+            semantic_engine = arrays['semantic_engine'].string(0)
+            semantic_model_id = arrays['semantic_model_id'].string(0)
+            semantic_revision = arrays['semantic_revision'].string(0)
+            semantic_model_key = arrays['semantic_model_key'].string(0)
+            semantic_dimension = arrays['semantic_dimension'].int32()
+            semantic_state = arrays['semantic_state'].string(0)
+            semantic_embedding = tuple(
+                arrays['semantic_emb'].float(i) for i in range(768))
+            if semantic_present:
+                out['semantic'] = {
+                    'state': semantic_state,
+                    'engine': semantic_engine,
+                    'model_id': semantic_model_id,
+                    'revision': semantic_revision,
+                    'model_key': semantic_model_key,
+                    'dimension': semantic_dimension,
+                    'embedding': semantic_embedding,
+                }
+            elif (semantic_engine or semantic_model_id or semantic_revision
+                  or semantic_model_key or semantic_dimension != 0
+                  or semantic_state
+                  or any(value != 0.0 for value in semantic_embedding)):
+                return None
         if face_present:
             out['face'] = {
                 'state': face_state, 'det': face_det,
@@ -1003,9 +1137,11 @@ def _runtime_npz(path, *, wanted_paths=None):
         wanted_paths=wanted_paths)
 
 
-def load_runtime_cache_index(score_path=None, face_path=None, *, wanted_paths=None) -> dict:
+def load_runtime_cache_index(score_path=None, face_path=None, *, semantic_path=None,
+                             wanted_paths=None) -> dict:
     """Load strictly shaped runtime entries, retaining source signatures internally."""
-    if not any(path and Path(path).is_file() for path in (score_path, face_path)):
+    if not any(path and Path(path).is_file()
+               for path in (score_path, semantic_path, face_path)):
         return {}
     def canonical(path):
         try:
@@ -1048,6 +1184,50 @@ def load_runtime_cache_index(score_path=None, face_path=None, *, wanted_paths=No
                     digest = hashes.uint8_row(i) if hashes is not None else b''
                     if payload is not None and len(p) <= 4096 and len(sig) <= 128:
                         out.setdefault(p, {})['score'] = (payload, sig, digest)
+        except (ValueError, TypeError, KeyError, IndexError, OverflowError, MemoryError):
+            pass
+    z = _runtime_npz(semantic_path, wanted_paths=wanted_paths)
+    semantic_required = {
+        'version', 'engine', 'model_id', 'revision', 'model_key', 'dimension',
+        'paths', 'states', 'embs', 'sigs', 'hashes',
+    }
+    if z is not None and set(z) == semantic_required:
+        try:
+            from . import bank_semantic_models as assets
+            paths, states, embs = (z[k] for k in ('paths', 'states', 'embs'))
+            sigs, hashes = z['sigs'], z['hashes']
+            metadata_shapes = all(z[name].shape == (1,) for name in (
+                'version', 'engine', 'model_id', 'revision', 'model_key',
+                'dimension'))
+            provenance_ok = (
+                metadata_shapes
+                and z['version'].int32() == 1
+                and z['engine'].string(0) == 'siglip2'
+                and z['model_id'].string(0) == assets.MODEL_ID
+                and z['revision'].string(0) == assets.REVISION
+                and z['model_key'].string(0) == assets.MODEL_KEY
+                and z['dimension'].int32() == assets.DIMENSION)
+            n = paths.shape[0] if len(paths.shape) == 1 else -1
+            if (provenance_ok and 0 <= n <= _MAX_RUNTIME_CACHE_ENTRIES
+                    and paths.shape == states.shape == sigs.shape == (n,)
+                    and hashes.shape == (n, 32) and hashes.descr == '|u1'
+                    and embs.shape == (n, assets.DIMENSION)):
+                for i in range(n):
+                    p = paths.string(i)
+                    if (wanted is not None and p not in wanted
+                            and canonical(p) not in wanted_canonical):
+                        continue
+                    payload = _normalized_semantic_cache({
+                        'state': states.string(i), 'engine': 'siglip2',
+                        'model_id': assets.MODEL_ID, 'revision': assets.REVISION,
+                        'model_key': assets.MODEL_KEY,
+                        'dimension': assets.DIMENSION,
+                        'embedding': embs.float_row(i),
+                    })
+                    sig = sigs.string(i)
+                    digest = hashes.uint8_row(i)
+                    if payload is not None and len(p) <= 4096 and len(sig) <= 128:
+                        out.setdefault(p, {})['semantic'] = (payload, sig, digest)
         except (ValueError, TypeError, KeyError, IndexError, OverflowError, MemoryError):
             pass
     z = _runtime_npz(face_path, wanted_paths=wanted_paths)
@@ -1113,18 +1293,17 @@ def cache_bundle_for_transfer(index, source_path, source_bytes) -> dict:
         return {}
     out = {}
     current_stat = runtime_stat_signature(source_path)
-    for kind in ('score', 'face'):
+    for kind in ('score', 'semantic', 'face'):
         pair = entries.get(kind)
         if not isinstance(pair, tuple) or len(pair) != 3:
             continue
         payload, signature, digest = pair
         if not isinstance(digest, bytes) or len(digest) != 32 or digest != source_hash:
             continue
-        # Score caches have carried stat signatures since their invalidation
-        # contract shipped.  An empty one is therefore malformed/stale.  Face
-        # caches predate signatures and retain their explicitly guarded legacy
-        # path until the next Face pass rewrites them.
-        if kind == 'score' and not signature:
+        # CLIP/SigLIP caches have carried stat signatures since their invalidation
+        # contracts shipped. An empty one is malformed/stale. Face caches predate
+        # signatures and retain their guarded legacy path until the next pass.
+        if kind in ('score', 'semantic') and not signature:
             continue
         if signature and (not _STAT_SIG_RE.fullmatch(signature)
                           or signature != current_stat):
@@ -1133,7 +1312,8 @@ def cache_bundle_for_transfer(index, source_path, source_bytes) -> dict:
     return normalized_cache_bundle(out) or {}
 
 
-def write_runtime_caches(score_path, face_path, entries, *, expected_fingerprints=None):
+def write_runtime_caches(score_path, face_path, entries, *, semantic_path=None,
+                         expected_fingerprints=None):
     """Write portable bundles as path-keyed runtime NPZ caches atomically."""
     expected_fingerprints = expected_fingerprints or {}
     safe = {}
@@ -1157,7 +1337,10 @@ def write_runtime_caches(score_path, face_path, entries, *, expected_fingerprint
         safe_signatures[path] = signature
         safe_hashes[path] = bytes.fromhex(fingerprint)
     if not safe:
-        return {'score': 0, 'face': 0}
+        empty = {'score': 0, 'face': 0}
+        if semantic_path is not None:
+            empty['semantic'] = 0
+        return empty
 
     def write_one(path, kind):
         selected = [(p, b[kind]) for p, b in safe.items() if kind in b]
@@ -1185,6 +1368,19 @@ def write_runtime_caches(score_path, face_path, entries, *, expected_fingerprint
                 'embs': npz_transport.floats(
                     (value for _, e in selected for value in e['embedding']),
                     (len(selected), 768)),
+            }
+        elif kind == 'semantic':
+            from . import bank_semantic_models as assets
+            arrays = {**common,
+                'version': npz_transport.int32([1], (1,)),
+                'engine': npz_transport.unicode(['siglip2']),
+                'model_id': npz_transport.unicode([assets.MODEL_ID]),
+                'revision': npz_transport.unicode([assets.REVISION]),
+                'model_key': npz_transport.unicode([assets.MODEL_KEY]),
+                'dimension': npz_transport.int32([assets.DIMENSION], (1,)),
+                'embs': npz_transport.floats(
+                    (value for _, e in selected for value in e['embedding']),
+                    (len(selected), assets.DIMENSION)),
             }
         else:
             arrays = {**common,
@@ -1215,5 +1411,8 @@ def write_runtime_caches(score_path, face_path, entries, *, expected_fingerprint
             return 0
         return len(selected)
 
-    return {'score': write_one(score_path, 'score'),
-            'face': write_one(face_path, 'face')}
+    counts = {'score': write_one(score_path, 'score'),
+              'face': write_one(face_path, 'face')}
+    if semantic_path is not None:
+        counts['semantic'] = write_one(semantic_path, 'semantic')
+    return counts

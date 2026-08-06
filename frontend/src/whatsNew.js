@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-each-bank-can-choose-clip-or-siglip2-without-losing-work',
+    date: '2026-08-06',
+    title: 'Each Bank can choose CLIP or SigLIP 2 — switching keeps every result',
+    blurb:
+      'A Bank now chooses the semantic engine behind Find by text, Similar, diverse and balanced picks, coverage, and same-shot grouping. CLIP remains the zero-change default and still owns Score; SigLIP 2 is an explicit optional install with its own pinned, resumable index. The two caches and the two same-shot partitions are stored separately, restored when you switch back, and carried through Bank → Dataset, Dataset → Bank and Bank → Bank transfers. Live readiness counts now follow the images that are actually in the Bank, so deleting or rejecting the last group cannot leave an old “65 ready” graph behind.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-describe-the-set-you-want-and-the-filters-move',
     date: '2026-08-05',
     title: 'Say what you want in a sentence, and the bank sets its own filters',

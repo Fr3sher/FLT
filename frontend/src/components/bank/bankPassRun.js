@@ -46,6 +46,7 @@ export const JOB_LABELS = {
   scan: '🔎 Quality scan',
   faces: '👥 Face pass',
   score: '✨ Score pass',
+  semantic_index: '🧠 Semantic index',
   semantic_dedup: '✂ Crops & variants',
   watermark: '🚩 Watermark scan',
   watermark_crop: '🚩 Watermark crop',
@@ -78,6 +79,7 @@ export const ENDPOINT_JOB_KIND = {
   scan: 'scan',
   faces: 'faces',
   score: 'score',
+  'semantic-index': 'semantic_index',
   'semantic-dedup': 'semantic_dedup',
 };
 

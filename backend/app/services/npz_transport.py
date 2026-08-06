@@ -3,7 +3,7 @@
 The Flask environment deliberately does not depend on NumPy, but Bank transfer
 caches must remain readable by NumPy's ``allow_pickle=False`` loader.  This
 module implements only the primitive NPY layouts LDS writes: little-endian
-float32, uint8 and fixed-width Unicode vectors/matrices.
+float32/int32, uint8 and fixed-width Unicode vectors/matrices.
 
 All archive I/O is chunked.  Headers, row counts and path/index payloads have
 hard limits, writers use a unique sibling tempfile, and a malformed archive
@@ -29,6 +29,7 @@ from pathlib import Path
 _MAGIC = b'\x93NUMPY'
 _UNICODE_RE = re.compile(r'^<U(?P<count>[1-9]\d*)$')
 _FLOAT_RE = re.compile(r'^<f4$')
+_INT32_RE = re.compile(r'^<i4$')
 _UINT8_RE = re.compile(r'^\|u1$')
 _NAME_RE = re.compile(r'^[A-Za-z][A-Za-z0-9_]*\.npy$')
 
@@ -40,6 +41,12 @@ _MAX_INDEX_BYTES = 64 * 1024 * 1024
 _MAX_ENTRIES = 32
 _INDEX_ARRAYS = frozenset(('paths.npy', 'states.npy', 'sigs.npy', 'hashes.npy'))
 _INDEX_NAMES = frozenset(name[:-4] for name in _INDEX_ARRAYS)
+# Only these arrays are rows keyed by ``paths``. Model/version metadata commonly
+# has shape ``(1,)`` too; treating every first dimension equal to the image count
+# as row-aligned corrupts metadata whenever a one-image cache is subset.
+_ROW_ALIGNED_NAMES = frozenset((
+    'states', 'sigs', 'hashes', 'aes', 'nsfw', 'dets', 'bfracs', 'yaws', 'embs',
+))
 _MAX_WRITTEN_UNCOMPRESSED = 1024 * 1024 * 1024
 _WRITE_LOCKS = tuple(threading.Lock() for _ in range(64))
 
@@ -91,6 +98,11 @@ class Array:
             raise (TypeError if not _UINT8_RE.fullmatch(self.descr) else IndexError)
         return self.data[index]
 
+    def int32(self, index=0):
+        if not _INT32_RE.fullmatch(self.descr) or not 0 <= index < self.size:
+            raise (TypeError if not _INT32_RE.fullmatch(self.descr) else IndexError)
+        return struct.unpack_from('<i', self.data, index * 4)[0]
+
     def uint8_row(self, index):
         if (not _UINT8_RE.fullmatch(self.descr) or len(self.shape) != 2
                 or not 0 <= index < self.shape[0]):
@@ -138,6 +150,8 @@ def _dtype_size(descr):
         count = int(match.group('count'))
         return count * 4 if count <= 4096 else None
     if _FLOAT_RE.fullmatch(descr):
+        return 4
+    if _INT32_RE.fullmatch(descr):
         return 4
     if _UINT8_RE.fullmatch(descr):
         return 1
@@ -347,7 +361,7 @@ def _read_archive(source, *, max_uncompressed_bytes, max_elements,
             if name == 'paths':
                 continue
             selection = None
-            if selected_rows is not None:
+            if selected_rows is not None and name in _ROW_ALIGNED_NAMES:
                 # Parse once to learn whether this array is row-aligned. Opening
                 # twice costs a tiny header but prevents retaining an unwanted
                 # 200k x 768 matrix in memory.
@@ -433,6 +447,30 @@ def floats(values, shape):
         except StopIteration:
             pass
         return Array('<f4', shape, data)
+    except (StopIteration, TypeError, ValueError, OverflowError, struct.error,
+            MemoryError):
+        return None
+
+
+def int32(values, shape):
+    shape = _constructor_shape(shape)
+    if shape is None:
+        return None
+    count = _product(shape)
+    try:
+        data = bytearray(count * 4)
+        iterator = iter(values)
+        for index in range(count):
+            value = next(iterator)
+            if isinstance(value, bool):
+                raise ValueError
+            struct.pack_into('<i', data, index * 4, int(value))
+        try:
+            next(iterator)
+            raise ValueError
+        except StopIteration:
+            pass
+        return Array('<i4', shape, data)
     except (StopIteration, TypeError, ValueError, OverflowError, struct.error,
             MemoryError):
         return None

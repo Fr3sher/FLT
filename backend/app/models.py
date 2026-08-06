@@ -288,6 +288,12 @@ class ImageBank(db.Model):
     # pipeline has ever run. Additive column — the image_bank table shipped in
     # the Beta, so it needs the additive path (see _SCHEMA_ADDITIONS).
     pipeline_report = db.Column(Text, nullable=True)
+    # Which image/text embedding space powers Bank search, similarity, diversity,
+    # coverage and semantic duplicate grouping. CLIP remains the durable default
+    # for every existing Bank; SigLIP2 uses its own cache and never replaces the
+    # CLIP vectors needed by aesthetic, NSFW, style and medium analysis.
+    semantic_engine = db.Column(String(16), nullable=False, default='clip',
+                                server_default='clip')
 
     def __repr__(self):
         return f'<ImageBank {self.id} {self.name}>'
@@ -321,12 +327,16 @@ class BankImage(db.Model):
     # same 64-bit dHash family (Hamming <= dup_distance).
     dup_group = db.Column(Integer, nullable=True, index=True)
     # Semantic near-duplicate group id (stage 2 — "same shot, different crop"):
-    # cosine of the CLIP embeddings the ✨ Score pass cached >= semantic_dup_threshold.
-    # Catches crops / re-compressed variants a dHash misses. Assigned by the
-    # semantic-dedup pass over the scored images; NULL = no semantic near-dup /
-    # the pass hasn't run. Distinct column from dup_group so the two stages
-    # co-exist (an image can belong to both).
+    # cosine in the Bank's selected CLIP or SigLIP2 space, with an engine-specific
+    # threshold. Catches crops / re-compressed variants a dHash misses. Assigned
+    # by the semantic-dedup pass; NULL = no semantic near-dup / the pass has not
+    # run for the active engine. Distinct from dup_group so both stages co-exist.
     semantic_dup_group = db.Column(Integer, nullable=True, index=True)
+    # Durable per-engine semantic partitions. ``semantic_dup_group`` above is the
+    # active projection consumed by every existing filter/payload; switching the
+    # Bank swaps that projection without throwing either engine's work away.
+    clip_semantic_dup_group = db.Column(Integer, nullable=True)
+    siglip2_semantic_dup_group = db.Column(Integer, nullable=True)
     # Subject pass (InsightFace subprocess). face_state mirrors the dataset
     # vocabulary (scorable|no_face|low_det|too_small|extreme_pose|unreadable|error);
     # face_cluster is a bank-local person-cluster id (1 = biggest cluster),

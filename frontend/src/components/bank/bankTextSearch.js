@@ -8,6 +8,7 @@
 // — and a bad query produces a confident, wrong-looking answer with no signal.
 // So three things are always said: that it is a ranking, how strong the top and
 // bottom of it are, and how many images could not be searched at all.
+import { normalizeSemanticEngine, semanticEngineLabel } from './bankSemanticEngine.js'
 
 // ── Why there is NO absolute quality scale here ──────────────────────────────
 // CLIP text/image cosines are not spread over 0..1 and their useful band is far
@@ -78,12 +79,13 @@ export function spreadLabel(range, poolMedian) {
  * Never claims a match: it says "closest", gives the range, and names what was
  * left out.
  */
-export function summarize(result) {
+export function summarize(result, engine = 'clip') {
   if (!result) return ''
+  const actualEngine = normalizeSemanticEngine(result.engine || engine)
   const shown = (result.image_ids || []).length
   if (!shown) {
-    return `No scored image to rank for “${result.query}”. `
-      + unsearchableNote(result)
+    return `No ${semanticEngineLabel(actualEngine)}-indexed image to rank for “${result.query}”. `
+      + unsearchableNote(result, actualEngine)
   }
   const r = result.score_range || {}
   const spread = spreadLabel(r, result.pool_median)
@@ -96,7 +98,7 @@ export function summarize(result) {
     'Search brings the likeliest images to the front; it does not select them. '
       + 'Every image scores something against every phrase.',
   ]
-  const note = unsearchableNote(result)
+  const note = unsearchableNote(result, actualEngine)
   if (note) parts.push(note)
   return parts.join(' ')
 }
@@ -107,15 +109,20 @@ function fmt(v) {
 }
 
 /**
- * The load-bearing warning. An image with no ✨ Score embedding cannot be found
+ * The load-bearing warning. An image with no selected-engine embedding cannot be found
  * by ANY phrase — staying silent about it lets the user conclude their picture
  * is missing from the bank.
  */
-export function unsearchableNote(result) {
-  const unscored = Number(result?.unscored) || 0
-  if (unscored <= 0) return ''
-  return `${unscored} of ${result.filtered} image(s) in this filter have no ✨ Score `
-    + 'embedding yet and could NOT be searched — run ✨ Score to include them.'
+export function unsearchableNote(result, engine = 'clip') {
+  const missing = Number(result?.unindexed ?? result?.unscored) || 0
+  if (missing <= 0) return ''
+  const actualEngine = normalizeSemanticEngine(result?.engine || engine)
+  const label = semanticEngineLabel(actualEngine)
+  const action = actualEngine === 'siglip2'
+    ? 'build or complete the SigLIP 2 semantic index'
+    : 'run ✨ Score'
+  return `${missing} of ${result.filtered} image(s) in this filter have no ${label} `
+    + `semantic embedding yet and could NOT be searched — ${action} to include them.`
 }
 
 /**
@@ -123,14 +130,15 @@ export function unsearchableNote(result) {
  * never an unexplained freeze. Mirrors the measured cost: ~8.5 s to load CLIP,
  * ~20 ms per phrase afterwards.
  */
-export function readinessHint(status) {
+export function readinessHint(status, engine = 'clip') {
   if (!status) return ''
+  const label = status.model_label || semanticEngineLabel(status.engine || engine)
   if (!status.available) {
     return status.reason || 'Text search is unavailable on this install.'
   }
   if (status.weights_warning) return status.weights_warning
-  if (status.warm) return 'Search model is loaded — results are instant.'
-  return 'First search loads the search model (about 10 seconds, on the CPU). '
+  if (status.warm) return `${label} search model is loaded — results are instant.`
+  return `First search loads the ${label} search model (about 10 seconds, on the CPU). `
     + 'After that, searches are instant.'
 }
 
@@ -163,10 +171,11 @@ export const CLIP_LIMITS = [
   'Spatial relations — “to the left of” carries almost no meaning.',
 ]
 
-export function limitsSentence() {
-  return 'Best at subjects, settings, styles and framing. It cannot count and '
+export function limitsSentence(engine = 'clip') {
+  const label = semanticEngineLabel(engine)
+  return `${label} is best at subjects, settings, styles and framing. It cannot count and `
     + 'ignores left/right — so describe what IS in the shot. To get rid of '
-    + 'something, use Push down rather than the word “without”, which CLIP '
+    + `something, use Push down rather than the word “without”, which ${label} `
     + 'ignores.'
 }
 

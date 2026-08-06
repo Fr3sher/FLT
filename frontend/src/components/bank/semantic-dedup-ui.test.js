@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { BANK_PASSES } from './bankPasses.js';
+import { pipelineStepKeys } from './bankSemanticEngine.js';
 
 const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
 const panel = fs.readFileSync(new URL('./DupGroupsPanel.jsx', import.meta.url), 'utf8');
@@ -23,20 +24,24 @@ test('the workspace renders both stages through the shared panel with distinct k
   assert.match(ws, /kind="semantic"/);
 });
 
-test('the ✂ Find crops button gates on Score having run', () => {
+test('the ✂ Find crops button gates on selected semantic readiness', () => {
   // The button opens its launch window; the endpoint is named once, in the pass
   // spec, and the shared runner builds the URL from it.
   assert.match(ws, /onClick=\{\(\) => setPassOpen\('semantic_dedup'\)\}/);
   const passes = fs.readFileSync(new URL('./bankPasses.js', import.meta.url), 'utf8');
   assert.match(passes, /endpoint: 'semantic-dedup'/);
   assert.match(ws, /\/api\/bank\/\$\{bankId\}\/\$\{spec\.endpoint\}/);
-  // Disabled until at least one image is scored (embeddings exist).
-  assert.match(ws, /disabled=\{live \|\| scored === 0\}/);
+  // Score is a separate aesthetic count; only the selected engine readiness gates it.
+  assert.match(ws, /setPassOpen\('semantic_dedup'\)\} disabled=\{live \|\| !semanticReady\}/);
+  const button = ws.slice(ws.indexOf("setPassOpen('semantic_dedup')"),
+    ws.indexOf("setPassOpen('semantic_dedup')") + 900);
+  assert.doesNotMatch(button, /scored\s*[=>]/);
+  assert.match(button, /semanticState\.label/);
 });
 
 test('✂ Find crops quotes NO number, and says why instead of inventing one', () => {
-  // Its pool is "every image ✨ Score cached an embedding for" — that lives in the
-  // score cache, not in a column, so no honest count exists client-side. The rule on
+  // Its pool is "every image the selected engine indexed" — that lives in an engine
+  // cache, not in a column, so no honest count exists client-side. The rule on
   // this surface is that every number is one somebody measured, so this window shows
   // none and explains the absence.
   //
@@ -47,7 +52,8 @@ test('✂ Find crops quotes NO number, and says why instead of inventing one', (
   const spec = BANK_PASSES.semantic_dedup;
   assert.ok(spec, 'the ✂ spec is missing');
   assert.equal(spec.countable, false);
-  assert.match(spec.fixedScopeLine, /rejected ones included/);
+  assert.match(spec.fixedScopeLine, /rejected .*included/);
+  assert.match(spec.fixedScopeLine, /selected semantic engine/);
   assert.match(spec.fixedScopeLine, /without inventing one/);
 });
 
@@ -81,12 +87,12 @@ test('duplicate resolution waits for every refresh before releasing its busy sta
   }
 });
 
-test('Launch all inserts the semantic step right after Score, defaulting on when ready', () => {
+test('Launch all keeps CLIP unchanged and inserts SigLIP2 index right before dedup', () => {
   assert.match(dialog, /key:\s*'semantic_dedup'/);
-  assert.match(dialog, /semantic_dedup:\s*!!caps\?\.bank_scoring/);
-  const m = dialog.match(/\[([^\]]*)\]\s*\n\s*\.filter\(\(k\)\s*=>\s*ready\[k\]\)/);
-  assert.ok(m, 'found the default step set');
-  const order = m[1];
-  assert.ok(order.indexOf("'semantic_dedup'") > order.indexOf("'score'"),
-    'semantic_dedup follows score in the default set');
+  assert.match(dialog, /semantic_dedup:\s*engine === 'siglip2'/);
+  const clip = pipelineStepKeys('clip');
+  const siglip = pipelineStepKeys('siglip2');
+  assert.equal(clip.includes('semantic_index'), false);
+  assert.deepEqual(siglip.slice(siglip.indexOf('score'), siglip.indexOf('semantic_dedup') + 1),
+    ['score', 'semantic_index', 'semantic_dedup']);
 });

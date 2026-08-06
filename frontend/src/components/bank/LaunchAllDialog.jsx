@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { attemptModalSubmit } from '../../utils/submitOutcome.js'
 import { flagCandidateLabel, launchRejectNote } from './autoRejectReadiness.js'
+import {
+  defaultPipelineStepKeys, normalizeSemanticEngine, pipelineStepKeys,
+  semanticEngineLabel,
+} from './bankSemanticEngine.js'
 
 /** 🚀 Launch all — the overnight funnel. The user picks which passes run and how
  * auto-reject behaves, sees a plain "here's what will run" preview, and hits Go.
@@ -22,44 +26,59 @@ const QUALITY_FLAGS = [
 ]
 
 export default function LaunchAllDialog({
-  caps, visionReady, counts, flagsActionable, onClose, onLaunch,
+  caps, visionReady, counts, flagsActionable, semanticEngine = 'clip', onClose, onLaunch,
 }) {
+  const engine = normalizeSemanticEngine(semanticEngine)
+  const engineLabel = semanticEngineLabel(engine)
   // A heavy pass is "ready" when its tool is installed; scan/auto-reject always are.
   const ready = useMemo(() => ({
     scan: true,
     auto_reject: true,
     score: !!caps?.bank_scoring,
-    // Stage 2 reuses Score's embeddings — ready exactly when Score is (and it's
-    // skipped at run time if Score didn't actually produce any).
-    semantic_dedup: !!caps?.bank_scoring,
+    semantic_index: engine === 'siglip2' && !!caps?.bank_siglip2,
+    // Stage 2 reads whichever semantic engine this Bank selected. The preceding
+    // score/index stage supplies it; the backend still skips honestly if that
+    // stage did not produce a usable cache.
+    semantic_dedup: engine === 'siglip2' ? !!caps?.bank_siglip2 : !!caps?.bank_scoring,
     watermark: !!visionReady,
     faces: !!caps?.face_scoring,
     framing: !!visionReady,
     caption: !!visionReady,
-  }), [caps, visionReady])
+  }), [caps, visionReady, engine])
 
-  const STEPS = [
+  const STEP_DEFS = {
+    scan:
     { key: 'scan', label: '🔎 Scan quality',
       desc: 'Sharpness, noise, flatness, size + near-duplicate groups (CPU).' },
+    auto_reject:
     { key: 'auto_reject', label: '🧹 Auto-reject flagged',
       desc: 'Reject the images carrying the flags below — reversible, nothing deleted.' },
+    score:
     { key: 'score', label: '✨ Score', needs: 'Bank scoring extra',
-      desc: 'Aesthetic 1–10, NSFW, style groups (GPU).' },
-    { key: 'semantic_dedup', label: '✂ Find crops & variants', needs: 'Bank scoring extra',
-      desc: 'Group crops/variants of the same shot from Score’s embeddings — no extra GPU (needs Score first).' },
+      desc: 'CLIP aesthetic 1–10, NSFW, visual style and 🎨 Medium (GPU).' },
+    semantic_index:
+    { key: 'semantic_index', label: '🧠 Build SigLIP 2 semantic index', needs: 'SigLIP 2 Quality tool',
+      desc: 'Build or resume the whole-Bank SigLIP 2 cache for semantic features. Existing CLIP data is preserved.' },
+    semantic_dedup:
+    { key: 'semantic_dedup', label: '✂ Find crops & variants',
+      needs: engine === 'siglip2' ? 'SigLIP 2 Quality tool' : 'Bank scoring extra',
+      desc: `Group crops/variants of the same shot from the ${engineLabel} semantic index (needs that index first).` },
+    watermark:
     { key: 'watermark', label: '🚩 Find watermarks', needs: 'Vision model',
       desc: 'Detect overlaid watermarks/logos with the Qwen3-VL detector (GPU).' },
+    faces:
     { key: 'faces', label: '👥 Group by person', needs: 'Quality tools',
       desc: 'Face embeddings + person clusters, no reference photo (CPU/GPU).' },
+    framing:
     { key: 'framing', label: '📐 Classify framing', needs: 'Vision model',
       desc: 'Tag each shot face/bust/body/back — powers the framing filter & coverage advice (GPU).' },
+    caption:
     { key: 'caption', label: '🏷️ Caption', needs: 'Caption engine',
       desc: 'Describe every image so it becomes searchable and rides to the dataset (GPU).' },
-  ]
+  }
+  const STEPS = pipelineStepKeys(engine).map((key) => STEP_DEFS[key])
 
-  const [steps, setSteps] = useState(() => new Set(
-    ['scan', 'auto_reject', 'score', 'semantic_dedup', 'watermark', 'faces', 'framing']
-      .filter((k) => ready[k])))
+  const [steps, setSteps] = useState(() => new Set(defaultPipelineStepKeys(engine, ready)))
   const [rejectFlags, setRejectFlags] = useState(() => new Set(['blur', 'uniform']))
   const [resolveDups, setResolveDups] = useState(true)
 

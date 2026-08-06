@@ -77,6 +77,8 @@ EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS = (
     'face_yaw',
     'dup_group',
     'semantic_dup_group',
+    'clip_semantic_dup_group',
+    'siglip2_semantic_dup_group',
     'face_cluster',
     'face_cluster_origin',
     'style_cluster',
@@ -178,7 +180,8 @@ def _bank_with_analysed_image(app, tmp_path, *, filename='one.jpg'):
         width=160, height=96, **HISTORICAL_ANALYSIS,
         # A direct Bank copy retains these relationships inside its selection;
         # Dataset round-trips and transformed copies must clear them.
-        dup_group=7, semantic_dup_group=8, face_cluster=4,
+        dup_group=7, semantic_dup_group=8, clip_semantic_dup_group=8,
+        face_cluster=4,
         face_cluster_origin='asserted', style_cluster=3,
         caption='caption from the bank', caption_origin='asserted',
         source_metadata=json.dumps(SOURCE_METADATA), status='keep',
@@ -240,6 +243,57 @@ def _seed_analysis_caches(bank, images):
     return entries
 
 
+def _seed_analysis_caches_with_semantic(bank, images):
+    """Semantic-specific fixture; historical Score/Face helpers stay unchanged."""
+    from app.services import bank_semantic_models as assets
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    entries = _seed_analysis_caches(bank, images)
+    semantic_unit = 1.0 / math.sqrt(assets.DIMENSION)
+    for bundle in entries.values():
+        bundle['semantic'] = {
+            'state': 'ok', 'engine': 'siglip2',
+            'model_id': assets.MODEL_ID, 'revision': assets.REVISION,
+            'model_key': assets.MODEL_KEY, 'dimension': assets.DIMENSION,
+            'embedding': (semantic_unit,) * assets.DIMENSION,
+        }
+    fingerprints = {
+        path: transfer.content_fingerprint_path(path) for path in entries
+    }
+    counts = transfer.write_runtime_caches(
+        banks._score_cache_path(bank.id), banks._face_cache_path(bank.id), entries,
+        semantic_path=banks._semantic_cache_path(bank.id),
+        expected_fingerprints=fingerprints)
+    assert counts == {
+        'score': len(entries), 'semantic': len(entries), 'face': len(entries)}
+    return entries
+
+
+def test_legacy_v3_active_only_semantic_group_remains_readable(app):
+    from app.services import bank_transfer_metadata as transfer
+
+    payload = b'legacy-v3-image'
+    analysis = {name: None for name in transfer.BANK_DIRECT_COPY_ANALYSIS_FIELDS}
+    analysis.update(HISTORICAL_ANALYSIS)
+    analysis['semantic_dup_group'] = 8
+    captured = transfer.captured_bank_analysis(
+        analysis, payload, group_scope='a' * 32)
+    stored = transfer.snapshot_storage(
+        {name: HISTORICAL_ANALYSIS[name]
+         for name in transfer.DETERMINISTIC_ANALYSIS_FIELDS},
+        payload, captured=captured)
+    legacy = json.loads(stored)
+    legacy['analysis'].pop('clip_semantic_dup_group')
+    legacy['analysis'].pop('siglip2_semantic_dup_group')
+
+    parsed = transfer.parse_snapshot(json.dumps(legacy))
+    assert parsed is not None and parsed['v'] == 3
+    assert parsed['analysis']['semantic_dup_group'] == 8
+    assert parsed['analysis']['clip_semantic_dup_group'] is None
+    assert parsed['analysis']['siglip2_semantic_dup_group'] is None
+
+
 def _runtime_cache_payloads(bank, rows):
     from app.services import bank_transfer_metadata as transfer
     from app.services import image_bank_service as banks
@@ -248,6 +302,16 @@ def _runtime_cache_payloads(bank, rows):
     return transfer.load_runtime_cache_index(
         banks._score_cache_path(bank.id), banks._face_cache_path(bank.id),
         wanted_paths=paths)
+
+
+def _runtime_cache_payloads_with_semantic(bank, rows):
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    paths = [str(Path(bank.source_path) / row.relpath) for row in rows]
+    return transfer.load_runtime_cache_index(
+        banks._score_cache_path(bank.id), banks._face_cache_path(bank.id),
+        semantic_path=banks._semantic_cache_path(bank.id), wanted_paths=paths)
 
 
 def _drop_runtime_cache_hashes(path):
@@ -273,7 +337,8 @@ def _add_group_peer(bank, *, filename='two.jpg'):
     image = BankImage(
         bank_id=bank.id, relpath=filename, file_size=path.stat().st_size,
         width=160, height=96, **HISTORICAL_ANALYSIS,
-        dup_group=7, semantic_dup_group=8, face_cluster=4,
+        dup_group=7, semantic_dup_group=8, clip_semantic_dup_group=8,
+        face_cluster=4,
         face_cluster_origin='asserted', style_cluster=3,
         caption='peer caption', caption_origin='asserted',
         source_metadata=json.dumps(SOURCE_METADATA), status='keep',
@@ -476,6 +541,186 @@ def test_dataset_roundtrip_preserves_score_face_caches_without_quality_scan(
         expected_hash = hashlib.sha256(Path(returned_path).read_bytes()).digest()
         assert cache[returned_path]['score'][2] == expected_hash
         assert cache[returned_path]['face'][2] == expected_hash
+
+
+def test_siglip2_bank_dataset_roundtrip_preserves_all_cache_lanes_and_engine(
+        app, tmp_path):
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+    from app.services.dataset_storage import dataset_path
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_bank.semantic_engine = 'siglip2'
+        db.session.commit()
+        _seed_analysis_caches_with_semantic(source_bank, (source_image,))
+
+        dataset = _promote_to_dataset(app, source_bank, source_image)
+        dataset_image = FaceDatasetImage.query.filter_by(dataset_id=dataset.id).one()
+        metadata = transfer.parse_transfer_metadata(dataset_image.transfer_metadata)
+        assert metadata['bank']['semantic_engine'] == 'siglip2'
+        snapshot = transfer.parse_snapshot(dataset_image.bank_analysis_snapshot)
+        sidecar_root = Path(dataset_path(dataset.id)) / '.bank-analysis-cache'
+        sidecar = transfer.read_cache_sidecar(sidecar_root, snapshot['cache_ref'])
+        assert set(sidecar) == {'score', 'semantic', 'face'}
+
+        returned_id = banks.start_dataset_import(
+            app, 'local', dataset.id, 'SigLIP2 roundtrip')
+        returned_bank = db.session.get(ImageBank, returned_id)
+        returned = BankImage.query.filter_by(bank_id=returned_id).one()
+        assert returned_bank.semantic_engine == 'siglip2'
+        runtime = _runtime_cache_payloads_with_semantic(returned_bank, (returned,))
+        returned_path = str(Path(returned_bank.source_path) / returned.relpath)
+        assert set(runtime[returned_path]) == {'score', 'semantic', 'face'}
+
+
+@pytest.mark.parametrize('metadata_mode', ('missing', 'incompatible'))
+def test_dataset_to_bank_defaults_clip_without_exact_engine_metadata(
+        app, tmp_path, metadata_mode):
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        peer = _add_group_peer(source_bank)
+        source_bank.semantic_engine = 'siglip2'
+        db.session.commit()
+        _seed_analysis_caches_with_semantic(source_bank, (source_image, peer))
+        dataset = datasets.create_dataset('local', 'Ambiguous', 'ambiguous')
+        banks.start_promote(
+            app, 'local', source_bank.id, [source_image.id, peer.id], dataset.id)
+        dataset_images = FaceDatasetImage.query.filter_by(dataset_id=dataset.id).all()
+        assert len(dataset_images) == 2
+        for dataset_image in dataset_images:
+            if metadata_mode == 'missing':
+                dataset_image.transfer_metadata = None
+            else:
+                dataset_image.transfer_metadata = transfer.capture_transfer_metadata(
+                    bank={'semantic_engine': 'siglip2'},
+                    bank_fingerprint='0' * 64)
+        db.session.commit()
+
+        returned_id = banks.start_dataset_import(
+            app, 'local', dataset.id, f'Default CLIP {metadata_mode}')
+        assert db.session.get(ImageBank, returned_id).semantic_engine == 'clip'
+        returned = BankImage.query.filter_by(bank_id=returned_id).all()
+        assert len(returned) == 2
+        assert all(row.semantic_dup_group == row.clip_semantic_dup_group
+                   for row in returned)
+        runtime = _runtime_cache_payloads_with_semantic(
+            db.session.get(ImageBank, returned_id), returned)
+        assert all(set(bundle) == {'score', 'semantic', 'face'}
+                   for bundle in runtime.values())
+
+
+@pytest.mark.parametrize('selected_engine', ('clip', 'siglip2'))
+def test_bank_to_bank_copies_selected_engine_and_all_runtime_caches(
+        app, tmp_path, selected_engine):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
+        source_bank.semantic_engine = selected_engine
+        db.session.commit()
+        _seed_analysis_caches_with_semantic(source_bank, (source_image,))
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source_image.id], 'SigLIP2 copy')
+        destination = db.session.get(ImageBank, destination_id)
+        copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        assert destination.semantic_engine == selected_engine
+        runtime = _runtime_cache_payloads_with_semantic(destination, (copied,))
+        copied_path = str(Path(destination.source_path) / copied.relpath)
+        assert set(runtime[copied_path]) == {'score', 'semantic', 'face'}
+
+
+def test_legacy_score_only_dataset_history_restores_clip_semantic_groups(
+        app, tmp_path):
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage, ImageBank
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source = _bank_with_analysed_image(app, tmp_path)
+        peer = _add_group_peer(source_bank)
+        dataset = datasets.create_dataset('local', 'Legacy CLIP', 'legacy_clip')
+        banks.start_promote(
+            app, 'local', source_bank.id, [source.id, peer.id], dataset.id)
+        dataset_rows = FaceDatasetImage.query.filter_by(dataset_id=dataset.id).all()
+        for row in dataset_rows:
+            metadata = transfer.parse_transfer_metadata(row.transfer_metadata)
+            metadata['bank']['semantic_engine'] = None
+            row.transfer_metadata = json.dumps(
+                metadata, ensure_ascii=False, separators=(',', ':'), sort_keys=True)
+        db.session.commit()
+
+        returned_id = banks.start_dataset_import(
+            app, 'local', dataset.id, 'Legacy score-only return')
+        returned_bank = db.session.get(ImageBank, returned_id)
+        returned = BankImage.query.filter_by(bank_id=returned_id).all()
+        assert returned_bank.semantic_engine == 'clip'
+        assert len(returned) == 2
+        assert {row.semantic_dup_group for row in returned} == {1}
+        runtime = _runtime_cache_payloads_with_semantic(returned_bank, returned)
+        assert all(set(bundle) == {'score', 'face'} for bundle in runtime.values())
+
+
+def test_mixed_engine_dataset_history_projects_default_lane_without_losing_either(
+        app, tmp_path):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        clip_bank, clip_image = _bank_with_analysed_image(
+            app, tmp_path / 'clip-source', filename='clip-a.jpg')
+        clip_peer = _add_group_peer(clip_bank, filename='clip-b.jpg')
+        siglip_bank, siglip_image = _bank_with_analysed_image(
+            app, tmp_path / 'siglip-source', filename='siglip-a.jpg')
+        siglip_peer = _add_group_peer(siglip_bank, filename='siglip-b.jpg')
+        siglip_bank.semantic_engine = 'siglip2'
+        db.session.commit()
+        _seed_analysis_caches_with_semantic(
+            siglip_bank, (siglip_image, siglip_peer))
+
+        dataset = datasets.create_dataset('local', 'Mixed spaces', 'mixed_spaces')
+        banks.start_promote(
+            app, 'local', clip_bank.id, [clip_image.id, clip_peer.id], dataset.id)
+        banks.start_promote(
+            app, 'local', siglip_bank.id, [siglip_image.id, siglip_peer.id], dataset.id)
+        returned_id = banks.start_dataset_import(
+            app, 'local', dataset.id, 'Mixed return')
+        returned_bank = db.session.get(ImageBank, returned_id)
+        returned = BankImage.query.filter_by(bank_id=returned_id).all()
+        assert returned_bank.semantic_engine == 'clip'
+        assert len(returned) == 4
+        clip_before = {row.id: row.clip_semantic_dup_group for row in returned}
+        siglip_before = {row.id: row.siglip2_semantic_dup_group for row in returned}
+        assert all(row.semantic_dup_group == row.clip_semantic_dup_group
+                   for row in returned)
+        banks.set_semantic_engine('local', returned_id, 'siglip2')
+        db.session.expire_all()
+        switched = BankImage.query.filter_by(bank_id=returned_id).all()
+        assert {row.id: row.clip_semantic_dup_group for row in switched} == clip_before
+        assert {row.id: row.siglip2_semantic_dup_group
+                for row in switched} == siglip_before
+        assert all(row.semantic_dup_group == row.siglip2_semantic_dup_group
+                   for row in switched)
+        runtime = _runtime_cache_payloads_with_semantic(returned_bank, returned)
+        assert len(runtime) == 4
+        assert all({'score', 'face'}.issubset(bundle)
+                   for bundle in runtime.values())
+        assert sum('semantic' in bundle for bundle in runtime.values()) == 2
 
 
 def test_dataset_pixel_edit_keeps_historical_vault_but_cannot_activate_it(
@@ -890,6 +1135,10 @@ def test_direct_bank_to_bank_copy_preserves_all_analysis_and_curation_state(
         source_bank, source_image = _bank_with_analysed_image(app, tmp_path)
         source_path = _sync_bank_row_to_current_file(source_bank, source_image)
         peer = _add_group_peer(source_bank)
+        source_image.siglip2_semantic_dup_group = 18
+        peer.siglip2_semantic_dup_group = 18
+        db.session.commit()
+        _seed_analysis_caches_with_semantic(source_bank, (source_image, peer))
         assert transfer.BANK_DIRECT_COPY_ANALYSIS_FIELDS == (
             EXPECTED_DIRECT_BANK_ANALYSIS_FIELDS)
         source_analysis = _row_values(
@@ -934,6 +1183,8 @@ def test_direct_bank_to_bank_copy_preserves_all_analysis_and_curation_state(
             _row_values(source_image, transfer.DETERMINISTIC_ANALYSIS_FIELDS))
         assert {(row.dup_group, row.semantic_dup_group) for row in copies} == {
             (7, 8)}
+        assert {(row.clip_semantic_dup_group,
+                 row.siglip2_semantic_dup_group) for row in copies} == {(8, 18)}
         assert (copied.width, copied.height) == _dimensions(copied_file)
         assert copied.status == 'reject'
         assert copied.reject_reason == 'manual'

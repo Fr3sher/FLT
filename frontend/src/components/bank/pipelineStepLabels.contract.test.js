@@ -47,11 +47,12 @@ test('every pipeline step the server can report has a label the user recognises'
     + 'Add them to STEP_LABEL with the words on their BUTTON.');
 });
 
-test('the two steps that were unlabelled carry the button wording, not a paraphrase', () => {
+test('semantic and framing steps carry their button wording, not raw identifiers', () => {
   const src = readFileSync(REPORT, 'utf8');
   // The exact strings the pass row and the Launch all dialog use. A report that
   // paraphrases a button is the same defect one notch quieter.
   assert.match(src, /semantic_dedup: '✂ Find crops & variants'/);
+  assert.match(src, /semantic_index: '🧠 Build semantic index'/);
   assert.match(src, /framing: '📐 Classify framing'/);
 });
 

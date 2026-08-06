@@ -593,6 +593,36 @@ def test_import_probe_budget_matches_the_scoring_probe(app):
     assert capabilities._IMPORT_TIMEOUT >= scoring_python.PROBE_TIMEOUT
 
 
+def test_siglip2_probe_checks_pinned_weights_before_heavy_import(app, monkeypatch):
+    from app import capabilities
+    from app.services import bank_semantic_models as assets
+    calls = []
+    monkeypatch.setattr(assets, 'weights_present', lambda: False)
+    monkeypatch.setattr(
+        capabilities, '_cached_import',
+        lambda *args, **kwargs: calls.append(args) or True)
+    with app.app_context():
+        result = capabilities.probe_bank_siglip2()
+    assert result['ok'] is False
+    assert result['model'] == assets.MODEL_ID
+    assert calls == []
+
+
+def test_siglip2_probe_uses_its_own_import_contract(app, monkeypatch):
+    from app import capabilities
+    from app.services import bank_semantic_models as assets
+    seen = []
+    monkeypatch.setattr(assets, 'weights_present', lambda: True)
+    monkeypatch.setattr(
+        capabilities, '_cached_import',
+        lambda name, python, expression: seen.append(
+            (name, expression)) or True)
+    with app.app_context():
+        result = capabilities.probe_bank_siglip2()
+    assert result['ok'] is True
+    assert seen == [('bank_siglip2', capabilities.CAPABILITY_IMPORTS['bank_siglip2'])]
+
+
 def test_unanswered_cuda_probe_does_not_read_as_no_cuda(app, monkeypatch):
     """The GPU-exclusive window is decided by bank_scoring_gpu_available(). A
     probe that never answered must not be reported as 'this interpreter has no

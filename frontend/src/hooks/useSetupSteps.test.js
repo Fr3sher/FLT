@@ -16,6 +16,20 @@ const comfyStep = (comfyui) => deriveSetupSteps({ comfyui }).find((s) => s.id ==
 // the shape the app actually receives, and the one where Setup reads the backend's
 // verdict instead of re-deriving its own.
 const comfyStepFull = (caps) => deriveSetupSteps(caps).find((s) => s.id === 'comfyui');
+const qualityStep = (caps) => deriveSetupSteps(caps).find((s) => s.id === 'quality');
+
+test('optional SigLIP2 readiness is visible without gating existing quality tools', () => {
+  const required = {
+    face_scoring: true, masks: true, watermark_inpaint: true, bank_scoring: true,
+  };
+  const without = qualityStep({ ...required, bank_siglip2: false });
+  assert.equal(without.status, 'ready');
+  assert.equal(without.bankSiglip2, false);
+  assert.match(without.unlocks.join(' | '), /SigLIP2/);
+  const withEngine = qualityStep({ ...required, bank_siglip2: true });
+  assert.equal(withEngine.status, 'ready');
+  assert.equal(withEngine.bankSiglip2, true);
+});
 
 test('Klein readiness needs the full trio, not just the UNET', () => {
   // UNET landed, but the backend still lists the text-encoder + VAE as missing:

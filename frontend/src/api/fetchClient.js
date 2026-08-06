@@ -188,6 +188,18 @@ export function putJson(url, body) {
   });
 }
 
+export function patchJson(url, body, opts = {}) {
+  return apiFetch(url, {
+    ...opts,
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRFToken': getCsrfToken(),
+    },
+    body: JSON.stringify(body),
+  });
+}
+
 export function del(url) {
   return apiFetch(url, {
     method: 'DELETE',

@@ -1063,6 +1063,9 @@ export default function SetupPage() {
           body: 'Repaints small off-center watermarks (LaMa) during 🧽 Clean instead of only cropping border marks. It can use CUDA or CPU from Settings. Without it, off-center marks are skipped.' },
         { action: 'bank_scoring', cap: 'bank_scoring', icon: '✨', title: 'Bank scoring (aesthetic · NSFW · style)',
           body: "Powers the 🗃️ Bank's ✨ Score pass: rates images for aesthetics (1–10), flags NSFW and groups them by visual style with one CLIP pass — and makes 'keep best' prefer the nicest-looking duplicate. Installs into its own Python (CLIP + a small NSFW model). Without it, the Score button is disabled with this hint." },
+        { action: 'bank_siglip2', cap: 'bank_siglip2', icon: '🧠',
+          title: 'SigLIP 2 semantic engine (optional)',
+          body: "Adds Google's general SigLIP2 Base engine as a per-Bank alternative for semantic search, similarity, diversity and crop/variant detection. CLIP remains installed and keeps doing aesthetic, NSFW, style and medium scoring; switching a Bank never deletes either cache. Downloads one pinned Apache-2.0 checkpoint (~1.5 GB) into the same managed scoring Python, only when you click Install." },
         { action: 'watermark_detect', cap: 'watermark_detect', icon: '🚩',
           title: 'Watermark detector (faster 🚩 Find)',
           body: "Makes the Bank's 🚩 Find watermarks pass roughly ten times faster and lets it run without Ollama: a small classifier scores each image (~0.14 s instead of ~1.7 s asking the vision model in words), and a second model marks where the logo sits so ✂ Crop and 🧽 Inpaint have something to work on. Adds ~0.9 GB of weights into the scoring Python it shares with ✨ Score. Without it nothing breaks — the vision model keeps doing the same job, slower." },
@@ -1070,9 +1073,10 @@ export default function SetupPage() {
       return (
         <div className="space-y-3">
           <p className="text-sm text-content-muted">
-            Optional helpers installed into this app's own Python environment. Face scoring and masks run on
+            Optional helpers installed into this app's managed ML environments. Face scoring and masks run on
             CPU; watermark inpainting can use CUDA or CPU. The app works fully without them; they just make
-            curation and training cleaner. Install each on its own below, or all at once at the bottom. Already installed?
+            curation and training cleaner. Install each on its own below. The legacy pip bundle at the bottom covers
+            the shared ML requirements only; isolated Bank engines and large model downloads stay explicit. Already installed?
             Use <span className="font-medium text-content">↻ Reinstall</span> to repair or update it.
           </p>
           {caps.python && !caps.python.ml_supported && (

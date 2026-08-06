@@ -360,14 +360,10 @@ function ollamaStep(caps, runtimeReadiness) {
 }
 
 function qualityStep(caps) {
-  // Four scoped ML capabilities now (face scoring, masks, watermark inpainting,
-  // bank scoring) — each installs/repairs on its own. The step is ready only when
-  // all of them are in.
-  // The watermark DETECTOR is deliberately NOT in this list. It is a pure
-  // accelerator — everything it does the vision model already does — and it costs
-  // ~0.9 GB, so counting it would flip every existing install from "ready" back to
-  // "partial" on update to nag about a download nobody asked for. Its card is on
-  // the step (installable, explained); the step's verdict just doesn't wait on it.
+  // Four required scoped ML capabilities (face scoring, masks, watermark
+  // inpainting, bank scoring) each install/repair on their own. SigLIP2 and the
+  // watermark detector are explicit optional downloads: their cards stay visible,
+  // but neither turns an existing healthy install back to "partial" after update.
   const parts = [!!caps.face_scoring, !!caps.masks, !!caps.watermark_inpaint,
     !!caps.bank_scoring]
   const ready = parts.every(Boolean)
@@ -375,11 +371,15 @@ function qualityStep(caps) {
   return {
     id: 'quality', title: 'Quality tools (ML extras)', recommended: false,
     unlocks: ['Face-similarity scoring', 'Person masks', 'Watermark inpainting',
-      'Bank scoring (aesthetic · NSFW · style)'],
+      'Bank scoring (aesthetic · NSFW · style)',
+      'SigLIP2 Bank semantics (optional)'],
     status: ready ? 'ready' : (partial ? 'partial' : 'available'),
     faceScoring: !!caps.face_scoring, masks: !!caps.masks,
     watermarkInpaint: !!caps.watermark_inpaint,
     bankScoring: !!caps.bank_scoring,
+    // Optional like the watermark accelerator: its card remains visible, but an
+    // existing CLIP-ready install does not become "partial" after this update.
+    bankSiglip2: !!caps.bank_siglip2,
     watermarkDetect: !!caps.watermark_detect,
   }
 }

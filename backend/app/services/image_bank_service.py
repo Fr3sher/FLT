@@ -55,7 +55,7 @@ from sqlalchemy import and_, case, func, or_, text
 from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
-from . import (bank_jobs, bank_transfer_metadata, bank_undo, caption_origin,
+from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
                dataset_activity, image_encoding, path_guard, trash)
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _dataset_ingest_lock,
@@ -69,6 +69,12 @@ from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
 
 logger = logging.getLogger(__name__)
+
+# At most one SHA-proven path map per engine. Generic analysis writers may bind
+# thousands of rows in one pass; alternating CLIP/SigLIP cache loads per row would
+# defeat the semantic engine's intentionally one-cache array memo.
+_SEMANTIC_GROUP_PROOF_LOCK = threading.RLock()
+_semantic_group_proof_memo = {}
 
 IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 # Sanity cap — a bank is a triage layer, not a filesystem indexer: this is what
@@ -106,6 +112,13 @@ _DUP_NUMPY_FROM = 8
 # popcount lookup, freed at every block.
 _DUP_BLOCK_CELLS = 2_000_000
 _POPCOUNT8 = None           # lazily built uint8 popcount table (see _popcount_lut)
+# Semantic cosine grouping is exact, but one request must not turn the 200k Bank
+# ceiling into 20 billion pair checks.  750M still covers a single 36k-image
+# SigLIP2 Bank (648M pairs); larger global partitions need an ANN implementation
+# rather than silently allocating/working without a bound. CLIP normally stays
+# well below this because its historical style clusters partition the work.
+_SEMANTIC_EXACT_PAIR_LIMIT = 750_000_000
+_SEMANTIC_TILE = 512       # at most 512x512 float/bool cells at once
 # A quality pass that keeps finding NOTHING on disk is not looking at a bank of
 # broken images — it is looking at the wrong folder. Bail out after this many
 # absent files (when they are at least half of what has been walked) rather than
@@ -234,6 +247,29 @@ def _face_cache_path(bank_id) -> Path:
 
 def _score_cache_path(bank_id) -> Path:
     return _bank_dir(bank_id) / 'score_cache.npz'
+
+
+def _semantic_cache_path(bank_id) -> Path:
+    """The SigLIP2 cache path, fixed for transfer/runtime-cache plumbing."""
+    return bank_semantic_engine.semantic_cache_path(bank_id, 'siglip2')
+
+
+def engine_model_key(engine) -> str:
+    """Public pure wrapper used by routes/tests without importing cache internals."""
+    return bank_semantic_engine.engine_model_key(engine)
+
+
+def semantic_cache_path(bank_or_id, engine=None) -> Path:
+    selected = (engine if engine is not None else
+                getattr(bank_or_id, 'semantic_engine', None))
+    return bank_semantic_engine.semantic_cache_path(bank_or_id, selected)
+
+
+def semantic_counts(bank_or_id, engine=None, total=None, *,
+                    eligible_paths=None) -> dict:
+    return bank_semantic_engine.semantic_counts(
+        bank_or_id, engine=engine, total=total,
+        eligible_paths=eligible_paths)
 
 
 def _abs_under(base: str, relpath: str) -> str | None:
@@ -1746,8 +1782,14 @@ def bank_payload(user_id, bank_id) -> dict | None:
                  .order_by(BankImage.id.asc()).first())
         style_clusters.append({'id': cid, 'size': size,
                                'cover_image_id': cover.id if cover else None})
+    semantic = semantic_engine_info(user_id, bank_id)
+    counts['semantic_ready'] = bool(semantic and semantic['ready'])
+    counts['semantic_indexed'] = int(
+        semantic['counts']['ok'] if semantic else 0)
     return {
         'id': bank.id, 'name': bank.name, 'source_path': bank.source_path,
+        'semantic_engine': (semantic['engine'] if semantic else
+                            _selected_semantic_engine(bank)),
         'created_at': bank.created_at.isoformat() if bank.created_at else None,
         'counts': counts, 'flags': flags,
         # Per-pass × per-pile run sizes — see the comment where they are built.
@@ -1768,6 +1810,7 @@ def bank_payload(user_id, bank_id) -> dict | None:
         ) if counts['angle_backfillable'] else None,
         'dup': dup,
         'semantic_dup': semantic_dup,
+        'semantic': semantic,
         'clusters': clusters, 'faces_scanned': faces_scanned,
         'style_clusters': style_clusters,
         'activity': bank_jobs.get(bank_id),
@@ -2403,6 +2446,54 @@ def _valid_analysis_fingerprint(value) -> bool:
             and all(ch in '0123456789abcdef' for ch in value))
 
 
+def _strict_semantic_group_for_generation(row: BankImage, path, fingerprint,
+                                          engine) -> int | None:
+    """Return one engine lane only under its own exact cache authority."""
+    selected = bank_semantic_engine.normalize_engine(engine)
+    group = getattr(row, f'{selected}_semantic_dup_group', None)
+    if (group is None or not path
+            or not _valid_analysis_fingerprint(fingerprint)):
+        return None
+    bank = db.session.get(ImageBank, row.bank_id)
+    if bank is None:
+        return None
+    key = str(path)
+    generation = bank_semantic_engine.cache_generation(bank, selected)
+    memo_key = (bank.id, selected, generation)
+    with _SEMANTIC_GROUP_PROOF_LOCK:
+        memo = _semantic_group_proof_memo.get(selected)
+        if memo is not None and memo[0] == memo_key:
+            proofs = memo[1]
+        else:
+            embeddings = bank_semantic_engine.load_semantic_embeddings(
+                bank, engine=selected)
+            proofs = {
+                candidate: bank_semantic_engine.embedding_fingerprint(
+                    candidate, engine=selected)
+                for candidate in embeddings
+            }
+            _semantic_group_proof_memo[selected] = (memo_key, proofs)
+    return int(group) if proofs.get(key) == fingerprint else None
+
+
+def _invalidate_write_generation(row: BankImage, path, fingerprint, *,
+                                 preserve_current_derivative=True) -> None:
+    """Invalidate shared lanes but retain independently proven engine history."""
+    groups = {
+        engine: _strict_semantic_group_for_generation(
+            row, path, fingerprint, engine)
+        for engine in ('clip', 'siglip2')
+    }
+    bank = db.session.get(ImageBank, row.bank_id)
+    selected_engine = _selected_semantic_engine(bank) if bank else 'clip'
+    _invalidate_effective_analysis(
+        row, preserve_current_derivative=preserve_current_derivative)
+    for engine, group in groups.items():
+        if group is not None:
+            setattr(row, f'{engine}_semantic_dup_group', group)
+    row.semantic_dup_group = groups.get(selected_engine)
+
+
 def _prepare_analysis_write(row: BankImage, path, measured_fingerprint) -> bool:
     """Authorise one lane write for the exact bytes a worker measured.
 
@@ -2427,8 +2518,7 @@ def _prepare_analysis_write(row: BankImage, path, measured_fingerprint) -> bool:
         # effective lane visibly empty until one of its workers measures current
         # bytes again.
         if row.analysis_fingerprint != current_live:
-            _invalidate_effective_analysis(
-                row, preserve_current_derivative=True)
+            _invalidate_write_generation(row, current_path, current_live)
             row.analysis_fingerprint = current_live
         return False
     live = bank_transfer_metadata.content_fingerprint_path(path)
@@ -2437,14 +2527,35 @@ def _prepare_analysis_write(row: BankImage, path, measured_fingerprint) -> bool:
         # returned late.  When the row itself is stale, leave it as an empty
         # row tied to the bytes that are now live.
         if row.analysis_fingerprint != live:
-            _invalidate_effective_analysis(
-                row, preserve_current_derivative=True)
+            _invalidate_write_generation(row, path, live)
             row.analysis_fingerprint = live
         return False
     if row.analysis_fingerprint != measured_fingerprint:
-        _invalidate_effective_analysis(
-            row, preserve_current_derivative=True)
+        _invalidate_write_generation(row, path, measured_fingerprint)
     row.analysis_fingerprint = measured_fingerprint
+    return True
+
+
+def _restore_proven_siglip2_group(row: BankImage, submitted_path,
+                                  preserved, *, selected_engine,
+                                  accepted_fingerprint=None) -> bool:
+    """Restore an independently SHA-proven SigLIP2 lane after CLIP invalidation."""
+    if preserved is None:
+        return False
+    group, fingerprint = preserved
+    current = accepted_fingerprint == fingerprint
+    if not current:
+        bank = db.session.get(ImageBank, row.bank_id)
+        current_path = analysis_image_path(bank, row) if bank else None
+        current = (
+            _same_resolved_path(current_path, submitted_path)
+            and bank_transfer_metadata.content_fingerprint_path(current_path)
+            == fingerprint)
+    if not current:
+        return False
+    row.siglip2_semantic_dup_group = group
+    if selected_engine == 'siglip2':
+        row.semantic_dup_group = group
     return True
 
 
@@ -3219,6 +3330,9 @@ def reset_score_memo() -> None:
     global _score_memo, _score_hashes
     _score_memo = None
     _score_hashes = {}
+    with _SEMANTIC_GROUP_PROOF_LOCK:
+        _semantic_group_proof_memo.clear()
+    bank_semantic_engine.reset_memo()
 
 
 def _load_score_embeddings(bank: ImageBank) -> dict:
@@ -3290,13 +3404,228 @@ def _score_embedding_fingerprint(path) -> str | None:
     return _score_hashes.get(str(path))
 
 
+def _selected_semantic_engine(bank) -> str:
+    return bank_semantic_engine.normalize_engine(
+        getattr(bank, 'semantic_engine', None))
+
+
+def _load_semantic_embeddings(bank: ImageBank) -> dict:
+    """Selected Bank embedding space, preserving the exact CLIP legacy seam."""
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        # Exact call is load-bearing for historical tests/mocks and for the
+        # byte-compatible Score cache loader above.
+        return _load_score_embeddings(bank)
+    return bank_semantic_engine.load_semantic_embeddings(bank, engine)
+
+
+def _semantic_embedding_fingerprint(bank: ImageBank, path) -> str | None:
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        return _score_embedding_fingerprint(path)
+    return bank_semantic_engine.embedding_fingerprint(path, engine)
+
+
+def _semantic_total(bank_id, engine=None) -> int:
+    """Rows currently eligible for semantic consumers, in either space."""
+    return (BankImage.query.filter_by(bank_id=bank_id)
+            .filter(BankImage.status != 'reject').count())
+
+
+def _semantic_eligible_paths(bank: ImageBank) -> tuple[int, tuple[str, ...]]:
+    """Return non-reject cache-path candidates without touching image bytes.
+
+    SigLIP2 deliberately indexes the whole Bank so a later restore does not need
+    fresh GPU work.  Readiness is narrower: rejected/deleted rows are not current
+    semantic consumers and must not inflate the workspace's ``ok / total``.
+
+    This runs in the workspace poll.  It must not call ``analysis_image_path``:
+    that resolver hashes clean sources and can materialise/prune rotations.  Raw
+    and clean paths are deterministic; already-materialised rotation filenames
+    are enumerated once from the app-owned directory, with no image stat/SHA.
+    """
+    rows = (BankImage.query.filter_by(bank_id=bank.id)
+            .filter(BankImage.status != 'reject')
+            .order_by(BankImage.id.asc()).all())
+    rotated = {}
+    if any(getattr(row, 'rotation', None) for row in rows):
+        try:
+            for candidate in _rotated_dir(bank.id).iterdir():
+                if candidate.is_file():
+                    prefix = candidate.name.split('.', 1)[0]
+                    if prefix.isdigit():
+                        rotated.setdefault(int(prefix), []).append(candidate)
+        except OSError:
+            pass
+    paths = []
+    for row in rows:
+        turn = int(getattr(row, 'rotation', None) or 0)
+        if turn:
+            marker = f'.r{turn}.'
+            paths.extend(str(candidate) for candidate in rotated.get(row.id, ())
+                         if marker in candidate.name)
+        elif row.watermark_clean_method:
+            paths.append(str(clean_image_path(bank.id, row.id)))
+        else:
+            raw = abs_image_path(bank, row)
+            if raw is not None:
+                paths.append(raw)
+    return len(rows), tuple(paths)
+
+
+def _resolve_semantic_device() -> tuple[str, bool]:
+    """Configured SigLIP2 device resolved against this exact ML Python."""
+    from ..capabilities import bank_scoring_gpu_available
+    preference = str(cfg.get('bank_semantic.device') or 'auto').strip().lower()
+    if preference not in ('auto', 'cpu', 'cuda'):
+        preference = 'auto'
+    cuda_available = bool(bank_scoring_gpu_available())
+    use_gpu = preference != 'cpu' and cuda_available
+    return ('cuda' if use_gpu else 'cpu'), use_gpu
+
+
+def semantic_device_info() -> dict:
+    preference = str(cfg.get('bank_semantic.device') or 'auto').strip().lower()
+    if preference not in ('auto', 'cpu', 'cuda'):
+        preference = 'auto'
+    device, use_gpu = _resolve_semantic_device()
+    return {'requested': preference, 'device': device, 'gpu': use_gpu}
+
+
+def _semantic_text_status(engine) -> dict:
+    from . import clip_text_encoder
+    selected = bank_semantic_engine.normalize_engine(engine)
+    try:
+        status = (clip_text_encoder.status() if selected == 'clip'
+                  else clip_text_encoder.status(engine=selected))
+    except TypeError:
+        # Rolling-upgrade compatibility until the paired encoder service lands.
+        status = clip_text_encoder.status()
+    out = dict(status or {})
+    out.setdefault('available', False)
+    out.setdefault('reason', None)
+    out.setdefault('weights_warning', None)
+    out.setdefault('warm', False)
+    out['engine'] = selected
+    out['model_label'] = bank_semantic_engine.engine_model_label(selected)
+    if selected == 'siglip2':
+        from ..capabilities import probe_bank_siglip2
+        probe = probe_bank_siglip2()
+        out['weights_warning'] = None
+        if not probe.get('ok'):
+            out['available'] = False
+            out['reason'] = probe.get('detail') or 'SigLIP2 is not installed'
+    return out
+
+
+def semantic_engine_info(user_id, bank_id) -> dict | None:
+    """Selected semantic space and safe cache coverage, with no local paths."""
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        return None
+    engine = _selected_semantic_engine(bank)
+    total, eligible_paths = _semantic_eligible_paths(bank)
+    measured = semantic_counts(
+        bank, engine=engine, total=total, eligible_paths=eligible_paths)
+    counts = {key: measured[key] for key in ('total', 'cached', 'ok', 'stale')}
+    return {
+        'engine': engine,
+        'model_key': measured['model_key'],
+        'model_label': measured['model_label'],
+        'dimension': measured['dimension'],
+        'source': measured['source'],
+        'ready': measured['ready'],
+        'complete': measured['complete'],
+        'needs_index': measured['needs_index'],
+        'error': measured['error'],
+        'counts': counts,
+        'text': _semantic_text_status(engine),
+        'device': (score_device_info(bank_id) if engine == 'clip'
+                   else semantic_device_info()),
+        # A selected SigLIP2 space never repurposes these CLIP-only products.
+        'clip_owned': {'style': True, 'medium': True},
+    }
+
+
+def semantic_index_readiness(user_id, bank_id) -> dict | None:
+    return semantic_engine_info(user_id, bank_id)
+
+
+# Backward/rolling-upgrade aliases used by service and route tests.
+semantic_readiness = semantic_index_readiness
+semantic_engine_readiness = semantic_index_readiness
+
+
+def _semantic_dup_lane(engine):
+    """ORM column holding the durable partition for one semantic engine."""
+    selected = bank_semantic_engine.normalize_engine(engine)
+    return (BankImage.clip_semantic_dup_group if selected == 'clip'
+            else BankImage.siglip2_semantic_dup_group)
+
+
+def set_semantic_engine(user_id, bank_id, engine) -> dict | None:
+    """Atomically swap the active duplicate projection under the mutation fence.
+
+    Embedding caches are independent of these database lanes and are deliberately
+    untouched.  The outgoing active partition is saved before the target lane is
+    restored, so repeated CLIP/SigLIP2 switches are lossless.
+    """
+    if not isinstance(engine, str) or engine not in ('clip', 'siglip2'):
+        raise ValueError('semantic engine must be clip or siglip2')
+    selected = engine
+    with bank_jobs.mutation_lease(bank_id, 'semantic_engine'):
+        bank = get_bank(user_id, bank_id)
+        if not bank:
+            return None
+        previous = _selected_semantic_engine(bank)
+        if previous != selected:
+            outgoing_lane = _semantic_dup_lane(previous)
+            incoming_lane = _semantic_dup_lane(selected)
+            bank.semantic_engine = selected
+            BankImage.query.filter_by(bank_id=bank_id).update(
+                {
+                    outgoing_lane: BankImage.semantic_dup_group,
+                    BankImage.semantic_dup_group: incoming_lane,
+                },
+                synchronize_session=False)
+            db.session.commit()
+            bank_semantic_engine.reset_memo()
+    return semantic_engine_info(user_id, bank_id)
+
+
+def _semantic_dup_threshold(engine, threshold=None) -> float:
+    """One finite cosine threshold for explicit runs and persisted config."""
+    if threshold in (None, ''):
+        if engine == 'clip':
+            raw = thresholds()['semantic_dup_threshold']
+        else:
+            raw = cfg.get('bank_semantic.siglip2_semantic_dup_threshold')
+            if raw in (None, ''):
+                raw = cfg.DEFAULTS['bank_semantic'][
+                    'siglip2_semantic_dup_threshold']
+    else:
+        raw = threshold
+    if isinstance(raw, bool):
+        raise ValueError(
+            'semantic duplicate threshold must be a number between 0 and 1')
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            'semantic duplicate threshold must be a number between 0 and 1') from exc
+    if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+        raise ValueError(
+            'semantic duplicate threshold must be finite and between 0 and 1')
+    return value
+
+
 def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
                                 _bank_lease=None) -> int | None:
-    """Stage-2 near-duplicate grouping over the CLIP embeddings the ✨ Score pass
-    cached — catches crops and re-compressed variants of the SAME shot that the
-    dHash (stage 1) misses. Returns the group count (groups of ≥2), or None when NO
-    embeddings are available (Score hasn't run) so the caller shows the "run Score
-    first" hint instead of a silent empty result.
+    """Stage-2 near-duplicate grouping in the Bank's selected semantic space.
+
+    CLIP preserves the historical Score-cache/style-blocking path byte for byte;
+    SigLIP2 reads its independent semantic cache and always compares globally,
+    because ``style_cluster`` remains an explicitly CLIP-owned product.
 
     Cost: a semantic near-dup (cosine ≥ threshold) is necessarily inside one style
     union-find component (that clustering uses style_threshold ≤ threshold), so we
@@ -3314,36 +3643,52 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
     bank = db.session.get(ImageBank, bank_id)
     if not bank:
         return None
-    score_cache_path = _score_cache_path(bank_id)
+    engine = _selected_semantic_engine(bank)
+    semantic_lane = _semantic_dup_lane(engine)
+    cache_path = (_score_cache_path(bank_id) if engine == 'clip'
+                  else _semantic_cache_path(bank_id))
     try:
-        cache_stat = score_cache_path.stat()
+        cache_stat = cache_path.stat()
         cache_generation = (cache_stat.st_size, cache_stat.st_mtime_ns)
     except OSError:
         return None
-    emb_by_path = _load_score_embeddings(bank)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
         return None
     th = thresholds()
-    t = float(threshold if threshold is not None else th['semantic_dup_threshold'])
-    block_by_style = th['style_threshold'] <= t
+    t = _semantic_dup_threshold(engine, threshold)
+    block_by_style = engine == 'clip' and th['style_threshold'] <= t
     rows = (BankImage.query.filter_by(bank_id=bank_id)
             .order_by(BankImage.id.asc()).all())
+    path_by_id = {row.id: analysis_image_path(bank, row) for row in rows}
+    preserved_siglip2_groups = (
+        _preserved_siglip2_groups(
+            bank_id, {path: row.id for row in rows
+                      if (path := path_by_id.get(row.id)) is not None})
+        if engine == 'clip' else {})
     # (image_id, block_key, embedding, path, fingerprint, style_cluster)
     items = []
     for r in rows:
-        p = analysis_image_path(bank, r)
+        p = path_by_id.get(r.id)
         emb = emb_by_path.get(p) if p else None
         if emb is None:
             continue
-        fingerprint = _score_embedding_fingerprint(p)
-        if not _prepare_analysis_write(r, p, fingerprint):
+        fingerprint = _semantic_embedding_fingerprint(bank, p)
+        prepared = _prepare_analysis_write(r, p, fingerprint)
+        if engine == 'clip':
+            _restore_proven_siglip2_group(
+                r, p, preserved_siglip2_groups.get(r.id),
+                selected_engine=engine,
+                accepted_fingerprint=fingerprint if prepared else None)
+        if not prepared:
             continue
         block = (r.style_cluster if r.style_cluster is not None else -1) \
             if block_by_style else 0
         items.append((r.id, block, emb, p, fingerprint, r.style_cluster))
     if not items:
         BankImage.query.filter_by(bank_id=bank_id).update(
-            {'semantic_dup_group': None}, synchronize_session=False)
+            {BankImage.semantic_dup_group: None, semantic_lane: None},
+            synchronize_session=False)
         db.session.commit()
         return 0
     # Do not retain a SQLite read/write transaction across the O(n²) CPU phase.
@@ -3364,19 +3709,45 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
         if ra != rb:
             parent[rb] = ra
 
-    chunk = 512
+    pair_count = sum(
+        len(members) * (len(members) - 1) // 2
+        for members in blocks.values())
+    if pair_count > _SEMANTIC_EXACT_PAIR_LIMIT:
+        raise ValueError(
+            'this semantic partition is too large for exact same-shot grouping '
+            f'({pair_count:,} candidate pairs; safe limit '
+            f'{_SEMANTIC_EXACT_PAIR_LIMIT:,}). Both semantic caches are unchanged. '
+            'Use CLIP style-blocked grouping or split the Bank; a bounded ANN '
+            'path is required for a larger global SigLIP2 partition.')
+
     for members in blocks.values():
         if len(members) < 2:
             continue
         E = np.stack([items[i][2] for i in members]).astype('float32')
         E /= (np.linalg.norm(E, axis=1, keepdims=True) + 1e-8)
         m = len(members)
-        for i0 in range(0, m, chunk):
-            sims = E[i0:i0 + chunk] @ E.T
-            for a, b in np.argwhere(sims >= t):
-                a += i0
-                if a < b:                       # skip the diagonal + mirror pairs
-                    union(members[int(a)], members[int(b)])
+        # Two-dimensional tiles keep similarity and match-index memory bounded
+        # independently of Bank size.  ``flatnonzero`` sees at most 512 values;
+        # unlike the former 512xN ``argwhere`` it can never materialise millions
+        # of pairs in one allocation when a low threshold creates a dense graph.
+        for i0 in range(0, m, _SEMANTIC_TILE):
+            i1 = min(m, i0 + _SEMANTIC_TILE)
+            for j0 in range(i0, m, _SEMANTIC_TILE):
+                j1 = min(m, j0 + _SEMANTIC_TILE)
+                tile_members = members[i0:i1] + members[j0:j1]
+                first_root = find(tile_members[0])
+                if all(find(member) == first_root for member in tile_members[1:]):
+                    continue  # every possible edge is already represented
+                sims = E[i0:i1] @ E[j0:j1].T
+                same_tile = i0 == j0
+                for local_a in range(i1 - i0):
+                    start = local_a + 1 if same_tile else 0
+                    hits = np.flatnonzero(sims[local_a, start:] >= t) + start
+                    left = members[i0 + local_a]
+                    for local_b in hits:
+                        right = members[j0 + int(local_b)]
+                        if find(left) != find(right):
+                            union(left, right)
     comps: dict = {}
     for i in range(len(items)):
         comps.setdefault(find(i), []).append(i)
@@ -3386,7 +3757,7 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
     # style id are one generation.  Refuse the whole semantic partition if any
     # member moved while the CPU comparison ran.
     try:
-        cache_stat = score_cache_path.stat()
+        cache_stat = cache_path.stat()
         cache_still_current = (
             cache_stat.st_size, cache_stat.st_mtime_ns) == cache_generation
     except OSError:
@@ -3404,46 +3775,56 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
         row = live_rows.get(image_id)
         current_path = analysis_image_path(bank, row) if row is not None else None
         current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
-        if (row is None or row.analysis_fingerprint != expected_fp
-                or current_fp != expected_fp
+        clip_invalid = (engine == 'clip' and row is not None
+                        and row.analysis_fingerprint != expected_fp)
+        if (row is None or clip_invalid or current_fp != expected_fp
                 or not _same_resolved_path(current_path, expected_path)
                 or (block_by_style and row.style_cluster != expected_style)):
             partition_valid = False
-            if (row is not None and row.analysis_fingerprint == expected_fp
+            if (engine == 'clip' and row is not None
+                    and row.analysis_fingerprint == expected_fp
                     and current_fp != expected_fp):
                 _invalidate_effective_analysis(row)
                 row.analysis_fingerprint = current_fp
     if not partition_valid:
         BankImage.query.filter_by(bank_id=bank_id).update(
-            {'semantic_dup_group': None}, synchronize_session=False)
+            {BankImage.semantic_dup_group: None, semantic_lane: None},
+            synchronize_session=False)
         db.session.commit()
         if not cache_still_current:
-            reset_score_memo()
+            if engine == 'clip':
+                reset_score_memo()
+            else:
+                bank_semantic_engine.reset_memo()
         return 0
     # Publish a complete replacement in one transaction only after validation.
     BankImage.query.filter_by(bank_id=bank_id).update(
-        {'semantic_dup_group': None}, synchronize_session=False)
+        {BankImage.semantic_dup_group: None, semantic_lane: None},
+        synchronize_session=False)
     for gid, members in enumerate(groups, start=1):
         member_ids = [items[i][0] for i in members]
         for i0 in range(0, len(member_ids), _SQL_IN_CHUNK):
             BankImage.query.filter(
                 BankImage.id.in_(member_ids[i0:i0 + _SQL_IN_CHUNK])).update(
-                {'semantic_dup_group': gid}, synchronize_session=False)
+                {BankImage.semantic_dup_group: gid, semantic_lane: gid},
+                synchronize_session=False)
     db.session.commit()
     return len(groups)
 
 
 def start_semantic_dedup(app, user_id, bank_id, threshold=None):
-    """Launch the stage-2 semantic near-duplicate pass (CPU, reuses the ✨ Score
-    embeddings — no GPU). ValueError (→400) when Score hasn't produced any usable
-    embedding yet, so the UI shows the clear "run Score first" hint rather than a
-    job that quietly does nothing."""
+    """Launch the CPU semantic near-duplicate pass in the selected space."""
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    if not _load_score_embeddings(bank):
-        raise ValueError('run ✨ Score first — semantic near-duplicates reuse its '
-                         'embeddings')
+    engine = _selected_semantic_engine(bank)
+    threshold = _semantic_dup_threshold(engine, threshold)
+    if not _load_semantic_embeddings(bank):
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — semantic near-duplicates reuse '
+                             'its embeddings')
+        raise ValueError('run Semantic index first — no SigLIP2 embeddings are '
+                         'available')
     return bank_jobs.start(app, bank_id, 'semantic_dedup',
                            _semantic_dedup_job(bank_id, threshold), total=0)
 
@@ -4034,6 +4415,29 @@ def _farthest_point(E, factor, n):
     return chosen
 
 
+def _verified_semantic_result_provenance(bank: ImageBank, captured_engine: str,
+                                         captured_model_key: str) -> dict:
+    """Refresh the selector before publishing an engine-bound result.
+
+    A second browser tab can PATCH the Bank while NumPy ranks a large pool.
+    Returning those old-space ids under the new selector would make the response
+    internally plausible but semantically false, so fail closed and let it retry.
+    """
+    try:
+        db.session.refresh(bank, attribute_names=['semantic_engine'])
+    except Exception as exc:  # deleted/detached/concurrently unavailable
+        raise ValueError(
+            'the Bank changed during semantic selection — retry') from exc
+    current_engine = _selected_semantic_engine(bank)
+    current_model_key = engine_model_key(current_engine)
+    if ((current_engine, current_model_key)
+            != (captured_engine, captured_model_key)):
+        raise ValueError(
+            'the semantic engine changed during selection — retry in the '
+            'current space')
+    return {'engine': captured_engine, 'model_key': captured_model_key}
+
+
 def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
                    filters=None):
     """Farthest-point sampling over the ✨ Score CLIP embeddings, tempered by a
@@ -4082,10 +4486,15 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — diversity sampling reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — diversity sampling reuses its '
+                             'embeddings')
+        raise ValueError('run Semantic index first — diversity sampling needs '
+                         'SigLIP2 embeddings')
     n = max(1, min(int(n), _CURATION_MAX_N))
     try:
         w = 0.0 if typicality is None else float(typicality)
@@ -4095,8 +4504,10 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
     m = len(ids)
     if m <= n:                                   # whole pool already fits
+        provenance = _verified_semantic_result_provenance(
+            bank, engine, model_key)
         return {'image_ids': sorted(ids), 'pool': m, 'requested': n,
-                'typicality': w}
+                'typicality': w, **provenance}
     # Novelty multiplier, in (0, 1] — never 0, so the -inf "already chosen"
     # sentinel below stays -inf (0 × -inf would be a NaN) and so even a fully
     # penalised row stays a last resort rather than an unpickable one.
@@ -4104,8 +4515,10 @@ def select_diverse(user_id, bank_id, n=60, *, typicality=_TYPICALITY_DEFAULT,
     if w > 0.0:
         factor = 10.0 ** (-_TYPICALITY_DECADES * w * _isolation_penalty(E))
     chosen = _farthest_point(E, factor, n)
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'image_ids': sorted(ids[i] for i in chosen),
-            'pool': m, 'requested': n, 'typicality': w}
+            'pool': m, 'requested': n, 'typicality': w, **provenance}
 
 
 # --- balanced selection (coverage of the LABELS, not of the embedding space) --
@@ -4221,10 +4634,15 @@ def select_balanced(user_id, bank_id, n=60, *, axis=_BALANCE_DEFAULT_AXIS,
         raise ValueError('bank not found')
     if axis not in _BALANCE_AXES:
         axis = _BALANCE_DEFAULT_AXIS
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — balanced selection reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — balanced selection reuses its '
+                             'embeddings')
+        raise ValueError('run Semantic index first — balanced selection needs '
+                         'SigLIP2 embeddings')
     n = max(1, min(int(n), _CURATION_MAX_N))
     try:
         w = 0.0 if typicality is None else float(typicality)
@@ -4291,11 +4709,13 @@ def select_balanced(user_id, bank_id, n=60, *, axis=_BALANCE_DEFAULT_AXIS,
     order = {k: i for i, k in enumerate(_FRAMINGS)}
     report.sort(key=lambda b: (order.get(b['framing'], 99),
                                b['cluster'] if b['cluster'] is not None else -1))
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'image_ids': sorted(ids[i] for i in chosen),
             'pool': m, 'requested': n, 'selected': len(chosen),
             'typicality': w, 'axis': axis, 'buckets': report,
             'unlabelled': unlabelled, 'unknown': unknown,
-            'shortfall': max(0, n - len(chosen))}
+            'shortfall': max(0, n - len(chosen)), **provenance}
 
 
 def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=None):
@@ -4312,21 +4732,33 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — reference similarity reuses its '
-                         'embeddings')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — reference similarity reuses '
+                             'its embeddings')
+        raise ValueError('run Semantic index first — reference similarity needs '
+                         'SigLIP2 embeddings')
     ref = db.session.get(BankImage, int(ref_id))
     if ref is None or ref.bank_id != bank_id:
         raise ValueError('reference image not found in this bank')
     ref_path = analysis_image_path(bank, ref)
     ref_emb = emb_by_path.get(ref_path) if ref_path else None
     if ref_emb is None:
-        raise ValueError('the reference image has no ✨ Score embedding — score '
-                         'it first (it may have been rejected before Score ran)')
+        if engine == 'clip':
+            raise ValueError('the reference image has no ✨ Score embedding — '
+                             'score it first (it may have been rejected before '
+                             'Score ran)')
+        raise ValueError('the reference image has no SigLIP2 embedding — run '
+                         'Semantic index first')
     ids, E = _pool_embeddings(bank, emb_by_path, filters or {})
     if not ids:
-        return {'results': [], 'image_ids': [], 'pool': 0, 'ref_id': int(ref_id)}
+        provenance = _verified_semantic_result_provenance(
+            bank, engine, model_key)
+        return {'results': [], 'image_ids': [], 'pool': 0,
+                'ref_id': int(ref_id), **provenance}
     rv = np.asarray(ref_emb, dtype='float32')
     rv /= (np.linalg.norm(rv) + 1e-8)
     sims = E @ rv                                 # cosine similarity, (m,)
@@ -4337,8 +4769,10 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
         n = max(1, min(int(n), _CURATION_MAX_N))
         keep = [int(k) for k in order[:n]]
     results = [{'id': ids[k], 'score': round(float(sims[k]), 4)} for k in keep]
+    provenance = _verified_semantic_result_provenance(
+        bank, engine, model_key)
     return {'results': results, 'image_ids': [ids[k] for k in keep],
-            'pool': len(ids), 'ref_id': int(ref_id)}
+            'pool': len(ids), 'ref_id': int(ref_id), **provenance}
 
 
 # ── 🔤 pushing an attribute DOWN a text ranking ──────────────────────────────
@@ -4452,12 +4886,24 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
+    for value, label in ((query, 'query'), (push_down, 'push_down')):
+        limit_error = clip_text_encoder.query_limit_error(value, label)
+        if limit_error:
+            raise ValueError(limit_error)
     # `-term` inside the query means the same thing as the panel's second field,
     # so both are folded into one excluded phrase before anything is encoded.
     positive, from_query = clip_text_encoder.split_query(query)
     text = clip_text_encoder.normalize_query(positive)
     excl = ', '.join(t for t in (clip_text_encoder.normalize_query(push_down),
                                  clip_text_encoder.normalize_query(from_query)) if t)
+    # The inline ``-term`` shorthand and the dedicated field are individually
+    # bounded above, but joining them can exceed that bound. Validate the exact
+    # strings that will become cache keys so this stays a request error (400),
+    # never a misleading encoder-unavailable response (503).
+    for value, label in ((text, 'query'), (excl, 'combined push_down')):
+        limit_error = clip_text_encoder.query_limit_error(value, label)
+        if limit_error:
+            raise ValueError(limit_error)
     if not text:
         # A bare "-hat" is not a search. Ranking by "least like a hat" would
         # return whatever is least like ANYTHING, which is noise wearing the
@@ -4466,10 +4912,15 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
                          'cannot rank anything')
     weight = _push_down_weight(push_down_weight if push_down_weight is not None
                                else PUSH_DOWN_WEIGHT_DEFAULT)
-    emb_by_path = _load_score_embeddings(bank)
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
-        raise ValueError('run ✨ Score first — text search ranks the embeddings '
-                         'it computes')
+        if engine == 'clip':
+            raise ValueError('run ✨ Score first — text search ranks the '
+                             'embeddings it computes')
+        raise ValueError('run Semantic index first — text search ranks the '
+                         'SigLIP2 embeddings it computes')
     filters = filters or {}
     # How many rows the current filter holds AT ALL — the denominator that makes
     # "searched 120 of 400" (and therefore the unscored warning) truthful.
@@ -4477,20 +4928,25 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
     ids, E = _pool_embeddings(bank, emb_by_path, filters)
     # Encode AFTER the cheap refusals: never make someone wait on a CLIP load to
     # then be told their bank was never scored.
-    qv, cached = clip_text_encoder.encode_query(text)
+    qv, cached = (clip_text_encoder.encode_query(text) if engine == 'clip' else
+                  clip_text_encoder.encode_query(text, engine=engine))
     nv = None
     if excl:
         # A second encode, and a second phrase in the same persistent cache — so
         # a repeated exclusion is as free as a repeated query. `cached` stays
         # true only when BOTH halves were already known, because it is shown to
         # promise instant, and half a cache hit is not instant.
-        nv, ncached = clip_text_encoder.encode_query(excl)
+        nv, ncached = (clip_text_encoder.encode_query(excl) if engine == 'clip'
+                       else clip_text_encoder.encode_query(excl, engine=engine))
         cached = bool(cached) and bool(ncached)
+    missing = max(0, int(filtered) - len(ids))
     base = {'query': text, 'cached': bool(cached), 'filtered': int(filtered),
-            'pool': len(ids), 'unscored': max(0, int(filtered) - len(ids)),
+            'pool': len(ids), 'unscored': missing, 'unindexed': missing,
+            'engine': engine, 'model_key': model_key,
             'push_down': excl or None,
             'push_down_weight': round(weight, 3) if excl else None}
     if not ids:
+        _verified_semantic_result_provenance(bank, engine, model_key)
         return {**base, 'results': [], 'image_ids': [], 'score_range': None,
                 'pool_median': None, 'push_down_moved': None,
                 'push_down_median': None}
@@ -4554,6 +5010,7 @@ def search_by_text(user_id, bank_id, query, n=60, *, push_down=None,
         # which is how it once declared a visibly-reordered grid a failure. When
         # a comparison cannot carry information, the honest output is none: the
         # places-changed count already says what happened.
+    _verified_semantic_result_provenance(bank, engine, model_key)
     return {**base, 'results': results,
             'image_ids': [ids[k] for k in keep], 'score_range': score_range,
             'pool_median': round(float(np.median(sims)), 4),
@@ -4895,22 +5352,23 @@ def _read_cache_count(cache_path):
         return None
 
 
-def _stopped_detail(noun, data, cache_path, total, suffix=''):
+def _stopped_detail(noun, data, cache_path, total, suffix='', *,
+                    final='relaunch to finish and cluster'):
     """The honest end-of-pass line when the user Stopped it. Prefers the child's
     own cancel counts, falls back to the flushed sidecar count, and never invents
     a number it can't back up. ``suffix`` states what reached the DATABASE, which
     is a different claim from what reached the cache and must not be implied."""
-    n = data.get('cached')
+    n = data.get('ready') if 'ready' in data else data.get('cached')
     if n is None:
         n = _read_cache_count(cache_path)
     if n is None:
         return ('Stopped — progress saved to cache'
-                f'{suffix}; relaunch to finish and cluster')
+                f'{suffix}; {final}')
     n = int(n)
     remaining = data.get('remaining')
     remaining = int(remaining) if remaining is not None else max(0, int(total) - n)
     return (f'Stopped — {n} {noun} ({remaining} remaining)'
-            f'{suffix}; relaunch to finish and cluster')
+            f'{suffix}; {final}')
 
 
 # --- rows that can vanish under a long pass ---------------------------------
@@ -5408,6 +5866,100 @@ def _resolve_score_device() -> tuple:
     return ('cuda' if use_gpu else 'cpu'), use_gpu
 
 
+_SEMANTIC_SCRIPT = str(cfg.BACKEND_DIR / 'infer' / 'bank_semantic_infer.py')
+_SEMANTIC_PROGRESS_RE = re.compile(r'\[semantic\] (\d+)/(\d+)')
+
+
+def start_semantic_index(app, user_id, bank_id, rescan=False):
+    """Build/resume the selected image space; CLIP delegates to Score exactly."""
+    from ..capabilities import probe_bank_siglip2
+    bank = get_bank(user_id, bank_id)
+    if not bank:
+        raise ValueError('bank not found')
+    engine = _selected_semantic_engine(bank)
+    if engine == 'clip':
+        return start_score(app, user_id, bank_id, rescore=bool(rescan))
+    capability = probe_bank_siglip2()
+    if not capability.get('ok'):
+        raise RuntimeError(capability.get('detail') or (
+            'SigLIP2 is not installed (Quality tools step in Setup)'))
+    _device, use_gpu = _resolve_semantic_device()
+    reason = _gpu_busy_reason() if use_gpu else None
+    if reason:
+        raise RuntimeError(reason)
+    # SigLIP2 is a semantic Bank index, not the aesthetic Score pool: the bin is
+    # searchable and participates in near-duplicate grouping too.
+    total = BankImage.query.filter_by(bank_id=bank_id).count()
+    return bank_jobs.start(
+        app, bank_id, 'semantic_index',
+        _semantic_index_job(bank_id, bool(rescan)), total=total)
+
+
+def _semantic_index_job(bank_id, rescan=False):
+    def run(job):
+        import json as _json
+        from contextlib import nullcontext
+
+        from ..gpu_window import gpu_exclusive_vision_window
+        bank = db.session.get(ImageBank, bank_id)
+        if not bank:
+            return
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        paths = []
+        for row in rows:
+            path = analysis_image_path(bank, row, refresh_rotation=True)
+            if _is_safe_bank_source(path, label='bank semantic index'):
+                paths.append(path)
+        device, use_gpu = _resolve_semantic_device()
+        bank_jobs.progress(job, done=0, total=len(paths), detail=(
+            f'SigLIP2 semantic index ({device.upper()})'))
+        if not paths:
+            bank_jobs.progress(job, detail=(
+                'done — nothing to index: this Bank has no readable image'))
+            return
+        _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
+        cache_path = _semantic_cache_path(bank_id)
+        payload = _json.dumps(bank_semantic_engine.image_worker_payload(
+            paths, bank_id, engine='siglip2', device=device, rescan=bool(rescan)))
+        python = cfg.get('bank_scoring.python') or sys.executable
+        window = (gpu_exclusive_vision_window(flag_ttl=1800) if use_gpu
+                  else nullcontext())
+        _release_db_before_inference()
+        data, stderr_tail, returncode = _drive_infer_subprocess(
+            job, python, _SEMANTIC_SCRIPT, payload, cache_path,
+            _SEMANTIC_PROGRESS_RE, window)
+        bank_semantic_engine.reset_memo()
+        if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
+            bank_jobs.progress(job, detail=_stopped_detail(
+                'images indexed', data, cache_path, len(paths),
+                suffix='; progress is resumable from this cache',
+                final='relaunch to finish'))
+            return
+        if not data.get('ok'):
+            tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
+            raise RuntimeError(tail or (
+                f'SigLIP2 semantic index produced no output (rc={returncode})'))
+        ready = int(data.get('ready') or 0)
+        failed = int(data.get('failed') or 0)
+        computed = int(data.get('computed') or 0)
+        reused = int(data.get('reused') or 0)
+        unreadable = max(0, len(rows) - len(paths))
+        detail = (f'done — {ready} semantic embedding(s) ready '
+                  f'({computed} computed, {reused} reused)')
+        if failed:
+            detail += f', {failed} failed (will retry)'
+        if unreadable:
+            detail += f', {unreadable} unreadable image(s) still need indexing'
+        bank_jobs.progress(job, done=ready, total=len(rows), detail=detail)
+    return run
+
+
+# Public aliases kept explicit for tests/callers that construct the job directly.
+semantic_index_job = _semantic_index_job
+start_semantic = start_semantic_index
+
+
 # CLIP ViT-L/14 measured at ~336 ms/image on CPU against ~15 ms on a recent
 # card. Used only to warn, never to refuse — a slow pass is still a pass.
 SCORE_CPU_MS_PER_IMAGE = 336
@@ -5486,7 +6038,43 @@ def start_score(app, user_id, bank_id, rescore=False):
 _SCORE_COMMIT_EVERY = 200
 
 
-def _apply_score_results(job, by_path, results, interruptible):
+def _preserved_siglip2_groups(bank_id, by_path) -> dict:
+    """Exact inactive SigLIP2 groups that a CLIP write may carry through.
+
+    The first Score run can be the first writer of ``analysis_fingerprint`` on a
+    migrated row.  Its generic generation binder clears every pixel-derived
+    field before writing CLIP results.  A SigLIP2 group is independent and may be
+    restored only when that engine's pinned runtime cache proves the same SHA.
+    """
+    wanted_ids = set(by_path.values())
+    if not wanted_ids:
+        return {}
+    rows = (BankImage.query.filter(
+        BankImage.bank_id == bank_id,
+        BankImage.id.in_(wanted_ids),
+        BankImage.siglip2_semantic_dup_group.isnot(None)).all())
+    if not rows:
+        return {}
+    bank = db.session.get(ImageBank, bank_id)
+    if bank is None:
+        return {}
+    embeddings = bank_semantic_engine.load_semantic_embeddings(
+        bank, engine='siglip2')
+    row_by_id = {row.id: row for row in rows}
+    preserved = {}
+    for path, image_id in by_path.items():
+        row = row_by_id.get(image_id)
+        fingerprint = bank_semantic_engine.embedding_fingerprint(
+            path, engine='siglip2')
+        if row is not None and path in embeddings and fingerprint is not None:
+            preserved[image_id] = (
+                row.siglip2_semantic_dup_group, fingerprint)
+    return preserved
+
+
+def _apply_score_results(job, by_path, results, interruptible, *,
+                         preserved_siglip2_groups=None,
+                         selected_engine='clip'):
     """Write the PER-IMAGE scores (aesthetic, nsfw) back. Returns
     (written, scored, vanished, stopped).
 
@@ -5522,11 +6110,18 @@ def _apply_score_results(job, by_path, results, interruptible):
         if row is None:      # deleted while the pass ran — see _live_image
             vanished += 1
             continue
-        if not _prepare_analysis_write(row, p, res.get('fingerprint')):
+        prepared = _prepare_analysis_write(row, p, res.get('fingerprint'))
+        preserved = (preserved_siglip2_groups or {}).get(image_id)
+        if not prepared:
             # The child measured a different incarnation of this live path.
             # Its hash-bearing cache entry is discarded/recomputed next run;
             # no scalar from it may be attached to the replacement bytes.
+            _restore_proven_siglip2_group(
+                row, p, preserved, selected_engine=selected_engine)
             continue
+        _restore_proven_siglip2_group(
+            row, p, preserved, selected_engine=selected_engine,
+            accepted_fingerprint=res.get('fingerprint'))
         if 'aesthetic' in res:
             row.aesthetic_score = res['aesthetic']
         if 'nsfw' in res:
@@ -5698,6 +6293,13 @@ def _score_job(bank_id, rescore=False):
         data, stderr_tail, returncode = _drive_infer_subprocess(
             job, python, _SCORE_SCRIPT, payload, cache_path, _SCORE_PROGRESS_RE,
             window)
+        score_results = data.get('results') or {}
+        preserved_siglip2_groups = (
+            _preserved_siglip2_groups(bank_id, by_path)
+            if score_results else {})
+        current_bank = db.session.get(ImageBank, bank_id)
+        selected_engine = (
+            _selected_semantic_engine(current_bank) if current_bank else 'clip')
         # Stopped by the user. The scores the child DID compute are paid GPU work
         # and land in the database here — the pass used to return empty-handed, so
         # an hour of inference reached the disk cache and never reached a single
@@ -5707,9 +6309,11 @@ def _score_job(bank_id, rescore=False):
         # half of one. Relaunching finishes from the cache and clusters then.
         if data.get('cancelled') or (bank_jobs.cancelled(job) and not data.get('ok')):
             saved = 0
-            if data.get('results'):
+            if score_results:
                 _, saved, _v, _s = _apply_score_results(
-                    job, by_path, data['results'], interruptible=False)
+                    job, by_path, score_results, interruptible=False,
+                    preserved_siglip2_groups=preserved_siglip2_groups,
+                    selected_engine=selected_engine)
             suffix = (f'; {saved} score(s) saved, style groups need a full pass'
                       if saved else '')
             bank_jobs.progress(job, detail=_stopped_detail(
@@ -5719,12 +6323,14 @@ def _score_job(bank_id, rescore=False):
             tail = data.get('error') or (stderr_tail[-1] if stderr_tail else '')
             raise RuntimeError(tail or f'scoring pass produced no output '
                                        f'(rc={returncode})')
-        results = data.get('results') or {}
+        results = score_results
         clusters = data.get('clusters') or {}
         computed = data.get('computed')
         reused = data.get('reused')
         written, scored, vanished, stopped = _apply_score_results(
-            job, by_path, results, interruptible=True)
+            job, by_path, results, interruptible=True,
+            preserved_siglip2_groups=preserved_siglip2_groups,
+            selected_engine=selected_engine)
         if vanished:
             logger.info('bank scoring pass: %s image(s) were deleted while it ran',
                         vanished)
@@ -7588,6 +8194,9 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
 # ranks on sharpness/size, not the aesthetic score that isn't computed yet).
 PIPELINE_STEPS = ('scan', 'auto_reject', 'score', 'semantic_dedup', 'watermark',
                   'faces', 'framing', 'caption')
+_SIGLIP2_PIPELINE_STEPS = (
+    'scan', 'auto_reject', 'score', 'semantic_index', 'semantic_dedup',
+    'watermark', 'faces', 'framing', 'caption')
 # Auto-reject inside the pipeline runs right after the quality scan, so it can
 # only act on the CPU-scan flags (and duplicates). The score-derived flags
 # (low_aesthetic/nsfw/watermark) have no data yet at that point.
@@ -7609,11 +8218,14 @@ PIPELINE_REJECT_FLAGS = tuple(f for f in _QUALITY_FLAGS
                               if f not in _PIPELINE_EXCLUDED_REJECT_FLAGS)
 
 
-def _sanitize_pipeline_steps(steps) -> list:
+def _sanitize_pipeline_steps(steps, engine='clip') -> list:
     """Keep only known steps, in the canonical pipeline order (the client can't
     reorder or invent a pass)."""
     want = set(steps or [])
-    return [s for s in PIPELINE_STEPS if s in want]
+    canonical = (_SIGLIP2_PIPELINE_STEPS
+                 if bank_semantic_engine.normalize_engine(engine) == 'siglip2'
+                 else PIPELINE_STEPS)
+    return [s for s in canonical if s in want]
 
 
 def _score_prereq() -> str | None:
@@ -7659,7 +8271,7 @@ def start_pipeline(app, user_id, bank_id, steps=None, reject_flags=None,
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    steps = _sanitize_pipeline_steps(steps)
+    steps = _sanitize_pipeline_steps(steps, _selected_semantic_engine(bank))
     if not steps:
         raise ValueError('no pipeline steps selected')
     reject_flags = [f for f in (reject_flags or []) if f in PIPELINE_REJECT_FLAGS]
@@ -7842,6 +8454,32 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         entry['counts'] = {'scored': c['scored'], 'style_groups': c['style_groups']}
         entry['detail'] = job.get('detail') or f"scored {c['scored']} image(s)"
         return
+    if step == 'semantic_index':
+        bank = db.session.get(ImageBank, bank_id)
+        if bank is None or _selected_semantic_engine(bank) != 'siglip2':
+            entry['status'], entry['reason'] = (
+                'skipped', 'Semantic index is available only with SigLIP2')
+            return
+        from ..capabilities import probe_bank_siglip2
+        probe = probe_bank_siglip2()
+        if not probe.get('ok'):
+            entry['status'], entry['reason'] = (
+                'skipped', probe.get('detail') or 'SigLIP2 is not installed')
+            return
+        _device, use_gpu = _resolve_semantic_device()
+        reason = _gpu_busy_reason() if use_gpu else None
+        if reason:
+            entry['status'], entry['reason'] = 'skipped', reason
+            return
+        _semantic_index_job(bank_id)(job)
+        measured = semantic_counts(
+            bank, engine='siglip2',
+            total=BankImage.query.filter_by(bank_id=bank_id).count())
+        entry['counts'] = {'semantic_indexed': measured['ok'],
+                           'semantic_total': measured['total']}
+        entry['detail'] = (job.get('detail') or
+                           f"indexed {measured['ok']} image(s) with SigLIP2")
+        return
     if step == 'semantic_dedup':
         # Runs right after Score, reusing its cached embeddings (no GPU). Groups
         # crops/variants for review; resolution stays a UI action (keep best/first
@@ -7851,7 +8489,12 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         n = rebuild_semantic_dup_groups(
             bank_id, _bank_lease=_job_bank_capability(job))
         if n is None:
-            entry['status'], entry['reason'] = 'skipped', 'run ✨ Score first — no embeddings'
+            bank = db.session.get(ImageBank, bank_id)
+            if bank is not None and _selected_semantic_engine(bank) == 'siglip2':
+                reason = 'run Semantic index first — no SigLIP2 embeddings'
+            else:
+                reason = 'run ✨ Score first — no embeddings'
+            entry['status'], entry['reason'] = 'skipped', reason
             return
         entry['counts'] = {'semantic_groups': n}
         entry['detail'] = f'{n} semantic near-duplicate group(s) to review'
@@ -7979,7 +8622,7 @@ def _coverage_embeddings(bank, crit):
     resolution, same fast-path reasoning — see ``_pool_embeddings``.
     """
     import numpy as np
-    emb_by_path = _load_score_embeddings(bank)
+    emb_by_path = _load_semantic_embeddings(bank)
     if not emb_by_path:
         return None
     rows = (BankImage.query.filter(BankImage.bank_id == bank.id, crit)
@@ -8008,15 +8651,20 @@ def _coverage_embeddings(bank, crit):
     return E
 
 
-def _visual_spread(bank, crit) -> dict:
-    """How alike the pool LOOKS, from the cached CLIP embeddings.
+def _visual_spread(bank, crit, *, engine=None) -> dict:
+    """How alike the pool LOOKS, from the selected semantic embeddings.
 
     Returns ``{'scored': m, 'similarity': float|None, 'band': str}`` where band is
     'redundant' | 'leaning' | 'varied' | 'unknown'. 'unknown' with scored 0 means
     the ✨ Score pass has not run (or its cache went stale) — the panel says so
     rather than drawing a bar it did not measure.
     """
-    out = {'scored': 0, 'similarity': None, 'band': 'unknown'}
+    engine = (_selected_semantic_engine(bank) if engine is None
+              else bank_semantic_engine.normalize_engine(engine))
+    calibrated = engine == 'clip'
+    out = {'scored': 0, 'semantic_indexed': 0, 'similarity': None,
+           'band': 'unknown', 'calibrated': calibrated,
+           'engine': engine, 'model_key': engine_model_key(engine)}
     try:
         E = _coverage_embeddings(bank, crit)
     except Exception:
@@ -8025,17 +8673,20 @@ def _visual_spread(bank, crit) -> dict:
         return out
     if E is None or len(E) < 2:
         out['scored'] = 0 if E is None else len(E)
+        out['semantic_indexed'] = out['scored']
         return out
     n = len(E)
     out['scored'] = n
+    out['semantic_indexed'] = n
     if n < _SPREAD_MIN_POOL:
         return out
     s = E.sum(axis=0, dtype='float64')
     sim = (float(s @ s) - n) / (n * n - n)
     sim = max(-1.0, min(1.0, sim))
     out['similarity'] = round(sim, 4)
-    out['band'] = ('redundant' if sim >= _SPREAD_REDUNDANT
-                   else 'leaning' if sim >= _SPREAD_LEANING else 'varied')
+    if calibrated:
+        out['band'] = ('redundant' if sim >= _SPREAD_REDUNDANT
+                       else 'leaning' if sim >= _SPREAD_LEANING else 'varied')
     return out
 
 
@@ -8189,6 +8840,11 @@ def _spread_advice(spread, total) -> list:
     if total < _SPREAD_MIN_POOL:
         return []
     if not spread['scored']:
+        if spread.get('engine') == 'siglip2':
+            return [{'tone': 'info',
+                     'text': 'Run Semantic index to also see how varied the set '
+                             'LOOKS — the labels above cannot tell two hundred '
+                             'near-identical shots from two hundred different ones.'}]
         return [{'tone': 'info',
                  'text': 'Run ✨ Score to also see how varied the set LOOKS — the '
                          'labels above cannot tell two hundred near-identical shots '
@@ -8237,17 +8893,22 @@ def coverage(user_id, bank_id) -> dict | None:
     bank = get_bank(user_id, bank_id)
     if not bank:
         return None
+    engine = _selected_semantic_engine(bank)
+    model_key = engine_model_key(engine)
     stats = _coverage_stats(bank_id)
     crit = _coverage_pool_crit(bank_id)
 
     captions = [c for (c,) in db.session.query(BankImage.caption)
                 .filter(BankImage.bank_id == bank_id, crit).all()]
     variety = caption_coverage.analyse(captions, kind=_COVERAGE_KIND)
-    spread = _visual_spread(bank, crit)
+    spread = _visual_spread(bank, crit, engine=engine)
     # Nested, because `analyse` returns its own `total`/`axes` and the bank payload
     # already owns `total` — flattening would silently overwrite the pool size.
     stats['variety'] = variety
     stats['visual'] = spread
+    stats['engine'] = engine
+    stats['model_key'] = model_key
+    stats['semantic_indexed'] = int(spread['scored'])
 
     advice = _coverage_advice(stats)
     if stats['total']:
@@ -8260,6 +8921,7 @@ def coverage(user_id, bank_id) -> dict | None:
     # sources rather than as three separate verdicts the user has to merge.
     advice.sort(key=lambda a: 0 if a['tone'] == 'warn' else 1)
     stats['advice'] = advice
+    _verified_semantic_result_provenance(bank, engine, model_key)
     return stats
 
 
@@ -8563,7 +9225,7 @@ def _copied_image_dimensions(path) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _cache_bundle_matches_analysis(bundle, analysis) -> dict:
+def _cache_bundle_matches_analysis(bundle, analysis, *, semantic_engine=None) -> dict:
     """Return only cache lanes that exactly corroborate snapshot scalars."""
     def same_optional(left, right, tolerance):
         if left is None or right is None:
@@ -8578,10 +9240,25 @@ def _cache_bundle_matches_analysis(bundle, analysis) -> dict:
     out = {}
     score = (bundle or {}).get('score')
     if score is not None:
+        clip_group_needs_embedding = (
+            value('clip_semantic_dup_group') is not None
+            or (semantic_engine == 'clip'
+                and value('semantic_dup_group') is not None))
+        def score_scalar_matches(cache_value, field, tolerance):
+            stored = value(field)
+            # A group-only historical snapshot may not carry optional score
+            # scalars, but any scalar it *does* advertise must still agree.
+            return ((stored is None
+                     and (clip_group_needs_embedding or cache_value is None))
+                    or (stored is not None and cache_value is not None
+                        and same_optional(cache_value, stored, tolerance)))
+
         if (score['state'] == 'ok'
-                and same_optional(score['aesthetic'], value('aesthetic_score'), 1e-4)
-                and same_optional(score['nsfw'], value('nsfw_score'), 1e-4)) \
-                or (score['state'] == 'error'
+                and score_scalar_matches(
+                    score['aesthetic'], 'aesthetic_score', 1e-4)
+                and score_scalar_matches(score['nsfw'], 'nsfw_score', 1e-4)) \
+                or (not clip_group_needs_embedding
+                    and score['state'] == 'error'
                     and value('aesthetic_score') is None
                     and value('nsfw_score') is None):
             out['score'] = score
@@ -8590,6 +9267,12 @@ def _cache_bundle_matches_analysis(bundle, analysis) -> dict:
         if (same_optional(face['det'], value('face_det'), 1e-3)
                 and same_optional(face['yaw'], value('face_yaw'), 1e-2)):
             out['face'] = face
+    # The independent semantic lane has no scalar DB columns to corroborate.
+    # Its own exact provenance/model contract was already checked while loading
+    # the sidecar/runtime cache, so retaining it here is the only honest test.
+    semantic = (bundle or {}).get('semantic')
+    if semantic is not None:
+        out['semantic'] = semantic
     return out
 
 
@@ -8645,11 +9328,14 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
     values = {}
     compatible = None
     cache_bundle = {}
+    source_engine = None
     if preserve_analysis:
         compatible = bank_transfer_metadata.compatible_snapshot(
             row.bank_analysis_snapshot, copied_path)
         if compatible:
             values.update(compatible['analysis'])
+            source_engine = bank_transfer_metadata.bank_semantic_engine_for_fingerprint(
+                row.transfer_metadata, copied_fingerprint)
             cache_ref = compatible.get('cache_ref')
             if cache_ref:
                 if not analysis_cache_dir:
@@ -8659,23 +9345,49 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
                 if loaded is None:
                     raise RuntimeError(
                         'Bank analysis snapshot references a missing or invalid cache')
+                if (source_engine is None and 'score' in loaded
+                        and 'semantic' not in loaded):
+                    # Pre-selector v3 sidecars carried only the historical CLIP
+                    # Score space, so this is the one unambiguous legacy claim.
+                    source_engine = 'clip'
                 cache_bundle = _cache_bundle_matches_analysis(
-                    loaded, compatible['analysis'])
+                    loaded, compatible['analysis'],
+                    semantic_engine=source_engine)
                 if set(cache_bundle) != set(loaded):
                     raise RuntimeError(
                         'Bank analysis cache does not match its snapshot')
             score_active = any(compatible['analysis'].get(name) is not None for name in (
                 'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
-                'semantic_dup_group', 'style_cluster'))
+                'style_cluster'))
+            active_group = values.get('semantic_dup_group')
+            if active_group is not None and source_engine in ('clip', 'siglip2'):
+                lane = f'{source_engine}_semantic_dup_group'
+                # Old v3 snapshots only had the active column.  Promote that
+                # value into its SHA/provenance-bound engine lane on restore.
+                if values.get(lane) is None:
+                    values[lane] = active_group
+            if source_engine in ('clip', 'siglip2'):
+                values['semantic_dup_group'] = values.get(
+                    f'{source_engine}_semantic_dup_group')
+            else:
+                # Keep explicit inactive lanes as sealed history, but never put
+                # an ambiguous legacy group into an arbitrary active space.
+                values['semantic_dup_group'] = None
+            clip_group_active = values.get('clip_semantic_dup_group') is not None
+            siglip2_group_active = (
+                values.get('siglip2_semantic_dup_group') is not None)
             face_active = (
                 any(compatible['analysis'].get(name) is not None
                     for name in ('face_state', 'face_det', 'face_yaw'))
                 or (compatible['analysis'].get('face_cluster') is not None
                     and compatible['analysis'].get('face_cluster_origin') != 'asserted'))
             if ((score_active and 'score' not in cache_bundle)
+                    or (clip_group_active and 'score' not in cache_bundle)
+                    or (siglip2_group_active and 'semantic' not in cache_bundle)
                     or (face_active and 'face' not in cache_bundle)):
                 raise RuntimeError(
-                    'Bank analysis snapshot is missing a required Score/Face cache')
+                    'Bank analysis snapshot is missing a required '
+                    'Score/Semantic/Face cache')
         # An incompatible snapshot remains a historical vault. Its SHA prevents
         # activation, but a later restore of the Dataset bytes may make it useful
         # again; importing must never destroy that evidence.
@@ -8866,6 +9578,7 @@ def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token
             copied = 0
             cache_entries = {}
             cache_fingerprints = {}
+            compatible_semantic_engines = []
             group_maps = {
                 name: {} for name in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS}
             group_next = {
@@ -8947,6 +9660,15 @@ def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token
                     abort('Could not preserve the complete Dataset image and its '
                           'analysis — the new Bank was discarded.')
                     return
+                engine_claim = None
+                if compatible:
+                    engine_claim = (
+                        bank_transfer_metadata.bank_semantic_engine_for_fingerprint(
+                            row.transfer_metadata, compatible['fingerprint']))
+                    if (engine_claim is None and 'score' in cache_bundle
+                            and 'semantic' not in cache_bundle):
+                        engine_claim = 'clip'  # unambiguous pre-selector sidecar
+                    compatible_semantic_engines.append(engine_claim)
                 scope = compatible.get('group_scope') if compatible else None
                 for field in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS:
                     old = values.get(field)
@@ -8962,6 +9684,14 @@ def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token
                         group_next[field] += 1
                         group_maps[field][key] = mapped
                     values[field] = mapped
+                if engine_claim in ('clip', 'siglip2'):
+                    # Group id remapping is lane-local.  Mirror the selected
+                    # remapped lane last so active and persisted state cannot
+                    # diverge merely because another lane used different ids.
+                    values['semantic_dup_group'] = values.get(
+                        f'{engine_claim}_semantic_dup_group')
+                else:
+                    values['semantic_dup_group'] = None
                 if values.get('face_cluster') is None:
                     values['face_cluster_origin'] = None
                 db.session.add(BankImage(
@@ -9003,12 +9733,28 @@ def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token
                               'the new Bank was discarded and the Dataset was '
                               'left unchanged.')
                         return
+            if (compatible_semantic_engines
+                    and compatible_semantic_engines[0] in ('clip', 'siglip2')
+                    and all(engine == compatible_semantic_engines[0]
+                            for engine in compatible_semantic_engines)):
+                bank.semantic_engine = compatible_semantic_engines[0]
+            # Uniform history restores that space; mixed/ambiguous history keeps
+            # the Bank's durable default (CLIP).  In both cases materialise the
+            # active compatibility column from the selected persisted lane.  A
+            # NULL active value beside a non-NULL selected lane would let the
+            # first engine switch save NULL over valid imported history.
+            selected_lane = getattr(
+                BankImage,
+                f'{_selected_semantic_engine(bank)}_semantic_dup_group')
+            BankImage.query.filter_by(bank_id=bank_id).update(
+                {BankImage.semantic_dup_group: selected_lane},
+                synchronize_session=False)
             db.session.flush()
             _clear_singleton_copy_duplicate_groups(bank_id)
             db.session.commit()
             if not _write_required_transfer_caches(
                     bank_id, cache_entries, cache_fingerprints):
-                abort('Could not preserve every Score/Face cache — the new Bank '
+                abort('Could not preserve every Score/Face cache and Semantic cache — the new Bank '
                       'was discarded and the Dataset was left unchanged.')
                 return
             reset_score_memo()
@@ -9141,6 +9887,7 @@ def start_bank_promote(app, user_id, bank_id, ids, name):
         bank = get_bank(user_id, bank_id)
         if not bank:
             raise ValueError('bank not found')
+        dest.semantic_engine = _selected_semantic_engine(bank)
         rows = _promote_source_rows(bank_id, ids)
         if not rows:
             raise ValueError('nothing to promote — keep or select some images first')
@@ -9225,10 +9972,20 @@ def _same_resolved_path(left, right) -> bool:
 
 
 def _bank_row_analysis(row: BankImage) -> dict:
-    return {
+    values = {
         name: getattr(row, name)
         for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
     }
+    # Rolling-upgrade/manual rows can still have only the historical active
+    # value.  Seal a self-describing v3 snapshot without mutating the source DB.
+    bank = db.session.get(ImageBank, row.bank_id)
+    engine = _selected_semantic_engine(bank) if bank else 'clip'
+    lane = f'{engine}_semantic_dup_group'
+    if values.get('semantic_dup_group') is not None:
+        values[lane] = values['semantic_dup_group']
+    else:
+        values['semantic_dup_group'] = values.get(lane)
+    return values
 
 
 def _raw_source_fingerprint(bank: ImageBank | None,
@@ -9262,7 +10019,7 @@ def _bank_transfer_generation(row: BankImage) -> tuple:
 
 _SCORE_TRANSFER_FIELDS = (
     'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
-    'semantic_dup_group', 'style_cluster')
+    'style_cluster')
 _FACE_MEASURED_TRANSFER_FIELDS = ('face_state', 'face_det', 'face_yaw')
 _LEGACY_UNPROVED_TRANSFER_FIELDS = (
     'framing', 'dup_group')
@@ -9308,12 +10065,26 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
     score_active = (any(getattr(row, name) is not None
                         for name in _SCORE_TRANSFER_FIELDS)
                     or 'score' in available)
+    semantic_active = 'semantic' in available
+    source_bank = db.session.get(ImageBank, row.bank_id)
+    source_engine = _selected_semantic_engine(source_bank) if source_bank else 'clip'
+    active_group = getattr(row, 'semantic_dup_group', None)
+    clip_group_active = (
+        getattr(row, 'clip_semantic_dup_group', None) is not None
+        or (source_engine == 'clip' and active_group is not None))
+    siglip2_group_active = (
+        getattr(row, 'siglip2_semantic_dup_group', None) is not None
+        or (source_engine == 'siglip2' and active_group is not None))
     face_measured = any(getattr(row, name) is not None
                         for name in _FACE_MEASURED_TRANSFER_FIELDS)
     face_computed_cluster = (row.face_cluster is not None
                              and row.face_cluster_origin != 'asserted')
     face_active = face_measured or face_computed_cluster or 'face' in available
     if score_active and 'score' not in available:
+        return None
+    if (clip_group_active and 'score' not in available):
+        return None
+    if siglip2_group_active and 'semantic' not in available:
         return None
     if face_active and 'face' not in available:
         return None
@@ -9344,9 +10115,9 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
     if deterministic_active or unproved_active or asserted_group:
         return ('legacy_tofu' if _complete_legacy_quality_matches(row, payload)
                 else None)
-    # Only SHA-bound Score/Face cache lanes remain. Every carried pixel fact is
+    # Only SHA-bound Score/Semantic/Face cache lanes remain. Every carried pixel fact is
     # individually proven, so this is exact despite the legacy NULL row marker.
-    return ('exact' if (score_active or face_active
+    return ('exact' if (score_active or semantic_active or face_active
                         or _has_bank_watermark_analysis(row)) else None)
 
 
@@ -9357,23 +10128,38 @@ def _row_matches_current_bytes(row: BankImage, path, payload, *, cache_bundle=No
 
 def _cache_bundle_matches_row(bundle, row: BankImage) -> dict:
     """Keep only cache lanes whose scalar results agree with the DB row."""
-    return _cache_bundle_matches_analysis(bundle, row)
+    bank = db.session.get(ImageBank, row.bank_id)
+    return _cache_bundle_matches_analysis(
+        bundle, row,
+        semantic_engine=_selected_semantic_engine(bank) if bank else 'clip')
 
 
 def _write_required_transfer_caches(bank_id, entries, fingerprints) -> bool:
     """Write every selected cache lane or report an incomplete destination."""
     expected = {
         kind: sum(kind in bundle for bundle in entries.values())
-        for kind in ('score', 'face')
+        for kind in ('score', 'semantic', 'face')
     }
     try:
         actual = bank_transfer_metadata.write_runtime_caches(
             _score_cache_path(bank_id), _face_cache_path(bank_id), entries,
+            semantic_path=_semantic_cache_path(bank_id),
             expected_fingerprints=fingerprints)
     except Exception:  # noqa: BLE001 — destination cleanup owns the failure
         logger.warning('bank transfer: cache write failed', exc_info=True)
         return False
     return actual == expected
+
+
+def _bank_portable_capture(row: BankImage, bank: ImageBank | None) -> dict:
+    """Portable Bank row plus the container-owned semantic-space choice."""
+    values = {
+        name: getattr(row, name, None)
+        for name in bank_transfer_metadata.BANK_PORTABLE_FIELDS
+    }
+    values['semantic_engine'] = (
+        _selected_semantic_engine(bank) if bank is not None else 'clip')
+    return values
 
 
 def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
@@ -9385,7 +10171,7 @@ def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
 
     The SHA-256 compares the exact validated source bytes with the completed
     destination.  Quality Scan is deliberately not a prerequisite: a manually
-    kept row may already have paid Score/Face work while every quality field is
+    kept row may already have paid Score/Semantic/Face work while every quality field is
     still NULL.
     """
     fresh_analysis = bank_deterministic_analysis(copied_path)
@@ -9411,10 +10197,7 @@ def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
     })
     values.update(fresh_analysis or {})
     if preserve_analysis:
-        values.update({
-            name: getattr(row, name)
-            for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
-        })
+        values.update(_bank_row_analysis(row))
     values.update({
         'caption': row.caption,
         # Authorship is a fact about the caption, independent of whether the
@@ -9433,7 +10216,8 @@ def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
     source_bank = db.session.get(ImageBank, row.bank_id)
     raw_fingerprint = _raw_source_fingerprint(source_bank, row)
     transfer_metadata = bank_transfer_metadata.capture_transfer_metadata(
-        row.transfer_metadata, bank=row, bank_fingerprint=source_fingerprint,
+        row.transfer_metadata, bank=_bank_portable_capture(row, source_bank),
+        bank_fingerprint=source_fingerprint,
         rebind_dataset_from=raw_fingerprint)
     if transfer_metadata is None:
         raise RuntimeError('Bank transfer metadata is malformed or too large')
@@ -9525,6 +10309,7 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
         copied, unreadable, source_plans = [], 0, []
         cache_index = bank_transfer_metadata.load_runtime_cache_index(
             _score_cache_path(src_bank_id), _face_cache_path(src_bank_id),
+            semantic_path=_semantic_cache_path(src_bank_id),
             wanted_paths=list(dict.fromkeys(
                 path for row in rows
                 for path in (abs_image_path(src, row),
@@ -9650,7 +10435,7 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                 dest_bank_id, cache_entries, cache_fingerprints):
             _fail_discarding_promoted_bank(
                 job, user_id, dest_bank_id,
-                'Could not preserve every Score/Face cache — the new bank was '
+                'Could not preserve every Score/Face cache and Semantic cache — the new bank was '
                 'discarded and the source Bank was left unchanged.')
             return
         reset_score_memo()
@@ -9780,6 +10565,7 @@ def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
         provenance_changes = []
         cache_index = bank_transfer_metadata.load_runtime_cache_index(
             _score_cache_path(bank_id), _face_cache_path(bank_id),
+            semantic_path=_semantic_cache_path(bank_id),
             wanted_paths=[path for row in rows
                           if (path := analysis_image_path(bank, row))])
         # One promotion scope, deliberately not the numeric Bank id: backups can
@@ -9887,7 +10673,8 @@ def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
                     raw_fingerprint = _raw_source_fingerprint(bank, row)
                     transfer_metadata = (
                         bank_transfer_metadata.capture_transfer_metadata(
-                            row.transfer_metadata, bank=row,
+                            row.transfer_metadata,
+                            bank=_bank_portable_capture(row, bank),
                             bank_fingerprint=expected_fingerprint,
                             rebind_dataset_from=raw_fingerprint))
                     if transfer_metadata is None:

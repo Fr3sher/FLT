@@ -32,6 +32,7 @@
  * Plain .js (no JSX) so `node --test` can execute all of it.
  */
 import { PASS_SCOPE_OPTIONS } from './bankPassScope.js';
+import { normalizeSemanticEngine, semanticEngineLabel } from './bankSemanticEngine.js';
 
 /* The reason a whole-bank pass refuses a scope. One sentence, said the same way
    everywhere, because it is the same fact three times. */
@@ -40,6 +41,10 @@ const PARTITION_REASON = (what) =>
   + 'run. A pass handed part of the bank would number that part from 1 and land '
   + 'those ids on top of unrelated groups already saved — so this pass covers '
   + 'everything, always.';
+
+const SEMANTIC_INDEX_REASON = 'The semantic index is one cache for the WHOLE Bank. '
+  + 'Search, similarity, diversity and crops/variants must all read the same '
+  + 'embedding space, so selections and status scopes do not apply.';
 
 /**
  * The passes, keyed by the id used in `payload.pass_scopes` and in the tests.
@@ -116,6 +121,38 @@ export const BANK_PASSES = {
         + 'get flagged and how the grid sorts. Retunable with no pass at all.',
     ],
     caveats: [],
+  },
+
+  semantic_index: {
+    id: 'semantic_index',
+    label: '🧠 Build semantic index',
+    verb: '🧠 Build semantic index',
+    endpoint: 'semantic-index',
+    what: 'Builds or resumes the selected semantic engine cache for search, '
+      + 'similarity, diversity, balanced sampling and crops/variants.',
+    scopes: SEMANTIC_INDEX_REASON,
+    selection: SEMANTIC_INDEX_REASON,
+    fixedScopeLine: 'Every image in the Bank — one shared semantic space.',
+    countable: false,
+    redo: {
+      key: 'rescan',
+      explicit: true,
+      label: 'Rebuild this engine’s semantic index from scratch',
+      note: 'Explicit reindex only. The other engine cache and the CLIP data '
+        + 'owned by ✨ Score are preserved.',
+    },
+    settings: [
+      { name: 'This Bank’s selected semantic engine' },
+      { name: 'Managed model + Python (Setup ▸ Quality tools)' },
+    ],
+    notHere: [
+      'Which engine this Bank uses — choose it in Analyze before opening this window.',
+      '✨ Score’s aesthetic, NSFW, visual-style and 🎨 Medium results — they stay on CLIP.',
+    ],
+    caveats: [
+      'A normal run resumes and fills only missing or stale rows. Tick rebuild only '
+        + 'when you deliberately want to recompute this engine’s entire cache.',
+    ],
   },
 
   faces: {
@@ -273,21 +310,18 @@ export const BANK_PASSES = {
     verb: '✂ Find crops & variants',
     endpoint: 'semantic-dedup',
     what: 'Groups crops and re-compressed variants of the SAME shot that the exact '
-      + 'hash misses, from the ✨ Score embeddings. No GPU.',
+      + 'hash misses, from this Bank’s selected semantic engine. No GPU after the index exists.',
     scopes: PARTITION_REASON('The “same shot” grouping'),
     selection: PARTITION_REASON('The “same shot” grouping'),
-    fixedScopeLine: 'Every image ✨ Score has an embedding for — rejected ones '
-      + 'included. That pool lives in the score cache, so this window cannot put a '
-      + 'number on it without inventing one.',
+    fixedScopeLine: 'Every image the selected semantic engine has indexed — rejected '
+      + 'ones included. That pool lives in the engine cache, so this window cannot '
+      + 'put a number on it without inventing one.',
     countable: false,
     redo: null,
     settings: [
-      { name: 'Same-shot threshold (🎚 Filter thresholds ▸ semantic_dup_threshold)',
-        note: 'Overridable for one run from the 🎚 panel.' },
-      { name: 'Style threshold (🎚 Filter thresholds ▸ style_threshold)',
-        note: 'Not a threshold here — it decides how the comparison is BLOCKED. '
-          + 'Set looser than the same-shot threshold and the pass falls back to '
-          + 'comparing everything against everything.' },
+      { name: 'The selected engine’s same-shot threshold',
+        note: 'CLIP and SigLIP 2 use separate values; their cosine scores are not '
+          + 'numerically interchangeable.' },
     ],
     notHere: [
       'How a group is resolved (keep best / keep first) — that is the ✂ Same shot '
@@ -326,10 +360,52 @@ export const BANK_PASSES = {
 
 /** Every pass id, in the order the panel lists its buttons. */
 export const BANK_PASS_ORDER = ['scan', 'faces', 'score', 'medium', 'framing',
-  'semantic_dedup', 'watermark', 'angles', 'caption'];
+  'semantic_index', 'semantic_dedup', 'watermark', 'angles', 'caption'];
 
-export function bankPass(passId) {
-  return BANK_PASSES[passId] || null;
+export function bankPass(passId, { semanticEngine = 'clip' } = {}) {
+  const spec = BANK_PASSES[passId] || null;
+  if (!spec || (passId !== 'semantic_index' && passId !== 'semantic_dedup')) return spec;
+  const engine = normalizeSemanticEngine(semanticEngine);
+  const label = semanticEngineLabel(engine);
+  if (passId === 'semantic_index') {
+    return {
+      ...spec,
+      label: `🧠 Build ${label} semantic index`,
+      verb: `🧠 Build ${label} semantic index`,
+      what: `Builds or resumes the whole-Bank ${label} cache for search, similarity, `
+        + 'diversity, balanced sampling and crops/variants.',
+      settings: [
+        { name: `${label} — this Bank’s selected semantic engine` },
+        ...spec.settings.slice(1),
+      ],
+    };
+  }
+  return {
+    ...spec,
+    what: `Groups crops and re-compressed variants of the SAME shot that the exact `
+      + `hash misses, from the ${label} semantic index. No GPU after the index exists.`,
+    fixedScopeLine: `Every image ${label} has indexed — rejected ones included. `
+      + 'That pool lives in the engine cache, so this window cannot put a number '
+      + 'on it without inventing one.',
+    settings: engine === 'siglip2' ? [
+      { name: 'SigLIP 2 same-shot threshold '
+          + '(bank_semantic.siglip2_semantic_dup_threshold)',
+        note: 'A separate conservative starting value, not a transplanted CLIP '
+          + 'cutoff. Review the proposed groups; LDS has not yet calibrated a '
+          + 'universal SigLIP 2 boundary across multiple real Banks.' },
+    ] : [
+      { name: 'CLIP same-shot threshold '
+          + '(🎚 Filter thresholds ▸ semantic_dup_threshold)',
+        note: 'Overridable for one run from the 🎚 panel.' },
+      { name: 'Style threshold (🎚 Filter thresholds ▸ style_threshold)',
+        note: 'CLIP-only comparison-blocking optimisation. Set looser than the '
+          + 'same-shot threshold and the pass falls back to comparing everything.' },
+    ],
+    notHere: engine === 'siglip2'
+      ? [...spec.notHere,
+        'CLIP style clusters — SigLIP 2 never reuses them to block comparisons.']
+      : spec.notHere,
+  };
 }
 
 /**

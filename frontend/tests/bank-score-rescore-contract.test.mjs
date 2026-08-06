@@ -100,9 +100,11 @@ test('the scoring pool is never narrowed to "not scored yet"', () => {
 test('a stopped pass writes scores but never a half style partition', () => {
   // Both halves matter and they pull in opposite directions, so both are pinned
   // here: the salvage write must NOT honour the (already set) cancel flag, and
-  // the cluster write must NOT run when the write-back was interrupted.
+  // the cluster write must NOT run when the write-back was interrupted.  The
+  // independently-proven SigLIP2 lane must also travel through this salvage
+  // write: a stopped Score pass is not allowed to erase semantic work.
   assert.match(service,
-    /_apply_score_results\(\s*job, by_path, data\['results'\], interruptible=False\)/)
+    /_apply_score_results\(\s*job, by_path, score_results, interruptible=False,\s*preserved_siglip2_groups=preserved_siglip2_groups,\s*selected_engine=selected_engine\)/)
   // The gap after the `return` is deliberately loose: the pass now publishes a
   // phase line before the partition write (that step is minutes long and used
   // to run mute behind a full progress bar). What is pinned is the ORDER — the

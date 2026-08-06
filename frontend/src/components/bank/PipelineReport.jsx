@@ -17,7 +17,8 @@ import { useState } from 'react'
  * step ships without its label rather than letting the fallback absorb it. */
 export const STEP_LABEL = {
   scan: '🔎 Scan quality', auto_reject: '🧹 Auto-reject',
-  score: '✨ Score', semantic_dedup: '✂ Find crops & variants',
+  score: '✨ Score', semantic_index: '🧠 Build semantic index',
+  semantic_dedup: '✂ Find crops & variants',
   watermark: '🚩 Watermarks', faces: '👥 Group by person',
   framing: '📐 Classify framing', caption: '🏷️ Caption',
 }
@@ -81,6 +82,7 @@ export default function PipelineReport({ report, onDismiss }) {
           <p className="border-t border-border pt-2 text-xs text-content-subtle">
             {c.total ?? 0} images · {c.scanned ?? 0} scanned · {c.reject ?? 0} rejected
             {c.scored ? ` · ${c.scored} scored` : ''}
+            {c.semantic_indexed ? ` · ${c.semantic_indexed} semantic-ready` : ''}
             {c.watermark_detected ? ` · ${c.watermark_detected} watermarked` : ''}
             {c.person_groups ? ` · ${c.person_groups} person group(s)` : ''}
             {c.captioned ? ` · ${c.captioned} captioned` : ''}

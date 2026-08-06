@@ -284,6 +284,10 @@ _SCHEMA_ADDITIONS = (
     # rows remain NULL, just like they were before source attribution was added.
     ('bank_image', 'source_metadata', 'TEXT'),
     ('bank_image', 'semantic_dup_group', 'INTEGER'),
+    # The visible semantic_dup_group is a projection of the selected engine.
+    # These nullable lanes retain both partitions across engine switches.
+    ('bank_image', 'clip_semantic_dup_group', 'INTEGER'),
+    ('bank_image', 'siglip2_semantic_dup_group', 'INTEGER'),
     ('bank_image', 'framing', 'VARCHAR(8)'),
     # Bank watermark CLEANING (two manual levels) — the detected bbox is now kept
     # (the scan used to parse it and throw it away) and the cleaned blob's method
@@ -345,6 +349,9 @@ _SCHEMA_ADDITIONS = (
     ('face_dataset_image', 'caption_origin', 'VARCHAR(16)'),
     ('face_dataset_image', 'caption_short_origin', 'VARCHAR(16)'),
     ('image_bank', 'pipeline_report', 'TEXT'),
+    # Per-Bank semantic engine. The non-null default makes every historical row
+    # byte-for-byte compatible with the CLIP behaviour it already had.
+    ('image_bank', 'semantic_engine', "VARCHAR(16) NOT NULL DEFAULT 'clip'"),
     # Cloud stop that cannot lie: the moment the user asked for a stop, kept in
     # the database so the supervisor can terminate a pod whose monitor thread
     # never honoured it. Additive — existing runs simply carry NULL.
@@ -385,6 +392,37 @@ def _apply_additive_migrations():
                 db.session.commit()
         except Exception:
             db.session.rollback()  # a failed ALTER must never block boot
+    # Before the engine selector there was only ``semantic_dup_group`` and its
+    # space was necessarily CLIP.  Copy that visible partition into the durable
+    # lane (or into SigLIP2 for Banks already switched by an intermediate build)
+    # so the first switch after this migration cannot erase existing work.  The
+    # NULL guard makes this safe and idempotent on every boot.
+    try:
+        db.session.execute(text("""
+            UPDATE bank_image
+               SET clip_semantic_dup_group = semantic_dup_group
+             WHERE clip_semantic_dup_group IS NULL
+               AND semantic_dup_group IS NOT NULL
+               AND bank_id IN (
+                   SELECT id FROM image_bank
+                    WHERE LOWER(TRIM(COALESCE(semantic_engine, 'clip')))
+                          != 'siglip2'
+               )
+        """))
+        db.session.execute(text("""
+            UPDATE bank_image
+               SET siglip2_semantic_dup_group = semantic_dup_group
+             WHERE siglip2_semantic_dup_group IS NULL
+               AND semantic_dup_group IS NOT NULL
+               AND bank_id IN (
+                   SELECT id FROM image_bank
+                    WHERE LOWER(TRIM(COALESCE(semantic_engine, 'clip')))
+                          = 'siglip2'
+               )
+        """))
+        db.session.commit()
+    except Exception:
+        db.session.rollback()  # legacy backfill is best-effort, boot stays open
     # Same loop, same discipline: idempotent (IF NOT EXISTS), additive only, and
     # fail-open — a database that cannot take an index still boots, just slower.
     for table, col in _INDEX_ADDITIONS:

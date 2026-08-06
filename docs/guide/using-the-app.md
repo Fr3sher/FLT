@@ -516,8 +516,9 @@ always know what's been used where.
 
 **🎨 Curate down to the right subset.** Culling removes the bad shots; curation
 picks the *good* subset — and it's most of what makes a LoRA good. Once **✨
-Score** has run (it caches a CLIP embedding per image), the **Curate** row under
-the selection bar offers two selectors that cost no extra GPU time:
+Score** has run (the default CLIP semantic index), or the Bank's optional
+**SigLIP 2 semantic index** is ready, the **Curate** row under the selection bar
+offers two selectors that cost no extra inference:
 
 - **🎨 Pick diverse** — enter a number and it selects the images that best
   *cover the variety* of what you're looking at (varied angles, outfits, scenes),
@@ -570,12 +571,14 @@ hundred near-identical shots from two hundred different ones, and they say
 nothing about outfits, lighting or camera angle. Two things you may already have
 on disk can, so the panel also reads them when they exist:
 
-- **Visual spread**, from the CLIP embeddings the ✨ Score pass caches. It reports
+- **Visual spread**, from the Bank's selected semantic index. It reports
   the average similarity across the pool — *"91% average similarity — a set this
   repetitive teaches one look"*. The bands were calibrated by measuring real
   banks: an ordinary one sits near 65%, an image plus its nearest neighbours
-  lands around 79-90%. Without ✨ Score it says **Not measured** — never
-  "varied", because nothing looked.
+  lands around 79-90% with CLIP. SigLIP 2 has its own score distribution, so LDS
+  shows its measured similarity but deliberately gives it no *varied/alike* band
+  until that engine has been calibrated on real Banks. Without the selected index
+  it says **Not measured** — never "varied", because nothing looked.
 - **Caption variety**, from the captions the 🏷️ pass wrote, read by the same
   lexicon the dataset Coverage panel uses. It reports which camera views,
   lightings, settings, outfits and expressions your captions mention and which
@@ -1012,14 +1015,41 @@ negated thing, not less (`a woman without a bikini` measured 60% bikinis against
 10.1% baseline), so `without a watermark` is reported back to you instead of being
 quietly sent. To guarantee an absence, use the word-exclude box.
 
+## Choose CLIP or SigLIP 2 for Bank semantics
+
+Each Bank has its own **Semantic engine** choice in **① Analyze**:
+
+- **CLIP** is the compatible default. Its index is the embedding cache already
+  produced by **✨ Score**, so every existing Bank behaves exactly as before.
+- **SigLIP 2** is optional. Install the pinned model once in **Setup ▸ Quality
+  tools**, select it on the Bank, then explicitly build that Bank's semantic
+  index. Selecting it never starts a scan or downloads a model by itself.
+
+The selected engine powers **Find by text**, **Similar to selected**, **Pick
+diverse**, **Balanced pick**, visual spread/coverage and **Find crops &
+variants**. The calibrated aesthetic head, NSFW score, visual-style groups and
+**🎨 Medium** remain on CLIP regardless of this choice.
+
+CLIP and SigLIP 2 use separate, model-versioned caches and separate **same-shot
+group partitions**. Switching swaps the visible partition but keeps both, so
+returning to an engine restores its grouping instead of erasing completed work.
+Both partitions and their exact cache entries travel with the existing analysis
+snapshot on Bank → Dataset, Dataset → Bank and Bank → Bank copies; a changed
+image fails the fingerprint check and is re-indexed instead of receiving stale
+analysis.
+
+The SigLIP 2 index is resumable and stoppable like Score: completed entries are
+written atomically, and a later launch pays only for missing, failed or changed
+images. **Reindex SigLIP 2** rebuilds that cache only; it never touches Score.
 
 ## Find bank images by describing them
 
 Under **Curate**, **🔤 Find by text…** ranks images by how close they are to a
 phrase you type — `brunette outdoors, wide shot`, `red dress against a white
-wall`, `close-up, harsh flash`. It reuses the embeddings **✨ Score** already
-computed, so there is no extra model, no download and no GPU work; searching
-while a LoRA trains is fine.
+wall`, `close-up, harsh flash`. It reads the Bank's selected semantic index:
+the existing **✨ Score** cache for CLIP, or the separate index you explicitly
+built for SigLIP 2. A search itself performs no image inference; searching while
+a LoRA trains is fine.
 
 **It is a ranking, not a filter.** Every image scores *something* against every
 phrase, so a result list always comes back full. The panel therefore reports the
@@ -1028,9 +1058,9 @@ are — *"all about equally close"*, *"the last ones are noticeably looser"*, or
 *"the tail is much weaker than the top"*. That spread is the useful signal: it
 says whether you can trust the bottom of the list.
 
-**Do not read those numbers as percentages.** They are much lower than intuition
-suggests. Measured on a real bank (48 images drawn from 8 unrelated datasets,
-using the exact model the app uses — ViT-L/14, `openai` weights):
+**Do not read those numbers as percentages, and do not compare engines by their
+raw values.** The following measurements are specifically for the default CLIP
+ViT-L/14 `openai` space, on a real bank (48 images from 8 unrelated datasets):
 
 | | Range |
 |---|---|
@@ -1065,14 +1095,13 @@ just a filter plus a phrase; nothing needs a second search grammar. Results land
 as a normal selection you review with ✓ Keep / ✕ Reject / ⬆ Promote — nothing is
 kept or deleted for you. **Clear search** returns to the full grid.
 
-**Images that were never scored cannot be found by any phrase.** Rather than
-letting them vanish, the summary counts them: *"3 of 27 images in this filter
-have no ✨ Score embedding yet and could NOT be searched."* Run ✨ Score to
-include them.
+**Images missing from the selected index cannot be found by any phrase.** Rather
+than letting them vanish, the summary counts them. Run **✨ Score** for CLIP, or
+complete the explicit **SigLIP 2 index**, to include them.
 
 ### What it is good at, and what it is not
 
-CLIP reads a picture as a whole. It is reliable for **subjects, styles, framing,
+The default CLIP engine reads a picture as a whole. It is reliable for **subjects, styles, framing,
 setting, materials and colour**, and unreliable for three things in particular:
 
 | Ask for | What you actually get | Measured |
@@ -1140,12 +1169,12 @@ brings the likeliest images to the front; the final call stays yours.
 
 ### Why the first search takes a moment
 
-The text encoder is CLIP's other half, and loading it costs about **ten seconds**
-on the CPU. The app therefore keeps it warm after the first search — subsequent
-searches are effectively instant — and releases it once you close the panel or
-after ten idle minutes, because it holds roughly 2.4 GB of RAM while it lives.
-Every phrase you have already searched is also cached on disk, so re-typing one
-is free even after a restart.
+The text encoder is the other half of the selected image/text model. Loading the
+default CLIP encoder costs about **ten seconds** on the CPU; SigLIP 2 also has a
+one-time model load. The app keeps the chosen encoder warm after the first
+search, then releases it when you close the panel or after the idle window.
+Every phrase is cached under that engine's model key, so CLIP and SigLIP 2 text
+vectors can never be mixed and re-typing one is free even after a restart.
 
 On a memory-tight machine you can set `bank_scoring.text_search_idle_minutes` to
 `0`: nothing is ever kept warm, and each new phrase pays the ten seconds instead.
@@ -1395,7 +1424,7 @@ worth knowing because they fail differently:
 
 | | 🎯 Similar to selected | 🏷️ Tags of this image |
 |---|---|---|
-| Matches on | the whole look (CLIP embeddings) | words *you* ticked |
+| Matches on | the whole look (the selected CLIP or SigLIP 2 index) | words *you* ticked |
 | Works without captions | yes | no |
 | Tells you *why* it matched | no | yes — the chips you ticked |
 
@@ -1809,14 +1838,20 @@ A dataset and an image bank can hand images to each other in both directions,
 and both directions **copy**. That is not an implementation detail — it is the
 rule the whole flow rests on:
 
+The files generated for **ai-toolkit are not LDS's dataset registry**. At launch,
+LDS freezes a disposable training export (kept images, captions and a freshly
+generated job config) from its own Dataset rows. Bank/Dataset identity, analysis
+history and comparisons stay in LDS's database plus its SHA-bound snapshot/cache
+sidecars; they are not reconstructed from an old ai-toolkit config file.
+
 - **Bank → dataset** (**⬆ Promote…**) writes new files into the dataset.
 - **Dataset → bank** (**🗃 Import to bank**, on the dataset) copies the dataset's
   kept images into a folder of the bank's own. Both choices retain the
   Dataset-owned captions, keep/reject curation, framing, watermark and
   provenance. Its dialog defaults to **Reuse compatible final-file analysis**;
   **Start fresh analysis** skips only reuse of prior analysis, not that metadata.
-  The AI **Face** and **Score** results are not reused after normalization or
-  another transformation because they are no longer proved.
+  The AI **Face**, **Score** and **SigLIP 2 semantic** results are not reused after
+  normalization or another transformation because they are no longer proved.
 
 Neither ever *points* at the other's files. The reason is that the two containers
 have opposite contracts. A dataset **owns** its images; a bank merely **points**

@@ -451,18 +451,64 @@ def bank_score(bank_id):
                   rescore=bool(data.get('rescore')))
 
 
+@bp.get('/bank/<int:bank_id>/semantic-engine')
+def bank_semantic_engine_get(bank_id):
+    """Selected image/text space plus the usable cache coverage for this Bank."""
+    payload = banks.semantic_engine_info(LOCAL_USER, bank_id)
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(payload)
+
+
+@bp.patch('/bank/<int:bank_id>/semantic-engine')
+def bank_semantic_engine_set(bank_id):
+    """Persist ``clip`` or ``siglip2`` for this Bank without deleting either cache."""
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
+    try:
+        payload = banks.set_semantic_engine(LOCAL_USER, bank_id, data.get('engine'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    if payload is None:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'ok': True, **payload})
+
+
+@bp.post('/bank/<int:bank_id>/semantic-index')
+def bank_semantic_index(bank_id):
+    """Build/resume the selected semantic image cache.
+
+    This is deliberately a whole-Bank partition like ✨ Score: semantic
+    near-duplicate grouping cannot mix ids produced from two partial spaces.
+    ``rescan`` only discards the selected engine's cache; the other engine and
+    the aesthetic CLIP cache are preserved.
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
+    return _start(banks.start_semantic_index, _app(), LOCAL_USER, bank_id,
+                  rescan=bool(data.get('rescan')))
+
+
 @bp.post('/bank/<int:bank_id>/semantic-dedup')
 def bank_semantic_dedup(bank_id):
-    """Stage-2 semantic near-duplicate pass (crops/variants) over the ✨ Score
-    embeddings — CPU, no GPU. {threshold: 0.95} overrides the config for an ad-hoc
-    re-tri without a re-scan. 202/409; 400 with a "run Score first" hint when no
-    embeddings exist yet."""
-    data = request.get_json(silent=True) or {}
+    """Stage-2 near-duplicates over the Bank's selected semantic engine.
+
+    CPU-only after the engine cache exists. ``threshold`` remains an explicit
+    per-run override; default calibration is engine-specific.
+    """
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
+    # Keep the raw value: the service owns the single finite [0, 1] validation
+    # used by HTTP, pipeline and direct callers. Invalid input must never fall
+    # back silently to a permissive default.
     threshold = data.get('threshold')
-    try:
-        threshold = float(threshold) if threshold not in (None, '') else None
-    except (TypeError, ValueError):
-        threshold = None
     return _start(banks.start_semantic_dedup, _app(), LOCAL_USER, bank_id,
                   threshold=threshold)
 
@@ -565,12 +611,11 @@ def bank_framing(bank_id):
 
 @bp.post('/bank/<int:bank_id>/medium')
 def bank_medium(bank_id):
-    """Classify every scored image by MEDIUM (photo / anime / 3D render /
-    illustration, or an honest 'unsure') from the CLIP embeddings the ✨ Score
-    pass already cached. {rescan:true} re-classifies rows that already have a
-    verdict. 202 on launch · 409 when the bank is busy · 503 when ✨ Score has
-    not run here or CLIP cannot be reached. No GPU is taken and no image is
-    re-inferred."""
+    """Classify images by medium from the CLIP vectors cached by ✨ Score.
+
+    The calibrated prompt set remains CLIP-specific even when this Bank selects
+    SigLIP2 for its general semantic tools. ``rescan`` recomputes verdicts.
+    """
     data = request.get_json(silent=True) or {}
     return _start(banks.start_medium, _app(), LOCAL_USER, bank_id,
                   rescan=bool(data.get('rescan')), **_scope(data))
@@ -943,9 +988,10 @@ def bank_select_balanced(bank_id):
 
 @bp.post('/bank/<int:bank_id>/select-similar')
 def bank_select_similar(bank_id):
-    """Rank the current filter by CLIP similarity to a reference bank image
+    """Rank the current filter in the Bank's selected semantic space
     ({ref_id}); returns the top-N ids (or everything ≥ {min_score}) for the UI to
-    check. Reuses the ✨ Score embeddings (no GPU). 400 when unscored / bad ref."""
+    check. Reuses the active CLIP or SigLIP2 cache (no GPU inference). 400 when
+    the selected index is unavailable or the reference is invalid."""
     data = request.get_json(silent=True) or {}
     try:
         ref_id = int(data.get('ref_id'))
@@ -971,8 +1017,10 @@ def bank_select_similar(bank_id):
 
 @bp.post('/bank/<int:bank_id>/search-text')
 def bank_search_text(bank_id):
-    """Rank the current filter by CLIP similarity to a written QUERY. Reuses the
-    ✨ Score embeddings; only the phrase is encoded, in the ML interpreter.
+    """Rank the current filter by the selected engine's text/image similarity.
+
+    Image vectors come from the active CLIP or SigLIP2 cache; only the phrase is
+    encoded in the matching ML interpreter.
 
     Top-N only, and deliberately NO min_score — unlike select-similar. On a real
     bank the correct-hit and unrelated-pair score distributions overlap (correct
@@ -985,12 +1033,16 @@ def bank_search_text(bank_id):
     threshold is not: a weight scales a subtraction inside one ranking, where a
     threshold would claim a relevance boundary the measurements say is absent.
 
-    400 = the request cannot be answered (no query, bank never scored).
-    503 = the FEATURE is unavailable here (no torch/open_clip, encoder failed) —
+    400 = the request cannot be answered (no query or active semantic index).
+    503 = the FEATURE is unavailable here (matching encoder failed) —
     a different thing, and the UI says so differently: one is "do this first",
     the other is "this install cannot do this at all"."""
     from ..services.clip_text_encoder import TextEncodeError
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
     try:
         n = int(data.get('n') or 60)
     except (TypeError, ValueError):
@@ -1009,19 +1061,31 @@ def bank_search_text(bank_id):
 
 @bp.get('/bank/text-search/status')
 def bank_text_search_status():
-    """Is text search available, is the model already warm, how many phrases are
-    cached, would a download be needed — everything the UI needs to set
-    expectations BEFORE the click rather than after an unexplained wait."""
+    """Read warm/cache state for exactly one semantic text space."""
     from ..services import clip_text_encoder
-    return jsonify({'ok': True, **clip_text_encoder.status()})
+    engine = request.args.get('engine') or 'clip'
+    try:
+        status = clip_text_encoder.status(engine=engine)
+    except (ValueError, clip_text_encoder.TextEncodeError) as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, **status})
 
 
 @bp.post('/bank/text-search/release')
 def bank_text_search_release():
-    """Reap the warm text encoder now (~2.4 GB back). Called when the search
-    panel closes; the idle timer is the backstop for a tab that just went away."""
+    """Reap only the selected engine's warm text worker."""
     from ..services import clip_text_encoder
-    return jsonify({'ok': True, 'released': clip_text_encoder.release()})
+    data = request.get_json(silent=True)
+    if data is None:
+        data = {}
+    if not isinstance(data, dict):
+        return jsonify({'error': 'request body must be an object'}), 400
+    engine = data.get('engine') or 'clip'
+    try:
+        released = clip_text_encoder.release(engine=engine)
+    except (ValueError, clip_text_encoder.TextEncodeError) as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({'ok': True, 'released': released})
 
 
 @bp.get('/bank/<int:bank_id>/delete-rejected/preview')

@@ -59,10 +59,11 @@ function DisabledNote({ children }) {
 
 export default function PassDialog({
   passId, payload, selectionSize = 0, live = false, detectorReady = false,
+  semanticEngine = 'clip',
   scope = '', onScope, redo = false, onRedo,
   onClose, onLaunch, children, secondary, extraSettings,
 }) {
-  const spec = bankPass(passId)
+  const spec = bankPass(passId, { semanticEngine })
   const selection = passSelectionAvailability(passId)
   const rows = useMemo(() => passScopeRows(passId), [passId])
 

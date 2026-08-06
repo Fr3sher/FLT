@@ -93,6 +93,43 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok', with_sig=True):
         banks.reset_score_memo()
 
 
+def _write_siglip2_cache(app, bank_id, embs_by_name):
+    """Fabricate the exact pinned, SHA-bound SigLIP2 cache contract."""
+    with app.app_context():
+        from app.models import BankImage
+        from app.services import bank_semantic_engine as semantic
+        from app.services import bank_semantic_models as models
+        from app.services import image_bank_service as banks
+
+        bank = banks.get_bank(_uid(), bank_id)
+        rows = {os.path.basename(r.relpath): r
+                for r in BankImage.query.filter_by(bank_id=bank_id).all()}
+        paths, sigs, hashes, embs = [], [], [], []
+        for name, vector in embs_by_name.items():
+            path = banks.abs_image_path(bank, rows[name])
+            stat = os.stat(path)
+            paths.append(path)
+            sigs.append(f'{stat.st_size}:{stat.st_mtime_ns}')
+            with open(path, 'rb') as fh:
+                hashes.append(np.frombuffer(
+                    hashlib.sha256(fh.read()).digest(), dtype='uint8'))
+            embs.append(np.asarray(vector, dtype='float32'))
+        cache_path = semantic.semantic_cache_path(bank, 'siglip2')
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        np.savez_compressed(
+            str(cache_path),
+            version=np.asarray([semantic.SEMANTIC_CACHE_VERSION], dtype='int32'),
+            engine=np.asarray(['siglip2']),
+            model_id=np.asarray([models.MODEL_ID]),
+            revision=np.asarray([models.REVISION]),
+            model_key=np.asarray([models.MODEL_KEY]),
+            dimension=np.asarray([models.DIMENSION], dtype='int32'),
+            paths=np.asarray(paths), states=np.asarray(['ok'] * len(paths)),
+            embs=np.stack(embs).astype('float32'), sigs=np.asarray(sigs),
+            hashes=np.stack(hashes).astype('uint8'))
+        banks.reset_score_memo()
+
+
 def _uid():
     from app.config import LOCAL_USER
     return LOCAL_USER
@@ -173,6 +210,56 @@ def test_threshold_retri_without_rescan(client, tmp_path, app):
     assert g['a.jpg'] is None and g['b.jpg'] is None
 
 
+@pytest.mark.parametrize('threshold', [
+    'NaN', 'Infinity', '-Infinity', -0.01, 1.01, 'not-a-number', [], True,
+])
+def test_semantic_dedup_rejects_invalid_thresholds_without_starting_job(
+        client, tmp_path, app, threshold):
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _flat(10)})
+    _write_score_cache(app, bank_id, {'a.jpg': _emb(1.0)})
+    response = client.post(
+        f'/api/bank/{bank_id}/semantic-dedup', json={'threshold': threshold})
+    assert response.status_code == 400
+    assert 'between 0 and 1' in response.get_json()['error']
+    payload = client.get(f'/api/bank/{bank_id}').get_json()
+    assert not payload.get('activity')
+
+
+def test_semantic_dedup_requires_an_object_body(client, tmp_path):
+    bank_id, _ = _mkbank(client, tmp_path, {'a.jpg': _flat(10)})
+    response = client.post(f'/api/bank/{bank_id}/semantic-dedup', json=[])
+    assert response.status_code == 400
+    assert 'object' in response.get_json()['error']
+
+
+def test_exact_semantic_pair_budget_fails_before_allocating_similarity(
+        client, tmp_path, app, monkeypatch):
+    bank_id, _ = _mkbank(client, tmp_path, {
+        'a.jpg': _flat(10), 'b.jpg': _flat(20), 'c.jpg': _flat(30)})
+    _write_score_cache(app, bank_id, {
+        'a.jpg': _emb(1.0), 'b.jpg': _emb(1.0), 'c.jpg': _emb(1.0)})
+    with app.app_context():
+        from app.services import image_bank_service as banks
+        monkeypatch.setattr(banks, '_SEMANTIC_EXACT_PAIR_LIMIT', 2)
+        with pytest.raises(ValueError, match='3 candidate pairs'):
+            banks.rebuild_semantic_dup_groups(bank_id)
+
+
+def test_semantic_grouping_never_materialises_all_matching_pairs(
+        client, tmp_path, app, monkeypatch):
+    bank_id, _ = _mkbank(client, tmp_path, {
+        'a.jpg': _flat(10), 'b.jpg': _flat(20), 'c.jpg': _flat(30)})
+    _write_score_cache(app, bank_id, {
+        'a.jpg': _emb(1.0), 'b.jpg': _emb(1.0), 'c.jpg': _emb(1.0)})
+    monkeypatch.setattr(
+        np, 'argwhere',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('dense pair materialisation is forbidden')))
+    with app.app_context():
+        from app.services import image_bank_service as banks
+        assert banks.rebuild_semantic_dup_groups(bank_id, threshold=0.0) == 1
+
+
 def test_blocking_respects_config_fallback(app, tmp_path, client):
     """When style_threshold > semantic threshold the blocking guarantee can't hold,
     so grouping falls back to a single global block and still finds the pair."""
@@ -186,6 +273,55 @@ def test_blocking_respects_config_fallback(app, tmp_path, client):
         n = banks.rebuild_semantic_dup_groups(bank_id)
     assert n == 1
     assert _groups(app, bank_id)['a.jpg'] == _groups(app, bank_id)['b.jpg']
+
+
+def test_siglip2_dedup_is_global_and_preserves_clip_analysis_lanes(
+        app, tmp_path, client):
+    """SigLIP2 must find a pair across unrelated CLIP style blocks, while its
+    independent cache owns only semantic_dup_group — never Score/Medium fields or
+    the shared analysis fingerprint."""
+    bank_id, _ = _mkbank(client, tmp_path, {
+        'a.jpg': _flat(10), 'b.jpg': _flat(20)})
+    with app.app_context():
+        from app.extensions import db
+        from app.models import BankImage, ImageBank
+
+        bank = db.session.get(ImageBank, bank_id)
+        bank.semantic_engine = 'siglip2'
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        rows[0].style_cluster, rows[1].style_cluster = 11, 22
+        rows[0].aesthetic_score, rows[1].aesthetic_score = 7.1, 8.2
+        rows[0].nsfw_score, rows[1].nsfw_score = 0.01, 0.02
+        rows[0].medium, rows[1].medium = 'photo', 'illustration'
+        rows[0].medium_margin, rows[1].medium_margin = 0.12, 0.34
+        rows[0].analysis_fingerprint = 'a' * 64
+        rows[1].analysis_fingerprint = 'b' * 64
+        before = {
+            row.id: (row.style_cluster, row.aesthetic_score, row.nsfw_score,
+                     row.medium, row.medium_margin, row.analysis_fingerprint)
+            for row in rows
+        }
+        db.session.commit()
+
+    _write_siglip2_cache(app, bank_id, {
+        'a.jpg': _emb(1.0, 0.0),
+        'b.jpg': _emb(0.98, np.sqrt(1 - 0.98 ** 2)),
+    })
+    with app.app_context():
+        from app.models import BankImage
+        from app.services import image_bank_service as banks
+
+        assert banks.rebuild_semantic_dup_groups(bank_id) == 1
+        rows = (BankImage.query.filter_by(bank_id=bank_id)
+                .order_by(BankImage.id.asc()).all())
+        assert rows[0].semantic_dup_group is not None
+        assert rows[0].semantic_dup_group == rows[1].semantic_dup_group
+        assert {
+            row.id: (row.style_cluster, row.aesthetic_score, row.nsfw_score,
+                     row.medium, row.medium_margin, row.analysis_fingerprint)
+            for row in rows
+        } == before
 
 
 # --- the "run Score first" hint ---------------------------------------------

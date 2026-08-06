@@ -1582,3 +1582,62 @@ def test_run_bank_scoring_still_installs_into_the_managed_venv(app, monkeypatch)
     clip_cmd = next(c for c in seen if any('open_clip' in str(p) for p in c))
     assert clip_cmd[0] == managed
     assert saved == managed
+
+
+def test_bank_siglip2_is_explicit_scoped_action(app):
+    from app import setup_installer
+    assert 'bank_siglip2' in setup_installer.INSTALL_ACTIONS
+    assert 'bank_siglip2' in setup_installer._WORKERS
+    assert 'bank_siglip2' in setup_installer._PIP_ACTIONS
+    assert 'bank_siglip2' not in setup_installer._INSTALL_ALL_ORDER
+    with app.app_context():
+        command = setup_installer.manual_command('bank_siglip2')
+    assert 'pip install torch' in command
+    assert setup_installer._TORCH_CPU_INDEX in command
+    assert 'transformers>=4.49' in command
+    assert 'Pillow' in command
+    assert 'hf_hub_download' in command
+
+
+def test_run_bank_siglip2_refuses_borrowed_interpreter(app, monkeypatch, tmp_path):
+    from app import config, setup_installer
+    borrowed = tmp_path / 'other-tool' / 'Scripts' / 'python.exe'
+    borrowed.parent.mkdir(parents=True)
+    borrowed.touch()
+    monkeypatch.setattr(
+        setup_installer, '_run_pip',
+        lambda *a, **k: (_ for _ in ()).throw(
+            AssertionError('must not mutate borrowed environments')))
+    with app.app_context():
+        config.save_config({'bank_scoring': {'python': str(borrowed)}})
+        setup_installer._runs['bank_siglip2'] = setup_installer._new_run()
+        assert setup_installer._run_bank_siglip2('bank_siglip2') == 1
+    log = setup_installer._runs['bank_siglip2']['log']
+    assert any('never changed' in line for line in log)
+
+
+def test_run_bank_siglip2_downloads_only_pinned_files(app, monkeypatch):
+    from app import config, setup_installer
+    from app.services import bank_semantic_models as assets
+    calls = []
+    monkeypatch.setattr(
+        setup_installer, '_ensure_bank_scoring_env',
+        lambda action: setup_installer._bank_scoring_env_python())
+    monkeypatch.setattr(
+        setup_installer, '_run_pip',
+        lambda action, command: calls.append(command) or 0)
+    monkeypatch.setattr(setup_installer, '_verify_capability_import',
+                        lambda action, python: True)
+    monkeypatch.setattr(assets, 'weights_present', lambda root=None: True)
+    with app.app_context():
+        config.save_config({'bank_scoring': {'python': ''}})
+        setup_installer._runs['bank_siglip2'] = setup_installer._new_run()
+        assert setup_installer._run_bank_siglip2('bank_siglip2') == 0
+    packages = next(command for command in calls
+                    if 'transformers>=4.49' in command)
+    assert 'Pillow' in packages
+    download = next(command for command in calls if '-c' in command)
+    payload = download[-1]
+    for filename in assets.FILES:
+        assert filename in payload
+    assert assets.REVISION in payload
