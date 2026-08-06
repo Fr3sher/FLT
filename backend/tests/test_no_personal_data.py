@@ -25,6 +25,7 @@ spot by reading the published ZIP instead. Both import their patterns from
 `scripts/privacy_patterns.py`; there is one table, not two.
 """
 import os
+import re
 import subprocess
 import sys
 
