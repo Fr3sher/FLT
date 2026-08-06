@@ -175,6 +175,10 @@ def test_starting_again_hands_the_child_only_the_images_that_are_left(
     first = _handed(tmp_path)[0]
     banked = client.get(PREVIEW.format(ds_id)).get_json()['resume']['done']
     assert len(first) == 5          # the stopped pass was handed everything
+    # Pinned, not read-and-trusted: every assertion below is relative to `banked`,
+    # so a stop that banked NOTHING would satisfy them all trivially — the test
+    # would go green over the exact regression it exists to catch.
+    assert banked == 2
 
     # Second start: no stop this time.
     monkeypatch.setattr(fmp, 'stop_requested', lambda job: False)
