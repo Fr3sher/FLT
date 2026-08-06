@@ -60,6 +60,35 @@ class _FakeProfileRateLimitedMidIteration:
         raise ConnectionError('429 Too Many Requests')
 
 
+class _FakeProfileWithManyPosts:
+    """A profile with more posts than SCAN_LIMIT, none of which raise or
+    time out — a genuine cap-hit, not an abort."""
+    def get_posts(self):
+        for i in range(instagram.SCAN_LIMIT + 10):
+            yield _FakeSimplePost(f'post{i}')
+
+
+class _FakeCarouselNode:
+    def __init__(self, idx):
+        self.is_video = False
+        self.display_url = f'https://example.invalid/n{idx}.jpg'
+
+
+class _FakeCarouselPostWithManySlides:
+    """One carousel post whose slide count alone exceeds SCAN_LIMIT — the cap
+    can be hit mid-post, not just between posts."""
+    shortcode = 'carousel1'
+    typename = 'GraphSidecar'
+
+    def get_sidecar_nodes(self):
+        return [_FakeCarouselNode(i) for i in range(instagram.SCAN_LIMIT + 10)]
+
+
+class _FakeProfileWithOneBigCarousel:
+    def get_posts(self):
+        yield _FakeCarouselPostWithManySlides()
+
+
 class _FakeProfileWhereEveryPostFailsConversion:
     """Deux posts vus, aucun ne survit à la conversion (ex. changement de mise
     en page côté Instagram) — pas la même chose qu'un profil sans publication."""
@@ -128,6 +157,40 @@ def test_scan_profile_marks_a_mid_iteration_rate_limit_as_partial(monkeypatch):
 
     assert err is None
     assert len(items) == 1
+    assert getattr(items, 'partial', False) is True
+
+
+def test_scan_profile_marks_hitting_scan_limit_as_partial(monkeypatch):
+    """A profile with more than SCAN_LIMIT posts, none of which fail or time
+    out, must not look like a complete SCAN_LIMIT-post profile. Patches
+    `instaloader.Profile.from_username` — the network boundary `_scan_profile`
+    actually iterates over — so the real collection loop runs and really
+    counts posts up to the cap, instead of stubbing `scan()`/`_scan_profile`
+    themselves out."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileWithManyPosts()))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='prolific', original_url=None)
+
+    items, err = instagram.scan(validation)
+
+    assert err is None
+    assert len(items) == instagram.SCAN_LIMIT
+    assert getattr(items, 'partial', False) is True
+
+
+def test_scan_profile_marks_hitting_scan_limit_mid_carousel_as_partial(monkeypatch):
+    """Same cap, hit inside a single carousel post's slides rather than between
+    posts — the other `break` site guarding SCAN_LIMIT."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileWithOneBigCarousel()))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='bigcarousel', original_url=None)
+
+    items, err = instagram.scan(validation)
+
+    assert err is None
+    assert len(items) == instagram.SCAN_LIMIT
     assert getattr(items, 'partial', False) is True
 
 
