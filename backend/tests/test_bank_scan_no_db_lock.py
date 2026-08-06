@@ -150,9 +150,11 @@ def _bank_of_duplicate_pairs(banks, db, tmp_path, pairs):
         # inside a group.
         base = (g * 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
         rows.append(BankImage(bank_id=bank.id, relpath=f'{g:06d}a.jpg',
-                              status='pending', dhash=f'{base:016x}'))
+                              status='pending', dhash=f'{base:016x}',
+                              analysis_fingerprint='0' * 64))
         rows.append(BankImage(bank_id=bank.id, relpath=f'{g:06d}b.jpg',
-                              status='pending', dhash=f'{base ^ 1:016x}'))
+                              status='pending', dhash=f'{base ^ 1:016x}',
+                              analysis_fingerprint='0' * 64))
     db.session.bulk_save_objects(rows)
     db.session.commit()
     return bank.id
@@ -230,7 +232,17 @@ def test_the_duplicate_regrouping_lets_other_writers_through(file_db):
     app, db_path, workdir = file_db
     with app.app_context():
         bank_id = _bank_of_duplicate_pairs(banks, db, workdir, _PAIRS)
-        with _WriterPressure(db_path) as pressure:
+        # This fixture intentionally owns no image files: it measures the DB
+        # write shape, not filesystem throughput.  Model a stable, attested
+        # generation at the two exact seams the regrouping now revalidates.
+        def analysis_path(_bank, row, *args, **kwargs):
+            return str(workdir / 'hashes' / row.relpath)
+
+        with patch.object(banks, 'analysis_image_path', analysis_path), \
+             patch.object(
+                 banks.bank_transfer_metadata, 'content_fingerprint_path',
+                 lambda _path: '0' * 64), \
+             _WriterPressure(db_path) as pressure:
             t0 = time.perf_counter()
             n = banks.rebuild_dup_groups(bank_id, max_distance=1)
             elapsed = time.perf_counter() - t0

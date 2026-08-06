@@ -191,7 +191,7 @@ class DetectorUnavailable(RuntimeError):
 
 
 def scan(paths, *, device=None, locate=True, should_cancel=None, cancel_file=None):
-    """Yield ``(path, state, score, regions, error)`` per image, in input order.
+    """Yield ``(path, state, score, regions, fingerprint, error)`` per image.
 
     `state` is 'detected' | 'none' | 'error'. `regions` are normalised
     [x1,y1,x2,y2] boxes in 0..1 (the same contract the hand-drawn masks and the
@@ -290,6 +290,7 @@ def _run_chunk(chunk, *, device, locate, should_cancel, cancel_file):
             index += 1
             yield (path, str(payload.get('state') or 'error'),
                    payload.get('score'), list(payload.get('regions') or []),
+                   payload.get('fingerprint'),
                    payload.get('error'))
             if should_cancel and should_cancel():
                 break

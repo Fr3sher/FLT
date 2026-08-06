@@ -18,6 +18,7 @@ What these tests pin:
 
 No real model is ever loaded: the encoder is monkeypatched everywhere.
 """
+import hashlib
 import json
 import os
 
@@ -62,7 +63,7 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok'):
         bank = banks.get_bank(_uid(), bank_id)
         rows = {os.path.basename(r.relpath): r
                 for r in BankImage.query.filter_by(bank_id=bank_id).all()}
-        paths, states, arr, sigs = [], [], [], []
+        paths, states, arr, sigs, hashes = [], [], [], [], []
         for nm, e in embs_by_name.items():
             r = rows[nm]
             p = banks.abs_image_path(bank, r)
@@ -71,6 +72,10 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok'):
             arr.append(np.asarray(e, dtype='float32'))
             st = os.stat(p)
             sigs.append(f'{st.st_size}:{st.st_mtime_ns}')
+            with open(p, 'rb') as fh:
+                digest = hashlib.sha256(fh.read()).digest()
+            hashes.append(np.frombuffer(digest, dtype='uint8'))
+            r.analysis_fingerprint = digest.hex()
         cache_path = banks._score_cache_path(bank_id)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         np.savez_compressed(
@@ -78,7 +83,10 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok'):
             paths=np.array(paths), states=np.array(states),
             aes=np.array([float('nan')] * len(paths), dtype='float32'),
             nsfw=np.array([float('nan')] * len(paths), dtype='float32'),
-            embs=np.stack(arr).astype('float32'), sigs=np.array(sigs))
+            embs=np.stack(arr).astype('float32'), sigs=np.array(sigs),
+            hashes=np.stack(hashes).astype('uint8'))
+        banks.db.session.commit()
+        banks.reset_score_memo()
 
 
 def _names_of(app, bank_id, ids):

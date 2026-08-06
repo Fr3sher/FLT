@@ -256,6 +256,11 @@ class FaceDatasetImage(db.Model):
     # deliberately stays in its normal columns and is never rolled back from this
     # historical snapshot. Additive column (migration in create_app).
     bank_analysis_snapshot = db.Column(Text, nullable=True)
+    # Bidirectional, bounded metadata envelope for fields that only one side of
+    # Bank <-> Dataset exposes (short caption, generation provenance, Bank reject
+    # reason, etc.). It is inert history unless the transfer validator explicitly
+    # restores a compatible destination field.
+    transfer_metadata = db.Column(Text, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
@@ -481,6 +486,15 @@ class BankImage(db.Model):
     # this column existed, or found no face; the ⤢ Angle chips call all three
     # "not measured", never "frontal".
     face_yaw = db.Column(Float, nullable=True)
+    # Full SHA-256 of the exact EFFECTIVE bytes (cleaned/rotated when selected)
+    # described by Quality, Score, Face and Framing.  Watermark geometry is the
+    # deliberate exception: it is measured and applied in raw-source coordinates
+    # and therefore has its own authority below.
+    analysis_fingerprint = db.Column(String(64), nullable=True)
+    # SHA-256 of the raw, pre-rotation source used for watermark detection,
+    # regions and cleaning. Historical watermark metadata may survive a baked
+    # transfer, but it is actionable only while this still matches the raw file.
+    watermark_fingerprint = db.Column(String(64), nullable=True)
     # Manual turn, in degrees CLOCKWISE: NULL/0 = untouched | 90 | 180 | 270.
     # (Idea by 1Tomber, GitHub #17.) A bank is a READ-ONLY view over the user's
     # own folder, so a rotation cannot rewrite their file — it is stored here and
@@ -508,6 +522,10 @@ class BankImage(db.Model):
     # read as "a dataset id" everywhere, so it is never re-pointed at a bank.
     # An image can have gone to both; the two answers stay independent.
     promoted_bank_id = db.Column(Integer, nullable=True)
+    # Same portable envelope as FaceDatasetImage.transfer_metadata. A Bank does
+    # not interpret Dataset-only values, but must carry them byte-for-metadata
+    # through Bank -> Bank and back to a Dataset.
+    transfer_metadata = db.Column(Text, nullable=True)
     created_at = db.Column(DateTime, default=db.func.current_timestamp())
 
     def __repr__(self):
@@ -569,10 +587,11 @@ class BankFolderProbe(db.Model):
     So this table only ever feeds a SUGGESTION. It groups nothing, it writes no
     face_cluster, and confirming it is a click the user makes.
 
-    ``content_sig`` is what makes a probe expire honestly: a cheap
-    "<image count>:<highest image id>" fingerprint of the folder at probe time.
-    Images added or removed since → the verdict describes a folder that no longer
-    exists, and the UI drops it rather than suggest from stale evidence."""
+    ``content_sig`` is what makes a probe expire honestly: a cheap DB-only digest
+    of the sampled pool's row ids, effective-analysis identities, transform
+    markers, and face threshold. Images added, removed, transformed or rebound
+    since → the verdict describes a folder that no longer exists, and the UI
+    marks it stale rather than suggest from stale evidence."""
     __tablename__ = 'bank_folder_probe'
     __table_args__ = (db.UniqueConstraint('bank_id', 'subfolder',
                                           name='uq_bank_folder_probe'),)

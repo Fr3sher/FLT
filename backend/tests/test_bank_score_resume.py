@@ -328,12 +328,21 @@ def _fake_child(tmp_path, body, name='fake_score.py'):
     """
     script = tmp_path / name
     script.write_text(
-        'import json, sys\n'
+        'import hashlib, json, sys\n'
         'req = json.loads(sys.stdin.read())\n'
         'images = req["images"]\n'
         'with open(req["cache"] + ".seen", "w", encoding="utf-8") as f:\n'
         '    json.dump(req, f)\n'
         f'{body}\n'
+        '# Mirror the real child contract: every result is bound to the exact\n'
+        '# bytes it measured, including synthetic results used by these tests.\n'
+        'for path, result in (out.get("results") or {}).items():\n'
+        '    if isinstance(result, dict) and "fingerprint" not in result:\n'
+        '        try:\n'
+        '            with open(path, "rb") as source:\n'
+        '                result["fingerprint"] = hashlib.sha256(source.read()).hexdigest()\n'
+        '        except OSError:\n'
+        '            result["fingerprint"] = None\n'
         'print(json.dumps(out))\n', encoding='utf-8')
     return str(script)
 
@@ -360,9 +369,16 @@ def test_stopping_writes_the_computed_scores_and_leaves_style_alone(
     bank_id = _mkbank(client, tmp_path, {'a.jpg': _flat(30), 'b.jpg': _flat(60)})
     with app.app_context():
         from app.extensions import db
-        from app.models import BankImage
+        from app.models import BankImage, ImageBank
+        from app.services import bank_transfer_metadata as transfer
+        bank = db.session.get(ImageBank, bank_id)
         for r in BankImage.query.filter_by(bank_id=bank_id).all():
             r.style_cluster = 7
+            # This is trusted current analysis. Without the exact-byte binding,
+            # the first hardened pass must (correctly) treat the legacy style id
+            # as stale rather than promise to preserve it.
+            r.analysis_fingerprint = transfer.content_fingerprint_path(
+                os.path.join(bank.source_path, r.relpath))
         db.session.commit()
 
     from app.services import image_bank_service as banks
@@ -397,10 +413,14 @@ def test_a_missing_head_never_blanks_the_scores_already_in_the_bank(
     bank_id = _mkbank(client, tmp_path, {'a.jpg': _flat(30)})
     with app.app_context():
         from app.extensions import db
-        from app.models import BankImage
+        from app.models import BankImage, ImageBank
+        from app.services import bank_transfer_metadata as transfer
+        bank = db.session.get(ImageBank, bank_id)
         row = BankImage.query.filter_by(bank_id=bank_id).one()
         row.aesthetic_score = 8.0
         row.nsfw_score = 0.1
+        row.analysis_fingerprint = transfer.content_fingerprint_path(
+            os.path.join(bank.source_path, row.relpath))
         db.session.commit()
 
     from app.services import image_bank_service as banks

@@ -57,6 +57,7 @@ therefore skipped on the cancel path — a stopped pass has 15 s to answer befor
 parent kills it, and spending three minutes there would throw away the scores it
 was trying to save."""
 from __future__ import annotations
+import hashlib
 import io
 import json
 import os
@@ -126,9 +127,27 @@ def _file_sig(path):
         return ''
 
 
+def _file_hash(path):
+    """Raw SHA-256 of the live path, or ``b''`` when it cannot be read."""
+    try:
+        before = _file_sig(path)
+        if not before:
+            return b''
+        digest = hashlib.sha256()
+        with open(path, 'rb') as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.digest() if _file_sig(path) == before else b''
+    except OSError:
+        return b''
+
+
 # --- caching (parallel-array .npz, same idea as the face cache) ----------------
-# Cache tuple: (state, aesthetic|None, nsfw|None, emb, sig). ``sig`` is the file
-# signature at scoring time (see _file_sig) — used to invalidate a changed image.
+# Cache tuple: (state, aesthetic|None, nsfw|None, emb, sig, sha256). ``sig`` is
+# the cheap runtime invalidator; the raw 32-byte digest is transfer authority.
 def _load_cache(path):
     import numpy as np
     out = {}
@@ -141,13 +160,22 @@ def _load_cache(path):
             # 'sigs' is additive — a cache written before signatures shipped has
             # none, so those entries carry an empty sig (never treated as stale).
             sigs = z['sigs'] if 'sigs' in z.files else [''] * len(paths)
+            hashes = z['hashes'] if 'hashes' in z.files else None
+            if (hashes is not None
+                    and (hashes.shape != (len(paths), 32)
+                         or hashes.dtype != np.dtype('uint8'))):
+                raise ValueError('invalid cache hash shape')
         for i, p in enumerate(paths):
             a = float(aes[i])
             n = float(nsfw[i])
+            digest = hashes[i].tobytes() \
+                if hashes is not None else b''
+            if digest == b'\0' * 32:
+                digest = b''
             out[str(p)] = (str(states[i]),
                            None if a != a else a,      # NaN sentinel = "not scored"
                            None if n != n else n,
-                           embs[i], str(sigs[i]))
+                           embs[i], str(sigs[i]), digest)
     except Exception as e:  # noqa: BLE001 — a corrupt cache = recompute, never fatal
         _log(f'[score] cache unreadable, recomputing: {e}')
         return {}
@@ -159,20 +187,35 @@ def _cache_sig(entry):
     return entry[4] if len(entry) > 4 else ''
 
 
+def _cache_hash(entry):
+    value = entry[5] if len(entry) > 5 else b''
+    return value if isinstance(value, bytes) and len(value) == 32 else b''
+
+
 def _is_stale(path, entry):
     """True when the file at ``path`` differs from what the cache recorded — a
     same-path edit. An empty stored/current sig (unreadable then or now) is never
     called stale, so we never thrash a file we cannot stat."""
     stored = _cache_sig(entry)
-    if not stored:
-        return False
+    digest = _cache_hash(entry)
+    # A legacy entry remains readable, but a deliberate Score pass re-computes
+    # it once so every result written back can carry cryptographic byte
+    # authority.  Stat equality alone cannot distinguish a same-size/mtime edit.
+    if not stored or not digest:
+        return True
     current = _file_sig(path)
-    return bool(current) and current != stored
+    return not current or current != stored or _file_hash(path) != digest
 
 
 def _save_cache(path, cache):
     import numpy as np
-    if not path or not cache:
+    if not path:
+        return
+    if not cache:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
         return
     paths = list(cache)
     nan = float('nan')
@@ -186,7 +229,10 @@ def _save_cache(path, cache):
         nsfw=np.array([nan if cache[p][2] is None else cache[p][2] for p in paths],
                       dtype='float32'),
         embs=np.stack([cache[p][3] for p in paths]).astype('float32'),
-        sigs=np.array([_cache_sig(cache[p]) for p in paths]))
+        sigs=np.array([_cache_sig(cache[p]) for p in paths]),
+        hashes=np.frombuffer(b''.join(
+            _cache_hash(cache[p]) or (b'\0' * 32) for p in paths),
+            dtype='uint8').reshape(len(paths), 32))
     os.replace(tmp, path)
 
 
@@ -346,7 +392,9 @@ def _results_from_cache(images, cache, cached_only=False):
             if cached_only:
                 continue
             entry = ('error', None, None, None, '')
-        row = {'state': str(entry[0])}
+        digest = _cache_hash(entry)
+        row = {'state': str(entry[0]),
+               'fingerprint': digest.hex() if digest else None}
         if entry[1] is not None:
             row['aesthetic'] = float(entry[1])
         if entry[2] is not None:
@@ -459,10 +507,18 @@ def main() -> int:
             # overwriting a good aesthetic score with None because the nsfw model
             # came back would trade one hole for another.
             keep = cache.get(p) if p in retry_set else None
+            signature = ''
+            payload_hash = b''
+            changed_while_scoring = False
             try:
                 # The bytes were validated from the open descriptor immediately
                 # before this decode.  Never re-open the mutable Bank path.
+                signature = _file_sig(p)
                 payload = read_validated_bank_image(p)
+                payload_hash = hashlib.sha256(payload).digest()
+                if not signature or _file_sig(p) != signature:
+                    changed_while_scoring = True
+                    raise RuntimeError('image changed while it was read')
                 with Image.open(io.BytesIO(payload)) as im:
                     im = im.convert('RGB')
                     with torch.no_grad():
@@ -480,18 +536,31 @@ def main() -> int:
                             logits = model(**inp).logits
                             probs = torch.softmax(logits, dim=-1)[0]
                             nsfw = round(float(probs[nsfw_idx].item()), 4)
-                    cache[p] = ('ok', aesthetic, nsfw, emb_np, _file_sig(p))
+                    result = ('ok', aesthetic, nsfw, emb_np, signature, payload_hash)
+                # CLIP and the heads can take long enough for a live Bank path
+                # to be replaced.  Publish only while it still identifies the
+                # validated bytes that produced ``result``.
+                if _file_sig(p) != signature:
+                    changed_while_scoring = True
+                    raise RuntimeError('image changed while it was scored')
+                cache[p] = result
             except Exception as e:  # noqa: BLE001 — one broken file never sinks the pass
+                if not signature or _file_sig(p) != signature:
+                    changed_while_scoring = True
                 # A hole-retry that fails KEEPS its entry: the embedding in it is
                 # good work, and downgrading it to ('error', zero) because the file
                 # is momentarily unreadable would drop the image out of the style
                 # partition to fix nothing.
-                if keep is None:
-                    cache[p] = ('error', None, None, zero, _file_sig(p))
+                if changed_while_scoring:
+                    cache.pop(p, None)
+                    if p in retry_set:
+                        reused = max(reused - 1, 0)
+                elif keep is None:
+                    cache[p] = ('error', None, None, zero, signature, payload_hash)
                 _log(f'[score] {i}/{len(work)} ERROR {e}')
                 continue
             finally:
-                if p in todo_set:
+                if p in todo_set and p in cache:
                     fresh += 1
                 computed += 1
                 done_since_save += 1

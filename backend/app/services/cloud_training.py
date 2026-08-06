@@ -26,6 +26,8 @@ from sqlalchemy import func
 from .. import config as cfg
 from ..extensions import db
 from ..models import CloudTrainingRun, SystemState
+from . import checkpoint_registry
+from . import dataset_activity
 from . import dense_local_delivery as dld
 from . import dense_weights
 from . import face_dataset_service as fds
@@ -2231,6 +2233,48 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     return res
 
 
+def _with_frozen_dataset_generation(user_id, dataset_id, detail, operation):
+    """Run ``operation`` while every LDS Dataset mutation is excluded."""
+    lock = fds._dataset_ingest_lock(user_id, dataset_id)
+    with lock:
+        token = dataset_activity.begin_exclusive(
+            dataset_id, 'training_export', detail=detail)
+        if token is None:
+            raise dataset_activity.DatasetActivityBusy(
+                'This dataset already has work in progress. Wait for it to '
+                'finish before launching cloud training.')
+        stop = threading.Event()
+
+        def heartbeat():
+            while not stop.wait(30.0):
+                dataset_activity.progress(token)
+
+        lease = threading.Thread(
+            target=heartbeat, daemon=True,
+            name=f'dataset-{dataset_id}-cloud-freeze-heartbeat')
+        lease.start()
+        try:
+            return operation()
+        finally:
+            stop.set()
+            lease.join(timeout=1.0)
+            dataset_activity.end(token)
+
+
+def _prepare_cloud_generation(user_id, dataset_id, base_model):
+    def prepare():
+        frozen = checkpoint_registry.prepare_launch(
+            user_id, dataset_id, base_model=base_model)
+        if checkpoint_registry.prepared_generation_identity(frozen) is None:
+            raise RuntimeError(
+                'could not freeze the Dataset provenance for cloud training; '
+                'no run was started — retry after checking the backend log')
+        return frozen
+
+    return _with_frozen_dataset_generation(
+        user_id, dataset_id, 'freezing the Dataset for cloud training', prepare)
+
+
 def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                           variant=None, train_type=None, masked=None,
                           allow_caption_mismatch=False, allow_uncaptioned=False,
@@ -2493,9 +2537,8 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
     # only file I/O of the registration happens here, so the registration itself
     # stays one short write and neither the reservation window nor the launch
     # response grows a second writer competing for the database lock.
-    from . import checkpoint_registry
-    _prepared = checkpoint_registry.prepare_launch(
-        user_id, dataset_id, base_model=base_model)
+    _prepared = _prepare_cloud_generation(
+        user_id, dataset_id, base_model)
     with _launch_reservation_lock:
         # Authoritative re-check + insert. Keeping the commit inside this
         # process-wide critical section means a second request always sees the
@@ -2661,8 +2704,12 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                 _run_config_dataset(ds, params), fam, masked=masked),
             prepared=_prepared,
             parent_record_id=parent_record_id, resumed_from=resumed_from)
-        if rec is not None:
-            params['version'] = rec.version
+        if rec is None:
+            raise RuntimeError(
+                'could not persist the Dataset provenance for cloud training; '
+                'the run was not started')
+        params['version'] = rec.version
+        params['record_id'] = rec.id
         _set(run, train_params=json.dumps(params))
         _stop_event_for(run.id).clear()
         _start_monitor(run.id)
@@ -2856,10 +2903,37 @@ def _prepare_staging(run):
     _set(run, phase_detail='Preparing dataset (masks)…')
     params = json.loads(run.train_params or '{}')
     staging = _staging_root() / f'run_{run.id}'
-    (staging / 'samples').mkdir(parents=True, exist_ok=True)
-    lt.export_dataset_to_aitoolkit('local', run.dataset_id,
-                                   masked=bool(params.get('masked', True)),
-                                   dest_dir=str(staging / 'dataset'))
+
+    def verify_and_export():
+        record = checkpoint_registry.record_by_id(params.get('record_id'))
+        expected = checkpoint_registry.record_generation_identity(record)
+        current = checkpoint_registry.prepare_launch(
+            'local', run.dataset_id,
+            base_model=params.get('base_model') or None)
+        observed = checkpoint_registry.prepared_generation_identity(current)
+        if expected is None or observed is None or observed != expected:
+            raise RuntimeError(
+                'The Dataset changed after this cloud run was requested. '
+                'Nothing was uploaded or trained; launch a new run from the '
+                'current Dataset.')
+        current_ds = current['ds']
+        if (getattr(current_ds, 'train_settings', None)
+                != params.get(_TRAIN_SETTINGS_SNAPSHOT)
+                or getattr(current_ds, 'train_slider', None)
+                != params.get(_TRAIN_SLIDER_SNAPSHOT)):
+            raise RuntimeError(
+                'The Dataset training options changed after this cloud run was '
+                'requested. Nothing was uploaded or trained; launch a new run.')
+        (staging / 'samples').mkdir(parents=True, exist_ok=True)
+        return lt.export_dataset_to_aitoolkit(
+            'local', run.dataset_id,
+            masked=bool(params.get('masked', True)),
+            dest_dir=str(staging / 'dataset'))
+
+    _with_frozen_dataset_generation(
+        'local', run.dataset_id,
+        'verifying and exporting the Dataset for cloud training',
+        verify_and_export)
     _set(run, staging_dir=str(staging))
 
 

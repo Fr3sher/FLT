@@ -8,6 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 import io
 import json
+import lzma
 import logging
 import math
 import ntpath
@@ -23,7 +24,9 @@ import time
 import uuid
 import warnings
 import zipfile
+import zlib
 from functools import wraps
+from pathlib import Path
 from types import SimpleNamespace
 from typing import BinaryIO
 from urllib.parse import urlsplit
@@ -127,6 +130,39 @@ UPSCALE_WARN_THRESHOLD = 1.5
 # accidentally create directories.
 _dataset_path = dataset_path
 _dataset_dir = ensure_dataset_dir
+
+
+def _bank_analysis_cache_dir(dataset_id):
+    """Private portable cache vault owned by one Dataset."""
+    return os.path.join(_dataset_dir(dataset_id), '.bank-analysis-cache')
+
+
+def _bank_analysis_cache_is_referenced(dataset_id, cache_ref) -> bool:
+    """Prove a content-addressed sidecar has a committed owning snapshot."""
+    if not bank_transfer_metadata.is_content_addressed_cache_ref(cache_ref):
+        return False
+    try:
+        stored_snapshots = (db.session.query(
+            FaceDatasetImage.bank_analysis_snapshot)
+            .filter(FaceDatasetImage.dataset_id == dataset_id,
+                    FaceDatasetImage.bank_analysis_snapshot.isnot(None)).all())
+        referenced = any(
+            (snapshot := bank_transfer_metadata.parse_snapshot(stored)) is not None
+            and snapshot.get('cache_ref') == cache_ref
+            for stored, in stored_snapshots
+        )
+        return bool(referenced and bank_transfer_metadata.read_cache_sidecar(
+            _bank_analysis_cache_dir(dataset_id), cache_ref) is not None)
+    except Exception:  # noqa: BLE001 - cleanup must never hide the primary failure
+        logger.exception('could not verify Bank analysis sidecar ownership')
+        return False
+
+
+def _remove_unreferenced_bank_analysis_cache(dataset_id, cache_ref) -> None:
+    if (cache_ref
+            and not _bank_analysis_cache_is_referenced(dataset_id, cache_ref)):
+        bank_transfer_metadata.remove_cache_sidecar(
+            _bank_analysis_cache_dir(dataset_id), cache_ref)
 
 
 def _restore_from_trash(trashed_path, original_path) -> None:
@@ -363,10 +399,39 @@ def _dataset_ingest_lock(user_id, dataset_id):
         hash((str(user_id), str(dataset_id))) % len(_DATASET_INGEST_LOCKS)]
 
 
+def _guard_not_bank_export(dataset_id, activity_token=None):
+    exclusive = dataset_activity.exclusive_kind(dataset_id)
+    if (exclusive and dataset_activity.owns_exclusive(
+            dataset_id, activity_token, exclusive)):
+        return
+    if exclusive == 'bank_export':
+        raise RuntimeError(
+            'This dataset is being copied to a Bank. Wait for that copy to '
+            'finish before editing or deleting it.')
+    if exclusive == 'bank_import':
+        raise RuntimeError(
+            'This dataset is receiving images from a Bank. Wait for that copy '
+            'to finish before editing or deleting it.')
+    if exclusive == 'training_export':
+        raise RuntimeError(
+            'This dataset is being frozen for training. Wait for that export '
+            'to finish before editing or deleting it.')
+    if exclusive == 'backup':
+        raise RuntimeError(
+            'This dataset is being backed up. Wait for that backup to finish '
+            'before editing or deleting it.')
+    if exclusive:
+        raise RuntimeError(
+            f'This dataset has an exclusive {exclusive} operation in progress. '
+            'Wait for it to finish before editing or deleting it.')
+
+
 def _serialize_dataset_ingest(fn):
     @wraps(fn)
     def wrapped(user_id, dataset_id, *args, **kwargs):
+        activity_token = kwargs.pop('_dataset_activity_token', None)
         with _dataset_ingest_lock(user_id, dataset_id):
+            _guard_not_bank_export(dataset_id, activity_token)
             return fn(user_id, dataset_id, *args, **kwargs)
     return wrapped
 
@@ -378,6 +443,7 @@ def _serialize_dataset_image_ingest(fn):
         if image is None:
             return fn(user_id, image_id, *args, **kwargs)
         with _dataset_ingest_lock(user_id, image.dataset_id):
+            _guard_not_bank_export(image.dataset_id)
             return fn(user_id, image_id, *args, **kwargs)
     return wrapped
 
@@ -1790,6 +1856,8 @@ def _clear_watermark_metadata(img):
     img.watermark_state = None
     img.watermark_bbox = None
     img.watermark_regions = None
+    img.watermark_source = None
+    img.watermark_score = None
 
 
 def _unkeep_parent_for_kept_improvement(img):
@@ -2161,6 +2229,7 @@ def resolve_small_image_rescue(user_id, dataset_id, candidate_id, choice):
 _UNSET = object()
 
 
+@_serialize_dataset_image_ingest
 def set_image_caption(user_id, image_id, caption, short=_UNSET):
     """Save one image's long caption; optionally its short variant. `short` defaults to a
     sentinel so a caller that only edits the long caption (the inline grid textarea) never
@@ -2489,7 +2558,8 @@ def _edit_image_in_place(user_id, image_id, make_payload, *, tag):
                 raise RuntimeError('image changed while editing; retry')
 
             watermark_snapshot = (
-                img.watermark_state, img.watermark_bbox, img.watermark_regions)
+                img.watermark_state, img.watermark_bbox, img.watermark_regions,
+                img.watermark_source, img.watermark_score)
             watermark_changed = any(value is not None for value in watermark_snapshot)
             if watermark_changed:
                 _clear_watermark_metadata(img)
@@ -2507,7 +2577,8 @@ def _edit_image_in_place(user_id, image_id, make_payload, *, tag):
             except OSError as e:
                 if watermark_changed:
                     (img.watermark_state, img.watermark_bbox,
-                     img.watermark_regions) = watermark_snapshot
+                     img.watermark_regions, img.watermark_source,
+                     img.watermark_score) = watermark_snapshot
                     try:
                         db.session.commit()
                     except Exception:
@@ -2583,6 +2654,20 @@ def delete_image(user_id, image_id):
         raise ValueError('resolve the small-image rescue pair before cleanup')
     original_path = (os.path.join(_dataset_path(img.dataset_id), img.filename)
                      if img.filename else None)
+    snapshot = bank_transfer_metadata.parse_snapshot(img.bank_analysis_snapshot)
+    cache_ref = snapshot.get('cache_ref') if snapshot else None
+    cache_dir = _bank_analysis_cache_dir(img.dataset_id)
+    cache_ref_shared = False
+    if cache_ref:
+        for other in (FaceDatasetImage.query
+                      .filter(FaceDatasetImage.dataset_id == img.dataset_id,
+                              FaceDatasetImage.id != img.id,
+                              FaceDatasetImage.bank_analysis_snapshot.isnot(None))):
+            other_snapshot = bank_transfer_metadata.parse_snapshot(
+                other.bank_analysis_snapshot)
+            if other_snapshot and other_snapshot.get('cache_ref') == cache_ref:
+                cache_ref_shared = True
+                break
     trashed_path = None
     try:
         if img.status == 'pending' and not img.filename and img.job_id:
@@ -2604,6 +2689,10 @@ def delete_image(user_id, image_id):
         db.session.rollback()
         _restore_from_trash(trashed_path, original_path)
         raise
+    # Row deletion is the sole point where its historical opaque vault ceases
+    # to have an owner. Best-effort after commit avoids losing it on DB rollback.
+    if cache_ref and not cache_ref_shared:
+        bank_transfer_metadata.remove_cache_sidecar(cache_dir, cache_ref)
     return True
 
 
@@ -2886,22 +2975,27 @@ def purge_unused(user_id, dataset_id):
 # ZIP portable (≠ export d'entraînement) : manifest + réglages + TOUTES les images
 # avec statuts/captions/scores — pour archiver ou déplacer un dataset entre machines.
 BACKUP_FORMAT = 'lds-dataset-backup'
-BACKUP_VERSION = 1
-_BACKUP_MAX_FILES = 600
+BACKUP_VERSION = 2
+_BACKUP_MAX_FILES = 1400
 _BACKUP_MAX_ROWS = 600
 _BACKUP_MAX_BYTES = 2 * 1024 * 1024 * 1024   # 2 GB uncompressed (zip-bomb guard)
-_BACKUP_MAX_METADATA_BYTES = 4 * 1024 * 1024
+_BACKUP_MAX_METADATA_BYTES = 192 * 1024 * 1024
+_BACKUP_MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
 # The import raster budget permits at most 16 Mi pixels.  96 MiB leaves room for
 # a valid 16 MP RGBA/BMP source plus container overhead, while making a single
 # archive entry incapable of filling a disk or RAM by itself.
 _BACKUP_MAX_IMAGE_BYTES = 96 * 1024 * 1024
 _BACKUP_NAME_RE = re.compile(r'^[\w.-]+\.(webp|jpg|jpeg|png|bmp)$', re.IGNORECASE)
+_BACKUP_WINDOWS_DEVICE_RE = re.compile(
+    r'^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])$', re.IGNORECASE)
+_BACKUP_ANALYSIS_CACHE_RE = re.compile(
+    r'^analysis-cache/(?P<ref>(?:[0-9a-f]{32}|[0-9a-f]{64}))\.npz$')
 _BACKUP_EXTENSION_CANONICAL = {
     '.jpg': '.jpg', '.jpeg': '.jpg', '.png': '.png', '.webp': '.webp', '.bmp': '.bmp',
 }
 
-# Champs snapshotés tels quels par ligne image (job_id/klein_model exclus : liés
-# à la machine source — un backup restauré ne peut pas « regénérer »).
+# Champs snapshotés tels quels par ligne image. ``job_id`` reste exclu car il est
+# lié à la machine source; ``klein_model`` est portable et doit survivre au trajet.
 # ⚠️ 'caption_origin'/'caption_short_origin' are in this tuple ON PURPOSE and must
 # stay: this is the ONLY place the backup knows about them (the column names exist
 # nowhere else in the export/restore path), and dropping them would not lose a
@@ -2911,12 +3005,12 @@ _BACKUP_EXTENSION_CANONICAL = {
 _BACKUP_IMG_FIELDS = ('filename', 'source', 'framing', 'variation_label', 'status',
                       'caption', 'caption_short',
                       'caption_origin', 'caption_short_origin',
-                      'variation_prompt', 'face_score', 'face_state',
+                      'variation_prompt', 'klein_model', 'face_score', 'face_state',
                       'upscale_ratio', 'watermark_state', 'watermark_bbox',
                       'watermark_source', 'watermark_score',
                       'watermark_regions', 'parent_image_id', 'derivation_kind',
                       'fail_reason', 'fail_kind', 'source_metadata',
-                      'bank_analysis_snapshot')
+                      'bank_analysis_snapshot', 'transfer_metadata')
 
 
 def _backup_basename(value):
@@ -2925,7 +3019,269 @@ def _backup_basename(value):
         return None
     if '/' in value or '\\' in value or not _BACKUP_NAME_RE.fullmatch(value):
         return None
+    # Windows treats these stems as devices even when an extension is present
+    # (``NUL.jpg`` writes to NUL). Reject them on every platform so an archive
+    # restored on Windows cannot commit a row whose blob was never created.
+    stem = value.split('.', 1)[0].rstrip(' .')
+    if _BACKUP_WINDOWS_DEVICE_RE.fullmatch(stem):
+        return None
     return value
+
+
+def _backup_file_generation(path):
+    """Identity/generation of one regular backup source, without symlinks."""
+    try:
+        info = os.stat(path, follow_symlinks=False)
+    except (OSError, TypeError, ValueError):
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _backup_handle_generation(stream):
+    try:
+        info = os.fstat(stream.fileno())
+    except (OSError, AttributeError, ValueError):
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _write_backup_file_member(archive, path, archive_name, expected_generation):
+    """Stream one already-identified regular file through the same open handle."""
+    flags = os.O_RDONLY | getattr(os, 'O_BINARY', 0)
+    flags |= getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(path, flags)
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValueError('dataset changed while the backup was created') from exc
+    with os.fdopen(descriptor, 'rb') as source:
+        if _backup_handle_generation(source) != expected_generation:
+            raise ValueError('dataset changed while the backup was created')
+        with archive.open(archive_name, 'w') as destination:
+            remaining = expected_generation[2]
+            while remaining:
+                chunk = source.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    raise ValueError('dataset changed while the backup was created')
+                destination.write(chunk)
+                remaining -= len(chunk)
+            # The generation's exact length is part of the archive contract.  A
+            # concurrent append must not escape the writer's aggregate preflight.
+            if source.read(1):
+                raise ValueError('dataset changed while the backup was created')
+        if _backup_handle_generation(source) != expected_generation:
+            raise ValueError('dataset changed while the backup was created')
+
+
+def _validate_backup_limits(member_sizes=(), *, row_count=None) -> None:
+    """Apply the portable-backup budgets to reader and writer inventories."""
+    members = tuple(member_sizes)
+    if len(members) > _BACKUP_MAX_FILES + 2:
+        raise ValueError(f'too many files in backup (max {_BACKUP_MAX_FILES})')
+    total = 0
+    for name, size in members:
+        total += size
+        if total > _BACKUP_MAX_BYTES:
+            raise ValueError('backup too large (max 2 GB uncompressed)')
+        if (name.startswith(('images/', 'ref/'))
+                and size > _BACKUP_MAX_IMAGE_BYTES):
+            basename = name.rsplit('/', 1)[-1]
+            raise ValueError(
+                f'backup image {basename} is too large '
+                f'(max {_BACKUP_MAX_IMAGE_BYTES // (1024 * 1024)} MiB per image)')
+    if row_count is not None and row_count > _BACKUP_MAX_ROWS:
+        raise ValueError(
+            f'too many image rows in backup (max {_BACKUP_MAX_ROWS})')
+
+
+def _normalized_backup_image_meta(meta, *, version=BACKUP_VERSION):
+    """Validate every active FaceDatasetImage value before restore staging."""
+    if not isinstance(meta, dict):
+        raise ValueError('invalid backup image metadata')
+    out = dict(meta)
+
+    def optional_text(field, limit, *, allowed=None):
+        value = meta.get(field)
+        if value is None:
+            return None
+        if not isinstance(value, str) or len(value) > limit:
+            raise ValueError(f'invalid backup image {field}')
+        if allowed is not None and value not in allowed:
+            raise ValueError(f'invalid backup image {field}')
+        return value
+
+    def optional_number(field, low=None, high=None):
+        value = meta.get(field)
+        if value is None:
+            return None
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value)):
+            raise ValueError(f'invalid backup image {field}')
+        number = float(value)
+        if ((low is not None and number < low)
+                or (high is not None and number > high)):
+            raise ValueError(f'invalid backup image {field}')
+        return number
+
+    filename = meta.get('filename')
+    if filename is not None and not isinstance(filename, str):
+        raise ValueError('invalid backup image filename')
+    if (version >= 2 and filename is not None
+            and _backup_basename(filename) != filename):
+        raise ValueError('invalid backup image filename')
+    source = optional_text('source', 12, allowed=('generated', 'import'))
+    status = optional_text(
+        'status', 10, allowed=('pending', 'keep', 'reject', 'failed'))
+    # v1 and small hand-built integration archives predate ``source``; use the
+    # model's historical defaults without weakening validation of supplied data.
+    source = source or 'generated'
+    status = status or 'pending'
+    out['source'], out['status'] = source, status
+    out['framing'] = optional_text(
+        'framing', 12, allowed=('face', 'bust', 'body', 'back', 'unknown'))
+    out['variation_label'] = optional_text('variation_label', 120)
+    out['caption'] = optional_text('caption', CAPTION_MAX_CHARS)
+    out['caption_short'] = optional_text('caption_short', CAPTION_MAX_CHARS)
+    for field, caption_field in (
+            ('caption_origin', 'caption'),
+            ('caption_short_origin', 'caption_short')):
+        origin = optional_text(field, 16, allowed=caption_origin.VALUES)
+        out[field] = origin if (out.get(caption_field) or '').strip() else None
+    out['variation_prompt'] = optional_text('variation_prompt', 500)
+    out['klein_model'] = optional_text('klein_model', 255)
+    out['face_score'] = optional_number('face_score', -1.0, 1.0)
+    out['face_state'] = optional_text(
+        'face_state', 16,
+        allowed=('scorable', 'no_face', 'low_det', 'too_small',
+                 'extreme_pose', 'unreadable', 'error'))
+    out['fail_reason'] = optional_text('fail_reason', 32768)
+    out['fail_kind'] = optional_text(
+        'fail_kind', 16, allowed=('refused', 'empty', 'error'))
+    out['upscale_ratio'] = optional_number('upscale_ratio', 0.0, 1_000_000.0)
+    out['watermark_state'] = optional_text(
+        'watermark_state', 16,
+        allowed=('none', 'detected', 'dismissed', 'cleaned', 'failed', 'error'))
+    out['watermark_source'] = optional_text(
+        'watermark_source', 16, allowed=('detector', 'vision'))
+    out['watermark_score'] = optional_number('watermark_score', 0.0, 1.0)
+
+    def box_storage(field, *, many):
+        raw = meta.get(field)
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or len(raw) > 32768:
+            raise ValueError(f'invalid backup image {field}')
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError, RecursionError, MemoryError):
+            raise ValueError(f'invalid backup image {field}')
+        boxes = parsed if many else [parsed]
+        if not isinstance(boxes, list) or len(boxes) > WATERMARK_REGION_LIMIT:
+            raise ValueError(f'invalid backup image {field}')
+        normalized = []
+        for box in boxes:
+            if not isinstance(box, list) or len(box) != 4:
+                raise ValueError(f'invalid backup image {field}')
+            if any(isinstance(value, bool)
+                   or not isinstance(value, (int, float))
+                   or not math.isfinite(value) for value in box):
+                raise ValueError(f'invalid backup image {field}')
+            x1, y1, x2, y2 = map(float, box)
+            if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
+                raise ValueError(f'invalid backup image {field}')
+            normalized.append([x1, y1, x2, y2])
+        # Validation is semantic, transport remains byte-for-byte at the TEXT
+        # level (including harmless whitespace) for a faithful backup roundtrip.
+        return raw
+
+    out['watermark_bbox'] = box_storage('watermark_bbox', many=False)
+    out['watermark_regions'] = box_storage('watermark_regions', many=True)
+
+    parent_id = meta.get('parent_image_id')
+    if (parent_id is not None and (isinstance(parent_id, bool)
+                                   or not isinstance(parent_id, int)
+                                   or parent_id <= 0)):
+        raise ValueError('invalid backup parent image id')
+    out['parent_image_id'] = parent_id
+    return out
+
+
+def _normalized_backup_manifest(manifest):
+    """Typed/bounded portable Dataset settings from an untrusted archive."""
+    if not isinstance(manifest, dict):
+        raise ValueError('invalid backup manifest')
+    out = dict(manifest)
+
+    def text_field(field, limit, *, allowed=None, required=False):
+        value = manifest.get(field)
+        if value is None:
+            if required:
+                raise ValueError(f'invalid backup {field}')
+            return None
+        if not isinstance(value, str) or len(value) > limit:
+            raise ValueError(f'invalid backup {field}')
+        if allowed is not None and value not in allowed:
+            raise ValueError(f'invalid backup {field}')
+        return value
+
+    out['name'] = text_field('name', 100)
+    out['trigger_word'] = text_field('trigger_word', 60)
+    out['kind'] = text_field(
+        'kind', 16, allowed=('character', 'concept', 'style'))
+    out['fidelity'] = text_field('fidelity', 8, allowed=FIDELITIES)
+    out['concept_desc'] = text_field('concept_desc', 500)
+    out['train_type'] = text_field('train_type', 16, allowed=TRAIN_TYPES)
+    out['training_mode'] = text_field(
+        'training_mode', 32, allowed=('lora', 'full_transformer')) or 'lora'
+    out['train_base_model'] = text_field('train_base_model', 4096)
+    variant = text_field('train_variant', 20)
+    if variant is not None and not re.fullmatch(r'[A-Za-z0-9_.-]+', variant):
+        raise ValueError('invalid backup train_variant')
+    out['train_variant'] = variant
+
+    def parsed_json_field(field, expected_type, max_bytes=1024 * 1024):
+        raw = manifest.get(field)
+        if raw is None:
+            return None
+        if not isinstance(raw, str) or len(raw.encode('utf-8')) > max_bytes:
+            raise ValueError(f'invalid backup {field}')
+        try:
+            value = json.loads(
+                raw,
+                parse_constant=lambda _value: (_ for _ in ()).throw(ValueError()))
+        except (TypeError, ValueError, UnicodeError, RecursionError, MemoryError):
+            raise ValueError(f'invalid backup {field}')
+        if not isinstance(value, expected_type):
+            raise ValueError(f'invalid backup {field}')
+        stack = [(value, 0)]
+        seen = 0
+        while stack:
+            current, depth = stack.pop()
+            seen += 1
+            if seen > 100_000 or depth > 32:
+                raise ValueError(f'invalid backup {field}')
+            if isinstance(current, float) and not math.isfinite(current):
+                raise ValueError(f'invalid backup {field}')
+            if isinstance(current, dict):
+                stack.extend((item, depth + 1) for item in current.values())
+            elif isinstance(current, list):
+                stack.extend((item, depth + 1) for item in current)
+        return raw
+
+    out['train_settings'] = parsed_json_field('train_settings', dict)
+    out['best_settings'] = parsed_json_field('best_settings', dict)
+    out['concept_terms'] = parsed_json_field(
+        'concept_terms', list, max_bytes=256 * 1024)
+    if out['concept_terms'] is not None:
+        terms = json.loads(out['concept_terms'])
+        if (len(terms) > 2048
+                or any(not isinstance(term, str) or len(term) > 500
+                       for term in terms)):
+            raise ValueError('invalid backup concept_terms')
+    return out
 
 
 def _read_validated_backup_image(z: zipfile.ZipFile, info: zipfile.ZipInfo,
@@ -2948,7 +3304,8 @@ def _read_validated_backup_image(z: zipfile.ZipFile, info: zipfile.ZipInfo,
             # Reading one extra byte limits actual decompression even if that
             # metadata is inconsistent with the entry payload.
             raw = source.read(max_bytes + 1)
-    except (OSError, EOFError, RuntimeError, MemoryError, zipfile.BadZipFile) as exc:
+    except (OSError, EOFError, RuntimeError, MemoryError, zipfile.BadZipFile,
+            zlib.error, lzma.LZMAError) as exc:
         raise ValueError(f'backup image {basename} could not be read') from exc
     if len(raw) > max_bytes:
         raise ValueError(
@@ -2999,7 +3356,8 @@ def _portable_train_base_model(value):
     return value
 
 
-def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
+def _write_backup_zip_locked(user_id: int, dataset_id: int,
+                             output: BinaryIO, *, activity_token=None) -> None:
     """Self-contained backup of one dataset: manifest.json (settings) +
     images.json (rows) + ref/ + images/ files. Ordinary rows without a file are
     skipped, but small-image rescue metadata rows are retained so their pair can
@@ -3013,6 +3371,9 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
             .filter(or_(FaceDatasetImage.filename.isnot(None),
                         FaceDatasetImage.derivation_kind.in_(_SMALL_IMAGE_DERIVATIONS)))
             .all())
+    # Fail before touching the destination stream: an archive emitted with more
+    # rows than the importer accepts is neither portable nor useful.
+    _validate_backup_limits(row_count=len(rows))
     primary_ref_names = []
     ref_name_keys = set()
     for raw_name in (ds.ref_filename, ds.ref_original_filename):
@@ -3051,6 +3412,9 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
         if (name := _backup_basename(img.filename))
         and os.path.isfile(os.path.join(dsdir, name))
     }
+    file_backed_rows = [img for img in rows if _backup_basename(img.filename)]
+    if len(image_file_names) != len(file_backed_rows):
+        raise ValueError('dataset has duplicate or missing image files')
     collisions = ref_name_keys.intersection(image_file_names)
     if collisions:
         collision = image_file_names[next(iter(collisions))]
@@ -3076,10 +3440,37 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
             if _backup_basename(ds.ref_original_filename) in primary_ref_names else None),
         'ref_extra_filenames': json.dumps(portable_extras),
     }
+    manifest_generation = tuple(
+        getattr(ds, field) for field in (
+            'name', 'trigger_word', 'kind', 'fidelity', 'concept_desc',
+            'concept_terms', 'train_type', 'training_mode', 'train_base_model',
+            'train_variant', 'train_settings', 'best_settings', 'ref_filename',
+            'ref_original_filename', 'ref_extra_filenames'))
+    row_generations = {
+        img.id: tuple(getattr(img, field) for field in _BACKUP_IMG_FIELDS)
+        for img in rows
+    }
+    backup_files = [
+        (os.path.join(dsdir, name), f'ref/{name}') for name in ref_names
+    ] + [
+        (os.path.join(dsdir, name), f'images/{name}')
+        for name in image_file_names.values()
+    ]
+    file_generations = {}
+    for path, _archive_name in backup_files:
+        generation = _backup_file_generation(path)
+        if generation is None:
+            raise ValueError('dataset file disappeared before backup')
+        file_generations[path] = generation
     # backup_image_id is archive-local only. It lets restore remap parent_image_id
     # to the newly allocated row ids instead of retaining ids from the source DB.
     images_meta = []
-    for img in rows:
+    analysis_cache_payloads = {}
+    analysis_cache_dir = _bank_analysis_cache_dir(dataset_id)
+    for row_index, img in enumerate(rows, 1):
+        if row_index == 1 or row_index % 25 == 0:
+            dataset_activity.progress(
+                activity_token, detail='sealing backup metadata')
         row = dict({'backup_image_id': img.id},
                    **{f: getattr(img, f) for f in _BACKUP_IMG_FIELDS})
         # Archive a structured, revalidated object rather than the raw TEXT
@@ -3088,22 +3479,138 @@ def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
         # A snapshot is durable only when it has the expected version, fingerprint
         # and bounded analysis shape.  Invalid legacy/local text is deliberately
         # omitted rather than becoming an opaque payload in a portable backup.
-        row['bank_analysis_snapshot'] = bank_transfer_metadata.normalized_snapshot_storage(
-            img.bank_analysis_snapshot)
+        snapshot = bank_transfer_metadata.parse_snapshot(img.bank_analysis_snapshot)
+        if snapshot is None and img.bank_analysis_snapshot:
+            try:
+                declared = (img.bank_analysis_snapshot
+                            if isinstance(img.bank_analysis_snapshot, dict)
+                            else json.loads(img.bank_analysis_snapshot))
+            except (TypeError, ValueError, UnicodeError, RecursionError, MemoryError):
+                declared = None
+            if isinstance(declared, dict) and declared.get('cache_ref') is not None:
+                raise ValueError('invalid Bank analysis cache snapshot')
+        if snapshot and snapshot.get('cache_ref'):
+            cache_ref = snapshot['cache_ref']
+            if not bank_transfer_metadata.is_content_addressed_cache_ref(cache_ref):
+                raise ValueError(
+                    'Bank analysis cache is not content-addressed; re-promote '
+                    'the image before creating a backup')
+            if cache_ref not in analysis_cache_payloads:
+                cache_path = os.path.join(
+                    analysis_cache_dir, f'{cache_ref}.npz')
+                try:
+                    size = os.path.getsize(cache_path)
+                    if size <= 0 or size > bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES:
+                        raise ValueError('Bank analysis cache sidecar is too large')
+                    with open(cache_path, 'rb') as source:
+                        cache_payload = source.read(
+                            bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES + 1)
+                except OSError as exc:
+                    raise ValueError(
+                        'Bank analysis cache sidecar is missing or unreadable') from exc
+                if (len(cache_payload) != size
+                        or bank_transfer_metadata.read_cache_sidecar_bytes(
+                            cache_payload, expected_ref=cache_ref) is None):
+                    raise ValueError(
+                        'Bank analysis cache sidecar is malformed or has changed')
+                analysis_cache_payloads[cache_ref] = cache_payload
+        row['bank_analysis_snapshot'] = (
+            bank_transfer_metadata.normalized_snapshot_storage(snapshot)
+            if snapshot is not None else None)
+        transfer_metadata = (
+            bank_transfer_metadata.normalized_transfer_metadata_storage(
+                img.transfer_metadata))
+        if img.transfer_metadata is not None and transfer_metadata is None:
+            raise ValueError('invalid Bank/Dataset transfer metadata')
+        row['transfer_metadata'] = transfer_metadata
         images_meta.append(row)
+    manifest_payload = json.dumps(
+        manifest, ensure_ascii=False, indent=1).encode('utf-8')
+    images_payload = json.dumps(
+        images_meta, ensure_ascii=False, indent=1).encode('utf-8')
+    if (len(manifest_payload) > _BACKUP_MAX_METADATA_BYTES
+            or len(images_payload) > _BACKUP_MAX_METADATA_BYTES):
+        raise ValueError('dataset backup metadata is too large')
+    backup_member_sizes = [
+        ('manifest.json', len(manifest_payload)),
+        ('images.json', len(images_payload)),
+        *((archive_name, file_generations[path][2])
+          for path, archive_name in backup_files),
+        *((f'analysis-cache/{cache_ref}.npz', len(payload))
+          for cache_ref, payload in analysis_cache_payloads.items()),
+    ]
+    _validate_backup_limits(backup_member_sizes, row_count=len(images_meta))
     with zipfile.ZipFile(output, 'w', zipfile.ZIP_DEFLATED) as z:
-        z.writestr('manifest.json', json.dumps(manifest, ensure_ascii=False, indent=1))
-        z.writestr('images.json', json.dumps(images_meta, ensure_ascii=False, indent=1))
-        for n in ref_names:
-            p = os.path.join(dsdir, n)
-            z.write(p, f'ref/{n}')
-        for img in rows:
-            name = _backup_basename(img.filename)
-            if not name:
-                continue   # metadata-only small-rescue candidate
-            p = os.path.join(dsdir, name)
-            if os.path.isfile(p):
-                z.write(p, f'images/{name}')
+        total_members = 2 + len(backup_files) + len(analysis_cache_payloads)
+        dataset_activity.progress(
+            activity_token, done=0, total=total_members,
+            detail='writing portable backup')
+        z.writestr('manifest.json', manifest_payload)
+        dataset_activity.bump(activity_token)
+        z.writestr('images.json', images_payload)
+        dataset_activity.bump(activity_token)
+        for path, archive_name in backup_files:
+            if _backup_file_generation(path) != file_generations[path]:
+                raise ValueError('dataset changed while the backup was created')
+            _write_backup_file_member(
+                z, path, archive_name, file_generations[path])
+            if _backup_file_generation(path) != file_generations[path]:
+                raise ValueError('dataset changed while the backup was created')
+            dataset_activity.bump(activity_token)
+        for cache_ref, payload in sorted(analysis_cache_payloads.items()):
+            # Archive exactly the immutable bytes validated above.  A live
+            # sidecar replacement between validation and ZipFile.write cannot
+            # smuggle different cache contents into the backup.
+            z.writestr(f'analysis-cache/{cache_ref}.npz', payload)
+            dataset_activity.bump(activity_token)
+        # Final generation fence: activity/ingest reservations block normal app
+        # writes, while this catches an already-running request or an external
+        # same-folder change that crossed the reservation boundary.
+        current_ds = (FaceDataset.query.filter_by(id=dataset_id, user_id=user_id)
+                      .populate_existing().one_or_none())
+        current_manifest_generation = (tuple(
+            getattr(current_ds, field) for field in (
+                'name', 'trigger_word', 'kind', 'fidelity', 'concept_desc',
+                'concept_terms', 'train_type', 'training_mode',
+                'train_base_model', 'train_variant', 'train_settings',
+                'best_settings', 'ref_filename', 'ref_original_filename',
+                'ref_extra_filenames')) if current_ds is not None else None)
+        current_rows = (FaceDatasetImage.query
+                        .filter(FaceDatasetImage.id.in_(tuple(row_generations)))
+                        .populate_existing().all()) if row_generations else []
+        current_row_generations = {
+            img.id: tuple(getattr(img, field) for field in _BACKUP_IMG_FIELDS)
+            for img in current_rows if img.dataset_id == dataset_id
+        }
+        current_row_ids = {
+            row_id for row_id, in db.session.query(FaceDatasetImage.id)
+            .filter_by(dataset_id=dataset_id)
+            .filter(or_(FaceDatasetImage.filename.isnot(None),
+                        FaceDatasetImage.derivation_kind.in_(
+                            _SMALL_IMAGE_DERIVATIONS))).all()
+        }
+        if (current_manifest_generation != manifest_generation
+                or current_row_generations != row_generations
+                or current_row_ids != set(row_generations)
+                or any(_backup_file_generation(path) != generation
+                       for path, generation in file_generations.items())):
+            raise ValueError('dataset changed while the backup was created')
+
+
+def write_backup_zip(user_id: int, dataset_id: int, output: BinaryIO) -> None:
+    """Create one coherent backup generation under Dataset-wide exclusion."""
+    dataset_id = dataset_activity.normalize_dataset_id(dataset_id)
+    with _dataset_ingest_lock(user_id, dataset_id):
+        token = dataset_activity.begin_exclusive(
+            dataset_id, 'backup', detail='creating portable backup')
+        if token is None:
+            raise ValueError(
+                'dataset has work in progress; wait before creating a backup')
+        try:
+            return _write_backup_zip_locked(
+                user_id, dataset_id, output, activity_token=token)
+        finally:
+            dataset_activity.end(token)
 
 
 def build_backup_zip(user_id: int, dataset_id: int) -> bytes:
@@ -3122,9 +3629,57 @@ def _coerce_archive_stream(archive):
         raise ValueError('not a zip file')
     try:
         archive.seek(0)
-    except (OSError, ValueError) as exc:
+    except (OSError, TypeError, ValueError) as exc:
         raise ValueError('zip archive is not seekable') from exc
     return archive, None
+
+
+def _preflight_zip_central_directory(
+        stream, *, max_entries, max_central_bytes, label) -> None:
+    """Bound EOCD-declared allocation before ``ZipFile`` parses the directory.
+
+    ``_EndRecData`` is the bounded EOCD reader used by CPython 3.12 itself.  Keep
+    a compatibility fallback for runtimes that do not expose it, and always
+    rewind because ``ZipFile`` must receive the original stream from offset zero.
+    """
+    end_reader = getattr(zipfile, '_EndRecData', None)
+    if not callable(end_reader):
+        stream.seek(0)
+        return
+    try:
+        try:
+            end_record = end_reader(stream)
+        except (OSError, EOFError, AttributeError, OverflowError, TypeError, ValueError,
+                zipfile.BadZipFile) as exc:
+            raise ValueError('not a zip file') from exc
+    finally:
+        try:
+            stream.seek(0)
+        except (OSError, TypeError, ValueError) as exc:
+            raise ValueError('zip archive is not seekable') from exc
+    if end_record is None:
+        raise ValueError('not a zip file')
+    try:
+        entries = end_record[getattr(zipfile, '_ECD_ENTRIES_TOTAL', 4)]
+        central_size = end_record[getattr(zipfile, '_ECD_SIZE', 5)]
+    except (IndexError, TypeError) as exc:
+        raise ValueError('not a zip file') from exc
+    if (isinstance(entries, bool) or not isinstance(entries, int)
+            or entries < 0
+            or isinstance(central_size, bool) or not isinstance(central_size, int)
+            or central_size < 0):
+        raise ValueError('not a zip file')
+    if entries > max_entries:
+        raise ValueError(f'too many files in {label} (max {max_entries})')
+    if central_size > max_central_bytes:
+        raise ValueError(f'{label} central directory is too large')
+
+
+def _preflight_backup_central_directory(stream) -> None:
+    return _preflight_zip_central_directory(
+        stream, max_entries=_BACKUP_MAX_FILES + 2,
+        max_central_bytes=_BACKUP_MAX_CENTRAL_DIRECTORY_BYTES,
+        label='backup')
 
 
 def import_backup_zip(user_id: int, archive: bytes | BinaryIO):
@@ -3134,6 +3689,7 @@ def import_backup_zip(user_id: int, archive: bytes | BinaryIO):
     created FaceDataset."""
     stream, owned = _coerce_archive_stream(archive)
     try:
+        _preflight_backup_central_directory(stream)
         try:
             z = zipfile.ZipFile(stream)
         except zipfile.BadZipFile as exc:
@@ -3152,10 +3708,8 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     # compressed manifest/images.json could bypass the image-only size total and
     # consume unbounded RAM during z.read/json.loads.
     all_infos = z.infolist()
-    if len(all_infos) > _BACKUP_MAX_FILES + 2:
-        raise ValueError(f'too many files in backup (max {_BACKUP_MAX_FILES})')
-    if sum(info.file_size for info in all_infos) > _BACKUP_MAX_BYTES:
-        raise ValueError('backup too large (max 2 GB uncompressed)')
+    _validate_backup_limits(
+        (info.filename, info.file_size) for info in all_infos)
     metadata = {}
     for info in all_infos:
         if info.filename not in ('manifest.json', 'images.json'):
@@ -3170,7 +3724,9 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     try:
         manifest = json.loads(z.read(metadata['manifest.json']).decode('utf-8'))
         images_meta = json.loads(z.read(metadata['images.json']).decode('utf-8'))
-    except (ValueError, UnicodeError, RecursionError, MemoryError, zipfile.BadZipFile):
+    except (ValueError, UnicodeError, RecursionError, MemoryError,
+            RuntimeError, NotImplementedError, EOFError, zipfile.BadZipFile,
+            zlib.error, lzma.LZMAError):
         raise ValueError('not a dataset backup (manifest.json/images.json missing or invalid)')
     if not isinstance(manifest, dict):
         raise ValueError('invalid backup manifest')
@@ -3182,18 +3738,17 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         raise ValueError('invalid backup version')
     if version > BACKUP_VERSION:
         raise ValueError('backup made by a newer version of the app - update first')
-    for field in ('name', 'trigger_word'):
-        value = manifest.get(field)
-        if value is not None and not isinstance(value, str):
-            raise ValueError(f'invalid backup {field}')
-    restored_training_mode = manifest.get('training_mode', 'lora')
-    if restored_training_mode not in ('lora', 'full_transformer'):
-        raise ValueError('invalid backup training_mode')
+    manifest = _normalized_backup_manifest(manifest)
+    restored_training_mode = manifest['training_mode']
     if not isinstance(images_meta, list):
         raise ValueError('invalid backup image metadata')
-    if len(images_meta) > _BACKUP_MAX_ROWS:
-        raise ValueError(f'too many image rows in backup (max {_BACKUP_MAX_ROWS})')
+    _validate_backup_limits(row_count=len(images_meta))
+    images_meta = [
+        _normalized_backup_image_meta(meta, version=version)
+        for meta in images_meta
+    ]
     seen_backup_ids = set()
+    metadata_image_names = {}
     rescue_sources = set()
     rescue_parent_counts = {}
     for meta in images_meta:
@@ -3202,6 +3757,15 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         filename = meta.get('filename')
         if filename is not None and not isinstance(filename, str):
             raise ValueError('invalid backup image filename')
+        if filename is not None:
+            portable_name = _backup_basename(filename)
+            if portable_name != filename and version >= 2:
+                raise ValueError('invalid backup image filename')
+            if portable_name == filename:
+                filename_key = filename.casefold()
+                if filename_key in metadata_image_names and version >= 2:
+                    raise ValueError('duplicate backup image filename')
+                metadata_image_names[filename_key] = filename
         backup_id = meta.get('backup_image_id')
         if backup_id is not None:
             if isinstance(backup_id, bool) or not isinstance(backup_id, int) or backup_id <= 0:
@@ -3213,6 +3777,9 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
         if derivation not in (None, SMALL_IMAGE_SOURCE, KLEIN_SMALL_IMAGE,
                               KLEIN_IMAGE_IMPROVE):
             raise ValueError('invalid image derivation in backup')
+        if (version >= 2 and filename is None
+                and derivation != KLEIN_SMALL_IMAGE):
+            raise ValueError('invalid metadata-only image row in backup')
         if derivation == SMALL_IMAGE_SOURCE:
             if backup_id is None or meta.get('parent_image_id') is not None:
                 raise ValueError('invalid small-image source provenance')
@@ -3226,8 +3793,23 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
                 raise ValueError('multiple Klein rescue candidates for one source')
     if any(parent_id not in rescue_sources for parent_id in rescue_parent_counts):
         raise ValueError('Klein rescue candidate has no valid source')
-    infos = [i for i in all_infos
-             if not i.is_dir() and i.filename.startswith(('ref/', 'images/'))]
+    infos = []
+    for info in all_infos:
+        if info.is_dir() or info.filename in ('manifest.json', 'images.json'):
+            continue
+        if info.filename.startswith('analysis-cache/'):
+            continue
+        if info.filename.startswith(('ref/', 'images/')):
+            prefix, candidate = info.filename.split('/', 1)
+            base = _backup_basename(candidate)
+            if base is None or info.filename != f'{prefix}/{base}':
+                if version >= 2:
+                    raise ValueError('invalid image/ref filename in backup')
+                continue
+            infos.append(info)
+            continue
+        if version >= 2:
+            raise ValueError(f'unexpected file in backup: {info.filename}')
     if len(infos) > _BACKUP_MAX_FILES:
         raise ValueError(f'too many files in backup (max {_BACKUP_MAX_FILES})')
     archive_names = {'ref': {}, 'images': {}}
@@ -3244,6 +3826,119 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     if collisions:
         collision = archive_names['images'][next(iter(collisions))]
         raise ValueError(f'backup has colliding ref/image filename: {collision}')
+    if version >= 2:
+        archive_image_keys = set(archive_names['images'])
+        metadata_image_keys = set(metadata_image_names)
+        missing_images = metadata_image_keys.difference(archive_image_keys)
+        orphan_images = archive_image_keys.difference(metadata_image_keys)
+        if missing_images:
+            raise ValueError(
+                f'backup image is missing: {metadata_image_names[next(iter(missing_images))]}')
+        if orphan_images:
+            raise ValueError(
+                f'unreferenced image in backup: '
+                f'{archive_names["images"][next(iter(orphan_images))]}')
+        for key in archive_image_keys:
+            if archive_names['images'][key] != metadata_image_names[key]:
+                raise ValueError('backup image filename case does not match metadata')
+
+        required_ref_names = []
+        for field in ('ref_filename', 'ref_original_filename'):
+            raw_name = manifest.get(field)
+            if raw_name is None:
+                continue
+            name = _backup_basename(raw_name)
+            if name != raw_name:
+                raise ValueError(f'invalid backup {field}')
+            required_ref_names.append(name)
+        extra_ref_names = _backup_extra_ref_names(
+            manifest.get('ref_extra_filenames'))
+        required_ref_names.extend(extra_ref_names)
+        required_ref_keys = {name.casefold() for name in required_ref_names}
+        allowed_ref_keys = set(required_ref_keys)
+        for name in extra_ref_names:
+            original = extra_ref_original_name(name)
+            if original:
+                allowed_ref_keys.add(original.casefold())
+        archive_ref_keys = set(archive_names['ref'])
+        missing_refs = required_ref_keys.difference(archive_ref_keys)
+        orphan_refs = archive_ref_keys.difference(allowed_ref_keys)
+        if missing_refs:
+            raise ValueError('backup reference image is missing')
+        if orphan_refs:
+            raise ValueError(
+                f'unreferenced reference image in backup: '
+                f'{archive_names["ref"][next(iter(orphan_refs))]}')
+
+    # Derive cache ownership only after the exact set of restorable rows/files
+    # has been validated. A crafted skipped row cannot smuggle an otherwise
+    # unowned sidecar into the restored Dataset folder.
+    requested_cache_refs = set()
+    if version >= 2:
+        for meta in images_meta:
+            raw_snapshot = meta.get('bank_analysis_snapshot')
+            snapshot = bank_transfer_metadata.parse_snapshot(raw_snapshot)
+            if raw_snapshot is not None and snapshot is None:
+                raise ValueError('invalid Bank analysis snapshot in backup')
+            if snapshot and snapshot.get('cache_ref'):
+                cache_ref = snapshot['cache_ref']
+                if not bank_transfer_metadata.is_content_addressed_cache_ref(
+                        cache_ref):
+                    raise ValueError(
+                        'backup analysis cache reference is not content-addressed')
+                requested_cache_refs.add(cache_ref)
+    cache_infos = {}
+    seen_cache_refs = set()
+    for info in all_infos:
+        if info.is_dir():
+            continue
+        if not info.filename.startswith('analysis-cache/'):
+            continue
+        match = _BACKUP_ANALYSIS_CACHE_RE.fullmatch(info.filename)
+        if not match:
+            if version >= 2:
+                raise ValueError('invalid analysis cache filename in backup')
+            continue
+        cache_ref = match.group('ref')
+        if cache_ref in seen_cache_refs:
+            raise ValueError(f'duplicate analysis cache in backup: {cache_ref}')
+        seen_cache_refs.add(cache_ref)
+        if version >= 2 and not bank_transfer_metadata.is_content_addressed_cache_ref(
+                cache_ref):
+            raise ValueError('backup analysis cache reference is not content-addressed')
+        if cache_ref not in requested_cache_refs:
+            if version >= 2:
+                raise ValueError(f'unreferenced analysis cache in backup: {cache_ref}')
+            continue
+        if (info.file_size <= 0
+                or info.file_size > bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES):
+            raise ValueError('analysis cache sidecar is too large')
+        cache_infos[cache_ref] = info
+    missing_cache_refs = requested_cache_refs.difference(cache_infos)
+    if missing_cache_refs:
+        raise ValueError(
+            f'analysis cache missing from backup: {sorted(missing_cache_refs)[0]}')
+
+    # Validate and bind every requested cache before creating a staging folder or
+    # opening a database transaction.  A v2 restore is all-or-nothing: a bad CRC,
+    # truncated NPZ, wrong SHA or invalid shape aborts the whole archive instead
+    # of silently deleting cache_ref and restoring weaker metadata.
+    validated_cache_payloads = {}
+    for cache_ref, info in cache_infos.items():
+        try:
+            with z.open(info) as source:
+                raw = source.read(
+                    bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES + 1)
+        except (OSError, EOFError, RuntimeError, MemoryError,
+                zipfile.BadZipFile, zlib.error, lzma.LZMAError) as exc:
+            raise ValueError('analysis cache sidecar is unreadable') from exc
+        if (len(raw) != info.file_size
+                or len(raw) > bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES
+                or bank_transfer_metadata.read_cache_sidecar_bytes(
+                    raw, expected_ref=cache_ref) is None):
+            raise ValueError(
+                'analysis cache sidecar is malformed or has a digest mismatch')
+        validated_cache_payloads[cache_ref] = raw
     name = (manifest.get('name') or 'Restored dataset')[:100]
     trigger = (manifest.get('trigger_word') or 'restored')[:60]
     # Extract first into a sibling directory: it is on the same volume as the final
@@ -3275,6 +3970,22 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
                 extracted_refs.setdefault(base.casefold(), base)
             else:
                 extracted_images.add(base)
+
+        extracted_cache_refs = set()
+        if validated_cache_payloads:
+            cache_dir = os.path.join(staging_dir, '.bank-analysis-cache')
+            os.mkdir(cache_dir)
+            for cache_ref, raw in validated_cache_payloads.items():
+                cache_path = os.path.join(cache_dir, f'{cache_ref}.npz')
+                try:
+                    with open(cache_path, 'wb') as dst:
+                        dst.write(raw)
+                        dst.flush()
+                        os.fsync(dst.fileno())
+                except OSError as exc:
+                    raise ValueError(
+                        'could not restore analysis cache sidecar') from exc
+                extracted_cache_refs.add(cache_ref)
 
         db_started = True
         ds = create_dataset(user_id, name, trigger, kind=manifest.get('kind'),
@@ -3319,9 +4030,21 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
             # while valid Pexels metadata is canonicalized back to JSON TEXT.
             values['source_metadata'] = _source_metadata_storage(
                 values.get('source_metadata'))
+            snapshot = bank_transfer_metadata.parse_snapshot(
+                values.get('bank_analysis_snapshot'))
+            if (snapshot and snapshot.get('cache_ref')
+                    and snapshot['cache_ref'] not in extracted_cache_refs):
+                raise ValueError('analysis cache sidecar was not restored')
             values['bank_analysis_snapshot'] = (
-                bank_transfer_metadata.normalized_snapshot_storage(
-                    values.get('bank_analysis_snapshot')))
+                bank_transfer_metadata.normalized_snapshot_storage(snapshot)
+                if snapshot is not None else None)
+            raw_transfer_metadata = values.get('transfer_metadata')
+            values['transfer_metadata'] = (
+                bank_transfer_metadata.normalized_transfer_metadata_storage(
+                    raw_transfer_metadata))
+            if (raw_transfer_metadata is not None
+                    and values['transfer_metadata'] is None):
+                raise ValueError('invalid Bank/Dataset transfer metadata in backup')
             if is_candidate and not fn and values.get('status') in ('pending', 'keep'):
                 values['status'] = 'failed'
                 values['fail_reason'] = (
@@ -3384,6 +4107,7 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
     return ds
 
 
+@_serialize_dataset_ingest
 def replace_in_captions(user_id, dataset_id, find, replace, mode='text'):
     """Bulk-edit the captions of KEPT images (the ones that train). Two modes:
 
@@ -3449,6 +4173,25 @@ def replace_in_captions(user_id, dataset_id, find, replace, mode='text'):
 
 # Batch curation (multi-select in the grid). 'pending' = reset the triage state.
 BATCH_ACTIONS = ('keep', 'reject', 'pending', 'delete', 'clear_caption')
+BATCH_MAX_IMAGES = 10_000
+_SQLITE_ID_MAX = (1 << 63) - 1
+
+
+def normalize_batch_image_ids(image_ids) -> list[int]:
+    if not isinstance(image_ids, list) or not image_ids:
+        raise ValueError("'ids' must be a non-empty list")
+    if len(image_ids) > BATCH_MAX_IMAGES:
+        raise ValueError(f'too many image ids (max {BATCH_MAX_IMAGES})')
+    out = []
+    seen = set()
+    for value in image_ids:
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value <= 0 or value > _SQLITE_ID_MAX):
+            raise ValueError("'ids' must contain positive integer image ids")
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
 
 
 @_serialize_dataset_ingest
@@ -3463,12 +4206,12 @@ def batch_image_action(user_id, dataset_id, image_ids, action):
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return 0
-    ids = [int(i) for i in (image_ids or []) if isinstance(i, (int, float, str)) and str(i).lstrip('-').isdigit()]
-    if not ids:
-        return 0
-    rows = (FaceDatasetImage.query
-            .filter_by(dataset_id=dataset_id)
-            .filter(FaceDatasetImage.id.in_(ids)).all())
+    ids = normalize_batch_image_ids(image_ids)
+    rows = []
+    for i0 in range(0, len(ids), 500):
+        rows.extend(FaceDatasetImage.query
+                    .filter_by(dataset_id=dataset_id)
+                    .filter(FaceDatasetImage.id.in_(ids[i0:i0 + 500])).all())
     n = 0
     if action != 'clear_caption' and any(
             img.derivation_kind in _SMALL_IMAGE_DERIVATIONS for img in rows):
@@ -3623,6 +4366,7 @@ def start_reference_edit(app, user_id, dataset_id, engine, prompt,
 
     Raises ValueError for a bad engine / empty prompt / missing reference (the
     route maps it to 400/404)."""
+    _guard_not_bank_export(dataset_id)
     engines = normalize_edit_engines(engine)
     prompt = (prompt or '').strip()
     if not prompt:
@@ -4227,11 +4971,13 @@ def discard_reference_edit(dataset_id):
     """Drop a pending edit (running=abandon OR ready) and delete its candidate
     file. An API call already sent is still billed — honesty preserved, no
     'refund' implied; a local render is cancelled, because it can be."""
+    _guard_not_bank_export(dataset_id)
     _clear_reference_edit(dataset_id)
 
 
 def reference_mutation(dataset_id):
     """Context manager shared by every primary-reference mutation path."""
+    _guard_not_bank_export(dataset_id)
     return reference_edit_jobs.reference_mutation(dataset_id)
 
 
@@ -4972,7 +5718,11 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                   bank_image_ids=None,
                   framings=None, bank_analysis_snapshots=None,
                   watermark_states=None, watermark_bboxes=None,
-                  watermark_regions=None, dedupe_seen=None):
+                  watermark_regions=None, watermark_sources=None,
+                  watermark_scores=None, statuses=None,
+                  transfer_metadatas=None, dedupe_seen=None,
+                  preserve_exact_bytes=False, created_ids_sink=None,
+                  provenance_changes_sink=None):
     """Store original static bytes (or head-crop) + create import rows (status=keep).
     When crop=True, each image is auto head-cropped via Qwen3-VL - the CALLER
     must then hold the GPU-exclusive window - and is by construction a face,
@@ -5011,12 +5761,12 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     a scalar column can only credit one) are listed in ``stats['bank_unlinked']``.
 
     ``bank_analysis_snapshots`` is an internal Bank-promotion marker parallel to
-    ``files_bytes``.  When present, this importer recalculates the deterministic
-    quality/provenance values from the final Dataset file, then seals
-    only those values with that file's fingerprint.  Source-file and ML verdicts
-    never enter the snapshot.  The regular user-facing fields stay separate:
-    ``watermark_*`` mirrors the current Bank watermark decision and mask without
-    treating either as a historical analysis value.
+    ``files_bytes``.  When present, this importer recalculates deterministic
+    quality/provenance from the final Dataset bytes and seals a v3 snapshot with
+    their SHA-256.  A byte-identical Bank capture also retains its complete row
+    analysis plus path-free Score/Face embeddings in a bounded sidecar; a
+    transformed image gets deterministic analysis only.  The regular current
+    Dataset fields stay separate and remain user-owned.
 
     ``dedupe_seen`` is an optional internal mutable cache of ``(dhash, row_id)``
     pairs for chunked imports. When omitted, the importer loads the dataset's
@@ -5046,6 +5796,11 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     watermark_states_by_index = list(watermark_states) if watermark_states is not None else []
     watermark_bboxes_by_index = list(watermark_bboxes) if watermark_bboxes is not None else []
     watermark_regions_by_index = list(watermark_regions) if watermark_regions is not None else []
+    watermark_sources_by_index = list(watermark_sources) if watermark_sources is not None else []
+    watermark_scores_by_index = list(watermark_scores) if watermark_scores is not None else []
+    statuses_by_index = list(statuses) if statuses is not None else []
+    transfer_metadata_by_index = (list(transfer_metadatas)
+                                  if transfer_metadatas is not None else [])
 
     def bank_id_at(i):
         return bank_ids_by_index[i] if i < len(bank_ids_by_index) else None
@@ -5090,6 +5845,34 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                  if i < len(watermark_regions_by_index) else None)
         return value if isinstance(value, str) else None
 
+    def watermark_source_at(i):
+        value = (watermark_sources_by_index[i]
+                 if i < len(watermark_sources_by_index) else None)
+        return value if value in ('detector', 'vision') else None
+
+    def watermark_score_at(i):
+        value = (watermark_scores_by_index[i]
+                 if i < len(watermark_scores_by_index) else None)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+
+    def status_at(i):
+        value = statuses_by_index[i] if i < len(statuses_by_index) else None
+        return value if value in ('pending', 'keep', 'reject') else 'keep'
+
+    def transfer_metadata_at(i):
+        value = (transfer_metadata_by_index[i]
+                 if i < len(transfer_metadata_by_index) else None)
+        if value is None:
+            return None
+        normalized = (
+            bank_transfer_metadata.normalized_transfer_metadata_storage(value))
+        if normalized is None:
+            raise RuntimeError('invalid Bank/Dataset transfer metadata')
+        return normalized
+
     ids = []
     failed = 0
     for index, raw in enumerate(files_bytes):
@@ -5103,22 +5886,66 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
             except Exception:
                 pass
         try:
-            if crop:
+            if preserve_exact_bytes:
+                if crop:
+                    raise ValueError('exact-byte Bank promotion cannot crop')
+                # This path is a preservation operation, independent of the
+                # user's normal Dataset import encoding preference.  Validate
+                # the static supported format, then store the identical bytes.
+                extension = _preserved_import_extension(
+                    raw, label='bank dataset promotion')
+                stored, scale = bytes(raw), None
+            elif crop:
                 stored, scale = face_crop_to_square_webp(raw, return_scale=True)
                 extension = '.webp'
             else:
                 stored, extension = import_store_image(raw)
                 scale = None
         except Exception as e:
+            if preserve_exact_bytes:
+                raise RuntimeError(
+                    f'could not preserve Bank image bytes: {e}') from e
             failed += 1
             logger.warning(f"dataset import: image skipped (dataset {dataset_id}): {e}")
             continue
-        analysis_snapshot = None
+        final_analysis = None
+        captured_analysis = None
+        captured_cache_bundle = None
         if snapshot_at(index) is not None:
             final_analysis = bank_deterministic_analysis(stored)
-            if final_analysis is not None:
-                analysis_snapshot = bank_transfer_metadata.snapshot_storage(
-                    final_analysis, stored)
+            if final_analysis is None:
+                raise RuntimeError('could not seal Bank analysis for Dataset image')
+            captured_analysis = (
+                snapshot_at(index) if isinstance(snapshot_at(index), dict) else None)
+            captured_matches = (
+                captured_analysis is not None
+                and captured_analysis.get('fingerprint')
+                == bank_transfer_metadata.content_fingerprint_bytes(stored))
+            if captured_matches and captured_analysis.get('caches'):
+                captured_cache_bundle = captured_analysis['caches']
+
+        def seal_analysis_snapshot():
+            """Persist the sidecar only when this candidate is about to commit."""
+            if final_analysis is None:
+                return None, None
+            cache_ref = None
+            try:
+                if captured_cache_bundle:
+                    cache_ref = bank_transfer_metadata.write_cache_sidecar(
+                        _bank_analysis_cache_dir(dataset_id), captured_cache_bundle)
+                    if cache_ref is None:
+                        raise RuntimeError(
+                            'could not preserve Bank Score/Face cache in Dataset')
+                snapshot = bank_transfer_metadata.snapshot_storage(
+                    final_analysis, stored, captured=captured_analysis,
+                    cache_ref=cache_ref)
+                if snapshot is None:
+                    raise RuntimeError(
+                        'could not seal Bank analysis for Dataset image')
+                return snapshot, cache_ref
+            except Exception:
+                _remove_unreferenced_bank_analysis_cache(dataset_id, cache_ref)
+                raise
         fp = None
         if dedupe:
             try:
@@ -5142,8 +5969,14 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                         stale_ids.add(mid)
                         continue
                     try:
-                        with Image.open(os.path.join(
-                                _dataset_dir(dataset_id), live.filename)) as im:
+                        live_path = os.path.join(
+                            _dataset_dir(dataset_id), live.filename)
+                        if (preserve_exact_bytes
+                                and Path(live_path).read_bytes() != stored):
+                            # Perceptually similar is not byte-identical and
+                            # cannot carry this image's exact analysis vault.
+                            continue
+                        with Image.open(live_path) as im:
                             live_hash = _dhash(im)
                     except (OSError, ValueError):
                         stale_ids.add(mid)
@@ -5169,34 +6002,185 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
                     # photo first), report the id back: the caller has no verifiable
                     # trace here and needs to fall back on its own bookkeeping.
                     bid = bank_id_at(index)
-                    if bid and not _attach_bank_provenance(
-                            match, bid, bank_analysis_snapshot=analysis_snapshot) \
-                            and stats is not None:
-                        stats.setdefault('bank_unlinked', []).append(bid)
+                    analysis_snapshot = None
+                    analysis_cache_ref = None
+                    try:
+                        if bid:
+                            analysis_snapshot, analysis_cache_ref = (
+                                seal_analysis_snapshot())
+                        linked_before = db.session.get(FaceDatasetImage, match)
+                        previous = ((linked_before.bank_image_id,
+                                     linked_before.bank_analysis_snapshot)
+                                    if linked_before is not None else None)
+                        linked = (bool(bid) and _attach_bank_provenance(
+                            match, bid, bank_analysis_snapshot=analysis_snapshot,
+                            bank_analysis_cache_dir=_bank_analysis_cache_dir(
+                                dataset_id)))
+                        linked_after = db.session.get(FaceDatasetImage, match)
+                        if (provenance_changes_sink is not None
+                                and previous is not None
+                                and linked_after is not None
+                                and previous != (linked_after.bank_image_id,
+                                                linked_after.bank_analysis_snapshot)):
+                            provenance_changes_sink.append({
+                                'image_id': match,
+                                'old_bank_image_id': previous[0],
+                                'old_snapshot': previous[1],
+                                'new_bank_image_id': linked_after.bank_image_id,
+                                'new_snapshot': linked_after.bank_analysis_snapshot,
+                            })
+                        if bid and not linked and stats is not None:
+                            stats.setdefault('bank_unlinked', []).append(bid)
+                    except Exception:
+                        # `_attach_bank_provenance` commits on success.  A fault
+                        # before that commit leaves the session unusable until
+                        # rollback; a fault after it is resolved by the durable
+                        # ownership proof in `finally` below.
+                        db.session.rollback()
+                        raise
+                    finally:
+                        _remove_unreferenced_bank_analysis_cache(
+                            dataset_id, analysis_cache_ref)
                     logger.info(f"dataset import: perceptual duplicate skipped (dataset {dataset_id})")
                     continue
+        analysis_snapshot, analysis_cache_ref = seal_analysis_snapshot()
+        transfer_metadata = transfer_metadata_at(index)
+        restored = bank_transfer_metadata.dataset_restore_values(
+            transfer_metadata,
+            bank_transfer_metadata.content_fingerprint_bytes(stored))
         fn = f"{user_id}_dataset_{uuid.uuid4().hex[:8]}{extension}"
-        write_image_atomic(os.path.join(_dataset_dir(dataset_id), fn), stored)
-        cap = (captions_by_index[index] if index < len(captions_by_index) else None)
-        cap = _cap_caption(cap) if (cap or '').strip() else None
-        img = FaceDatasetImage(dataset_id=dataset_id, source='import', status='keep',
-                               filename=fn, framing=framing_at(index),
-                               upscale_ratio=scale, caption=cap,
-                               caption_origin=caption_origin_at(index, cap),
-                               bank_image_id=bank_id_at(index),
-                               bank_analysis_snapshot=analysis_snapshot,
-                               watermark_state=watermark_state_at(index),
-                               watermark_bbox=watermark_bbox_at(index),
-                               watermark_regions=watermark_regions_at(index),
-                               source_metadata=_source_metadata_storage(
-                                   metadata_by_index[index]
-                                   if index < len(metadata_by_index) else None))
-        db.session.add(img)
-        db.session.commit()
+        stored_path = os.path.join(_dataset_dir(dataset_id), fn)
+        try:
+            write_image_atomic(stored_path, stored)
+            cap = (captions_by_index[index] if index < len(captions_by_index) else None)
+            cap = _cap_caption(cap) if (cap or '').strip() else None
+            restored_short = restored.get('caption_short')
+            restored_short = (_cap_caption(restored_short)
+                              if isinstance(restored_short, str)
+                              and restored_short.strip() else None)
+            restored_short_origin = (restored.get('caption_short_origin')
+                                     if restored_short else None)
+            img = FaceDatasetImage(
+                                   dataset_id=dataset_id,
+                                   source=restored.get('source') or 'import',
+                                   status=status_at(index),
+                                   filename=fn, framing=framing_at(index),
+                                   variation_label=restored.get('variation_label'),
+                                   variation_prompt=restored.get('variation_prompt'),
+                                   klein_model=restored.get('klein_model'),
+                                   face_score=restored.get('face_score'),
+                                   face_state=restored.get('face_state'),
+                                   fail_reason=restored.get('fail_reason'),
+                                   fail_kind=restored.get('fail_kind'),
+                                   upscale_ratio=(restored.get('upscale_ratio')
+                                                  if restored.get('upscale_ratio')
+                                                  is not None else scale),
+                                   caption=cap, caption_short=restored_short,
+                                   caption_origin=caption_origin_at(index, cap),
+                                   caption_short_origin=restored_short_origin,
+                                   bank_image_id=bank_id_at(index),
+                                   bank_analysis_snapshot=analysis_snapshot,
+                                   transfer_metadata=transfer_metadata,
+                                   watermark_state=watermark_state_at(index),
+                                   watermark_bbox=watermark_bbox_at(index),
+                                   watermark_regions=watermark_regions_at(index),
+                                   watermark_source=watermark_source_at(index),
+                                   watermark_score=watermark_score_at(index),
+                                   source_metadata=_source_metadata_storage(
+                                       metadata_by_index[index]
+                                       if index < len(metadata_by_index) else None))
+            db.session.add(img)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            try:
+                os.unlink(stored_path)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                logger.warning('dataset import: could not remove uncommitted image %s',
+                               stored_path, exc_info=True)
+            _remove_unreferenced_bank_analysis_cache(
+                dataset_id, analysis_cache_ref)
+            raise
         if dedupe and fp is not None:
             seen.append((fp, img.id))
         ids.append(img.id)
+        if created_ids_sink is not None:
+            created_ids_sink.append(img.id)
     return ids, failed
+
+
+def rollback_imported_images(user_id, dataset_id, image_ids,
+                             provenance_changes=None) -> bool:
+    """Remove only rows created by a failed multi-chunk Bank promotion.
+
+    The caller holds the Dataset ingest stripe for the whole promotion.  Files
+    are moved to the recoverable app trash before one DB commit; any failure
+    restores every moved file and leaves the rows intact.
+    """
+    wanted = {int(value) for value in image_ids}
+    provenance_changes = list(provenance_changes or ())
+    if not wanted and not provenance_changes:
+        return True
+    ds = get_dataset(user_id, dataset_id)
+    if ds is None:
+        return False
+    rows = (FaceDatasetImage.query
+            .filter(FaceDatasetImage.dataset_id == dataset_id,
+                    FaceDatasetImage.id.in_(wanted)).all())
+    if {row.id for row in rows} != wanted:
+        return False
+    moved = []
+    cache_refs = set()
+    try:
+        for change in reversed(provenance_changes):
+            row = (FaceDatasetImage.query
+                   .filter_by(id=change.get('image_id'), dataset_id=dataset_id)
+                   .one_or_none())
+            if (row is None
+                    or row.bank_image_id != change.get('new_bank_image_id')
+                    or row.bank_analysis_snapshot != change.get('new_snapshot')):
+                raise RuntimeError('dedupe provenance changed during rollback')
+            new_snapshot = bank_transfer_metadata.parse_snapshot(
+                row.bank_analysis_snapshot)
+            if new_snapshot and new_snapshot.get('cache_ref'):
+                cache_refs.add(new_snapshot['cache_ref'])
+            row.bank_image_id = change.get('old_bank_image_id')
+            row.bank_analysis_snapshot = change.get('old_snapshot')
+        for row in rows:
+            snapshot = bank_transfer_metadata.parse_snapshot(
+                row.bank_analysis_snapshot)
+            if snapshot and snapshot.get('cache_ref'):
+                cache_refs.add(snapshot['cache_ref'])
+            if row.filename:
+                original = os.path.join(_dataset_path(dataset_id), row.filename)
+                if os.path.exists(original):
+                    trashed = trash.send_to_trash(
+                        original,
+                        context=f'dataset-{dataset_id}-failed-bank-promotion-{row.id}')
+                    moved.append((trashed, original))
+            db.session.delete(row)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        for trashed, original in reversed(moved):
+            _restore_from_trash(trashed, original)
+        return False
+    cache_dir = _bank_analysis_cache_dir(dataset_id)
+    for cache_ref in cache_refs:
+        shared = False
+        for other in (FaceDatasetImage.query
+                      .filter(FaceDatasetImage.dataset_id == dataset_id,
+                              FaceDatasetImage.bank_analysis_snapshot.isnot(None))):
+            snapshot = bank_transfer_metadata.parse_snapshot(
+                other.bank_analysis_snapshot)
+            if snapshot and snapshot.get('cache_ref') == cache_ref:
+                shared = True
+                break
+        if not shared:
+            bank_transfer_metadata.remove_cache_sidecar(cache_dir, cache_ref)
+    return True
 
 
 # --- Import d'un dataset d'entraînement existant (ZIP kohya-style / dossier) --
@@ -5211,6 +6195,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
 DATASET_ZIP_MAX_FILES = 400
 DATASET_ZIP_MAX_BYTES = 2 * 1024 * 1024 * 1024
 DATASET_ZIP_MAX_IMAGE_BYTES = 128 * 1024 * 1024
+_DATASET_ZIP_MAX_CENTRAL_DIRECTORY_BYTES = 8 * 1024 * 1024
 _DATASET_ZIP_IMG_EXTS = ('.jpg', '.jpeg', '.png', '.webp', '.bmp')
 
 
@@ -5228,7 +6213,9 @@ def _merge_training_images(user_id, dataset_id, entries, captions, stats=None):
     for stem, display, getter in entries:
         try:
             raw = getter()
-        except (OSError, ValueError, MemoryError, zipfile.BadZipFile):
+        except (OSError, ValueError, MemoryError, zipfile.BadZipFile,
+                zipfile.LargeZipFile, zlib.error, lzma.LZMAError,
+                NotImplementedError, RuntimeError):
             failed += 1
             continue
         if stats is not None:   # même garde qualité que l'import de photos
@@ -5309,9 +6296,15 @@ def import_dataset_zip(user_id: int, dataset_id: int,
         raise ValueError('dataset not found')
     stream, owned = _coerce_archive_stream(archive)
     try:
+        _preflight_zip_central_directory(
+            stream, max_entries=DATASET_ZIP_MAX_FILES,
+            max_central_bytes=_DATASET_ZIP_MAX_CENTRAL_DIRECTORY_BYTES,
+            label='zip')
         try:
             z = zipfile.ZipFile(stream)
-        except zipfile.BadZipFile as exc:
+        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile,
+                zlib.error, lzma.LZMAError, NotImplementedError,
+                RuntimeError) as exc:
             raise ValueError('not a zip file') from exc
         try:
             infos = [i for i in z.infolist() if not i.is_dir()]
@@ -5333,7 +6326,9 @@ def import_dataset_zip(user_id: int, dataset_id: int,
                     try:
                         captions[os.path.splitext(i.filename)[0]] = \
                             z.read(i).decode('utf-8', 'replace').strip()
-                    except (OSError, zipfile.BadZipFile):
+                    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile,
+                            zlib.error, lzma.LZMAError, NotImplementedError,
+                            RuntimeError):
                         pass
             entries = [
                 (os.path.splitext(i.filename)[0], i.filename,
@@ -5572,7 +6567,8 @@ def _existing_dhashes(dataset_id) -> list:
     return [h for h, _id in _existing_dhash_rows(dataset_id)]
 
 
-def _attach_bank_provenance(image_id, bank_image_id, *, bank_analysis_snapshot=None) -> bool:
+def _attach_bank_provenance(image_id, bank_image_id, *, bank_analysis_snapshot=None,
+                            bank_analysis_cache_dir=None) -> bool:
     """Raccroche une image de dataset DÉJÀ présente à la bank_image dont elle est
     le doublon perceptuel, et dit si le lien a été pris. N'écrase jamais une
     provenance existante : la première bank qui a fourni l'image la garde (sinon
@@ -5597,7 +6593,14 @@ def _attach_bank_provenance(image_id, bank_image_id, *, bank_analysis_snapshot=N
                          and row.bank_analysis_snapshot is None))
     if owns_snapshot and bank_analysis_snapshot and row.filename:
         path = os.path.join(_dataset_dir(row.dataset_id), row.filename)
-        if bank_transfer_metadata.compatible_analysis(bank_analysis_snapshot, path) is not None:
+        snapshot = bank_transfer_metadata.compatible_snapshot(
+            bank_analysis_snapshot, path)
+        cache_ok = (snapshot is not None and (
+            not snapshot.get('cache_ref')
+            or (bank_analysis_cache_dir is not None
+                and bank_transfer_metadata.read_cache_sidecar(
+                    bank_analysis_cache_dir, snapshot['cache_ref']) is not None)))
+        if cache_ok:
             row.bank_analysis_snapshot = bank_analysis_snapshot
             changed = True
     linked = bool(bank_image_id and row.bank_image_id == bank_image_id)
@@ -5838,6 +6841,7 @@ def _parse_classify(raw):
 
 def classify_images(user_id, dataset_id):
     """Classify imported images lacking a framing via Qwen3-VL. Returns count."""
+    _guard_not_bank_export(dataset_id)
     try:
         from .vision_ollama import describe_image_ollama, unload_vision_model
     except ImportError:
@@ -6370,6 +7374,7 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
     moteur n'a rien écrit). C'est la seule façon, après coup, de savoir QUI a rédigé :
     'auto' enchaîne les deux moteurs sans le dire, et leurs styles diffèrent. La
     valeur de retour reste le NOMBRE total de captions (contrat inchangé)."""
+    _guard_not_bank_export(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return 0
@@ -7059,6 +8064,7 @@ def analyze_faces(user_id, dataset_id) -> dict:
     Persiste face_score (cosinus brut, None si non note) + face_state. AUCUNE
     suppression, aucune decision : la passe ecrit un chiffre, c'est 🎯 Auto-triage
     qui agit dessus. Tourne sur CPU -> pas de fenetre GPU. Retourne {state: count}."""
+    _guard_not_bank_export(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -7349,6 +8355,7 @@ def normalize_watermark_regions(value, *, allow_null=True) -> list[list[float]] 
 
 def set_watermark_regions(user_id, dataset_id, image_id, regions) -> dict | None:
     """Atomically replace a detected image's manual watermark-region override."""
+    _guard_not_bank_export(dataset_id)
     owned_query = (FaceDatasetImage.query
                    .join(FaceDataset, FaceDatasetImage.dataset_id == FaceDataset.id)
                    .filter(FaceDatasetImage.id == image_id,
@@ -7587,6 +8594,7 @@ def detect_watermarks(user_id, dataset_id, *, include_dismissed=False, backend=N
     (a deliberate "check everything again"). CALLER decides on the GPU-exclusive
     vision window: the vision route always needs it, the detector only when it
     actually runs on CUDA."""
+    _guard_not_bank_export(dataset_id)
     from . import watermark_detector
     resolution = (backend if isinstance(backend, dict)
                   else watermark_detector.resolve_backend(backend))
@@ -7813,6 +8821,7 @@ def dismiss_watermarks(user_id, dataset_id, image_ids):
     don't belong / aren't detected are silently ignored, like batch_image_action).
     Returns the number of rows dismissed. The bbox is kept (harmless, and a later
     include_dismissed re-scan overwrites it)."""
+    _guard_not_bank_export(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         return 0
@@ -8257,6 +9266,7 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
     an unknown name degrades to no extra LoRAs with a log). The preset's chain
     applies to EVERY variation of the run — picking the preset IS the intent,
     there is no automatic per-variation gating."""
+    _guard_not_bank_export(dataset_id)
     try:
         from .klein_edit_helper import enqueue_klein_edit
     except ImportError:
@@ -8376,6 +9386,7 @@ def generate_variations_krea(user_id, dataset_id, variations, multiplier,
     The row stores the ENGINE ID in `klein_model`, like the API rows do, so the
     grid badge can say "Krea 2 Edit"; the base model itself is re-resolved
     deterministically at enqueue and at regenerate."""
+    _guard_not_bank_export(dataset_id)
     from . import krea_edit_helper as keh
     ds = get_dataset(user_id, dataset_id)
     if not ds:
@@ -8620,6 +9631,10 @@ def _enqueue_improve(engine, *, user_id, source, source_path, prompt, label,
 
 def improve_existing_image(user_id, image_id, engine=None):
     """Serialize one source's improve request, including the queue hand-off."""
+    image = _owned_image(user_id, image_id)
+    if image is None:
+        return None
+    _guard_not_bank_export(image.dataset_id)
     lock = _IMAGE_IMPROVE_LOCKS[hash((str(user_id), image_id))
                                 % len(_IMAGE_IMPROVE_LOCKS)]
     with lock:
@@ -8641,6 +9656,7 @@ def _improve_existing_image_locked(user_id, image_id, engine=None):
     img = _owned_image(user_id, image_id)
     if not img:
         return None
+    _guard_not_bank_export(img.dataset_id)
     if img.derivation_kind in _SMALL_IMAGE_DERIVATIONS:
         raise ValueError(
             'resolve the small-image rescue pair before improving either image')
@@ -8770,6 +9786,7 @@ def reimprove_image(user_id, image_id):
     img = _owned_image(user_id, image_id)
     if not img:
         return None
+    _guard_not_bank_export(img.dataset_id)
     if img.derivation_kind != KLEIN_IMAGE_IMPROVE:
         raise ValueError('only an upscale & improve result can be re-improved')
     # Take the same stripe as a first-pass improve OF THE PARENT: the two paths
@@ -8784,6 +9801,7 @@ def _reimprove_image_locked(user_id, image_id):
     img = _owned_image(user_id, image_id)
     if not img:
         return None
+    _guard_not_bank_export(img.dataset_id)
     if img.derivation_kind != KLEIN_IMAGE_IMPROVE:
         raise ValueError('only an upscale & improve result can be re-improved')
     if img.status == 'pending' and not img.filename:
@@ -8983,6 +10001,7 @@ def start_bulk_improve(app, user_id, dataset_id, image_ids, engine=None):
     an unknown dataset / an empty eligible set, RuntimeError (-> 409) when a batch
     is already running, and the engine's missing-assets exceptions (-> structured
     409) so a missing model surfaces ONCE instead of once per image."""
+    _guard_not_bank_export(dataset_id)
     ds = get_dataset(user_id, dataset_id)
     if not ds:
         raise ValueError('dataset not found')
@@ -9104,6 +10123,7 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
     img = _owned_image(user_id, image_id)
     if not img or img.source != 'generated':
         return None
+    _guard_not_bank_export(img.dataset_id)
     if img.derivation_kind == KLEIN_SMALL_IMAGE:
         raise ValueError('small-image rescue candidates cannot be regenerated; re-import the source')
     if img.derivation_kind == KLEIN_IMAGE_IMPROVE:
@@ -9650,6 +10670,7 @@ def generate_variations_nanobanana(app, user_id, dataset_id, variations, multipl
     rows (job_id stays None - that is the marker for API-generated rows), then
     fill them from a background thread. The existing polling/banner/cancel UI
     works unchanged (pending + no file = in flight). Returns the created ids."""
+    _guard_not_bank_export(dataset_id)
     if engine not in API_ENGINES:
         raise ValueError(f'unknown API engine: {engine}')
     # Fail-closed : les variations NSFW ne partent JAMAIS vers un moteur API

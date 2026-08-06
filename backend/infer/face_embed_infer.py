@@ -17,7 +17,7 @@ Protocol (same family as face_score_infer.py):
             drive the UI progress bar).
 
 Embeddings are CACHED in the .npz (parallel arrays paths/embs/states/dets/
-bfracs/yaws) and written incrementally every CACHE_EVERY images — killing the
+bfracs/yaws/sigs/hashes) and written incrementally every CACHE_EVERY images — killing the
 pass mid-way loses at most that slice, and re-clustering at another threshold is
 then near-instant.
 
@@ -34,6 +34,7 @@ photo clusters by its dominant face); cluster ids are 1-based, ordered by
 cluster size descending, singletons included (a person seen once is still a
 cluster of one)."""
 from __future__ import annotations
+import hashlib
 import json
 import os
 import sys
@@ -71,8 +72,34 @@ def _write_count(cache_path, n):
         pass
 
 
+def _file_sig(path):
+    """Cheap runtime invalidation signature, aligned with the Score cache."""
+    try:
+        st = os.stat(path)
+        return f'{st.st_size}:{st.st_mtime_ns}'
+    except OSError:
+        return ''
+
+
+def _file_hash(path):
+    try:
+        before = _file_sig(path)
+        if not before:
+            return b''
+        digest = hashlib.sha256()
+        with open(path, 'rb') as fh:
+            while True:
+                chunk = fh.read(1024 * 1024)
+                if not chunk:
+                    break
+                digest.update(chunk)
+        return digest.digest() if _file_sig(path) == before else b''
+    except OSError:
+        return b''
+
+
 def _load_cache(path):
-    """{path: (state, det, bbox_frac, emb, yaw)}. A cache written before the yaw
+    """{path: (state, det, bbox_frac, emb, yaw, sig)}. A cache written before the yaw
     array existed loads with yaw = NaN — additive, so no user ever has to
     re-embed a bank just because a new number was added to the tuple."""
     import numpy as np
@@ -84,9 +111,20 @@ def _load_cache(path):
             paths, states = z['paths'], z['states']
             embs, dets, bfracs = z['embs'], z['dets'], z['bfracs']
             yaws = z['yaws'] if 'yaws' in z.files else None
+            sigs = z['sigs'] if 'sigs' in z.files else None
+            hashes = z['hashes'] if 'hashes' in z.files else None
+            if (hashes is not None
+                    and (hashes.shape != (len(paths), 32)
+                         or hashes.dtype != np.dtype('uint8'))):
+                raise ValueError('invalid cache hash shape')
         for i, p in enumerate(paths):
+            digest = hashes[i].tobytes() \
+                if hashes is not None else b''
+            if digest == b'\0' * 32:
+                digest = b''
             out[str(p)] = (states[i], float(dets[i]), float(bfracs[i]), embs[i],
-                           float(yaws[i]) if yaws is not None else float('nan'))
+                           float(yaws[i]) if yaws is not None else float('nan'),
+                           str(sigs[i]) if sigs is not None else '', digest)
     except Exception as e:  # noqa: BLE001 — a corrupt cache = recompute, never fatal
         _log(f'[embed] cache unreadable, recomputing: {e}')
         return {}
@@ -95,7 +133,13 @@ def _load_cache(path):
 
 def _save_cache(path, cache):
     import numpy as np
-    if not path or not cache:
+    if not path:
+        return
+    if not cache:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
         return
     paths = list(cache)
     tmp = path + '.tmp.npz'   # .npz suffix so numpy never appends its own
@@ -106,8 +150,31 @@ def _save_cache(path, cache):
         dets=np.array([cache[p][1] for p in paths], dtype='float32'),
         bfracs=np.array([cache[p][2] for p in paths], dtype='float32'),
         yaws=np.array([cache[p][4] for p in paths], dtype='float32'),
-        embs=np.stack([cache[p][3] for p in paths]).astype('float32'))
+        embs=np.stack([cache[p][3] for p in paths]).astype('float32'),
+        sigs=np.array([_cache_sig(cache[p]) for p in paths]),
+        hashes=np.frombuffer(b''.join(
+            _cache_hash(cache[p]) or (b'\0' * 32) for p in paths),
+            dtype='uint8').reshape(len(paths), 32))
     os.replace(tmp, path)
+
+
+def _cache_sig(entry):
+    return entry[5] if len(entry) > 5 else ''
+
+
+def _cache_hash(entry):
+    value = entry[6] if len(entry) > 6 else b''
+    return value if isinstance(value, bytes) and len(value) == 32 else b''
+
+
+def _is_stale(path, entry):
+    stored = _cache_sig(entry)
+    digest = _cache_hash(entry)
+    if not stored or not digest:
+        return True
+    current = _file_sig(path)
+    return (not current or current != stored
+            or _file_hash(path) != digest)
 
 
 def _cluster(order, cache, threshold):
@@ -179,6 +246,8 @@ def main() -> int:
     def _needs_work(p):
         if p not in cache:
             return True
+        if _is_stale(p, cache[p]):
+            return True
         return require_yaw and not (cache[p][4] == cache[p][4])   # NaN test
 
     todo = [p for p in images if _needs_work(p)]
@@ -221,6 +290,7 @@ def main() -> int:
         import numpy as _np
         zero = _np.zeros(512, dtype='float32')
         done_since_save = 0
+        uncached_changed = 0
         if _cancel_requested(cancel_file):   # cancelled during the model load
             cached = len(images) - len(todo)
             _write_count(cache_path, cached)
@@ -228,15 +298,25 @@ def main() -> int:
                               'cached': cached, 'remaining': len(todo)}))
             return 0
         for i, p in enumerate(todo, 1):
+            changed_while_reading = False
+            signature = ''
+            payload_hash = b''
+            result = None
             try:
                 # Read a bounded, validated snapshot rather than opening the
                 # live Bank path with cv2.  The parent can only preflight a
                 # path; it cannot stop that path being replaced before this
                 # dedicated interpreter starts.
+                signature = _file_sig(p)
                 payload = read_validated_bank_image(p)
+                payload_hash = hashlib.sha256(payload).digest()
+                if not signature or _file_sig(p) != signature:
+                    changed_while_reading = True
+                    raise RuntimeError('image changed while it was read')
                 img = cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
                 if img is None:
-                    cache[p] = ('unreadable', 0.0, 0.0, zero, float('nan'))
+                    result = ('unreadable', 0.0, 0.0, zero, float('nan'),
+                              signature, payload_hash)
                 else:
                     h, w = img.shape[:2]
                     f = biggest(app.get(img))
@@ -248,7 +328,8 @@ def main() -> int:
                     else:
                         scale = 1.0
                     if f is None:
-                        cache[p] = ('no_face', 0.0, 0.0, zero, float('nan'))
+                        result = ('no_face', 0.0, 0.0, zero, float('nan'),
+                                  signature, payload_hash)
                     else:
                         area = (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
                         bbox_frac = float(area / (w * h) / scale)
@@ -268,37 +349,63 @@ def main() -> int:
                             state = 'too_small'
                         elif abs(gate) > YAW_MAX:
                             state = 'extreme_pose'
-                        cache[p] = (state, round(det, 3), round(bbox_frac, 4),
-                                    f.normed_embedding.astype('float32'),
-                                    yaw if yaw != yaw else round(yaw, 2))
+                        result = (state, round(det, 3), round(bbox_frac, 4),
+                                  f.normed_embedding.astype('float32'),
+                                  yaw if yaw != yaw else round(yaw, 2), signature,
+                                  payload_hash)
+                # Inference may be much slower than the validated read.  Commit
+                # its local result only while the live path still identifies
+                # the bytes captured above.
+                if not signature or _file_sig(p) != signature:
+                    changed_while_reading = True
+                    raise RuntimeError('image changed while it was analysed')
+                cache[p] = result
             except Exception as e:  # noqa: BLE001 — one broken file must not sink the pass
-                cache[p] = ('error', 0.0, 0.0, zero, float('nan'))
+                # The validated read can itself fail because a live Bank file
+                # was replaced or removed.  Compare the identity captured
+                # before the read even on that exception path; otherwise an
+                # ERROR could be signed for replacement bytes no model saw.
+                if not signature or _file_sig(p) != signature:
+                    changed_while_reading = True
+                if changed_while_reading:
+                    # Never bless the replacement with an ERROR computed from
+                    # different bytes. Missing entry means the next run retries.
+                    cache.pop(p, None)
+                    uncached_changed += 1
+                else:
+                    cache[p] = ('error', 0.0, 0.0, zero, float('nan'), signature,
+                                payload_hash)
                 _log(f'[embed] {i}/{len(todo)} ERROR {e}')
                 continue
             finally:
                 done_since_save += 1
                 if cache_path and done_since_save >= CACHE_EVERY:
                     _save_cache(cache_path, cache)
-                    _write_count(cache_path, len(images) - len(todo) + i)
+                    _write_count(
+                        cache_path,
+                        len(images) - len(todo) + i - uncached_changed)
                     done_since_save = 0
-            _log(f'[embed] {i}/{len(todo)} {cache[p][0]}')
+            _log(f'[embed] {i}/{len(todo)} '
+                 f'{cache[p][0] if p in cache else "changed; retry next run"}')
             if _cancel_requested(cancel_file):   # clean stop between images
                 if cache_path:
                     _save_cache(cache_path, cache)
-                cached = len(images) - len(todo) + i
+                cached = sum(path in cache for path in images)
                 _write_count(cache_path, cached)
                 print(json.dumps({'ok': True, 'cancelled': True,
                                   'cached': cached, 'remaining': len(todo) - i}))
                 return 0
         if cache_path:
             _save_cache(cache_path, cache)
-            _write_count(cache_path, len(images))
+            _write_count(cache_path, sum(path in cache for path in images))
 
     results = {}
     for p in images:
-        state, det, bfrac, _emb, yaw = (cache.get(p)
-                                        or ('error', 0.0, 0.0, None, float('nan')))
+        entry = cache.get(p) or ('error', 0.0, 0.0, None, float('nan'), '', b'')
+        state, det, bfrac, _emb, yaw = entry[:5]
+        digest = _cache_hash(entry)
         results[p] = {'state': str(state), 'det': float(det), 'bbox_frac': float(bfrac),
+                      'fingerprint': digest.hex() if digest else None,
                       # null, never 0.0 — "not measured" is its own answer.
                       'yaw': None if yaw != yaw else float(yaw)}
     clusters = _cluster(images, cache, threshold)

@@ -45,19 +45,34 @@ an asserted folder is not a wall around its images.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import os
 import re
 from datetime import datetime, timezone
+from functools import wraps
 
 from sqlalchemy import func, or_
 
 from ..extensions import db
 from ..models import BankFolderPerson, BankFolderProbe, BankImage
+from . import bank_jobs
 
 logger = logging.getLogger(__name__)
+
+
+def _serialized_bank_mutation(kind):
+    """Use the same Bank reservation fence as every other synchronous write."""
+    def decorate(fn):
+        @wraps(fn)
+        def guarded(user_id, bank_id, *args, _bank_lease=None, **kwargs):
+            with bank_jobs.mutation_lease(
+                    bank_id, kind, capability=_bank_lease) as lease:
+                return fn(user_id, bank_id, *args, _bank_lease=lease, **kwargs)
+        return guarded
+    return decorate
 
 # How many images the sample check embeds. Small enough to stay a few seconds of
 # GPU (vs thousands for a full pass), big enough that a second person occupying a
@@ -181,8 +196,16 @@ def _report_of(row) -> dict | None:
     if not row.sample_report:
         return None
     try:
-        return json.loads(row.sample_report)
-    except ValueError:
+        report = json.loads(row.sample_report)
+        if not isinstance(report, dict):
+            return None
+        # Keep the old report as history but name when it no longer describes
+        # the asserted folder's effective image generation.
+        report['stale'] = (
+            report.get('content_sig') != _folder_signature(
+                row.bank_id, row.subfolder))
+        return report
+    except (TypeError, ValueError):
         return None
 
 
@@ -255,12 +278,25 @@ def _next_cluster_id(bank_id) -> int:
 
 def asserted_offset(bank_id) -> int:
     """How far the embeddings pass must push its own 1-based cluster ids so they
-    never collide with an asserted group's."""
-    return int((db.session.query(func.max(BankFolderPerson.cluster_id))
-                .filter(BankFolderPerson.bank_id == bank_id).scalar() or 0))
+    never collide with an asserted group's.
+
+    Transfers preserve asserted image rows even though the source folder rule
+    itself is intentionally Bank-local.  Such an orphaned-but-authoritative id
+    still occupies the shared cluster namespace and therefore participates in
+    the offset exactly like a live ``BankFolderPerson`` rule.
+    """
+    rule_max = (db.session.query(func.max(BankFolderPerson.cluster_id))
+                .filter(BankFolderPerson.bank_id == bank_id).scalar() or 0)
+    row_max = (db.session.query(func.max(BankImage.face_cluster))
+               .filter(BankImage.bank_id == bank_id,
+                       BankImage.face_cluster_origin == ASSERTED)
+               .scalar() or 0)
+    return int(max(rule_max, row_max))
 
 
-def assert_single_person(user_id, bank_id, subfolder) -> dict:
+@_serialized_bank_mutation('folder_person')
+def assert_single_person(user_id, bank_id, subfolder, *,
+                         _bank_lease=None) -> dict:
     """Declare a subfolder to hold one person. Immediate, no inference at all.
 
     Idempotent: asserting an already-asserted folder just re-stamps it (useful
@@ -288,7 +324,8 @@ def assert_single_person(user_id, bank_id, subfolder) -> dict:
     return {'subfolder': sub, 'cluster_id': row.cluster_id, 'images': total}
 
 
-def revoke(user_id, bank_id, subfolder) -> dict:
+@_serialized_bank_mutation('folder_person_revoke')
+def revoke(user_id, bank_id, subfolder, *, _bank_lease=None) -> dict:
     """Undo the assertion: the group dissolves and the folder goes back to normal
     clustering. Only ids this module wrote are cleared — a row whose cluster the
     embeddings pass computed (before the assertion, or in a folder that partly
@@ -470,10 +507,12 @@ def _sample_job(bank_id, subfolder):
         picked = _stratified(pool)
         by_path = {}
         for r in picked:
-            p = banks.abs_image_path(bank, r)
+            p = banks.analysis_image_path(bank, r, refresh_rotation=True)
             if banks._is_safe_bank_source(p, label='folder sample check'):
                 by_path[p] = r.id
         paths = list(by_path)
+        sample_generation = _folder_signature(
+            bank_id, subfolder, include_analysis=False)
         bank_jobs.progress(job, done=0, total=len(paths), detail='sample check')
         if not paths:
             bank_jobs.progress(job, detail='no readable image to sample')
@@ -514,14 +553,29 @@ def _sample_job(bank_id, subfolder):
         # them back (never the cluster id — that belongs to the assertion), so
         # the "to check" list has substance even on a bank whose face pass never
         # ran. This is also why the sample is not wasted work.
+        sample_valid = (
+            _folder_signature(bank_id, subfolder, include_analysis=False)
+            == sample_generation)
         for p, image_id in by_path.items():
             live = banks._live_image(image_id)
-            if live is None or live.face_state is not None:
-                continue
             res = results.get(p) or {}
-            live.face_state = res.get('state')
-            live.face_det = res.get('det')
+            if (live is None or live.status == 'reject'
+                    or banks._subfolder_of(live.relpath) != subfolder
+                    or not banks._prepare_analysis_write(
+                        live, p, res.get('fingerprint'))):
+                sample_valid = False
+                continue
+            if live.face_state is None:
+                live.face_state = res.get('state')
+                live.face_det = res.get('det')
         db.session.commit()
+        if (not sample_valid
+                or _folder_signature(
+                    bank_id, subfolder, include_analysis=False)
+                != sample_generation):
+            bank_jobs.progress(
+                job, detail='sample changed while it was checked — no report saved')
+            return
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
@@ -538,7 +592,8 @@ def _sample_job(bank_id, subfolder):
                 'checked_at': _now_iso(), 'sample': len(paths),
                 'scorable': scorable, 'largest': largest, 'faces': faces,
                 'threshold': th['face_threshold'],
-                'verdict': verdict, 'note': sentence})
+                'verdict': verdict, 'note': sentence,
+                'content_sig': _folder_signature(bank_id, subfolder)})
             db.session.commit()
         bank_jobs.progress(job, detail=sentence)
     return run
@@ -554,15 +609,35 @@ def _sample_job(bank_id, subfolder):
 # It suggests. It never asserts. A wrong assertion made silently would corrupt
 # the person grouping with something the user never said, and they would have no
 # reason to look for it — so confirming stays one deliberate click.
-def _folder_signature(bank_id, subfolder) -> str:
-    """A cheap fingerprint of a folder's CONTENT: how many images it holds and
-    the highest row id among them. Both change the moment images are added or
-    removed, which is exactly when a probe stops describing reality. No hashing,
-    no disk access — one aggregate query."""
-    q = _folder_rows_q(bank_id, subfolder)
-    n = q.count()
-    top = q.with_entities(func.max(BankImage.id)).scalar() or 0
-    return f'{int(n)}:{int(top)}'
+def _folder_signature(bank_id, subfolder, *, include_analysis=True) -> str:
+    """DB-only identity of the exact non-rejected effective pool a probe saw.
+
+    Count/max-id missed rotations, cleans, status changes and threshold changes,
+    so a verdict could remain labelled fresh while every sampled pixel changed.
+    A truncated SHA-256 fits the existing 40-character column; its input contains
+    no file bytes and therefore keeps this UI freshness check cheap.
+    """
+    rows = (_folder_rows_q(bank_id, subfolder)
+            .filter(BankImage.status != 'reject')
+            .with_entities(BankImage.id, BankImage.relpath,
+                           BankImage.analysis_fingerprint, BankImage.rotation,
+                           BankImage.watermark_clean_method)
+            .order_by(BankImage.id.asc()).all())
+    try:
+        threshold = _svc().thresholds().get('face_threshold')
+    except Exception:  # noqa: BLE001 — freshness degrades to a stable sentinel
+        threshold = None
+    digest = hashlib.sha256()
+    digest.update(f'face-threshold:{threshold!r}\n'.encode('utf-8'))
+    for image_id, relpath, fingerprint, rotation, clean_method in rows:
+        digest.update(
+            f'{image_id}\0{relpath}\0'
+            f'{fingerprint if include_analysis else ""}\0'
+            f'{rotation or 0}\0{clean_method or ""}\n'.encode(
+                'utf-8', errors='surrogatepass'))
+    # Existing schema stores 40 characters.  This is a change token, while the
+    # security authority for a sampled image remains its full SHA-256 below.
+    return digest.hexdigest()[:40]
 
 
 def _sample_pool(bank_id, subfolder):
@@ -586,13 +661,27 @@ def _sample_pool(bank_id, subfolder):
     sample again on every single launch. Falling back to the full pool costs
     nothing there (every one of those embeddings is cached) and the folder gets
     the honest "almost no readable face" it earned."""
+    banks = _svc()
+    from ..models import ImageBank
+    bank = db.session.get(ImageBank, bank_id)
     base = _folder_rows_q(bank_id, subfolder).filter(BankImage.status != 'reject')
-    rows = (base.filter(or_(BankImage.face_state.is_(None),
-                            BankImage.face_state == 'scorable'))
-            .order_by(BankImage.relpath.asc()).all())
+    all_rows = base.order_by(BankImage.relpath.asc()).all()
+    rows = []
+    for row in all_rows:
+        if row.face_state is None or row.face_state == 'scorable':
+            rows.append(row)
+            continue
+        # A measured-unusable verdict only saves a re-draw while it is proven to
+        # describe the row's current effective bytes. Legacy/unbound and stale
+        # states stay eligible so a clean/rotation cannot exclude them forever.
+        path = banks.analysis_image_path(bank, row) if bank is not None else None
+        if (not row.analysis_fingerprint
+                or banks.bank_transfer_metadata.content_fingerprint_path(path)
+                != row.analysis_fingerprint):
+            rows.append(row)
     if len(rows) >= MIN_PROBE_IMAGES:
         return rows
-    return base.order_by(BankImage.relpath.asc()).all()
+    return all_rows
 
 
 def probe_for(bank_id, subfolder):
@@ -703,7 +792,9 @@ def _probe_states(bank_id, bank, candidates) -> dict:
         budget = draw_budget(images)
         s = {'name': name, 'bank': bank, 'pool': pool, 'next': 0,
              'order': _draw_order(len(pool), budget), 'paths': {}, 'clusters': {},
-             'pending': False}
+             'pending': False,
+             'generation_sig': _folder_signature(
+                 bank_id, name, include_analysis=False)}
         _draw_more(s, SAMPLE_SIZE)
         state[name] = s
     return state
@@ -720,7 +811,8 @@ def _draw_more(s, want) -> int:
     while added < want and s['next'] < len(s['order']):
         row = s['pool'][s['order'][s['next']]]
         s['next'] += 1
-        p = banks.abs_image_path(s['bank'], row)
+        p = banks.analysis_image_path(
+            s['bank'], row, refresh_rotation=True)
         if p in s['paths']:
             continue
         if banks._is_safe_bank_source(p, label='folder person probe'):
@@ -754,13 +846,29 @@ def _apply_probe_results(bank_id, state, results) -> dict:
     for s in state.values():
         if len(s['paths']) < 2:      # nothing to compare below two faces
             continue
+        folder_valid = (_folder_signature(
+            bank_id, s['name'], include_analysis=False)
+            == s['generation_sig'])
         for p, image_id in s['paths'].items():
             live = banks._live_image(image_id)
-            if live is None or live.face_state is not None:
-                continue
             res = results.get(p) or {}
-            live.face_state = res.get('state')
-            live.face_det = res.get('det')
+            if (live is None or live.status == 'reject'
+                    or banks._subfolder_of(live.relpath) != s['name']
+                    or not banks._prepare_analysis_write(
+                        live, p, res.get('fingerprint'))):
+                folder_valid = False
+                continue
+            if live.face_state is None:
+                live.face_state = res.get('state')
+                live.face_det = res.get('det')
+        # Per-folder all-or-none: one changed sample member invalidates the
+        # clustering evidence for this folder, while other folders in the same
+        # bounded child call remain publishable.
+        if (not folder_valid
+                or _folder_signature(
+                    bank_id, s['name'], include_analysis=False)
+                != s['generation_sig']):
+            continue
         sizes = {}
         for cid in (s['clusters'] or {}).values():
             sizes[cid] = sizes.get(cid, 0) + 1
@@ -1052,7 +1160,9 @@ def start_preflight(app, user_id, bank_id):
                              limit=MAX_PREFLIGHT_FOLDERS, kind='folder-preflight')
 
 
-def accept_suggestions(user_id, bank_id, subfolders) -> dict:
+@_serialized_bank_mutation('folder_person_accept')
+def accept_suggestions(user_id, bank_id, subfolders, *,
+                       _bank_lease=None) -> dict:
     """Confirm the preflight's offers in ONE gesture.
 
     Each folder goes through ``assert_single_person`` — the same persisted,
@@ -1072,7 +1182,8 @@ def accept_suggestions(user_id, bank_id, subfolders) -> dict:
     for sub in subfolders:
         name = '' if sub is None else str(sub)
         try:
-            out = assert_single_person(user_id, bank_id, name)
+            out = assert_single_person(
+                user_id, bank_id, name, _bank_lease=_bank_lease)
         except ValueError as e:
             failed.append({'subfolder': name, 'error': str(e)})
             continue

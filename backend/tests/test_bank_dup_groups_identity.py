@@ -13,9 +13,11 @@ same groups — the same ids, on the same images — over random hashes, over ha
 built to be adversarial (exact ties, chains, one huge group), and at every
 distance the setting allows.
 """
+import hashlib
 import random
 
 import pytest
+from PIL import Image
 
 
 # --- the algorithm as it stood, character for character ----------------------
@@ -165,8 +167,15 @@ def _bank_of_hashes(banks, db, hashes, tmp_path):
     src.mkdir(parents=True, exist_ok=True)
     bank, _added = banks.create_bank('local', 'Hashes', str(src))
     for i, h in enumerate(hashes):
-        db.session.add(BankImage(bank_id=bank.id, relpath=f'{i:05d}.jpg',
-                                 status='pending', dhash=f'{h:016x}'))
+        relpath = f'{i:05d}.jpg'
+        path = src / relpath
+        Image.new(
+            'RGB', (8, 8), (i % 256, (i // 256) % 256, h & 0xff),
+        ).save(str(path), 'JPEG')
+        fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+        db.session.add(BankImage(
+            bank_id=bank.id, relpath=relpath, status='pending',
+            dhash=f'{h:016x}', analysis_fingerprint=fingerprint))
     db.session.commit()
     return bank.id
 

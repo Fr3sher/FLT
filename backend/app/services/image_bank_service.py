@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import io
 import logging
+import math
 import os
 import re
 import shutil
@@ -44,6 +45,7 @@ import warnings
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
 
 from PIL import Image, ImageOps
@@ -53,13 +55,14 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
 from . import (bank_jobs, bank_transfer_metadata, bank_undo, caption_origin,
-               image_encoding, path_guard, trash)
+               dataset_activity, image_encoding, path_guard, trash)
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _dataset_ingest_lock,
                                    _existing_dhash_rows, _hamming, _SCRAPE_DL_WORKERS,
                                    _watermark_regions_payload,
                                    _source_metadata_storage, bank_deterministic_analysis,
                                    import_images, _preserved_import_extension,
+                                   rollback_imported_images,
                                    normalize_watermark_regions)
 from .image_quality import ANALYSIS_MAX_SIDE, quality_metrics
 from .image_provenance import ORIGINS, provenance_metrics
@@ -153,12 +156,13 @@ def safe_bank_source(path, *, label: str = 'bank image'):
             yield image
 
 
-def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
-    """Read one live source with both a raw-byte cap and content validation.
+def _read_bounded_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
+    """Take one bounded raw snapshot without claiming it is a valid image.
 
-    This closes the time-of-check/time-of-use gap for paths handed as bytes to
-    Dataset import or Ollama: the exact bounded bytes read are revalidated before
-    any downstream service sees them.
+    The quality scanner needs this lower-level seam so it can bind an
+    ``unreadable`` verdict to the exact malformed bytes it inspected.  Every
+    consumer that needs a usable image must still go through
+    :func:`_read_safe_bank_source_bytes` below.
     """
     _bank_source_size_guard(path, label=label)
     try:
@@ -169,6 +173,17 @@ def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
     if len(raw) > BANK_SOURCE_MAX_BYTES:
         raise ValueError(
             f'{label} is too large (max {BANK_SOURCE_MAX_BYTES // (1024 * 1024)} MiB)')
+    return raw
+
+
+def _read_safe_bank_source_bytes(path, *, label: str = 'bank image') -> bytes:
+    """Read one live source with both a raw-byte cap and content validation.
+
+    This closes the time-of-check/time-of-use gap for paths handed as bytes to
+    Dataset import or Ollama: the exact bounded bytes read are revalidated before
+    any downstream service sees them.
+    """
+    raw = _read_bounded_bank_source_bytes(path, label=label)
     try:
         _preserved_import_extension(raw, label=label)
     except MemoryError as exc:
@@ -260,13 +275,37 @@ def _rotated_dir(bank_id) -> Path:
     return _bank_dir(bank_id) / 'rotated'
 
 
-def rotated_image_path(bank_id, image_id, rotation, source: str) -> Path:
-    """Where the turned copy of one image lives. Keyed on the angle AND on the
-    source's extension so a rotated PNG stays a PNG; keyed on the CLEAN state too
-    (via the source name) is unnecessary because every clean change drops the
-    whole derived set (see drop_derived)."""
+def rotated_image_path(bank_id, image_id, rotation, source: str,
+                       source_fingerprint=None) -> Path:
+    """Where the turned copy lives, content-addressed by its exact source.
+
+    A Bank watches a live user folder. Keying only on image id + angle made a
+    same-path replacement reuse the previous file's rotated pixels forever.
+    The full source SHA makes a cached derivative valid for exactly one raw or
+    cleaned generation while preserving the original image format.
+    """
+    source_fingerprint = (source_fingerprint
+                          or bank_transfer_metadata.content_fingerprint_path(source))
+    if not _valid_analysis_fingerprint(source_fingerprint):
+        raise ValueError('rotation source could not be fingerprinted')
     ext = os.path.splitext(source)[1].lower() or '.png'
-    return _rotated_dir(bank_id) / f'{image_id}.r{int(rotation)}{ext}'
+    return (_rotated_dir(bank_id)
+            / f'{image_id}.{source_fingerprint}.r{int(rotation)}{ext}')
+
+
+def _prune_rotated_generations(destination: Path, image_id) -> None:
+    """Best-effort removal of obsolete content-addressed/legacy siblings."""
+    try:
+        candidates = list(destination.parent.glob(f'{image_id}.*.r*'))
+        candidates.extend(destination.parent.glob(f'{image_id}.r*'))
+        for stale in candidates:
+            if stale != destination:
+                try:
+                    stale.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
@@ -284,8 +323,14 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
         return source
     if not turn:
         return source
-    dst = rotated_image_path(bank_id, row.id, turn, source)
+    source_fingerprint = bank_transfer_metadata.content_fingerprint_path(source)
+    if not _valid_analysis_fingerprint(source_fingerprint):
+        return source
+    dst = rotated_image_path(
+        bank_id, row.id, turn, source,
+        source_fingerprint=source_fingerprint)
     if dst.is_file():
+        _prune_rotated_generations(dst, row.id)
         return str(dst)
     try:
         # The generic transform below also checks the pixel budget. This Bank
@@ -295,6 +340,9 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
             pass
         payload = transformed_image_bytes(
             source, rotate_transform(turn), max_source_bytes=BANK_SOURCE_MAX_BYTES)
+        if (bank_transfer_metadata.content_fingerprint_path(source)
+                != source_fingerprint):
+            raise OSError('rotation source changed while it was being read')
         dst.parent.mkdir(parents=True, exist_ok=True)
         # Two simultaneous GETs of the same turned image (grid + lightbox) each
         # build it. A SHARED temp name would make one of them fail on Windows
@@ -310,6 +358,9 @@ def _ensure_rotated(bank_id, row: BankImage, source: str) -> str:
                     tmp.unlink()
                 except OSError:
                     pass
+        if (bank_transfer_metadata.content_fingerprint_path(source)
+                == source_fingerprint):
+            _prune_rotated_generations(dst, row.id)
         return str(dst)
     except (ValueError, OSError) as e:
         logger.warning('bank image %s could not be rotated: %s', row.id, e)
@@ -341,9 +392,82 @@ def resolved_image_path(bank: ImageBank, row: BankImage) -> str | None:
     return _ensure_rotated(bank.id, row, path)
 
 
+def analysis_image_path(bank: ImageBank, row: BankImage, *,
+                        refresh_rotation=False) -> str | None:
+    """Strict effective path used by every analysis/caption/cache lane.
+
+    Display remains fail-open so a broken derivative never produces a 404.
+    Analysis must fail closed: a requested clean without raw watermark authority,
+    or a rotation that cannot be materialised, may never silently analyse the
+    raw fallback and bless it as though it were the displayed transform.
+    """
+    raw = abs_image_path(bank, row)
+    if not raw or not os.path.isfile(raw):
+        return None
+    path = raw
+    if row.watermark_clean_method:
+        if (not _valid_analysis_fingerprint(row.watermark_fingerprint)
+                or bank_transfer_metadata.content_fingerprint_path(raw)
+                != row.watermark_fingerprint):
+            return None
+        cleaned = clean_image_path(bank.id, row.id)
+        if not cleaned.is_file():
+            return None
+        path = str(cleaned)
+    if getattr(row, 'rotation', None):
+        if refresh_rotation:
+            try:
+                candidate = rotated_image_path(
+                    bank.id, row.id, row.rotation, path)
+                # A completed analysis fingerprint authorises this exact
+                # derivative as the current effective generation. Rebuilding it
+                # would change its stat signature and make the exact Score/Face
+                # caches stale on every pass/promotion, so refresh only an
+                # unbound or mismatched copy.
+                trusted = (candidate.is_file()
+                           and _valid_analysis_fingerprint(
+                               row.analysis_fingerprint)
+                           and bank_transfer_metadata.content_fingerprint_path(
+                               candidate) == row.analysis_fingerprint)
+                if not trusted:
+                    candidate.unlink(missing_ok=True)
+            except (OSError, TypeError, ValueError):
+                return None
+        rotated = _ensure_rotated(bank.id, row, path)
+        if _same_resolved_path(rotated, path):
+            return None
+        path = rotated
+    return path if path and os.path.isfile(path) else None
+
+
 # --- CRUD -------------------------------------------------------------------
 def get_bank(user_id, bank_id) -> ImageBank | None:
     return ImageBank.query.filter_by(id=bank_id, user_id=user_id).first()
+
+
+def _serialized_bank_mutation(kind):
+    """Guard a synchronous ``(user_id, bank_id, ...)`` mutation atomically.
+
+    The HTTP blueprint's busy check remains useful for a fast, friendly refusal,
+    but it can never be the write fence: another thread may reserve the Bank
+    after ``before_request`` returns.  Every decorated service therefore owns a
+    short Bank lease for the whole mutation.  Background jobs/pipelines pass
+    their exact reservation in ``_bank_lease`` and are validated rather than
+    trying to acquire their own non-reentrant slot.
+    """
+    def decorate(fn):
+        @wraps(fn)
+        def guarded(user_id, bank_id, *args, _bank_lease=None, **kwargs):
+            with bank_jobs.mutation_lease(
+                    bank_id, kind, capability=_bank_lease) as lease:
+                return fn(user_id, bank_id, *args, _bank_lease=lease, **kwargs)
+        return guarded
+    return decorate
+
+
+def _job_bank_capability(job):
+    """Return a modern registry capability, not a legacy test/job mapping."""
+    return job if isinstance(job, dict) and '_keys' in job else None
 
 
 def create_bank(user_id, name, folder):
@@ -440,7 +564,7 @@ def _sync_cached(bank_id) -> dict:
     return {**(last['result'] if last else _EMPTY_SYNC), 'added': 0, 'not_added': 0}
 
 
-def refresh_bank(user_id, bank_id, force=False) -> dict | None:
+def refresh_bank(user_id, bank_id, force=False, *, _bank_lease=None) -> dict | None:
     """Re-inventory a bank's source folder: register the images that appeared in
     it since the last walk.
 
@@ -464,6 +588,16 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     Returns {'added', 'missing', 'unavailable', 'error', 'not_added', 'limit'},
     or None when the bank is unknown. ``force`` bypasses the cooldown (bank
     opened by hand)."""
+    if _bank_lease is None:
+        try:
+            with bank_jobs.mutation_lease(bank_id, 'folder_sync') as lease:
+                return refresh_bank(
+                    user_id, bank_id, force=force, _bank_lease=lease)
+        except bank_jobs.BankJobBusy:
+            # Polling remains readable while a pass owns the Bank; inventory is
+            # additive and can safely wait for the next refresh.
+            return _sync_cached(bank_id)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
     bank = get_bank(user_id, bank_id)
     if bank is None:
         return None
@@ -475,9 +609,6 @@ def refresh_bank(user_id, bank_id, force=False) -> dict | None:
     # them and reports progress against a fixed total). Adding rows underneath
     # it is harmless for the data but would silently fall outside that total —
     # the next refresh, a second later, picks them up.
-    if bank_jobs.running(bank_id):
-        return _sync_cached(bank_id)
-
     folder = bank.source_path
     if not folder or not os.path.isdir(folder):
         return _remember_sync(bank_id, now, {**_EMPTY_SYNC, 'unavailable': True})
@@ -623,7 +754,9 @@ def relocate_preview(user_id, bank_id, folder) -> dict:
     }
 
 
-def relocate_bank(user_id, bank_id, folder, confirm=False) -> dict:
+@_serialized_bank_mutation('relocate')
+def relocate_bank(user_id, bank_id, folder, confirm=False, *,
+                  _bank_lease=None) -> dict:
     """Point a bank at a NEW folder, keeping every row and every analysis.
 
     Moving a bank costs nothing by construction: BankImage.relpath is relative
@@ -637,8 +770,6 @@ def relocate_bank(user_id, bank_id, folder, confirm=False) -> dict:
     rows whose file did not come along keep their analysis and simply read as
     missing in the folder-sync note. Returns the preview dict plus
     {'applied', 'needs_confirm', 'overlaps'}."""
-    if bank_jobs.running(bank_id):
-        raise bank_jobs.BankJobBusy(bank_jobs.get(bank_id)['kind'])
     out = relocate_preview(user_id, bank_id, folder)
     out['needs_confirm'] = out['missing'] > 0
     out['applied'] = False
@@ -675,7 +806,40 @@ def _is_imported_source(path) -> bool:
         return False
 
 
-def delete_bank(user_id, bank_id) -> bool:
+def _remove_partial_import_folder(path, *, context) -> bool:
+    """Permanently remove an app-owned *partial* import folder, fail closed.
+
+    This is deliberately narrower than ordinary Bank deletion, which prefers a
+    recoverable move to Trash.  Failed/cancelled transfers have no user-owned
+    result to recover, though, and leaving their full copy behind is both an
+    orphan and a false "discarded" claim.  Resolve the target immediately before
+    removal and accept only a strict child of ``bank_sources_root``; an arbitrary
+    user source (or the import root itself) is never handed to ``rmtree``.
+    """
+    raw = str(path or '')
+    if not raw:
+        return False
+    if not os.path.lexists(raw):
+        return True
+    try:
+        resolved = os.path.realpath(raw)
+    except (OSError, TypeError, ValueError):
+        return False
+    if not _is_imported_source(resolved):
+        logger.error('%s: refusing to remove an unbounded folder %r', context, raw)
+        return False
+    try:
+        shutil.rmtree(resolved)
+    except Exception:  # noqa: BLE001 — cleanup must report every removal failure
+        logger.error('%s: could not remove partial import folder %s',
+                     context, resolved, exc_info=True)
+        return False
+    return not os.path.lexists(resolved)
+
+
+@_serialized_bank_mutation('delete')
+def delete_bank(user_id, bank_id, *, _allow_busy=False,
+                _bank_lease=None) -> bool:
     """Drop the bank's ROWS and working data (thumbs + face cache). A folder of the
     user's OWN and its images are never touched.
 
@@ -686,8 +850,6 @@ def delete_bank(user_id, bank_id) -> bool:
     bank = get_bank(user_id, bank_id)
     if not bank:
         return False
-    if bank_jobs.running(bank_id):
-        bank_jobs.cancel(bank_id)
     imported_source = bank.source_path if _is_imported_source(bank.source_path) else None
     from . import folder_person
     folder_person.drop_for_bank(bank_id)   # children first — no relationship()
@@ -708,6 +870,44 @@ def delete_bank(user_id, bank_id) -> bool:
 
 
 # --- flags & payloads -------------------------------------------------------
+def _watermark_history_inactive(row: BankImage) -> bool:
+    """Whether copied watermark history is known not to describe this payload.
+
+    A transformed source Bank legitimately has two identities: watermark data
+    belongs to its pristine raw file while effective analysis belongs to its
+    clean/rotated derivative.  After promotion that derivative is baked into a
+    new Bank's raw file and the transform markers are intentionally removed; an
+    unequal pair of exact fingerprints is then historical evidence only.
+    """
+    if row.watermark_clean_method or row.rotation:
+        return False
+    if not _valid_analysis_fingerprint(row.watermark_fingerprint):
+        return True
+    return bool(
+        _valid_analysis_fingerprint(row.analysis_fingerprint)
+        and row.analysis_fingerprint != row.watermark_fingerprint)
+
+
+def _watermark_history_inactive_clause():
+    """SQL mirror of :func:`_watermark_history_inactive`."""
+    return and_(
+        BankImage.watermark_clean_method.is_(None),
+        BankImage.rotation.is_(None),
+        or_(
+            BankImage.watermark_fingerprint.is_(None),
+            func.length(BankImage.watermark_fingerprint) != 64,
+            and_(
+                BankImage.analysis_fingerprint.isnot(None),
+                func.length(BankImage.analysis_fingerprint) == 64,
+                BankImage.watermark_fingerprint.isnot(None),
+                func.length(BankImage.watermark_fingerprint) == 64,
+                BankImage.analysis_fingerprint
+                != BankImage.watermark_fingerprint,
+            ),
+        ),
+    )
+
+
 def image_flags(row: BankImage, th: dict) -> list:
     """Threshold verdicts for one image, recomputed from the raw scores."""
     if row.quality_state == 'unreadable':
@@ -736,7 +936,8 @@ def image_flags(row: BankImage, th: dict) -> list:
         flags.append('low_aesthetic')
     if row.nsfw_score is not None and row.nsfw_score > th['nsfw_max']:
         flags.append('nsfw')
-    if row.watermark_state == 'detected':
+    if (row.watermark_state == 'detected'
+            and not _watermark_history_inactive(row)):
         flags.append('watermark')
     return flags
 
@@ -771,17 +972,23 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
     # means the badge disappears when the user deletes the image in the dataset,
     # instead of advertising a copy that is gone.
     promoted = (promoted_by or {}).get(row.id, row.promoted_dataset_id)
-    # A quarter turn transposes what the user SEES. The columns keep the source's
-    # own numbers (a re-scan rewrites them from the file, which never changed), so
-    # the swap happens here, at read time — the payload can never drift out of
-    # sync with the stored angle.
+    # Current scans bind width/height to the same EFFECTIVE bytes as every other
+    # analysis lane, so a SHA-bound row is already in display orientation.  Only
+    # a legacy, unbound rotated row may still carry raw inventory dimensions and
+    # needs the historical read-time transpose.
     rotation = int(row.rotation or 0) % 360
-    width, height = ((row.height, row.width) if rotation in (90, 270)
+    legacy_raw_dimensions = (
+        rotation in (90, 270)
+        and not _valid_analysis_fingerprint(row.analysis_fingerprint))
+    width, height = ((row.height, row.width) if legacy_raw_dimensions
                      else (row.width, row.height))
     # The mask editor's seed, carried ONLY on the rows that can open it: a bank
     # page is thousands of images and the other 99% would pay for three null keys.
+    watermark_active = not _watermark_history_inactive(row)
     mask = {}
-    if row.watermark_state == 'detected' or row.watermark_regions is not None:
+    if watermark_active and (
+            row.watermark_state == 'detected'
+            or row.watermark_regions is not None):
         import json as _json
         try:
             bbox = _json.loads(row.watermark_bbox or '')
@@ -801,15 +1008,16 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         'blur_score': row.blur_score, 'noise_score': row.noise_score,
         'uniformity_score': row.uniformity_score,
         'aesthetic_score': row.aesthetic_score, 'nsfw_score': row.nsfw_score,
-        'style_cluster': row.style_cluster, 'watermark_state': row.watermark_state,
+        'style_cluster': row.style_cluster,
+        'watermark_state': row.watermark_state if watermark_active else None,
         'watermark_clean_method': row.watermark_clean_method,
         # Who ruled on THIS image, and with what score. Per image rather than per
         # bank because a bank scanned over weeks holds both routes' verdicts, and
         # "why is this one flagged?" is asked about one tile, not about a bank.
         # NULL source = scanned before the app recorded it; NULL score = the
         # vision route, which writes a sentence and not a number.
-        'watermark_source': row.watermark_source,
-        'watermark_score': row.watermark_score,
+        'watermark_source': row.watermark_source if watermark_active else None,
+        'watermark_score': row.watermark_score if watermark_active else None,
         'detail_ratio': row.detail_ratio, 'bars_ratio': row.bars_ratio,
         'jpeg_quality': row.jpeg_quality,
         'origin': row.origin, 'origin_evidence': row.origin_evidence,
@@ -855,7 +1063,8 @@ def _flag_filter(flag: str, th: dict):
         return and_(BankImage.nsfw_score.isnot(None),
                     BankImage.nsfw_score > th['nsfw_max'])
     if flag == 'watermark':
-        return BankImage.watermark_state == 'detected'
+        return and_(BankImage.watermark_state == 'detected',
+                    ~_watermark_history_inactive_clause())
     ok = BankImage.quality_state == 'ok'
     crit = {
         'blur': BankImage.blur_score < th['sharpness_min'],
@@ -1348,7 +1557,9 @@ def bank_payload(user_id, bank_id) -> dict | None:
         # (so the UI can show "scored 0/9000" and enable the threshold facets).
         'scored': base.filter(or_(BankImage.aesthetic_score.isnot(None),
                                   BankImage.nsfw_score.isnot(None))).count(),
-        'watermark_scanned': base.filter(BankImage.watermark_state.isnot(None)).count(),
+        'watermark_scanned': base.filter(
+            BankImage.watermark_state.isnot(None),
+            ~_watermark_history_inactive_clause()).count(),
         'framing_classified': base.filter(BankImage.framing.isnot(None)).count(),
         # 🎨 Medium — how many rows the pass has a verdict for ('unsure'
         # included: it IS a verdict). Drives the chip row's appearance and the
@@ -2051,7 +2262,8 @@ def drop_derived(bank_id, image_id) -> None:
     points at it once the row's state moved on — so a locked file is not an
     error."""
     for pattern, folder in ((f'{image_id}.*.webp', _thumbs_dir(bank_id)),
-                            (f'{image_id}.r*', _rotated_dir(bank_id))):
+                            (f'{image_id}.r*', _rotated_dir(bank_id)),
+                            (f'{image_id}.*.r*', _rotated_dir(bank_id))):
         try:
             for stale in folder.glob(pattern):
                 try:
@@ -2062,8 +2274,180 @@ def drop_derived(bank_id, image_id) -> None:
             pass
 
 
+def _drop_analysis_thumbnails(bank_id, image_id) -> None:
+    """Remove every thumbnail without touching the current full-size transform."""
+    try:
+        for stale in _thumbs_dir(bank_id).glob(f'{image_id}*.webp'):
+            try:
+                stale.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 #: Historical alias — external callers/tests may still name the narrow version.
 drop_clean_thumbs = drop_derived
+
+
+def _clear_bank_pixel_analysis(
+        row: BankImage, *, preserve_current_derivative=False) -> None:
+    """Clear effective-byte lanes while preserving raw/user-owned history."""
+    asserted_cluster = (row.face_cluster, row.face_cluster_origin) \
+        if row.face_cluster_origin == 'asserted' else (None, None)
+    for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS:
+        setattr(row, name, None)
+    if asserted_cluster[1] == 'asserted':
+        row.face_cluster, row.face_cluster_origin = asserted_cluster
+    row.analysis_fingerprint = None
+    # A writer that has already validated the current rotated path must not
+    # delete that very path while binding its fingerprint: doing so invalidates
+    # the hash-bearing runtime cache the child just wrote. Explicit mutations
+    # still take the default and discard every old turned copy.
+    if preserve_current_derivative:
+        _drop_analysis_thumbnails(row.bank_id, row.id)
+    else:
+        drop_derived(row.bank_id, row.id)
+        try:
+            (_thumbs_dir(row.bank_id) / f'{row.id}.webp').unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _clear_bank_watermark_analysis(
+        row: BankImage, *, preserve_effective_derivative=False) -> None:
+    """Clear raw-source watermark authority and any clean output it owns.
+
+    A raw watermark verdict is independent from Score/Face/quality lanes.  When
+    the row was never cleaned, rebinding that verdict must not delete a valid
+    rotated derivative: it contains the same effective pixels those lanes
+    measured.  A clean marker is different because removing it changes the
+    effective image and therefore necessarily drops all derived copies.
+    """
+    had_clean = bool(row.watermark_clean_method)
+    for name in bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS:
+        setattr(row, name, None)
+    row.watermark_fingerprint = None
+    row.watermark_clean_method = None
+    if had_clean or not preserve_effective_derivative:
+        try:
+            clean_image_path(row.bank_id, row.id).unlink(missing_ok=True)
+        except OSError:
+            pass
+        drop_derived(row.bank_id, row.id)
+
+
+def _invalidate_effective_analysis(
+        row: BankImage, *, preserve_current_derivative=False) -> None:
+    _clear_bank_pixel_analysis(
+        row, preserve_current_derivative=preserve_current_derivative)
+    row.width = None
+    row.height = None
+
+
+def _valid_analysis_fingerprint(value) -> bool:
+    return (isinstance(value, str) and len(value) == 64
+            and all(ch in '0123456789abcdef' for ch in value))
+
+
+def _prepare_analysis_write(row: BankImage, path, measured_fingerprint) -> bool:
+    """Authorise one lane write for the exact bytes a worker measured.
+
+    The row is always reloaded by callers after inference.  This second digest
+    closes external-file TOCTOU: a result for bytes A cannot be attached after
+    the path became B.  On a real identity change every other derived lane is
+    explicitly invalidated before this job writes its own result and the shared
+    fingerprint in the same transaction.
+    """
+    if not _valid_analysis_fingerprint(measured_fingerprint):
+        return False
+    # ``path`` is what the worker was handed.  It is not necessarily what the
+    # row resolves to NOW: a clean/rotation marker can change while inference is
+    # in flight and the old derivative may remain readable at its old path.  A
+    # digest of that submitted path alone would then authorise the wrong visual
+    # generation.  Re-resolve the live row before considering the result.
+    bank = db.session.get(ImageBank, row.bank_id)
+    current_path = analysis_image_path(bank, row) if bank is not None else None
+    if not _same_resolved_path(current_path, path):
+        current_live = bank_transfer_metadata.content_fingerprint_path(current_path)
+        # Preserve a newer already-authorised generation; otherwise make every
+        # effective lane visibly empty until one of its workers measures current
+        # bytes again.
+        if row.analysis_fingerprint != current_live:
+            _invalidate_effective_analysis(
+                row, preserve_current_derivative=True)
+            row.analysis_fingerprint = current_live
+        return False
+    live = bank_transfer_metadata.content_fingerprint_path(path)
+    if live != measured_fingerprint:
+        # Do not erase a newer, already-authorised row because an old worker
+        # returned late.  When the row itself is stale, leave it as an empty
+        # row tied to the bytes that are now live.
+        if row.analysis_fingerprint != live:
+            _invalidate_effective_analysis(
+                row, preserve_current_derivative=True)
+            row.analysis_fingerprint = live
+        return False
+    if row.analysis_fingerprint != measured_fingerprint:
+        _invalidate_effective_analysis(
+            row, preserve_current_derivative=True)
+    row.analysis_fingerprint = measured_fingerprint
+    return True
+
+
+def _prepare_watermark_write(row: BankImage, raw_path,
+                             measured_fingerprint) -> bool:
+    """Authorise watermark geometry for one exact raw, pre-rotation payload."""
+    if not _valid_analysis_fingerprint(measured_fingerprint):
+        return False
+    live = bank_transfer_metadata.content_fingerprint_path(raw_path)
+
+    def rebind(new_fingerprint):
+        """Forget only generations that are actually stale.
+
+        Score normally runs before Watermark in the full pipeline.  The first
+        watermark attestation therefore must not erase the freshly measured
+        effective lanes.  Even after a raw source replacement, a newer Score
+        worker may already have rebound those lanes to the live effective bytes;
+        comparing their shared fingerprint keeps that newer work intact.
+        """
+        bank = db.session.get(ImageBank, row.bank_id)
+        current_path = analysis_image_path(bank, row) if bank is not None else None
+        current_effective = bank_transfer_metadata.content_fingerprint_path(
+            current_path)
+        effective_is_current = (
+            _valid_analysis_fingerprint(row.analysis_fingerprint)
+            and row.analysis_fingerprint == current_effective)
+        had_clean = bool(row.watermark_clean_method)
+        _clear_bank_watermark_analysis(
+            row, preserve_effective_derivative=not had_clean)
+        if not effective_is_current or had_clean:
+            _invalidate_effective_analysis(
+                row, preserve_current_derivative=not had_clean)
+        row.watermark_fingerprint = new_fingerprint
+
+    if live != measured_fingerprint:
+        if row.watermark_fingerprint != live:
+            rebind(live)
+        return False
+    if row.watermark_fingerprint != measured_fingerprint:
+        # NULL means this is the first raw-source attestation, not a generation
+        # change.  No clean transform can be trusted without an attestation, but
+        # an ordinary raw/rotated row keeps every already-proven effective lane.
+        if row.watermark_fingerprint is None and not row.watermark_clean_method:
+            bank = db.session.get(ImageBank, row.bank_id)
+            current_path = (analysis_image_path(bank, row)
+                            if bank is not None else None)
+            current_effective = (
+                bank_transfer_metadata.content_fingerprint_path(current_path))
+            if (_valid_analysis_fingerprint(row.analysis_fingerprint)
+                    and row.analysis_fingerprint != current_effective):
+                _invalidate_effective_analysis(
+                    row, preserve_current_derivative=True)
+            row.watermark_fingerprint = measured_fingerprint
+            return True
+        rebind(measured_fingerprint)
+    return True
 
 
 def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
@@ -2093,11 +2477,19 @@ def ensure_thumb(bank: ImageBank, row: BankImage) -> Path | None:
 def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
     """Worker: decode ONE file, compute metrics + dHash + thumbnail. Pure
     filesystem/PIL — no DB access (the job thread owns the session)."""
-    image_id, relpath = item
-    path = os.path.join(src_root, relpath)
+    if len(item) == 2:  # compatibility for the pure worker unit test
+        image_id, relpath = item
+        path = os.path.join(src_root, relpath)
+        tpath = thumbs / f'{image_id}.webp'
+    else:
+        image_id, path, thumb_path = item
+        tpath = Path(thumb_path)
     out = {'id': image_id, 'quality_state': 'unreadable', 'width': None,
            'height': None, 'file_size': None, 'dhash': None, 'metrics': None,
-           'provenance': None}
+           'provenance': None, 'fingerprint': None, 'path': path}
+    if not path:
+        out['quality_state'] = 'missing'
+        return out
     try:
         out['file_size'] = os.path.getsize(path)
     except OSError:
@@ -2109,28 +2501,39 @@ def _scan_one(src_root: str, thumbs: Path, item: tuple) -> dict:
             out['quality_state'] = 'missing'
             return out
     try:
-        with safe_bank_source(path, label='bank scan') as im:
-            out['width'], out['height'] = im.size
-            # JPEG fast path: decode at reduced scale — the metrics run on a
-            # ≤1024 working copy anyway, and dHash (9×8) is resize-invariant.
-            im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
-            im.load()
-            out['metrics'] = quality_metrics(im)
-            # Provenance rides along on the SAME decode — re-opening the file for
-            # it would double the I/O of a 36 000-image pass for nothing. It reads
-            # the drafted image (native pixels up to ANALYSIS_MAX_SIDE*2), which is
-            # what the effective-resolution measure needs: it crops, never resizes.
-            out['provenance'] = provenance_metrics(im)
-            out['dhash'] = f'{_dhash(im):016x}'
-            tpath = thumbs / f'{image_id}.webp'
-            if not tpath.is_file():
-                t = im.convert('RGB')
-                t.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
-                t.save(tpath, 'WEBP', quality=72)
+        # Fingerprint the bounded raw snapshot BEFORE Pillow validates it.  A
+        # malformed image is still a stable generation we can safely label
+        # ``unreadable`` and reject; without this digest the strict write fence
+        # would leave it pending and rescan the same broken file forever.
+        payload = _read_bounded_bank_source_bytes(path, label='bank scan')
+        out['file_size'] = len(payload)
+        out['fingerprint'] = bank_transfer_metadata.content_fingerprint_bytes(payload)
+        _preserved_import_extension(payload, label='bank scan')
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(payload)) as im:
+                out['width'], out['height'] = im.size
+                # JPEG fast path: decode at reduced scale — the metrics run on a
+                # ≤1024 working copy anyway, and dHash (9×8) is resize-invariant.
+                im.draft(None, (ANALYSIS_MAX_SIDE * 2, ANALYSIS_MAX_SIDE * 2))
+                im.load()
+                out['metrics'] = quality_metrics(im)
+                # Provenance rides along on the SAME decode — re-opening the file for
+                # it would double the I/O of a 36 000-image pass for nothing.
+                out['provenance'] = provenance_metrics(im)
+                out['dhash'] = f'{_dhash(im):016x}'
+                if not tpath.is_file():
+                    tpath.parent.mkdir(parents=True, exist_ok=True)
+                    t = im.convert('RGB')
+                    t.thumbnail((THUMB_MAX_SIDE, THUMB_MAX_SIDE), Image.LANCZOS)
+                    t.save(tpath, 'WEBP', quality=72)
         out['quality_state'] = 'ok'
     except (OSError, ValueError, SyntaxError, MemoryError,
             Image.DecompressionBombError, Image.DecompressionBombWarning):
-        pass  # stays 'unreadable' — surfaced as a flag, never fatal
+        # When bounded validation succeeded before Pillow rejected the image,
+        # ``fingerprint`` still authorises the unreadable verdict.  A failure
+        # before a complete raw snapshot leaves it NULL and parent writes none.
+        pass
     return out
 
 
@@ -2337,9 +2740,13 @@ def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
             return
-        items = [(r.id, r.relpath) for r in
-                 _scan_pool(bank_id, rescan, statuses, ids)
-                 .order_by(BankImage.id.asc()).all()]
+        rows = (_scan_pool(bank_id, rescan, statuses, ids)
+                .order_by(BankImage.id.asc()).all())
+        items = [
+            (row.id, analysis_image_path(bank, row, refresh_rotation=True),
+             str(_thumb_path(bank_id, row)))
+            for row in rows
+        ]
         bank_jobs.progress(job, done=0, total=len(items), detail='quality scan')
         thumbs = _thumbs_dir(bank_id)
         thumbs.mkdir(parents=True, exist_ok=True)
@@ -2398,12 +2805,20 @@ def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
                     # keep going rather than sinking a scan of thousands.
                     vanished += 1
                 else:
+                    source_path = res.get('path')
+                    if not _prepare_analysis_write(
+                            row, source_path, res.get('fingerprint')):
+                        done += 1
+                        if done % _COMMIT_EVERY == 0:
+                            db.session.commit()
+                        bank_jobs.bump(job)
+                        if not bank_jobs.cancelled(job):
+                            submit_next()
+                        continue
                     if row.dhash != res['dhash']:
                         hashed += 1
                     row.quality_state = res['quality_state']
                     row.width, row.height = res['width'], res['height']
-                    if res['file_size'] is not None:
-                        row.file_size = res['file_size']
                     row.dhash = res['dhash']
                     if res['metrics']:
                         row.blur_score = res['metrics']['blur_score']
@@ -2446,7 +2861,8 @@ def _scan_job(bank_id, rescan, regroup=False, statuses=None, ids=None):
         # on screen, so running it can only reproduce them.
         if regroup or hashed or vanished:
             bank_jobs.progress(job, detail='grouping duplicates')
-            groups = rebuild_dup_groups(bank_id, job=job)
+            groups = rebuild_dup_groups(
+                bank_id, job=job, _bank_lease=_job_bank_capability(job))
             if bank_jobs.cancelled(job):
                 return
             head = f'done — {groups} duplicate group(s)'
@@ -2507,7 +2923,6 @@ def _dup_groups_from_hashes(hashes, d, job=None):
     so the groups are identical, which `test_bank_dup_groups_identity.py` pins
     against a verbatim copy of the old code.
     """
-    import numpy as np
     n = len(hashes)
     parent = list(range(n))
 
@@ -2533,13 +2948,23 @@ def _dup_groups_from_hashes(hashes, d, job=None):
     total = sum(len(m) for m in work)
     _job_progress(job, done=0, total=total,
                   detail=f'grouping duplicates — comparing {n} hash(es)')
-    lut = _popcount_lut()
+    # NumPy is an optional acceleration dependency. Most buckets are tiny and
+    # need no array at all; importing it eagerly made an otherwise pure-Python
+    # quality scan crash at the final grouping step in the lean Flask venv.
+    np = None
+    lut = None
     seen = 0
     for members in work:
         if _job_cancelled(job):
             return None
         m = len(members)
-        if m < _DUP_NUMPY_FROM:
+        if m >= _DUP_NUMPY_FROM and np is None:
+            try:
+                import numpy as np_module
+                np = np_module
+            except ImportError:
+                np = False
+        if m < _DUP_NUMPY_FROM or np is False:
             # Tiny buckets are the majority and an array costs more than the
             # handful of comparisons it would save.
             for x in range(m):
@@ -2550,6 +2975,8 @@ def _dup_groups_from_hashes(hashes, d, job=None):
             seen += m
             _job_progress(job, done=seen)
             continue
+        if lut is None:
+            lut = _popcount_lut()
         arr = np.array([hashes[i] for i in members], dtype='uint64')
         cols = np.arange(m, dtype='int64')[None, :]
         step = max(1, min(m, _DUP_BLOCK_CELLS // m))
@@ -2576,7 +3003,8 @@ def _dup_groups_from_hashes(hashes, d, job=None):
                   key=lambda m: (-len(m), m[0]))
 
 
-def rebuild_dup_groups(bank_id, max_distance=None, job=None) -> int:
+def rebuild_dup_groups(bank_id, max_distance=None, job=None, *,
+                       _bank_lease=None) -> int:
     """Recompute near-duplicate groups over every hashed image of the bank.
     Groups of ≥2 get a 1-based id ordered by size (biggest first). Returns the
     group count (what was written, when the job was stopped part-way).
@@ -2586,13 +3014,53 @@ def rebuild_dup_groups(bank_id, max_distance=None, job=None) -> int:
     left the progress bar at 100 % under the words "grouping duplicates" for 96
     to 124 s with no way out — which reads as a dead application, and was
     reported as one."""
+    if _bank_lease is None:
+        with bank_jobs.mutation_lease(bank_id, 'duplicate_regroup') as lease:
+            return rebuild_dup_groups(
+                bank_id, max_distance=max_distance, job=job,
+                _bank_lease=lease)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
     th = thresholds()
     d = int(th['dup_distance'] if max_distance is None else max_distance)
-    rows = (db.session.query(BankImage.id, BankImage.dhash)
+    bank = db.session.get(ImageBank, bank_id)
+    if not bank:
+        return 0
+    rows = (BankImage.query
             .filter(BankImage.bank_id == bank_id, BankImage.dhash.isnot(None))
             .order_by(BankImage.id.asc()).all())
-    ids = [r[0] for r in rows]
-    hashes = [int(r[1], 16) for r in rows]
+    # Capture the exact effective identity beside the dHash.  The comparison is
+    # deliberately CPU-only and may take minutes on a large bank; a source file
+    # can be replaced underneath us during that window even though Bank writes
+    # are job-guarded.
+    proven = []
+    invalidated = False
+    for row in rows:
+        path = analysis_image_path(bank, row)
+        live = bank_transfer_metadata.content_fingerprint_path(path)
+        if live is not None and row.analysis_fingerprint == live:
+            try:
+                numeric_hash = int(row.dhash, 16)
+            except (TypeError, ValueError):
+                _invalidate_effective_analysis(row)
+                invalidated = True
+                continue
+            proven.append((row.id, path, live, row.dhash, numeric_hash))
+        elif row.analysis_fingerprint is not None and live is not None:
+            _invalidate_effective_analysis(row)
+            row.analysis_fingerprint = live
+            invalidated = True
+        elif row.analysis_fingerprint is not None:
+            _invalidate_effective_analysis(row)
+            invalidated = True
+    if invalidated:
+        # One changed member makes every old group id suspect.  Clearing the
+        # partition in one statement is safer than leaving old peers pointing at
+        # a group whose changed member has just been removed.
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'dup_group': None}, synchronize_session=False)
+    db.session.commit()
+    ids = [item[0] for item in proven]
+    hashes = [item[4] for item in proven]
     # Everything below the comparison is pure CPU over data already in memory,
     # so the session must not sit on a transaction across it — same guard, same
     # reason, as every inference pass (see _release_db_before_inference).
@@ -2600,6 +3068,37 @@ def rebuild_dup_groups(bank_id, max_distance=None, job=None) -> int:
     groups = _dup_groups_from_hashes(hashes, d, job=job)
     if groups is None:
         return 0            # stopped before any write: the bank is untouched
+    # Revalidate the COMPLETE input immediately before publishing the global
+    # partition.  A per-row check while writing is too late: group numbers have
+    # meaning only as one coherent result over this captured set.
+    live_rows = {}
+    for i0 in range(0, len(ids), _SQL_IN_CHUNK):
+        live_rows.update({
+            row.id: row for row in BankImage.query.filter(
+                BankImage.bank_id == bank_id,
+                BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
+        })
+    partition_valid = True
+    for image_id, expected_path, expected_fp, expected_dhash, _numeric in proven:
+        row = live_rows.get(image_id)
+        current_path = analysis_image_path(bank, row) if row is not None else None
+        current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
+        if (row is None or row.dhash != expected_dhash
+                or row.analysis_fingerprint != expected_fp
+                or current_fp != expected_fp
+                or not _same_resolved_path(current_path, expected_path)):
+            partition_valid = False
+            # Do not erase a newer, correctly rebound row.  Only invalidate a
+            # row that still advertises the stale identity we captured.
+            if (row is not None and row.analysis_fingerprint == expected_fp
+                    and current_fp != expected_fp):
+                _invalidate_effective_analysis(row)
+                row.analysis_fingerprint = current_fp
+    if not partition_valid:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'dup_group': None}, synchronize_session=False)
+        db.session.commit()
+        return 0
     _job_progress(job, done=0, total=len(groups),
                   detail=f'grouping duplicates — writing {len(groups)} group(s)')
     BankImage.query.filter_by(bank_id=bank_id).update(
@@ -2659,12 +3158,14 @@ def rebuild_dup_groups(bank_id, max_distance=None, job=None) -> int:
 #     covers the double-click; a session-long one would hide a real edit.
 _SCORE_MEMO_TTL = 60.0
 _score_memo = None            # (key, at, {path: emb}) — see reset_score_memo()
+_score_hashes = {}            # {path: exact SHA-256 hex} for that one memo
 
 
 def reset_score_memo() -> None:
     """Drop the parsed-score-cache memo (tests; bank deletion)."""
-    global _score_memo
+    global _score_memo, _score_hashes
     _score_memo = None
+    _score_hashes = {}
 
 
 def _load_score_embeddings(bank: ImageBank) -> dict:
@@ -2675,7 +3176,7 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
     signature) is dropped, so a semantic group is never built on an outdated
     embedding. Reads the .npz directly (numpy is in the Flask venv); torch/open_clip
     are NOT needed here — stage 2 costs no new GPU work, it reuses Score's output."""
-    global _score_memo
+    global _score_memo, _score_hashes
     import numpy as np
     path = _score_cache_path(bank.id)
     if not path.is_file():
@@ -2696,10 +3197,15 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
             embs = z['embs']
             sigs = ([str(s) for s in z['sigs']] if 'sigs' in z.files
                     else [''] * len(paths))
+            hashes = z['hashes'] if 'hashes' in z.files else None
+            if (hashes is None or hashes.shape != (len(paths), 32)
+                    or hashes.dtype != np.dtype('uint8')):
+                return {}
     except Exception as e:  # noqa: BLE001 — a corrupt cache = "no embeddings", never fatal
         logger.warning('bank %s score cache unreadable: %s', bank.id, e)
         return {}
     out = {}
+    exact_hashes = {}
     for i, p in enumerate(paths):
         if states[i] != 'ok':
             continue
@@ -2714,13 +3220,25 @@ def _load_score_embeddings(bank: ImageBank) -> dict:
                     continue
             except OSError:
                 continue
+        digest = hashes[i].tobytes()
+        if (digest == b'\0' * 32
+                or bank_transfer_metadata.content_fingerprint_path(p)
+                != digest.hex()):
+            continue
         out[p] = np.asarray(emb, dtype='float32')
+        exact_hashes[p] = digest.hex()
     if key is not None:
         _score_memo = (key, time.time(), out)
+    _score_hashes = exact_hashes
     return out
 
 
-def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
+def _score_embedding_fingerprint(path) -> str | None:
+    return _score_hashes.get(str(path))
+
+
+def rebuild_semantic_dup_groups(bank_id, threshold=None, *,
+                                _bank_lease=None) -> int | None:
     """Stage-2 near-duplicate grouping over the CLIP embeddings the ✨ Score pass
     cached — catches crops and re-compressed variants of the SAME shot that the
     dHash (stage 1) misses. Returns the group count (groups of ≥2), or None when NO
@@ -2734,9 +3252,20 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
     guarantee, so we fall back to a single global block then. Re-running at another
     threshold is CPU-only and near-instant: it re-reads the cached embeddings — no
     GPU, no re-scan."""
+    if _bank_lease is None:
+        with bank_jobs.mutation_lease(bank_id, 'semantic_dedup') as lease:
+            return rebuild_semantic_dup_groups(
+                bank_id, threshold=threshold, _bank_lease=lease)
+    bank_jobs.require_reservation(_bank_lease, bank_id)
     import numpy as np
     bank = db.session.get(ImageBank, bank_id)
     if not bank:
+        return None
+    score_cache_path = _score_cache_path(bank_id)
+    try:
+        cache_stat = score_cache_path.stat()
+        cache_generation = (cache_stat.st_size, cache_stat.st_mtime_ns)
+    except OSError:
         return None
     emb_by_path = _load_score_embeddings(bank)
     if not emb_by_path:
@@ -2746,23 +3275,28 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
     block_by_style = th['style_threshold'] <= t
     rows = (BankImage.query.filter_by(bank_id=bank_id)
             .order_by(BankImage.id.asc()).all())
-    items = []      # (image_id, block_key, emb)
+    # (image_id, block_key, embedding, path, fingerprint, style_cluster)
+    items = []
     for r in rows:
-        p = abs_image_path(bank, r)
+        p = analysis_image_path(bank, r)
         emb = emb_by_path.get(p) if p else None
         if emb is None:
             continue
+        fingerprint = _score_embedding_fingerprint(p)
+        if not _prepare_analysis_write(r, p, fingerprint):
+            continue
         block = (r.style_cluster if r.style_cluster is not None else -1) \
             if block_by_style else 0
-        items.append((r.id, block, emb))
-    # A re-run fully recomputes — clear every semantic group first.
-    BankImage.query.filter_by(bank_id=bank_id).update(
-        {'semantic_dup_group': None}, synchronize_session=False)
+        items.append((r.id, block, emb, p, fingerprint, r.style_cluster))
     if not items:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'semantic_dup_group': None}, synchronize_session=False)
         db.session.commit()
         return 0
+    # Do not retain a SQLite read/write transaction across the O(n²) CPU phase.
+    _release_db_before_inference()
     blocks: dict = {}
-    for idx, (_id, block, _emb) in enumerate(items):
+    for idx, (_id, block, _emb, _path, _fp, _style) in enumerate(items):
         blocks.setdefault(block, []).append(idx)
     parent = list(range(len(items)))
 
@@ -2795,6 +3329,47 @@ def rebuild_semantic_dup_groups(bank_id, threshold=None) -> int | None:
         comps.setdefault(find(i), []).append(i)
     groups = sorted((m for m in comps.values() if len(m) >= 2),
                     key=lambda m: (-len(m), items[m[0]][0]))
+    # The cache, every effective payload, and (when used for blocking) every
+    # style id are one generation.  Refuse the whole semantic partition if any
+    # member moved while the CPU comparison ran.
+    try:
+        cache_stat = score_cache_path.stat()
+        cache_still_current = (
+            cache_stat.st_size, cache_stat.st_mtime_ns) == cache_generation
+    except OSError:
+        cache_still_current = False
+    item_ids = [item[0] for item in items]
+    live_rows = {}
+    for i0 in range(0, len(item_ids), _SQL_IN_CHUNK):
+        live_rows.update({
+            row.id: row for row in BankImage.query.filter(
+                BankImage.bank_id == bank_id,
+                BankImage.id.in_(item_ids[i0:i0 + _SQL_IN_CHUNK])).all()
+        })
+    partition_valid = cache_still_current
+    for image_id, _block, _emb, expected_path, expected_fp, expected_style in items:
+        row = live_rows.get(image_id)
+        current_path = analysis_image_path(bank, row) if row is not None else None
+        current_fp = bank_transfer_metadata.content_fingerprint_path(current_path)
+        if (row is None or row.analysis_fingerprint != expected_fp
+                or current_fp != expected_fp
+                or not _same_resolved_path(current_path, expected_path)
+                or (block_by_style and row.style_cluster != expected_style)):
+            partition_valid = False
+            if (row is not None and row.analysis_fingerprint == expected_fp
+                    and current_fp != expected_fp):
+                _invalidate_effective_analysis(row)
+                row.analysis_fingerprint = current_fp
+    if not partition_valid:
+        BankImage.query.filter_by(bank_id=bank_id).update(
+            {'semantic_dup_group': None}, synchronize_session=False)
+        db.session.commit()
+        if not cache_still_current:
+            reset_score_memo()
+        return 0
+    # Publish a complete replacement in one transaction only after validation.
+    BankImage.query.filter_by(bank_id=bank_id).update(
+        {'semantic_dup_group': None}, synchronize_session=False)
     for gid, members in enumerate(groups, start=1):
         member_ids = [items[i][0] for i in members]
         for i0 in range(0, len(member_ids), _SQL_IN_CHUNK):
@@ -2823,7 +3398,8 @@ def start_semantic_dedup(app, user_id, bank_id, threshold=None):
 def _semantic_dedup_job(bank_id, threshold):
     def run(job):
         bank_jobs.progress(job, done=0, total=0, detail='finding crops & variants')
-        n = rebuild_semantic_dup_groups(bank_id, threshold)
+        n = rebuild_semantic_dup_groups(
+            bank_id, threshold, _bank_lease=_job_bank_capability(job))
         if n is None:
             bank_jobs.progress(job, detail='no embeddings — run ✨ Score first')
             return
@@ -2874,9 +3450,11 @@ def _best_of(rows):
     return max(rows, key=key)
 
 
+@_serialized_bank_mutation('resolve_dups')
 def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
                  col=BankImage.dup_group, attr='dup_group', reason='duplicate',
-                 respect_existing_keep=True, snapshot=None):
+                 respect_existing_keep=True, snapshot=None, *,
+                 _bank_lease=None):
     """Resolve duplicate groups: keep one member, REJECT the others (a status,
     never a file deletion, so it's reversible). strategy 'best'|'first' applies to
     one group or, when ``group`` is None, to every unresolved group at once;
@@ -2948,14 +3526,14 @@ def resolve_dups(user_id, bank_id, strategy='best', group=None, keep_ids=None,
 
 def resolve_semantic_dups(user_id, bank_id, strategy='best', group=None,
                           keep_ids=None, respect_existing_keep=True,
-                          snapshot=None):
+                          snapshot=None, *, _bank_lease=None):
     """resolve_dups for stage 2 (semantic_dup_group, reject reason
     'semantic_dup')."""
     return resolve_dups(user_id, bank_id, strategy=strategy, group=group,
                         keep_ids=keep_ids, col=BankImage.semantic_dup_group,
                         attr='semantic_dup_group', reason='semantic_dup',
                         respect_existing_keep=respect_existing_keep,
-                        snapshot=snapshot)
+                        snapshot=snapshot, _bank_lease=_bank_lease)
 
 
 # --- statuses & flag application --------------------------------------------
@@ -2963,7 +3541,8 @@ _STATUS_UNDO_LABEL = {'keep': 'Keep images', 'reject': 'Reject images',
                       'pending': 'Set images back to undecided'}
 
 
-def set_status(user_id, bank_id, ids, status) -> int:
+@_serialized_bank_mutation('status')
+def set_status(user_id, bank_id, ids, status, *, _bank_lease=None) -> int:
     """Manual keep/reject/pending on a selection. Returns rows changed.
 
     Snapshots the prior (status, reason) of every row it actually flips, so the
@@ -2992,7 +3571,8 @@ def set_status(user_id, bank_id, ids, status) -> int:
     return n
 
 
-def rotate_images(user_id, bank_id, ids, delta) -> dict:
+@_serialized_bank_mutation('rotate')
+def rotate_images(user_id, bank_id, ids, delta, *, _bank_lease=None) -> dict:
     """Turn a selection by ``delta`` degrees CLOCKWISE (idea by 1Tomber, #17).
 
     The user's files are NEVER written to: the new angle is stored on the row and
@@ -3021,13 +3601,16 @@ def rotate_images(user_id, bank_id, ids, delta) -> dict:
             BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all()
         for r in rows:
             r.rotation = (int(r.rotation or 0) + step) % 360 or None
-            drop_derived(bank_id, r.id)
+            _invalidate_effective_analysis(r)
             rotations[r.id] = int(r.rotation or 0)
     db.session.commit()
+    reset_score_memo()
     return {'rotated': len(rotations), 'rotations': rotations}
 
 
-def apply_flags(user_id, bank_id, flags, snapshot=None) -> dict:
+@_serialized_bank_mutation('apply_flags')
+def apply_flags(user_id, bank_id, flags, snapshot=None, *,
+                _bank_lease=None) -> dict:
     """Bulk-reject the PENDING images carrying the given flags. Manual ✓/✕
     decisions are never flipped (only status='pending' is touched) — same
     contract as the dataset auto-triage. Returns per-flag reject counts.
@@ -3075,7 +3658,8 @@ def undo_offer(user_id, bank_id) -> dict | None:
     return bank_undo.peek(bank_id)
 
 
-def undo_last(user_id, bank_id) -> dict:
+@_serialized_bank_mutation('undo')
+def undo_last(user_id, bank_id, *, _bank_lease=None) -> dict:
     """Put every row the last bulk decision changed back to what it was.
 
     Three outcomes per row, all counted, because a restore that quietly missed
@@ -3099,8 +3683,6 @@ def undo_last(user_id, bank_id) -> dict:
     bank = get_bank(user_id, bank_id)
     if not bank:
         raise ValueError('bank not found')
-    if bank_jobs.running(bank_id):
-        raise RuntimeError('a pass is running on this bank — stop it first')
     snap = bank_undo.take(bank_id)
     if not snap or not snap['rows']:
         raise ValueError('nothing to undo')
@@ -3210,6 +3792,13 @@ def _pool_embeddings(bank, emb_by_path, filters):
     prefix = os.path.normcase(base + os.sep)
     ids, vecs = [], []
     for r in rows:
+        if r.watermark_clean_method or r.rotation:
+            p = analysis_image_path(bank, r)
+            emb = emb_by_path.get(p) if p else None
+            if emb is not None:
+                ids.append(r.id)
+                vecs.append(emb)
+            continue
         # Fast path: the keys of emb_by_path were THEMSELVES produced by
         # _abs_under (the ✨ Score pass walks the same rows), so a lexical
         # normpath that HITS the dict is provably the very string realpath would
@@ -3677,7 +4266,7 @@ def select_similar(user_id, bank_id, ref_id, n=60, min_score=None, *, filters=No
     ref = db.session.get(BankImage, int(ref_id))
     if ref is None or ref.bank_id != bank_id:
         raise ValueError('reference image not found in this bank')
-    ref_path = abs_image_path(bank, ref)
+    ref_path = analysis_image_path(bank, ref)
     ref_emb = emb_by_path.get(ref_path) if ref_path else None
     if ref_emb is None:
         raise ValueError('the reference image has no ✨ Score embedding — score '
@@ -4109,7 +4698,9 @@ def start_delete_rejected(app, user_id, bank_id) -> dict:
     total = BankImage.query.filter_by(bank_id=bank_id, status='reject').count()
 
     def _run(job):
-        out = delete_rejected(user_id, bank_id, job=job)
+        out = delete_rejected(
+            user_id, bank_id, job=job,
+            _bank_lease=_job_bank_capability(job))
         job['result'] = out
         bank_jobs.progress(job, detail=delete_rejected_summary(out))
 
@@ -4117,7 +4708,8 @@ def start_delete_rejected(app, user_id, bank_id) -> dict:
     return {'total': total, 'job': job}
 
 
-def delete_rejected(user_id, bank_id, job=None) -> dict:
+@_serialized_bank_mutation('delete_rejected')
+def delete_rejected(user_id, bank_id, job=None, *, _bank_lease=None) -> dict:
     """Delete the SOURCE files of every status='reject' image from disk, then
     drop their bank_image rows.
 
@@ -4543,17 +5135,44 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
             q = q.filter(BankImage.status != 'reject',
                          or_(BankImage.face_cluster_origin.is_(None),
                              BankImage.face_cluster_origin != 'asserted'))
+        def asserted_membership():
+            if angles_only:
+                return ()
+            return tuple((int(image_id), cluster_id)
+                         for image_id, cluster_id in (
+                db.session.query(BankImage.id, BankImage.face_cluster)
+                .filter(BankImage.bank_id == bank_id,
+                        BankImage.face_cluster_origin == 'asserted')
+                .order_by(BankImage.id.asc()).all()))
+
+        asserted_generation = asserted_membership()
         rows = q.order_by(BankImage.id.asc()).all()
+        eligible_ids = [r.id for r in rows]
         by_path = {}
+        unresolved_ids = []
         for r in rows:
-            p = abs_image_path(bank, r)
-            if _is_safe_bank_source(p, label='bank face pass'):
+            p = analysis_image_path(bank, r, refresh_rotation=True)
+            if (_is_safe_bank_source(p, label='bank face pass')
+                    and p not in by_path):
                 by_path[p] = r.id
+            else:
+                unresolved_ids.append(r.id)
+                # A strict resolver failure means the row cannot continue to
+                # advertise measurements for an older effective generation.
+                _invalidate_effective_analysis(r)
         paths = list(by_path)
         skipped_asserted = 0 if angles_only else _asserted_image_count(bank_id)
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail='measuring angles' if angles_only else 'face pass')
         if not paths:
+            if not angles_only and eligible_ids:
+                for i0 in range(0, len(eligible_ids), _SQL_IN_CHUNK):
+                    BankImage.query.filter(
+                        BankImage.id.in_(eligible_ids[i0:i0 + _SQL_IN_CHUNK]),
+                        or_(BankImage.face_cluster_origin.is_(None),
+                            BankImage.face_cluster_origin != 'asserted')).update(
+                        {'face_cluster': None}, synchronize_session=False)
+            db.session.commit()
             return
         _bank_dir(bank_id).mkdir(parents=True, exist_ok=True)
         th = thresholds()
@@ -4605,12 +5224,23 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
         from . import folder_person
         offset = folder_person.asserted_offset(bank_id)
         done = vanished = 0
+        cluster_valid = not unresolved_ids
+        valid_rows = {}
         for p, image_id in by_path.items():
             row = _live_image(image_id)
             if row is None:      # deleted while the pass ran — see _live_image
                 vanished += 1
                 continue
+            if not angles_only and row.face_cluster_origin == 'asserted':
+                # The user may have asserted this folder while inference was in
+                # flight.  Their newer decision wins and this row can no longer
+                # be a member of the computed partition.
+                cluster_valid = False
+                continue
             res = results.get(p) or {}
+            if not _prepare_analysis_write(row, p, res.get('fingerprint')):
+                cluster_valid = False
+                continue
             # A yaw is written whenever the child measured one. It is never
             # written back as NULL over a value we already have: the ⤢ backfill
             # re-runs on rows that HAVE no angle, and a face that fails detection
@@ -4622,11 +5252,45 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
             if not angles_only:
                 row.face_state = res.get('state')
                 row.face_det = res.get('det')
-                cid = clusters.get(p)
-                row.face_cluster = None if cid is None else int(cid) + offset
+                valid_rows[p] = row
             done += 1
             if done % 200 == 0:
                 db.session.commit()
+        if not angles_only:
+            if asserted_membership() != asserted_generation:
+                cluster_valid = False
+            if cluster_valid and len(valid_rows) == len(by_path):
+                # Revalidate the complete partition after all scalar write-back.
+                # Otherwise an early member can change while later rows are
+                # being committed and still receive a cluster for its old bytes.
+                for p, image_id in by_path.items():
+                    row = _live_image(image_id)
+                    fingerprint = (results.get(p) or {}).get('fingerprint')
+                    live = bank_transfer_metadata.content_fingerprint_path(p)
+                    if (row is None or row.face_cluster_origin == 'asserted'
+                            or row.analysis_fingerprint != fingerprint
+                            or live != fingerprint):
+                        cluster_valid = False
+                        if (row is not None
+                                and row.analysis_fingerprint == fingerprint
+                                and live != fingerprint):
+                            _invalidate_effective_analysis(row)
+                            row.analysis_fingerprint = live
+                        break
+            if cluster_valid and len(valid_rows) == len(by_path):
+                for p, row in valid_rows.items():
+                    cid = clusters.get(p)
+                    row.face_cluster = None if cid is None else int(cid) + offset
+                    row.face_cluster_origin = None
+            else:
+                # Person ids are one partition. If any member changed after
+                # inference, a mixture of old/new numbering is not meaningful.
+                (BankImage.query.filter(
+                    BankImage.bank_id == bank_id,
+                    BankImage.status != 'reject',
+                    or_(BankImage.face_cluster_origin.is_(None),
+                        BankImage.face_cluster_origin != 'asserted')).update(
+                    {'face_cluster': None}, synchronize_session=False))
         db.session.commit()
         if vanished:
             logger.info('bank face pass: %s image(s) were deleted while it ran', vanished)
@@ -4641,6 +5305,8 @@ def _faces_job(bank_id, angles_only=False, statuses=None, ids=None):
                   else 'done — ' + group_summary(
                       sizes.values(), 'person cluster', th['face_threshold'],
                       '🎚 Filter thresholds ▸ face_threshold'))
+        if not angles_only and not cluster_valid:
+            detail += ' (person grouping discarded: an image changed during write-back)'
         if skipped_asserted:
             # Never mute: an image the pass did not look at must be reported as
             # such, or "0 clusters" would read as "no one in this bank".
@@ -4803,6 +5469,11 @@ def _apply_score_results(job, by_path, results, interruptible):
         if row is None:      # deleted while the pass ran — see _live_image
             vanished += 1
             continue
+        if not _prepare_analysis_write(row, p, res.get('fingerprint')):
+            # The child measured a different incarnation of this live path.
+            # Its hash-bearing cache entry is discarded/recomputed next run;
+            # no scalar from it may be attached to the replacement bytes.
+            continue
         if 'aesthetic' in res:
             row.aesthetic_score = res['aesthetic']
         if 'nsfw' in res:
@@ -4866,7 +5537,7 @@ def group_summary(sizes, noun='style group', threshold=None, setting=''):
             f'(the biggest holds {biggest} of {total} images)')
 
 
-def _write_style_clusters(by_path, clusters):
+def _write_style_clusters(by_path, clusters, results):
     """Write the style partition — all of it or none of it.
 
     ``style_cluster`` is not a per-image measurement, it is one numbering of the
@@ -4879,6 +5550,22 @@ def _write_style_clusters(by_path, clusters):
 
     Grouped bulk UPDATEs rather than a write per row: same number of rows, a few
     hundred statements instead of tens of thousands."""
+    # Revalidate the entire partition immediately before its bulk write.  One
+    # changed member changes the meaning of the global clustering, so unlike
+    # independent scalar scores this lane is all-or-none.
+    for p, image_id in by_path.items():
+        result = results.get(p) or {}
+        row = _live_image(image_id)
+        fingerprint = result.get('fingerprint')
+        if (row is None or row.analysis_fingerprint != fingerprint
+                or bank_transfer_metadata.content_fingerprint_path(p) != fingerprint):
+            all_ids = list(by_path.values())
+            for i0 in range(0, len(all_ids), _SQL_IN_CHUNK):
+                BankImage.query.filter(
+                    BankImage.id.in_(all_ids[i0:i0 + _SQL_IN_CHUNK])).update(
+                    {'style_cluster': None}, synchronize_session=False)
+            db.session.commit()
+            return False
     by_cid: dict = {}
     for p, image_id in by_path.items():
         by_cid.setdefault(clusters.get(p), []).append(image_id)
@@ -4898,6 +5585,7 @@ def _write_style_clusters(by_path, clusters):
                 time.sleep(_DUP_WRITE_YIELD)
                 since_commit = 0
     db.session.commit()
+    return True
 
 
 def _score_job(bank_id, rescore=False):
@@ -4915,7 +5603,7 @@ def _score_job(bank_id, rescore=False):
                 .order_by(BankImage.id.asc()).all())
         by_path = {}
         for r in rows:
-            p = abs_image_path(bank, r)
+            p = analysis_image_path(bank, r, refresh_rotation=True)
             if _is_safe_bank_source(p, label='bank scoring pass'):
                 by_path[p] = r.id
         paths = list(by_path)
@@ -5005,7 +5693,7 @@ def _score_job(bank_id, rescore=False):
             f'writing the style grouping over {len(clusters)} image(s) — this '
             'step finishes even if you Stop, because a half-written grouping '
             'would mix two numberings'))
-        _write_style_clusters(by_path, clusters)
+        style_written = _write_style_clusters(by_path, clusters, results)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1
@@ -5024,6 +5712,8 @@ def _score_job(bank_id, rescore=False):
                   + group_summary(sizes.values(), 'style group',
                                   th['style_threshold'],
                                   '🎚 Filter thresholds ▸ style_threshold'))
+        if not style_written:
+            detail += ' (style grouping discarded: an image changed during write-back)'
         # Where the work went. Both numbers count images HANDED to the pass, so
         # they add up to the pool and never stand in for `scored`, which counts
         # rows actually written. Saying "scored N" over a bank that recomputed
@@ -5102,14 +5792,18 @@ def _chain_medium_after_score(job, bank_id) -> str:
 # --- watermark pass (reuses the dataset Qwen3-VL overlaid-mark detector) -----
 def _watermark_not_dismissed():
     return or_(BankImage.watermark_state.is_(None),
-               BankImage.watermark_state != 'dismissed')
+               BankImage.watermark_state != 'dismissed',
+               _watermark_history_inactive_clause())
 
 
 def _watermark_todo_clause():
     """The "not answered yet" half, on its own — one expression for the pool and
     for the counter that prices it."""
     return and_(_watermark_not_dismissed(),
-                or_(BankImage.watermark_state.is_(None),
+                or_(_watermark_history_inactive_clause(),
+                    BankImage.watermark_fingerprint.is_(None),
+                    func.length(BankImage.watermark_fingerprint) != 64,
+                    BankImage.watermark_state.is_(None),
                     and_(BankImage.watermark_state == 'detected',
                          BankImage.watermark_bbox.is_(None))))
 
@@ -5125,9 +5819,7 @@ def _watermark_scan_query(bank_id, rescan, statuses=None, ids=None):
     on a rescan — same anti-frustration rule as the dataset detector."""
     q = _scoped_pool(bank_id, statuses, ids).filter(_watermark_not_dismissed())
     if not rescan:
-        q = q.filter(or_(BankImage.watermark_state.is_(None),
-                         and_(BankImage.watermark_state == 'detected',
-                              BankImage.watermark_bbox.is_(None))))
+        q = q.filter(_watermark_todo_clause())
     return q
 
 
@@ -5225,6 +5917,11 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
                 # would be asking "is there a watermark?" about our own edit).
                 if row.watermark_clean_method:
                     _discard_clean_blob(bank_id, row)
+                    _invalidate_effective_analysis(row)
+                # Watermark boxes are stored in raw, EXIF-oriented source
+                # coordinates because cleaning consumes ``abs_image_path``.
+                # Rotation/clean derivatives belong to the effective-analysis
+                # lanes and would make the saved geometry unusable here.
                 yield rid, abs_image_path(bank, row)
 
         def ask(item):
@@ -5235,16 +5932,23 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
             _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
-            return describe_image_ollama(
-                _read_safe_bank_source_bytes(path, label='bank watermark scan'),
-                WATERMARK_BBOX_PROMPT, num_predict=400,
-                prefer_json=True, fmt='json', keep_alive='5m')
+            payload = _read_safe_bank_source_bytes(
+                path, label='bank watermark scan')
+            fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            try:
+                raw = describe_image_ollama(
+                    payload, WATERMARK_BBOX_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+                return {'raw': raw, 'fingerprint': fingerprint, 'error': None}
+            except Exception as exc:  # noqa: BLE001 — preserve per-image semantics
+                return {'raw': None, 'fingerprint': fingerprint,
+                        'error': f'{type(exc).__name__}: {exc}'}
 
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
                 # The calls overlap (see vision_pool); the loop body — every
                 # database write below — still runs here, on this one thread.
-                for (rid, _path), raw, error in map_vision(
+                for (rid, _path), answer, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
                     # Re-read: the answer we are about to store took ~1.7 s to
@@ -5256,7 +5960,23 @@ def _watermark_job(bank_id, rescan, use_detector=False, statuses=None, ids=None,
                         vanished += 1
                         bank_jobs.bump(job)
                         continue
-                    if error is not None:  # one bad file never sinks the pass
+                    answer = answer if isinstance(answer, dict) else {}
+                    fingerprint = answer.get('fingerprint')
+                    raw = answer.get('raw')
+                    call_error = error or answer.get('error')
+                    if call_error is not None and not _prepare_watermark_write(
+                            row, _path, fingerprint):
+                        # No verdict is safer than attaching a worker error to
+                        # bytes the worker did not actually read.
+                        bank_jobs.bump(job)
+                        db.session.commit()
+                        continue
+                    if call_error is None and raw is not None and not _prepare_watermark_write(
+                            row, _path, fingerprint):
+                        bank_jobs.bump(job)
+                        db.session.commit()
+                        continue
+                    if call_error is not None:  # one bad file never sinks the pass
                         row.watermark_state = 'error'
                         errors += 1
                     elif raw is None:      # file gone: leave the row as it was
@@ -5375,6 +6095,7 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
             # there a watermark?" about our own edit.
             if row.watermark_clean_method:
                 _discard_clean_blob(bank_id, row)
+                _invalidate_effective_analysis(row)
             path = abs_image_path(bank, row)
             if not path:
                 # No resolvable file. Counted and bumped rather than quietly
@@ -5418,7 +6139,7 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
         located = 0
         try:
             with window:
-                for path, state, score, regions, error in watermark_detector.scan(
+                for path, state, score, regions, fingerprint, error in watermark_detector.scan(
                         [p for _rid, p in planned],
                         should_cancel=should_cancel, cancel_file=cancel_file):
                     # Match on the path the child echoed, popping it so a bank
@@ -5432,6 +6153,10 @@ def _watermark_detector_job(bank_id, rescan, statuses=None, ids=None):
                                     'it was being analysed, skipping it', row_id)
                         vanished += 1
                         bank_jobs.bump(job)
+                        continue
+                    if not _prepare_watermark_write(row, path, fingerprint):
+                        bank_jobs.bump(job)
+                        db.session.commit()
                         continue
                     row.watermark_source = 'detector'
                     row.watermark_score = (round(float(score), 4)
@@ -5537,18 +6262,24 @@ def _clean_pool_query(bank_id):
     return (BankImage.query.filter_by(bank_id=bank_id,
                                       watermark_state='detected')
             .filter(BankImage.status != 'reject')
+            .filter(BankImage.watermark_fingerprint.isnot(None))
+            .filter(func.length(BankImage.watermark_fingerprint) == 64)
+            .filter(~_watermark_history_inactive_clause())
             .filter(or_(BankImage.watermark_bbox.isnot(None),
                         BankImage.watermark_regions.isnot(None))))
 
 
 def _needs_rescan_count(bank_id) -> int:
-    """Rows flagged by an older build that kept no bbox — nothing can route them
-    until a scan re-adopts them (see _watermark_scan_query). A row the user has
-    masked by hand is NOT one of them: it no longer needs the detector."""
+    """Flagged rows whose geometry is not authorised for their current raw."""
     return (BankImage.query.filter_by(bank_id=bank_id, watermark_state='detected')
             .filter(BankImage.status != 'reject')
-            .filter(BankImage.watermark_bbox.is_(None))
-            .filter(BankImage.watermark_regions.is_(None)).count())
+            .filter(or_(
+                and_(BankImage.watermark_bbox.is_(None),
+                     BankImage.watermark_regions.is_(None)),
+                BankImage.watermark_fingerprint.is_(None),
+                func.length(BankImage.watermark_fingerprint) != 64,
+                _watermark_history_inactive_clause(),
+            )).count())
 
 
 def _drop_clean_blob_by_id(bank_id, image_id) -> None:
@@ -5616,6 +6347,17 @@ def _clean_regions(row):
     return ([bbox] if bbox else []), False, None
 
 
+def _current_watermark_source(bank, row) -> tuple[str | None, str | None]:
+    path = abs_image_path(bank, row)
+    if not path or not os.path.isfile(path):
+        return None, None
+    fingerprint = bank_transfer_metadata.content_fingerprint_path(path)
+    if (not _valid_analysis_fingerprint(row.watermark_fingerprint)
+            or fingerprint != row.watermark_fingerprint):
+        return None, fingerprint
+    return path, fingerprint
+
+
 def _source_size(bank, row):
     """(path, W, H) in the browser/VLM's visual orientation.
 
@@ -5623,8 +6365,8 @@ def _source_size(bank, row):
     camera dimensions here would route/crop a 90° JPEG in a different coordinate
     system than both the user and the model saw.
     """
-    path = abs_image_path(bank, row)
-    if not path or not os.path.isfile(path):
+    path, _fingerprint = _current_watermark_source(bank, row)
+    if not path:
         return None, 0, 0
     try:
         with safe_bank_source(path, label='bank watermark') as im:
@@ -5726,6 +6468,7 @@ def _watermark_crop_job(bank_id):
                     failed += 1
                     bank_jobs.bump(job)
                     continue
+                expected_raw_fingerprint = row.watermark_fingerprint
                 route, box = _route_watermark(bbox, width, height, allow_crop=True)
                 if route != 'crop':
                     left += 1              # level 2's job — stays 'detected'
@@ -5739,10 +6482,13 @@ def _watermark_crop_job(bank_id):
                     failed += 1
                     bank_jobs.bump(job)
                     continue
-                if _apply_watermark_crop(str(dst), box):
+                cleaned_ok = _apply_watermark_crop(str(dst), box)
+                generation_ok = _prepare_watermark_write(
+                    row, src, expected_raw_fingerprint)
+                if cleaned_ok and generation_ok:
                     row.watermark_state = 'cleaned'
                     row.watermark_clean_method = 'crop'
-                    drop_derived(bank_id, row.id)
+                    _invalidate_effective_analysis(row)
                     cropped += 1
                 else:
                     _discard_clean_blob(bank_id, row)
@@ -5752,6 +6498,8 @@ def _watermark_crop_job(bank_id):
                 bank_jobs.bump(job)
         finally:
             db.session.commit()
+            if cropped:
+                reset_score_memo()
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {cropped} cropped so far')
             return
@@ -5824,9 +6572,11 @@ def _watermark_inpaint_job(bank_id, method):
         # Klein must NOT take that window — ComfyUI owns the GPU there and
         # holding it would deadlock its worker (same split as the dataset route).
         device = 'cpu' if method == 'klein' else watermark_lama.resolve_device()
-        # (image_id, dst_path, [bbox]) for the single LaMa batch — ids, not ORM
-        # rows: this list is held across a batch that can run for minutes, and a
-        # row deleted in that window must be skippable rather than fatal.
+        # (image_id, dst_path, [bbox], raw_path, raw_fingerprint) for the single
+        # LaMa batch — ids, not ORM rows: this list is held across a batch that
+        # can run for minutes, and a row deleted in that window must be skippable
+        # rather than fatal. The raw identity closes that same minutes-long
+        # window for external source replacements.
         pending = []
         window = (gpu_exclusive_vision_window(flag_ttl=1800)
                   if device == 'cuda' else nullcontext())
@@ -5850,6 +6600,7 @@ def _watermark_inpaint_job(bank_id, method):
                             {'kind': 'failed', 'detail': problem} if problem else None)
                         bank_jobs.bump(job)
                         continue
+                    expected_raw_fingerprint = row.watermark_fingerprint
                     if manual and not boxes:
                         # The user deleted every zone. That is an ANSWER, not a
                         # missing value: repaint nothing, and never fall back to
@@ -5901,10 +6652,12 @@ def _watermark_inpaint_job(bank_id, method):
                         # the panel now states (BankWatermarkPanel → /api/klein-model).
                         ok, err = watermark_klein.inpaint_watermark_klein(
                             bank.user_id, str(dst), [list(b) for b in boxes])
-                        if ok:
+                        generation_ok = _prepare_watermark_write(
+                            row, src, expected_raw_fingerprint)
+                        if ok and generation_ok:
                             row.watermark_state = 'cleaned'
                             row.watermark_clean_method = 'klein'
-                            drop_derived(bank_id, row.id)
+                            _invalidate_effective_analysis(row)
                             counts['klein'] += 1
                         else:
                             _discard_clean_blob(bank_id, row)
@@ -5914,20 +6667,22 @@ def _watermark_inpaint_job(bank_id, method):
                         db.session.commit()
                         bank_jobs.bump(job)
                         continue
-                    pending.append((rid, dst, [list(b) for b in boxes]))
+                    pending.append((rid, dst, [list(b) for b in boxes], src,
+                                    expected_raw_fingerprint))
                     bank_jobs.bump(job)
                 if pending and bank_jobs.cancelled(job):
                     # Stop means stop: the staged copies of rows we never got to
                     # repaint are thrown away rather than running a long batch
                     # after the user asked out (they stay 'detected', retryable).
-                    for pid, _dst, _boxes in pending:
+                    for pid, _dst, _boxes, _src, _fingerprint in pending:
                         _drop_clean_blob_by_id(bank_id, pid)
                     pending = []
                 if pending:
                     results = watermark_lama.inpaint_batch(
                         [{'image_path': str(dst), 'bboxes': boxes}
-                         for _rid, dst, boxes in pending], device=device)
-                    for pid, dst, _boxes in pending:
+                         for _rid, dst, boxes, _src, _fingerprint in pending],
+                        device=device)
+                    for pid, dst, _boxes, src, expected_raw_fingerprint in pending:
                         row = _live_image(pid)
                         if row is None:
                             # Deleted while the batch ran: no row is left to point
@@ -5939,10 +6694,12 @@ def _watermark_inpaint_job(bank_id, method):
                             continue
                         ok, err = results.get(str(dst), (
                             False, {'kind': 'failed', 'detail': 'missing inpaint result'}))
-                        if ok:
+                        generation_ok = _prepare_watermark_write(
+                            row, src, expected_raw_fingerprint)
+                        if ok and generation_ok:
                             row.watermark_state = 'cleaned'
                             row.watermark_clean_method = 'lama'
-                            drop_derived(bank_id, row.id)
+                            _invalidate_effective_analysis(row)
                             counts['inpainted'] += 1
                         else:
                             _discard_clean_blob(bank_id, row)
@@ -5951,6 +6708,8 @@ def _watermark_inpaint_job(bank_id, method):
                             error = err or error
         finally:
             db.session.commit()
+            if counts['inpainted'] or counts['klein']:
+                reset_score_memo()
         done = counts['inpainted'] + counts['klein']
         if bank_jobs.cancelled(job):
             bank_jobs.progress(job, detail=f'cancelled — {done} inpainted so far')
@@ -5977,7 +6736,9 @@ def _watermark_inpaint_job(bank_id, method):
     return run
 
 
-def set_watermark_regions(user_id, bank_id, image_id, regions) -> dict | None:
+@_serialized_bank_mutation('watermark_regions')
+def set_watermark_regions(user_id, bank_id, image_id, regions, *,
+                          _bank_lease=None) -> dict | None:
     """Replace one flagged image's hand-drawn watermark mask (reported missing in
     the Bank by Qeeyana on Reddit — the Dataset had it, the Bank did not).
 
@@ -6002,19 +6763,25 @@ def set_watermark_regions(user_id, bank_id, image_id, regions) -> dict | None:
     normalized = normalize_watermark_regions(regions)
     import json as _json
     stored = _json.dumps(normalized) if normalized is not None else None
-    updated = (BankImage.query
-               .filter_by(id=row.id, bank_id=bank_id, watermark_state='detected')
-               .update({'watermark_regions': stored}, synchronize_session=False))
-    if updated != 1:
-        db.session.rollback()
-        if owned.one_or_none() is None:
-            return None
-        raise RuntimeError('this image is no longer flagged — nothing to mask')
+    bank = db.session.get(ImageBank, bank_id)
+    raw_path = abs_image_path(bank, row) if bank else None
+    expected_raw_fingerprint = row.watermark_fingerprint
+    if not _prepare_watermark_write(
+            row, raw_path, expected_raw_fingerprint):
+        # Keep the fail-closed invalidation performed by the authority check.
+        # Rolling it back would leave stale geometry active after this request
+        # has proved that the source bytes changed.
+        db.session.commit()
+        raise RuntimeError('the source image changed — scan it again before masking')
+    row.watermark_state = 'detected'
+    row.watermark_regions = stored
     db.session.commit()
     return _watermark_regions_payload(row)
 
 
-def undo_watermark_clean(user_id, bank_id, image_ids=None) -> int:
+@_serialized_bank_mutation('watermark_undo')
+def undo_watermark_clean(user_id, bank_id, image_ids=None, *,
+                         _bank_lease=None) -> int:
     """Throw away cleaned versions and re-flag the images. The source was never
     modified, so undoing is just deleting our own blob — which is exactly what
     makes running both levels risk-free. ``image_ids`` empty = every cleaned
@@ -6027,17 +6794,29 @@ def undo_watermark_clean(user_id, bank_id, image_ids=None) -> int:
         ids = [int(i) for i in image_ids]
         q = q.filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK]))
     rows = q.all()
+    restored = 0
     for row in rows:
+        raw_path = abs_image_path(bank, row)
+        expected_raw_fingerprint = row.watermark_fingerprint
+        if not _prepare_watermark_write(
+                row, raw_path, expected_raw_fingerprint):
+            continue
         _discard_clean_blob(bank_id, row)
+        _invalidate_effective_analysis(row)
         # Back to 'detected' with its bbox intact, so it re-enters both levels
         # (e.g. to retry with the other engine).
         row.watermark_state = 'detected'
+        restored += 1
     if rows:
         db.session.commit()
-    return len(rows)
+        if restored:
+            reset_score_memo()
+    return restored
 
 
-def dismiss_watermarks(user_id, bank_id, image_ids) -> int:
+@_serialized_bank_mutation('watermark_dismiss')
+def dismiss_watermarks(user_id, bank_id, image_ids, *,
+                       _bank_lease=None) -> int:
     """Rule a flag a FALSE positive: 'detected' → 'dismissed'. Those images leave
     both cleaning levels and are never re-flagged by a later scan — without this,
     level 2 would happily repaint a legitimate logo on a T-shirt. Mirrors the
@@ -6051,18 +6830,26 @@ def dismiss_watermarks(user_id, bank_id, image_ids) -> int:
     rows = (BankImage.query
             .filter_by(bank_id=bank_id, watermark_state='detected')
             .filter(BankImage.id.in_(ids[:_SQL_IN_CHUNK])).all())
+    dismissed = 0
     for row in rows:
+        raw_path = abs_image_path(bank, row)
+        expected_raw_fingerprint = row.watermark_fingerprint
+        if not _prepare_watermark_write(
+                row, raw_path, expected_raw_fingerprint):
+            continue
         row.watermark_state = 'dismissed'
+        dismissed += 1
     if rows:
         db.session.commit()
-    return len(rows)
+    return dismissed
 
 
 def _watermark_source_counts(bank_id) -> dict:
     """How many SCANNED rows each detection route produced. A row with a state but
     no source predates the column — counted as 'unknown', never attributed."""
     scanned = BankImage.query.filter_by(bank_id=bank_id).filter(
-        BankImage.watermark_state.isnot(None))
+        BankImage.watermark_state.isnot(None),
+        ~_watermark_history_inactive_clause())
     detector = scanned.filter(BankImage.watermark_source == 'detector').count()
     vision = scanned.filter(BankImage.watermark_source == 'vision').count()
     return {'detector': detector, 'vision': vision,
@@ -6121,7 +6908,9 @@ def watermark_levels(user_id, bank_id) -> dict | None:
                                                 allow_crop=True)[0] == 'crop':
             croppable += 1
     return {
-        'scanned': base.filter(BankImage.watermark_state.isnot(None)).count(),
+        'scanned': base.filter(
+            BankImage.watermark_state.isnot(None),
+            ~_watermark_history_inactive_clause()).count(),
         # What a plain re-run would still look at. Detection resumes where it
         # stopped (the pass commits every 25 rows), but nothing said so: a
         # progress bar that restarts at 0 each run reads as "it started over
@@ -6140,7 +6929,9 @@ def watermark_levels(user_id, bank_id) -> dict | None:
         'cropped': base.filter_by(watermark_clean_method='crop').count(),
         'inpainted': base.filter(
             BankImage.watermark_clean_method.in_(('lama', 'klein'))).count(),
-        'dismissed': base.filter_by(watermark_state='dismissed').count(),
+        'dismissed': base.filter(
+            BankImage.watermark_state == 'dismissed',
+            ~_watermark_history_inactive_clause()).count(),
         'needs_rescan': _needs_rescan_count(bank_id),
         # WHO ruled on the images already scanned. Surfaced because the two
         # routes are not the same instrument and a bank scanned over weeks can
@@ -6243,7 +7034,8 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
                     vanished += 1
                     bank_jobs.bump(job)
                     continue
-                yield rid, abs_image_path(bank, row)
+                yield rid, analysis_image_path(
+                    bank, row, refresh_rotation=True)
 
         def ask(item):
             """WORKER thread: file + network only, no session. None means the
@@ -6251,16 +7043,22 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
             _rid, path = item
             if not path or not os.path.isfile(path):
                 return None
-            return describe_image_ollama(
-                _read_safe_bank_source_bytes(path, label='bank framing scan'),
-                CLASSIFY_PROMPT, num_predict=400,
-                prefer_json=True, fmt='json', keep_alive='5m')
+            payload = _read_safe_bank_source_bytes(path, label='bank framing scan')
+            fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            try:
+                raw = describe_image_ollama(
+                    payload, CLASSIFY_PROMPT, num_predict=400,
+                    prefer_json=True, fmt='json', keep_alive='5m')
+                return {'raw': raw, 'fingerprint': fingerprint, 'error': None}
+            except Exception as exc:  # noqa: BLE001 — one image, not the pass
+                return {'raw': None, 'fingerprint': fingerprint,
+                        'error': f'{type(exc).__name__}: {exc}'}
 
         with gpu_exclusive_vision_window(flag_ttl=1800):
             try:
                 # The calls overlap (see vision_pool); every write below still
                 # happens here, on this one thread.
-                for (rid, _path), raw, error in map_vision(
+                for (rid, _path), answer, error in map_vision(
                         prepared(), ask,
                         should_cancel=lambda: bank_jobs.cancelled(job)):
                     # Re-read: the classification we are about to store took a
@@ -6272,7 +7070,16 @@ def _framing_job(bank_id, rescan, statuses=None, ids=None):
                         vanished += 1
                         bank_jobs.bump(job)
                         continue
-                    if error is not None:  # one bad file never sinks the pass
+                    answer = answer if isinstance(answer, dict) else {}
+                    fingerprint = answer.get('fingerprint')
+                    raw = answer.get('raw')
+                    call_error = error or answer.get('error')
+                    if ((call_error is not None or raw is not None)
+                            and not _prepare_analysis_write(
+                                row, _path, fingerprint)):
+                        bank_jobs.bump(job)
+                        continue
+                    if call_error is not None:  # one bad file never sinks the pass
                         errors += 1
                     elif raw is None:      # file gone: leave the row as it was
                         pass
@@ -6400,14 +7207,27 @@ def _medium_job(bank_id, rescan, statuses=None, ids=None):
             # normpath that HITS the cache is provably what realpath would have
             # returned, and realpath is a syscall this loop cannot afford once
             # per row on a 20 000-image bank.
-            p = os.path.normpath(os.path.join(base, r.relpath))
-            emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
-            if emb is None:
-                p2 = _abs_under(base, r.relpath)
-                emb = emb_by_path.get(p2) if p2 else None
+            if r.watermark_clean_method or r.rotation:
+                p = analysis_image_path(bank, r)
+                emb = emb_by_path.get(p) if p else None
+            else:
+                p = os.path.normpath(os.path.join(base, r.relpath))
+                emb = (emb_by_path.get(p)
+                       if os.path.normcase(p).startswith(prefix) else None)
+                if emb is None:
+                    p2 = _abs_under(base, r.relpath)
+                    emb = emb_by_path.get(p2) if p2 else None
+                    if emb is not None:
+                        p = p2
             if emb is None:
                 unscored += 1          # no embedding → stays NULL, honestly
             else:
+                fingerprint = _score_embedding_fingerprint(p)
+                if not _prepare_analysis_write(r, p, fingerprint):
+                    unscored += 1
+                    done += 1
+                    bank_jobs.bump(job)
+                    continue
                 e = np.asarray(emb, dtype='float32')
                 e = e / (float(np.linalg.norm(e)) + 1e-8)
                 sims = P @ e
@@ -6616,25 +7436,45 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             rows = [r for r in rows if not caption_origin.is_protected(r)]
         by_path = {}
         for r in rows:
-            p = abs_image_path(bank, r)
+            p = analysis_image_path(bank, r, refresh_rotation=True)
             if _is_safe_bank_source(p, label='bank caption pass'):
-                by_path[p] = r.id
+                fingerprint = bank_transfer_metadata.content_fingerprint_path(p)
+                if fingerprint is not None:
+                    by_path[p] = (r.id, fingerprint)
         paths = list(by_path)
         bank_jobs.progress(job, done=0, total=len(paths), detail='captioning')
         if not paths:
             return
-        captioned = vanished = 0
+        captioned = vanished = stale = spared_mid_pass = 0
 
         def _on_caption(path, caption, engine=None):
-            nonlocal captioned, vanished
-            image_id = by_path.get(path)
-            if image_id is None:
+            nonlocal captioned, vanished, stale, spared_mid_pass
+            planned = by_path.get(path)
+            if planned is None:
                 return           # a path this pass never asked about — not ours
+            image_id, expected_fingerprint = planned
             row = _live_image(image_id)
             if row is None:      # deleted while it was being captioned — _live_image
                 logger.info('bank caption pass: image %s was deleted mid-pass, '
                             'skipping its caption', image_id)
                 vanished += 1
+                return
+            # Inference may take seconds. A tracked rotate/clean or an external
+            # same-path replacement during that window must not attach the
+            # caption computed from A to the now-current pixels B.
+            current_path = analysis_image_path(bank, row, refresh_rotation=True)
+            if (not _same_resolved_path(path, current_path)
+                    or bank_transfer_metadata.content_fingerprint_path(current_path)
+                    != expected_fingerprint):
+                logger.info('bank caption pass: image %s changed mid-pass, '
+                            'skipping its stale caption', image_id)
+                stale += 1
+                return
+            # A caption written while this image was in inference wins unless
+            # the user explicitly allowed overwriting asserted captions.
+            if ((not force and (row.caption or '').strip())
+                    or (keep_asserted and caption_origin.is_protected(row))):
+                spared_mid_pass += 1
                 return
             # WHICH engine wrote this row, reported by the engine that wrote it —
             # not the backend that was asked for. 'auto' chains both, so the
@@ -6672,6 +7512,10 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             detail += f', {skipped_asserted} kept (written by you)'
         if vanished:
             detail += f', {vanished} skipped (deleted while the pass ran)'
+        if stale:
+            detail += f', {stale} skipped (image changed while captioning)'
+        if spared_mid_pass:
+            detail += f', {spared_mid_pass} kept (newer caption won)'
         detail += _scope_note(
             bank_id,
             None if force else or_(BankImage.caption.is_(None),
@@ -6797,7 +7641,9 @@ def _bank_counts(bank_id) -> dict:
         'reject': base.filter_by(status='reject').count(),
         'scored': base.filter(or_(BankImage.aesthetic_score.isnot(None),
                                   BankImage.nsfw_score.isnot(None))).count(),
-        'watermark_detected': base.filter(BankImage.watermark_state == 'detected').count(),
+        'watermark_detected': base.filter(
+            BankImage.watermark_state == 'detected',
+            ~_watermark_history_inactive_clause()).count(),
         'framing_classified': base.filter(BankImage.framing.isnot(None)).count(),
         'captioned': base.filter(and_(BankImage.caption.isnot(None),
                                        BankImage.caption != '')).count(),
@@ -6914,11 +7760,14 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         # its second half. The later steps only ADD analysis columns, so undoing
         # this one leaves them consistent.
         snap = bank_undo.Snapshot('Launch all — auto-reject')
-        rejected = (apply_flags(user_id, bank_id, reject_flags, snapshot=snap)
+        capability = _job_bank_capability(job)
+        rejected = (apply_flags(user_id, bank_id, reject_flags, snapshot=snap,
+                                _bank_lease=capability)
                     if reject_flags else {})
         dup_rejected = 0
         if resolve_dups:
-            dup_rejected = resolve_dups_keep_best(user_id, bank_id, snapshot=snap)
+            dup_rejected = resolve_dups_keep_best(
+                user_id, bank_id, snapshot=snap, _bank_lease=capability)
         snap.commit(bank_id)
         n = sum(rejected.values()) + dup_rejected
         entry['counts'] = {'rejected': n, 'by_flag': rejected,
@@ -6946,7 +7795,8 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
         # /manual) — near-dups are fuzzier than exact dHash, so the overnight run
         # surfaces them rather than auto-rejecting. Skipped-with-reason (never a
         # mute ✗) when Score produced no embeddings.
-        n = rebuild_semantic_dup_groups(bank_id)
+        n = rebuild_semantic_dup_groups(
+            bank_id, _bank_lease=_job_bank_capability(job))
         if n is None:
             entry['status'], entry['reason'] = 'skipped', 'run ✨ Score first — no embeddings'
             return
@@ -6997,10 +7847,12 @@ def _run_pipeline_step(job, user_id, bank_id, step, reject_flags, resolve_dups, 
     entry['status'], entry['reason'] = 'skipped', 'unknown step'
 
 
-def resolve_dups_keep_best(user_id, bank_id, snapshot=None) -> int:
+def resolve_dups_keep_best(user_id, bank_id, snapshot=None, *,
+                           _bank_lease=None) -> int:
     """Auto-resolve every unresolved duplicate group keeping the best member,
     for the pipeline's auto-reject step. Returns the number REJECTED."""
-    out = resolve_dups(user_id, bank_id, strategy='best', snapshot=snapshot)
+    out = resolve_dups(user_id, bank_id, strategy='best', snapshot=snapshot,
+                       _bank_lease=_bank_lease)
     return out.get('rejected', 0)
 
 
@@ -7083,6 +7935,12 @@ def _coverage_embeddings(bank, crit):
     prefix = os.path.normcase(base + os.sep)
     vecs = []
     for r in rows:
+        if r.watermark_clean_method or r.rotation:
+            p = analysis_image_path(bank, r)
+            emb = emb_by_path.get(p) if p else None
+            if emb is not None:
+                vecs.append(emb)
+            continue
         p = os.path.normpath(os.path.join(base, r.relpath))
         emb = emb_by_path.get(p) if os.path.normcase(p).startswith(prefix) else None
         if emb is None:
@@ -7405,18 +8263,85 @@ def promotable_count(user_id, bank_id, dataset_id) -> int | None:
 _IMPORT_FOLDER_SAFE = re.compile(r'[^A-Za-z0-9 _-]')
 
 
+def _normalize_import_bank_name(name) -> str:
+    if not isinstance(name, str):
+        raise ValueError('name must be text')
+    name = name.strip()
+    if not name:
+        raise ValueError('name is required')
+    if len(name) > 100:
+        raise ValueError('name is too long (max 100 characters)')
+    return name
+
+
 def _import_folder_for(name: str) -> str:
     """A fresh, unused folder under bank_sources_root for an imported bank.
     Suffixes -2, -3… rather than reusing a folder: two imports of the same name
     must never end up sharing (and silently merging) one set of files."""
     stem = _IMPORT_FOLDER_SAFE.sub('_', name).strip() or 'bank'
     root = cfg.bank_sources_root()
+    root.mkdir(parents=True, exist_ok=True)
     candidate = root / stem
     i = 2
-    while candidate.exists():
-        candidate = root / f'{stem}-{i}'
-        i += 1
-    return str(candidate)
+    while True:
+        try:
+            # Reservation and creation are the same atomic filesystem action.
+            # ``exists()`` followed by ``makedirs(exist_ok=True)`` let two
+            # concurrent imports silently share one source folder.
+            os.mkdir(candidate)
+            return str(candidate)
+        except FileExistsError:
+            candidate = root / f'{stem}-{i}'
+            i += 1
+
+
+def _stage_import_bank(user_id, name) -> ImageBank:
+    """Reserve a private folder and FLUSH its still-uncommitted Bank row.
+
+    The generated id can then be reserved in ``bank_jobs`` before the row becomes
+    visible to another request.  Callers either commit it or remove the private
+    folder after rolling the transaction back.
+    """
+    folder = _import_folder_for(name)
+    try:
+        bank = ImageBank(user_id=user_id, name=name, source_path=folder)
+        db.session.add(bank)
+        db.session.flush()
+        return bank
+    except Exception:
+        db.session.rollback()
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _create_import_bank(user_id, name) -> ImageBank:
+    """Reserve a private folder and persist its Bank row as one unit."""
+    bank = _stage_import_bank(user_id, name)
+    folder = bank.source_path
+    try:
+        db.session.commit()
+        return bank
+    except Exception:
+        db.session.rollback()
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+
+
+def _discard_unlaunched_import_bank(user_id, bank_id, folder, *,
+                                    _bank_lease=None):
+    """Remove a staged/committed destination whose worker never took ownership."""
+    try:
+        db.session.rollback()
+    except Exception:  # noqa: BLE001 — cleanup must not mask the launch failure
+        logger.warning('bank import: rollback failed', exc_info=True)
+    if bank_id is not None and get_bank(user_id, bank_id) is not None:
+        return _discard_promoted_bank(
+            user_id, bank_id, _bank_lease=_bank_lease)
+    # A flush rolled back the row, so delete_bank has no path from which to find
+    # the folder.  ``folder`` came directly from _import_folder_for; retain the
+    # root check as a final defence against a future caller passing another path.
+    return _remove_partial_import_folder(
+        folder, context='bank import launch cleanup')
 
 
 def _scrape_blob_name(raw: bytes) -> str | None:
@@ -7447,7 +8372,8 @@ def _scrape_blob_name(raw: bytes) -> str | None:
     return f'{hashlib.sha256(raw).hexdigest()[:24]}{ext}'
 
 
-def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
+def scrape_import_to_bank(user_id, items, bank_id=None, name=None, *,
+                          _bank_lease=None, _created=False) -> dict:
     """🕸 Scrape → BANK: the scraper's second destination.
 
     Downloads the SELECTED scanned images ({'url','title'}) into a bank's source
@@ -7475,19 +8401,23 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
     if len(items) > SCRAPE_IMPORT_MAX:
         raise ValueError(f'max {SCRAPE_IMPORT_MAX} images per import')
 
-    created = False
     if bank_id is not None:
+        if _bank_lease is None:
+            # Preserve the established quick 409 (and its test seam); the
+            # atomic lease immediately below is still authoritative if this
+            # advisory read races a new owner.
+            if bank_jobs.running(bank_id):
+                snap = bank_jobs.get(bank_id) or {}
+                raise bank_jobs.BankJobBusy(
+                    snap.get('kind') or 'background')
+            with bank_jobs.mutation_lease(bank_id, 'scrape_import') as lease:
+                return scrape_import_to_bank(
+                    user_id, items, bank_id=bank_id, name=name,
+                    _bank_lease=lease, _created=_created)
+        bank_jobs.require_reservation(_bank_lease, bank_id)
         bank = get_bank(user_id, bank_id)
         if bank is None:
             raise ValueError('bank not found')
-        # A live pass works off a snapshot of this bank's rows and reports against
-        # a fixed total; refresh_bank also declines to walk underneath it. Adding
-        # files now would land outside both — refuse in the shape the UI knows.
-        if bank_jobs.running(bank.id):
-            # The snapshot can vanish between the two reads (a job that finishes
-            # right here); the refusal must still name something.
-            snap = bank_jobs.get(bank.id) or {}
-            raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
         folder = bank.source_path
         if not folder or not os.path.isdir(folder):
             raise ValueError('this bank\'s folder is unavailable — relocate it first')
@@ -7504,15 +8434,33 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
         name = (name or '').strip()
         if not name:
             raise ValueError('name is required')
-        folder = _import_folder_for(name)
-        os.makedirs(folder, exist_ok=True)
-        bank = ImageBank(user_id=user_id, name=name, source_path=folder)
-        db.session.add(bank)
-        db.session.commit()
-        created = True
+        bank = reservation = None
+        folder = None
+        try:
+            # Make the new row visible only after its mutation reservation is
+            # installed, exactly like the background Bank import paths.
+            bank = _stage_import_bank(user_id, name)
+            folder = bank.source_path
+            reservation = bank_jobs.reserve(bank.id, 'scrape_import')
+            db.session.commit()
+            return scrape_import_to_bank(
+                user_id, items, bank_id=bank.id, name=name,
+                _bank_lease=reservation, _created=True)
+        except Exception:
+            if bank is not None and not bank_jobs.launched(reservation):
+                # Before commit this rolls the staged row back; after commit it
+                # removes the otherwise empty/partial app-owned Bank.
+                _discard_unlaunched_import_bank(
+                    user_id, bank.id, folder, _bank_lease=reservation)
+            raise
+        finally:
+            bank_jobs.abort(reservation)
 
     with ThreadPoolExecutor(max_workers=_SCRAPE_DL_WORKERS) as pool:
         downloaded = list(pool.map(_download_scrape_item, items))
+    # Downloads can be slow. Refresh the capability before the first write so a
+    # stale/purged lease can never publish beside a newer Bank owner.
+    bank_jobs.require_reservation(_bank_lease, bank.id)
 
     skipped: dict[str, int] = {}
     saved = already_there = 0
@@ -7539,8 +8487,9 @@ def scrape_import_to_bank(user_id, items, bank_id=None, name=None) -> dict:
 
     # ONE inventory path for every bank: the same walk that picks up files the
     # user drops in the folder by hand picks these up too. No third insert path.
-    sync = refresh_bank(user_id, bank.id, force=True) or {}
-    return {'bank_id': bank.id, 'name': bank.name, 'created': created,
+    sync = refresh_bank(
+        user_id, bank.id, force=True, _bank_lease=_bank_lease) or {}
+    return {'bank_id': bank.id, 'name': bank.name, 'created': _created,
             'saved': saved, 'already_there': already_there,
             'added': sync.get('added', 0), 'skipped': skipped}
 
@@ -7561,7 +8510,38 @@ def _copied_image_dimensions(path) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analysis: bool) -> dict:
+def _cache_bundle_matches_analysis(bundle, analysis) -> dict:
+    """Return only cache lanes that exactly corroborate snapshot scalars."""
+    def same_optional(left, right, tolerance):
+        if left is None or right is None:
+            return left is None and right is None
+        return math.isclose(
+            float(left), float(right), rel_tol=0.0, abs_tol=tolerance)
+
+    def value(name):
+        return analysis.get(name) if isinstance(analysis, dict) else getattr(
+            analysis, name)
+
+    out = {}
+    score = (bundle or {}).get('score')
+    if score is not None:
+        if (score['state'] == 'ok'
+                and same_optional(score['aesthetic'], value('aesthetic_score'), 1e-4)
+                and same_optional(score['nsfw'], value('nsfw_score'), 1e-4)) \
+                or (score['state'] == 'error'
+                    and value('aesthetic_score') is None
+                    and value('nsfw_score') is None):
+            out['score'] = score
+    face = (bundle or {}).get('face')
+    if face is not None and face['state'] == value('face_state'):
+        if (same_optional(face['det'], value('face_det'), 1e-3)
+                and same_optional(face['yaw'], value('face_yaw'), 1e-2)):
+            out['face'] = face
+    return out
+
+
+def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analysis: bool,
+                             *, analysis_cache_dir=None):
     """The current user-facing Dataset data, plus a compatible old Bank analysis.
 
     The snapshot never gets to overwrite caption/framing/watermark/provenance or
@@ -7570,7 +8550,14 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
     fingerprint.  This is deliberately checked against ``copied_path`` after the
     copy, closing the tiny edit-during-copy race as well.
     """
-    values = {
+    copied_fingerprint = bank_transfer_metadata.content_fingerprint_path(
+        copied_path)
+    transfer_metadata = bank_transfer_metadata.capture_transfer_metadata(
+        row.transfer_metadata, dataset=row,
+        dataset_fingerprint=copied_fingerprint)
+    if transfer_metadata is None:
+        raise RuntimeError('Dataset transfer metadata is malformed or too large')
+    current_values = {
         'caption': row.caption,
         # WHO wrote that caption travels with it. This is THE path that used to
         # destroy hand-written work: a caption typed in the Dataset editor landed
@@ -7584,28 +8571,109 @@ def _dataset_row_bank_values(row: FaceDatasetImage, copied_path, preserve_analys
         'watermark_bbox': row.watermark_bbox if isinstance(row.watermark_bbox, str) else None,
         'watermark_regions': (row.watermark_regions
                               if isinstance(row.watermark_regions, str) else None),
+        'watermark_source': (row.watermark_source
+                             if row.watermark_source in ('detector', 'vision') else None),
+        'watermark_score': (float(row.watermark_score)
+                            if isinstance(row.watermark_score, (int, float))
+                            and not isinstance(row.watermark_score, bool)
+                            and 0.0 <= float(row.watermark_score) <= 1.0 else None),
         'source_metadata': _source_metadata_storage(row.source_metadata),
         # Dataset-to-Bank only starts from kept rows.  Keep the current explicit
         # decision should it change while the background copy is waiting, but do
         # not invent a Bank-only 'failed' status for a Dataset failure row.
         'status': (row.status if row.status in _BANK_TRANSFER_STATUSES else 'keep'),
+        'reject_reason': None,
+        'transfer_metadata': transfer_metadata,
         'watermark_clean_method': None,
         # A Bank rotation has already been materialised into the Dataset pixels
         # during promotion.  Restoring it here would turn the copied file twice.
         'rotation': None,
     }
-    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    values = {}
+    compatible = None
+    cache_bundle = {}
     if preserve_analysis:
-        analysis = bank_transfer_metadata.compatible_analysis(
+        compatible = bank_transfer_metadata.compatible_snapshot(
             row.bank_analysis_snapshot, copied_path)
-        if analysis:
-            values.update(analysis)
-        elif row.bank_analysis_snapshot is not None:
-            # A Dataset byte edit (or a rejected legacy payload) must not keep
-            # looking transferable forever.  The compatibility check above is
-            # against the just-copied bytes, so clearing here is race-safe.
-            row.bank_analysis_snapshot = None
-    return values
+        if compatible:
+            values.update(compatible['analysis'])
+            cache_ref = compatible.get('cache_ref')
+            if cache_ref:
+                if not analysis_cache_dir:
+                    raise RuntimeError('Bank analysis cache directory is unavailable')
+                loaded = bank_transfer_metadata.read_cache_sidecar(
+                    analysis_cache_dir, cache_ref)
+                if loaded is None:
+                    raise RuntimeError(
+                        'Bank analysis snapshot references a missing or invalid cache')
+                cache_bundle = _cache_bundle_matches_analysis(
+                    loaded, compatible['analysis'])
+                if set(cache_bundle) != set(loaded):
+                    raise RuntimeError(
+                        'Bank analysis cache does not match its snapshot')
+            score_active = any(compatible['analysis'].get(name) is not None for name in (
+                'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
+                'semantic_dup_group', 'style_cluster'))
+            face_active = (
+                any(compatible['analysis'].get(name) is not None
+                    for name in ('face_state', 'face_det', 'face_yaw'))
+                or (compatible['analysis'].get('face_cluster') is not None
+                    and compatible['analysis'].get('face_cluster_origin') != 'asserted'))
+            if ((score_active and 'score' not in cache_bundle)
+                    or (face_active and 'face' not in cache_bundle)):
+                raise RuntimeError(
+                    'Bank analysis snapshot is missing a required Score/Face cache')
+        # An incompatible snapshot remains a historical vault. Its SHA prevents
+        # activation, but a later restore of the Dataset bytes may make it useful
+        # again; importing must never destroy that evidence.
+    watermark_names = bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS
+    current_has_watermark = any(
+        current_values.get(name) is not None for name in watermark_names)
+    # Dataset fields are the current user-owned truth. When every visible
+    # watermark column is empty, retain the snapshot's inactive raw-source
+    # history instead of erasing it merely because it was not actionable on the
+    # promoted effective bytes.
+    values.update({
+        name: value for name, value in current_values.items()
+        if current_has_watermark or name not in watermark_names
+    })
+    values['width'], values['height'] = _copied_image_dimensions(copied_path)
+    if compatible:
+        values['analysis_fingerprint'] = (
+            compatible['fingerprint']
+            if compatible.get('assurance') == 'exact' else None)
+    else:
+        # Dataset-owned current framing/watermark values are copied from a
+        # synchronously reserved master and can therefore be bound to the exact
+        # destination bytes even when there is no historical Bank snapshot.
+        has_current_pixel_lane = current_values.get('framing') is not None
+        values['analysis_fingerprint'] = (
+            bank_transfer_metadata.content_fingerprint_path(copied_path)
+            if has_current_pixel_lane else None)
+    values['watermark_fingerprint'] = (
+        copied_fingerprint if current_has_watermark
+        else compatible.get('watermark_fingerprint') if compatible
+        else None)
+    return values, compatible, cache_bundle
+
+
+_DATASET_BANK_GENERATION_FIELDS = tuple(dict.fromkeys((
+    *bank_transfer_metadata.DATASET_PORTABLE_FIELDS,
+    'bank_analysis_snapshot', 'transfer_metadata',
+)))
+
+
+def _dataset_bank_generation(row: FaceDatasetImage) -> tuple:
+    return tuple(getattr(row, name) for name in _DATASET_BANK_GENERATION_FIELDS)
+
+
+def _file_generation(path) -> tuple | None:
+    try:
+        stat = os.stat(path)
+        return (stat.st_dev, stat.st_ino, stat.st_size,
+                stat.st_mtime_ns, stat.st_ctime_ns)
+    except (OSError, TypeError, ValueError):
+        return None
 
 
 def start_dataset_import(app, user_id, dataset_id, name, preserve_analysis=True):
@@ -7625,95 +8693,279 @@ def start_dataset_import(app, user_id, dataset_id, name, preserve_analysis=True)
     kept ones across).
 
     Background job: hundreds of files is a slow copy, and the bank page already
-    renders bank_jobs progress. The bank row is created FIRST (empty) so the job
-    has a bank_id to report against; a job that dies part-way leaves a bank
-    holding exactly the images it managed to copy, never a phantom row.
+    renders bank_jobs progress. The destination id and folder are staged first,
+    but its row is committed only AFTER the Bank id is reserved; it can therefore
+    never become a visible, writable half-built Bank.
     Raises ValueError (-> 400) on a missing dataset, a blank name, invalid
     preservation mode, or nothing kept."""
     from .dataset_storage import dataset_path
+    dataset_id = dataset_activity.normalize_dataset_id(dataset_id)
     if not isinstance(preserve_analysis, bool):
         raise ValueError('preserve_analysis must be a boolean')
-    name = (name or '').strip()
-    if not name:
-        raise ValueError('name is required')
-    ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
-    if not ds:
-        raise ValueError('dataset not found')
-    rows = (FaceDatasetImage.query
-            .filter_by(dataset_id=dataset_id, status='keep')
-            .filter(FaceDatasetImage.filename.isnot(None))
-            .order_by(FaceDatasetImage.id.asc()).all())
-    if not rows:
-        raise ValueError('nothing to import — keep some images first')
-    if len(rows) > BANK_MAX_FILES:
-        raise ValueError(f'too many images (max {BANK_MAX_FILES})')
-    folder = _import_folder_for(name)
-    os.makedirs(folder, exist_ok=True)
-    bank = ImageBank(user_id=user_id, name=name, source_path=folder)
-    db.session.add(bank)
-    db.session.commit()
-    src_dir = str(dataset_path(dataset_id))
-    bank_jobs.start(
-        app, bank.id, 'dataset_import',
-        _dataset_import_job(bank.id, src_dir,
-                            [(r.id, r.filename) for r in rows], preserve_analysis),
-        total=len(rows))
-    return bank.id
+    name = _normalize_import_bank_name(name)
+    token = None
+    bank = None
+    reservation = None
+    bank_id = None
+    bank_folder = None
+    with _dataset_ingest_lock(user_id, dataset_id):
+        ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
+        if not ds:
+            raise ValueError('dataset not found')
+        # Reserve BEFORE reading the selected rows.  A query-then-reserve pair
+        # leaves a window in which delete/edit can change the generation that the
+        # worker believes it captured.
+        token = dataset_activity.begin_exclusive(
+            dataset_id, 'bank_export', detail='copying to Bank')
+        if token is None:
+            raise dataset_activity.DatasetActivityBusy(
+                'This dataset already has work in progress. Wait for it to '
+                'finish before copying it to a Bank.')
+        try:
+            rows = (FaceDatasetImage.query
+                    .filter_by(dataset_id=dataset_id, status='keep')
+                    .filter(FaceDatasetImage.filename.isnot(None))
+                    .order_by(FaceDatasetImage.id.asc()).all())
+            if not rows:
+                raise ValueError('nothing to import — keep some images first')
+            if len(rows) > BANK_MAX_FILES:
+                raise ValueError(f'too many images (max {BANK_MAX_FILES})')
+            dataset_activity.progress(token, total=len(rows))
+            src_dir = str(dataset_path(dataset_id))
+            image_rows = []
+            seen_names = set()
+            for row in rows:
+                filename = row.filename
+                if (not isinstance(filename, str) or not filename
+                        or os.path.basename(filename) != filename):
+                    raise RuntimeError('Dataset contains an invalid image filename')
+                key = os.path.normcase(filename)
+                if key in seen_names:
+                    raise RuntimeError('Dataset contains duplicate image filenames')
+                seen_names.add(key)
+                source = os.path.join(src_dir, filename)
+                source_generation = _file_generation(source)
+                if (source_generation is None
+                        or source_generation[2] > BANK_SOURCE_MAX_BYTES):
+                    raise RuntimeError('A kept Dataset image is unavailable or too large')
+                sidecar_generation = None
+                if preserve_analysis:
+                    snapshot = bank_transfer_metadata.parse_snapshot(
+                        row.bank_analysis_snapshot)
+                    cache_ref = snapshot.get('cache_ref') if snapshot else None
+                    if cache_ref:
+                        sidecar_path = os.path.join(
+                            src_dir, '.bank-analysis-cache', f'{cache_ref}.npz')
+                        sidecar_generation = _file_generation(sidecar_path)
+                        if (sidecar_generation is None
+                                or sidecar_generation[2]
+                                > bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES):
+                            raise RuntimeError(
+                                'Bank analysis snapshot references a missing or '
+                                'oversized cache')
+                image_rows.append((
+                    row.id, filename, source_generation,
+                    _dataset_bank_generation(row), sidecar_generation))
+            bank = _stage_import_bank(user_id, name)
+            bank_id, bank_folder = bank.id, bank.source_path
+            reservation = bank_jobs.reserve(
+                bank_id, 'dataset_import', total=len(rows))
+            # The Bank first becomes externally visible with its reservation
+            # already installed.  The worker is launched only after durability.
+            db.session.commit()
+            bank_jobs.start(
+                app, bank_id, 'dataset_import',
+                _dataset_import_job(
+                    bank_id, dataset_id, src_dir, image_rows, token,
+                    preserve_analysis),
+                total=len(rows), reservation=reservation)
+            # Compatibility with tests/integrators that temporarily replace
+            # bank_jobs.start with an inline runner: their runner cannot adopt
+            # our registry entry, so release just that unlaunched reservation.
+            if not bank_jobs.launched(reservation):
+                bank_jobs.abort(reservation)
+        except Exception:
+            bank_jobs.abort(reservation)
+            if bank is not None:
+                _discard_unlaunched_import_bank(
+                    user_id, bank_id, bank_folder)
+            dataset_activity.end(token)
+            raise
+    return bank_id
 
 
-def _dataset_import_job(bank_id, src_dir, image_rows, preserve_analysis=True):
+def _dataset_import_job(bank_id, dataset_id, src_dir, image_rows, activity_token,
+                        preserve_analysis=True):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
-        if not bank:
-            return
-        copied = missing = failed = 0
-        for i, (image_id, fallback_fn) in enumerate(image_rows, 1):
-            if bank_jobs.cancelled(job):
-                break
-            # Re-read the row for its latest user-authored choices.  The list of
-            # ids still fixes the *selection* at click time, matching the old
-            # filename-only job; a deleted legacy row degrades to a plain copy.
-            row = db.session.get(FaceDatasetImage, image_id)
-            fn = row.filename if row and row.filename else fallback_fn
-            src = os.path.join(src_dir, fn)
-            if not os.path.isfile(src):
-                missing += 1
+        user_id = bank.user_id if bank else None
+
+        def abort(message):
+            if user_id is not None:
+                _fail_discarding_promoted_bank(
+                    job, user_id, bank_id, message)
+            else:
+                bank_jobs.fail(job, message)
+
+        try:
+            if not bank:
+                return
+            copied = 0
+            cache_entries = {}
+            cache_fingerprints = {}
+            group_maps = {
+                name: {} for name in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS}
+            group_next = {
+                name: 1 for name in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS}
+            analysis_cache_dir = os.path.join(src_dir, '.bank-analysis-cache')
+            for i, (image_id, filename, expected_file_generation,
+                    expected_generation, expected_sidecar_generation) in enumerate(
+                        image_rows, 1):
+                if bank_jobs.cancelled(job):
+                    abort('Dataset copy cancelled — the partial Bank was discarded.')
+                    return
+                row = (FaceDatasetImage.query
+                       .filter_by(id=image_id, dataset_id=dataset_id)
+                       .populate_existing().one_or_none())
+                if (row is None or row.filename != filename
+                        or _dataset_bank_generation(row) != expected_generation):
+                    abort('The Dataset changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                src = os.path.join(src_dir, filename)
+                try:
+                    if _file_generation(src) != expected_file_generation:
+                        raise ValueError('source generation changed')
+                    payload = _read_safe_bank_source_bytes(
+                        src, label='dataset-to-bank import')
+                except (OSError, TypeError, ValueError, MemoryError,
+                        Image.DecompressionBombError,
+                        Image.DecompressionBombWarning):
+                    abort('A Dataset image disappeared or became unreadable during '
+                          'copy — the new Bank was discarded.')
+                    return
+                if _file_generation(src) != expected_file_generation:
+                    abort('A Dataset image changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                expected_fingerprint = (
+                    bank_transfer_metadata.content_fingerprint_bytes(payload))
+                if expected_fingerprint is None:
+                    abort('Could not fingerprint a Dataset image — the new Bank '
+                          'was discarded.')
+                    return
+                compatible_now = (bank_transfer_metadata.compatible_snapshot(
+                    row.bank_analysis_snapshot, src) if preserve_analysis else None)
+                cache_ref = (compatible_now.get('cache_ref')
+                             if compatible_now else None)
+                if expected_sidecar_generation is not None and cache_ref:
+                    sidecar_path = os.path.join(
+                        analysis_cache_dir, f'{cache_ref}.npz')
+                    try:
+                        if _file_generation(sidecar_path) != expected_sidecar_generation:
+                            raise OSError('sidecar generation changed')
+                        with open(sidecar_path, 'rb') as sidecar:
+                            sidecar_raw = sidecar.read(
+                                bank_transfer_metadata.CACHE_SIDECAR_MAX_BYTES + 1)
+                    except OSError:
+                        sidecar_raw = b''
+                    if (_file_generation(sidecar_path) != expected_sidecar_generation
+                            or len(sidecar_raw) != expected_sidecar_generation[2]
+                            or bank_transfer_metadata.read_cache_sidecar_bytes(
+                                sidecar_raw) is None):
+                        abort('Bank analysis cache changed during copy — the new '
+                              'Bank was discarded.')
+                        return
+                dest = os.path.join(bank.source_path, filename)
+                try:
+                    with open(dest, 'wb') as destination:
+                        destination.write(payload)
+                    size = os.path.getsize(dest)
+                    if (size != len(payload)
+                            or bank_transfer_metadata.content_fingerprint_path(dest)
+                            != expected_fingerprint):
+                        raise OSError('destination bytes did not verify')
+                    values, compatible, cache_bundle = _dataset_row_bank_values(
+                        row, dest, preserve_analysis,
+                        analysis_cache_dir=analysis_cache_dir)
+                except Exception as exc:  # noqa: BLE001 — any partial transfer aborts
+                    logger.warning('dataset import: copy %s failed', filename,
+                                   exc_info=True)
+                    abort('Could not preserve the complete Dataset image and its '
+                          'analysis — the new Bank was discarded.')
+                    return
+                scope = compatible.get('group_scope') if compatible else None
+                for field in bank_transfer_metadata.BANK_LOCAL_GROUP_FIELDS:
+                    old = values.get(field)
+                    if old is None:
+                        continue
+                    if not scope:
+                        values[field] = None
+                        continue
+                    key = (scope, int(old))
+                    mapped = group_maps[field].get(key)
+                    if mapped is None:
+                        mapped = group_next[field]
+                        group_next[field] += 1
+                        group_maps[field][key] = mapped
+                    values[field] = mapped
+                if values.get('face_cluster') is None:
+                    values['face_cluster_origin'] = None
+                db.session.add(BankImage(
+                    bank_id=bank_id, relpath=filename, file_size=size, **values))
+                if cache_bundle and compatible:
+                    cache_entries[dest] = cache_bundle
+                    cache_fingerprints[dest] = compatible['fingerprint']
+                copied += 1
+                if i % 200 == 0:
+                    db.session.commit()
                 bank_jobs.bump(job)
-                continue
-            dest = os.path.join(bank.source_path, fn)
-            try:
-                # Dataset folders can contain legacy/manual files outside the
-                # current import path. Revalidate the exact bytes before they
-                # become a live Bank source instead of trusting an old row.
-                payload = _read_safe_bank_source_bytes(
-                    src, label='dataset-to-bank import')
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                with open(dest, 'wb') as destination:
-                    destination.write(payload)
-                size = os.path.getsize(dest)
-            except (OSError, TypeError, ValueError, MemoryError,
-                    Image.DecompressionBombError, Image.DecompressionBombWarning):
-                # One unreadable/locked file never sinks the whole import — the
-                # bank just ends up with the rest, and the detail line says so.
-                logger.warning('dataset import: copy %s failed', fn, exc_info=True)
-                failed += 1
-                bank_jobs.bump(job)
-                continue
-            values = (_dataset_row_bank_values(row, dest, preserve_analysis)
-                      if row is not None else {'status': 'keep'})
-            db.session.add(BankImage(bank_id=bank_id, relpath=fn, file_size=size,
-                                     **values))
-            copied += 1
-            if i % 200 == 0:
-                db.session.commit()
-            bank_jobs.bump(job)
-        db.session.commit()
-        detail = f'{copied} image(s) imported'
-        if missing:
-            detail += f', {missing} missing on disk'
-        if failed:
-            detail += f', {failed} failed'
-        bank_jobs.progress(job, detail=detail)
+                dataset_activity.bump(activity_token)
+            # A synchronous Dataset mutation may have passed its HTTP busy
+            # check immediately before the export reservation was installed.
+            # Revalidate the complete source generation after the last copy so
+            # an early row cannot change while later rows are still being read.
+            for (image_id, filename, expected_file_generation,
+                 expected_generation, expected_sidecar_generation) in image_rows:
+                current = (FaceDatasetImage.query
+                           .filter_by(id=image_id, dataset_id=dataset_id)
+                           .populate_existing().one_or_none())
+                source = os.path.join(src_dir, filename)
+                if (current is None or current.filename != filename
+                        or _dataset_bank_generation(current) != expected_generation
+                        or _file_generation(source) != expected_file_generation):
+                    abort('The Dataset changed during copy — the new Bank was '
+                          'discarded and the Dataset was left unchanged.')
+                    return
+                if expected_sidecar_generation is not None:
+                    current_snapshot = bank_transfer_metadata.parse_snapshot(
+                        current.bank_analysis_snapshot)
+                    current_ref = (current_snapshot.get('cache_ref')
+                                   if current_snapshot else None)
+                    sidecar = (os.path.join(
+                        analysis_cache_dir, f'{current_ref}.npz')
+                               if current_ref else None)
+                    if _file_generation(sidecar) != expected_sidecar_generation:
+                        abort('The Dataset analysis cache changed during copy — '
+                              'the new Bank was discarded and the Dataset was '
+                              'left unchanged.')
+                        return
+            db.session.flush()
+            _clear_singleton_copy_duplicate_groups(bank_id)
+            db.session.commit()
+            if not _write_required_transfer_caches(
+                    bank_id, cache_entries, cache_fingerprints):
+                abort('Could not preserve every Score/Face cache — the new Bank '
+                      'was discarded and the Dataset was left unchanged.')
+                return
+            reset_score_memo()
+            bank_jobs.progress(job, detail=f'{copied} image(s) imported')
+        except Exception:  # noqa: BLE001 — make the advertised operation atomic
+            logger.exception('dataset import crashed; discarding destination Bank')
+            abort('Dataset copy failed — the partial Bank was discarded and the '
+                  'Dataset was left unchanged.')
+        finally:
+            dataset_activity.end(activity_token)
     return run
 
 
@@ -7730,14 +8982,37 @@ def _dataset_import_job(bank_id, src_dir, image_rows, preserve_analysis=True):
 # app rewrites images IN PLACE (re-crop, "Reset to auto", watermark cleaning) and
 # an in-place rewrite reuses the inode, so two "independent" banks would become
 # one at the first edit. Banks never share their files. It costs the bytes.
+_SQLITE_ID_MAX = (1 << 63) - 1
+
+
+def _normalize_promotion_ids(ids) -> list[int]:
+    """Validate and stable-deduplicate an explicit promotion selection."""
+    if ids is None:
+        return []
+    if not isinstance(ids, (list, tuple)):
+        raise ValueError('image_ids must be a list')
+    if len(ids) > BANK_MAX_FILES:
+        raise ValueError(f'too many image ids (max {BANK_MAX_FILES})')
+    out = []
+    seen = set()
+    for value in ids:
+        if (isinstance(value, bool) or not isinstance(value, int)
+                or value <= 0 or value > _SQLITE_ID_MAX):
+            raise ValueError('image_ids must contain positive integers')
+        if value not in seen:
+            seen.add(value)
+            out.append(value)
+    return out
+
+
 def _promote_source_rows(bank_id, ids) -> list:
     """The rows a promotion would carry: the explicit selection, or every KEPT
     image when the selection is empty (same rule as promoting to a dataset).
 
     Ordered by relpath so the copy, the count and the size preview all describe
     the same set in the same order."""
-    if ids:
-        wanted = [int(i) for i in ids]
+    wanted = _normalize_promotion_ids(ids)
+    if wanted:
         rows = []
         for i0 in range(0, len(wanted), _SQL_IN_CHUNK):
             rows.extend(BankImage.query.filter(
@@ -7787,42 +9062,55 @@ def start_bank_promote(app, user_id, bank_id, ids, name):
 
     Raises ValueError (-> 400) on a missing bank, a blank name or an empty
     selection, BankJobBusy (-> 409) while another pass runs on the source."""
-    bank = get_bank(user_id, bank_id)
-    if not bank:
-        raise ValueError('bank not found')
-    name = (name or '').strip()
-    if not name:
-        raise ValueError('name is required')
-    rows = _promote_source_rows(bank_id, ids)
-    if not rows:
-        raise ValueError('nothing to promote — keep or select some images first')
-    if len(rows) > BANK_MAX_FILES:
-        raise ValueError(f'too many images (max {BANK_MAX_FILES})')
-    # Checked BEFORE anything is created: bank_jobs.start would raise the same
-    # 409 a moment later, having already left a folder and a row behind.
+    name = _normalize_import_bank_name(name)
+    ids = _normalize_promotion_ids(ids)
+    # Advisory fast-path for the established error shape. The later atomic
+    # multi-Bank reservation remains the real fence if this read races.
     if bank_jobs.running(bank_id):
-        # ``running()`` gets a snapshot internally; a finished job can expire
-        # between that read and this one.  Preserve the established 409 instead
-        # of turning a harmless TTL race into a server error.
         snap = bank_jobs.get(bank_id) or {}
         raise bank_jobs.BankJobBusy(snap.get('kind') or 'background')
-    folder = _import_folder_for(name)
-    os.makedirs(folder, exist_ok=True)
-    dest = ImageBank(user_id=user_id, name=name, source_path=folder)
-    db.session.add(dest)
-    db.session.commit()
+    dest = None
+    reservation = None
+    dest_id = None
+    dest_folder = None
     try:
+        # Flush gives the destination an id without making it visible. Reserve
+        # source + destination atomically, then commit, then launch: no request
+        # can ever observe a half-built destination without its write guard.
+        dest = _stage_import_bank(user_id, name)
+        dest_id, dest_folder = dest.id, dest.source_path
+        reservation = bank_jobs.reserve(
+            bank_id, 'bank_promote', reserve_ids=(dest_id,))
+        # Selection is frozen only after source + destination are reserved.
+        # Otherwise a rotate/status request admitted just before this launch can
+        # resume after our query and make the copied generation disagree with
+        # the selection the user confirmed.
+        bank = get_bank(user_id, bank_id)
+        if not bank:
+            raise ValueError('bank not found')
+        rows = _promote_source_rows(bank_id, ids)
+        if not rows:
+            raise ValueError('nothing to promote — keep or select some images first')
+        if len(rows) > BANK_MAX_FILES:
+            raise ValueError(f'too many images (max {BANK_MAX_FILES})')
+        bank_jobs.progress(reservation, total=len(rows))
+        db.session.commit()
         bank_jobs.start(app, bank_id, 'bank_promote',
-                        _bank_promote_job(user_id, bank_id, dest.id,
+                        _bank_promote_job(user_id, bank_id, dest_id,
                                           [r.id for r in rows]),
-                        total=len(rows))
-    except bank_jobs.BankJobBusy:
-        _discard_promoted_bank(user_id, dest.id)   # lost the race: leave nothing
+                        total=len(rows), reserve_ids=(dest_id,),
+                        reservation=reservation)
+        if not bank_jobs.launched(reservation):
+            bank_jobs.abort(reservation)
+    except Exception:
+        bank_jobs.abort(reservation)
+        if dest is not None:
+            _discard_unlaunched_import_bank(user_id, dest_id, dest_folder)
         raise
-    return dest.id
+    return dest_id
 
 
-def _discard_promoted_bank(user_id, dest_bank_id):
+def _discard_promoted_bank(user_id, dest_bank_id, *, _bank_lease=None):
     """Unmake a destination bank that never became one. Uncommitted rows are
     rolled back first, then delete_bank takes the row, the working data and the
     copy folder (it is under bank_sources_root, so it is OURS to remove)."""
@@ -7830,11 +9118,46 @@ def _discard_promoted_bank(user_id, dest_bank_id):
         db.session.rollback()
     except Exception:  # noqa: BLE001 — teardown must not mask the real failure
         logger.warning('bank promote: rollback failed', exc_info=True)
+    bank = get_bank(user_id, dest_bank_id)
+    if bank is None:
+        # Idempotent retry after a successful discard.
+        return True
+    folder = bank.source_path
+    if not _is_imported_source(folder):
+        logger.error('bank promote: refusing to discard destination %s with an '
+                     'unbounded source folder %r', dest_bank_id, folder)
+        return False
+    deleted = False
     try:
-        delete_bank(user_id, dest_bank_id)
+        deleted = delete_bank(
+            user_id, dest_bank_id, _allow_busy=True,
+            _bank_lease=_bank_lease)
     except Exception:  # noqa: BLE001
-        logger.warning('bank promote: could not discard the partial bank',
-                       exc_info=True)
+        # delete_bank commits the row removal before it asks Trash to move the
+        # folder.  A Trash failure can therefore raise after the DB is already
+        # clean; the bounded fallback below must still run.
+        logger.warning('bank promote: normal discard failed; trying bounded '
+                       'partial-folder cleanup', exc_info=True)
+    folder_removed = _remove_partial_import_folder(
+        folder, context=f'bank promote {dest_bank_id} cleanup')
+    row_removed = get_bank(user_id, dest_bank_id) is None
+    if not (row_removed and folder_removed):
+        logger.error('bank promote: incomplete discard for destination %s '
+                     '(delete=%s row_removed=%s folder_removed=%s)',
+                     dest_bank_id, deleted, row_removed, folder_removed)
+        return False
+    return True
+
+
+def _fail_discarding_promoted_bank(job, user_id, dest_bank_id, message):
+    """Discard a transfer destination and make cleanup failure user-visible."""
+    if not _discard_promoted_bank(
+            user_id, dest_bank_id,
+            _bank_lease=_job_bank_capability(job)):
+        message = (f'{message} Cleanup also failed: the partial Bank folder '
+                   'could not be removed. Check the application logs and the '
+                   'Bank imports folder.')
+    bank_jobs.fail(job, message)
 
 
 def _same_resolved_path(left, right) -> bool:
@@ -7848,31 +9171,182 @@ def _same_resolved_path(left, right) -> bool:
         return False
 
 
+def _bank_row_analysis(row: BankImage) -> dict:
+    return {
+        name: getattr(row, name)
+        for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
+    }
+
+
+def _raw_source_fingerprint(bank: ImageBank | None,
+                            row: BankImage | None) -> str | None:
+    """Fingerprint the immutable/raw Bank source for lineage checks only.
+
+    Transfer payload readers stay pinned to :func:`analysis_image_path`; this
+    helper deliberately isolates the one raw-path lookup needed to prove that a
+    tracked clean/rotation still descends from the Dataset bytes in its capsule.
+    """
+    if bank is None or row is None:
+        return None
+    return bank_transfer_metadata.content_fingerprint_path(
+        abs_image_path(bank, row))
+
+
+_BANK_TRANSFER_GENERATION_FIELDS = (
+    'relpath', 'file_size', 'width', 'height',
+    'caption', 'caption_origin', 'source_metadata',
+    'status', 'reject_reason', 'transfer_metadata',
+    'rotation', 'watermark_clean_method', 'analysis_fingerprint',
+    'watermark_fingerprint',
+    *bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS,
+)
+
+
+def _bank_transfer_generation(row: BankImage) -> tuple:
+    return tuple(
+        getattr(row, name) for name in _BANK_TRANSFER_GENERATION_FIELDS)
+
+
+_SCORE_TRANSFER_FIELDS = (
+    'aesthetic_score', 'nsfw_score', 'medium', 'medium_margin',
+    'semantic_dup_group', 'style_cluster')
+_FACE_MEASURED_TRANSFER_FIELDS = ('face_state', 'face_det', 'face_yaw')
+_LEGACY_UNPROVED_TRANSFER_FIELDS = (
+    'framing', 'dup_group')
+
+
+def _has_bank_pixel_analysis(row: BankImage) -> bool:
+    return any(getattr(row, name) is not None
+               for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS)
+
+
+def _has_bank_watermark_analysis(row: BankImage) -> bool:
+    return any(getattr(row, name) is not None
+               for name in bank_transfer_metadata.BANK_WATERMARK_ANALYSIS_FIELDS)
+
+
+def _complete_legacy_quality_matches(row: BankImage, payload) -> bool:
+    required = ('quality_state', 'blur_score', 'noise_score',
+                'uniformity_score', 'dhash', 'origin')
+    if row.quality_state != 'ok' or any(getattr(row, name) is None
+                                        for name in required):
+        return False
+    fresh = bank_deterministic_analysis(payload)
+    return fresh is not None and all(
+        fresh.get(name) == getattr(row, name)
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS)
+
+
+def _analysis_transfer_assurance(row: BankImage, path, payload, *,
+                                 cache_bundle=None) -> str | None:
+    """Return ``exact`` / ``legacy_tofu`` or refuse full analysis transport.
+
+    ``legacy_tofu`` is deliberately carried as such in the Dataset snapshot and
+    never becomes ``analysis_fingerprint``.  It is the narrow local-compat path
+    for a pre-migration row whose complete Quality lane can be freshly reproduced
+    from these bytes; framing/watermark still have no historical hash.
+    """
+    if not isinstance(payload, bytes):
+        return None
+    fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+    if fingerprint is None:
+        return None
+    available = set(cache_bundle or {})
+    score_active = (any(getattr(row, name) is not None
+                        for name in _SCORE_TRANSFER_FIELDS)
+                    or 'score' in available)
+    face_measured = any(getattr(row, name) is not None
+                        for name in _FACE_MEASURED_TRANSFER_FIELDS)
+    face_computed_cluster = (row.face_cluster is not None
+                             and row.face_cluster_origin != 'asserted')
+    face_active = face_measured or face_computed_cluster or 'face' in available
+    if score_active and 'score' not in available:
+        return None
+    if face_active and 'face' not in available:
+        return None
+
+    stored = getattr(row, 'analysis_fingerprint', None)
+    if stored == fingerprint:
+        return 'exact'
+    if stored is not None:
+        return None
+
+    # For an unbound legacy row these values are only a narrow TOFU signal. New
+    # scans store effective dimensions; old rotated rows may still store raw
+    # dimensions and therefore safely fail this gate until re-scanned.
+    if row.file_size is not None and int(row.file_size) != len(payload):
+        return None
+    dimensions = _copied_image_dimensions(path)
+    if (row.width is not None and row.height is not None
+            and dimensions != (row.width, row.height)):
+        return None
+
+    deterministic_active = any(
+        getattr(row, name) is not None
+        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS)
+    unproved_active = any(getattr(row, name) is not None
+                          for name in _LEGACY_UNPROVED_TRANSFER_FIELDS)
+    asserted_group = (row.face_cluster is not None
+                      and row.face_cluster_origin == 'asserted')
+    if deterministic_active or unproved_active or asserted_group:
+        return ('legacy_tofu' if _complete_legacy_quality_matches(row, payload)
+                else None)
+    # Only SHA-bound Score/Face cache lanes remain. Every carried pixel fact is
+    # individually proven, so this is exact despite the legacy NULL row marker.
+    return ('exact' if (score_active or face_active
+                        or _has_bank_watermark_analysis(row)) else None)
+
+
+def _row_matches_current_bytes(row: BankImage, path, payload, *, cache_bundle=None) -> bool:
+    return _analysis_transfer_assurance(
+        row, path, payload, cache_bundle=cache_bundle) is not None
+
+
+def _cache_bundle_matches_row(bundle, row: BankImage) -> dict:
+    """Keep only cache lanes whose scalar results agree with the DB row."""
+    return _cache_bundle_matches_analysis(bundle, row)
+
+
+def _write_required_transfer_caches(bank_id, entries, fingerprints) -> bool:
+    """Write every selected cache lane or report an incomplete destination."""
+    expected = {
+        kind: sum(kind in bundle for bundle in entries.values())
+        for kind in ('score', 'face')
+    }
+    try:
+        actual = bank_transfer_metadata.write_runtime_caches(
+            _score_cache_path(bank_id), _face_cache_path(bank_id), entries,
+            expected_fingerprints=fingerprints)
+    except Exception:  # noqa: BLE001 — destination cleanup owns the failure
+        logger.warning('bank transfer: cache write failed', exc_info=True)
+        return False
+    return actual == expected
+
+
 def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
-                      preserve_analysis_candidate: bool) -> dict:
+                      preserve_analysis_candidate: bool,
+                      source_fingerprint: str | None = None,
+                      source_payload: bytes | None = None,
+                      cache_bundle=None) -> tuple[dict, bool, str | None]:
     """Metadata for an independent Bank -> Bank file copy.
 
-    Bank rows predate transfer fingerprints, so a raw path alone cannot prove
-    byte identity: the live file may have been replaced since its scan.  As a
-    targeted legacy guard (not a cryptographic proof), preserve source analysis
-    only when the destination's ten deterministic values, dimensions and byte
-    size still match the analysed row.  This rejects manifest replacements while
-    accepting compatible old databases without a schema migration.  The one
-    fresh deterministic measurement is reused whether the guard succeeds or
-    fails; dimensions and size are likewise each read once and reused.
+    The SHA-256 compares the exact validated source bytes with the completed
+    destination.  Quality Scan is deliberately not a prerequisite: a manually
+    kept row may already have paid Score/Face work while every quality field is
+    still NULL.
     """
     fresh_analysis = bank_deterministic_analysis(copied_path)
     dimensions = _copied_image_dimensions(copied_path)
-    source_analysis = {
-        name: getattr(row, name)
-        for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS
-    }
+    assurance = (_analysis_transfer_assurance(
+        row, copied_path, source_payload, cache_bundle=cache_bundle)
+                 if preserve_analysis_candidate and isinstance(source_payload, bytes)
+                 else None)
     preserve_analysis = (
         preserve_analysis_candidate
-        and fresh_analysis is not None
-        and fresh_analysis == source_analysis
-        and dimensions == (row.width, row.height)
-        and copied_size == row.file_size
+        and isinstance(source_fingerprint, str)
+        and bank_transfer_metadata.content_fingerprint_path(copied_path)
+        == source_fingerprint
+        and assurance is not None
     )
     values = {
         name: None
@@ -7899,13 +9373,26 @@ def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
         # rotate the image a second time.
         'watermark_clean_method': None,
         'rotation': None,
-        # Preserve the historical Bank -> Bank contract: a copy is a fresh
-        # candidate set, never an inherited keep/reject decision.
-        'status': 'pending',
-        'reject_reason': None,
+        'status': (row.status if row.status in ('pending', 'keep', 'reject')
+                   else 'pending'),
+        'reject_reason': row.reject_reason,
     })
+    source_bank = db.session.get(ImageBank, row.bank_id)
+    raw_fingerprint = _raw_source_fingerprint(source_bank, row)
+    transfer_metadata = bank_transfer_metadata.capture_transfer_metadata(
+        row.transfer_metadata, bank=row, bank_fingerprint=source_fingerprint,
+        rebind_dataset_from=raw_fingerprint)
+    if transfer_metadata is None:
+        raise RuntimeError('Bank transfer metadata is malformed or too large')
+    values['transfer_metadata'] = transfer_metadata
     values['width'], values['height'] = dimensions
-    return values
+    values['analysis_fingerprint'] = (
+        source_fingerprint if assurance == 'exact'
+        else None if preserve_analysis
+        else (source_fingerprint if fresh_analysis is not None else None))
+    values['watermark_fingerprint'] = (
+        row.watermark_fingerprint if preserve_analysis else None)
+    return values, preserve_analysis, assurance
 
 
 def _clear_singleton_copy_duplicate_groups(bank_id) -> None:
@@ -7929,29 +9416,80 @@ def _clear_singleton_copy_duplicate_groups(bank_id) -> None:
 
 
 def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
-    def run(job):
+    def transfer(job):
         src = db.session.get(ImageBank, src_bank_id)
         dest = db.session.get(ImageBank, dest_bank_id)
         if not src or not dest:
+            if dest is not None:
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'The source Bank disappeared — the new bank was discarded.')
             return
         rows = _promote_source_rows(src_bank_id, ids)
         bank_jobs.progress(job, done=0, total=len(rows), detail='copying')
-        copied, unreadable = [], 0
+        # A corrupted/legacy DB can contain duplicate relpaths, and a Bank from
+        # a case-sensitive volume can contain A.jpg beside a.jpg. Both collapse
+        # onto one destination on Windows. Validate a one-row/one-file mapping
+        # before the first byte is written, including file-vs-directory clashes.
+        target_by_id = {}
+        target_keys = set()
+        destination_root = os.path.abspath(dest.source_path)
+        for row in rows:
+            relpath = row.relpath
+            if (not isinstance(relpath, str) or not relpath
+                    or os.path.isabs(relpath)):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source has an invalid path — the new Bank was '
+                    'discarded.')
+                return
+            normalized = os.path.normpath(relpath)
+            target = os.path.abspath(os.path.join(destination_root, normalized))
+            try:
+                contained = (os.path.commonpath([destination_root, target])
+                             == destination_root and target != destination_root)
+            except (OSError, ValueError):
+                contained = False
+            key = normalized.replace('\\', '/').casefold()
+            if (not contained or key in target_keys
+                    or key in ('.', '..') or key.startswith('../')):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Selected source paths collide in the new Bank — the new '
+                    'Bank was discarded before copying.')
+                return
+            target_keys.add(key)
+            target_by_id[row.id] = target
+        for key in target_keys:
+            parts = key.split('/')
+            if any('/'.join(parts[:i]) in target_keys
+                   for i in range(1, len(parts))):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source path collides with another image folder '
+                    'in the new Bank — the new Bank was discarded before copying.')
+                return
+        copied, unreadable, source_plans = [], 0, []
+        cache_index = bank_transfer_metadata.load_runtime_cache_index(
+            _score_cache_path(src_bank_id), _face_cache_path(src_bank_id),
+            wanted_paths=list(dict.fromkeys(
+                path for row in rows
+                for path in (abs_image_path(src, row),
+                             analysis_image_path(src, row)) if path)))
+        cache_entries, cache_fingerprints = {}, {}
         for r in rows:
             if bank_jobs.cancelled(job):
-                break
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Copy cancelled — the partial Bank was discarded.')
+                return
+            expected_generation = _bank_transfer_generation(r)
             # RESOLVED path: a watermark-cleaned image must land cleaned, same
-            # rule as promoting to a dataset.  Only an unmarked raw-path copy is
-            # even eligible to retain analysis. A missing clean blob or failed
-            # rotation may fall back to this same path, but its effective marker
-            # deliberately forces the safe recalculation/reset path.
-            raw_source_path = abs_image_path(src, r)
-            p = resolved_image_path(src, r)
-            preserve_analysis_candidate = (
-                _same_resolved_path(p, raw_source_path)
-                and not r.watermark_clean_method
-                and not r.rotation
-            )
+            # rule as promoting to a dataset.  Analysis is bound to these
+            # effective bytes, so a baked clean/rotation remains transferable
+            # only when its shared fingerprint proves this exact payload.
+            p = analysis_image_path(src, r, refresh_rotation=True)
+            preserve_analysis_candidate = True
             try:
                 # Read + validate the exact bounded bytes before writing. A
                 # `copy2` after a header-only check could race a live folder
@@ -7961,11 +9499,12 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                     p, label='bank-to-bank promotion')
             except (OSError, TypeError, ValueError, MemoryError,
                     Image.DecompressionBombError, Image.DecompressionBombWarning):
-                # One unreadable/locked source costs one image, never the run.
-                unreadable += 1
-                bank_jobs.bump(job)
-                continue
-            target = os.path.join(dest.source_path, r.relpath)
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'A selected source image became unreadable — the new Bank '
+                    'was discarded.')
+                return
+            target = target_by_id[r.id]
             try:
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with open(target, 'wb') as target_file:
@@ -7978,27 +9517,75 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
                 # the one outcome worse than failing. Unmake it and say so.
                 logger.warning('bank promote: writing the copy failed',
                                exc_info=True)
-                _discard_promoted_bank(user_id, dest_bank_id)
-                bank_jobs.fail(job, 'Could not write the copies — the new bank '
-                                    'was discarded and nothing was changed. '
-                                    'Check the free space on the drive holding '
-                                    "the app's data, then try again. "
-                                    f'({e.strerror or "write failed"})')
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not write the copies — the new bank was discarded '
+                    'and nothing was changed. Check the free space on the drive '
+                    "holding the app's data, then try again. "
+                    f'({e.strerror or "write failed"})')
+                return
+            source_fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+            bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                cache_index, p, payload)
+            bundle = _cache_bundle_matches_row(bundle, r)
+            try:
+                values, preserved, assurance = _bank_copy_values(
+                    r, target, size,
+                    preserve_analysis_candidate=preserve_analysis_candidate,
+                    source_fingerprint=source_fingerprint,
+                    source_payload=payload, cache_bundle=bundle)
+            except (RuntimeError, TypeError, ValueError):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not preserve the complete Bank metadata — the new '
+                    'bank was discarded and the source Bank was left unchanged.')
+                return
+            if (_has_bank_pixel_analysis(r) or bundle) and not preserved:
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'Could not prove every analysis lane for the exact source '
+                    'bytes — the new bank was discarded and the source Bank was '
+                    'left unchanged. Re-run the stale analysis passes and try '
+                    'again.')
                 return
             db.session.add(BankImage(
                 bank_id=dest_bank_id, relpath=r.relpath, file_size=size,
-                **_bank_copy_values(
-                    r, target, size,
-                    preserve_analysis_candidate=preserve_analysis_candidate)))
+                **values))
+            if preserved:
+                if bundle:
+                    cache_entries[target] = bundle
+                    cache_fingerprints[target] = source_fingerprint
             copied.append(r.id)
+            source_plans.append((
+                r.id, source_fingerprint, expected_generation))
             if len(copied) % 200 == 0:
                 db.session.commit()
             bank_jobs.bump(job)
         if not copied:
-            _discard_promoted_bank(user_id, dest_bank_id)
-            bank_jobs.fail(job, 'Nothing could be copied — the new bank was '
-                                'discarded. The selected files could not be read.')
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Nothing could be copied — the new bank was discarded. The '
+                'selected files could not be read.')
             return
+        # The route-level busy check is advisory; a synchronous mutation could
+        # have passed it just before this transfer reserved the Bank. Revalidate
+        # every source generation after all copies and before publishing caches
+        # or provenance. Any drift discards the complete destination.
+        for source_id, expected_fingerprint, expected_generation in source_plans:
+            current = (BankImage.query
+                       .filter_by(id=source_id, bank_id=src_bank_id)
+                       .populate_existing().one_or_none())
+            current_path = (analysis_image_path(src, current)
+                            if current is not None else None)
+            if (current is None
+                    or _bank_transfer_generation(current) != expected_generation
+                    or bank_transfer_metadata.content_fingerprint_path(
+                        current_path) != expected_fingerprint):
+                _fail_discarding_promoted_bank(
+                    job, user_id, dest_bank_id,
+                    'The source Bank changed during the copy — the new bank was '
+                    'discarded and the source was left unchanged.')
+                return
         # The selected set is not necessarily the copied set: unreadable files
         # and cancellation can remove group peers. Flush the rows actually
         # written, then clear only duplicate/semantic labels left with one member.
@@ -8006,6 +9593,14 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
         db.session.flush()
         _clear_singleton_copy_duplicate_groups(dest_bank_id)
         db.session.commit()
+        if not _write_required_transfer_caches(
+                dest_bank_id, cache_entries, cache_fingerprints):
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Could not preserve every Score/Face cache — the new bank was '
+                'discarded and the source Bank was left unchanged.')
+            return
+        reset_score_memo()
         # Marked LAST, and only for what really landed: the source keeps its rows
         # (a promotion never removes anything from the bank it came from) and now
         # says where they went, exactly like a promotion to a dataset.
@@ -8020,6 +9615,18 @@ def _bank_promote_job(user_id, src_bank_id, dest_bank_id, ids):
         if unreadable:
             detail += f', {unreadable} unreadable'
         bank_jobs.progress(job, detail=detail)
+
+    def run(job):
+        try:
+            return transfer(job)
+        except Exception:  # noqa: BLE001 — destination creation is all-or-nothing
+            db.session.rollback()
+            logger.exception('bank-to-bank promotion crashed')
+            _fail_discarding_promoted_bank(
+                job, user_id, dest_bank_id,
+                'Bank copy failed — the partial Bank was discarded and the '
+                'source Bank was left unchanged.')
+            return None
     return run
 
 
@@ -8028,26 +9635,55 @@ def start_promote(app, user_id, bank_id, ids, dataset_id):
     (normalize + perceptual dedup vs the dataset). ``ids`` empty = every KEPT
     image not already on THIS dataset. Background job (a big promotion decodes
     hundreds of files)."""
-    bank = get_bank(user_id, bank_id)
-    if not bank:
-        raise ValueError('bank not found')
-    ds = FaceDataset.query.filter_by(id=dataset_id, user_id=user_id).first()
-    if not ds:
-        raise ValueError('dataset not found')
-    if ids:
-        ids = [int(i) for i in ids]
-    else:
-        ids = [r.id for r in
-               _promotable_query(bank_id, dataset_id)
-               .order_by(BankImage.id.asc()).all()]
-    if not ids:
-        raise ValueError('nothing to promote — keep some images first')
-    return bank_jobs.start(app, bank_id, 'promote',
-                           _promote_job(user_id, bank_id, ids, dataset_id),
-                           total=len(ids))
+    dataset_id = dataset_activity.normalize_dataset_id(dataset_id)
+    ids = _normalize_promotion_ids(ids)
+    activity_token = None
+    reservation = bank_jobs.reserve(bank_id, 'promote')
+    try:
+        # Freeze BOTH ends before selecting rows. Bank first is safe: the only
+        # reverse transfer creates a brand-new Bank id while holding the Dataset
+        # lock, so there is no opposing Dataset->existing-Bank lock order.
+        with _dataset_ingest_lock(user_id, dataset_id):
+            bank = get_bank(user_id, bank_id)
+            if not bank:
+                raise ValueError('bank not found')
+            ds = FaceDataset.query.filter_by(
+                id=dataset_id, user_id=user_id).first()
+            if not ds:
+                raise ValueError('dataset not found')
+            if not ids:
+                ids = [r.id for r in
+                       _promotable_query(bank_id, dataset_id)
+                       .order_by(BankImage.id.asc()).all()]
+            if not ids:
+                raise ValueError('nothing to promote — keep some images first')
+            bank_jobs.progress(reservation, total=len(ids))
+            activity_token = dataset_activity.begin_exclusive(
+                dataset_id, 'bank_import', total=len(ids),
+                detail='copying images from a Bank')
+            if activity_token is None:
+                raise dataset_activity.DatasetActivityBusy(
+                    'This dataset already has work in progress. Wait for it to '
+                    'finish before copying images from a Bank.')
+            result = bank_jobs.start(
+                app, bank_id, 'promote',
+                _promote_job(
+                    user_id, bank_id, ids, dataset_id, activity_token),
+                total=len(ids), reservation=reservation)
+            if not bank_jobs.launched(reservation):
+                # Compatibility for inline test/integration runners that do not
+                # understand explicit reservation adoption.
+                bank_jobs.abort(reservation)
+                dataset_activity.end(activity_token)
+            return result
+    except Exception:
+        bank_jobs.abort(reservation)
+        if activity_token is not None:
+            dataset_activity.end(activity_token)
+        raise
 
 
-def _promote_job(user_id, bank_id, ids, dataset_id):
+def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
     def run(job):
         bank = db.session.get(ImageBank, bank_id)
         if not bank:
@@ -8057,97 +9693,258 @@ def _promote_job(user_id, bank_id, ids, dataset_id):
             rows.extend(BankImage.query.filter(
                 BankImage.bank_id == bank_id,
                 BankImage.id.in_(ids[i0:i0 + _SQL_IN_CHUNK])).all())
+        # Byte-identical rows from DIFFERENT Bank sources remain independent,
+        # but retrying the SAME source id is idempotent. The Dataset lock wraps
+        # this query through the final commit, closing double-click/concurrent
+        # job races without merging unrelated provenance.
+        existing_source_ids = set()
+        row_ids = [row.id for row in rows]
+        for i0 in range(0, len(row_ids), _SQL_IN_CHUNK):
+            existing_source_ids.update(
+                source_id for source_id, in db.session.query(
+                    FaceDatasetImage.bank_image_id).filter(
+                        FaceDatasetImage.dataset_id == dataset_id,
+                        FaceDatasetImage.bank_image_id.in_(
+                            row_ids[i0:i0 + _SQL_IN_CHUNK])).all())
+        rows = [row for row in rows if row.id not in existing_source_ids]
         rows.sort(key=lambda r: r.id)
-        bank_jobs.progress(job, done=0, total=len(rows), detail='promoting')
+        already_present = len(existing_source_ids)
+        bank_jobs.progress(
+            job, done=already_present, total=already_present + len(rows),
+            detail='promoting')
+        dataset_activity.progress(
+            activity_token, done=already_present,
+            total=already_present + len(rows), detail='copying images from a Bank')
+        if not rows:
+            bank_jobs.progress(
+                job, detail=f'done — {already_present} already present')
+            dataset_activity.progress(
+                activity_token,
+                detail=f'done — {already_present} already present')
+            return
         stats: dict = {}
-        imported = failed = 0
-        dedupe_seen = _existing_dhash_rows(dataset_id)
-        for c0 in range(0, len(rows), _PROMOTE_CHUNK):
-            if bank_jobs.cancelled(job):
-                break
-            chunk = rows[c0:c0 + _PROMOTE_CHUNK]
-            blobs, chunk_rows = [], []
-            caps, cap_origins, frms, source_meta, snapshots = [], [], [], [], []
-            watermark_states, watermark_bboxes, watermark_regions = [], [], []
-            for r in chunk:
-                # RESOLVED path: a watermark-cleaned image must reach the dataset
-                # cleaned, otherwise the two cleaning levels were run for nothing.
-                p = resolved_image_path(bank, r)
-                try:
-                    blobs.append(_read_safe_bank_source_bytes(
-                        p, label='bank dataset promotion'))
-                    chunk_rows.append(r)
-                    # Carry the bank caption onto the dataset image (parallel to blobs),
-                    # so a captioned selection lands already captioned.
-                    caps.append(r.caption)
-                    # ...and WHO wrote it, in the list parallel to it. A caption
-                    # the user corrected in the Bank must come back to a Dataset
-                    # still marked as theirs, or the round-trip launders it into
-                    # something the next forced pass overwrites.
-                    cap_origins.append(r.caption_origin)
-                    # Carry the framing the bank's classify pass already wrote, so
-                    # the dataset's Composition counter is right the moment the
-                    # promotion lands (it only tallies rows that HAVE a framing).
-                    frms.append(r.framing)
-                    # Preserve compatible source attribution and the current
-                    # watermark review state/mask alongside the normal caption
-                    # fields.  The Dataset importer validates provenance before
-                    # it reaches storage.
-                    source_meta.append(r.source_metadata)
-                    watermark_states.append(r.watermark_state)
-                    watermark_bboxes.append(r.watermark_bbox)
-                    watermark_regions.append(r.watermark_regions)
-                    # The importer recomputes the strict deterministic snapshot
-                    # from the final normalized Dataset WebP; no source score or
-                    # ML verdict is carried through this marker.
-                    snapshots.append(True)
-                except (OSError, TypeError, ValueError, MemoryError,
-                        Image.DecompressionBombError, Image.DecompressionBombWarning):
-                    failed += 1
-            if blobs:
+        imported_ids = []
+        provenance_changes = []
+        cache_index = bank_transfer_metadata.load_runtime_cache_index(
+            _score_cache_path(bank_id), _face_cache_path(bank_id),
+            wanted_paths=[path for row in rows
+                          if (path := analysis_image_path(bank, row))])
+        # One promotion scope, deliberately not the numeric Bank id: backups can
+        # move across installations where ids collide, and separate promotions
+        # of the same Bank must remain separate provenance events.
+        group_scope = uuid.uuid4().hex
+        def abort(message):
+            db.session.rollback()
+            if ((imported_ids or provenance_changes)
+                    and not rollback_imported_images(
+                        user_id, dataset_id, imported_ids,
+                        provenance_changes=provenance_changes)):
+                logger.error('bank promotion rollback did not remove every row')
+                message += ' Automatic rollback was incomplete; inspect the Dataset.'
+            bank_jobs.fail(job, message)
+
+        # Admission pass: no Dataset mutation occurs until every selected row
+        # has an exact readable payload and every advertised analysis lane is
+        # proven by its shared fingerprint plus required cache.
+        plans = []
+        try:
+            for row in rows:
+                if bank_jobs.cancelled(job):
+                    abort('Promotion cancelled before import; nothing was changed.')
+                    return
+                path = analysis_image_path(
+                    bank, row, refresh_rotation=True)
+                payload = _read_safe_bank_source_bytes(
+                    path, label='bank dataset promotion preflight')
+                fingerprint = bank_transfer_metadata.content_fingerprint_bytes(payload)
+                bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                    cache_index, path, payload)
+                bundle = _cache_bundle_matches_row(bundle, row)
+                assurance = _analysis_transfer_assurance(
+                    row, path, payload, cache_bundle=bundle)
+                advertised = _has_bank_pixel_analysis(row) or bool(bundle)
+                if advertised and assurance is None:
+                    abort('Could not prove every analysis lane for the exact '
+                          'promoted bytes. Nothing was imported; re-run the stale '
+                          'analysis passes and try again.')
+                    return
+                plans.append((
+                    row.id, fingerprint, _bank_transfer_generation(row)))
+        except (OSError, TypeError, ValueError, MemoryError,
+                Image.DecompressionBombError, Image.DecompressionBombWarning):
+            abort('A selected Bank image is unreadable; nothing was imported.')
+            return
+
+        try:
+            for c0 in range(0, len(plans), _PROMOTE_CHUNK):
+                if bank_jobs.cancelled(job):
+                    abort('Promotion cancelled — imported rows were rolled back.')
+                    return
+                chunk_plans = plans[c0:c0 + _PROMOTE_CHUNK]
+                blobs, chunk_rows = [], []
+                caps, cap_origins, frms, source_meta, snapshots = [], [], [], [], []
+                watermark_states, watermark_bboxes, watermark_regions = [], [], []
+                watermark_sources, watermark_scores = [], []
+                statuses, transfer_metadatas = [], []
+                for row_id, expected_fingerprint, expected_generation in chunk_plans:
+                    row = (BankImage.query
+                           .filter_by(id=row_id, bank_id=bank_id)
+                           .populate_existing().one_or_none())
+                    if (row is None
+                            or _bank_transfer_generation(row)
+                            != expected_generation):
+                        abort('The source Bank changed during promotion; imported '
+                              'rows were rolled back.')
+                        return
+                    path = analysis_image_path(bank, row)
+                    payload = _read_safe_bank_source_bytes(
+                        path, label='bank dataset promotion')
+                    if (bank_transfer_metadata.content_fingerprint_bytes(payload)
+                            != expected_fingerprint):
+                        abort('A source Bank image changed during promotion; '
+                              'imported rows were rolled back.')
+                        return
+                    cache_bundle = bank_transfer_metadata.cache_bundle_for_transfer(
+                        cache_index, path, payload)
+                    cache_bundle = _cache_bundle_matches_row(cache_bundle, row)
+                    assurance = _analysis_transfer_assurance(
+                        row, path, payload, cache_bundle=cache_bundle)
+                    advertised = _has_bank_pixel_analysis(row) or bool(cache_bundle)
+                    if advertised and assurance is None:
+                        abort('A source analysis/cache changed during promotion; '
+                              'imported rows were rolled back.')
+                        return
+                    captured = None
+                    if assurance is not None:
+                        captured = bank_transfer_metadata.captured_bank_analysis(
+                            _bank_row_analysis(row), payload,
+                            assurance=assurance, group_scope=group_scope,
+                            cache_bundle=cache_bundle,
+                            watermark_fingerprint=row.watermark_fingerprint)
+                        if captured is None:
+                            abort('Could not seal complete Bank analysis; imported '
+                                  'rows were rolled back.')
+                            return
+                    blobs.append(payload)
+                    chunk_rows.append(row)
+                    caps.append(row.caption)
+                    cap_origins.append(row.caption_origin)
+                    source_meta.append(row.source_metadata)
+                    snapshots.append(captured if captured is not None else True)
+                    raw_fingerprint = _raw_source_fingerprint(bank, row)
+                    transfer_metadata = (
+                        bank_transfer_metadata.capture_transfer_metadata(
+                            row.transfer_metadata, bank=row,
+                            bank_fingerprint=expected_fingerprint,
+                            rebind_dataset_from=raw_fingerprint))
+                    if transfer_metadata is None:
+                        abort('Could not preserve complete Bank metadata; imported '
+                              'rows were rolled back.')
+                        return
+                    transfer_metadatas.append(transfer_metadata)
+                    statuses.append(row.status)
+                    # Pixel-derived Dataset columns travel only under the same
+                    # exact/legacy claim as the opaque Bank snapshot.
+                    frms.append(row.framing if captured is not None else None)
+                    watermark_actionable = (
+                        captured is not None
+                        and row.watermark_fingerprint == expected_fingerprint)
+                    watermark_states.append(
+                        row.watermark_state if watermark_actionable else None)
+                    watermark_bboxes.append(
+                        row.watermark_bbox if watermark_actionable else None)
+                    watermark_regions.append(
+                        row.watermark_regions if watermark_actionable else None)
+                    watermark_sources.append(
+                        row.watermark_source if watermark_actionable else None)
+                    watermark_scores.append(
+                        row.watermark_score if watermark_actionable else None)
                 new_ids, bad = import_images(
-                    user_id, dataset_id, blobs, dedupe=True, stats=stats,
+                    user_id, dataset_id, blobs, dedupe=False, stats=stats,
                     captions=caps, caption_origins=cap_origins,
-                    bank_image_ids=[r.id for r in chunk_rows],
+                    bank_image_ids=[row.id for row in chunk_rows],
                     framings=frms, source_metadata=source_meta,
                     bank_analysis_snapshots=snapshots,
                     watermark_states=watermark_states,
                     watermark_bboxes=watermark_bboxes,
                     watermark_regions=watermark_regions,
-                    dedupe_seen=dedupe_seen)
-                imported += len(new_ids)
-                failed += bad
-                # The dataset row now carries the link back (import_images writes
-                # it, and hands it to the matched row when a dedupe skips the
-                # blob), so 'already promoted here' is a fact we can re-check.
-                # Clear the legacy one-way flag as we go: it would otherwise keep
-                # excluding this image from the target long after the user
-                # deleted it there.
-                #
-                # The exception is an image whose row in the dataset is already
-                # credited to ANOTHER bank (both banks hold the same photo). There
-                # is one column for one owner, so this bank gets no verifiable
-                # trace and keeps the old flag — the alternative is offering the
-                # image on every promotion, forever.
-                unlinked = set(stats.get('bank_unlinked') or ())
-                stats.pop('bank_unlinked', None)
-                for r in chunk_rows:
-                    r.promoted_dataset_id = dataset_id if r.id in unlinked else None
-                db.session.commit()
-            bank_jobs.bump(job, len(chunk))
-        dups = stats.get('duplicates', 0)
+                    watermark_sources=watermark_sources,
+                    watermark_scores=watermark_scores,
+                    statuses=statuses,
+                    transfer_metadatas=transfer_metadatas,
+                    preserve_exact_bytes=True,
+                    created_ids_sink=imported_ids,
+                    provenance_changes_sink=provenance_changes,
+                    _dataset_activity_token=activity_token)
+                if bad or len(new_ids) != len(chunk_rows):
+                    abort('Could not import every selected image; imported rows '
+                          'were rolled back.')
+                    return
+                bank_jobs.bump(job, len(chunk_rows))
+                dataset_activity.bump(activity_token, len(chunk_rows))
+            # Final source-generation fence. It catches any synchronous Bank
+            # write that raced the HTTP busy check after an earlier chunk had
+            # already committed into the Dataset.
+            for row_id, expected_fingerprint, expected_generation in plans:
+                current = (BankImage.query
+                           .filter_by(id=row_id, bank_id=bank_id)
+                           .populate_existing().one_or_none())
+                current_path = (analysis_image_path(bank, current)
+                                if current is not None else None)
+                if (current is None
+                        or _bank_transfer_generation(current)
+                        != expected_generation
+                        or bank_transfer_metadata.content_fingerprint_path(
+                            current_path) != expected_fingerprint):
+                    abort('The source Bank changed during promotion; imported '
+                          'rows were rolled back.')
+                    return
+            # Link the source only after the complete destination is durable.
+            source_ids = [row_id for row_id, _fingerprint, _gen in plans]
+            unlinked = set(stats.get('bank_unlinked') or ())
+            for i0 in range(0, len(source_ids), _SQL_IN_CHUNK):
+                for source_row in (BankImage.query
+                                   .filter(BankImage.bank_id == bank_id,
+                                           BankImage.id.in_(
+                                               source_ids[i0:i0 + _SQL_IN_CHUNK]))):
+                    source_row.promoted_dataset_id = (
+                        dataset_id if source_row.id in unlinked else None)
+            db.session.commit()
+        except Exception:  # noqa: BLE001 — promotion is all-or-nothing
+            logger.exception('bank dataset promotion failed')
+            abort('Promotion failed — imported rows were rolled back.')
+            return
         small = stats.get('small', 0)
-        detail = f'done — {imported} imported'
-        if dups:
-            detail += f', {dups} already in the dataset'
-        if failed:
-            detail += f', {failed} failed'
+        detail = f'done — {len(imported_ids)} imported'
+        if already_present:
+            detail += f', {already_present} already present'
         if small:
             detail += f', {small} under the recommended size'
         bank_jobs.progress(job, detail=detail)
 
     def run_locked(job):
-        with _dataset_ingest_lock(user_id, dataset_id):
+        lock = _dataset_ingest_lock(user_id, dataset_id)
+        acquired = False
+        # Waiting behind another long Dataset operation must keep the Bank
+        # reservation alive; otherwise its one-hour stale TTL could detach this
+        # worker and let a second promotion start beside it.
+        try:
+            while not acquired:
+                acquired = lock.acquire(timeout=1.0)
+                if acquired:
+                    break
+                dataset_activity.progress(
+                    activity_token, detail='waiting for the Dataset write lock')
+                if bank_jobs.cancelled(job):
+                    bank_jobs.progress(job, detail='cancelled before promotion')
+                    return None
+            if bank_jobs.cancelled(job):
+                bank_jobs.progress(job, detail='cancelled before promotion')
+                return None
             return run(job)
+        finally:
+            dataset_activity.end(activity_token)
+            if acquired:
+                lock.release()
 
     return run_locked

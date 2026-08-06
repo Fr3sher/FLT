@@ -11,7 +11,7 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 
 from ..config import LOCAL_USER
 from ..models import BankImage
-from ..services import bank_jobs
+from ..services import bank_jobs, dataset_activity
 from ..services import image_bank_service as banks
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,53 @@ def _busy(e):
     BEFORE the first 2 s progress poll, so at that instant the response body is
     the only thing that knows which pass is in the way."""
     return jsonify({'error': str(e), 'busy_kind': e.kind}), 409
+
+
+@bp.errorhandler(bank_jobs.BankJobBusy)
+def _busy_after_service_fence(e):
+    """Map service-level lease races to the same 409 as the advisory guard."""
+    return _busy(e)
+
+
+_BUSY_WRITE_EXEMPT_ENDPOINTS = frozenset({
+    # Read-only preview despite using POST (it carries unsaved thresholds).
+    'bank.bank_flag_preview',
+    # Read-only curation queries. They may warm/read the Score cache, but never
+    # mutate Bank rows or source files.
+    'bank.bank_select_diverse',
+    'bank.bank_select_balanced',
+    'bank.bank_select_similar',
+    'bank.bank_search_text',
+    # The one write that must stay reachable precisely while a job is live.
+    'bank.bank_cancel',
+})
+
+
+@bp.before_request
+def _guard_reserved_bank_writes():
+    """Keep a building destination readable/cancellable but immutable.
+
+    Bank jobs reserve every Bank whose rows or files they own.  Most heavy-pass
+    services already check their own source slot, but lightweight synchronous
+    routes (status flips in particular) historically did not.  Enforce the
+    reservation once at the HTTP boundary so a destination cannot be edited or
+    deleted while its copy is still being assembled.
+    """
+    if request.method not in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        return None
+    if request.endpoint in _BUSY_WRITE_EXEMPT_ENDPOINTS:
+        return None
+    if request.endpoint == 'bank.bank_relocate':
+        # The first relocation POST is a read-only filesystem preview. Only the
+        # explicit confirmation changes source_path and must wait for the job.
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict) or not bool(body.get('confirm')):
+            return None
+    bank_id = (request.view_args or {}).get('bank_id')
+    if bank_id is None or not bank_jobs.running(bank_id):
+        return None
+    snap = bank_jobs.get(bank_id) or {}
+    return _busy(bank_jobs.BankJobBusy(snap.get('kind') or 'background'))
 
 
 @bp.get('/banks')
@@ -86,11 +133,17 @@ def bank_from_dataset():
     if not isinstance(preserve_analysis, bool):
         return jsonify({'error': 'preserve_analysis must be a boolean'}), 400
     try:
+        dataset_id = dataset_activity.normalize_dataset_id(data.get('dataset_id'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    try:
         bank_id = banks.start_dataset_import(_app(), LOCAL_USER,
-                                             data.get('dataset_id'), data.get('name'),
+                                             dataset_id, data.get('name'),
                                              preserve_analysis=preserve_analysis)
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
+    except dataset_activity.DatasetActivityBusy as e:
+        return jsonify({'error': str(e), 'busy_kind': 'bank_export'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except RuntimeError as e:
@@ -166,7 +219,13 @@ def bank_flag_preview(bank_id):
 
 @bp.delete('/bank/<int:bank_id>')
 def bank_delete(bank_id):
-    if not banks.delete_bank(LOCAL_USER, bank_id):
+    try:
+        deleted = banks.delete_bank(LOCAL_USER, bank_id)
+    except bank_jobs.BankJobBusy as e:
+        # The blueprint guard covers an already-live reservation; this catches
+        # the narrower race where a job acquires the Bank after that check.
+        return _busy(e)
+    if not deleted:
         return jsonify({'error': 'not found'}), 404
     return jsonify({'ok': True})
 
@@ -177,12 +236,28 @@ def bank_relocate(bank_id):
     rename). Two-step ON PURPOSE: {folder} alone only REPORTS how many of the
     bank's files are in there, {folder, confirm: true} applies it. 400 when the
     folder holds none of them (that is a different folder, not a moved one),
-    409 while a pass is running. Nothing is ever deleted — a partial match keeps
-    every row and its analysis."""
+    The preview stays readable while a pass runs; only a confirmed write returns
+    409. Nothing is ever deleted — a partial match keeps every row and its
+    analysis."""
     data = request.get_json(silent=True) or {}
+    confirm = bool(data.get('confirm'))
     try:
-        out = banks.relocate_bank(LOCAL_USER, bank_id, data.get('folder'),
-                                  confirm=bool(data.get('confirm')))
+        if confirm:
+            out = banks.relocate_bank(
+                LOCAL_USER, bank_id, data.get('folder'), confirm=True)
+        else:
+            # relocate_bank also owns the write-side busy guard. Calling its
+            # read-only primitive directly keeps the preview usable while a job
+            # owns the Bank without weakening confirmation.
+            out = banks.relocate_preview(LOCAL_USER, bank_id, data.get('folder'))
+            out['needs_confirm'] = out['missing'] > 0
+            out['applied'] = False
+            if out['total'] and not out['found']:
+                raise banks.BankRelocateMismatch(
+                    'none of this bank\'s '
+                    f"{out['total']} image(s) are in that folder — it does not look "
+                    'like this bank. Pick the folder that CONTAINS the images '
+                    '(the one you moved), not its parent.', out)
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
     except banks.BankRelocateMismatch as e:
@@ -307,6 +382,8 @@ def _start(fn, *args, **kwargs):
         fn(*args, **kwargs)
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
+    except dataset_activity.DatasetActivityBusy as e:
+        return jsonify({'error': str(e), 'busy_kind': 'bank_import'}), 409
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
     except RuntimeError as e:
@@ -550,13 +627,15 @@ def bank_pipeline(bank_id):
 
 @bp.post('/bank/<int:bank_id>/promote')
 def bank_promote(bank_id):
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
     try:
-        dataset_id = int(data.get('dataset_id'))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'dataset_id is required'}), 400
+        dataset_id = dataset_activity.normalize_dataset_id(data.get('dataset_id'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     return _start(banks.start_promote, _app(), LOCAL_USER, bank_id,
-                  data.get('image_ids') or [], dataset_id)
+                  data.get('image_ids'), dataset_id)
 
 
 @bp.post('/bank/<int:bank_id>/promote-to-bank')
@@ -570,10 +649,12 @@ def bank_promote_to_bank(bank_id):
     The files are COPIED: banks never share theirs, and the app rewrites images
     in place, so anything cheaper would make the two banks one at the first
     re-crop. 409 while another pass runs on the SOURCE bank."""
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
     try:
         new_id = banks.start_bank_promote(_app(), LOCAL_USER, bank_id,
-                                          data.get('image_ids') or [],
+                                          data.get('image_ids'),
                                           data.get('name'))
     except bank_jobs.BankJobBusy as e:
         return _busy(e)
@@ -590,8 +671,15 @@ def bank_selection_size(bank_id):
     footnote; video is three orders of magnitude above, which is exactly why the
     dialog states the measured figure instead of assuming one."""
     raw = request.args.get('ids')
-    ids = [int(p) for p in raw.split(',') if p.strip().isdigit()] if raw else []
-    out = banks.selection_size(LOCAL_USER, bank_id, ids)
+    try:
+        tokens = [part.strip() for part in raw.split(',') if part.strip()] \
+            if raw else []
+        if any(not token.isascii() or not token.isdigit() for token in tokens):
+            raise ValueError('ids must be positive integers')
+        ids = banks._normalize_promotion_ids([int(token) for token in tokens])
+        out = banks.selection_size(LOCAL_USER, bank_id, ids)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     if out is None:
         return jsonify({'error': 'not found'}), 404
     return jsonify(out)
@@ -603,9 +691,10 @@ def bank_promotable(bank_id):
     — the honest count for the promote modal (per-target: images already on
     OTHER datasets still count)."""
     try:
-        dataset_id = int(request.args.get('dataset_id'))
-    except (TypeError, ValueError):
-        return jsonify({'error': 'dataset_id is required'}), 400
+        dataset_id = dataset_activity.normalize_dataset_id(
+            request.args.get('dataset_id'))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     n = banks.promotable_count(LOCAL_USER, bank_id, dataset_id)
     if n is None:
         return jsonify({'error': 'not found'}), 404

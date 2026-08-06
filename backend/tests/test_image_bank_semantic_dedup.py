@@ -5,6 +5,7 @@ CACHED embeddings — grouping over synthetic embeddings, the stage-1 vs stage-2
 distinction, threshold re-tri with no re-scan, the "run Score first" hint, the
 pipeline step order + skip reason, resolution, and the score-cache staleness guard.
 Background jobs run inline under TESTING (see bank_jobs.start)."""
+import hashlib
 import importlib.util
 import os
 import pathlib
@@ -64,7 +65,7 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok', with_sig=True):
         bank = banks.get_bank(_uid(), bank_id)
         rows = {os.path.basename(r.relpath): r
                 for r in BankImage.query.filter_by(bank_id=bank_id).all()}
-        paths, states, aes, nsfw, arr, sigs = [], [], [], [], [], []
+        paths, states, aes, nsfw, arr, sigs, hashes = [], [], [], [], [], [], []
         for name, e in embs_by_name.items():
             r = rows[name]
             p = banks.abs_image_path(bank, r)
@@ -73,6 +74,9 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok', with_sig=True):
             aes.append(float('nan'))
             nsfw.append(float('nan'))
             arr.append(np.asarray(e, dtype='float32'))
+            with open(p, 'rb') as fh:
+                hashes.append(np.frombuffer(
+                    hashlib.sha256(fh.read()).digest(), dtype='uint8'))
             if with_sig:
                 st = os.stat(p)
                 sigs.append(f'{st.st_size}:{st.st_mtime_ns}')
@@ -84,7 +88,9 @@ def _write_score_cache(app, bank_id, embs_by_name, state='ok', with_sig=True):
             str(cache_path),
             paths=np.array(paths), states=np.array(states),
             aes=np.array(aes, dtype='float32'), nsfw=np.array(nsfw, dtype='float32'),
-            embs=np.stack(arr).astype('float32'), sigs=np.array(sigs))
+            embs=np.stack(arr).astype('float32'), sigs=np.array(sigs),
+            hashes=np.stack(hashes).astype('uint8'))
+        banks.reset_score_memo()
 
 
 def _uid():
@@ -269,13 +275,17 @@ def test_file_signature_detects_change(tmp_path):
     p = str(tmp_path / 'f.bin')
     with open(p, 'wb') as fh:
         fh.write(b'hello')
-    entry = ('ok', None, None, np.zeros(4), mod._file_sig(p))
+    entry = ('ok', None, None, np.zeros(4), mod._file_sig(p),
+             mod._file_hash(p))
     assert mod._is_stale(p, entry) is False
     with open(p, 'ab') as fh:            # change size → stale
         fh.write(b'more')
     assert mod._is_stale(p, entry) is True
-    # A legacy 4-tuple (no signature) is never called stale.
-    assert mod._is_stale(p, ('ok', None, None, np.zeros(4))) is False
+    # Legacy entries without cryptographic byte authority are deliberately
+    # recomputed once, even when their cheap stat signature still matches.
+    assert mod._is_stale(p, ('ok', None, None, np.zeros(4))) is True
+    assert mod._is_stale(
+        p, ('ok', None, None, np.zeros(4), mod._file_sig(p))) is True
 
 
 def test_stale_embedding_dropped_from_semantic_pass(client, tmp_path, app):

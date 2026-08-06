@@ -1706,13 +1706,17 @@ def dataset_captions_write_files(dataset_id):
 def dataset_images_batch(dataset_id):
     """Multi-select curation: apply one action to many images in one request.
     Body: {ids: [int, ...], action: keep|reject|pending|delete|clear_caption}."""
-    data = request.get_json(silent=True) or {}
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({'error': 'JSON body must be an object'}), 400
     action = data.get('action')
     ids = data.get('ids')
     if action not in svc.BATCH_ACTIONS:
         return jsonify({'error': 'invalid action'}), 400
-    if not isinstance(ids, list) or not ids:
-        return jsonify({'error': "'ids' must be a non-empty list"}), 400
+    try:
+        ids = svc.normalize_batch_image_ids(ids)
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     if not svc.get_dataset(LOCAL_USER, dataset_id):
         return jsonify({'error': 'not found'}), 404
     try:

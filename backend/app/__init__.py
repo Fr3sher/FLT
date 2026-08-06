@@ -126,6 +126,28 @@ class ArchiveAwareRequest(Request):
     def max_content_length(self, value):
         self._forced_max_content_length = value
 
+    def _raise_if_declared_body_is_too_large(self):
+        """Apply the selected ceiling on Flask/Werkzeug versions before 2.3.
+
+        Older Werkzeug guarded multipart parsing but its raw ``get_data``
+        stream did not consult Flask's ``MAX_CONTENT_LENGTH`` at all.  Keep the
+        same endpoint-aware limit for both entry paths so an ordinary upload
+        cannot bypass its 64 MiB ceiling merely by using a non-form body.
+        """
+        limit = self.max_content_length
+        if (limit is not None and self.content_length is not None
+                and self.content_length > limit):
+            from werkzeug.exceptions import RequestEntityTooLarge
+            raise RequestEntityTooLarge()
+
+    def _load_form_data(self):
+        self._raise_if_declared_body_is_too_large()
+        return super()._load_form_data()
+
+    def get_data(self, *args, **kwargs):
+        self._raise_if_declared_body_is_too_large()
+        return super().get_data(*args, **kwargs)
+
 
 def _positive_env_int(name, default):
     """Read a positive integer without making a bad optional env var fatal."""
@@ -224,6 +246,7 @@ _SCHEMA_ADDITIONS = (
     # Versioned, byte-fingerprinted Bank analysis used by the durable Bank <-> Dataset
     # transfer path. Legacy Dataset rows simply have no snapshot to restore.
     ('face_dataset_image', 'bank_analysis_snapshot', 'TEXT'),
+    ('face_dataset_image', 'transfer_metadata', 'TEXT'),
     ('training_run_record', 'settings', 'TEXT'),
     # Full launch freeze: caption text, per-image content hashes, environment.
     # NULL on every run recorded before it existed — the compare panel says so.
@@ -291,10 +314,16 @@ _SCHEMA_ADDITIONS = (
     ('bank_image', 'medium', 'VARCHAR(16)'),
     ('bank_image', 'medium_margin', 'REAL'),
     ('bank_image', 'face_yaw', 'REAL'),
+    # Exact-byte authority shared by every Bank analysis lane.  Existing rows
+    # stay NULL and enter the explicit legacy compatibility path until a pass
+    # re-attests them; inventing a backfill hash would falsely bless stale data.
+    ('bank_image', 'analysis_fingerprint', 'VARCHAR(64)'),
+    ('bank_image', 'watermark_fingerprint', 'VARCHAR(64)'),
     # ⬆ Promote's second destination: the bank a selection was copied into.
     # Additive and independent of promoted_dataset_id — a database that never
     # gains it simply never shows the "promoted to a bank" badge.
     ('bank_image', 'promoted_bank_id', 'INTEGER'),
+    ('bank_image', 'transfer_metadata', 'TEXT'),
     # Manual quarter-turn of a bank image (degrees clockwise, NULL = untouched).
     # Additive: a database that never gains it simply has no rotated images.
     ('bank_image', 'rotation', 'INTEGER'),

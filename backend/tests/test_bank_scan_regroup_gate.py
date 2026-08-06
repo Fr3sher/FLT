@@ -19,6 +19,7 @@ Two rules come out of that, and both are easy to get wrong in opposite ways:
 And the phase now reports progress and honours Stop, which it did not: there was
 no `progress`, no `bump` and no `cancelled` anywhere in its body.
 """
+import hashlib
 from unittest.mock import patch
 
 from PIL import Image
@@ -168,8 +169,16 @@ def _bank_of_pairs(banks, db, tmp_path, pairs=40):
     for g in range(pairs):
         base = (g * 0x9E3779B97F4A7C15) & ((1 << 64) - 1)
         for suffix, h in (('a', base), ('b', base ^ 1)):
-            db.session.add(BankImage(bank_id=bank.id, relpath=f'{g:04d}{suffix}.jpg',
-                                     status='pending', dhash=f'{h:016x}'))
+            relpath = f'{g:04d}{suffix}.jpg'
+            path = src / relpath
+            Image.new(
+                'RGB', (8, 8),
+                ((g * 17) % 256, 40 if suffix == 'a' else 80, 150),
+            ).save(str(path), 'JPEG')
+            fingerprint = hashlib.sha256(path.read_bytes()).hexdigest()
+            db.session.add(BankImage(
+                bank_id=bank.id, relpath=relpath, status='pending',
+                dhash=f'{h:016x}', analysis_fingerprint=fingerprint))
     db.session.commit()
     return bank.id
 

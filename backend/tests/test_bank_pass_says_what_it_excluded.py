@@ -112,7 +112,16 @@ def _fake_medium_env(monkeypatch, bank, scored_rows):
     root = os.path.realpath(bank.source_path)
     by_path = {os.path.normpath(os.path.join(root, r.relpath)): e
                for r in scored_rows}
+    fingerprints = {
+        path: banks.bank_transfer_metadata.content_fingerprint_path(path)
+        for path in by_path}
+    for row in scored_rows:
+        path = os.path.normpath(os.path.join(root, row.relpath))
+        row.analysis_fingerprint = fingerprints[path]
+    db.session.commit()
     monkeypatch.setattr(banks, '_load_score_embeddings', lambda _b: by_path)
+    monkeypatch.setattr(
+        banks, '_score_embedding_fingerprint', fingerprints.get)
 
 
 def _bank_with_a_full_bin(app, client, tmp_path, monkeypatch):
