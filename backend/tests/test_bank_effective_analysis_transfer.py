@@ -138,6 +138,31 @@ def _assert_only_user_asserted_effective_state_survives(row) -> None:
     assert row.watermark_score == pytest.approx(0.97)
 
 
+def _mutate_then_isolate_assertion(app, bank, row, mutation):
+    """Change effective bytes, then remove the independent watermark history."""
+    from app.extensions import db
+    from app.models import BankImage
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    if mutation == 'rotate':
+        result = banks.rotate_images('local', bank.id, [row.id], 90)
+        assert result['rotated'] == 1
+    else:
+        job = banks.start_watermark_crop(app, 'local', bank.id)
+        assert job['error'] is None, job
+        assert banks.clean_image_path(bank.id, row.id).is_file()
+    row = db.session.get(BankImage, row.id, populate_existing=True)
+    if mutation == 'rotate':
+        # Rotation does not depend on raw watermark history.  Removing it makes
+        # this case exercise the assertion-only overlay with assurance=None.
+        for name in transfer.BANK_WATERMARK_ANALYSIS_FIELDS:
+            setattr(row, name, None)
+        row.watermark_fingerprint = None
+        db.session.commit()
+    return row
+
+
 @pytest.mark.parametrize(
     ('mutation', 'expected_state', 'expected_clean_method'),
     (
@@ -179,6 +204,121 @@ def test_pixel_mutations_invalidate_effective_lanes_but_keep_raw_and_user_histor
         assert row.watermark_state == expected_state
         assert row.watermark_clean_method == expected_clean_method
         assert row.watermark_fingerprint == raw_fingerprint == _sha(raw_path)
+
+
+@pytest.mark.parametrize('mutation', ('rotate', 'clean'))
+def test_asserted_face_membership_survives_mutation_and_bank_copy_without_stale_lanes(
+        app, tmp_path, mutation):
+    from app.extensions import db
+    from app.models import BankImage, ImageBank
+    from app.services import bank_jobs, bank_transfer_metadata as transfer
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source, _raw = _make_bank(
+            app, tmp_path, asserted=True)
+        source = _mutate_then_isolate_assertion(
+            app, source_bank, source, mutation)
+        effective = banks.analysis_image_path(
+            source_bank, source, refresh_rotation=True)
+        payload = Path(effective).read_bytes()
+
+        assert (source.face_cluster, source.face_cluster_origin) == (4, 'asserted')
+        assert not banks._has_bank_pixel_analysis(source)
+        assurance = banks._analysis_transfer_assurance(
+            source, effective, payload)
+        assert assurance is None
+
+        destination_id = banks.start_bank_promote(
+            app, 'local', source_bank.id, [source.id],
+            f'Asserted {mutation} copy')
+        destination = db.session.get(ImageBank, destination_id)
+        assert destination is not None, bank_jobs.get(source_bank.id)
+        copied = BankImage.query.filter_by(bank_id=destination_id).one()
+        assert (copied.face_cluster,
+                copied.face_cluster_origin) == (4, 'asserted')
+        for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS:
+            if (name not in ('face_cluster', 'face_cluster_origin')
+                    and name not in transfer.BANK_WATERMARK_ANALYSIS_FIELDS):
+                assert getattr(copied, name) is None, name
+
+
+@pytest.mark.parametrize('mutation', ('rotate', 'clean'))
+def test_asserted_face_membership_survives_bank_dataset_bank_roundtrip(
+        app, tmp_path, mutation):
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage
+    from app.services import bank_transfer_metadata as transfer
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source, _raw = _make_bank(
+            app, tmp_path, asserted=True)
+        source = _mutate_then_isolate_assertion(
+            app, source_bank, source, mutation)
+        dataset = datasets.create_dataset(
+            'local', f'Asserted {mutation}', f'asserted_{mutation}')
+
+        banks.start_promote(
+            app, 'local', source_bank.id, [source.id], dataset.id)
+        dataset_row = FaceDatasetImage.query.filter_by(
+            dataset_id=dataset.id).one()
+        snapshot = transfer.parse_snapshot(dataset_row.bank_analysis_snapshot)
+        assert snapshot is not None
+        assert (snapshot['analysis']['face_cluster'],
+                snapshot['analysis']['face_cluster_origin']) == (4, 'asserted')
+        for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS:
+            if (name not in ('face_cluster', 'face_cluster_origin')
+                    and name not in transfer.BANK_WATERMARK_ANALYSIS_FIELDS):
+                assert snapshot['analysis'][name] is None, name
+        assert snapshot['cache_ref'] is None
+
+        returned_bank_id = banks.start_dataset_import(
+            app, 'local', dataset.id, f'Asserted {mutation} returned')
+        returned = BankImage.query.filter_by(bank_id=returned_bank_id).one()
+        assert returned.face_cluster is not None
+        assert returned.face_cluster_origin == 'asserted'
+        for name in transfer.BANK_TRANSFORM_STALE_ANALYSIS_FIELDS:
+            if (name not in ('face_cluster', 'face_cluster_origin')
+                    and name not in transfer.BANK_WATERMARK_ANALYSIS_FIELDS):
+                assert getattr(returned, name) is None, name
+
+
+@pytest.mark.parametrize('destination', ('bank', 'dataset'))
+def test_asserted_face_membership_does_not_hide_a_true_stale_pixel_lane(
+        app, tmp_path, destination):
+    from app.extensions import db
+    from app.models import BankImage, FaceDatasetImage, ImageBank
+    from app.services import face_dataset_service as datasets
+    from app.services import image_bank_service as banks
+
+    with app.app_context():
+        source_bank, source, _raw = _make_bank(
+            app, tmp_path, asserted=True)
+        source = _mutate_then_isolate_assertion(
+            app, source_bank, source, 'rotate')
+        # Simulate a legacy/corrupt row that retained a real pixel-derived fact
+        # after its shared fingerprint was cleared.
+        source.framing = 'body'
+        db.session.commit()
+        effective = banks.analysis_image_path(
+            source_bank, source, refresh_rotation=True)
+        assert banks._has_bank_pixel_analysis(source)
+        assert banks._analysis_transfer_assurance(
+            source, effective, Path(effective).read_bytes()) is None
+
+        if destination == 'bank':
+            destination_id = banks.start_bank_promote(
+                app, 'local', source_bank.id, [source.id], 'Must be refused')
+            assert db.session.get(ImageBank, destination_id) is None
+        else:
+            dataset = datasets.create_dataset(
+                'local', 'Must be refused', 'must_be_refused')
+            banks.start_promote(
+                app, 'local', source_bank.id, [source.id], dataset.id)
+            assert FaceDatasetImage.query.filter_by(
+                dataset_id=dataset.id).count() == 0
 
 
 def test_all_effective_analysis_passes_resolve_the_transformed_image(

@@ -10024,11 +10024,32 @@ _SCORE_TRANSFER_FIELDS = (
 _FACE_MEASURED_TRANSFER_FIELDS = ('face_state', 'face_det', 'face_yaw')
 _LEGACY_UNPROVED_TRANSFER_FIELDS = (
     'framing', 'dup_group')
+_ASSERTED_FACE_TRANSFER_FIELDS = ('face_cluster', 'face_cluster_origin')
+
+
+def _asserted_face_transfer_values(row: BankImage) -> dict:
+    """Return only a complete user-owned face membership assertion.
+
+    The numeric cluster is Bank-local, but the assertion itself is not derived
+    from pixels.  It therefore survives a rotation/clean while every measured
+    face field is invalidated.  An orphan ``origin`` marker stays out of this
+    lane and fails closed as ordinary analysis metadata.
+    """
+    if (row.face_cluster is None
+            or row.face_cluster_origin != 'asserted'):
+        return {}
+    return {
+        'face_cluster': row.face_cluster,
+        'face_cluster_origin': 'asserted',
+    }
 
 
 def _has_bank_pixel_analysis(row: BankImage) -> bool:
+    asserted = _asserted_face_transfer_values(row)
+    non_pixel = _ASSERTED_FACE_TRANSFER_FIELDS if asserted else ()
     return any(getattr(row, name) is not None
-               for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS)
+               for name in bank_transfer_metadata.BANK_PIXEL_DERIVED_FIELDS
+               if name not in non_pixel)
 
 
 def _has_bank_watermark_analysis(row: BankImage) -> bool:
@@ -10110,15 +10131,28 @@ def _analysis_transfer_assurance(row: BankImage, path, payload, *,
         for name in bank_transfer_metadata.DETERMINISTIC_ANALYSIS_FIELDS)
     unproved_active = any(getattr(row, name) is not None
                           for name in _LEGACY_UNPROVED_TRANSFER_FIELDS)
-    asserted_group = (row.face_cluster is not None
-                      and row.face_cluster_origin == 'asserted')
-    if deterministic_active or unproved_active or asserted_group:
+    if deterministic_active or unproved_active:
         return ('legacy_tofu' if _complete_legacy_quality_matches(row, payload)
                 else None)
     # Only SHA-bound Score/Semantic/Face cache lanes remain. Every carried pixel fact is
     # individually proven, so this is exact despite the legacy NULL row marker.
     return ('exact' if (score_active or semantic_active or face_active
                         or _has_bank_watermark_analysis(row)) else None)
+
+
+def _captured_asserted_face_analysis(row: BankImage, payload: bytes, *,
+                                     group_scope: str) -> dict | None:
+    """Seal a manual face assertion without carrying any unproved pixel fact."""
+    asserted = _asserted_face_transfer_values(row)
+    if not asserted:
+        return None
+    analysis = {
+        name: None
+        for name in bank_transfer_metadata.BANK_DIRECT_COPY_ANALYSIS_FIELDS
+    }
+    analysis.update(asserted)
+    return bank_transfer_metadata.captured_bank_analysis(
+        analysis, payload, assurance='exact', group_scope=group_scope)
 
 
 def _row_matches_current_bytes(row: BankImage, path, payload, *, cache_bundle=None) -> bool:
@@ -10198,6 +10232,10 @@ def _bank_copy_values(row: BankImage, copied_path, copied_size, *,
     values.update(fresh_analysis or {})
     if preserve_analysis:
         values.update(_bank_row_analysis(row))
+    # A folder/person assertion is user-owned membership, not a measurement of
+    # the pre-transform pixels.  Reapply only that pair after the stale-analysis
+    # reset even when no full analysis generation can be transported.
+    values.update(_asserted_face_transfer_values(row))
     values.update({
         'caption': row.caption,
         # Authorship is a fact about the caption, independent of whether the
@@ -10664,6 +10702,18 @@ def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
                             abort('Could not seal complete Bank analysis; imported '
                                   'rows were rolled back.')
                             return
+                    else:
+                        # Folder/person membership is user-owned metadata.  Seal
+                        # only that assertion for the Dataset round-trip; every
+                        # pixel-derived field remains NULL until the Dataset
+                        # importer measures its final bytes itself.
+                        captured = _captured_asserted_face_analysis(
+                            row, payload, group_scope=group_scope)
+                        if (_asserted_face_transfer_values(row)
+                                and captured is None):
+                            abort('Could not seal the asserted face membership; '
+                                  'imported rows were rolled back.')
+                            return
                     blobs.append(payload)
                     chunk_rows.append(row)
                     caps.append(row.caption)
@@ -10685,9 +10735,9 @@ def _promote_job(user_id, bank_id, ids, dataset_id, activity_token=None):
                     statuses.append(row.status)
                     # Pixel-derived Dataset columns travel only under the same
                     # exact/legacy claim as the opaque Bank snapshot.
-                    frms.append(row.framing if captured is not None else None)
+                    frms.append(row.framing if assurance is not None else None)
                     watermark_actionable = (
-                        captured is not None
+                        assurance is not None
                         and row.watermark_fingerprint == expected_fingerprint)
                     watermark_states.append(
                         row.watermark_state if watermark_actionable else None)
