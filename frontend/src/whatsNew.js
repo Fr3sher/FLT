@@ -48,6 +48,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-05-describe-the-set-you-want-and-the-filters-move',
+    date: '2026-08-05',
+    title: 'Say what you want in a sentence, and the bank sets its own filters',
+    blurb:
+      'Type "an amateur photo set, least polished first" above the triage chips and the bank moves ITS controls — medium, flags, resolution, sort — then the counters you already had say, measured, how many images that lands on. The model never looks at your pictures and never picks any: it only reads the sentence, so a wrong reading costs one glance at chips you can edit rather than a silent selection of a few thousand images you would have to trust. It answers over what your bank has actually measured, with the real per-value counts in front of it, so it cannot reach for a bucket that holds nothing. When part of a request has nowhere to land — asking for what is IN the pictures on a bank whose captions cover 1% of it — it says that part is not expressible here instead of inventing a filter that would return three thousand convincing, unrelated images. And it will not turn an exclusion into a search phrase: the ranker in this app returns MORE of a negated thing, not less, so "without a watermark" is reported rather than quietly sent.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-05-bank-passes-say-what-they-left-out',
     date: '2026-08-05',
     title: 'Bank passes now say what they were doing, what they grouped, and what they left out',

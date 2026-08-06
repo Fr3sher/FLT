@@ -12,6 +12,8 @@ from flask import Blueprint, current_app, jsonify, request, send_file
 from ..config import LOCAL_USER
 from ..models import BankImage
 from ..services import bank_jobs, dataset_activity
+from ._common import _map_error
+from ..services import bank_filter_translator as translator
 from ..services import image_bank_service as banks
 
 logger = logging.getLogger(__name__)
@@ -1251,4 +1253,28 @@ def bank_accept_folder_persons(bank_id):
         out = folder_person.accept_suggestions(LOCAL_USER, bank_id, subs)
     except ValueError as e:
         return _folder_person_error(e)
+    return jsonify({'ok': True, **out})
+
+
+@bp.post('/bank/<int:bank_id>/describe-filter')
+def bank_describe_filter(bank_id):
+    """Turn a sentence into this bank's own filter — and apply NOTHING.
+
+    The response moves the visible controls; the grid's existing counters then say
+    how many images that lands on, measured, without the model. A wrong reading
+    therefore costs one glance at chips the user can edit, not a silent selection.
+
+    Errors go through the shared mapper so the local-fence refusal keeps its
+    `ollama_fence_blocked` code: this surface has no degraded mode, and a model
+    held by something outside the app is the one failure that carries its own
+    remedy."""
+    data = request.get_json(silent=True) or {}
+    try:
+        if banks.get_bank(LOCAL_USER, bank_id) is None:
+            # Checked before prompting: a model round-trip for a bank that is not
+            # there costs seconds and answers a question nobody asked.
+            return jsonify({'error': 'bank not found'}), 404
+        out = translator.translate(bank_id, data.get('request'))
+    except Exception as e:  # noqa: BLE001 — _map_error re-raises what it cannot map
+        return _map_error(e)
     return jsonify({'ok': True, **out})

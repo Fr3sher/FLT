@@ -92,6 +92,7 @@ import {
 } from './autoRejectReadiness.js'
 // 🗃️ Chip counters — the number a chip PRINTS (measured under the filters in
 // force) is not the number that decides the chip EXISTS (bank-wide).
+import DescribeFilterBar from './DescribeFilterBar.jsx'
 import { chipCounts, facetDataKey, isFacetFiltered } from './bankFacetCounts.js'
 
 const PAGE_SIZE = 120
@@ -2092,6 +2093,12 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
       {/* ② Triage — browse by facet/cluster and Keep/Reject to decide what stays.
           Stays fully visible; density was never the complaint. */}
       <ZoneSection zone={triageZone} accented={activeStep === 'triage'}>
+
+      {/* Say it in words; the app sets its own chips and the counters below —
+          measured, not the model — say what that lands on. Placed at the TOP of
+          triage because it is a shortcut to the controls underneath, not a
+          separate way of selecting. */}
+      <DescribeFilterBar bankId={bankId} onApply={setF} />
 
       {/* Person clusters (after the face pass) */}
       {clusters.length > 0 && (

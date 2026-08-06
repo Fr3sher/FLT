@@ -986,6 +986,33 @@ you how many there are and roughly how long it will take on your machine, and
 does nothing until you click. It re-runs the face detector on those images only,
 writes nothing but the angle, and leaves your person groups exactly as they are.
 
+## Set the bank filters from a sentence
+
+At the top of **Triage**, **🗣 Describe the set you want** takes a plain request —
+`an amateur photo set, least polished first` — and moves the bank's own controls:
+medium, quality flags, resolution tier, sort. The chip counters below then say,
+measured, how many images that lands on.
+
+The model never looks at your images and never chooses any. It reads the sentence
+and nothing else, so a wrong reading costs you one glance at chips you can edit,
+not a silent selection you would have to trust. Everything it proposes lands in the
+same filters a click would set, and clearing them is the same gesture as always.
+
+It answers over what your bank has actually measured. The real per-value counts go
+to the model with the request, so it cannot reach for a bucket that holds nothing.
+
+**It says when it cannot.** Asking for what is *in* the pictures — `women
+outdoors` — has nowhere to land while captions cover a small fraction of a bank
+and framing almost none of it. That part of the request comes back as *not
+expressible here* rather than as a filter that would return a few thousand
+convincing, unrelated images.
+
+**It will not turn an exclusion into a search.** The ranker returns *more* of a
+negated thing, not less (`a woman without a bikini` measured 60% bikinis against a
+10.1% baseline), so `without a watermark` is reported back to you instead of being
+quietly sent. To guarantee an absence, use the word-exclude box.
+
+
 ## Find bank images by describing them
 
 Under **Curate**, **🔤 Find by text…** ranks images by how close they are to a

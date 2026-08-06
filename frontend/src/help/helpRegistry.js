@@ -463,6 +463,17 @@ const TOPICS = [
      'review faster', 'grid', 'unscored', 'unscanned', 'not scored', 'greyed out',
      'disabled sort', 'bank', 'triage'],
     '/bank', 'using-the-app', 'sort-a-grid-to-review-faster'),
+  action('bank-describe-filter', 'Set the bank filters by describing the set you want',
+    ['describe', 'describe the set', 'say what you want', 'sentence', 'plain english',
+     'natural language', 'ask', 'ask for', 'prompt', 'agent', 'assistant', 'llm',
+     'ollama', 'amateur', 'amateur dataset', 'professional', 'candid', 'snapshot',
+     'automatic filter', 'set the filters', 'filter for me', 'pick for me',
+     'choose images', 'build a dataset', 'i want a dataset', 'smart selection',
+     // What people type when it declined — the answer most likely to send
+     // someone looking for a feature they think is broken.
+     'not expressible', 'cannot express', 'it did nothing', 'refused', 'no filter',
+     'needs captions', 'without', 'exclude', 'negation', 'why not'],
+    '/bank', 'using-the-app', 'set-the-bank-filters-from-a-sentence'),
   action('bank-tag-chips', 'See the tags of what you selected, and filter by them',
     ['tag', 'tags', 'chips', 'tag chips', 'clickable tags', 'attributes',
      'same tags', 'more like this', 'like this one', 'similar', 'find similar',
