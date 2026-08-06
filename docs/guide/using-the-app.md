@@ -682,6 +682,20 @@ inside ✨ Score with the default scope.
 A run with **nothing to do** is refused before it starts, with the reason and a
 suggestion — not launched and then reported as a success.
 
+**The two watermark cleaning levels take the same scope**, and they are the two
+where it matters most: ✂ **Auto-crop** and 🧽 **Repaint** are the only actions on
+this page that produce a new image file. Their windows list the same five lines,
+with one difference — their pool is not a pile but *the flagged images carrying a
+usable mark*, so a scope narrows that set and can never widen it. The count on
+each line is the pool the level **walks**; ✂ then crops only the marks that sit
+in a border band, which is the narrower number written on the button itself.
+Both windows state what is reversible before you start: your own files are never
+written to, the cleaned pixels live in the bank's own copy, and ↩ **Undo
+cleaning** deletes those copies and re-flags the images. Undo is bank-wide rather
+than per run, and two things are out of its reach — an image you already promoted
+(that copy was written into the dataset) and an image whose source file changed
+on disk since the clean.
+
 ## When a folder is already one person
 
 Scraped material usually arrives sorted: one folder per person. **👤 Group by

@@ -79,12 +79,20 @@ export function findLevelState(levels, {
 }
 
 /** Level 2 — auto-crop. Always available (CPU/PIL), so the only reasons it can
- * be off are "a pass is already running" and "nothing to crop". */
-export function cropLevelState(levels, { live = false } = {}) {
+ * be off are "a pass is already running" and "nothing to crop".
+ *
+ * `binWaiting` is how many flagged images sit in the BIN — a pile this payload
+ * cannot see (its pool has always been `status != 'reject'`). It exists because
+ * the level now opens a window where the bin CAN be chosen: a button disabled on
+ * "nothing to crop" would lock that choice away from exactly the user who needs
+ * it, and a capability nobody can reach reads as one that was never shipped. */
+export function cropLevelState(levels, { live = false, binWaiting = 0 } = {}) {
   const c = levelCounts(levels);
   const reason = live
     ? 'A pass is already running on this bank — wait for it to finish.'
-    : c.croppable === 0
+    : (c.croppable === 0 && binWaiting > 0)
+      ? null
+      : c.croppable === 0
       ? (c.flagged > 0
         ? (c.handMasked >= c.flagged
           // A hand-drawn mask can hold several zones and zones on the subject —
@@ -101,8 +109,24 @@ export function cropLevelState(levels, { live = false } = {}) {
     remaining: c.croppable,
     disabled: reason !== null,
     reason,
-    label: `✂ Auto-crop (${c.croppable})`,
+    // The bin is NAMED rather than folded into the total: "✂ Auto-crop (0)" on a
+    // live button is a contradiction, and adding binWaiting to croppable would
+    // add an unrouted figure to a routed one.
+    label: c.croppable === 0 && binWaiting > 0
+      ? `✂ Auto-crop (${binWaiting} in the bin)`
+      : `✂ Auto-crop (${c.croppable})`,
+    // …and the line under the button follows the label. Leaving the default
+    // "0 image(s) waiting" under a button offering 2 is the card contradicting
+    // itself, which is exactly what the counts on this page exist to end.
+    note: binWaiting > 0 && c.croppable === 0 ? binNote(binWaiting) : '',
   };
+}
+
+
+/** The line under a level whose only remaining work sits in the bin. */
+function binNote(n) {
+  return `${n} image(s) waiting, all of them unkept — pick “✕ Unkept only” in `
+    + 'the window.';
 }
 
 /** Level 3 — inpaint. `method` is the engine toggle: 'lama' (or 'auto') repaints
@@ -110,7 +134,8 @@ export function cropLevelState(levels, { live = false } = {}) {
  * repaints those. An engine that isn't installed disables the button with the
  * install path spelled out — never a silent failure mid-pass. */
 export function inpaintLevelState(levels, {
-  live = false, method = 'auto', lamaReady = false, kleinReady = false, kleinReason = null,
+  live = false, method = 'auto', lamaReady = false, kleinReady = false,
+  kleinReason = null, binWaiting = 0,
 } = {}) {
   const c = levelCounts(levels);
   const wantsKlein = method === 'klein';
@@ -128,17 +153,22 @@ export function inpaintLevelState(levels, {
         ? (kleinReason
           || 'Klein inpainting needs ComfyUI running and the Klein models (Setup ▸ ComfyUI).')
         : 'LaMa inpainting is not installed yet (Setup ▸ Quality tools).')
-      : c.flagged === 0
-        ? (c.cropped > 0
-          ? 'Nothing left — every flagged image has been handled.'
-          : 'Nothing flagged — run 🚩 Find watermarks first.')
-        : null;
+      : (c.flagged === 0 && binWaiting > 0)
+        ? null                      // see cropLevelState: the bin is reachable now
+        : c.flagged === 0
+          ? (c.cropped > 0
+            ? 'Nothing left — every flagged image has been handled.'
+            : 'Nothing flagged — run 🚩 Find watermarks first.')
+          : null;
   return {
     done: c.inpainted,
     remaining: c.flagged,
     disabled: reason !== null,
     reason,
-    label: `🧽 Inpaint (${c.flagged})`,
+    label: c.flagged === 0 && binWaiting > 0
+      ? `🧽 Inpaint (${binWaiting} in the bin)`
+      : `🧽 Inpaint (${c.flagged})`,
+    note: binWaiting > 0 && c.flagged === 0 && engineReady ? binNote(binWaiting) : '',
   };
 }
 

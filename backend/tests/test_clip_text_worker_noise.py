@@ -157,6 +157,27 @@ def test_banner_before_the_json_still_encodes(app, tmp_path, monkeypatch):
     assert float(np.linalg.norm(vec)) == pytest.approx(1.0, abs=1e-5)
 
 
+def test_borrowed_clip_worker_ignores_the_user_site(app, tmp_path, monkeypatch):
+    """The readiness probe and the actual long-lived worker must use the same
+    isolated Python.  This prevents a user's global package from poisoning a
+    healthy ComfyUI embedded environment only when the worker starts."""
+    import subprocess
+    seen = []
+    real_popen = subprocess.Popen
+
+    def capture(command, *args, **kwargs):
+        seen.append(list(command))
+        return real_popen(command, *args, **kwargs)
+
+    with app.app_context():
+        enc = _install_worker(monkeypatch, tmp_path, CHATTY_WORKER, 'isolated.py')
+        monkeypatch.setattr(enc.subprocess, 'Popen', capture)
+        vec, _ = enc.encode_query('isolated')
+        enc.release()
+    assert vec.shape == (768,)
+    assert seen and seen[0][1] == '-s'
+
+
 def test_medium_prototypes_survive_a_chatty_worker(app, tmp_path, monkeypatch):
     """🎨 Medium's prototype matrix — the exact frame in the bug report — builds
     normally over a worker that prints a banner on every answer."""

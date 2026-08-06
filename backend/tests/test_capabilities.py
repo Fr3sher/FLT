@@ -18,11 +18,12 @@ def _no_real_subprocess(monkeypatch):
     Stub the seam so the suite never spawns a real subprocess; individual
     tests that care about the ok/False split re-patch it locally."""
     from app import capabilities
+    real_import_ok = capabilities._import_ok
     capabilities._import_cache.clear()
     capabilities._cache = None
     capabilities._cache_ts = 0.0
     monkeypatch.setattr(capabilities, '_import_ok', lambda *a, **k: False)
-    yield
+    yield real_import_ok
     capabilities._import_cache.clear()
     capabilities._cache = None
     capabilities._cache_ts = 0.0
@@ -642,6 +643,35 @@ def test_score_probe_remains_scoped_to_score_python(app, monkeypatch):
         })
         assert capabilities.probe_bank_scoring()['ok'] is True
     assert seen == [('bank_scoring', '/borrowed/score/python')]
+
+
+def test_import_capabilities_disable_the_user_site(
+        app, monkeypatch, _no_real_subprocess):
+    """Score readiness and its CUDA gate share this subprocess seam.  A
+    borrowed ComfyUI Python must be checked with its own packages only, not a
+    broken package inherited from the Windows user's site directory."""
+    from types import SimpleNamespace
+    from app import capabilities
+    seen = []
+
+    def run(command, **kwargs):
+        seen.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(capabilities.subprocess, 'run', run)
+    monkeypatch.setattr(capabilities, '_import_ok', _no_real_subprocess)
+    capabilities._import_cache.clear()
+    python = r'C:\ComfyUI\python_embeded\python.exe'
+    assert capabilities._cached_import_state(
+        'bank_scoring', python,
+        capabilities.CAPABILITY_IMPORTS['bank_scoring']) is True
+    assert seen[0][:3] == [r'C:\ComfyUI\python_embeded\python.exe', '-s', '-c']
+
+    capabilities._import_cache.clear()
+    seen.clear()
+    assert capabilities._cached_import_state(
+        'masks', python, capabilities.CAPABILITY_IMPORTS['masks']) is True
+    assert seen[0][:2] == [python, '-c']
 
 
 def test_siglip2_cuda_probe_uses_semantic_python_and_unknown_means_cpu(

@@ -2235,6 +2235,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
             "which level can run, and why not" logic stays unit-tested. */}
         <BankWatermarkPanel bankId={bankId} live={live}
           onFind={() => setPassOpen('watermark')}
+          payload={payload} selectedIds={[...selected]}
           onChanged={async () => { await refreshPayload(); await refreshImages() }} />
         {scoreNote && (
           <p className={`text-xs ${scoreNote.tone === 'warn'
