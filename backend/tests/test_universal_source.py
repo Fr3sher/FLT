@@ -184,6 +184,21 @@ def test_a_blocked_scan_is_an_error_never_an_empty_result(monkeypatch):
     assert '429' in err
 
 
+def test_a_genuinely_empty_page_is_an_empty_result_not_an_error(monkeypatch):
+    """kind='empty' = gallery-dl a tourné correctement et n'a rien trouvé (post
+    supprimé, album vide, mauvais type de page) : ça DOIT ressembler à un scan
+    vide réussi ([], None), pas à un échec — sinon on ne distingue plus ce cas
+    d'un vrai blocage (auth/429/toolerror), ce que 'empty' existe pour éviter."""
+    _spy_enumerate(monkeypatch,
+                   err=gdl.GdlError('gallery-dl: no media found.', 'empty'))
+    m = Match(url='https://example.test/album/1')
+    m.page = 0
+
+    items, err = UniversalSource().scan(m)
+
+    assert (items, err) == ([], None)
+
+
 def test_a_site_gallery_dl_does_not_know_still_yields_the_single_media(monkeypatch):
     """Repli historique : 1 item vidéo, pour que les hôtes vettés atteignent
     yt-dlp au téléchargement. Pas de pagination sur un item unique."""

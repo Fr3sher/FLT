@@ -72,8 +72,15 @@ class UniversalSource(Source):
             match.paginated = False
             return ([{'url': url, 'title': url, 'thumbnail': None,
                       'type': 'video', 'platform': 'generic'}], None)
-        # Auth / 429 / DDoS-Guard / vide réel : on remonte. Ne JAMAIS déguiser un
-        # blocage en « aucune image trouvée ».
+        if getattr(err, 'kind', None) == 'empty':
+            # gallery-dl a tourné sans incident et n'a rien trouvé (post supprimé,
+            # album vide, mauvais type de page) : un scan vide réussi, PAS un
+            # échec. Le confondre avec 'toolerror' rendrait les deux cas
+            # indiscernables pour cet appelant — exactement ce que 'empty' existe
+            # pour éviter (cf. docstring de GdlError).
+            return [], None
+        # Auth / 429 / DDoS-Guard / erreur outil : on remonte. Ne JAMAIS déguiser
+        # un blocage en « aucune image trouvée ».
         return None, err or "Nothing to scan at this URL."
 
     def download(self, url, dest_base):
