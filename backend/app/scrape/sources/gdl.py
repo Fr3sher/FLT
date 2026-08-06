@@ -52,7 +52,16 @@ class GdlError(str):
     Pourquoi cette classe existe : universal.py comparait l'erreur à
     'gallery-dl : unsupported' — une forme que PERSONNE n'émettait (espace
     parasite) — ce qui a rendu le repli yt-dlp injoignable sans qu'aucun test ne
-    rougisse. Un kind transporté comme donnée ne peut plus se perdre ainsi."""
+    rougisse. Un kind transporté comme donnée ne peut plus se perdre ainsi.
+
+    Vocabulaire complet des `kind` (5 valeurs) :
+    - 4 dérivées du code de sortie gallery-dl par `classify_exit()` :
+      'unsupported' | 'auth' | 'network' | 'toolerror' ;
+    - 1 assignée au point d'appel, PAS par `classify_exit()` : 'empty', posée
+      par `enumerate()` quand gallery-dl a répondu sans erreur mais qu'aucun
+      média n'a été trouvé (page valide, contenu absent). Volontairement
+      distincte de 'toolerror' : fusionner les deux rendrait un vrai échec
+      outil et un résultat vide légitime indiscernables pour l'appelant."""
 
     def __new__(cls, message, kind=None):
         obj = super().__new__(cls, message)
@@ -185,7 +194,11 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
                 continue
             sent = _error_sentinel(sub)
             if sent:
-                album_errors.append(sent)
+                # Même enveloppe que le sentinel TOP-LEVEL ci-dessus : sans GdlError,
+                # ce message brut (un str nu) n'a pas de `.kind` et un appelant qui
+                # fait `getattr(err, 'kind', None)` le lit comme None au lieu de
+                # 'toolerror' — silencieusement mal aiguillé.
+                album_errors.append(GdlError(sent, 'toolerror'))
                 continue
             taken = 0
             for entry in sub:

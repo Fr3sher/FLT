@@ -67,3 +67,22 @@ def test_auth_failure_is_reported_and_never_retried_via_ytdlp(monkeypatch, tmp_p
         'https://x.com/someone/status/1', str(tmp_path / 'item'))
 
     assert ok is False and 'auth' in err
+
+
+def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
+    """Quand TOUS les albums échouent via le sentinel type -1 (pas via une
+    exception/`_run_simulate` en erreur), l'erreur remontée par `enumerate()`
+    doit rester une GdlError utilisable par `getattr(err, 'kind', None)` — pas
+    un str nu redevenu invisible au branchement kind."""
+
+    def fake_run_simulate(url, max_items, cookies, extra_opts, image_range=None):
+        if 'category' in url:
+            return [[6, 'https://x/album1/', {}]], None
+        return [[-1, {'message': 'blocked by extractor'}]], None
+
+    monkeypatch.setattr(gdl, '_run_simulate', fake_run_simulate)
+
+    items, err = gdl.enumerate('https://x/category/')
+
+    assert items is None
+    assert getattr(err, 'kind', None) == 'toolerror'
