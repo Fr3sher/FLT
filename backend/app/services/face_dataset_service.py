@@ -723,6 +723,25 @@ _SOURCE_URL_MAX_CHARS = 2048
 _PHOTOGRAPHER_MAX_CHARS = 160
 
 
+def _safe_public_https_url(value):
+    """URL https sans credentials, longueur bornée — hôte LIBRE. Les résultats de
+    recherche web viennent de sites arbitraires ; c'est la FORME qu'on contrôle
+    ici, le contenu ayant déjà été validé par le fetch durci de l'import."""
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed or len(trimmed) > _SOURCE_URL_MAX_CHARS:
+        return None
+    try:
+        parsed = urlsplit(trimmed)
+    except ValueError:
+        return None
+    if (parsed.scheme != 'https' or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None):
+        return None
+    return trimmed
+
+
 def _safe_source_https_url(value, allowed_hosts):
     """Return a stripped HTTPS URL on an exact allowlisted host, else None."""
     if not isinstance(value, str):
@@ -752,13 +771,25 @@ def normalize_source_metadata(value, *, image_url=None):
     Pexels HTTPS hosts; at scrape-import time the downloaded image must also be
     hosted by the official Pexels image CDN. Extra keys never reach storage or
     the dataset payload.
+
+    Web-search provenance keeps only the page the image was found on: there is
+    no photographer to credit and the image can be hosted anywhere.
     """
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except (TypeError, ValueError):
             return None
-    if not isinstance(value, dict) or value.get('platform') != 'pexels':
+    if not isinstance(value, dict):
+        return None
+    platform = value.get('platform')
+    if platform == 'websearch':
+        # Recherche web : aucun photographe à créditer, seulement la page où
+        # l'image a été trouvée. `image_url` n'est pas restreint à un CDN ici —
+        # une image du web ouvert est hébergée n'importe où.
+        source_url = _safe_public_https_url(value.get('source_url'))
+        return {'platform': 'websearch', 'source_url': source_url} if source_url else None
+    if platform != 'pexels':
         return None
     if image_url is not None and not _safe_source_https_url(
             image_url, _PEXELS_IMAGE_HOSTS):
@@ -790,7 +821,7 @@ def _source_metadata_storage(value, *, image_url=None):
 
 
 def _source_metadata_from_scrape_item(item):
-    if not isinstance(item, dict) or item.get('platform') != 'pexels':
+    if not isinstance(item, dict) or item.get('platform') not in ('pexels', 'websearch'):
         return None
     return normalize_source_metadata(item, image_url=item.get('url'))
 

@@ -6,6 +6,7 @@ import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import CaptionEditorDialog from './CaptionEditorDialog';
 import PromptEditPopover from './PromptEditPopover';
 import PexelsAttribution from './PexelsAttribution';
+import WebImageSource from './WebImageSource';
 import { ENGINE_ACCENTS, ENGINE_LABELS } from './engineSelection.js';
 import { canRegenerateGeneric, improveRerunAffordance, isImageImproveRow } from './improveRerun.js';
 import { rememberImageRatio } from './lightboxActionPlacement.js';
@@ -302,6 +303,8 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
         )}
       </div>
       <PexelsAttribution metadata={img.source_metadata}
+        className="mx-1.5 mt-1 block text-[0.625rem] leading-tight text-content-subtle" />
+      <WebImageSource metadata={img.source_metadata}
         className="mx-1.5 mt-1 block text-[0.625rem] leading-tight text-content-subtle" />
       {isRescueDerived ? (
         <p className="m-1.5 rounded border border-indigo-400/30 bg-indigo-500/10 px-2 py-1 text-center text-[0.625rem] text-indigo-200"
