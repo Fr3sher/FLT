@@ -50,6 +50,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-web-image-search-install-check-fixed',
+    date: '2026-08-07',
+    title: 'Web image search now flags a missing install correctly',
+    blurb: 'If your scraper packages were installed before web image search (DuckDuckGo-style keyword search) shipped, the app used to say the scraper was ready and only fail once you actually searched. The Web images tab now correctly flags it as needing a reinstall, with a one-click "Install scraper extras" button to fix it.',
+  },
+  {
     id: '2026-08-06-reddit-load-more-no-longer-drops-posts',
     date: '2026-08-06',
     title: 'Reddit "Load more" no longer skips posts',
