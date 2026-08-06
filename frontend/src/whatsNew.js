@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-video-extras-installable-from-setup',
+    date: '2026-08-06',
+    title: 'The video extras can now be installed where the app said they were',
+    blurb:
+      'The Video bank\'s banner told you "Install the video extra from Setup" — and Setup had no such button: both installs existed, but only for the API. Setup\'s optional-helpers step now carries the two missing cards: 🎬 Video decoding (PyAV + bundled ffmpeg into the app\'s own Python, no torch) and 🎞️ Shot detection (TransNetV2 into the scoring Python, CPU is fine). One click each, live progress, and the banner clears without a restart. A new test holds Setup to every install the video banners promise, so a pass can no longer point at a button that does not exist.',
+    to: '/setup',
+  },
+  {
     id: '2026-08-06-video-watermark-flag',
     date: '2026-08-06',
     title: 'Spot the watermarked shots before they teach your LoRA a logo',

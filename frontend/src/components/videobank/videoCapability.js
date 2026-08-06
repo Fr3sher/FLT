@@ -24,12 +24,16 @@ export const VIDEO_PIECES = [
     label: 'Reading video files',
     blurb: 'Opening your files to read their length, size and frame rate, and to grab thumbnails.',
     fix: 'Install the video extra from Setup.',
+    // The /api/capabilities key the Setup card for this piece turns green —
+    // the machine half of the `fix` sentence (see mlInstallCards.test.js).
+    setupCap: 'video_decode',
   },
   {
     key: 'detect',
     label: 'Finding shots',
     blurb: 'Cutting each file at its shot boundaries, so you triage shots instead of whole rushes.',
     fix: 'Install the shot-detection extra from Setup (it pulls in torch).',
+    setupCap: 'video_detect',
   },
   {
     key: 'encode',
