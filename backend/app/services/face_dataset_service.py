@@ -4059,7 +4059,7 @@ def _import_backup_zipfile(user_id: int, z: zipfile.ZipFile):
             values = {f: meta.get(f) for f in _BACKUP_IMG_FIELDS
                       if f not in ('filename', 'parent_image_id')}
             # Backup input is untrusted. Unknown/invalid provenance is dropped,
-            # while valid Pexels metadata is canonicalized back to JSON TEXT.
+            # while valid Pexels or web-search metadata is canonicalized back to JSON TEXT.
             values['source_metadata'] = _source_metadata_storage(
                 values.get('source_metadata'))
             snapshot = bank_transfer_metadata.parse_snapshot(
@@ -5769,7 +5769,7 @@ def import_images(user_id, dataset_id, files_bytes, crop=False, dedupe=False, st
     the ORIGINALS, before paying the crop) keep the historical behavior.
 
     ``source_metadata`` is an optional list parallel to ``files_bytes``. Only
-    validated Pexels provenance is stored; existing callers can omit it.
+    validated Pexels or web-search provenance is stored; existing callers can omit it.
 
     ``captions`` is an optional list parallel to ``files_bytes`` — a pre-existing
     caption to carry onto the new row (the image-bank promotion path passes the bank

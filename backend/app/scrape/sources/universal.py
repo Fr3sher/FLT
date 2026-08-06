@@ -84,6 +84,8 @@ class UniversalSource(Source):
         return None, err or "Nothing to scan at this URL."
 
     def download(self, url, dest_base):
+        """Surface héritée sans appelant dans cette app : le vrai chemin de
+        téléchargement est `_download_scrape_item` (fetch durci de `item['url']`, cf. `reddit.py`)."""
         # 1) gallery-dl (extracteur dédié) d'abord.
         dest_dir = os.path.dirname(dest_base)
         filename = os.path.basename(dest_base)
