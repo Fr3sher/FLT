@@ -1273,6 +1273,12 @@ def _image_dict(row: BankImage, th: dict, promoted_by: dict | None = None) -> di
         # dataset one, which is stored in user databases and read as a dataset id.
         'promoted_bank_id': row.promoted_bank_id,
         'caption': row.caption,
+        # WHO wrote that caption ('asserted' | 'joycaption' | 'ollama' | NULL =
+        # never recorded — services/caption_origin.py). Sent with the text and
+        # not derived from the current backend setting: the 'auto' backend CHAINS
+        # two engines inside one run, so a bank holds both, and the settings value
+        # names a policy rather than the writer of any one sentence.
+        'caption_origin': row.caption_origin,
     }
 
 
@@ -1881,7 +1887,17 @@ def bank_payload(user_id, bank_id) -> dict | None:
         'caption': {'todo': {'keep': int(todo_keep or 0),
                              'pending': int(todo_pending or 0),
                              'reject': int(todo_reject or 0)},
-                    'all': dict(all_by_status)},
+                    'all': dict(all_by_status),
+                    # …and WHAT KIND of images this pile holds, measured, because
+                    # one thing the captioners are known to do badly is tied to
+                    # that: see captionNsfwNotice.js. Two figures per pile and
+                    # never one, for the same reason `unscanned` exists beside the
+                    # flag totals — an image ✨ Score never reached is not a SFW
+                    # image, and a share computed over the whole pile would quietly
+                    # treat "unknown" as "clean" and understate itself.
+                    'nsfw': _todo_by_status(bank_id, _flag_filter('nsfw', th)),
+                    'nsfw_measured': _todo_by_status(
+                        bank_id, BankImage.nsfw_score.isnot(None))},
     }
     framing = _framing_counts(bank_id)
     flags, flags_actionable = _flag_counts(bank_id, th)
@@ -8346,6 +8362,48 @@ def start_caption(app, user_id, bank_id, ids=None, force=False, vocabulary=None,
                            total=total)
 
 
+# The name each stored origin gets in a sentence. 'asserted' is absent ON PURPOSE:
+# no pass ever writes it, and a pass that reported it would be reporting something
+# it did not do. Keys are the stored values (services/caption_origin.py) — frozen.
+_CAPTION_WRITER_NAMES = {
+    caption_origin.JOYCAPTION: 'JoyCaption',
+    caption_origin.OLLAMA: 'the Ollama vision model',
+}
+
+
+def _caption_writers_note(wrote, unrecorded=0):
+    """" — 340 by JoyCaption, 87 by the Ollama vision model", or ''.
+
+    WHY THE RUN HAS TO SAY THIS. The default backend is 'auto', which is a CHAIN:
+    JoyCaption writes what it can, the Ollama vision model covers the rest. The two
+    write differently and, on some material, one of them writes something that is
+    not in the picture at all — so "427 captioned" describes two halves the user has
+    no way to tell apart afterwards. These numbers come from the rows that were
+    STAMPED, so they are what the run wrote and not what it was asked to write.
+
+    Silence when a single engine wrote everything would be a smaller lie but still
+    one — a one-engine run is exactly the thing worth confirming — so the note is
+    emitted for one writer as well.  '' only when nothing was written at all.
+
+    An engine name this build does not know is printed AS ITSELF rather than
+    dropped: swallowing it would rebuild the blind spot this note exists to close.
+    """
+    parts = []
+    for key in (caption_origin.JOYCAPTION, caption_origin.OLLAMA):
+        n = int(wrote.get(key) or 0)
+        if n:
+            parts.append(f'{n} by {_CAPTION_WRITER_NAMES[key]}')
+    for key in sorted(k for k in (wrote or {}) if k not in _CAPTION_WRITER_NAMES):
+        n = int(wrote.get(key) or 0)
+        if n:
+            parts.append(f'{n} by {key}')
+    if unrecorded:
+        # NOT "by nobody": the engine did not report a name, so the row stores
+        # NULL and the sentence says exactly that much and no more.
+        parts.append(f'{int(unrecorded)} whose engine did not report a name')
+    return f' — {", ".join(parts)}' if parts else ''
+
+
 def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
                  backend=None, ollama_model=None, statuses=None,
                  keep_asserted=False):
@@ -8385,9 +8443,20 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
         if not paths:
             return
         captioned = vanished = stale = spared_mid_pass = 0
+        # WHO ended up writing, counted from the rows that were actually STAMPED —
+        # not from the pool, and not from the backend that was asked for. 'auto'
+        # is a chain (JoyCaption, then Ollama on what it missed), so the requested
+        # value would mislabel roughly half a bank, and the pool would count rows
+        # the pass then skipped as stale/deleted/newer-caption-won. The same
+        # mistake the flag counters were built to stop making.
+        wrote = {}
+        # None is a real outcome (an engine that reports no name) and it is kept
+        # apart rather than folded into either engine — the column stores NULL for
+        # it and reads as "never recorded", not as "machine".
+        unrecorded_writes = 0
 
         def _on_caption(path, caption, engine=None):
-            nonlocal captioned, vanished, stale, spared_mid_pass
+            nonlocal captioned, vanished, stale, spared_mid_pass, unrecorded_writes
             planned = by_path.get(path)
             if planned is None:
                 return           # a path this pass never asked about — not ours
@@ -8418,9 +8487,17 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             # WHICH engine wrote this row, reported by the engine that wrote it —
             # not the backend that was asked for. 'auto' chains both, so the
             # requested value would mislabel roughly half the bank.
-            caption_origin.stamp(row, caption, caption_origin.engine_origin(engine))
+            origin = caption_origin.engine_origin(engine)
+            caption_origin.stamp(row, caption, origin)
             db.session.commit()
             captioned += 1
+            # Counted from row.caption_origin rather than from `origin`: stamp()
+            # clears the origin on a blank caption, and a row that stored no author
+            # must not be reported as one written by an engine.
+            if row.caption_origin:
+                wrote[row.caption_origin] = wrote.get(row.caption_origin, 0) + 1
+            else:
+                unrecorded_writes += 1
 
         # GPU-exclusive for the whole pass, exactly like the score/watermark passes:
         # frees ComfyUI VRAM and blocks a training start for the duration.
@@ -8444,6 +8521,7 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             bank_jobs.progress(job, detail=f'cancelled — {captioned} captioned so far')
             return
         detail = f'done — {captioned} captioned'
+        detail += _caption_writers_note(wrote, unrecorded_writes)
         if skipped_asserted:
             # Named in the RESULT, not only in the warning before the click: the
             # user has to be able to see afterwards that the protection did

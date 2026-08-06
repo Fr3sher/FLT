@@ -2,6 +2,9 @@
 import { improvementBadge } from './improveCandidates.js';
 import { useEffect, useRef, useState } from 'react';
 import { displayLabel } from '../../utils/labels';
+// WHO wrote this tile's caption — the per-image half of the provenance the pass
+// already reports in aggregate (utils/captionEngines.js).
+import { captionIsAsserted, captionOriginInfo } from '../../utils/captionOrigin.js';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import CaptionEditorDialog from './CaptionEditorDialog';
 import PromptEditPopover from './PromptEditPopover';
@@ -334,6 +337,21 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
       {img.status === 'keep' && (
         <div className="m-1.5 mt-0 flex flex-col gap-1">
           <div className="dataset-grid-item__actions flex items-center justify-end gap-1">
+            {/* WHO WROTE THE TEXT IN THE BOX BELOW, on the row that already carries
+                this caption's actions. Only when there IS a caption and its author
+                was recorded: stamping "author not recorded" on every legacy tile
+                would be a grid of identical chips, which is noise rather than
+                information — the expanded editor has the room to say it and does. */}
+            {(cap || '').trim() && captionOriginInfo(img.caption_origin).known && (
+              <span title={captionOriginInfo(img.caption_origin).title}
+                aria-label={captionOriginInfo(img.caption_origin).short}
+                className={`mr-auto rounded border px-1 py-0.5 text-[10px] leading-none ${
+                  captionIsAsserted(img.caption_origin)
+                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
+                    : 'border-border bg-surface text-content-subtle'}`}>
+                {captionOriginInfo(img.caption_origin).chip}
+              </span>
+            )}
             <button type="button" onClick={() => setCaptionEditorOpen(true)}
               disabled={busy}
               title="Open a larger caption editor"
@@ -372,6 +390,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
         <CaptionEditorDialog initialCaption={cap} imageUrl={url}
           datasetId={datasetId} imageId={img.id}
           initialShortCaption={img.caption_short || ''} showShort={dualCaptions}
+          captionOrigin={img.caption_origin} shortCaptionOrigin={img.caption_short_origin}
           imageLabel={displayLabel(img.variation_label)}
           onClose={() => setCaptionEditorOpen(false)}
           /* Awaited, and its answer is handed BACK: an unawaited handler cannot
