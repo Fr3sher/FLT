@@ -82,11 +82,15 @@ def test_match_refuses_non_public_urls():
         assert src.match(url) is None, url
 
 
-def test_match_still_accepts_a_public_http_url():
-    # example.com (pas example.test) : example.test est un domaine de test RFC 2606
-    # SANS enregistrement DNS, donc _validate_public_http_url le rejette (DNS
-    # introuvable) — ce n'est pas un accroc de la garde, juste un mauvais fixture.
-    assert UniversalSource().match('https://example.com/album/1') is not None
+def test_match_still_accepts_a_public_http_url(monkeypatch):
+    # example.test (domaine de test RFC 2606, SANS enregistrement DNS réel) :
+    # on simule la résolution pour rester hermétique (aucun appel réseau) tout
+    # en exerçant la vraie branche de classification d'IP du garde SSRF.
+    monkeypatch.setattr(
+        netfetch.socket, 'getaddrinfo',
+        lambda *a, **k: [(netfetch.socket.AF_INET, netfetch.socket.SOCK_STREAM,
+                           6, '', ('93.184.216.34', 443))])
+    assert UniversalSource().match('https://example.test/album/1') is not None
 
 
 def test_enumerate_album_recursion_sentinel_carries_a_kind(monkeypatch):
