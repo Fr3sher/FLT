@@ -24,9 +24,11 @@ import KleinModelSetting from '../shared/KleinModelSetting';
 import { localEngineUnavailableReason } from '../../utils/localEngineReason';
 import {
   buildPexelsSearchUrl,
+  buildWebSearchUrl,
   isPexelsUrl,
   loadPexelsAuthorization,
   normalizePexelsKeyword,
+  normalizeWebSearchKeyword,
   resolveScanTarget,
   savePexelsAuthorization,
 } from './scraperSourceSearch';
@@ -50,6 +52,7 @@ const SOURCE_GROUPS = [
 const SOURCE_MODES = [
   ['reddit', 'Reddit'],
   ['pexels', 'Pexels'],
+  ['websearch', 'Web images'],
   ['url', 'URL'],
 ];
 
@@ -58,6 +61,7 @@ const PEXELS_AUTH_ERROR = 'Confirm explicit Pexels authorization for dataset/ML 
 const PLATFORM_LABELS = {
   civitai: 'Civitai', instagram: 'Instagram', pexels: 'Pexels', pornpics: 'PornPics',
   reddit: 'Reddit', sexcom: 'Sex.com', x: 'X / Twitter', generic: 'URL source',
+  websearch: 'Web images',
 };
 
 const platformLabel = (platform) => PLATFORM_LABELS[platform]
@@ -95,6 +99,8 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   const [pexelsLocale, setPexelsLocale] = useState(restoredScan.pexelsLocale);
   const [pexelsOrientation, setPexelsOrientation] = useState(restoredScan.pexelsOrientation);
   const [pexelsAuthorized, setPexelsAuthorized] = useState(() => loadPexelsAuthorization());
+  const [websearchKeyword, setWebsearchKeyword] = useState(restoredScan.websearchKeyword);
+  const [websearchSafe, setWebsearchSafe] = useState(restoredScan.websearchSafe);
   const [activeScanUrl, setActiveScanUrl] = useState(restoredScan.activeScanUrl);
   const [activePlatform, setActivePlatform] = useState(restoredScan.activePlatform);
   const [items, setItems] = useState(restoredScan.items);
@@ -125,10 +131,12 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
 
   useEffect(() => {
     saveScraperScanState(scanKey, { sourceMode, url, kw, sub, pexelsKeyword,
-      pexelsLocale, pexelsOrientation, activeScanUrl, activePlatform,
+      pexelsLocale, pexelsOrientation, websearchKeyword, websearchSafe,
+      activeScanUrl, activePlatform,
       items, page, paginated, fullAlbums, rescueSmall, selected });
   }, [scanKey, sourceMode, url, kw, sub, pexelsKeyword, pexelsLocale,
-    pexelsOrientation, activeScanUrl, activePlatform, items, page, paginated,
+    pexelsOrientation, websearchKeyword, websearchSafe, activeScanUrl,
+    activePlatform, items, page, paginated,
     fullAlbums, rescueSmall, selected]);
 
   // Page zero uses the submitted form target. Later pages are deliberately pinned
@@ -207,6 +215,13 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
   }, [pexelsKeyword, pexelsLocale, pexelsOrientation,
     pexelsAuthorized, scanning, runScan, toast]);
 
+  const runWebSearch = useCallback(() => {
+    if (scanning) return;
+    const built = buildWebSearchUrl(websearchKeyword, websearchSafe);
+    if (!built) return;
+    runScan(0, built);
+  }, [websearchKeyword, websearchSafe, scanning, runScan]);
+
   const changePexelsAuthorization = (confirmed) => {
     setPexelsAuthorized(confirmed);
     savePexelsAuthorization(confirmed);
@@ -255,6 +270,7 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
     clearScraperScanState(scanKey);
     setSourceMode('reddit'); setUrl(''); setKw(''); setSub('');
     setPexelsKeyword(''); setPexelsLocale('fr-FR'); setPexelsOrientation('');
+    setWebsearchKeyword(''); setWebsearchSafe(false);
     setActiveScanUrl(''); setActivePlatform(''); setItems([]); setPage(0);
     setPaginated(false); setFullAlbums(false); setRescueSmall(false);
     setSelected(new Set()); setBroken(new Set());
@@ -421,6 +437,36 @@ export default function ConceptSourcesPanel({ datasetId, onImport, busy,
               {scanning ? 'Searching…' : 'Search Pexels'}
             </button>
           </div>
+        </div>
+      )}
+
+      {sourceMode === 'websearch' && (
+        <div className="rounded-lg border border-border bg-white/5 px-2.5 py-2 flex flex-col gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <input value={websearchKeyword} onChange={(e) => setWebsearchKeyword(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); runWebSearch(); } }}
+              placeholder="keyword — e.g. curly hair portrait"
+              aria-label="Web image search keyword"
+              className="min-w-[12rem] flex-[2] px-2.5 py-1.5 rounded-lg bg-surface-raised border border-border text-content text-sm placeholder:text-content-subtle focus:border-indigo-500 outline-none" />
+            <label className="flex items-center gap-2 text-[0.6875rem] text-content-muted cursor-pointer shrink-0">
+              <input type="checkbox" checked={websearchSafe}
+                onChange={(e) => setWebsearchSafe(e.target.checked)}
+                className="h-4 w-4 rounded border-border accent-indigo-500" />
+              <span>SafeSearch</span>
+            </label>
+            <button type="button" onClick={runWebSearch}
+              disabled={scanning || !normalizeWebSearchKeyword(websearchKeyword)}
+              title="Search images across the open web"
+              className="px-3 py-1.5 rounded-lg bg-surface border border-border text-content text-sm hover:bg-white/10 disabled:opacity-40 shrink-0">
+              {scanning ? 'Searching…' : 'Search the web'}
+            </button>
+            <HelpBadge topic="action-scrape-websearch" className="self-center" />
+          </div>
+          <p className="text-content-muted text-[0.6875rem] leading-relaxed">
+            Searches images across the open web — no account and no API key.
+            Results come from third-party sites: check the licence before using an
+            image, and expect a broader mix than a curated source like Pexels.
+          </p>
         </div>
       )}
 

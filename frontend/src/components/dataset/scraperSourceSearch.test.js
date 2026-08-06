@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   buildPexelsSearchUrl,
+  buildWebSearchUrl,
   isPexelsUrl,
   loadPexelsAuthorization,
   normalizePexelsKeyword,
+  normalizeWebSearchKeyword,
   resolveScanTarget,
   savePexelsAuthorization,
 } from './scraperSourceSearch.js';
@@ -55,6 +57,24 @@ test('Pexels dataset authorization is global and removable', () => {
   assert.equal(loadPexelsAuthorization(storage), true);
   savePexelsAuthorization(false, storage);
   assert.equal(loadPexelsAuthorization(storage), false);
+});
+
+test('web search URLs carry the keyword and the SafeSearch flag', () => {
+  assert.equal(buildWebSearchUrl('curly hair'),
+    'https://duckduckgo.com/?q=curly+hair&iax=images&ia=images&kp=-2');
+  assert.equal(buildWebSearchUrl('  curly   hair  ', true),
+    'https://duckduckgo.com/?q=curly+hair&iax=images&ia=images&kp=1');
+});
+
+test('a blank web search keyword builds no URL at all', () => {
+  assert.equal(buildWebSearchUrl(''), '');
+  assert.equal(buildWebSearchUrl('   '), '');
+  assert.equal(normalizeWebSearchKeyword(' portrait\tstudio\n'), 'portrait studio');
+});
+
+test('web search keywords survive URL encoding', () => {
+  assert.equal(buildWebSearchUrl('été & nuit'),
+    'https://duckduckgo.com/?q=%C3%A9t%C3%A9+%26+nuit&iax=images&ia=images&kp=-2');
 });
 
 test('Pexels URL detection accepts only official web hosts over HTTP or HTTPS', () => {

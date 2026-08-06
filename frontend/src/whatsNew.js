@@ -48,6 +48,12 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-06-web-image-search',
+    date: '2026-08-06',
+    title: 'Search the web for images by keyword',
+    blurb: 'Type what you are looking for instead of hunting for a gallery URL first. No account, no API key. Results come from third-party sites, so check the licence before using one.',
+  },
+  {
     id: '2026-08-06-each-bank-can-choose-clip-or-siglip2-without-losing-work',
     date: '2026-08-06',
     title: 'Each Bank can choose CLIP or SigLIP 2 — switching keeps every result',

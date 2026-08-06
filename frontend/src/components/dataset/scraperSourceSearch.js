@@ -52,6 +52,26 @@ export function resolveScanTarget({ nextPage, explicitUrl, draftUrl, activeScanU
   return typeof candidate === 'string' ? candidate.trim() : '';
 }
 
+// DuckDuckGo's own SafeSearch flag. The scan API accepts a URL and nothing else,
+// so the setting travels inside the URL and the backend source reads it back —
+// no request field is added and the contract is unchanged.
+const WEB_SEARCH_SAFE_OFF = '-2';
+const WEB_SEARCH_SAFE_STRICT = '1';
+
+export function normalizeWebSearchKeyword(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+export function buildWebSearchUrl(keyword, safe = false) {
+  const query = normalizeWebSearchKeyword(keyword);
+  if (!query) return '';
+  const params = new URLSearchParams({
+    q: query, iax: 'images', ia: 'images',
+    kp: safe ? WEB_SEARCH_SAFE_STRICT : WEB_SEARCH_SAFE_OFF,
+  });
+  return `https://duckduckgo.com/?${params.toString()}`;
+}
+
 export function loadPexelsAuthorization(storage) {
   const target = storageFor(storage);
   if (!target) return false;
