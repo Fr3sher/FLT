@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   deriveSetupSteps, deriveCapabilitySummary, kleinMissingLabels, KLEIN_ASSET_LABELS,
   comfyuiDirVerdict, COMFYUI_SKIP_LOST, COMFYUI_SKIP_KEPT,
-  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS,
+  aitoolkitVerdict, AITOOLKIT_INSTALL_STEPS, SETUP_STEP_IDS,
 } from './useSetupSteps.js';
 // installAllPlan / installCatalog are imported further down, next to their own
 // sections; kreaInstallPlan has no other importer here.
@@ -355,7 +355,9 @@ import { installAllPlan, INSTALL_ALL_ORDER } from './useSetupSteps.js';
 const fullCaps = () => ({
   python: { ml_supported: true },
   face_scoring: true, masks: true, watermark_inpaint: true,
-  video_decode: true, video_detect: true,
+  // Three video probes, not two: the `video` install action ships PyAV AND a
+  // bundled ffmpeg, so a "fully installed" snapshot has to assert both.
+  video_decode: true, video_detect: true, video_encode: true,
   ollama: { reachable: true, vision_model_ready: true, vision_model: 'qwen3-vl:8b' },
   // reachable matters for the Krea node pack: an unreachable ComfyUI's node probe
   // fails open, so "nothing missing" from a stopped ComfyUI must not read as
@@ -645,6 +647,92 @@ test('the capability summary counts bank scoring, SigLIP2, the watermark detecto
   assert.equal(on.find((r) => /SigLIP2/.test(r.label)).ok, true);
   assert.equal(on.find((r) => /Watermark detector/.test(r.label)).ok, true);
   assert.equal(on.find((r) => /Scraping extras/.test(r.label)).ok, true);
+});
+
+// The third video piece. probe_video() reports decode / detect / encode apart
+// on purpose ("a single boolean would be a lie here"), and ffmpeg fails on its
+// own for a reason the backend documents: imageio-ffmpeg answers with a path
+// whether or not its binary download finished, so `av` can import on a machine
+// with no encoder at all. That machine scanned, detected and triaged fine — and
+// the summary certified it complete while it could not cut or export one clip.
+test('the capability summary counts clip encoding apart from decoding', () => {
+  const rows = deriveCapabilitySummary({ video_decode: true, video_detect: true, video_encode: false });
+  const labels = rows.map((r) => r.label);
+  const encode = rows.find((r) => /video/i.test(r.label) && /encod/i.test(r.label));
+  assert.ok(encode, `no clip-encoding row in the summary: ${labels.join(', ')}`);
+  // It reads its OWN key — a row copy-pasted from "reading files" would be green here.
+  assert.equal(encode.ok, false);
+  assert.equal(rows.find((r) => /read/i.test(r.label) && /video/i.test(r.label)).ok, true);
+  assert.equal(encode.topic, 'setup-quality');
+  const on = deriveCapabilitySummary({ video_decode: true, video_detect: true, video_encode: true });
+  assert.equal(on.find((r) => /video/i.test(r.label) && /encod/i.test(r.label)).ok, true);
+});
+
+// The `video` install action installs BOTH halves, so its catalog row cannot be
+// "present" on decoding alone: that badged ✓ Installed on a machine with no
+// encoder AND dropped the row from the install plans, hiding the one button
+// that fixes it.
+test('the install catalog treats the video action as missing when the encoder is', () => {
+  const rows = installCatalog({ video_decode: true, video_detect: true, video_encode: false });
+  const video = rows.find((r) => r.action === 'video');
+  assert.ok(video, 'no "video" row in installCatalog');
+  assert.equal(video.present, false);
+  const whole = installCatalog({ video_decode: true, video_detect: true, video_encode: true });
+  assert.equal(whole.find((r) => r.action === 'video').present, true);
+});
+
+// --- Every summary row must LEAD somewhere ---------------------------------
+// "Krea 2 Edit (local)" rendered a ✗ and did nothing when clicked: it had no
+// CAPABILITY_STEP_ID entry, so the row taught the user something was missing and
+// offered no way to reach it — half the requirement. This test is the general
+// form of that bug: any row added to deriveCapabilitySummary without a mapping,
+// or mapped at a screen the wizard does not have, fails here.
+const capabilityStepMap = () => {
+  const page = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+  const block = page.match(/const CAPABILITY_STEP_ID = \{([\s\S]*?)\n\}/);
+  assert.ok(block, 'CAPABILITY_STEP_ID not found in SetupPage.jsx');
+  const map = {};
+  for (const m of block[1].matchAll(/'([^']+)':\s*'([^']+)',/g)) map[m[1]] = m[2];
+  return { page, map };
+};
+
+test('every "What\'s unlocked" row maps to a wizard screen that exists', () => {
+  const { page, map } = capabilityStepMap();
+  // welcome is index 0 and screenOf() falls back to it — a row may never target it.
+  const screensLine = page.match(/const SCREENS = \[([^\]]*)\]/);
+  assert.ok(screensLine, 'SCREENS not found in SetupPage.jsx');
+  const extraScreens = [...screensLine[1].matchAll(/'([^']+)'/g)]
+    .map((m) => m[1]).filter((s) => s !== 'welcome');
+  const valid = new Set([...SETUP_STEP_IDS, ...extraScreens]);
+  const rows = deriveCapabilitySummary({});
+  assert.ok(rows.length > 10, 'the summary is suspiciously short — has it stopped deriving?');
+  for (const r of rows) {
+    assert.ok(map[r.label],
+      `"${r.label}" has no CAPABILITY_STEP_ID entry — its row renders inert`);
+    assert.ok(valid.has(map[r.label]),
+      `"${r.label}" points at "${map[r.label]}", which is not a wizard screen`);
+  }
+});
+
+test('Krea 2 Edit points at the install screen, and screenOf can resolve it', () => {
+  const { page, map } = capabilityStepMap();
+  // Its ONE-CLICK installer is KreaInstallCard, mounted only inside
+  // InstallEverything — i.e. on the install/repair screen. The comfyui step
+  // carries Klein's weights, never Krea's, so mapping it there would land the
+  // user on a screen with nothing to press.
+  assert.equal(map['Krea 2 Edit (local)'], 'install');
+  const installScreen = fs.readFileSync(
+    new URL('../components/setup/InstallEverything.jsx', import.meta.url), 'utf8');
+  assert.match(installScreen, /<KreaInstallCard/,
+    'the install screen no longer mounts KreaInstallCard — the mapping now leads nowhere');
+  assert.match(page, /<InstallEverything/,
+    'SetupPage no longer renders InstallEverything on the install screen');
+  // 'install' is not a tool step, so screenOf must fall back to SCREENS. Without
+  // that lookup it resolved to indexOf(-1)+1 = 0 and dumped the user on welcome.
+  const fn = page.match(/const screenOf = \(id\) => \{[\s\S]*?\n  \}/);
+  assert.ok(fn, 'screenOf is no longer a block — re-check it still resolves non-step screens');
+  assert.match(fn[0], /SCREENS\.indexOf\(id\)/,
+    'screenOf ignores SCREENS: a row pointing at the install menu lands on welcome');
 });
 
 test('each new capability row maps to the quality wizard step in SetupPage', () => {

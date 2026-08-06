@@ -470,6 +470,17 @@ export function deriveCapabilitySummary(caps) {
     // removed from the denominator.
     { label: 'Video bank — reading files', ok: !!c.video_decode, topic: 'setup-quality' },
     { label: 'Video bank — shot detection', ok: !!c.video_detect, topic: 'setup-quality' },
+    // The THIRD video piece, and the one that was still silently missing from
+    // this list. capabilities.probe_video() reports decode / detect / encode
+    // apart on purpose ("a single boolean would be a lie here"), and the encoder
+    // fails on its own for a documented reason: imageio-ffmpeg answers with a
+    // path whether or not its binary download ever finished, so `av` can import
+    // (decode ✓) on a machine where no ffmpeg exists. That machine could scan,
+    // detect and triage — and certified "N of N ready" while it could not cut or
+    // export one clip. Same install action as decoding (`video` = PyAV +
+    // imageio-ffmpeg), so the fix is one ↻ Reinstall on the quality step, but it
+    // is a separate row because a green "reading files" is not the answer to it.
+    { label: 'Video bank — clip encoding', ok: !!c.video_encode, topic: 'setup-quality' },
     // Four more that were installable (INSTALL_ACTIONS: bank_scoring, bank_siglip2,
     // watermark_detect, scrape_extras; capabilities.py: bank_scoring, bank_siglip2,
     // watermark_detect, scrape_deps) and had a working Setup card, yet never had a
@@ -767,7 +778,11 @@ export function installCatalog(caps) {
     // `video` (PyAV) goes into the app's own Python — no torch, always available;
     // `shot_detect` rides the scoring environment, exactly like the watermark
     // detector, and the runner refuses the app venv itself.
-    item('video', c.video_decode, true, ''),
+    // `video` installs BOTH halves (PyAV + imageio-ffmpeg), so it is "present"
+    // only when both probes are green. Keying it on decoding alone badged the row
+    // ✓ Installed on a machine whose ffmpeg download never finished, and left it
+    // out of the install plans — the one button that would have fixed it.
+    item('video', c.video_decode && c.video_encode, true, ''),
     item('shot_detect', c.video_detect, true, ''),
     item('ollama_model', o.vision_model_ready, o.reachable && modelName,
       !o.reachable ? 'Start Ollama first (the Captioning step).'

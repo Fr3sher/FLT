@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-unlocked-rows-lead-to-their-install',
+    date: '2026-08-07',
+    title: 'Every "What\'s unlocked" row now takes you to its install',
+    blurb: 'The Krea 2 Edit row told you it was missing and did nothing when clicked — it now opens the install screen where its one-click installer lives (or, when the files are already there, tells you to restart ComfyUI). Clip encoding joins the list too: a machine with no ffmpeg used to be certified complete while it could not export a single clip. And the scraper install warning finally names the packages YOUR machine is missing, instead of reciting three from memory.',
+    to: '/setup?step=install',
+  },
+  {
     id: '2026-08-07-setup-summary-lists-every-installable-engine',
     date: '2026-08-07',
     title: 'Setup now lists every engine you can install',

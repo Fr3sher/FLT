@@ -1662,6 +1662,7 @@ def probe(force=False) -> dict:
     watermark_inpaint = probe_watermark_inpaint()
     watermark_detect = probe_watermark_detect()
     video = probe_video()
+    scrape_deps = probe_scrape_deps()
     joycaption = probe_joycaption(aitoolkit)
     models = _scan_models()
     # Klein engine readiness is now honest tri-component: the graph needs the UNET
@@ -1952,7 +1953,14 @@ def probe(force=False) -> dict:
         # point of the setting is that the rule stops being invisible.
         'dataset_import': _dataset_import_policy(),
         'python': python_ml_status(),
-        'scrape_deps': probe_scrape_deps()['ok'],
+        'scrape_deps': scrape_deps['ok'],
+        # WHICH modules are absent, same convention as joycaption/video/siglip2
+        # above. The install banner used to recite a hand-written list of three
+        # package names; the probe watches seven, so a machine flagged because
+        # `ddgs` or `yt_dlp` is missing read a warning that named neither and
+        # could not explain why it was being asked to reinstall. The banner now
+        # quotes this string's list instead of keeping its own copy.
+        'scrape_deps_detail': scrape_deps['detail'],
         'training_visible': aitoolkit['ok'] or bool(cfg.secret('VAST_API_KEY')),
         'studio_visible': comfy['ok'],
     }
