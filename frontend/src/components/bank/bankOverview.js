@@ -151,10 +151,15 @@ function groupKpi(label, data, available, emptyText) {
   if (!available && groups === 0 && images === 0) {
     return { label, value: '—', detail: emptyText }
   }
+  // `groups` and `images` describe everything the last analysis pass found,
+  // including groups the user has already resolved.  `unresolved` is the live
+  // curation queue and is therefore the only honest headline number.  Fall
+  // back to `groups` for payloads produced by an older backend.
+  const remaining = count(data?.unresolved) ?? groups
   return {
     label,
-    value: groups.toLocaleString(),
-    detail: `${groups === 1 ? 'group' : 'groups'} · ${images.toLocaleString()} image${images === 1 ? '' : 's'}`,
+    value: remaining.toLocaleString(),
+    detail: `${remaining === 1 ? 'group' : 'groups'} remaining to resolve`,
   }
 }
 

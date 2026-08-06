@@ -60,6 +60,27 @@ test('the resolution panel hits the semantic endpoints and uses same-shot wordin
   assert.match(panel, /keep_ids:\s*\[img\.id\]/);
 });
 
+test('duplicate resolution waits for every refresh before releasing its busy state', () => {
+  // node --test cannot parse JSX, so pin the observable sequencing contract in
+  // source: refresh the panel, await the parent overview/grid refresh, then let
+  // the finally block enable the controls again.
+  const panelRefresh = panel.indexOf('await refresh(0)');
+  const parentRefresh = panel.indexOf('await onChanged?.()', panelRefresh);
+  const releaseBusy = panel.indexOf('setBusy(false)', parentRefresh);
+  assert.ok(panelRefresh >= 0, 'the panel refresh is awaited');
+  assert.ok(parentRefresh > panelRefresh, 'the async parent refresh is awaited after it');
+  assert.ok(releaseBusy > parentRefresh, 'busy is released only after both refreshes finish');
+
+  for (const kind of ['exact', 'semantic']) {
+    const callsiteStart = ws.indexOf(`kind="${kind}"`);
+    assert.ok(callsiteStart >= 0, `the ${kind} duplicate panel is rendered`);
+    const callsite = ws.slice(callsiteStart, callsiteStart + 200);
+    assert.match(callsite,
+      /onChanged=\{async \(\) => \{ await refreshPayload\(\); await refreshImages\(\) \}\}/,
+      `the ${kind} callback returns and awaits both parent refreshes`);
+  }
+});
+
 test('Launch all inserts the semantic step right after Score, defaulting on when ready', () => {
   assert.match(dialog, /key:\s*'semantic_dedup'/);
   assert.match(dialog, /semantic_dedup:\s*!!caps\?\.bank_scoring/);

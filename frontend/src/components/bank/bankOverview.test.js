@@ -53,6 +53,45 @@ test('partial analysis keeps exact bank-wide counts and exposes unfinished passe
   assert.equal(model.kpis[0].value, '1')
 })
 
+test('duplicate KPIs headline the live unresolved queue, not historical groups', () => {
+  const model = bankOverviewModel({
+    counts: { total: 130, scanned: 130 },
+    dup: { groups: 65, images: 130, unresolved: 0 },
+    semantic_dup: { groups: 65, images: 130, unresolved: 0 },
+  })
+  const duplicates = model.kpis.find((kpi) => kpi.label === 'Duplicates')
+  const sameShots = model.kpis.find((kpi) => kpi.label === 'Same shots')
+
+  assert.equal(duplicates.value, '0')
+  assert.equal(duplicates.detail, 'groups remaining to resolve')
+  assert.equal(sameShots.value, '0')
+  assert.equal(sameShots.detail, 'groups remaining to resolve')
+})
+
+test('duplicate KPIs expose non-zero remaining work for both analysis stages', () => {
+  const model = bankOverviewModel({
+    counts: { total: 130, scanned: 130 },
+    dup: { groups: 65, images: 130, unresolved: 3 },
+    semantic_dup: { groups: 40, images: 90, unresolved: 3 },
+  })
+
+  assert.equal(model.kpis.find((kpi) => kpi.label === 'Duplicates').value, '3')
+  assert.equal(model.kpis.find((kpi) => kpi.label === 'Same shots').value, '3')
+})
+
+test('duplicate KPIs remain compatible with legacy payloads lacking unresolved', () => {
+  const model = bankOverviewModel({
+    counts: { total: 4, scanned: 4 },
+    dup: { groups: 2, images: 4 },
+    semantic_dup: { groups: 1, images: 2 },
+  })
+
+  assert.equal(model.kpis.find((kpi) => kpi.label === 'Duplicates').value, '2')
+  assert.equal(model.kpis.find((kpi) => kpi.label === 'Same shots').value, '1')
+  assert.equal(model.kpis.find((kpi) => kpi.label === 'Same shots').detail,
+    'group remaining to resolve')
+})
+
 test('Faces coverage is separate from a completed no-face angle result', () => {
   const model = bankOverviewModel({
     counts: { total: 6, angle_measured: 0, angle_backfillable: 0 },

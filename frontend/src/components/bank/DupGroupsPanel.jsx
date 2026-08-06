@@ -59,7 +59,7 @@ export default function DupGroupsPanel({ bankId, live, onChanged, kind = 'exact'
       const d = await postJson(`/api/bank/${bankId}/${k.resolvePath}`, body)
       toast.success(okMsg || `Resolved ${d.resolved} group(s) — ${d.rejected} duplicate(s) rejected.`)
       await refresh(0)
-      onChanged?.()
+      await onChanged?.()
     } catch (e) {
       toast.error(e?.message || 'Resolution failed.')
     } finally {

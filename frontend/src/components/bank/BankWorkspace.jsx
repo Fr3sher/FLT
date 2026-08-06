@@ -3060,10 +3060,10 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
 
       {filter.flag === 'dups' ? (
         <DupGroupsPanel bankId={bankId} live={live} kind="exact"
-          onChanged={() => { refreshPayload(); refreshImages() }} />
+          onChanged={async () => { await refreshPayload(); await refreshImages() }} />
       ) : filter.flag === 'semantic_dups' ? (
         <DupGroupsPanel bankId={bankId} live={live} kind="semantic"
-          onChanged={() => { refreshPayload(); refreshImages() }} />
+          onChanged={async () => { await refreshPayload(); await refreshImages() }} />
       ) : (
         <>
           <ul className={`grid gap-2 ${tileSize === 'S'
