@@ -144,6 +144,32 @@ def test_profile_scan_marks_exhausting_max_pages_as_partial(monkeypatch):
     assert getattr(items, 'partial', False) is True
 
 
+def test_profile_scan_of_a_complete_two_page_profile_is_not_partial(monkeypatch):
+    """Negative counterpart of the truncation tests above: a profile that
+    fully fits in 2 pages (well under MAX_ITEMS and MAX_PAGES), with every
+    page loading fine and pagination ending naturally (`page > total_pages`),
+    must NOT be flagged partial. Patches `_request_html` (same boundary as
+    the other tests here) so the real pagination loop runs to its natural
+    end instead of a stubbed scan()."""
+    def fake_request_html(url):
+        page_num = 2 if url.endswith('/page/2') else 1
+        tiles = ''.join(f'"/uploads/a/b/300px_p{page_num}_{i}.jpg"' for i in range(10))
+        # max_index=34 => total_pages = ceil(34/24) = 2, so pagination stops
+        # naturally after page 2 (page=3 > total_pages=2).
+        links = '<a href="/fr/someone/34">34</a>'
+        return tiles + links, None
+
+    monkeypatch.setattr(picazor, '_request_html', fake_request_html)
+    validation = SimpleNamespace(original_url='https://picazor.com/fr/someone',
+                                 value='someone', url_type=None)
+
+    items, err = picazor.scan(validation)
+
+    assert err is None
+    assert len(items) == 20
+    assert getattr(items, 'partial', False) is False
+
+
 def test_listing_scan_marks_overflowing_max_items_as_partial(monkeypatch):
     """A single listing page (videos/week, models/...) whose parse yields more
     tiles than MAX_ITEMS in one shot must also be flagged partial, not silently

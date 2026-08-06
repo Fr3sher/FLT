@@ -68,6 +68,14 @@ class _FakeProfileWithManyPosts:
             yield _FakeSimplePost(f'post{i}')
 
 
+class _FakeProfileWithFewPosts:
+    """A profile with fewer posts than SCAN_LIMIT, none of which raise, time
+    out or fail conversion — a genuinely complete, uncapped scan."""
+    def get_posts(self):
+        for i in range(3):
+            yield _FakeSimplePost(f'post{i}')
+
+
 class _FakeCarouselNode:
     def __init__(self, idx):
         self.is_video = False
@@ -192,6 +200,25 @@ def test_scan_profile_marks_hitting_scan_limit_mid_carousel_as_partial(monkeypat
     assert err is None
     assert len(items) == instagram.SCAN_LIMIT
     assert getattr(items, 'partial', False) is True
+
+
+def test_scan_profile_of_a_complete_profile_is_not_partial(monkeypatch):
+    """Negative counterpart of the truncation tests above: a profile with
+    fewer than SCAN_LIMIT posts, none of which raise, time out or fail
+    conversion, must NOT be flagged partial. Patches
+    `instaloader.Profile.from_username` (same boundary as the other tests
+    here) so the real collection loop runs to its natural end instead of a
+    stubbed scan()."""
+    monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
+    monkeypatch.setattr(instaloader.Profile, 'from_username',
+                        staticmethod(lambda context, username: _FakeProfileWithFewPosts()))
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='someone', original_url=None)
+
+    items, err = instagram.scan(validation)
+
+    assert err is None
+    assert len(items) == 3
+    assert getattr(items, 'partial', False) is False
 
 
 def test_scan_profile_where_every_post_fails_conversion_is_a_failure_not_empty(monkeypatch):

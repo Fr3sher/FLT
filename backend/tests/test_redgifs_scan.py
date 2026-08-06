@@ -140,6 +140,27 @@ def test_scan_returns_partial_when_rate_limited_after_collecting_some_items(monk
     assert getattr(items, 'partial', False) is True
 
 
+def test_scan_of_a_complete_profile_is_not_partial(monkeypatch):
+    """Negative counterpart of the truncation tests above: a profile whose
+    single page exhausts itself naturally (`pages` == 1, no RedGifsAbort,
+    well under MAX_ITEMS) must NOT be flagged partial. Patches `client._get`
+    (the real HTTP boundary `_iter_paged` calls) so the real pagination loop
+    runs to its natural end instead of a stubbed scan()."""
+    def _get_single_page(url, video_id=None):
+        gifs = [{'id': f'g{i}', 'urls': {}} for i in range(3)]
+        return {'gifs': gifs, 'pages': 1}
+
+    monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
+    monkeypatch.setattr(redgifs.client, '_get', _get_single_page)
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='someone')
+
+    items, err = redgifs.scan(validation)
+
+    assert err is None
+    assert len(items) == 3
+    assert getattr(items, 'partial', False) is False
+
+
 def test_scan_marks_hitting_max_items_as_partial(monkeypatch):
     """A profile that has more than MAX_ITEMS (100) videos, with every page
     loading fine (no RedGifsAbort at all), must not look complete. Patches
