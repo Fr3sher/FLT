@@ -425,10 +425,20 @@ def test_the_walk_yields_exactly_what_relpath_did(client, app, tmp_path):
 
 def test_a_rescan_after_a_rescan_adds_nothing(client, app, tmp_path):
     """The keys the walk produces must match the keys already in the database —
-    the failure mode of a hand-rolled relpath is a silent DOUBLE inventory."""
+    the failure mode of a hand-rolled relpath is a silent DOUBLE inventory.
+
+    The bank is re-pointed at the SAME folder spelled the way a legacy row can
+    hold it (forward slashes, trailing separator) before the rescan: that is the
+    case a slice-based walk gets wrong and relpath got right for free."""
     bank_id, src = _mkbank(client, tmp_path, {'a.jpg': _photo(seed=1),
                                               os.path.join('sub', 'b.jpg'):
                                               _photo(seed=2)})
+    with app.app_context():
+        from app.extensions import db
+        from app.models import ImageBank
+        db.session.get(ImageBank, bank_id).source_path = (
+            str(src).replace('\\', '/') + '/')
+        db.session.commit()
     client.get('/api/banks?rescan=1')
     rows = {b['id']: b for b in
             client.get('/api/banks?rescan=1').get_json()['banks']}
