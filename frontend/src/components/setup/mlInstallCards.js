@@ -33,4 +33,12 @@ export const ML_INSTALL_CARDS = [
   { action: 'shot_detect', cap: 'video_detect', icon: '🎞️',
     title: 'Shot detection (triage shots, not whole rushes)',
     body: 'Cuts each video at its shot boundaries (TransNetV2) so a two-hour file becomes hundreds of individually reviewable shots. Installs torch (CPU is fine — the network reads 48×27 frames) and one small package into the scoring Python it shares with ✨ Score. Without it you can still watch and triage whole files; you just cannot split them.' },
+  // This card is the fix for the exact gap the others already closed: the
+  // Concept Sources panel (Datasets ▸ Sources) offers the same install action
+  // through its own amber banner, but Setup — the screen a new user actually
+  // opens first — had no button for it at all, so the "install the scraper
+  // extras" advice from that banner led back to a page with nothing to click.
+  { action: 'scrape_extras', cap: 'scrape_deps', icon: '🔎',
+    title: 'Scraping extras (gallery links & keyless web image search)',
+    body: 'Installs curl_cffi, gallery-dl and cloudscraper — what gallery-URL scraping and the keyless web image search use to fetch thumbnails and full images. Pexels enumeration works without it (its official API); fetching the actual images still needs curl_cffi. Without it, scraping is limited to sources with no anti-bot layer.' },
 ]

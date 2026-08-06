@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-setup-summary-lists-every-installable-engine',
+    date: '2026-08-07',
+    title: 'Setup now lists every engine you can install',
+    blurb: "Bank scoring, the SigLIP2 semantic engine, the fast watermark detector and the scraping extras (gallery links & keyless web search) could already be installed with one click, but never showed up on the wizard's \"What's unlocked\" screen — so finishing Setup could look complete on a machine still missing four of them. All four now get their own row, their own install card, and their own ✓/✗.",
+    to: '/setup?step=quality',
+  },
+  {
     id: '2026-08-06-reddit-load-more-no-longer-drops-posts',
     date: '2026-08-06',
     title: 'Reddit "Load more" no longer skips posts',

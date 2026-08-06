@@ -40,13 +40,15 @@ const RIGS = [
 test('every capability row carries a destination, in every rig', () => {
   for (const [name, caps] of RIGS) {
     const rows = deriveCapabilitySummary(caps)
-    // 12 since Krea 2 Edit joined the list, 14 since the two video pieces did —
-    // each for the same reason. Krea was ABSENT before, which let the final
-    // screen certify "11 of 11 ready" on a machine with no Krea at all; then the
-    // video lane repeated the defect ("12 of 12 ready" on a machine that could
-    // not cut one file). An absent capability must be visible and counted,
-    // never dropped from the denominator.
-    assert.equal(rows.length, 14, `${name}: expected 14 capabilities`)
+    // 12 since Krea 2 Edit joined the list, 14 since the two video pieces did,
+    // 18 since bank scoring/SigLIP2/the watermark detector/scraping extras
+    // did — each for the same reason. Krea was ABSENT before, which let the
+    // final screen certify "11 of 11 ready" on a machine with no Krea at all;
+    // the video lane repeated the defect ("12 of 12 ready" on a machine that
+    // could not cut one file); these four repeated it again ("14 of 14 ready"
+    // on a machine missing four installable engines). An absent capability
+    // must be visible and counted, never dropped from the denominator.
+    assert.equal(rows.length, 18, `${name}: expected 18 capabilities`)
     for (const row of rows) {
       const dest = capabilityDestination(row)
       assert.ok(dest, `${name}: "${row.label}" has no destination`)

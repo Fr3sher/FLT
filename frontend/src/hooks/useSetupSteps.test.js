@@ -607,6 +607,71 @@ test('the capability summary counts the video pieces', () => {
   assert.equal(on.find((r) => /shot detection/i.test(r.label)).ok, true);
 });
 
+// --- Four more installable capabilities were missing from "What's unlocked" -----
+// setup_installer.INSTALL_ACTIONS already knew bank_scoring, bank_siglip2,
+// watermark_detect and scrape_extras, and each already had a working Setup card
+// (mlInstallCards.js) or, for scraping, a working install button on the Concept
+// Sources panel — but none of the four had a row on the wizard's final screen.
+// Same defect as the video pieces above, just for four different engines: a
+// machine missing all four still certified "14 of 14 capabilities ready".
+test('the capability summary counts bank scoring, SigLIP2, the watermark detector and scraping extras', () => {
+  const off = deriveCapabilitySummary({
+    bank_scoring: false, bank_siglip2: false, watermark_detect: false, scrape_deps: false,
+  });
+  const labels = off.map((r) => r.label);
+  const bank = off.find((r) => /^Bank scoring/.test(r.label));
+  const siglip = off.find((r) => /SigLIP2/.test(r.label));
+  const wmDetect = off.find((r) => /Watermark detector/.test(r.label));
+  const scrape = off.find((r) => /Scraping extras/.test(r.label));
+  assert.ok(bank, `no bank-scoring row in the summary: ${labels.join(', ')}`);
+  assert.ok(siglip, `no SigLIP2 row in the summary: ${labels.join(', ')}`);
+  assert.ok(wmDetect, `no watermark-detector row in the summary: ${labels.join(', ')}`);
+  assert.ok(scrape, `no scraping-extras row in the summary: ${labels.join(', ')}`);
+  // Each reads its OWN capability key, not a neighbour's — the bug this guards
+  // against is a copy-pasted row that always reports another engine's state.
+  assert.equal(bank.ok, false);
+  assert.equal(siglip.ok, false);
+  assert.equal(wmDetect.ok, false);
+  assert.equal(scrape.ok, false);
+  assert.equal(bank.topic, 'setup-quality');
+  assert.equal(siglip.topic, 'setup-quality');
+  assert.equal(wmDetect.topic, 'setup-quality');
+  assert.equal(scrape.topic, 'setup-quality');
+
+  const on = deriveCapabilitySummary({
+    bank_scoring: true, bank_siglip2: true, watermark_detect: true, scrape_deps: true,
+  });
+  assert.equal(on.find((r) => /^Bank scoring/.test(r.label)).ok, true);
+  assert.equal(on.find((r) => /SigLIP2/.test(r.label)).ok, true);
+  assert.equal(on.find((r) => /Watermark detector/.test(r.label)).ok, true);
+  assert.equal(on.find((r) => /Scraping extras/.test(r.label)).ok, true);
+});
+
+test('each new capability row maps to the quality wizard step in SetupPage', () => {
+  const page = fs.readFileSync(new URL('../pages/SetupPage.jsx', import.meta.url), 'utf8');
+  for (const label of [
+    'Bank scoring (aesthetic · NSFW · style)',
+    'SigLIP2 Bank semantics (optional)',
+    'Watermark detector (optional)',
+    'Scraping extras (optional)',
+  ]) {
+    const esc = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`'${esc}':\\s*'quality'`);
+    assert.match(page, re, `"${label}" is not wired to the quality step in CAPABILITY_STEP_ID`);
+  }
+});
+
+// The scraping-extras install action now has a Setup card of its own — it used
+// to be installable only from the Datasets ▸ Concept Sources panel, which the
+// Setup wizard never pointed at (and could not: capabilityDestination() only
+// resolves /settings and /setup routes). Without this card the new row's
+// "manage in Setup wizard" promise would be a dead end.
+test('the quality step offers a Setup card for scraping extras', () => {
+  const cards = fs.readFileSync(new URL('../components/setup/mlInstallCards.js', import.meta.url), 'utf8');
+  assert.match(cards, /action:\s*'scrape_extras'/);
+  assert.match(cards, /cap:\s*'scrape_deps'/);
+});
+
 test('the install catalog offers the video extras for install and repair', () => {
   const rows = installCatalog({ video_decode: false, video_detect: true });
   const video = rows.find((r) => r.action === 'video');

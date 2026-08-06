@@ -600,7 +600,11 @@ const TOPICS = [
      'reinstall', 'repair', 'optional helpers',
      'watermark detector', 'detector', 'siglip', 'siglip2', 'grounding dino',
      'faster watermark', 'watermark speed', 'find watermarks faster',
-     'watermark without ollama']),
+     'watermark without ollama',
+     // Scraping extras got a card here too — previously installable only from
+     // the Concept Sources panel, so Setup had nothing to click for it.
+     'scraper extras', 'scrape extras', 'curl_cffi', 'gallery-dl', 'cloudscraper',
+     'scraping not installed', 'web image search', 'keyless search']),
   setupStep('setup-training', 'training', 'Set up ai-toolkit (LoRA training)',
     ['ai-toolkit', 'aitoolkit', 'training', 'lora training', 'run.py', 'python',
      'interpreter', 'install training', 'train']),

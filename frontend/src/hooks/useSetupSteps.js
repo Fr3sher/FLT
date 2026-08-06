@@ -372,7 +372,8 @@ function qualityStep(caps) {
     id: 'quality', title: 'Quality tools (ML extras)', recommended: false,
     unlocks: ['Face-similarity scoring', 'Person masks', 'Watermark inpainting',
       'Bank scoring (aesthetic · NSFW · style)',
-      'SigLIP2 Bank semantics (optional)'],
+      'SigLIP2 Bank semantics (optional)',
+      'Watermark detector (optional)', 'Scraping extras (optional)'],
     status: ready ? 'ready' : (partial ? 'partial' : 'available'),
     faceScoring: !!caps.face_scoring, masks: !!caps.masks,
     watermarkInpaint: !!caps.watermark_inpaint,
@@ -381,6 +382,9 @@ function qualityStep(caps) {
     // existing CLIP-ready install does not become "partial" after this update.
     bankSiglip2: !!caps.bank_siglip2,
     watermarkDetect: !!caps.watermark_detect,
+    // Also optional and also install-from-here (its own Setup card lives in
+    // this step, see mlInstallCards.js) — same non-gating treatment.
+    scrapeDeps: !!caps.scrape_deps,
   }
 }
 
@@ -466,6 +470,18 @@ export function deriveCapabilitySummary(caps) {
     // removed from the denominator.
     { label: 'Video bank — reading files', ok: !!c.video_decode, topic: 'setup-quality' },
     { label: 'Video bank — shot detection', ok: !!c.video_detect, topic: 'setup-quality' },
+    // Four more that were installable (INSTALL_ACTIONS: bank_scoring, bank_siglip2,
+    // watermark_detect, scrape_extras; capabilities.py: bank_scoring, bank_siglip2,
+    // watermark_detect, scrape_deps) and had a working Setup card, yet never had a
+    // row here — the exact defect the comments above name, just for four different
+    // engines. A machine missing all four still certified "14 of 14 ready".
+    { label: 'Bank scoring (aesthetic · NSFW · style)', ok: !!c.bank_scoring,
+      topic: 'setup-quality' },
+    { label: 'SigLIP2 Bank semantics (optional)', ok: !!c.bank_siglip2,
+      topic: 'setup-quality' },
+    { label: 'Watermark detector (optional)', ok: !!c.watermark_detect,
+      topic: 'setup-quality' },
+    { label: 'Scraping extras (optional)', ok: !!c.scrape_deps, topic: 'setup-quality' },
     { label: 'LoRA training', ok: !!c.training_visible, topic: 'setup-training' },
     { label: 'Test Studio', ok: !!c.studio_visible,
       topic: 'setup-comfyui', waitingTopic: WAITING,

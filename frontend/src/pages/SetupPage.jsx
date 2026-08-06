@@ -77,6 +77,14 @@ const CAPABILITY_STEP_ID = {
   'Watermark inpainting': 'quality',
   'Video bank — reading files': 'quality',
   'Video bank — shot detection': 'quality',
+  // Same step as the four rows above: each has its own one-click card in the
+  // quality step's install list (mlInstallCards.js) — bank scoring/SigLIP2/the
+  // watermark detector were already there; the scraping-extras card was added
+  // alongside this row (it previously only lived on the Concept Sources panel).
+  'Bank scoring (aesthetic · NSFW · style)': 'quality',
+  'SigLIP2 Bank semantics (optional)': 'quality',
+  'Watermark detector (optional)': 'quality',
+  'Scraping extras (optional)': 'quality',
   'LoRA training': 'training',
   'Test Studio': 'comfyui',
 }
