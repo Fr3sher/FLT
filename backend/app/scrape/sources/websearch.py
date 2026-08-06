@@ -15,12 +15,17 @@ import logging
 from urllib.parse import parse_qs, urlsplit
 
 from .base import Source, Capabilities, Match
-from . import registry
+from . import gdl, registry
 
 logger = logging.getLogger(__name__)
 
 PLATFORM = 'websearch'
-MAX_RESULTS = 120        # même fenêtre que gdl.DEFAULT_MAX_ITEMS : une page = une page
+# Même fenêtre que les sources gdl-backed : une page = une page. Dérivée de la
+# constante partagée plutôt que recopiée — un ancien commentaire ici promettait
+# la même chose en dur (120), et rien n'empêchait plus les deux valeurs de
+# diverger un jour en silence pendant que le commentaire continuait d'affirmer
+# qu'elles restaient égales.
+MAX_RESULTS = gdl.DEFAULT_MAX_ITEMS
 _HOSTS = frozenset({'duckduckgo.com', 'www.duckduckgo.com'})
 _MISSING_DEP = ("Web image search needs the 'ddgs' package: "
                 "pip install -r backend/requirements-scrape.txt")
