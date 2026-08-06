@@ -337,21 +337,6 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
       {img.status === 'keep' && (
         <div className="m-1.5 mt-0 flex flex-col gap-1">
           <div className="dataset-grid-item__actions flex items-center justify-end gap-1">
-            {/* WHO WROTE THE TEXT IN THE BOX BELOW, on the row that already carries
-                this caption's actions. Only when there IS a caption and its author
-                was recorded: stamping "author not recorded" on every legacy tile
-                would be a grid of identical chips, which is noise rather than
-                information — the expanded editor has the room to say it and does. */}
-            {(cap || '').trim() && captionOriginInfo(img.caption_origin).known && (
-              <span title={captionOriginInfo(img.caption_origin).title}
-                aria-label={captionOriginInfo(img.caption_origin).short}
-                className={`mr-auto rounded border px-1 py-0.5 text-[10px] leading-none ${
-                  captionIsAsserted(img.caption_origin)
-                    ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300'
-                    : 'border-border bg-surface text-content-subtle'}`}>
-                {captionOriginInfo(img.caption_origin).chip}
-              </span>
-            )}
             <button type="button" onClick={() => setCaptionEditorOpen(true)}
               disabled={busy}
               title="Open a larger caption editor"
@@ -370,6 +355,25 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
               </button>
             )}
           </div>
+          {/* WHO WROTE THE TEXT IN THE BOX BELOW.
+              ITS OWN LINE, not a badge slipped into the action row: at the M tile
+              density that row already holds ⛶ Expand and 🗑 Caption, and a third
+              item there is clipped at the tile's left edge — measured headless at
+              that density, where the chip read "yCaption".
+              ALWAYS VISIBLE, unlike that row: this is a readout, not an action, and
+              a provenance you have to hover to discover is one nobody discovers.
+              Only when there IS a caption and its author was recorded — stamping
+              "author not recorded" on every legacy tile would be a grid of identical
+              chips, which is noise; the expanded editor has room to say it and does. */}
+          {(cap || '').trim() && captionOriginInfo(img.caption_origin).known && (
+            <span title={captionOriginInfo(img.caption_origin).title}
+              aria-label={captionOriginInfo(img.caption_origin).short}
+              className={`block truncate text-[10px] leading-none ${
+                captionIsAsserted(img.caption_origin)
+                  ? 'text-emerald-300' : 'text-content-subtle'}`}>
+              {captionOriginInfo(img.caption_origin).chip}
+            </span>
+          )}
           <textarea value={cap} onChange={(e) => setCap(e.target.value)}
             disabled={busy}
             onFocus={() => { editingRef.current = true; }}
