@@ -76,9 +76,11 @@ def scrape_scan():
     # PAS gdl-backed (ports autonomes) mais réutilisent le même `ResultList` pour
     # signaler leurs propres troncatures (page RedGifs refusée après une page
     # réussie, itération Instagram interrompue en cours de route) — même
-    # convention, aucun changement ici. Seule une source qui n'implémente aucune
-    # notion de troncature (Pexels, Reddit…) renvoie une liste ordinaire →
-    # `getattr` retombe alors sur False.
+    # convention, aucun changement ici. Reddit (reddit.py) est elle aussi
+    # gdl-backed en apparence seulement — port autonome — mais renvoie désormais
+    # un `ResultList` portant `partial` (budget d'appels listing épuisé). Seule
+    # une source qui n'implémente réellement aucune notion de troncature
+    # (Pexels…) renvoie une liste ordinaire → `getattr` retombe alors sur False.
     partial = bool(getattr(items, 'partial', False))
     if err and getattr(err, 'kind', None) != 'empty':
         return jsonify({'error': err, 'platform': result.platform.value,

@@ -255,6 +255,14 @@ def test_scan_listing_budget_exhausted_marks_partial(monkeypatch):
     assert items == []
     assert getattr(items, 'partial', False) is True
     assert calls['n'] == reddit._MAX_LISTING_CALLS
+    # Budget épuisé AVANT d'avoir rempli la page : une page plus profonde ferait
+    # un skip encore plus grand contre le même budget, donc ne peut jamais
+    # réussir non plus — le bouton « Load more » doit se taire (le bandeau
+    # `partial` reste l'endroit honnête). Sans ce garde-fou, `match.paginated`
+    # resterait à sa valeur par défaut (non-False) et la route rapporterait
+    # `paginated: True` pour toujours sur cette page profonde : 60 appels API
+    # pour 0 item à chaque clic, indéfiniment.
+    assert m.paginated is False
 
 
 def test_scan_empty_keyword_is_error(monkeypatch):

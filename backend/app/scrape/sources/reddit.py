@@ -63,6 +63,12 @@ _SCAN_MAX = 200            # plafond d'items remontés par UNE page de scan (pay
 # protège seulement le cas pathologique. Si atteinte avant d'avoir rempli la
 # page ou épuisé le listing, le résultat est marqué `partial` (jamais renvoyé
 # comme silencieusement complet).
+# (l'ancien design rejouait lui aussi le listing depuis `after=None` à chaque
+# page — `_fetch_listing` bouclait `for i in range(page + 1)` puis ne convertissait
+# que la dernière fournée — donc ce n'est pas une dette nouvelle : mesuré, le coût
+# par item est un match nul à faible densité d'images et strictement meilleur sur
+# les subreddits à galeries, où l'ancienne marche livrait 30 items là où celle-ci
+# en livre 200)
 _MAX_LISTING_CALLS = 60
 _SORTS = frozenset({'hot', 'new', 'top', 'rising', 'controversial', 'best'})
 _IMG_EXT = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
@@ -414,6 +420,14 @@ class RedditSource(Source):
                         continue
                     items.append(it)
                     if len(items) >= limit:
+                        # Retour dès `limit` atteint, SANS regarder si `after` tient
+                        # encore un curseur : une page qui tombe pile sur `limit`
+                        # items se voit donc marquée exhausted=False et laisse
+                        # « Load more » actif pour un clic qui reviendra bredouille.
+                        # Délibéré : l'inverse (masquer le bouton alors qu'il restait
+                        # des items) serait le sens qui compte, et l'éviter coûterait
+                        # un appel listing d'anticipation par page réussie — un clic
+                        # mort occasionnel est moins cher que ça.
                         return items, False, False
             if not after:
                 return items, True, False   # listing épuisé : rien de plus à charger
@@ -470,6 +484,14 @@ class RedditSource(Source):
             items, exhausted, budget_hit = self._walk_items(ep, token, page * _SCAN_MAX, _SCAN_MAX)
             if exhausted:
                 match.paginated = False   # rien de plus à charger : cache « Load more »
+            elif budget_hit and len(items) < _SCAN_MAX:
+                # Budget d'appels épuisé AVANT d'avoir rempli la page : une page
+                # plus profonde ferait un skip encore plus grand contre le MÊME
+                # budget, donc ne peut jamais réussir mieux — proposer « Load more »
+                # ici garantirait un clic mort (0 item, coût plein en appels API).
+                # `partial` reste posé : le bandeau reste honnête, seul le bouton
+                # se tait.
+                match.paginated = False
             result = ResultList(items)
             result.partial = budget_hit
             return result, None
