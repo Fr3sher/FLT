@@ -8,7 +8,7 @@ sources gdl-backed, pas juste UniversalSource.
 Tout est mocké au niveau de `registry.resolve` : aucun appel réseau ni
 process gallery-dl."""
 from app.scrape.sources import gdl, registry
-from app.scrape.sources.base import Match, Source, Capabilities
+from app.scrape.sources.base import Match, Source, Capabilities, ResultList
 
 
 class _FakeSource(Source):
@@ -92,15 +92,14 @@ def test_scan_toolerror_kind_still_answers_502(client, monkeypatch):
 
 
 def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client, monkeypatch):
-    """`enumerate()` peut renvoyer un `_ResultList` avec `partial=True` (budget de
-    temps épuisé en cours de récursion d'albums, items présents mais incomplets,
-    cf. gdl.py). Avant cette vague, `partial` s'arrêtait au logger.info de
-    universal.py : la route ne l'exposait nulle part, donc l'UI ne pouvait jamais
-    dire à l'utilisateur qu'un résultat COMPLET-en-apparence était en réalité
-    tronqué (finding #2)."""
-    from app.scrape.sources.gdl import _ResultList
-
-    truncated = _ResultList([
+    """`enumerate()` peut renvoyer un `ResultList` (app/scrape/sources/base.py)
+    avec `partial=True` (budget de temps épuisé en cours de récursion
+    d'albums, items présents mais incomplets, cf. gdl.py). Avant cette vague,
+    `partial` s'arrêtait au logger.info de universal.py : la route ne
+    l'exposait nulle part, donc l'UI ne pouvait jamais dire à l'utilisateur
+    qu'un résultat COMPLET-en-apparence était en réalité tronqué
+    (finding #2)."""
+    truncated = ResultList([
         {'url': 'https://fake.example.test/a.jpg', 'title': '', 'thumbnail': None,
          'type': 'image', 'platform': 'fake'}])
     truncated.from_albums = True
@@ -117,7 +116,7 @@ def test_scan_surfaces_partial_when_the_time_budget_cut_the_listing_short(client
 
 
 def test_scan_partial_defaults_to_false_for_ordinary_sources(client, monkeypatch):
-    """Une source non gdl-backed (liste ordinaire, pas de `_ResultList`) ne doit
+    """Une source non gdl-backed (liste ordinaire, pas de `ResultList`) ne doit
     jamais faire lever `partial` par accident — `getattr` doit retomber sur False
     plutôt que planter ou renvoyer une valeur truthy inattendue."""
     _use_fake_source(monkeypatch, items=[{'url': 'https://fake.example.test/a.jpg',

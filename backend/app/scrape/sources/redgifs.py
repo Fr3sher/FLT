@@ -14,7 +14,7 @@ import threading
 import requests
 
 from ..validators import URLType
-from .gdl import _ResultList
+from .base import ResultList
 
 logger = logging.getLogger(__name__)
 
@@ -216,13 +216,13 @@ def scan(validation):
             if items:
                 # Des items ont déjà été récoltés avant que RedGifs ne refuse une
                 # page suivante (429/403/5xx/401) : résultat PARTIEL, pas un échec
-                # — même convention que `gdl._ResultList.partial` (réutilisée telle
-                # quelle, cf. import), lue par `routes/scrape.py` sur l'objet
+                # — même convention que `base.ResultList.partial` (réutilisée
+                # telle quelle, cf. import), lue par `routes/scrape.py` sur l'objet
                 # retourné (`getattr(items, 'partial', False)`), sans changement
                 # côté route. Corrige au passage un bug préexistant vérifié par le
                 # relecteur : un 429 en page 2 après une page 1 réussie renvoyait
                 # 1 item avec err=None et aucun signal de troncature.
-                result = _ResultList(items[:MAX_ITEMS])
+                result = ResultList(items[:MAX_ITEMS])
                 result.partial = True
                 return result, None
             # Zéro item ET abandon (pas un épuisement propre) : une vraie panne

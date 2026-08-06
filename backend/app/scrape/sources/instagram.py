@@ -29,7 +29,8 @@ import time
 import logging
 from pathlib import Path
 
-from .gdl import GdlError, _ResultList
+from .base import ResultList
+from .gdl import GdlError
 
 try:
     import instaloader
@@ -290,7 +291,7 @@ def _scan_profile(loader, username):
             # On a déjà des items utiles → on les retourne sans erreur, mais la
             # récolte n'est PAS garantie complète (cas le plus courant : rate-limit
             # en cours de route) — signal `partial`, même convention que
-            # `gdl._ResultList.partial` / le cas `timed_out`/`posts_failed`
+            # `base.ResultList.partial` / le cas `timed_out`/`posts_failed`
             # juste en dessous (réutilisée telle quelle), lue par `routes/scrape.py`
             # sur l'objet retourné sans changement côté route. Avant cette
             # correction ce chemin renvoyait `items[:SCAN_LIMIT], None` — une
@@ -298,7 +299,7 @@ def _scan_profile(loader, username):
             # coupée comme complète.
             logger.warning("Itération profil %s interrompue après %d items : %s",
                            username, len(items), e)
-            result = _ResultList(items[:SCAN_LIMIT])
+            result = ResultList(items[:SCAN_LIMIT])
             result.partial = True
             return result, None
         logger.warning("Itération profil %s échouée : %s", username, e)
@@ -333,10 +334,10 @@ def _scan_profile(loader, username):
         # l'itération avant la fin, soit certains posts ont échoué à la
         # conversion pendant que d'autres réussissaient. Les items présents
         # restent valides — signal `partial` plutôt que de les jeter, même
-        # convention que `gdl._ResultList.partial` (réutilisée telle quelle),
+        # convention que `base.ResultList.partial` (réutilisée telle quelle),
         # lue par `routes/scrape.py` sur l'objet retourné sans changement côté
         # route.
-        result = _ResultList(items[:SCAN_LIMIT])
+        result = ResultList(items[:SCAN_LIMIT])
         result.partial = True
         return result, None
     return items[:SCAN_LIMIT], None

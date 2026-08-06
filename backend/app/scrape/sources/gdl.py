@@ -13,6 +13,8 @@ import time
 import logging
 from urllib.parse import urlparse
 
+from .base import ResultList
+
 logger = logging.getLogger(__name__)
 
 GDL_TIMEOUT = 60
@@ -162,25 +164,6 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
     return data, None
 
 
-class _ResultList(list):
-    """Items renvoyés par `enumerate()`, porteurs de métadonnées de provenance
-    (même patron que `GdlError` sous-classant `str`) : les appelants qui
-    traitent le retour comme une simple liste continuent de fonctionner sans
-    changement ; ceux qui veulent savoir consultent les attributs.
-
-    - `from_albums` : True si TOUS les items proviennent de la récursion
-      d'albums (type 6), pas des médias top-level de la page. `enumerate()` ne
-      borne cette récursion QU'au nombre d'albums (`max_albums`), jamais par un
-      offset de page — donc une source qui annoncerait la pagination sur ces
-      items enverrait « Charger plus » dans le vide (cf. le repli `unsupported`
-      qui, lui, coupe déjà `match.paginated` pour la même raison).
-    - `partial` : True si le budget de temps global (`deadline`) a coupé
-      l'énumération avant d'avoir exploré tous les albums — les items présents
-      restent valides, il en manque potentiellement."""
-    from_albums = False
-    partial = False
-
-
 def _error_sentinel(entries):
     """Si une entrée type -1 (erreur d'extracteur) est présente, renvoie son message."""
     for entry in entries:
@@ -252,8 +235,9 @@ def enumerate(url, *, platform='generic', max_items=DEFAULT_MAX_ITEMS,
                         break
         def _from_albums(collected):
             """Enveloppe les items collectés via la récursion d'albums avec leur
-            provenance (`from_albums`, `partial`) — cf. docstring de `_ResultList`."""
-            out = _ResultList(collected[:max_items])
+            provenance (`from_albums`, `partial`) — cf. docstring de
+            `base.ResultList`."""
+            out = ResultList(collected[:max_items])
             out.from_albums = True
             out.partial = timed_out
             return out

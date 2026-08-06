@@ -118,7 +118,7 @@ def test_scan_profile_marks_a_mid_iteration_rate_limit_as_partial(monkeypatch):
     `profile.get_posts()` AFTER at least one post was already collected used to
     return `items[:SCAN_LIMIT], None` — a plain list with no truncation signal,
     presenting a one-item harvest as complete. Must now carry `partial=True`,
-    the same convention as `gdl._ResultList.partial`."""
+    the same convention as `base.ResultList.partial`."""
     monkeypatch.setattr(instagram, '_build_loader', lambda: SimpleNamespace(context=object()))
     monkeypatch.setattr(instaloader.Profile, 'from_username',
                         staticmethod(lambda context, username: _FakeProfileRateLimitedMidIteration()))

@@ -65,14 +65,15 @@ def scrape_scan():
     match.page = page
     match.include_albums = bool(data.get('include_albums'))
     items, err = match.source.scan(match)
-    # `partial` (cf. gdl.enumerate / gdl._ResultList) : le budget de temps global a
+    # `partial` (cf. gdl.enumerate / base.ResultList) : le budget de temps global a
     # coupé la récursion d'albums avant d'avoir tout exploré — les items présents
     # restent valides, il en manque potentiellement. Lu directement sur `items` :
-    # `_ResultList` porte l'attribut sur le retour qu'`enumerate()` produit, que la
-    # source le renvoie tel quel (universal.py, gdl_source.py, erome.py,
+    # `ResultList` (contrat de source public, app/scrape/sources/base.py — PAS un
+    # détail gallery-dl) porte l'attribut sur le retour qu'`enumerate()` produit,
+    # que la source le renvoie tel quel (universal.py, gdl_source.py, erome.py,
     # image_sites.py, civitai.py, sexcom.py — TOUTES les sources gdl-backed) sans
     # avoir besoin de le relayer explicitement. redgifs.py et instagram.py ne sont
-    # PAS gdl-backed (ports autonomes) mais réutilisent le même `_ResultList` pour
+    # PAS gdl-backed (ports autonomes) mais réutilisent le même `ResultList` pour
     # signaler leurs propres troncatures (page RedGifs refusée après une page
     # réussie, itération Instagram interrompue en cours de route) — même
     # convention, aucun changement ici. Seule une source qui n'implémente aucune
