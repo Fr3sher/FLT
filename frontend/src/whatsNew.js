@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-captions-say-who-wrote-them',
+    date: '2026-08-07',
+    title: 'Every caption now says who wrote it',
+    blurb: 'The default captioning backend is a chain, not a choice: JoyCaption writes what it can, then the Ollama vision model covers the images it missed — and both halves used to land in the same box looking identical. Captions now carry their author everywhere you read one (bank tile, dataset tile, the expanded editor, the identity-leak list), your own hand-written captions stay marked as yours, and a bank caption run ends with "340 by JoyCaption, 87 by the Ollama vision model" instead of a bare total. On a bank that ✨ Score has found to be mostly NSFW, the caption window now also says what was measured on that kind of image before you start.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-07-unlocked-rows-lead-to-their-install',
     date: '2026-08-07',
     title: 'Every "What\'s unlocked" row now takes you to its install',
