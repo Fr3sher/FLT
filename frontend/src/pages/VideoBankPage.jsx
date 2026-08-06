@@ -108,7 +108,12 @@ export default function VideoBankPage() {
   return (
     <div className="space-y-6">
       <header className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-bold text-content">🎬 Video bank</h1>
+        <h1 className="flex items-center gap-2 text-xl font-bold text-content">
+          🎬 Video bank
+          <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-600 dark:text-amber-400">
+            Beta
+          </span>
+        </h1>
         <HelpBadge topic="page-video-bank" />
         <BankLaneTabs className="w-full sm:ml-auto sm:w-auto" />
       </header>
