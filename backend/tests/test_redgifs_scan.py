@@ -55,3 +55,59 @@ def test_a_missing_single_video_stays_a_real_error_not_an_empty_result(monkeypat
 
     assert items is None
     assert 'not found' in err
+
+
+def test_scan_reports_a_failure_not_an_empty_success_when_profile_is_rate_limited(monkeypatch):
+    """Probe from the reviewer: a 429 on the profile page must not report an
+    empty success. Before the fix, `_iter_paged` swallowed EVERY HTTP error
+    (429/403/5xx/timeout) and just `return`ed, ending the generator — a
+    rate-limited profile then yielded zero items and `scan()` answered
+    ([], None): HTTP 200, count 0, "No images found on this page." """
+    def _rate_limited(username):
+        raise redgifs.RedGifsAbort("RedGifs: HTTP 429.")
+        yield  # pragma: no cover - unreachable, keeps this a generator function
+
+    monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
+    monkeypatch.setattr(redgifs.client, 'iter_user', _rate_limited)
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='throttled')
+
+    items, err = redgifs.scan(validation)
+
+    assert items is None
+    assert err is not None
+    assert 'rate' in err.lower() or 'blocked' in err.lower()
+
+
+def test_scan_reports_a_failure_not_an_empty_success_when_niche_is_rate_limited(monkeypatch):
+    def _rate_limited(niche):
+        raise redgifs.RedGifsAbort("RedGifs: HTTP 429.")
+        yield  # pragma: no cover - unreachable, keeps this a generator function
+
+    monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
+    monkeypatch.setattr(redgifs.client, 'iter_niche', _rate_limited)
+    validation = SimpleNamespace(url_type=URLType.NICHE, value='throttled-niche')
+
+    items, err = redgifs.scan(validation)
+
+    assert items is None
+    assert err is not None
+    assert 'rate' in err.lower() or 'blocked' in err.lower()
+
+
+def test_scan_returns_partial_when_rate_limited_after_collecting_some_items(monkeypatch):
+    """Pre-existing bug the reviewer also verified: a 429 on page 2 after page 1
+    succeeded used to return 1 item with err=None and no truncation signal, while
+    dozens of advertised pages were refused. Now it must carry `partial=True`."""
+    def _partial(username):
+        yield {'id': 'abc', 'urls': {}}
+        raise redgifs.RedGifsAbort("RedGifs: HTTP 429.")
+
+    monkeypatch.setattr(redgifs.client, 'get_token', lambda: 'tok')
+    monkeypatch.setattr(redgifs.client, 'iter_user', _partial)
+    validation = SimpleNamespace(url_type=URLType.PROFILE, value='throttled')
+
+    items, err = redgifs.scan(validation)
+
+    assert err is None
+    assert len(items) == 1
+    assert getattr(items, 'partial', False) is True
