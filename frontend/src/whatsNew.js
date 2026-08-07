@@ -50,6 +50,22 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-pick-the-model-file-you-actually-have',
+    date: '2026-08-07',
+    title: 'Choose your Klein and Krea model files from a list instead of typing a filename',
+    blurb:
+      'The Klein model-file fields and the Krea 2 Edit base model and identity LoRA were blank boxes you had to fill from memory — one typo and the engine quietly used a different file. Each is now a searchable list of the model files actually found in your ComfyUI (extra_model_paths.yaml roots included), with a ↻ to rescan after you drop a new one in, and a plain sentence naming the folder when nothing is there. The Krea base list shows only what the app would really elect, so a checkpoint it refuses is never offered. Typing still works for a file that is not on disk yet, or an absolute path from anywhere.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-07-a-pinned-model-that-is-missing-stops-the-run',
+    date: '2026-08-07',
+    title: 'A model file you chose that is no longer there now stops the engine instead of being swapped',
+    blurb:
+      'If you pinned a Klein or Krea model file and that file is gone or renamed, the app used to fall back to picking one for you and write a line in a log nobody reads — so the graph loaded a file other than the one on screen, and you only found out from the images. Now the pinned name stays in the field, marked "not found", the engine refuses to start and says which file it is looking for. Clearing the field is the explicit way back to automatic detection. The one exception is the shipped identity/consistency LoRA name, which nobody typed: at its default it still recovers a renamed download on its own.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-07-krea-likeness-dials-reachable',
     date: '2026-08-07',
     title: 'When Krea 2 Edit does not look enough like your reference, you can now fix it',

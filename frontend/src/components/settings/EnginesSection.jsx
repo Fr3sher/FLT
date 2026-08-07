@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { apiFetch, postJson } from '../../api/fetchClient'
 import { INPUT_CLASS, Card, StatusBadge, SecretField } from './primitives'
 import KleinLoraCombobox, { useKleinGenerationLoras } from './KleinLoraCombobox'
+import ModelFilePicker, { useModelFiles } from './ModelFilePicker'
 import PromptOverrideField from '../common/PromptOverrideField'
 import PromptPreview from './PromptPreview'
 import ResetToDefault from './ResetToDefault'
@@ -190,16 +191,16 @@ function KleinLorasCard({ config, setField }) {
    `slot` matches caps.comfyui.klein_overrides.
    Ported from socrasteeze's branch (GitHub #20). */
 const KLEIN_MODEL_SLOTS = [
-  { key: 'klein-model-unet', cfg: 'unet', slot: 'unet', label: 'Diffusion model (UNET)',
+  { key: 'klein-model-unet', cfg: 'unet', slot: 'unet', pick: 'klein_unet', label: 'Diffusion model (UNET)',
     hint: 'Full path from anywhere, or relative to a diffusion-model folder — e.g. klein/flux-2-klein-9b-fp8.safetensors under models/unet (a bare filename for a file sitting at a folder root). A filename without "fp8" loads at full precision instead of being quantized.' },
-  { key: 'klein-model-text_encoder', cfg: 'text_encoder', slot: 'text_encoder', label: 'Text encoder',
+  { key: 'klein-model-text_encoder', cfg: 'text_encoder', slot: 'text_encoder', pick: 'klein_text_encoder', label: 'Text encoder',
     hint: 'Full path, or relative to models/text_encoders — e.g. qwen_3_8b_fp8mixed.safetensors.' },
-  { key: 'klein-model-vae', cfg: 'vae', slot: 'vae', label: 'VAE',
+  { key: 'klein-model-vae', cfg: 'vae', slot: 'vae', pick: 'klein_vae', label: 'VAE',
     hint: 'Full path, or relative to models/vae — e.g. flux2-vae.safetensors.' },
-  { key: 'klein-model-consistency_lora', cfg: 'consistency_lora', slot: 'consistency_lora',
+  { key: 'klein-model-consistency_lora', cfg: 'consistency_lora', slot: 'consistency_lora', pick: 'klein_consistency_lora',
     label: 'Consistency LoRA',
     placeholder: 'Empty = no consistency LoRA',
-    missText: 'Not found — the LoRA is skipped (Setup can download it)',
+    missText: 'Not found — at the shipped name the LoRA is simply skipped (Setup can download it); a name you chose yourself stops the engine instead',
     hint: 'Full path, or relative to models/loras — the structure-anchoring LoRA chained onto the Klein edit graph. Unlike the three above, this one has a shipped default and clearing it disables the LoRA rather than turning on auto-detection.' },
 ]
 
@@ -219,7 +220,36 @@ function overrideBadge(st, missText) {
     return { cls: 'text-amber-400',
              text: "Could not be linked into ComfyUI's model folders — check permissions, or move the file" }
   }
-  return { cls: 'text-amber-400', text: missText || 'Not found — auto-detection is used' }
+  return { cls: 'text-amber-400', text: missText || 'Not found — the engine will refuse to run until you fix or clear this' }
+}
+
+/* ONE pinnable slot. Its own component because each row needs its OWN scan of a
+   DIFFERENT ComfyUI folder, and a hook cannot be called inside a .map. Each scan
+   is cached server-side on that folder's mtime, so four rows are four cheap
+   requests, not four directory walks. */
+function KleinModelSlotRow({ spec, config, setField, override }) {
+  const { key, cfg, label, hint, placeholder, missText, pick } = spec
+  const scan = useModelFiles(pick)
+  const badge = overrideBadge(override, missText)
+  return (
+    <div>
+      <div className="flex flex-wrap items-center justify-between gap-x-2">
+        <label htmlFor={key} className="block text-sm font-medium text-content">{label}</label>
+        {badge && (
+          <span className={`text-xs sm:text-right ${badge.cls}`}>{badge.text}</span>
+        )}
+      </div>
+      <ModelFilePicker
+        id={key}
+        ariaLabel={`Klein ${label}`}
+        value={config.klein?.[cfg] || ''}
+        onChange={(v) => setField('klein', cfg, v)}
+        placeholder={placeholder || 'Empty = auto-detect'}
+        {...scan}
+      />
+      <p className="mt-1 text-[0.6875rem] text-content-subtle">{hint}</p>
+    </div>
+  )
 }
 
 function KleinModelFilesCard({ config, setField, caps }) {
@@ -228,30 +258,12 @@ function KleinModelFilesCard({ config, setField, caps }) {
     <Card
       id="klein-model-files"
       title="Klein model files (optional)"
-      help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Each field takes a full absolute path OR a ComfyUI-relative loader name. A path under one of ComfyUI's model folders (extra_model_paths.yaml roots included) is converted automatically to what the loader needs; a path from anywhere else is hardlinked into an lds-pinned/ folder so ComfyUI can load it without you moving a multi-GB file. Leave a field empty to keep auto-detection for that slot. A pinned file that cannot be resolved falls back to auto-detection and shows a badge here rather than blocking generation. Contributed by socrasteeze (GitHub)."
+      help="Pin the exact files the Klein graph loads instead of relying on auto-detection (the canonical download names, then a narrow token scan). Each field takes a full absolute path OR a ComfyUI-relative loader name. A path under one of ComfyUI's model folders (extra_model_paths.yaml roots included) is converted automatically to what the loader needs; a path from anywhere else is hardlinked into an lds-pinned/ folder so ComfyUI can load it without you moving a multi-GB file. Each field lists the files actually found in that ComfyUI folder — you can still type a name or a full path for a file that is not there yet. Leave a field empty to keep auto-detection for that slot. A pinned file that cannot be resolved STOPS the engine and says which one: it used to fall back to auto-detection, which meant the graph loaded a different file from the one shown here and nobody found out until the images came back wrong. Clearing the field is how you go back to auto-detection. Contributed by socrasteeze (GitHub)."
     >
-      {KLEIN_MODEL_SLOTS.map(({ key, cfg, slot, label, hint, placeholder, missText }) => {
-        const badge = overrideBadge(overrides[slot], missText)
-        return (
-          <div key={key}>
-            <div className="flex flex-wrap items-center justify-between gap-x-2">
-              <label htmlFor={key} className="block text-sm font-medium text-content">{label}</label>
-              {badge && (
-                <span className={`text-xs sm:text-right ${badge.cls}`}>{badge.text}</span>
-              )}
-            </div>
-            <input
-              id={key}
-              type="text"
-              value={config.klein?.[cfg] || ''}
-              onChange={(e) => setField('klein', cfg, e.target.value)}
-              placeholder={placeholder || 'Empty = auto-detect'}
-              className={INPUT_CLASS}
-            />
-            <p className="mt-1 text-[0.6875rem] text-content-subtle">{hint}</p>
-          </div>
-        )
-      })}
+      {KLEIN_MODEL_SLOTS.map((s) => (
+        <KleinModelSlotRow key={s.key} spec={s} config={config} setField={setField}
+          override={overrides[s.slot]} />
+      ))}
     </Card>
   )
 }
@@ -367,6 +379,11 @@ function KreaCard({ config, setField, configDefaults }) {
   const krea = config.krea || {}
   const reset = { config, configDefaults, setField }
   const dflt = (key) => defaultValueAt(configDefaults, 'krea', key)
+  // One scan per slot, fired when the card mounts. Both degrade to an empty list
+  // (=> plain free-text field) rather than blocking the panel — an absolute path
+  // from outside every ComfyUI root is a legitimate value no scan can enumerate.
+  const baseScan = useModelFiles('krea_base_model')
+  const identityScan = useModelFiles('krea_identity_lora')
   const grounding = Number(krea.grounding_px ?? dflt('grounding_px'))
   return (
     <Card
@@ -426,18 +443,20 @@ function KreaCard({ config, setField, configDefaults }) {
         <label htmlFor="krea-base-model" className="block text-xs font-medium text-content">
           Base model file (optional)
         </label>
-        <input
+        <ModelFilePicker
           id="krea-base-model"
-          type="text"
+          ariaLabel="Krea base model file"
           value={krea.base_model ?? ''}
+          onChange={(v) => setField('krea', 'base_model', v)}
           placeholder="auto — finds a Krea 2 Turbo/Raw build"
-          onChange={(e) => setField('krea', 'base_model', e.target.value)}
-          className={INPUT_CLASS}
+          {...baseScan}
         />
         <p className="mt-1 text-[0.6875rem] text-content-subtle">
           Leave blank unless you own several Krea builds. Blank = the app picks a Krea 2
-          Turbo then Raw model from your ComfyUI. Non-Krea-2 checkpoints that merely carry
-          &ldquo;krea&rdquo; in their name are skipped: the identity LoRA renders pure noise on them.
+          Turbo then Raw model from your ComfyUI. The list is what the app would actually
+          elect from: non-Krea-2 checkpoints that merely carry &ldquo;krea&rdquo; in their name are
+          skipped there too, because the identity LoRA renders pure noise on them. Pick a
+          file that is not on disk and Krea refuses to run rather than loading another one.
         </p>
         {/* The default here is the EMPTY string, and resetting writes exactly
             that: blank means "resolve it yourself", and a reset must give that
@@ -450,18 +469,18 @@ function KreaCard({ config, setField, configDefaults }) {
         <label htmlFor="krea-identity-lora" className="block text-xs font-medium text-content">
           Identity edit LoRA (optional)
         </label>
-        <input
+        <ModelFilePicker
           id="krea-identity-lora"
-          type="text"
+          ariaLabel="Krea identity edit LoRA"
           value={krea.identity_lora ?? ''}
-          placeholder="krea/krea2_identity_edit_v1_2.safetensors"
-          onChange={(e) => setField('krea', 'identity_lora', e.target.value)}
-          className={INPUT_CLASS}
+          onChange={(v) => setField('krea', 'identity_lora', v)}
+          placeholder="blank = find krea2_identity_edit automatically"
+          {...identityScan}
         />
         <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          Path relative to ComfyUI&rsquo;s models/loras. If the file isn&rsquo;t there under this
-          name, the app searches your LoRA folders for a krea2_identity_edit file, so a
-          renamed download still works.
+          Blank = the app searches your LoRA folders for a krea2_identity_edit file, so a
+          renamed download still works. Name one here and that is the LoRA it loads — if it
+          is not on disk, Krea refuses to run instead of substituting another face transfer.
         </p>
         <ResetToDefault label="Identity edit LoRA" section="krea" field="identity_lora" {...reset} />
       </div>

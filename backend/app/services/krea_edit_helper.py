@@ -162,6 +162,36 @@ class KreaModelsMissing(Exception):
                          + ', '.join(self.missing + self.missing_nodes))
 
 
+class KreaPinnedModelMissing(Exception):
+    """A Krea model file the user PINNED in Settings is not on disk.
+
+    Deliberately NOT the same error as KreaModelsMissing, and deliberately not a
+    silent fallback to automatic resolution.
+
+    WHY THE ENGINE REFUSES INSTEAD OF FALLING BACK
+    ----------------------------------------------
+    This resolver used to log a warning and elect a base model on its own when
+    `krea.base_model` named a file it could not find. On a shared ComfyUI that is
+    how an entire training ran on a third-party finetune nobody chose: the
+    Settings field showed one filename, the graph loaded another, and the only
+    symptom was images that were subtly not the model asked for — visible after
+    the expensive part, not before it.
+
+    A setting that quietly resolves to something OTHER than what it displays is
+    the worst failure mode available to us. So a pin that cannot be resolved is a
+    STOP, naming the file, and clearing the field is the explicit gesture that
+    goes back to auto-detection.
+
+    `.gaps` = [{'slot', 'key', 'configured'}]."""
+
+    def __init__(self, gaps):
+        self.gaps = list(gaps or [])
+        super().__init__(
+            'Krea 2 Edit: pinned model file not found — '
+            + '; '.join(f"{g['key']} = {g['configured']!r}" for g in self.gaps)
+            + '. Pick a file that exists, or clear the field to use auto-detection.')
+
+
 # --- Resolution -------------------------------------------------------------
 # Canonical-name-first with NARROW token fallbacks, scanning roots in ComfyUI's
 # own priority order — the same discipline as klein_edit_helper. A WRONG model is
@@ -334,8 +364,14 @@ def resolve_krea_unet(selected=None):
         for sub, names in folders:
             if bare_pick in names:
                 return os.path.join(sub, bare_pick)
-        logger.warning('krea.base_model %r not found under any krea folder — '
-                       'falling back to automatic resolution', pick)
+        # An explicit pick that is NOT there stops here. It used to fall through
+        # to the election below with a log line nobody reads — see
+        # KreaPinnedModelMissing for the run that cost us. Returning None makes
+        # `krea_missing_assets` report the gap and `preflight` refuse, naming the
+        # file the user asked for instead of quietly loading another one.
+        logger.warning('krea base model %r is not on disk — refusing to elect a '
+                       'different one', pick)
+        return None
     return elect_krea_base([os.path.join(sub, n) for sub, names in folders
                             for n in names])
 
@@ -383,6 +419,16 @@ def resolve_krea_identity_lora():
         found = _lora_abs(configured)
         if found:
             return configured, found
+        # A pin the USER chose is a stop, not a licence to load a different
+        # LoRA: the identity LoRA IS the face transfer, and swapping it silently
+        # changes every output. But the SHIPPED default is not a choice — it is
+        # the canonical download name, and "not there under this name, so scan
+        # for the renamed file" is the whole reason that fallback exists. Only a
+        # value moved off the default refuses; the default keeps scanning.
+        if _is_user_pin('krea.identity_lora'):
+            logger.warning('krea.identity_lora %r is not on disk — refusing to '
+                           'scan for a different one', configured)
+            return None, None
         logger.info('krea.identity_lora %r not found — scanning for the LoRA by name',
                     configured)
     # list_models mirrors ComfyUI's own get_filename_list: every loras search
@@ -562,9 +608,63 @@ def missing_file_entries(missing):
     return out
 
 
+# The two Krea slots a user can PIN to an exact file, and the picker slot each
+# one feeds.
+KREA_PIN_KEYS = {
+    'base_model': ('krea.base_model', 'krea_base_model'),
+    'identity_lora': ('krea.identity_lora', 'krea_identity_lora'),
+}
+
+
+def _is_user_pin(key: str) -> bool:
+    """Is this config value something the USER chose, as opposed to the value the
+    app ships?
+
+    The distinction is not pedantry, it is the difference between a helpful
+    refusal and a bricked install. `krea.base_model` defaults to '' — any value
+    is a choice. `krea.identity_lora` defaults to the canonical DOWNLOAD name, so
+    every install on earth has it "set" while nobody typed it; treating that as a
+    pin would turn the renamed-download recovery into a hard stop for everyone.
+    Klein's consistency LoRA has exactly the same shape (see
+    klein_edit_helper.klein_pin_gaps)."""
+    section, _, field = key.partition('.')
+    raw = str(cfg.get(key) or '').strip()
+    if not raw:
+        return False
+    shipped = str((cfg.DEFAULTS.get(section) or {}).get(field, '') or '').strip()
+    return raw != shipped
+
+
+def krea_pin_gaps():
+    """``[{'slot', 'key', 'configured'}]`` for every Krea model file pinned in
+    Settings that is NOT on disk. Empty on an install that pins nothing (the
+    normal case) and on one whose pins all resolve.
+
+    Read by capabilities (to keep the engine dark and let the UI say WHY) and by
+    preflight (to refuse a run). One function, so the badge in Settings, the
+    engine card and the refusal can never disagree about which file is missing."""
+    gaps = []
+    raw_base = (cfg.get('krea.base_model') or '').strip()
+    if raw_base and resolve_krea_unet() is None:
+        gaps.append({'slot': 'base_model', 'key': 'krea.base_model',
+                     'configured': raw_base})
+    raw_lora = (cfg.get('krea.identity_lora') or '').strip()
+    if _is_user_pin('krea.identity_lora') and resolve_krea_identity_lora()[0] is None:
+        gaps.append({'slot': 'identity_lora', 'key': 'krea.identity_lora',
+                     'configured': raw_lora})
+    return gaps
+
+
 def preflight():
     """Raise KreaModelsMissing when the engine cannot run. No auto-download: see
-    the module docstring — the honest answer is a named gap, not a fake installer."""
+    the module docstring — the honest answer is a named gap, not a fake installer.
+
+    A PINNED file that is absent is raised first and separately: "your base model
+    is missing" and "the file you chose is not there" send the user to two
+    different places, and only the second one is about something they typed."""
+    gaps = krea_pin_gaps()
+    if gaps:
+        raise KreaPinnedModelMissing(gaps)
     missing = krea_missing_assets()
     nodes = krea_missing_nodes()
     if missing or nodes:

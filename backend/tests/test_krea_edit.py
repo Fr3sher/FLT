@@ -125,17 +125,60 @@ def test_the_incompatible_biglove_base_is_never_picked(krea):
     assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
 
 
-def test_an_explicit_base_model_setting_wins_and_a_stale_one_degrades(krea):
+def test_an_explicit_base_model_setting_wins_and_a_stale_one_STOPS(krea):
+    """This test used to assert the OPPOSITE of its second half, and the reversal
+    is the point.
+
+    It read: "a setting pointing at a file that is no longer there must NOT block
+    the engine — it falls back to automatic resolution with a log line." That is
+    the behaviour that let a whole training run on a third-party finetune nobody
+    chose: Settings displayed one filename, the graph loaded another, and the log
+    line was in a file nobody opens. A setting that silently resolves to
+    something other than what it shows is invisible until after the expensive
+    part.
+
+    So a stale pin is now a STOP that names the file, and clearing the field is
+    the explicit gesture that returns to auto-detection.
+    """
     keh, base, config = krea
     d = base / 'models' / 'diffusion_models' / 'Krea'
     _write(d / 'krea2_turbo_fp8.safetensors')
     _write(d / 'krea2_raw_fp8.safetensors')
     config.save_config({'krea': {'base_model': 'krea2_raw_fp8.safetensors'}})
     assert keh.resolve_krea_unet().endswith('krea2_raw_fp8.safetensors')
-    # A setting pointing at a file that is no longer there must NOT block the
-    # engine — it falls back to automatic resolution with a log line.
+    # The pinned file is gone: nothing is elected in its place...
     config.save_config({'krea': {'base_model': 'deleted_yesterday.safetensors'}})
+    assert keh.resolve_krea_unet() is None
+    # ...the gap is reported by name, so the UI can point at the field...
+    gaps = keh.krea_pin_gaps()
+    assert [g['key'] for g in gaps] == ['krea.base_model']
+    assert gaps[0]['configured'] == 'deleted_yesterday.safetensors'
+    # ...the run refuses rather than rendering on another base...
+    with pytest.raises(keh.KreaPinnedModelMissing) as exc:
+        keh.preflight()
+    assert 'deleted_yesterday.safetensors' in str(exc.value)
+    # ...and clearing the field is what goes back to automatic resolution.
+    config.save_config({'krea': {'base_model': ''}})
     assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
+    assert keh.krea_pin_gaps() == []
+
+
+def test_the_shipped_identity_lora_name_is_not_a_user_pin(krea):
+    """`krea.identity_lora` defaults to the canonical DOWNLOAD name, so every
+    install has it "set" while nobody typed it. Treating that as a pin would turn
+    the renamed-download recovery into a hard stop for everyone — the refusal is
+    for values a user actually chose."""
+    keh, base, config = krea
+    loras = base / 'models' / 'loras' / 'krea'
+    # The default name is absent, the renamed file is there: still found, no gap.
+    _write(loras / 'krea2_identity_edit_v12_renamed.safetensors')
+    name, path = keh.resolve_krea_identity_lora()
+    assert name and name.endswith('krea2_identity_edit_v12_renamed.safetensors')
+    assert keh.krea_pin_gaps() == []
+    # A name the user typed themselves, absent: that one stops.
+    config.save_config({'krea': {'identity_lora': 'krea/my_own_identity.safetensors'}})
+    assert keh.resolve_krea_identity_lora() == (None, None)
+    assert [g['slot'] for g in keh.krea_pin_gaps()] == ['identity_lora']
 
 
 # --- encoder / VAE: the narrow-token discipline ------------------------------
