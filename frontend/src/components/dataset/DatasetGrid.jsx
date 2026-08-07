@@ -17,6 +17,7 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import { useToast } from '../common/Toast';
 import { autoTriageAvailable } from './faceScoringGate.js';
 import { bulkActionMessage, createBulkActionGate } from './bulkActionGate.js';
+import { READS_STAY_OPEN, datasetBusyReason } from './datasetBusyReason.js';
 import {
   autoTriageFailureMessage,
   autoTriageOwnershipForResult,
@@ -288,6 +289,23 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
     () => improvementStateByParent(images), [images]);
   const autoTriageApplying = autoTriageRuns.has(datasetId);
   const bulkBusy = busy || launchingImprove || !!bulkAction || autoTriageApplying;
+  /* WHAT BLOCKS WHAT — three answers, not one.
+     `bulkBusy` blocks WRITES: a running pass owns the pixels, the statuses and
+     the files, and a second writer would race it. That has never been in doubt.
+     `selectionLocked` blocks the TICK BOXES, and only for the actions that are
+     spending the selection right now (a bulk keep/reject/delete, an improve
+     launch, an auto-triage apply) — each of those snapshots the ids at click
+     time and CLEARS the selection when it returns, so a selection made while
+     one is in flight would be silently thrown away. A dataset pass
+     (`busy`: generation, captioning, watermark scan…) is deliberately NOT in
+     that list: it was handed its own list of images when it started and cannot
+     be shifted by anything ticked afterwards.
+     READS are in neither list — inspecting an image writes nothing. */
+  const selectionLocked = launchingImprove || !!bulkAction || autoTriageApplying;
+  // The sentence a refused write shows, instead of going quietly grey. `activity`
+  // is the server's snapshot (name, progress, time left); a purely local lock
+  // has none and still gets an honest generic line.
+  const busyReason = bulkBusy ? datasetBusyReason(busy ? activity : null) : null;
   useEffect(() => {
     onBulkBusyChange?.(bulkBusy);
     return () => onBulkBusyChange?.(false);
@@ -364,7 +382,7 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
     return counts;
   }, new Map())].map(([reason, count]) => `${count} ${reason}`).join(' · ');
   const toggle = (id) => {
-    if (bulkBusy) return;
+    if (selectionLocked) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id); else next.add(id);
@@ -423,6 +441,14 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   return (
     <div id="ds-images-review" tabIndex={-1} data-workspace-focus
       className="flex flex-col gap-2 scroll-mt-20">
+      {/* Says what the pass BLOCKS, once, in words — the per-button titles name
+          which pass, and a title is not readable on a touch screen at all. */}
+      {busyReason && (
+        <p role="status" aria-live="polite"
+          className="rounded-lg border border-amber-400/30 bg-amber-400/5 px-2.5 py-1.5 text-[11px] leading-snug text-amber-100/90">
+          <span aria-hidden="true">🔒 </span>{READS_STAY_OPEN}
+        </p>
+      )}
       {onBatch && autoTriageAvailable(faceScoringBlocked) && (
         <AutoTriageBar images={images.filter((image) => !isSmallImageRescueRow(image))}
           datasetId={datasetId} faceThresholds={faceThresholds} onBatch={onBatch}
@@ -527,13 +553,16 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
             improvementState={improvementStates.get(img.id)}
             onCrop={onCrop} onDelete={onDelete} onMirror={onMirror}
             mirrorBusy={Boolean(mirroringIds?.has(img.id))} busy={bulkBusy}
+            busyReason={busyReason}
             onScoreFace={onScoreFace} scoreFaceBusy={Boolean(scoringFaceIds?.has(img.id))}
             faceScoringBusy={Boolean(scoringFaceIds?.size)}
             faceScoringBlocked={faceScoringBlocked}
             onRegenerate={bulkBusy ? undefined : onRegenerate}
-            onReimprove={onReimprove} onView={bulkBusy ? undefined : onView}
+            /* onView is handed over UNCONDITIONALLY: withholding it made the
+               inspect button a no-op even once its `disabled` was lifted. */
+            onReimprove={onReimprove} onView={onView}
             selected={selected.has(img.id)}
-            onToggleSelect={onBatch && !bulkBusy && !isSmallImageRescueRow(img) ? toggle : undefined}
+            onToggleSelect={onBatch && !selectionLocked && !isSmallImageRescueRow(img) ? toggle : undefined}
             nonce={(nonces && nonces[img.id]) || 0} faceThresholds={faceThresholds}
             tileSize={tileSize} datasetKind={datasetKind} dualCaptions={dualCaptions} />
         ))}

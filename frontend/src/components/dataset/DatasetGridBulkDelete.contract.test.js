@@ -27,7 +27,16 @@ test('the in-flight delete is announced and every bulk action is disabled', () =
   assert.match(grid, /bulkActionMessage\(bulkAction\)/)
   assert.match(grid, /const bulkBusy = busy \|\| launchingImprove \|\| !!bulkAction/)
   assert.match(grid, /disabled=\{bulkBusy\}/)
-  assert.match(grid, /onBatch && !bulkBusy && !isSmallImageRescueRow/)
+  // The tick boxes are withheld while an action is SPENDING the selection —
+  // each of those snapshots the ids at click time and clears the selection on
+  // return, so anything ticked meanwhile would be silently thrown away.
+  // Deliberately NOT `bulkBusy`: a dataset pass (`busy` — generation,
+  // captioning, a watermark scan) was handed its own list of images when it
+  // started and cannot be shifted by a later tick, so it no longer freezes the
+  // selection. See tests/dataset-tile-reads-stay-live.test.mjs.
+  assert.match(grid, /const selectionLocked = launchingImprove \|\| !!bulkAction \|\| autoTriageApplying/)
+  assert.match(grid, /onBatch && !selectionLocked && !isSmallImageRescueRow/)
+  assert.match(grid, /const toggle = \(id\) => \{\s*\n\s*if \(selectionLocked\) return;/)
 })
 
 test('delete completion gets a delete-specific toast', () => {

@@ -69,8 +69,15 @@ export const JOB_LABELS = {
   delete_rejected: '🗑 Delete rejected',
 };
 
-export function jobLabel(kind) {
-  return JOB_LABELS[kind] || 'Another pass';
+/* `labels` is a parameter, not a constant read, because the SENTENCE this file
+   composes is not bank-specific — only its vocabulary is. The Dataset grid
+   refuses writes during a pass for exactly the same reason a bank does, and
+   needed exactly the same line (blocker + progress + time left + remedy); the
+   only thing it does not share is the list of pass names. See
+   `components/dataset/datasetBusyReason.js`, which supplies its own table and
+   its own subject and gets this composer unchanged. */
+export function jobLabel(kind, labels = JOB_LABELS) {
+  return labels[kind] || 'Another pass';
 }
 
 /* The POST path the re-run button uses → the job kind that path produces. The
@@ -110,14 +117,16 @@ export function bankIsBusy(activity, offline = false) {
 
 /* Where the Stop button is. Named once so the refusal and the disabled reason
    cannot drift apart, and so renaming the control is one edit. */
-const STOP_HINT = 'Wait for it to finish, or press Stop in the progress bar at the top of the bank.';
+export const STOP_HINT = 'Wait for it to finish, or press Stop in the progress bar at the top of the bank.';
 
 /** One sentence naming the blocker and its progress, e.g.
  *  "✨ Score pass is running on this bank — 137 / 412". No remedy: callers add
- *  the part that fits their surface. */
-export function busyLine({ kind, activity, withDetail = true } = {}) {
+ *  the part that fits their surface. `labels`/`subject` let another surface
+ *  (the Dataset grid) reuse the composition with its own vocabulary. */
+export function busyLine({ kind, activity, withDetail = true,
+  labels = JOB_LABELS, subject = 'this bank' } = {}) {
   const k = kind || activity?.kind;
-  const label = jobLabel(k);
+  const label = jobLabel(k, labels);
   const progress = jobProgress(activity);
   // `withDetail: false` for a surface that sits on the SAME screen as the
   // progress bar. The bar narrates the phase already; repeating it beside a
@@ -130,7 +139,7 @@ export function busyLine({ kind, activity, withDetail = true } = {}) {
   // never answer before — "wait for it to finish" with no idea how long that is
   // is advice you cannot act on.
   const eta = etaPhrase(activity);
-  let line = `${label} is running on this bank`;
+  let line = `${label} is running on ${subject}`;
   if (progress) line += ` — ${progress}`;
   if (eta) line += `${progress ? ' · ' : ' — '}${eta}`;
   if (detail) line += `${(progress || eta) ? ' · ' : ' — '}${detail}`;
@@ -158,8 +167,8 @@ function usefulDetail(label, detail) {
  * route now returns; `activity` is the last snapshot we have, for the numbers.
  * Never returns the server string — that is the whole point.
  */
-export function busyRefusal({ kind, activity } = {}) {
-  return `${busyLine({ kind, activity })}. ${STOP_HINT}`;
+export function busyRefusal({ kind, activity, labels, subject, stopHint = STOP_HINT } = {}) {
+  return `${busyLine({ kind, activity, labels, subject })}. ${stopHint}`;
 }
 
 /**

@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-dataset-stays-readable-while-it-works',
+    date: '2026-08-07',
+    title: 'A dataset you can still look through while it works',
+    blurb:
+      'Starting a generation, a captioning run or a watermark scan used to freeze the whole grid: you could not open an image full screen, zoom into a face, or even tick a box, on a pass that might run for an hour. Inspecting and selecting are reads — they change nothing — so they now stay available throughout. Editing does not: crop, mirror, rotate, keep/reject, captions and delete still wait for the pass to finish, because a second writer would race it. What changed there is that they stop being silently grey — each one now says which pass is holding it, where that pass has got to and how long it still needs ("⚡ Variation generation is running on this dataset — 12 / 64"), and a line above the grid states the rule once: edits wait, looking and ticking do not.',
+    to: '/datasets?section=images&panel=review',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',
