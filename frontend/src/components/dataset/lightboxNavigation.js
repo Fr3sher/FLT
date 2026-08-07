@@ -40,9 +40,18 @@
  * writer that no longer owns the screen is dropped: see `stampedPatch`.
  */
 
-/** Everything an image starts from, whatever the previous one ended on. */
+/**
+ * Everything an image starts from, whatever the previous one ended on.
+ *
+ * `compareMode` is a MODE, not a flag: the lightbox offers two comparisons —
+ * against the original an improve pass came from, and against the dataset's
+ * reference photo — and they are mutually exclusive, so 'none' | 'derived' |
+ * 'reference' is the honest shape. It replaced a boolean `comparing`; keeping
+ * the state in one slot is what makes "moving image closes whichever pane was
+ * open" true for both without a second reset path.
+ */
 export function freshLightboxImageState(imageId) {
-  return { imageId: imageId ?? null, full: false, comparing: false, improving: false };
+  return { imageId: imageId ?? null, full: false, compareMode: 'none', improving: false };
 }
 
 /**

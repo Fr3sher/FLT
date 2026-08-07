@@ -1784,6 +1784,19 @@ const TOPICS = [
      'original pending', 'original undecided', 'automatic unkeep', 'keep both',
      'bulk keep', 'batch keep', 'nothing deleted', 'do not delete'],
     '/datasets?section=images', 'using-the-app', 'compare-an-improved-image-with-the-original'),
+  // The lightbox's ◐ Compare with reference — a DIFFERENT question from the one
+  // above ("same person?" vs "sharper?"), on a different set of images (all of
+  // them, not just candidates), with a different promise about scale. Its own
+  // topic on purpose: one topic answering both would have to hedge on the one
+  // sentence that matters, which pane geometry guarantees what.
+  action('action-compare-with-reference', 'Compare an image with the dataset reference photo',
+    ['compare', 'comparison', 'reference', 'reference photo', 'ref', 'side by side',
+     'side-by-side', 'same person', 'is it the same person', 'identity', 'likeness',
+     'resemblance', 'face', 'drift', 'off model', 'off-model', 'does not look like',
+     'doesn t look like', 'check the reference', 'show the reference', 'lightbox',
+     'generated image', 'variation', 'imported photo', 'different framings',
+     'no compare button', 'no reference', 'add a reference photo'],
+    '/datasets?section=images', 'using-the-app', 'compare-an-image-with-the-dataset-reference-photo'),
   // ✨ in the CANVAS lightbox AND in the checkpoint / run gallery's. Its own
   // topic, not a variant of the dataset one: the result lands somewhere else
   // (the checkpoint's gallery, not the curation grid), and "where did my upscale

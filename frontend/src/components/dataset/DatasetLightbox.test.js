@@ -46,20 +46,59 @@ test('a derived image can be inspected next to the original it came from', () =>
   assert.match(lightbox, /className="h-full w-full select-none object-contain"/);
   assert.doesNotMatch(lightbox, /max-h-full max-w-full select-none object-contain/);
   // Real button, pressed state carried by aria (not colour alone).
-  assert.match(lightbox, /aria-pressed=\{comparing\}/);
+  assert.match(lightbox, /aria-pressed=\{compareMode === 'derived'\}/);
   assert.match(lightbox, /Compare with original/);
   assert.match(lightbox, /Exit comparison/);
   // Full-width control at phone width, like the other lightbox actions.
   assert.match(lightbox, /w-full sm:w-auto[^]{0,400}Compare with original/);
-  // Each pane names its side in TEXT.
-  assert.match(lightbox, /compare\.beforeLabel/);
-  assert.match(lightbox, /compare\.afterLabel/);
+  // Each pane names its side in TEXT — from whichever descriptor is on screen.
+  assert.match(lightbox, /activeCompare\.beforeLabel/);
+  assert.match(lightbox, /activeCompare\.afterLabel/);
   // Zoom is not silently broken: comparison says, in the same hint slot, that
   // 100 % lives outside the comparison.
   assert.match(lightbox, /exit comparison to zoom/i);
   // A vanished original explains itself instead of leaving a dead button.
   assert.match(lightbox, /compare && !compare\.available/);
   assert.match(lightbox, /\{compare\.reason\}/);
+});
+
+// The second comparison: "is this still the same person?" — the question a
+// plainly generated variation raises, which the derived comparison could never
+// answer because a generated row has no `derivation_kind` and therefore no
+// button at all. Decisions live in utils/referenceCompare.js (unit-tested);
+// this file pins the wiring, since node --test cannot render JSX.
+test('any dataset image can be inspected next to the reference photo', () => {
+  assert.match(lightbox, /describeReferenceComparison\(img, refFilename\)/);
+  // Its own button, next to the other one — not a mode picker that would hide
+  // one question behind the other on an improved image.
+  assert.match(lightbox, /Compare with reference/);
+  assert.match(lightbox, /aria-pressed=\{compareMode === 'reference'\}/);
+  assert.match(lightbox, /w-full sm:w-auto[^]{0,400}Compare with reference/);
+  // ONE state for both readings ⇒ entering either leaves the other; two
+  // booleans would have allowed two pairs of panes at once. And it lives in the
+  // id-STAMPED per-image slot, not in a useState of its own: that is what makes
+  // ⟩ leave the comparison behind with the image it belonged to, instead of
+  // carrying an "Original" pane onto a picture whose parent is someone else's.
+  assert.match(lightbox, /const \{ full, compareMode, improving \} = lightboxImageState\(/);
+  assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
+  assert.match(lightbox,
+    /patchImageState\(\{ full: false, compareMode: compareMode === mode \? 'none' : mode \}\)/);
+  // The reference is NOT a payload row: its own cache nonce, same /img endpoint.
+  assert.match(lightbox, /compareMode === 'reference' \? refNonce : parentNonce/);
+  // The rail/bar rule only needs to know a comparison is open, whichever it is.
+  assert.match(lightbox, /comparing: compareMode !== 'none'/);
+  // "same scale" is TRUE of the derived pair and FALSE here (a square head
+  // reference against a body plan): the hint is per mode, not shared.
+  assert.match(lightbox, /compareMode === 'derived' && inCompare/);
+  assert.match(lightbox, /different framings — each pane fits its own image/);
+  // A reference recorded without a usable file states why, like the other mode.
+  assert.match(lightbox, /refCompare && !refCompare\.available/);
+  assert.match(lightbox, /\{refCompare\.reason\}/);
+});
+
+test('workspace hands the lightbox the reference photo and its own nonce', () => {
+  assert.match(workspace, /refFilename=\{d\.ref_filename \|\| ''\}/);
+  assert.match(workspace, /refNonce=\{ds\.refNonce \|\| 0\}/);
 });
 
 test('workspace feeds the lightbox the resolved parent of a derived image', () => {
