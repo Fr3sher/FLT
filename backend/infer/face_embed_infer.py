@@ -45,6 +45,7 @@ DET_MIN, BBOX_MIN, YAW_MAX = 0.50, 0.06, 40.0   # same gates as face_score_infer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_image_guard import read_validated_bank_image  # noqa: E402
 from face_score_infer import _repair_nested_antelopev2  # noqa: E402
+import npz_atomic  # noqa: E402
 
 
 def _log(m):
@@ -142,9 +143,7 @@ def _save_cache(path, cache):
             pass
         return
     paths = list(cache)
-    tmp = path + '.tmp.npz'   # .npz suffix so numpy never appends its own
-    np.savez_compressed(
-        tmp,
+    npz_atomic.save_npz_atomic(path, dict(
         paths=np.array(paths),
         states=np.array([cache[p][0] for p in paths]),
         dets=np.array([cache[p][1] for p in paths], dtype='float32'),
@@ -154,8 +153,28 @@ def _save_cache(path, cache):
         sigs=np.array([_cache_sig(cache[p]) for p in paths]),
         hashes=np.frombuffer(b''.join(
             _cache_hash(cache[p]) or (b'\0' * 32) for p in paths),
-            dtype='uint8').reshape(len(paths), 32))
-    os.replace(tmp, path)
+            dtype='uint8').reshape(len(paths), 32)))
+
+
+def _flush_cache(path, cache):
+    """Save, and never let a HELD cache file kill the pass — the twin of the same
+    helper in bank_score_infer. The finished archive stays on disk under its
+    temporary name, and the next run salvages it."""
+    try:
+        _save_cache(path, cache)
+    except npz_atomic.NpzReplaceLocked as error:
+        _log(f'[embed] {error}')
+
+
+def _salvage_cache(path):
+    """Promote a temporary left by an interrupted run, if it reads back clean.
+
+    ``_load_cache`` is the validator on purpose: it applies exactly the parsing a
+    real read applies and touches every array, so a file truncated by a kill
+    mid-write fails it instead of being promoted."""
+    if not path:
+        return
+    npz_atomic.salvage_orphan_tmp(path, lambda p: len(_load_cache(p)), _log)
 
 
 def _cache_sig(entry):
@@ -241,6 +260,9 @@ def main() -> int:
     require_yaw = bool(req.get('require_yaw'))
 
     used_gpu = False   # set when the model actually loads on CUDA below
+    # Claim any embedding work a previous run finished but could not rename into
+    # place (a held destination) or never got to rename at all (a hard kill).
+    _salvage_cache(cache_path)
     cache = _load_cache(cache_path)
 
     def _needs_work(p):
@@ -380,7 +402,7 @@ def main() -> int:
             finally:
                 done_since_save += 1
                 if cache_path and done_since_save >= CACHE_EVERY:
-                    _save_cache(cache_path, cache)
+                    _flush_cache(cache_path, cache)
                     _write_count(
                         cache_path,
                         len(images) - len(todo) + i - uncached_changed)
@@ -389,14 +411,14 @@ def main() -> int:
                  f'{cache[p][0] if p in cache else "changed; retry next run"}')
             if _cancel_requested(cancel_file):   # clean stop between images
                 if cache_path:
-                    _save_cache(cache_path, cache)
+                    _flush_cache(cache_path, cache)
                 cached = sum(path in cache for path in images)
                 _write_count(cache_path, cached)
                 print(json.dumps({'ok': True, 'cancelled': True,
                                   'cached': cached, 'remaining': len(todo) - i}))
                 return 0
         if cache_path:
-            _save_cache(cache_path, cache)
+            _flush_cache(cache_path, cache)
             _write_count(cache_path, sum(path in cache for path in images))
 
     results = {}

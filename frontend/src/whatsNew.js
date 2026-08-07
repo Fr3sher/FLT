@@ -57,6 +57,13 @@ export const WHATS_NEW = [
       'Press Stop while ✨ Score is writing thirty-six thousand rows and nothing appeared to happen for about three seconds — so everyone pressed it again, several times. The click was always registered instantly; it was the banner around it that took that long to refresh, and the button looked exactly the same before and after. It now changes to "Stopping…" the instant you press it and stops taking clicks, without waiting for anything from the server. It also says what it is waiting for, in the words of the step actually running — "finishing the current batch of 200 rows, then saving" is why the counter keeps moving for a moment after you press. And it tells you the price BEFORE you press: while scores are being written, everything already written stays and only the style grouping has to be redone in full, while during the style grouping itself Stop costs nothing because that step is written whole either way.',
   },
   {
+    id: '2026-08-07-passes-survive-a-locked-cache',
+    date: '2026-08-07',
+    title: 'A pass no longer dies because something else touched its cache file',
+    blurb:
+      'A ✨ Score over 37,000 images stopped at image 1849 with "Access denied" on its own cache — not a permissions problem, but an antivirus holding the freshly written file for a fraction of a second while the pass tried to swap it into place. On Windows that is enough to refuse the swap, and the work the pass had already computed and written was thrown away with it. Now the swap waits and retries for a few seconds, and if something really is holding the file the message says so instead of sending you into folder permissions. Better still, nothing is lost either way: work a previous run finished but could not file away is picked up automatically when the pass next starts, so a run interrupted by a lock, a crash or a power cut resumes from where it got to. Recovered work is checked before it is trusted — a half-written file is refused and removed rather than quietly becoming your cache. Applies to ✨ Score, faces, the semantic index and the video search vectors.',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',

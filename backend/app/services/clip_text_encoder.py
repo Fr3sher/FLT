@@ -66,6 +66,7 @@ import zipfile
 
 from .. import config as cfg
 from ..utils.redact import redact_tokens, redact_user_paths
+from . import atomic_npz
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +303,26 @@ def _load_disk_cache() -> None:
         _memory.clear()
 
 
+def _sweep_orphan_text_caches(path) -> None:
+    """Delete leftover ``.tmp.npz`` files for a TEXT cache — never promote one.
+
+    The image-side caches salvage their orphans, because those hold hours of GPU
+    work. These two hold query vectors: rebuilding one is a handful of seconds
+    against a model that is loaded anyway, and both loaders enforce a strict
+    provenance/normalisation contract that a promoted file would have to satisfy
+    to be of any use. Promoting is therefore risk with no reward here.
+
+    Sweeping, on the other hand, is a real fix: the SigLIP2 writer names its
+    temporary with pid+thread+nanoseconds, so every process killed mid-write used
+    to leave one more file behind, forever, with nothing that ever removed them.
+    """
+    for orphan in atomic_npz.orphan_temporaries(path):
+        try:
+            os.remove(orphan)
+        except OSError:
+            pass
+
+
 def _save_disk_cache() -> None:
     import numpy as np
     if not _memory:
@@ -312,13 +333,12 @@ def _save_disk_cache() -> None:
             _memory.popitem(last=False)
         path.parent.mkdir(parents=True, exist_ok=True)
         keys = list(_memory)
-        tmp = str(path) + '.tmp.npz'
-        np.savez_compressed(tmp,
-                            queries=np.array(keys),
-                            vecs=np.array([_memory[k] for k in keys], dtype='float32'))
-        os.replace(tmp, str(path))
+        atomic_npz.save_npz_atomic(path, dict(
+            queries=np.array(keys),
+            vecs=np.array([_memory[k] for k in keys], dtype='float32')))
     except Exception:  # noqa: BLE001 — losing the cache costs time, never data
         pass
+    _sweep_orphan_text_caches(path)
 
 
 def _load_siglip2_disk_cache() -> None:
@@ -399,17 +419,13 @@ def _save_siglip2_disk_cache() -> None:
     if not _siglip2_memory:
         return
     path = _siglip2_cache_path()
-    temporary = None
     try:
         while len(_siglip2_memory) > MAX_CACHED_QUERIES:
             _siglip2_memory.popitem(last=False)
         contract = bank_semantic_engine.semantic_contract('siglip2')
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(
-            f'{path.name}.{os.getpid()}-{threading.get_ident()}-{time.time_ns()}.tmp.npz')
         keys = list(_siglip2_memory)
-        np.savez_compressed(
-            str(temporary),
+        atomic_npz.save_npz_atomic(path, dict(
             version=np.asarray([1], dtype='int32'),
             engine=np.asarray([contract['engine']]),
             model_id=np.asarray([contract['model_id']]),
@@ -419,16 +435,10 @@ def _save_siglip2_disk_cache() -> None:
             queries=np.asarray(keys),
             vecs=np.asarray(
                 [_siglip2_memory[key] for key in keys], dtype='float32'),
-        )
-        os.replace(str(temporary), str(path))
+        ))
     except Exception:  # losing the cache costs time, never data
         pass
-    finally:
-        if temporary is not None:
-            try:
-                temporary.unlink()
-            except OSError:
-                pass
+    _sweep_orphan_text_caches(path)
 
 
 def cached_queries(engine='clip') -> int:
