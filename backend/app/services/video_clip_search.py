@@ -62,6 +62,7 @@ import tempfile
 
 from ..extensions import db
 from ..models import VideoBank, VideoClip, VideoSource
+from . import atomic_npz
 from . import clip_text_encoder
 
 logger = logging.getLogger(__name__)
@@ -228,21 +229,56 @@ def save_embeddings(bank_id, store):
             labels.append(str(f['label']))
             times.append(float(f['time_s']))
             vecs.append(np.asarray(f['vec'], dtype='float32'))
-    tmp = str(path) + '.tmp.npz'
     if not ids:
         # Nothing to store is a legitimate state (a bank whose every shot was
         # unreadable). Writing an empty .npz keeps the reader on one code path.
-        np.savez_compressed(tmp, clip_ids=np.zeros(0, dtype='int64'),
-                            labels=np.array([], dtype='<U8'),
-                            times=np.zeros(0, dtype='float32'),
-                            vecs=np.zeros((0, 1), dtype='float32'))
+        arrays = dict(clip_ids=np.zeros(0, dtype='int64'),
+                      labels=np.array([], dtype='<U8'),
+                      times=np.zeros(0, dtype='float32'),
+                      vecs=np.zeros((0, 1), dtype='float32'))
     else:
-        np.savez_compressed(tmp, clip_ids=np.asarray(ids, dtype='int64'),
-                            labels=np.asarray(labels),
-                            times=np.asarray(times, dtype='float32'),
-                            vecs=np.stack(vecs).astype('float32'))
-    os.replace(tmp, str(path))
+        arrays = dict(clip_ids=np.asarray(ids, dtype='int64'),
+                      labels=np.asarray(labels),
+                      times=np.asarray(times, dtype='float32'),
+                      vecs=np.stack(vecs).astype('float32'))
+    atomic_npz.save_npz_atomic(path, arrays)
     forget_memory_cache()
+
+
+def _store_entry_count(candidate):
+    """How many frame vectors an embedding store holds — 0 when it is unusable.
+
+    This is the validator salvage runs before promoting anything, so it is
+    deliberately strict AND it touches every array: an .npz whose writer was
+    killed mid-compression opens fine (the header is written first) and only
+    fails when a member is actually decompressed. Reading the shapes is what
+    turns "the file exists" into "the file is whole".
+    """
+    import numpy as np
+    with np.load(str(candidate), allow_pickle=False) as z:
+        if set(z.files) != {'clip_ids', 'labels', 'times', 'vecs'}:
+            raise ValueError('embedding store keys do not match')
+        ids, labels, times, vecs = z['clip_ids'], z['labels'], z['times'], z['vecs']
+        if not (len(ids) == len(labels) == len(times) == len(vecs)):
+            raise ValueError('embedding store arrays are not row-aligned')
+        return int(len(ids))
+
+
+def _salvage_orphan_store(bank_id, path):
+    """Claim the vectors of an embed run that finished a write it could not rename.
+
+    A frame vector is CLIP over a decoded video frame — the most expensive thing
+    this module produces — so a stranded temporary is worth opening. It is
+    promoted only if it reads back whole and holds at least as many rows as the
+    store already in place; anything else is deleted and logged.
+    """
+    try:
+        atomic_npz.salvage_orphan_tmp(
+            path, _store_entry_count,
+            lambda message: logger.info('video bank %s: %s', bank_id, message))
+    except Exception as error:  # noqa: BLE001 — salvage never breaks a search
+        logger.warning('video bank %s: could not salvage embeddings: %s',
+                       bank_id, error)
 
 
 def load_embeddings(bank_id):
@@ -252,6 +288,7 @@ def load_embeddings(bank_id):
     global _memo
     import numpy as np
     path = embed_cache_path(bank_id)
+    _salvage_orphan_store(bank_id, path)
     try:
         st = path.stat()
         key = (int(bank_id), str(path), st.st_size, st.st_mtime_ns)

@@ -35,6 +35,7 @@ _CACHE_KEYS = frozenset({
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_image_guard import read_validated_bank_image  # noqa: E402
+import npz_atomic  # noqa: E402
 
 
 def _log(message: str) -> None:
@@ -189,29 +190,44 @@ def _save_cache(path: str | None, cache: dict, contract: dict) -> None:
     else:
         embs = np.empty((0, dimension), dtype='float32')
         hashes = np.empty((0, 32), dtype='uint8')
-    token = f'{os.getpid()}-{secrets.token_hex(6)}'
-    temporary = destination.with_name(f'{destination.name}.{token}.tmp.npz')
+    npz_atomic.save_npz_atomic(destination, dict(
+        version=np.asarray([contract['cache_version']], dtype='int32'),
+        engine=np.asarray([contract['engine']]),
+        model_id=np.asarray([contract['model_id']]),
+        revision=np.asarray([contract['revision']]),
+        model_key=np.asarray([contract['model_key']]),
+        dimension=np.asarray([dimension], dtype='int32'),
+        paths=np.asarray(paths, dtype=np.str_),
+        states=np.asarray([cache[p][0] for p in paths], dtype=np.str_),
+        embs=embs,
+        sigs=np.asarray([cache[p][2] for p in paths], dtype=np.str_),
+        hashes=hashes,
+    ))
+
+
+def _flush_cache(path: str | None, cache: dict, contract: dict) -> None:
+    """Save, and never let a HELD cache file kill the pass.
+
+    This writer used to delete its own temporary in a ``finally``, which meant a
+    lost rename destroyed the finished archive on the way out. The temporary is
+    now the fallback, not litter: it stays, and the next pass salvages it."""
     try:
-        np.savez_compressed(
-            str(temporary),
-            version=np.asarray([contract['cache_version']], dtype='int32'),
-            engine=np.asarray([contract['engine']]),
-            model_id=np.asarray([contract['model_id']]),
-            revision=np.asarray([contract['revision']]),
-            model_key=np.asarray([contract['model_key']]),
-            dimension=np.asarray([dimension], dtype='int32'),
-            paths=np.asarray(paths, dtype=np.str_),
-            states=np.asarray([cache[p][0] for p in paths], dtype=np.str_),
-            embs=embs,
-            sigs=np.asarray([cache[p][2] for p in paths], dtype=np.str_),
-            hashes=hashes,
-        )
-        os.replace(str(temporary), str(destination))
-    finally:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
+        _save_cache(path, cache, contract)
+    except npz_atomic.NpzReplaceLocked as error:
+        _phase(str(error))
+
+
+def _salvage_cache(path: str | None, contract: dict) -> None:
+    """Promote a temporary left by an interrupted run, if it reads back clean.
+
+    ``_load_cache`` is the validator, and here that matters twice: besides
+    catching a file truncated mid-write, it rejects a temporary whose PROVENANCE
+    (engine, model id, revision, dimension) is not the one this pass runs, so a
+    cache from another semantic engine can never be promoted over this one."""
+    if not path:
+        return
+    npz_atomic.salvage_orphan_tmp(
+        path, lambda candidate: len(_load_cache(candidate, contract)), _log)
 
 
 def _write_count(cache_path: str | None, count: int) -> None:
@@ -357,6 +373,9 @@ def main() -> int:
                'error': 'device must be auto, cpu or cuda'})
         return 1
 
+    # Claim (or sweep) whatever a previous run left behind before deciding what
+    # is still to embed — see _salvage_cache.
+    _salvage_cache(cache_path, contract)
     loaded = {} if rescore else _load_cache(cache_path, contract)
     # A whole-Bank payload is authoritative.  Removed paths must not survive in
     # a cache and inflate coverage after a resume.
@@ -374,7 +393,7 @@ def main() -> int:
 
     if _cancel_requested(cancel_file):
         if pruned and cache_path:
-            _save_cache(cache_path, cache, contract)
+            _flush_cache(cache_path, cache, contract)
         _write_count(cache_path, reused)
         _emit(_result_payload(contract, images, cache, computed=0,
                               reused=reused, cancelled=True))
@@ -382,7 +401,7 @@ def main() -> int:
 
     if not todo:
         if pruned and cache_path:
-            _save_cache(cache_path, cache, contract)
+            _flush_cache(cache_path, cache, contract)
         _emit(_result_payload(contract, images, cache, computed=0, reused=reused))
         return 0
 
@@ -476,14 +495,14 @@ def main() -> int:
             if state == 'ok':
                 ready_added += 1
             if cache_path and saved_since >= CACHE_EVERY:
-                _save_cache(cache_path, cache, contract)
+                _flush_cache(cache_path, cache, contract)
                 _write_count(cache_path, reused + ready_added)
                 saved_since = 0
         if state == 'ok':
             _log(f'[semantic] {index}/{len(todo)} ok')
         if _cancel_requested(cancel_file):
             if cache_path:
-                _save_cache(cache_path, cache, contract)
+                _flush_cache(cache_path, cache, contract)
             _write_count(cache_path, reused + ready_added)
             _emit(_result_payload(contract, images, cache, computed=computed,
                                   reused=reused, cancelled=True))
@@ -491,7 +510,7 @@ def main() -> int:
 
     if cache_path:
         _phase(f'saving the semantic cache ({len(cache)} image(s))…')
-        _save_cache(cache_path, cache, contract)
+        _flush_cache(cache_path, cache, contract)
         _write_count(cache_path, reused + ready_added)
     _emit(_result_payload(contract, images, cache, computed=computed, reused=reused))
     return 0

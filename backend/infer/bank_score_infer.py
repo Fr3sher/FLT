@@ -75,6 +75,7 @@ _NSFW_MODEL = 'Marqo/nsfw-image-detection-384'
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bank_image_guard import read_validated_bank_image  # noqa: E402
+import npz_atomic  # noqa: E402
 
 
 def _log(m):
@@ -219,9 +220,7 @@ def _save_cache(path, cache):
         return
     paths = list(cache)
     nan = float('nan')
-    tmp = path + '.tmp.npz'
-    np.savez_compressed(
-        tmp,
+    npz_atomic.save_npz_atomic(path, dict(
         paths=np.array(paths),
         states=np.array([cache[p][0] for p in paths]),
         aes=np.array([nan if cache[p][1] is None else cache[p][1] for p in paths],
@@ -232,8 +231,31 @@ def _save_cache(path, cache):
         sigs=np.array([_cache_sig(cache[p]) for p in paths]),
         hashes=np.frombuffer(b''.join(
             _cache_hash(cache[p]) or (b'\0' * 32) for p in paths),
-            dtype='uint8').reshape(len(paths), 32))
-    os.replace(tmp, path)
+            dtype='uint8').reshape(len(paths), 32)))
+
+
+def _flush_cache(path, cache):
+    """Save, and NEVER let a held cache file kill the pass.
+
+    Losing this write costs a re-score; dying here costs the whole run. The
+    finished archive stays on disk under its temporary name and the next pass
+    salvages it (``_salvage_cache``), so the honest thing is to tell the user
+    what happened and keep going."""
+    try:
+        _save_cache(path, cache)
+    except npz_atomic.NpzReplaceLocked as error:
+        _phase(str(error))
+
+
+def _salvage_cache(path):
+    """Promote a temporary left by an interrupted run, if it reads back clean.
+
+    ``_load_cache`` is the validator on purpose: it is exactly the parsing a real
+    read applies, and it touches every array, so a file truncated by a kill
+    mid-write fails it instead of being promoted."""
+    if not path:
+        return
+    npz_atomic.salvage_orphan_tmp(path, lambda p: len(_load_cache(p)), _log)
 
 
 # --- style clustering (union-find over cosine, testable without torch) ---------
@@ -432,6 +454,12 @@ def main() -> int:
     # relaunch cost the full bank again.
     rescore = bool(req.get('rescore'))
 
+    # Before anything else: a previous run may have finished a cache write and
+    # then lost the rename to a file lock (or been killed mid-flush). That work
+    # is paid GPU time sitting in a temporary; claim it before deciding what is
+    # left to do. Done even on the rescore lane, which is also where leftover
+    # temporaries get swept instead of accumulating forever.
+    _salvage_cache(cache_path)
     cache = {} if rescore else _load_cache(cache_path)
     # Re-score anything not cached OR whose file changed on disk since (a same-path
     # edit invalidates the stale embedding/scores).
@@ -565,13 +593,13 @@ def main() -> int:
                 computed += 1
                 done_since_save += 1
                 if cache_path and done_since_save >= CACHE_EVERY:
-                    _save_cache(cache_path, cache)
+                    _flush_cache(cache_path, cache)
                     _write_count(cache_path, reused + fresh)
                     done_since_save = 0
             _log(f'[score] {i}/{len(work)} {cache[p][0]}')
             if _cancel_requested(cancel_file):   # clean stop between images
                 if cache_path:
-                    _save_cache(cache_path, cache)
+                    _flush_cache(cache_path, cache)
                 _write_count(cache_path, reused + fresh)
                 # results, NOT clusters. The scores here are paid GPU work and the
                 # parent writes them; the style partition is 181 s of n² away and
@@ -586,7 +614,7 @@ def main() -> int:
                 return 0
         if cache_path:
             _phase(f'saving the score cache ({len(cache)} image(s))…')
-            _save_cache(cache_path, cache)
+            _flush_cache(cache_path, cache)
             _write_count(cache_path, reused + fresh)
 
     results = _results_from_cache(images, cache)
