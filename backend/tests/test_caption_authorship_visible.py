@@ -132,8 +132,9 @@ def test_the_pass_result_names_the_writers_and_counts_what_it_stamped(
     assert '3 captioned' in detail
     # The two engines, named apart, in canonical order, with the numbers the rows
     # really carry — not "3 by the configured backend".
-    assert '2 by JoyCaption' in detail
-    assert '1 by the Ollama vision model' in detail
+    # Parenthesised, so the comma-separated skip counts that follow can never read
+    # as more writers.
+    assert '(2 by JoyCaption, 1 by the Ollama vision model)' in detail
 
     from app.models import BankImage
     with app.app_context():
@@ -171,7 +172,7 @@ def test_the_writers_note_is_empty_when_nothing_was_written():
     assert _caption_writers_note({'joycaption': 0}, 0) == ''
     # An engine this build does not know is printed AS ITSELF rather than dropped.
     note = _caption_writers_note({'some-future-engine': 4}, 0)
-    assert '4 by some-future-engine' in note
+    assert note == ' (4 by some-future-engine)'
 
 
 # --- the launch window's figures --------------------------------------------

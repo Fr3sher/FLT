@@ -8372,7 +8372,11 @@ _CAPTION_WRITER_NAMES = {
 
 
 def _caption_writers_note(wrote, unrecorded=0):
-    """" — 340 by JoyCaption, 87 by the Ollama vision model", or ''.
+    """" (340 by JoyCaption, 87 by the Ollama vision model)", or ''.
+
+    PARENTHESES, not a dash: the detail line continues with comma-separated skip
+    counts ("3 kept (written by you)", "1 skipped (image changed)"), and a
+    dash-introduced list would let those read as more writers.
 
     WHY THE RUN HAS TO SAY THIS. The default backend is 'auto', which is a CHAIN:
     JoyCaption writes what it can, the Ollama vision model covers the rest. The two
@@ -8401,7 +8405,7 @@ def _caption_writers_note(wrote, unrecorded=0):
         # NOT "by nobody": the engine did not report a name, so the row stores
         # NULL and the sentence says exactly that much and no more.
         parts.append(f'{int(unrecorded)} whose engine did not report a name')
-    return f' — {", ".join(parts)}' if parts else ''
+    return f' ({", ".join(parts)})' if parts else ''
 
 
 def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
@@ -8487,15 +8491,17 @@ def _caption_job(bank_id, ids, force, vocabulary=None, length=None, *,
             # WHICH engine wrote this row, reported by the engine that wrote it —
             # not the backend that was asked for. 'auto' chains both, so the
             # requested value would mislabel roughly half the bank.
-            origin = caption_origin.engine_origin(engine)
-            caption_origin.stamp(row, caption, origin)
+            caption_origin.stamp(row, caption,
+                                 caption_origin.engine_origin(engine))
+            # Read off the ROW, and read BEFORE the commit — the commit expires the
+            # instance, so reading after it would cost one SELECT per image on a
+            # 100 000-image bank. `stamp` clears the origin on a blank caption, so
+            # the stored value is what the row really carries, not what was passed.
+            stored = row.caption_origin
             db.session.commit()
             captioned += 1
-            # Counted from row.caption_origin rather than from `origin`: stamp()
-            # clears the origin on a blank caption, and a row that stored no author
-            # must not be reported as one written by an engine.
-            if row.caption_origin:
-                wrote[row.caption_origin] = wrote.get(row.caption_origin, 0) + 1
+            if stored:
+                wrote[stored] = wrote.get(stored, 0) + 1
             else:
                 unrecorded_writes += 1
 
