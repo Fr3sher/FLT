@@ -56,7 +56,7 @@ from .. import config as cfg
 from ..extensions import db
 from ..models import BankImage, FaceDataset, FaceDatasetImage, ImageBank
 from . import (bank_jobs, bank_semantic_engine, bank_transfer_metadata, bank_undo, caption_origin,
-               dataset_activity, image_encoding, path_guard, trash)
+               dataset_activity, image_encoding, input_budget, path_guard, trash)
 from .face_dataset_service import (SCRAPE_IMPORT_MAX, _dhash, _download_scrape_item,
                                    _dataset_ingest_lock,
                                    _existing_dhash_rows, _hamming, _SCRAPE_DL_WORKERS,

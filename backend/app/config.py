@@ -152,6 +152,24 @@ DEFAULTS = {
     # merge, scrape-to-dataset). It does not touch generated images, the ≤2048
     # copies handed to a generation API, or an image the user already curated.
     'dataset_import': {'max_side': 1024, 'encoding': 'preserve'},
+    # 🛡️ The shared image INPUT budget — how big a source file any lane is
+    # allowed to decode. Not a dataset-import preference: dataset import, ZIP
+    # and scrape ingest, Bank scan and thumbnails, edits, ComfyUI staging and
+    # Ollama vision all read these two numbers, so an image that can be
+    # imported can also be looked at.
+    #
+    # It is a MEMORY guard, so it is reasoned in decoded bytes: 3 B per RGB
+    # pixel, 4 B per RGBA pixel, and an edit or analysis pass can hold a second
+    # copy at once. The shipped 64 Mi-pixels is ~192 MiB for one RGB decode
+    # (~256 MiB RGBA) and ~384-512 MiB with a working copy — room for every
+    # current phone/35 mm master (61 MP = 57 Mi-pixels) and for panoramas,
+    # which the previous hardcoded 16 Mi-pixels / 8192 px refused.
+    #
+    # 0 on either key = NO limit for that dimension. The app then also stops
+    # capping Pillow's own decompression-bomb threshold, so a malformed or
+    # hostile file can be decoded until it exhausts memory. That is a real
+    # trade, offered rather than imposed; the Settings card says so.
+    'image_input': {'max_side': 16384, 'max_pixels': 64 * 1024 * 1024},
     'training': {'default_family': 'zimage'},
     # Concept face masking (opt-in per dataset, Advanced training options). Both
     # knobs are exposed because NOBODY has measured the right value: no public A/B
