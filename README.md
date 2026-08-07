@@ -18,10 +18,22 @@ A real Character LoRA built end to end in seven minutes, unedited and without na
 
 https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
 
-<p align="center">
-  <img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace: a progress rail mapping reference, generation, curation, captioning and training, next to the curation grid and its bulk actions" width="820">
-</p>
-<p align="center"><em>One workspace for the full route. Every person shown in these screenshots was produced by the app's own generation engines; no real individual is depicted.</em></p>
+<table>
+  <tr>
+    <td width="45%" valign="top">
+      <a href="docs/screenshots/generate/generate-variations.png"><img src="docs/screenshots/generate/generate-variations.png" alt="Generate variations: the subject type, and the five engines side by side with what each one costs per image, whether it runs on your GPU or bills an API, and which ones refuse adult content" width="100%"></a>
+    </td>
+    <td width="55%" valign="top">
+      <a href="docs/screenshots/02-workspace.png"><img src="docs/screenshots/02-workspace.png" alt="Guided dataset workspace: a progress rail mapping reference, generation, curation, captioning and training, next to the curation grid and its bulk actions" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><strong>Pick where the images come from</strong> — the five engines side by side, each stating its price per image, whether it runs free on your GPU or bills an API, and which ones refuse adult content. The first question anyone asks of this app, answered before you commit to it.</sub></td>
+    <td valign="top"><sub><strong>Then one workspace for the whole route</strong> — a progress rail from reference to Studio, beside the grid where you keep, reject, re-caption or send a selection back through an engine in bulk.</sub></td>
+  </tr>
+</table>
+
+<p align="center"><em>Every person shown in these screenshots was produced by the app's own generation engines; no real individual is depicted.</em></p>
 
 ## What it does
 
@@ -197,8 +209,8 @@ the target model accepts.
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="docs/screenshots/generate/generate-variations.png"><img src="docs/screenshots/generate/generate-variations.png" alt="Generate variations: subject type, and the five engines side by side with what each one costs, whether it needs a GPU and whether it accepts NSFW" width="380"></a><br>
-      <sub><strong>Generate</strong> — five engines side by side, each stating its price, its GPU need and what it will refuse.</sub>
+      <a href="docs/screenshots/bank/bank-overview.png"><img src="docs/screenshots/bank/bank-overview.png" alt="Image Bank overview with scoring, filters and review controls" width="380"></a><br>
+      <sub><strong>Image Bank</strong> — score, search and shortlist large collections.</sub>
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset image grid with keep/reject decisions, face-similarity scores and per-tile caption fields" width="380"></a><br>
