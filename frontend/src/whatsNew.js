@@ -3613,7 +3613,7 @@ export const WHATS_NEW = [
     date: '2026-08-04',
     title: '🎨 Medium and 🔎 text search stop failing over a line of chatter',
     blurb:
-      'On some installs 🎨 Medium and 🔎 text search died with “the text encoder produced no result — check the ✨ Score interpreter”, on machines whose ✨ Score interpreter was fine — it had just produced the embeddings both features read. The cause was one line: the first thing the text encoder printed had to be its answer, so a first-run banner, a weights download or any greeting from the ML environment ahead of it was read as a failure. Both features now step over anything that is not an answer, the way the ✨ Score pass already did. And when the encoder really does fail, the message quotes what it actually printed — including the error output, which used to be discarded — with home-folder paths stripped, so it is safe to paste into a help thread and it no longer sends you to check a component it never looked at.',
+      'On some installs 🎨 Medium and 🔎 text search died with “the text encoder produced no result — check the ✨ Score interpreter”, on machines whose ✨ Score interpreter was fine — it had just produced the embeddings both features read. The cause was one line: the first thing the text encoder printed had to be its answer, so a first-run banner, a weights download or any greeting from the ML environment ahead of it was read as a failure. Both features now step over anything that is not an answer, the way the ✨ Score pass already did. And when the encoder really does fail, the message quotes what it actually printed — including the error output, which used to be discarded — with home-folder paths stripped, so it is safe to paste into a help thread and it no longer sends you to check a component it never looked at. Reported by shinybtw (Discord), with the failing traceback.',
     to: '/bank',
   },
   // Appended rather than prepended ON PURPOSE: several waves are editing the
@@ -3669,6 +3669,14 @@ export const WHATS_NEW = [
     title: 'Redo a bank’s captions with a better model — and see what that costs first',
     blurb:
       'Once every image in a bank had a caption, 🏷️ Caption reached zero and went grey — taking the engine and model selects beside it out of reach, on exactly the bank whose captions you wanted to redo. A 🔄 Re-caption button now sits at the end of the Caption options row and runs the same pass over the pile you chose, with the engine, model, register and length you picked. It overwrites, so it tells you the numbers before you click: the button quotes how many images it will rewrite, an amber line quotes how many of those already carry a caption, and the confirmation repeats both. It also says the part we cannot fix: this app stores one caption per image and records nothing about who wrote it, so a caption you corrected by hand looks exactly like a generated one and is overwritten too — and no undo covers captions. With images selected the button stays inert and says why, because a selection can span pages that were never loaded and the count would be a guess.',
+  },
+  {
+    id: '2026-08-07-framing-stops-locking-itself-out-of-the-model',
+    date: '2026-08-07',
+    title: '📐 Framing classifies your whole bank instead of a handful of images',
+    blurb:
+      'On a bank of any size, 📐 Framing could classify a few images and then quietly stop classifying anything at all — the bar kept moving, the log filled with “vision GPU window renewal failed / database is locked”, and stopping the pass reported four images done out of the twelve it had walked. The pass was starving itself: it saved its results in batches of 25 and held the database write lock between them, across model calls that take seconds each, while the check that lets the app talk to the vision model needs that same database every single call. Failing that check is fail-safe by design, so every remaining image was refused rather than mislabelled — correct, and completely invisible. It now saves each image as it goes (measured at 0.17 ms per save) and never holds the lock across a model call, so a pass classifies what you gave it. The 🔎 Watermark scan and the watermark repaint level got the same treatment before they could hit it. And when something does go wrong, every pass now ends the same way whether it finished or you stopped it: what it classified, what it could not read, what was deleted under it, what changed while it was being analysed, and what the model was never shown. Reported by _mr.arrow_ (Discord).',
+    // No `to`: the passes live inside a bank workspace, which has no deep link.
   },
 ];
 

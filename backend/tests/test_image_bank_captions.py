@@ -191,7 +191,10 @@ def test_caption_does_not_stamp_result_after_pixels_change_mid_inference(
     assert response.status_code == 202
     assert _by_name(client, bank_id)['a.png']['caption'] is None
     activity = client.get(f'/api/bank/{bank_id}').get_json()['activity']
-    assert 'image changed while captioning' in activity['detail']
+    # The wording is now the one EVERY pass uses for this outcome (_skipped_note):
+    # four passes had four sentences for the same fact, and the cancelled endings
+    # had none at all.
+    assert 'the image changed while the pass ran' in activity['detail']
 
 
 def _striped(value, phase, size=256):

@@ -108,7 +108,10 @@ test('a stopped pass writes scores but never a half style partition', () => {
   // The gap after the `return` is deliberately loose: the pass now publishes a
   // phase line before the partition write (that step is minutes long and used
   // to run mute behind a full progress bar). What is pinned is the ORDER — the
-  // cluster write stays behind the stopped-return, whatever is said in between.
+  // cluster write stays behind the stopped-return, whatever is said in between —
+  // the widths are a tolerance, not the property. They grew again when the
+  // stopped line gained the clause naming the images this pass did not write
+  // (_skipped_note): a sentence, not a reordering.
   assert.match(service,
-    /if stopped:[\s\S]{0,400}?Stopped while saving[\s\S]{0,400}?return\n[\s\S]{0,700}?_write_style_clusters/)
+    /if stopped:[\s\S]{0,600}?Stopped while saving[\s\S]{0,600}?return\n[\s\S]{0,700}?_write_style_clusters/)
 })
