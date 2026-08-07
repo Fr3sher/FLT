@@ -62,6 +62,21 @@ def _write(path: Path, data: bytes | str) -> None:
     path.write_bytes(data)
 
 
+def _oem_bytes(text: str) -> bytes:
+    """Encode a batch script the way cmd.exe will READ it.
+
+    A .bat/.cmd is parsed in the console OEM codepage, so any non-ASCII path
+    baked into one must be encoded there too -- UTF-8 turns an accent into two
+    bytes cmd resolves to a path that does not exist. Python ships an `oem`
+    codec on Windows for exactly this; elsewhere the caller is skipped anyway,
+    and the ASCII fallback keeps this helper importable on any platform.
+    """
+    try:
+        return text.encode("oem")
+    except LookupError:                       # not Windows: no OEM codepage
+        return text.encode("utf-8")
+
+
 def _fake_launcher(label: str) -> bytes:
     return (
         "@echo off\r\n"
@@ -455,15 +470,19 @@ def test_bat_alias_handles_special_path_and_rejects_hostile_argument(tmp_path):
 
     (install / "bat-result.txt").unlink()
     harness = tmp_path / "hostile argument harness.cmd"
-    _write(
-        harness,
-        (
-            "@echo off\r\n"
-            f'call "{install / GENERIC_BAT.name}" '
-            '"main & echo PWNED_SENTINEL"\r\n'
-            "exit /b %ERRORLEVEL%\r\n"
-        ),
-    )
+    # cmd.exe decodes a .cmd file in the console OEM codepage, NOT in UTF-8, and
+    # the install path above deliberately carries an accent. Written as UTF-8 the
+    # accent arrives as two mojibake bytes, cmd answers "path not found" and exits
+    # 1 -- so the hostile argument never reaches the .bat and the rejection this
+    # test exists for is never exercised. It looked like a product failure; it was
+    # the harness. The first call above is unaffected because the path travels
+    # through argv there, which Python hands to Windows as native UTF-16.
+    _write(harness, _oem_bytes(
+        "@echo off\r\n"
+        f'call "{install / GENERIC_BAT.name}" '
+        '"main & echo PWNED_SENTINEL"\r\n'
+        "exit /b %ERRORLEVEL%\r\n"
+    ))
     rejected = subprocess.run(
         [COMSPEC, "/d", "/c", str(harness)],
         input="\n",
