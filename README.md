@@ -48,7 +48,7 @@ Point a bank at a folder, or scrape straight into one. It reads what is there **
 
 The cuts are measured rather than guessed: the aesthetic and near-duplicate thresholds were calibrated on a real bank of **7,316 images**, and every measure that cannot answer says "unsure" or "not measured" instead of inventing a verdict. The image lane is out of Beta; the **video** lane still carries the chip, and says why below.
 
-**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [launching a pass](docs/screenshots/bank/bank-launch-all.png)
+**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [**Launch all** — the whole triage in one go, each pass quoting what it would reject before you start it](docs/screenshots/bank/bank-launch-all.png)
 
 | Capability | What it provides |
 |---|---|
