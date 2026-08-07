@@ -40,15 +40,15 @@ https://github.com/user-attachments/assets/d51ff89c-34e9-41a9-b47d-08939a8c867b
 
 API generation follows each provider's billing and content policy. Read the direct notes for [Gemini](docs/guide/settings-reference.md#what-the-gemini-engine-will-and-will-not-do), [ChatGPT subscription mode](docs/guide/settings-reference.md#chatgpt-subscription-experimental), [OpenRouter and image-engine settings](docs/guide/settings-reference.md#image-engines), and [Pexels authorization](docs/guide/workflow.md#the-built-in-web-scraper) before using those lanes. The local engines do not send reference images to an API.
 
-### Image Bank *(Beta)*
+### Image Bank
 
 A dataset is the thirty images you train on. A **bank** is the three thousand you had to look at to find them — and looking at three thousand images by hand is where most datasets die.
 
 Point a bank at a folder, or scrape straight into one. It reads what is there **in place**: your files are never modified, moved or renamed, and the single action that does touch the source folder announces itself in capitals before it runs. Then **one pass measures the whole pile**, and every question afterwards is answered against those measurements instead of against your eyes — what is blurry, what is a duplicate of what, who is in it, how it is framed, whether it is a photograph or a render, and what it actually shows. You keep, reject and shortlist; a kept selection graduates into a dataset with its analysis attached, and can come back the other way.
 
-The cuts are measured rather than guessed: the aesthetic and near-duplicate thresholds were calibrated on a real bank of **7,316 images**, and every measure that cannot answer says "unsure" or "not measured" instead of inventing a verdict. The bank carries a **Beta** chip in the app — it is the newest large surface, and it still moves faster than the rest.
+The cuts are measured rather than guessed: the aesthetic and near-duplicate thresholds were calibrated on a real bank of **7,316 images**, and every measure that cannot answer says "unsure" or "not measured" instead of inventing a verdict. The image lane is out of Beta; the **video** lane still carries the chip, and says why below.
 
-**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [launching a pass](docs/screenshots/bank/bank-launch-all.png)
+**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [**Launch all** — the whole triage in one go, each pass quoting what it would reject before you start it](docs/screenshots/bank/bank-launch-all.png)
 
 | Capability | What it provides |
 |---|---|
@@ -66,7 +66,7 @@ The cuts are measured rather than guessed: the aesthetic and near-duplicate thre
 | **Safe bulk work** | Undo the last bulk decision, tune thresholds where you work, move a bank without losing analysis, or run the full chain overnight |
 | **The one destructive action** | Everything above leaves your files alone — 🗑 **Delete rejected** is the single bank action that touches the source folder. It sends the rejected files to the OS trash (or the app's own, or deletes them) behind a type-DELETE confirmation that first states how many files, where they go, and which other banks share that folder. It refuses outright when the folder is also a dataset's |
 
-### Video Bank *(first release — read the limits)*
+### Video Bank *(Beta — first release, read the limits)*
 
 Turns long source videos into a **video training set**: a flat folder of `.mp4`
 clips with matching `.txt` captions, cut to the exact frame count and frame rate

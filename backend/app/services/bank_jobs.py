@@ -19,6 +19,8 @@ import threading
 import time
 from contextlib import contextmanager
 
+from . import job_eta
+
 _lock = threading.Lock()
 _jobs: dict = {}          # bank_id -> job dict (see start())
 _FINISHED_TTL = 5 * 60    # finished snapshot lifetime
@@ -98,7 +100,8 @@ def _reserve_locked(bank_id, kind, total=0, reserve_ids=None):
            'cancelled': False, 'finished': False, 'detail': None,
            'started_at': now, '_touched': now, '_cancel_hook': None,
            'pipeline': None, '_keys': keys, '_launched': False,
-           '_owner_thread': threading.get_ident()}
+           '_owner_thread': threading.get_ident(),
+           '_eta': job_eta.new_state()}
     # One shared object under every participating Bank id is an atomic
     # multi-bank reservation.  No lock ordering/deadlock exists because the
     # registry lock is acquired once for the whole set.
@@ -285,6 +288,19 @@ def start(app, bank_id, kind, fn, total=0, reserve_ids=None,
     return job
 
 
+def _observe_locked(job, now):
+    """Feed the remaining-time estimator (caller holds ``_lock``).
+
+    A few historical call sites hand a plain job mapping straight to a pass
+    without going through ``reserve``/``start``; those have no estimator, and
+    creating one here keeps them counting rather than crashing on a KeyError.
+    """
+    state = job.get('_eta')
+    if state is None:
+        state = job['_eta'] = job_eta.new_state()
+    job_eta.observe(state, job.get('done') or 0, job.get('total') or 0, now)
+
+
 def progress(job, done=None, total=None, detail=None):
     with _lock:
         if done is not None:
@@ -293,7 +309,9 @@ def progress(job, done=None, total=None, detail=None):
             job['total'] = int(total)
         if detail is not None:
             job['detail'] = str(detail)
-        job['_touched'] = time.time()
+        now = time.time()
+        job['_touched'] = now
+        _observe_locked(job, now)
 
 
 def fail(job, message):
@@ -310,7 +328,9 @@ def fail(job, message):
 def bump(job, n=1):
     with _lock:
         job['done'] += n
-        job['_touched'] = time.time()
+        now = time.time()
+        job['_touched'] = now
+        _observe_locked(job, now)
 
 
 def set_pipeline(job, snapshot):
@@ -371,7 +391,12 @@ def cancel(bank_id) -> bool:
 
 def get(bank_id):
     """Snapshot for the payload: {kind, done, total, error, cancelled,
-    finished, detail, started_at, pipeline} or None. Purges expired entries."""
+    finished, detail, started_at, pipeline, eta_state, eta_seconds, eta_scope}
+    or None. Purges expired entries.
+
+    ``eta_*`` is how long the pass still has to run — see ``job_eta``. A
+    FINISHED job never carries one: "about 20 minutes left" under a completed
+    pass would be the loudest possible way to say the number means nothing."""
     now = time.time()
     with _lock:
         job = _jobs.get(bank_id)
@@ -386,6 +411,16 @@ def get(bank_id):
                                     'started_at')}
         pipeline = job.get('pipeline')
         snap['pipeline'] = dict(pipeline) if pipeline else None
+        state = job.get('_eta')
+        if state is None or job['finished'] or job['cancelled'] or job['error']:
+            snap['eta_state'] = job_eta.ETA_NONE
+            snap['eta_seconds'] = None
+            snap['eta_scope'] = 'job'
+        else:
+            eta_state, seconds, scope = job_eta.read(state, now)
+            snap['eta_state'] = eta_state
+            snap['eta_seconds'] = seconds
+            snap['eta_scope'] = scope
         return snap
 
 

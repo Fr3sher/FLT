@@ -10,6 +10,7 @@
  *
  * PURE: no JSX, no fetch.
  */
+import { etaPhrase } from '../bank/passEta.js'
 
 const n = (v) => Number(v) || 0
 
@@ -138,8 +139,14 @@ export function activityLine(activity, counts) {
   const done = overall ? overall.done : n(activity.done)
   const total = overall ? overall.total : n(activity.total)
   const progress = total ? ` — ${done}/${total}` : ''
+  // Free ride: the video lane keys into the SAME `bank_jobs` registry as the
+  // image passes (see `video_bank_service.job_key`), so its snapshot already
+  // carries the measured remaining time. The figure is about the work THIS job
+  // has left, which is the right one even on a resume — `overall` above only
+  // widens the counter to include what a previous run finished.
+  const eta = etaPhrase(activity)
   const detail = activity.detail ? ` (${activity.detail})` : ''
-  return `${label}${progress}${detail}`
+  return `${label}${progress}${eta ? ` · ${eta}` : ''}${detail}`
 }
 
 /** 0–100, or null when the job does not know its total (a pass that is still

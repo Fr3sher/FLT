@@ -34,6 +34,7 @@ import { folderSyncToast } from './bankSync.js'
 import { UNDO_HINT, undoBannerText, undoOffer, undoResultMessage } from './bankUndo.js'
 // Four progress states, not two — including the honest "I don't know" (pure/testable).
 import { progressPresence, PROGRESS_HIDDEN, PROGRESS_UNKNOWN, PROGRESS_STALE } from './progressPresence.js'
+import { etaPhrase } from './passEta.js'
 // An occupied bank refuses in OUR words, never in the server's (pure/testable).
 import { busyRefusal } from './bankPassRun.js'
 import { holdsTheGpu, scoreDeviceNote } from './bankScoreDevice.js'
@@ -270,6 +271,10 @@ export function ProgressBar({ activity, onCancel, offline = false }) {
   const stale = presence === PROGRESS_STALE
   const { kind, done, total, detail } = activity
   const pct = total > 0 ? Math.round((100 * done) / total) : null
+  // "12939 / 37800" says where the pass is; it never said how long that leaves.
+  // On a bank this size the difference between twenty minutes and four hours is
+  // the difference between waiting and going to do something else.
+  const eta = etaPhrase(activity)
   const pipe = kind === 'pipeline' ? activity.pipeline : null
   return (
     <div className="space-y-2 rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-sm">
@@ -295,7 +300,8 @@ export function ProgressBar({ activity, onCancel, offline = false }) {
               on work that is running — so the figure only appears when there
               is one. */}
           {(done || total) ? <>{' — '}{done}{total ? ` / ${total}` : ''}</> : null}
-          {detail ? `${(done || total) ? ' · ' : ' — '}${detail}` : ''}
+          {eta ? `${(done || total) ? ' · ' : ' — '}${eta}` : ''}
+          {detail ? `${(done || total || eta) ? ' · ' : ' — '}${detail}` : ''}
         </span>
         {pct != null && (
           <div className="h-1.5 w-40 overflow-hidden rounded bg-surface-raised" role="progressbar"

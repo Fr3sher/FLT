@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-passes-say-how-long-is-left',
+    date: '2026-08-07',
+    title: 'Every pass now tells you how much longer it needs',
+    blurb:
+      '"12939 / 37800" told you where a pass was, never whether that meant twenty minutes or four hours — so the only way to find out was to sit and watch. Scan, ✨ Score, faces, framing, medium, captioning, watermark, crops & variants, the semantic index and the video passes now add "about 2 hours left" beside their counter, and a refusal to start a second pass tells you how long the first one still needs. The number is measured over the last minute of real work, not averaged since the pass began: a ✨ Score resuming from cache swallows twenty thousand rows in two seconds and an average would have promised "a few seconds" for the next hour and a half. It stays quiet until it can hold still — you get "estimating time left…" rather than a figure that changes every poll — it says "in this step" once a pass has moved on to a different kind of work, and a step with nothing to count (grouping styles, comparing shots) gets no estimate at all rather than an invented one.',
+  },
+  {
     id: '2026-08-07-reference-edit-survives-a-restart',
     date: '2026-08-07',
     title: 'An edited reference photo is no longer lost if the app restarts',
