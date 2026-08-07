@@ -144,6 +144,25 @@ def test_the_write_back_names_the_batch_the_stop_has_to_wait_out(app, tmp_path):
     assert 'needs another full pass' in cost
 
 
+def test_the_salvage_write_does_not_promise_a_batch_it_will_not_honour(app, tmp_path):
+    """The stopped run's write-back is NOT interruptible, and must not pretend.
+
+    When the child is stopped, whatever it computed is written here with the
+    cancel flag already set and deliberately ignored — that write IS the rescue
+    of an hour of GPU work. Offering "finishing the current batch of 200 rows"
+    there would be a promise the user watches fail: the counter runs to the end.
+    """
+    from app.services import image_bank_service as banks
+    with app.app_context():
+        seen = []
+        with patch.object(banks.bank_jobs, 'progress', lambda job, **kw: None), \
+             patch.object(banks.bank_jobs, 'set_stop_notice',
+                          lambda job, **kw: seen.append(kw)):
+            banks._apply_score_results(object(), {}, {}, interruptible=False)
+        assert 'runs to the end' in seen[0]['wait']
+        assert 'current batch' not in seen[0]['wait']
+
+
 def test_the_style_write_says_a_stop_costs_nothing_there(app, tmp_path):
     seen = _score_phases(app, tmp_path)
     grouping = [s for s in seen['stop']

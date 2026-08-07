@@ -6386,12 +6386,19 @@ def _apply_score_results(job, by_path, results, interruptible, *,
     # is read once every `_SCORE_COMMIT_EVERY` rows, so a click can sit for a
     # batch, and a button that says nothing about that is indistinguishable from
     # a button that did not register the click.
+    #
+    # The SALVAGE call (interruptible=False) reaches this same code with the
+    # cancel flag already set, and it deliberately ignores it — this write IS
+    # the rescue of the stopped run's GPU work. Promising "the current batch"
+    # there would be a lie the user watches fail: the counter runs to the end.
     bank_jobs.set_stop_notice(
         job,
         cost='Scores already written stay. The style grouping is not written '
              'yet and only re-runs whole, so it needs another full pass.',
-        wait=f'Stopping — finishing the current batch of {_SCORE_COMMIT_EVERY} '
-             'rows, then saving.')
+        wait=(f'Stopping — finishing the current batch of {_SCORE_COMMIT_EVERY} '
+              'rows, then saving.') if interruptible else
+             ('Stopping — saving the scores this run already computed; this '
+              'last write runs to the end so none of them is thrown away.'))
     for p, image_id in by_path.items():
         res = results.get(p)
         if res is None:
