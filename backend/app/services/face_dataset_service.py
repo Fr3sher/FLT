@@ -5271,6 +5271,15 @@ def dataset_payload(user_id, dataset_id):
                     'framing': i.framing, 'variation_label': i.variation_label,
                     'status': i.status, 'caption': i.caption,
                     'caption_short': i.caption_short,
+                    # WHO wrote each of the two texts ('asserted' | 'joycaption' |
+                    # 'ollama' | NULL = never recorded — services/caption_origin.py).
+                    # It travels WITH the sentence, per image and per field: the
+                    # default 'auto' backend chains JoyCaption then Ollama inside a
+                    # single run, and the short caption has its own writers, so
+                    # neither the settings value nor the long caption's stamp can
+                    # answer "who wrote the words I am reading".
+                    'caption_origin': i.caption_origin,
+                    'caption_short_origin': i.caption_short_origin,
                     'fail_reason': i.fail_reason,
                     # 'refused' | 'empty' | 'error' | None — de quelle NATURE est
                     # l'échec, pour que l'UI puisse compter les refus fournisseur

@@ -24,6 +24,8 @@ import ReferenceEditModal from './ReferenceEditModal';
 import { defaultEditEngine } from './referenceEdit';
 import { localEngineUnavailableReason, hasComfyui } from '../../utils/localEngineReason.js';
 import { captionEnginesSummary, CAPTION_ENGINE_WHY } from '../../utils/captionEngines.js';
+// …and the per-image half of the same question, for the captions listed in full here.
+import { captionOriginInfo } from '../../utils/captionOrigin.js';
 import { extraRefCropSource } from './extraRefs';
 import DatasetLightbox from './DatasetLightbox';
 import DatasetSettingsModal from './DatasetSettingsModal';
@@ -1811,6 +1813,18 @@ export default function DatasetWorkspace({ ds, onBack }) {
                                 }}
                                 aria-label={`Caption of image ${img.id}`}
                                 className="w-full bg-app/60 border border-amber-400/30 rounded px-2 py-1 text-[0.6875rem] text-content resize-y" />
+                              {/* WHO WROTE THE LEAKING SENTENCE. This list is read
+                                  caption by caption to decide what to redo, and the
+                                  'auto' backend chains two engines inside one run —
+                                  so "which engine keeps leaking" is answerable here
+                                  and was not. Silent when the author was never
+                                  recorded (that is not "a model wrote it"). */}
+                              {captionOriginInfo(img.caption_origin).known && (
+                                <span className="text-[0.625rem] text-content-subtle"
+                                  title={captionOriginInfo(img.caption_origin).title}>
+                                  {captionOriginInfo(img.caption_origin).short}
+                                </span>
+                              )}
                               <button type="button"
                                 disabled={recaptionLocked}
                                 onClick={() => ds.recaptionImages([img.id], effCaptionMode)}

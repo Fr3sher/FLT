@@ -50,6 +50,11 @@ import {
   captionRecaptionConfirmation, captionRecaptionDisabledReason, captionRecaptionLabel,
   captionRecaptionNote, captionScopeNote, captionScopeStatuses,
 } from './bankCaptionScope.js'
+// …and the one thing the captioners are known to do badly, said where the engine is
+// still free to change. Pure/testable; stays silent unless the scope is measurably
+// the material it was measured on (see the module header for the evidence base).
+import { captionNsfwNotice } from './captionNsfwNotice.js'
+import { passScopeOption } from './bankPassScope.js'
 // 🎛 The launch window every pass now opens, and the two pure modules behind it:
 // what each pass is (blocks, offered scopes, refusals) and how big a run is.
 import PassDialog from './PassDialog.jsx'
@@ -63,6 +68,9 @@ import { BANK_ZONES, nextBankStep } from './bankGuide.js'
 import { ORIGIN_CHIPS, PROVENANCE_FLAG_LABEL, detailSummary } from './bankProvenance.js'
 // Grid ordering menu (which sorts exist, and which ones have data) — pure/testable.
 import { bankSortGroups, loadBankSort, saveBankSort } from '../../utils/gridSort.js'
+// WHO wrote the caption on a tile — the per-image half of the same provenance the
+// pass reports in aggregate (utils/captionEngines.js).
+import { captionOriginTooltipLine } from '../../utils/captionOrigin.js'
 // 🏷️ One image's caption → the chips you can filter by, and the same chips over a
 // whole SELECTION with how often each was cited (pure/testable).
 import {
@@ -627,7 +635,13 @@ function Tile({ img, bankId, selected, onToggle, onReview, onTags, size }) {
           + (img.origin && img.origin !== 'unknown' ? ` · ${img.origin}` : '')
           + (img.style_cluster ? ` · style #${img.style_cluster}` : '')
           + (img.semantic_dup_group ? ` · same shot #${img.semantic_dup_group}` : '')
-          + (img.caption ? `\n${img.caption}` : '')}
+          // The caption, and WHO WROTE IT in the same breath. The 'auto' backend
+          // chains two engines inside one run, so a bank holds both and the
+          // sentence alone cannot say which half produced it — exactly the reading
+          // this tooltip was missing.
+          + (img.caption
+            ? `\n${captionOriginTooltipLine(img.caption, img.caption_origin)}: ${img.caption}`
+            : '')}
         className="block w-full">
         {/* ?r= is a cache buster, not a parameter the server reads: the thumb
             route answers with max-age=3600, so a turned image would keep showing
@@ -1933,6 +1947,16 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
      ("Standard — the prompt as⌄"). */
   const captionSelectClass = 'mt-0.5 w-full rounded-lg border border-border bg-app/60 '
     + 'px-2 py-1 text-xs text-content disabled:opacity-40'
+  /* Rendered UNDER the engine picker, because it is about the engine and the picker
+     is the lever it names. It re-computes as the engine changes, so ticking
+     JoyCaption turns the warning into its own confirmation instead of leaving an
+     alarm on screen about a half that will no longer run. */
+  const captionNsfw = captionNsfwNotice({
+    payload,
+    scopeId: captionScope,
+    piles: passScopeOption(captionScope).piles,
+    engineId: captionEngine,
+  })
   const captionRunControls = (
     <div className="space-y-2 rounded-md border border-border bg-surface-raised p-2">
       <p className="m-0 text-[11px] font-semibold uppercase tracking-wide text-content-muted">
@@ -1991,6 +2015,23 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           </select>
         </label>
       </div>
+      {captionNsfw && (
+        <div role="note" aria-label="What this run is about to caption"
+          className={`space-y-1 rounded-md border px-2 py-1.5 ${
+            captionNsfw.tone === 'warn'
+              ? 'border-amber-400/40 bg-amber-500/10' : 'border-sky-400/40 bg-sky-500/10'}`}>
+          <p className={`m-0 text-[11px] font-semibold leading-snug ${
+            captionNsfw.tone === 'warn' ? 'text-amber-200' : 'text-sky-200'}`}>
+            {captionNsfw.tone === 'warn' ? '⚠ ' : 'ℹ ' }{captionNsfw.heading}
+          </p>
+          {captionNsfw.paragraphs.map((line) => (
+            <p key={line} className={`m-0 text-[11px] leading-snug ${
+              captionNsfw.tone === 'warn' ? 'text-amber-100/90' : 'text-sky-100/90'}`}>
+              {line}
+            </p>
+          ))}
+        </div>
+      )}
       <p className="m-0 text-[11px] leading-snug text-content-subtle">
         {captionScopeNote(selected.size, counts, captionScope)}
       </p>

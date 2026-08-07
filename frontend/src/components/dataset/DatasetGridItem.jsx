@@ -2,6 +2,9 @@
 import { improvementBadge } from './improveCandidates.js';
 import { useEffect, useRef, useState } from 'react';
 import { displayLabel } from '../../utils/labels';
+// WHO wrote this tile's caption — the per-image half of the provenance the pass
+// already reports in aggregate (utils/captionEngines.js).
+import { captionIsAsserted, captionOriginInfo } from '../../utils/captionOrigin.js';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import CaptionEditorDialog from './CaptionEditorDialog';
 import PromptEditPopover from './PromptEditPopover';
@@ -352,6 +355,25 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
               </button>
             )}
           </div>
+          {/* WHO WROTE THE TEXT IN THE BOX BELOW.
+              ITS OWN LINE, not a badge slipped into the action row: at the M tile
+              density that row already holds ⛶ Expand and 🗑 Caption, and a third
+              item there is clipped at the tile's left edge — measured headless at
+              that density, where the chip read "yCaption".
+              ALWAYS VISIBLE, unlike that row: this is a readout, not an action, and
+              a provenance you have to hover to discover is one nobody discovers.
+              Only when there IS a caption and its author was recorded — stamping
+              "author not recorded" on every legacy tile would be a grid of identical
+              chips, which is noise; the expanded editor has room to say it and does. */}
+          {(cap || '').trim() && captionOriginInfo(img.caption_origin).known && (
+            <span title={captionOriginInfo(img.caption_origin).title}
+              aria-label={captionOriginInfo(img.caption_origin).short}
+              className={`block truncate text-[10px] leading-none ${
+                captionIsAsserted(img.caption_origin)
+                  ? 'text-emerald-300' : 'text-content-subtle'}`}>
+              {captionOriginInfo(img.caption_origin).chip}
+            </span>
+          )}
           <textarea value={cap} onChange={(e) => setCap(e.target.value)}
             disabled={busy}
             onFocus={() => { editingRef.current = true; }}
@@ -372,6 +394,7 @@ export default function DatasetGridItem({ img, datasetId, onStatus, onCaption, o
         <CaptionEditorDialog initialCaption={cap} imageUrl={url}
           datasetId={datasetId} imageId={img.id}
           initialShortCaption={img.caption_short || ''} showShort={dualCaptions}
+          captionOrigin={img.caption_origin} shortCaptionOrigin={img.caption_short_origin}
           imageLabel={displayLabel(img.variation_label)}
           onClose={() => setCaptionEditorOpen(false)}
           /* Awaited, and its answer is handed BACK: an unawaited handler cannot
