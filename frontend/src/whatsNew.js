@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-passes-survive-a-locked-cache',
+    date: '2026-08-07',
+    title: 'A pass no longer dies because something else touched its cache file',
+    blurb:
+      'A ✨ Score over 37,000 images stopped at image 1849 with "Access denied" on its own cache — not a permissions problem, but an antivirus holding the freshly written file for a fraction of a second while the pass tried to swap it into place. On Windows that is enough to refuse the swap, and the work the pass had already computed and written was thrown away with it. Now the swap waits and retries for a few seconds, and if something really is holding the file the message says so instead of sending you into folder permissions. Better still, nothing is lost either way: work a previous run finished but could not file away is picked up automatically when the pass next starts, so a run interrupted by a lock, a crash or a power cut resumes from where it got to. Recovered work is checked before it is trusted — a half-written file is refused and removed rather than quietly becoming your cache. Applies to ✨ Score, faces, the semantic index and the video search vectors.',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',

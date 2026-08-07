@@ -235,20 +235,26 @@ def salvage_orphan_tmp(destination, count_entries, log=None):
         current = 0
     recovered = 0
     for candidate in candidates:
+        count, reason = 0, None
         if recovered:
-            _discard(candidate, say, 'superseded by a newer recovered file')
-            continue
-        try:
-            count = count_entries(candidate)
-        except Exception as error:               # noqa: BLE001
-            _discard(candidate, say, f'unreadable ({error})')
-            continue
-        if not count:
-            _discard(candidate, say, 'unreadable or empty')
-            continue
-        if count < current:
-            _discard(candidate, say,
-                     f'holds {count} entries, fewer than the {current} already cached')
+            reason = 'superseded by a newer recovered file'
+        else:
+            try:
+                count = count_entries(candidate)
+            except Exception as error:           # noqa: BLE001
+                count, reason = 0, f'unreadable ({error})'
+            # The discard happens OUTSIDE that except block on purpose. While it
+            # is running, the live exception still holds its traceback, the
+            # traceback holds the reader's frames, and those hold the numpy file
+            # object open — on Windows that makes os.remove fail, silently
+            # leaving behind exactly the litter this is here to clear.
+            if reason is None and not count:
+                reason = 'unreadable or empty'
+            elif reason is None and count < current:
+                reason = (f'holds {count} entries, fewer than the {current} '
+                          f'already cached')
+        if reason:
+            _discard(candidate, say, reason)
             continue
         try:
             replace_with_retry(candidate, destination)
