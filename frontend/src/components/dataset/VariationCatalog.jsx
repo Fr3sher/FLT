@@ -7,8 +7,8 @@ import { useCapabilities } from '../../context/CapabilitiesContext';
 import { apiFetch, putJson } from '../../api/fetchClient';
 import ShotIllustration, { contextEmoji } from './ShotIllustration';
 import { displayLabel } from '../../utils/labels';
-import { generationLoraPresetPayload, sanitizeGenerationLoraPresets } from '../../utils/generationLoras';
-import { kreaGenerationLoraPresetPayload, sanitizeKreaGenerationLoraPresets } from '../../utils/kreaGenerationLoras';
+import { generationLoraPresetPayload, sanitizeGenerationLoraPresets, resolveDefaultPresetName } from '../../utils/generationLoras';
+import { kreaGenerationLoraPresetPayload, sanitizeKreaGenerationLoraPresets, resolveKreaDefaultPresetName } from '../../utils/kreaGenerationLoras';
 import { requestHelpTip } from '../../help/helpTips';
 import { HelpBadge } from '../../help/HelpMode';
 import {
@@ -474,10 +474,15 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [loraStrength, setLoraStrength] = useState(0.5);
   // Optional generation-LoRA PRESETS (Idea by @waltm — Discord feature
   // request): the user's named combinations from Settings
-  // (klein.generation_lora_presets). Per run the workspace just PICKS one —
-  // "None" by default on every mount (deliberately not persisted, so no one
-  // inherits yesterday's stack); the preset's config is authoritative (no
-  // per-LoRA knobs here) and its chain applies to the whole run.
+  // (klein.generation_lora_presets). Per run the workspace just PICKS one; the
+  // preset's config is authoritative (no per-LoRA knobs here) and its chain
+  // applies to the whole run.
+  // The mount value is klein.default_generation_lora_preset, resolved against
+  // the configured list below — '' (None) unless the user picked a default in
+  // Settings, which is the behaviour every install had before that key existed.
+  // What is still NOT persisted is the choice made HERE: it lasts for this
+  // visit only and never writes the setting back, so a one-off run can never
+  // silently become everyone's new default.
   const [loraPresets, setLoraPresets] = useState([]);   // [{name, loras:[{file, strength}]}]
   const [loraPresetName, setLoraPresetName] = useState('');   // '' = None
   const activeLoraPreset = loraPresets.find((p) => p.name === loraPresetName) || null;
@@ -543,7 +548,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [kreaGrounding, setKreaGrounding] = useState(512);
   // Krea's own always-on presets (krea.generation_lora_presets) — a SEPARATE
   // pick from Klein's, because one run can dispatch to both engines and each
-  // graph takes its own family of LoRAs. "None" on every visit, like Klein's.
+  // graph takes its own family of LoRAs — including the STARTING pick, which
+  // comes from krea.default_generation_lora_preset and is resolved against
+  // Krea's own list (the same name can designate two different chains).
   const [kreaLoraPresets, setKreaLoraPresets] = useState([]);
   const [kreaLoraPresetName, setKreaLoraPresetName] = useState('');
   const activeKreaLoraPreset = kreaLoraPresets.find((p) => p.name === kreaLoraPresetName) || null;
@@ -562,9 +569,24 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         setChatgptAuth(d.config?.engines?.chatgpt_auth || 'auto');
         setOpenrouterModel((d.config?.engines?.openrouter_model || '').trim());
         setChatgptImageModel((d.config?.engines?.chatgpt_image_model || '').trim());
-        // Optional generation-LoRA presets: names + chains for the picker.
-        setLoraPresets(sanitizeGenerationLoraPresets(d.config?.klein?.generation_lora_presets));
-        setKreaLoraPresets(sanitizeKreaGenerationLoraPresets(d.config?.krea?.generation_lora_presets));
+        // Optional generation-LoRA presets: names + chains for the picker, and
+        // the preset each engine STARTS on. The pickers used to open on "None"
+        // on every visit, so a configured preset applied only when the user
+        // remembered to re-pick it — a run that forgot showed no LoRA at all in
+        // its PNG metadata, which reads as the app ignoring its own settings.
+        // Each engine resolves its OWN default against its OWN list (the same
+        // name can designate two different chains), fail-closed: a name matching
+        // no preset resolves to '' = None. This only sets the STARTING value —
+        // changing the picker below still affects this run only, and never
+        // writes the setting back.
+        const kleinPresets = sanitizeGenerationLoraPresets(d.config?.klein?.generation_lora_presets);
+        const kreaPresets = sanitizeKreaGenerationLoraPresets(d.config?.krea?.generation_lora_presets);
+        setLoraPresets(kleinPresets);
+        setKreaLoraPresets(kreaPresets);
+        setLoraPresetName(resolveDefaultPresetName(
+          d.config?.klein?.default_generation_lora_preset, kleinPresets));
+        setKreaLoraPresetName(resolveKreaDefaultPresetName(
+          d.config?.krea?.default_generation_lora_preset, kreaPresets));
         // Krea's one dial. It lives in Settings (it changes the meaning of every
         // shot in the batch identically, so it is not a per-run argument), and is
         // MIRRORED here so the workspace can say what the run will actually do.
@@ -1164,8 +1186,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             </div>
             {/* Optional generation-LoRA preset (Idea by @waltm) — pick one of
                 the named combinations from Settings; its chain (read-only
-                here) applies to every variation of the run. "None" on each
-                visit by default. */}
+                here) applies to every variation of the run. It opens on
+                klein.default_generation_lora_preset ("None" unless one is set);
+                changing it here affects THIS run only. */}
             <div className="flex flex-col gap-1">
               <label className="flex items-center gap-2 text-content-muted text-[0.6875rem]">
                 <span className="whitespace-nowrap">LoRA preset</span>

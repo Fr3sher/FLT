@@ -1750,6 +1750,24 @@ def probe(force=False) -> dict:
     # See krea_edit_helper.KreaPinnedModelMissing for the run that made this a
     # gate instead of a log line.
     krea_pin_gaps = _krh.krea_pin_gaps()
+    # WHICH Krea base this install actually loads, named. `krea.base_model` blank
+    # means "elect one", and until now nothing on screen said what got elected —
+    # the only way to find out was to read a finished PNG's metadata. That silence
+    # is expensive: a folder holding both the canonical Turbo build and a
+    # community finetune whose name also reads as "turbo" puts BOTH in the top
+    # regime tier, and the tie-break can hand the run to the finetune. Every
+    # quality judgement made after that is about a model the user never chose.
+    # It is the SAME resolve_krea_unet() the generation path calls, not a second
+    # ranking. Cost: this is its THIRD call in this probe (krea_missing_assets and
+    # krea_invalid_assets each made one above), and the expensive part — the
+    # header tie-break between several same-tier candidates — is cached in
+    # model_integrity on (abspath, mtime_ns, size). Measured on a worst-case tree
+    # of six candidates that ALL read as "turbo" (so the tie-break really runs):
+    # 24 ms for the cold call, 1.4 ms for every later one. This one is always a
+    # later one, and probe() is itself cached for 30 s; a single-candidate install
+    # reads no header at all (step 3 of resolve_krea_unet only runs when more than
+    # one survives step 2). Empty string = nothing loadable on disk.
+    krea_base_resolved = _krh.resolve_krea_unet() or ''
     krea_ready = (comfy['ok'] and not krea_missing and not krea_nodes_missing
                   and not krea_blocking_invalid and not krea_pin_gaps)
     # SeedVR2 — the fidelity upscaler (issue #32). Same three-part shape as Krea
@@ -1850,6 +1868,10 @@ def probe(force=False) -> dict:
             # (krea_edit_helper.KREA_ASSETS) and the custom-node class_types this
             # ComfyUI doesn't expose. Empty + empty => the engine is ready.
             'krea_missing': krea_missing,
+            # The ComfyUI-relative name of the Krea base the next run WILL load
+            # (pin honoured, else the election). '' = none on disk. Published so
+            # the Settings field can name it instead of promising "auto".
+            'krea_base_resolved': krea_base_resolved,
             'krea_nodes_missing': krea_nodes_missing,
             'krea_nodes_installed': krea_nodes_installed,
             # Krea assets PRESENT on disk but not real, loadable weights — same
