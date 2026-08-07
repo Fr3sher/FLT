@@ -90,6 +90,14 @@ export const WHATS_NEW = [
     to: '/settings/engines',
   },
   {
+    id: '2026-08-08-improve-instruction-editable-in-place',
+    date: '2026-08-08',
+    title: 'Fix the improve instruction where it goes wrong, not in Settings',
+    blurb:
+      'The note under ✨ Upscale & improve already told you what the pass was about to ask Klein for — "add detailed texture, add sharp details…" — and then sent you to Settings to change it. Now you can change it right there: ✎ Edit this instruction here opens the box under the button, in the lightbox and in the bulk toolbar, already filled with the exact text in force. Rewrite it for a drawing, or untick it and let the pass upscale with no instruction at all; both take effect on your next improve, with nothing to save. It edits the app-wide setting — the same value Settings shows, applying to every dataset — and the panel says so before you touch it. Reset to default appears only once you have actually overridden something, and puts you back on the shipped text rather than on a frozen copy of it, so later improvements to that text still reach you.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-07-bank-stop-answers-the-click',
     date: '2026-08-07',
     title: 'Stop on a Bank pass answers you the moment you press it',
