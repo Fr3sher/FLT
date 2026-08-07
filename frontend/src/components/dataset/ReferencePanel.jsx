@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import IdentityPromptModal from './IdentityPromptModal';
 // Engine names come from the derived edit list — spelling them out here is how
 // this tooltip ended up naming two engines while a third could already edit.
-import { editEngineNames } from './referenceEdit';
+import { editEngineNames, pendingEditNote } from './referenceEdit';
 
 // Cap identique à MAX_EXTRA_REFS côté backend (face_dataset_service).
 const MAX_EXTRA_REFS = 3;
@@ -10,7 +10,8 @@ const MAX_EXTRA_REFS = 3;
 export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCropRef, onEditRef, busy,
                                          importBusy = busy, visionBusy = false, nonce = 0,
                                          extraRefs = [], onAddExtraRef, onRemoveExtraRef,
-                                         onCropExtraRef, subjectType = 'human' }) {
+                                         onCropExtraRef, subjectType = 'human',
+                                         referenceEdit = null }) {
   const inp = useRef(null);
   const inpExtra = useRef(null);
   // Auto head-crop = OPT-IN (vision pass, pauses ComfyUI). Default OFF: upload is
@@ -21,6 +22,10 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
   // here, in the one place where the user is thinking about identity locking.
   const [promptModal, setPromptModal] = useState(false);
   const imgUrl = (fn) => `/api/dataset/${datasetId}/img/${encodeURIComponent(fn)}${nonce ? `?v=${nonce}` : ''}`;
+  // An edit that already landed and is waiting for Keep or Discard. It matters
+  // most after a restart: the modal only opens on a click, so without this the
+  // paid result would sit unannounced until the TTL deleted it.
+  const waiting = onEditRef ? pendingEditNote(referenceEdit) : null;
   return (
     <div className="flex flex-col gap-2 rounded-lg border border-border bg-surface p-3">
       <div className="flex items-center gap-3">
@@ -30,7 +35,19 @@ export default function ReferencePanel({ refFilename, datasetId, onSetRef, onCro
             : <span className="text-content-subtle text-xs">none</span>}
         </div>
         <div className="flex flex-col gap-1">
-          <span className="text-content text-sm font-medium">Reference photo</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-content text-sm font-medium">Reference photo</span>
+            {waiting && (
+              // A button, not a label: the whole point is to lead somewhere, and
+              // the modal it opens is where Keep and Discard live.
+              <button type="button" onClick={onEditRef} disabled={busy}
+                title="Open the edit to compare it with the current reference, then Keep or Discard"
+                className="px-2 py-0.5 rounded-full border border-amber-500/40 bg-amber-500/10
+                           text-amber-300 text-[0.625rem] font-medium disabled:opacity-40">
+                ✦ {waiting} →
+              </button>
+            )}
+          </div>
           <span className="text-content-subtle text-[0.6875rem]">source of Klein variations — crop with ✂ after upload</span>
           <div className="flex gap-1.5 items-center flex-wrap">
             <button type="button" onClick={() => inp.current?.click()} disabled={importBusy}

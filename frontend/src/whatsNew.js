@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-reference-edit-survives-a-restart',
+    date: '2026-08-07',
+    title: 'An edited reference photo is no longer lost if the app restarts',
+    blurb:
+      'Editing your reference photo is a paid call that takes one to three minutes. If the app restarted before you pressed Keep, the finished image was still sitting in your dataset folder — but nothing could reach it any more: the modal came back empty, Keep refused, and the result you paid for was deleted half an hour later. It now comes back waiting for your Keep or Discard. If a second engine was still working when the app went down, it says so plainly instead of spinning forever on a result that is not coming.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-07-video-install-checks-the-encoder',
     date: '2026-08-07',
     title: 'Installing the video extra no longer claims success when clips still cannot be cut',

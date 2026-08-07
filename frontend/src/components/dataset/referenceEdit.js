@@ -322,6 +322,27 @@ export function editPhase(referenceEdit) {
   return 'failed';
 }
 
+/** What the Reference card says when an edit is waiting for a decision — or
+ *  null when there is nothing to decide.
+ *
+ *  The ✦ Edit modal only opens on a click, so a candidate the server restored
+ *  after a restart was reachable and never announced: the user had no way to
+ *  learn that a result they PAID for was sitting there, and the TTL eventually
+ *  deleted it. This badge is the announcement.
+ *
+ *  Only READY candidates with a real file count. A running edit is deliberately
+ *  silent here — the modal and the activity badge already show it, and a card
+ *  badge that sometimes meant "maybe later" would train the eye to skip the one
+ *  that means "decide now". */
+export function pendingEditNote(referenceEdit) {
+  const ready = referenceEditCandidates(referenceEdit).filter(
+    (candidate) => candidate.status === 'ready' && candidate.candidate_filename);
+  if (!ready.length) return null;
+  return ready.length === 1
+    ? 'An edited version is waiting'
+    : `${ready.length} edited versions are waiting`;
+}
+
 /** Advisory shown when a generation batch is live. A Keep is provably safe (the
  *  batch snapshotted the reference at launch), so this INFORMS, it does not block:
  *  the point is that editing changes only FUTURE batches. Returns null when no
