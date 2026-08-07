@@ -50,12 +50,28 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-reference-edit-survives-a-restart',
+    date: '2026-08-07',
+    title: 'An edited reference photo is no longer lost if the app restarts',
+    blurb:
+      'Editing your reference photo is a paid call that takes one to three minutes. If the app restarted before you pressed Keep, the finished image was still sitting in your dataset folder — but nothing could reach it any more: the modal came back empty, Keep refused, and the result you paid for was deleted half an hour later. It now comes back waiting for your Keep or Discard. If a second engine was still working when the app went down, it says so plainly instead of spinning forever on a result that is not coming.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-07-video-install-checks-the-encoder',
     date: '2026-08-07',
     title: 'Installing the video extra no longer claims success when clips still cannot be cut',
     blurb:
       'The video extra delivers two things — reading your files, and encoding the clips you keep — and Setup only ever checked the first. So on a machine where the bundled ffmpeg never finished downloading (or an antivirus emptied it), the install said "✓ installed successfully" while the "Video bank — clip encoding" row stayed ✗ right underneath, behind the very same ↻ button: you reinstalled the half that already worked. That install now fails honestly and tells you which half is missing and what repairs it. The Setup row got stricter too: it runs ffmpeg instead of trusting that a file exists at the right path, so a truncated or quarantined binary is caught in Setup rather than in the middle of an export.',
     to: '/setup',
+  },
+  {
+    id: '2026-08-07-face-mask-preview-survives-a-restart',
+    date: '2026-08-07',
+    title: 'The face-mask preview no longer disappears when you restart',
+    blurb:
+      'Looking for faces across a concept dataset is the slow part of the training panel — the detector alone takes seconds to load before the first image, then every kept photo on top. That whole pass used to live only in the app\'s memory, so restarting the server threw it away and the panel offered to run it all over again. It is now saved beside your images and comes back with them. Stopping a pass keeps its credit too: the faces already found survive the restart, so "Resume — 47 of 153 already analyzed" is still waiting for you. If you changed your kept images while the app was down, the preview comes back labelled out of date rather than pretending to be current.',
+    to: '/datasets',
   },
   {
     id: '2026-08-03-phone-layout-full-width',

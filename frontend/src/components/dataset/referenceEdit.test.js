@@ -5,7 +5,7 @@ import {
   batchLiveNote, editPhase, editEngineOptions, editCostNote, editKeepNote,
   editRefNote, acceptsExtraEditRefs, acceptsExtraEditRefsForBatch, editRefSupport,
   editBatchBlockedReason, referenceEditCandidates,
-  retryRequestForReferenceEdit, MAX_EDIT_REFS, maxEditRefsForBatch,
+  retryRequestForReferenceEdit, MAX_EDIT_REFS, maxEditRefsForBatch, pendingEditNote,
 } from './referenceEdit.js';
 import {
   STORAGE_ENGINES, STORAGE_PRIMARY, ENGINES, API_ENGINES, LOCAL_ENGINES, ENGINE_LABELS,
@@ -278,4 +278,61 @@ test('an exact Retry belongs only to the opaque batch currently displayed', () =
     retryRequestForReferenceEdit({ ...request, batchId: null }, { batch_id: 'batch-A' }),
     null,
   );
+});
+
+/* The badge on the Reference card. Its whole reason to exist is the restart
+   case: the ✦ Edit modal only opens on a click, so a candidate recovered after
+   a restart was reachable but never announced — the user had no way to learn
+   that a result they PAID for was sitting there waiting for a Keep. */
+test('a ready candidate is announced on the reference card', () => {
+  assert.equal(pendingEditNote({
+    status: 'ready', engines: ['chatgpt'],
+    candidates: { chatgpt: { engine: 'chatgpt', status: 'ready', candidate_filename: 'c.webp' } },
+  }), 'An edited version is waiting');
+});
+
+test('nothing is announced while there is nothing to decide', () => {
+  // No edit at all, and — deliberately — no badge for a RUNNING one either: the
+  // modal and the activity badge already say that, and a card badge that meant
+  // "maybe later" would train the eye to ignore the one that means "decide now".
+  assert.equal(pendingEditNote(null), null);
+  assert.equal(pendingEditNote({
+    status: 'running', engines: ['chatgpt'],
+    candidates: { chatgpt: { engine: 'chatgpt', status: 'running', candidate_filename: null } },
+  }), null);
+  assert.equal(pendingEditNote({
+    status: 'failed', engines: ['chatgpt'],
+    candidates: { chatgpt: { engine: 'chatgpt', status: 'failed', error: 'boom' } },
+  }), null);
+});
+
+test('a partly-lost batch is still announced for the result that landed', () => {
+  // Exactly the shape recovery rebuilds: one engine landed, one died with the
+  // process. There IS something to keep, so it is announced.
+  assert.equal(pendingEditNote({
+    status: 'ready', engines: ['chatgpt', 'krea'],
+    candidates: {
+      chatgpt: { engine: 'chatgpt', status: 'ready', candidate_filename: 'c.webp' },
+      krea: { engine: 'krea', status: 'failed', error: 'krea: lost to a restart' },
+    },
+  }), 'An edited version is waiting');
+});
+
+test('two results waiting say so, so the badge never undercounts the choice', () => {
+  assert.equal(pendingEditNote({
+    status: 'ready', engines: ['chatgpt', 'krea'],
+    candidates: {
+      chatgpt: { engine: 'chatgpt', status: 'ready', candidate_filename: 'c.webp' },
+      krea: { engine: 'krea', status: 'ready', candidate_filename: 'k.webp' },
+    },
+  }), '2 edited versions are waiting');
+});
+
+test('a ready status with no file is not something to decide on', () => {
+  // Defensive: the badge must point at a real image, or clicking it opens a
+  // modal with nothing in it.
+  assert.equal(pendingEditNote({
+    status: 'ready', engines: ['chatgpt'],
+    candidates: { chatgpt: { engine: 'chatgpt', status: 'ready', candidate_filename: null } },
+  }), null);
 });
