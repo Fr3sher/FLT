@@ -6381,6 +6381,17 @@ def _apply_score_results(job, by_path, results, interruptible, *,
     bank_jobs.progress(job, done=0, total=total, detail=(
         f'writing {total} score(s) to the database…'
         + (' — a few minutes on a bank this size' if total >= 5000 else '')))
+    # What Stop costs HERE, in the phase the user is actually looking at. The
+    # commit batch below is why the promise has to name a wait at all: the flag
+    # is read once every `_SCORE_COMMIT_EVERY` rows, so a click can sit for a
+    # batch, and a button that says nothing about that is indistinguishable from
+    # a button that did not register the click.
+    bank_jobs.set_stop_notice(
+        job,
+        cost='Scores already written stay. The style grouping is not written '
+             'yet and only re-runs whole, so it needs another full pass.',
+        wait=f'Stopping — finishing the current batch of {_SCORE_COMMIT_EVERY} '
+             'rows, then saving.')
     for p, image_id in by_path.items():
         res = results.get(p)
         if res is None:
@@ -6541,6 +6552,17 @@ def _score_job(bank_id, rescore=False):
         # no explanation reads as a hang.
         bank_jobs.progress(job, done=0, total=len(paths),
                            detail=f'scoring pass ({device.upper()})')
+        # Phase 1 of three, each with a different price — see the cancelled
+        # branch below: whatever the child computed before it was told to stop
+        # is written to the database, and only the global style partition is
+        # lost (it is computed over the whole bank at once and cannot be halved).
+        bank_jobs.set_stop_notice(
+            job,
+            cost='Every image already scored is saved when you stop. The style '
+                 'grouping is computed over the whole bank at once, so it is '
+                 'the one thing a stop loses.',
+            wait='Stopping — waiting for the image being analyzed, then saving '
+                 'what was scored.')
         if not paths:
             # Never leave the label of a pass that did not run: the one-click
             # tunnel falls back to a count read from the DATABASE when a step
@@ -6631,11 +6653,22 @@ def _score_job(bank_id, rescore=False):
         # The last mute step, and the one whose Stop semantics differ from every
         # other: the partition is written whole or not at all (see
         # _write_style_clusters), so a Stop landing here does NOT undo it.
+        # The sentence about Stop used to live INSIDE this label, where it was
+        # read by everyone at all times and answered a question only the person
+        # reaching for the button is asking — and at 400 px it pushed the
+        # counter and the pass name off their line. It now sits next to the
+        # button, as this phase's promise.
         bank_jobs.progress(job, done=0, total=0, detail=(
-            f'writing the style grouping over {len(clusters)} image(s) — this '
-            'step finishes even if you Stop, because a half-written grouping '
-            'would mix two numberings'))
+            f'writing the style grouping over {len(clusters)} image(s)'))
+        bank_jobs.set_stop_notice(
+            job,
+            cost='This step finishes even if you Stop — a half-written grouping '
+                 'would mix two numberings. Nothing already written is lost.',
+            wait='Stopping — the style grouping is written whole first.')
         style_written = _write_style_clusters(by_path, clusters, results)
+        # 🎨 Medium runs next inside this same job and stops on its own terms;
+        # leaving the grouping's promise up would describe a step that is over.
+        bank_jobs.set_stop_notice(job)
         sizes = {}
         for cid in clusters.values():
             sizes[cid] = sizes.get(cid, 0) + 1

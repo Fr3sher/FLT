@@ -107,6 +107,7 @@ def _writer_verdict_during_inference(file_db, make_job):
         with patch.object(banks, '_drive_infer_subprocess', fake_drive), \
              patch.object(banks.bank_jobs, 'cancelled', lambda job: False), \
              patch.object(banks.bank_jobs, 'progress', lambda job, **kw: None), \
+             patch.object(banks.bank_jobs, 'set_stop_notice', lambda job, **kw: None), \
              patch('app.capabilities.bank_scoring_gpu_available', lambda: False), \
              patch.object(banks, '_resolve_face_device', lambda: ('cpu', False)):
             make_job(banks, bank_id)(object())
