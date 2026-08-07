@@ -661,9 +661,9 @@ export const WHATS_NEW = [
   {
     id: '2026-08-04-cloud-quantize-rents-a-machine-that-fits',
     date: '2026-08-04',
-    title: 'Cloud quantization now rents a machine that can actually hold your model — and says why when it cannot',
+    title: 'Cloud quantization picks a machine that can hold the model (server side — this lane has no button)',
     blurb:
-      '☁ Quantize to fp8 in the cloud used to give up one second after the click with “create_instance failed: HTTP 400 {}” — no machine, no money spent, and no reason. Two things were wrong. It rented the cheapest offer on the market, and cheap is exactly where free disk runs out: a 26 GB model needs about 86 GB on the pod for the master, its fp8 twin and the download cache, while the top offer of a live search had 57 GB — an ask vast refuses outright. And a single refusal ended the job, even though the next machine would have taken it. Now the search only considers machines with the disk this job will claim, the offer is chosen by the same rule a training launch uses (bad hosts skipped, suspiciously cheap listings ignored), and a refusal moves to the next candidate instead of ending everything. When a rental really is impossible, the error quotes what vast said rather than an empty “{}”. The estimate stays an estimate — but if the market moved and the only machine left costs materially more than the price you agreed to, it tells you and rents nothing.',
+      'A correction first: this lane has no interface, so there is no click to make. The fix below is real and lives in the server half; the reachable way to shrink a model is ✨ Quantize to fp8, locally, from a full-model card or Settings ▸ Storage. Cloud quantization used to give up one second after being asked with “create_instance failed: HTTP 400 {}” — no machine, no money spent, and no reason. Two things were wrong. It rented the cheapest offer on the market, and cheap is exactly where free disk runs out: a 26 GB model needs about 86 GB on the pod for the master, its fp8 twin and the download cache, while the top offer of a live search had 57 GB — an ask vast refuses outright. And a single refusal ended the job, even though the next machine would have taken it. Now the search only considers machines with the disk this job will claim, the offer is chosen by the same rule a training launch uses (bad hosts skipped, suspiciously cheap listings ignored), and a refusal moves to the next candidate instead of ending everything. When a rental really is impossible, the error quotes what vast said rather than an empty “{}”. The estimate stays an estimate — but if the market moved and the only machine left costs materially more than the price you agreed to, it tells you and rents nothing.',
   },
   {
     id: '2026-08-04-quantize-to-fp8-from-settings-storage',
@@ -754,10 +754,10 @@ export const WHATS_NEW = [
   {
     id: '2026-08-03-quantize-in-the-cloud-without-downloading',
     date: '2026-08-03',
-    title: 'Quantize a delivered full model in the cloud — you only ever download the small one',
+    title: 'Cloud quantization: built on the server, never given a button — corrected',
     blurb:
-      'A full model already sitting in your private Hugging Face repo is 26 GB, and building its fp8 twin at home means pulling all 26 GB down and pushing 10 GB back — an hour of your bandwidth for under a minute of arithmetic. “☁ Quantize to fp8 in the cloud” rents one cheap machine to do that round trip on a datacentre link and writes the fp8 file straight into the same repository; you then download only the ~10 GB result. The cost is quoted before anything is rented — price per hour, estimated minutes, estimated total — like a training run. And the machine is destroyed on every path out: on success, on failure, and at a hard deadline even if it never reported anything, with a sweep that also reaps a machine left behind by an app restart. It refuses if the fp8 file already exists, and warns before renting if your private storage looks too small for it.',
-    to: '/cloud',
+      'This entry announced a “☁ Quantize to fp8 in the cloud” button, and that button was never wired: the service, its three endpoints and their tests are in the app, but nothing in the interface calls them, so there has never been anything to click. We are correcting the claim rather than quietly leaving it: an app that announces what it cannot do is worse than one that shipped less. What DOES work, and always did, is the local conversion — ✨ Quantize to fp8, from a full-model recipe card or from Settings ▸ Storage. It runs on your CPU in about a minute, so the arithmetic was never the expensive part. The cost the cloud lane was meant to save is bandwidth: a master that lives only in your Hugging Face repo has to come down (26 GB) and go back up (10 GB) for the local path to touch it. If that round trip is your problem, say so on the Discord — the server half is already written and only the door is missing.',
+    to: '/settings',
   },
   {
     id: '2026-08-03-quantize-an-existing-model-to-fp8',
