@@ -1285,7 +1285,8 @@ export default function DatasetWorkspace({ ds, onBack }) {
                       extraRefs={d.ref_extra_filenames || []}
                       onAddExtraRef={ds.addExtraRef} onRemoveExtraRef={ds.removeExtraRef}
                       onCropExtraRef={(fn) => setExtraRefCrop(fn)}
-                      subjectType={d.subject_type || 'human'} />
+                      subjectType={d.subject_type || 'human'}
+                      referenceEdit={d.reference_edit} />
                   </div>
                 </div>
 

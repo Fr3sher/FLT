@@ -5334,7 +5334,13 @@ def dataset_payload(user_id, dataset_id):
         # Before/After from this after a tab sleep or reload; the 'edit_reference'
         # activity above keeps this polled while it runs. get() lazily purges an
         # abandoned candidate past its TTL, so this can't strand a stale file.
-        'reference_edit': reference_edit_jobs.get(dataset_id),
+        # The dataset dir is passed so a candidate that LANDED before a restart
+        # is found again and re-offered: it is a paid provider result, and losing
+        # the registry entry used to leave it unreachable until the sweep deleted
+        # it. Recovery reads sidecars, never filenames, and only ever runs when
+        # the registry has nothing live for this dataset.
+        'reference_edit': reference_edit_jobs.get(dataset_id,
+                                                  _dataset_dir(dataset_id)),
     }
 
 
