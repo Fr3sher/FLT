@@ -481,15 +481,49 @@ working copies. This follows **Qeeyana (Reddit)** asking: *"Images added to
   untouched.
 
 **Import safety limit — every mode:** Before preserve, WebP normalization, or
-auto head-crop can decode the source, it must be no larger than **16 Mi-pixels**
-and **8192 px per side**. A larger file is rejected; convert or resize it before
-importing. WebP normalization does not bypass this admission limit.
+auto head-crop can decode the source, it must fit the **Image size budget**
+below (shipped default **64 Mi-pixels** and **16384 px per side**). A larger
+file is rejected, and the message names the setting. WebP normalization does
+not bypass this admission limit.
 - **Stored resolution** → `dataset_import.max_side`. Used only by the three WebP
 normalization modes. Choose `1024`, `1536`, `2048`, `4096`, or `0` = original
 size. The aspect ratio is always preserved (no square padding) and an image is
 never enlarged. This output setting takes effect only after the source passes
 the import safety limit above; normalized output also clamps the longest side to
-**8192 px**.
+**8192 px** — that ceiling bounds what is *written* by a WebP mode and is
+deliberately independent of the input budget.
+
+### Image size budget
+
+How large a source image **any** part of the app may decode. Not an import-only
+rule: dataset import, ZIP and scrape ingest, Bank scan and thumbnails, edits,
+ComfyUI staging and Ollama vision captioning all read these two keys, so an
+image you can import is an image you can look at.
+
+- **Maximum total pixels** → `image_input.max_pixels`. Default
+  **`67108864`** (64 Mi-pixels). `0` = no limit.
+- **Maximum side** → `image_input.max_side`. Default **`16384`** px. `0` = no
+  limit.
+
+This is a **memory** budget, not an encoder limit: a decoded RGB pixel costs 3
+bytes (RGBA 4), and an edit or analysis pass can hold a second copy at the same
+time. So 64 Mi-pixels is about **192 MiB** for one decoded RGB buffer and
+roughly **384 MiB** while a working copy exists. It admits every current phone
+and 35 mm camera master (a 61 MP 9504×6336 frame is 57 Mi-pixels) and ordinary
+stitched panoramas — the previous fixed 16 Mi-pixels / 8192 px refused both.
+
+**What `0` disarms.** No limit means a corrupt or hostile file can be decoded
+until it fills memory: a few hundred header bytes can claim billions of pixels,
+and the app has no second guard behind this one — an unlimited budget also lifts
+Pillow's own decompression-bomb threshold, so the choice is real in both
+directions. It is offered because "let it through" is a legitimate answer for a
+panorama you produced yourself.
+
+**One consumer cannot follow it.** Image Bank *inference workers* (face,
+aesthetic and NSFW scoring, watermark inpainting) run in a separate Python
+interpreter that does not import the app or its config, and keep their own fixed
+16 Mi-pixel / 8192 px guard (`backend/infer/bank_image_guard.py`). An image above
+that imports, displays and trains normally; those workers skip it.
 
 **Auto head-crop is deliberately different.** It changes the picture into a
 square head shot, so it creates a derived WebP even when `preserve` is selected.
@@ -1299,8 +1333,10 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `paths.cloud_runs_dir` | Working area of cloud training runs (dataset copy, samples, logs). Empty string defaults to `<data dir>/cloud_runs`. |
 | `paths.checkpoints_dir` | Durable store for the checkpoints cloud runs produce. Empty string defaults to `<data dir>/checkpoints`. No cleanup ever removes a file from it. |
 | `paths.video_datasets_dir` | Where promoted video datasets are written — a flat folder of `.mp4` clips with homonym `.txt` captions per dataset. Empty string defaults to `<data dir>/video_datasets`. |
-| `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still be at most 16 Mi-pixels and 8192 px per side; a larger one is rejected and must be converted or resized before import. Not retroactive. Editable in Settings → Captioning & quality. |
-| `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The 16 Mi-pixel / 8192 px-per-side input limit applies to every mode. Editable in Settings → Captioning & quality. |
+| `dataset_import.max_side` | Longest side for opt-in WebP normalization (default `1024`; `0` = original size). It is ignored by the default `preserve` mode; ratio is always preserved, never enlarged, and normalized paths clamp at 8192 px. Every source must still fit `image_input.*` below; a larger one is rejected and must be resized before import (or the budget raised). Not retroactive. Editable in Settings → Captioning & quality. |
+| `dataset_import.encoding` | How an un-cropped imported image is written: `preserve` (default; original JPG/JPEG, PNG, WebP or BMP bytes with the matching extension), or the opt-in WebP modes `standard` (q92), `high` (q100), and `lossless`. Auto head-crop is always a derived WebP. The `image_input.*` budget applies to every mode. Editable in Settings → Captioning & quality. |
+| `image_input.max_pixels` | Largest source image any lane may decode, in pixels (default `67108864` = 64 Mi-pixels; `0` = no limit). A memory budget: ~3 bytes per decoded RGB pixel, and an edit or analysis pass can hold a second copy. Read by dataset import, ZIP/scrape ingest, Bank scan and thumbnails, edits, ComfyUI staging and Ollama vision. Bank *inference workers* keep their own fixed 16 Mi-pixel guard. Editable in Settings → Captioning & quality. |
+| `image_input.max_side` | Largest side of a source image, in px (default `16384`; `0` = no limit). Separate from `max_pixels` because a wide panorama can sit inside the pixel budget and still exceed a side limit. Editable in Settings → Captioning & quality. |
 | `comfyui.api_url` | Base URL of your ComfyUI instance (default `http://127.0.0.1:8188`). |
 | `comfyui.base_dir` | ComfyUI install directory, used to derive `output`/`input`/`models`/`loras` dirs if those aren't set explicitly. |
 | `comfyui.output_dir` | Explicit override for ComfyUI's output folder. Set it when ComfyUI runs with `--output-directory`. Editable in Settings → Local tools. |

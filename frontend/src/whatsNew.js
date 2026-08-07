@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-image-size-budget-is-a-setting',
+    date: '2026-08-07',
+    title: 'Big panoramas and camera masters import now — and the size limit is yours to set',
+    blurb:
+      'A 10418×2100 panorama used to be refused with "reduce the image before import", which was the only advice possible while the limit was welded into the code. The limit is now a setting, and its default has moved from 16 Mi-pixels / 8192 px per side to 64 Mi-pixels / 16384 px — room for a 61 MP camera master or a stitched panorama without a second thought. Settings ▸ Captioning & quality ▸ Image size budget lets you raise it further, or switch it off entirely; the choices are labelled in the memory each one commits (a decoded pixel costs 3 bytes, and an edit can hold a second copy at once), and "No limit" says plainly what it disarms. One number governs the whole app — import, ZIP and scrape ingest, Bank scan and thumbnails, edits, ComfyUI staging and vision captioning — so an image you can import is an image you can look at. And when something is refused, the message now tells you where to change the budget instead of just telling you to shrink the file.',
+    to: '/settings/captioning',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',
