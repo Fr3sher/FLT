@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-face-mask-preview-survives-a-restart',
+    date: '2026-08-07',
+    title: 'The face-mask preview no longer disappears when you restart',
+    blurb:
+      'Looking for faces across a concept dataset is the slow part of the training panel — the detector alone takes seconds to load before the first image, then every kept photo on top. That whole pass used to live only in the app\'s memory, so restarting the server threw it away and the panel offered to run it all over again. It is now saved beside your images and comes back with them. Stopping a pass keeps its credit too: the faces already found survive the restart, so "Resume — 47 of 153 already analyzed" is still waiting for you. If you changed your kept images while the app was down, the preview comes back labelled out of date rather than pretending to be current.',
+    to: '/datasets',
+  },
+  {
     id: '2026-08-03-phone-layout-full-width',
     date: '2026-08-03',
     title: 'The dataset page uses the whole screen again on a phone',
