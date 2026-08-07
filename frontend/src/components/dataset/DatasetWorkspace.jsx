@@ -2122,6 +2122,13 @@ export default function DatasetWorkspace({ ds, onBack }) {
           compare={viewImgComparison}
           parentNonce={(ds.nonces && viewImgComparison?.parent
             && ds.nonces[viewImgComparison.parent.id]) || 0}
+          // The SECOND comparison — against the dataset's reference photo — is
+          // decided inside the lightbox: unlike the derived parent it is not a
+          // row of the payload, just this dataset's own filename, and it is
+          // served by the very same /img/<name> endpoint. `refNonce` is the
+          // reference's own cache buster (a crop or a re-upload bumps it).
+          refFilename={d.ref_filename || ''}
+          refNonce={ds.refNonce || 0}
           onClose={() => setViewImg(null)}
           onMirror={viewImgLive._rescueReviewPreview ? undefined : ds.mirrorImage}
           onRotate={viewImgLive._rescueReviewPreview ? undefined : ds.rotateImage}

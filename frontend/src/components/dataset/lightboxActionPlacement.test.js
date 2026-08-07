@@ -229,7 +229,11 @@ test('the rail keeps words — these actions rotate, recrop and spend GPU time',
 test('the decision is fed the lock and the comparison, not just the geometry', () => {
   assert.match(lightbox, /const actionsLocked = busy \|\| mirrorBusy \|\| improving \|\| improvePending/);
   assert.match(lightbox, /locked: actionsLocked/);
-  assert.match(lightbox, /comparing,/);
+  // The lightbox now has TWO comparisons (against the original, against the
+  // reference photo) held in one `compareMode`. This rule only cares that two
+  // panes want the width, so it is fed the collapsed boolean — a mode name
+  // leaking in here would make the placement rule grow a second reason to change.
+  assert.match(lightbox, /comparing: compareMode !== 'none',/);
   // Resize is coalesced to one decision per frame.
   assert.match(lightbox, /requestAnimationFrame\(\(\) => \{ frame = 0; apply\(\); \}\)/);
   assert.match(lightbox, /removeEventListener\('resize', onResize\)/);

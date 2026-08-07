@@ -17,6 +17,7 @@ import {
 } from './lightboxActionPlacement';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { displayLabel } from '../../utils/labels';
+import { describeReferenceComparison } from '../../utils/referenceCompare';
 import SourceAttribution from './SourceAttribution';
 import {
   freshLightboxImageState, lightboxImageState, lightboxNeighbours, ownsArrowKeys,
@@ -24,6 +25,13 @@ import {
 } from './lightboxNavigation';
 
 const COMPARE_HELP = 'Show the original this image was made from, next to it, at the same scale.';
+/* The SECOND comparison, and deliberately a second BUTTON rather than a picker:
+   an improved image can answer both questions and a selector would hide one of
+   them behind the other. The two modes are mutually exclusive though — two
+   pairs side by side stop showing anything at all — so one state holds which
+   reading is on screen. */
+const REFERENCE_COMPARE_HELP = 'Show the dataset\'s reference photo next to this image — '
+  + 'the framings differ, so each pane fits its own image.';
 
 /**
  * One half of the comparison. The two panes are cells of the SAME grid, so they
@@ -32,6 +40,12 @@ const COMPARE_HELP = 'Show the original this image was made from, next to it, at
  * rescales to a megapixel budget and keeps the aspect ratio, so this is the only
  * reading where "it looks better" means something. Each side is named in text,
  * never by colour alone.
+ *
+ * The reference comparison reuses this component unchanged, and gets the right
+ * behaviour for free rather than by accident: a square head reference and a
+ * full-body plan have different aspect ratios, so each fills its own identical
+ * box and the two are shown at whatever scale makes them whole. What must NOT
+ * be reused is the "same scale" sentence — see the status line below.
  */
 function ComparePane({ label, url, alt, accent }) {
   return (
@@ -88,6 +102,8 @@ export default function DatasetLightbox({
   nonce = 0,
   compare = null,
   parentNonce = 0,
+  refFilename = '',
+  refNonce = 0,
   onClose,
   onCrop,
   onMirror,
@@ -124,7 +140,15 @@ export default function DatasetLightbox({
      lives in lightboxActionPlacement.js because `node --test` cannot parse JSX
      and this is the part that must be tested case by case. */
   const imageId = img?.id ?? null;
-  const { full, comparing, improving } = lightboxImageState(storedState, imageId);
+  /* `compareMode` ('none' | 'derived' | 'reference') sits INSIDE the stamped
+     state, where the boolean `comparing` used to. Two reasons, and the second
+     is the one that matters: a mode held in its own useState would have been
+     the one piece of per-image state that travels — ⟩ would have carried
+     "reference comparison open" onto the next picture, and, worse, an open
+     "original" pane onto an image whose parent is somebody else's. Inside the
+     slot the guarantee is structural: a foreign stamp yields a fresh state, so
+     moving image closes the comparison with no reset effect to get right. */
+  const { full, compareMode, improving } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
      callback and must be compared against the present, not against the past it
@@ -172,7 +196,9 @@ export default function DatasetLightbox({
       imageWidth: ratio?.imageWidth,
       imageHeight: ratio?.imageHeight,
       current,
-      comparing,
+      // The placement rule only cares that TWO panes want the width, not which
+      // pair is on screen.
+      comparing: compareMode !== 'none',
       locked: actionsLocked,
     }));
     apply();
@@ -187,7 +213,7 @@ export default function DatasetLightbox({
       window.removeEventListener('resize', onResize);
       if (frame) cancelAnimationFrame(frame);
     };
-  }, [ratio, comparing, actionsLocked]);
+  }, [ratio, compareMode, actionsLocked]);
 
   const rail = placement === 'rail';
 
@@ -215,16 +241,39 @@ export default function DatasetLightbox({
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose, onNavigate, prev, next]);
   useEffect(() => { closeRef.current?.focus(); }, []);
+  /* No "close the comparison when the image changes" effect on purpose: the id
+     stamp above already guarantees it, for BOTH comparison modes, without a
+     frame in which the previous image's panes are painted next to the new one. */
 
   if (!img || !img.filename) return null;
   const fileUrl = (filename, v) =>
     `/api/dataset/${datasetId}/img/${encodeURIComponent(filename)}${v ? `?v=${v}` : ''}`;
   const url = fileUrl(img.filename, nonce);
   const alt = displayLabel(img.variation_label) || 'dataset image';
-  // A comparison is only ever entered when the original is actually renderable;
-  // an unavailable one degrades to a stated reason, never a dead button.
-  const canCompare = !!(compare && compare.available && compare.parent?.filename);
-  const inCompare = canCompare && comparing;
+  // A comparison is only ever entered when the other side is actually
+  // renderable; an unavailable one degrades to a stated reason, never a dead
+  // button. Both modes go through this same guard.
+  const refCompare = describeReferenceComparison(img, refFilename);
+  const usable = (c) => !!(c && c.available && c.parent?.filename);
+  const canCompare = usable(compare);
+  const canCompareRef = usable(refCompare);
+  // The mode currently on screen, re-checked against availability: a payload
+  // refresh can retire the parent under an open comparison, and a stale mode
+  // must fall back to the plain view rather than render a broken pane.
+  const activeCompare = (compareMode === 'derived' && canCompare) ? compare
+    : (compareMode === 'reference' && canCompareRef) ? refCompare
+      : null;
+  const inCompare = !!activeCompare;
+  // The reference lives beside the images, not among them: its own cache nonce.
+  const activeParentNonce = compareMode === 'reference' ? refNonce : parentNonce;
+  // Pressing the mode you are in leaves it; pressing the other one SWITCHES,
+  // which is what makes the two exclusive without a single line of teardown.
+  // Written through the stamped patch like every other per-image property, so a
+  // press that resolves after ⟩ cannot reopen a pane on the next image.
+  const toggleCompare = (mode) => (event) => {
+    event.stopPropagation();
+    patchImageState({ full: false, compareMode: compareMode === mode ? 'none' : mode });
+  };
   const improvementActive = improving || improvePending;
   /* ONE button per engine that can run here, exactly like the selection
      toolbar. The lightbox is where you are when you are looking at the one
@@ -289,9 +338,9 @@ export default function DatasetLightbox({
            axis. Equal grid cells on both layouts = equal display scale. */
         <div onClick={(e) => e.stopPropagation()}
           className="flex-1 min-h-0 grid grid-rows-2 grid-cols-1 sm:grid-rows-1 sm:grid-cols-2 gap-2 p-2 sm:p-4">
-          <ComparePane label={compare.beforeLabel} alt={alt}
-            url={fileUrl(compare.parent.filename, parentNonce)} />
-          <ComparePane label={compare.afterLabel} alt={alt} url={url} accent />
+          <ComparePane label={activeCompare.beforeLabel} alt={alt}
+            url={fileUrl(activeCompare.parent.filename, activeParentNonce)} />
+          <ComparePane label={activeCompare.afterLabel} alt={alt} url={url} accent />
         </div>
       ) : full ? (
         <div className="flex-1 min-h-0 min-w-0 overflow-auto">
@@ -352,27 +401,54 @@ export default function DatasetLightbox({
           <SourceAttribution metadata={img.source_metadata}
             className="text-[11px] text-white/70" />
           <span className="text-white/50 text-[11px]">
-            {inCompare
-              /* Zoom is OFF here, and says so. At 100 % a 2 MP result and a 0.5 MP
-                 original cover different parts of the subject, which is exactly
-                 the dishonest comparison this mode exists to avoid. */
+            {/* Zoom is OFF in both comparisons, and says so. What the two panes
+                GUARANTEE is not the same in both, and this line must not claim
+                otherwise: against the original, equal boxes plus a preserved
+                aspect ratio really do mean one shared scale, and that is the
+                whole point. Against the reference the two images are unrelated
+                crops — a square head next to a full-body plan — so each pane
+                fits its own image at its own scale. Reusing "same scale" there
+                would have been a sentence the pixels contradict. */}
+            {compareMode === 'derived' && inCompare
               ? 'same scale — exit comparison to zoom to 100 %'
-              : full ? '100 % — click image to fit' : 'fitted — click image for 100 %'}
+              : compareMode === 'reference' && inCompare
+                ? 'different framings — each pane fits its own image; exit comparison to zoom to 100 %'
+                : full ? '100 % — click image to fit' : 'fitted — click image for 100 %'}
           </span>
         </div>
         {canCompare && (
-          <button type="button" aria-pressed={comparing}
-            onClick={(e) => {
-              e.stopPropagation();
-              patchImageState({ full: false, comparing: !comparing });
-            }}
-            aria-label={comparing
+          <button type="button" aria-pressed={compareMode === 'derived'}
+            onClick={toggleCompare('derived')}
+            aria-label={compareMode === 'derived'
               ? `Hide the original next to ${alt}`
               : `Show the original next to ${alt}`}
             title={COMPARE_HELP}
             className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-indigo-400/50 bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-100 text-xs font-semibold">
-            {comparing ? '⊟ Exit comparison' : '⧉ Compare with original'}
+            {compareMode === 'derived' ? '⊟ Exit comparison' : '⧉ Compare with original'}
           </button>
+        )}
+        {/* TWO buttons, not a picker. On an improved image both questions are
+            live — "is it sharper than what it came from" and "is it still the
+            same person" — and a selector would have hidden one behind the
+            other. On a plainly generated variation only this one exists, which
+            is the whole reason it was added: until now that image, the bulk of
+            a character dataset, had no comparison at all. */}
+        {canCompareRef && (
+          <button type="button" aria-pressed={compareMode === 'reference'}
+            onClick={toggleCompare('reference')}
+            aria-label={compareMode === 'reference'
+              ? `Hide the reference photo next to ${alt}`
+              : `Show the reference photo next to ${alt}`}
+            title={REFERENCE_COMPARE_HELP}
+            className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg border border-sky-400/50 bg-sky-500/20 hover:bg-sky-500/30 text-sky-100 text-xs font-semibold">
+            {compareMode === 'reference' ? '⊟ Exit comparison' : '◐ Compare with reference'}
+          </button>
+        )}
+        {refCompare && !refCompare.available && (
+          <span role="note"
+            className="max-w-full break-words rounded-lg border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-100">
+            <span aria-hidden>⚠ </span>{refCompare.reason}
+          </span>
         )}
         {compare && !compare.available && (
           /* No affordance rather than a dead one — and it says why, because

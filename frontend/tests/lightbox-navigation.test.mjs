@@ -95,12 +95,21 @@ test('an image that is not in the shown list gets no navigation at all', () => {
 
 test('state computed for one image is never rendered for another', () => {
   // Everything a previous image could have been left in: zoomed to 100 %, its
-  // comparison pane open, an improve pass running.
-  const stale = { imageId: 11, full: true, comparing: true, improving: true }
+  // comparison pane open, an improve pass running. `compareMode` covers BOTH
+  // comparisons (against the original, against the reference photo) — the
+  // reference one is the dangerous one to carry over, since it is offered on
+  // every image and would silently follow you all the way down the grid.
+  const stale = { imageId: 11, full: true, compareMode: 'reference', improving: true }
   const live = lightboxImageState(stale, 22)
   assert.deepEqual(live, {
-    imageId: 22, full: false, comparing: false, improving: false,
+    imageId: 22, full: false, compareMode: 'none', improving: false,
   })
+  // The derived pane is the one that would be actively MISLEADING: captioned
+  // "Original", showing the previous image's parent.
+  assert.equal(
+    lightboxImageState({ imageId: 11, full: false, compareMode: 'derived', improving: false }, 22)
+      .compareMode,
+    'none')
   // …while the image it WAS computed for keeps it — a reset that fires on every
   // render would make the zoom un-holdable.
   assert.equal(lightboxImageState(stale, 11), stale)
@@ -285,8 +294,12 @@ test('an improve resolving on the previous image leaves the current one alone', 
 test('a patch from the image on screen still applies', () => {
   // The guard drops FOREIGN writers only -- it must not freeze the live one,
   // which would be a far worse cure than the disease.
-  const stored = stampedPatch(freshLightboxImageState(22), { comparing: true }, 22, 22)
-  assert.equal(lightboxImageState(stored, 22).comparing, true)
+  const stored = stampedPatch(freshLightboxImageState(22), { compareMode: 'reference' }, 22, 22)
+  assert.equal(lightboxImageState(stored, 22).compareMode, 'reference')
+  // Switching modes is the same single write, so the two comparisons can never
+  // both be open — the state has one slot, not two flags.
+  const switched = stampedPatch(stored, { compareMode: 'derived' }, 22, 22)
+  assert.equal(lightboxImageState(switched, 22).compareMode, 'derived')
 })
 
 test('the lightbox routes its state writes through the stamp guard', () => {

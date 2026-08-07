@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-compare-any-image-with-the-reference',
+    date: '2026-08-07',
+    title: 'Check any image against your reference photo, side by side',
+    blurb:
+      'The question you ask of a generated shot is "is this still the same person?" — and until now the only way to answer it was to remember the reference photo from another panel. Open any image in the dataset full screen and press ◐ Compare with reference: the reference and the image sit side by side, each named, each filling its own pane. It works on every image, generated or imported, not just on improve candidates — and on an improved one both buttons are there, so you can flip between "is it sharper?" and "is it still them?". The two never open at once, and neither follows you: press ⟩ and the next picture starts clean. Each pane fits its own image and says so — a square head crop next to a full-body plan has no shared scale to promise, unlike the comparison against the original.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-07-dataset-lightbox-next-previous',
     date: '2026-08-07',
     title: 'Walk a dataset image by image, without closing the picture each time',
