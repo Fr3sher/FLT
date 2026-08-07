@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-krea-likeness-dials-reachable',
+    date: '2026-08-07',
+    title: 'When Krea 2 Edit does not look enough like your reference, you can now fix it',
+    blurb:
+      'Krea has two dials that decide how strongly it holds on to your reference photo — the reference pull and the identity LoRA\'s own strength — and neither had a control anywhere in the app: the only way to move them was to hand-edit config.json. They are now sliders in the "🧬 Krea 2 Edit tuning" panel of Generate variations, right where you judge the result. Reference pull is the one to reach for when the face is too loose (it used to ship paired with reference grounding, so raising grounding alone left you on an uncalibrated mix), and the identity LoRA strength has 50% of headroom above its shipped 1.0. Both write your global Krea settings — the panel says so, and each has a one-click way back to the shipped value.',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',

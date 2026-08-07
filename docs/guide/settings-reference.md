@@ -185,7 +185,12 @@ Settings:
   posterized output, not a subtler quality loss). Empty by default. *(Preset
   mechanism by @waltm, Discord.)*
 
-The pipeline's reference boost is an internal Krea calibration, not a second user-facing likeness slider; use **Reference grounding** for that trade-off.
+Two more Krea calibration dials exist, and they are **not on this page** — their sliders live in the **🧬 Krea 2 Edit tuning** panel of the workspace's *Generate variations* screen, because that is where you judge what they do. They are settings all the same: moving a slider there saves the value globally and it applies to **every** Krea run from now on, exactly as if you had changed it here. The panel says so above the sliders.
+
+- **Reference pull** → `krea.ref_boost`. Range `0`–`10`, default **`0.25`**. How hard the source latent is pushed back into the model at every denoising step. This is the lever for *"the subject doesn't look enough like my reference"* — raise it and likeness sharpens; raise it far and the model also recopies the composition, pose and outfit the shot card asked it to change. Historically it shipped **paired** with `grounding_px` (v1 = 1024 / 4.0, v2 = 512 / 1.0), so if you have raised grounding on its own you are on a combination no shipped profile ever calibrated — this is the dial that brings the pair back into balance.
+- **Identity LoRA strength** → `krea.identity_lora_strength`. Range `0`–`1.5`, default **`1.0`**. The weight applied to the Krea 2 identity-edit LoRA itself — the piece that carries the face across. Below 1 softens the likeness and leaves more room for the prompt; `0` disables the face transfer entirely; above 1 is past the weight the file was trained for and can look waxy or posterized rather than simply more similar.
+
+Both are re-clamped by the server on every run, so a hand-edited `config.json` out of range is corrected rather than obeyed.
 
 Two behaviours worth knowing before you build a dataset with it:
 
