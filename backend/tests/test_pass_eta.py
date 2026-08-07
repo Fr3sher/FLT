@@ -84,12 +84,19 @@ def test_a_cache_burst_never_promises_a_few_seconds():
     """
     events, _ = resume_from_cache()
     state = job_eta.new_state()
-    early = [e for e in events if e[0] <= 40.0]
-    result = feed(state, early, 21220)
-    assert result[0] == job_eta.ETA_ESTIMATING
+    # Asserted at EVERY report, not at one convenient instant: the estimate only
+    # has to be wrong once to teach the user the figure means nothing. Ninety
+    # seconds is well past the point where the window is long enough and full
+    # enough to compute something — a build with no burst guard speaks here.
+    for at, done in events:
+        if at > 90.0:
+            break
+        job_eta.observe(state, done, 21220, at)
+        assert job_eta.read(state, at)[0] != job_eta.ETA_READY, (
+            f'promised a duration at t={at:.1f} across a cache burst')
 
-    # What the naive average would have said at that moment, for the record.
-    elapsed, done = early[-1]
+    # What the naive average would have said in that window, for the record.
+    elapsed, done = [e for e in events if e[0] <= 90.0][-1]
     naive = (21220 - done) / (done / elapsed)
     assert naive < 5.0
 
@@ -155,8 +162,10 @@ def test_a_wedged_pass_stops_promising():
     state = job_eta.new_state()
     events = steady(1.0, 200, 4000)
     assert feed(state, events, 4000)[0] == job_eta.ETA_READY
-    later = 200.0 + job_eta.STALE_SAMPLE_SECONDS + 1
-    assert job_eta.read(state, later)[0] == job_eta.ETA_ESTIMATING
+    # A literal silence, not `STALE_SAMPLE_SECONDS + 1`: expressing the wait in
+    # terms of the constant means widening the constant also widens the test,
+    # and the assertion follows the bug instead of catching it.
+    assert job_eta.read(state, 400.0)[0] == job_eta.ETA_ESTIMATING
 
 
 def test_a_slowing_pass_grows_its_estimate_instead_of_holding_the_old_one():
@@ -171,6 +180,27 @@ def test_a_slowing_pass_grows_its_estimate_instead_of_holding_the_old_one():
     result = job_eta.read(state, slow[-1][0])
     assert result[0] == job_eta.ETA_READY
     assert result[1] > fast * 2
+
+
+def test_a_pass_that_decays_to_a_crawl_keeps_refreshing_its_promise():
+    """Below the item floor the estimate must still MOVE.
+
+    The floor is there so the first number is not published off a burst. Applied
+    after publication it would do the opposite of its job: a pass falling to two
+    items a minute would stop qualifying, and the twenty-minute promise made
+    while it was fast would sit on screen through the hour that followed.
+    """
+    state = job_eta.new_state()
+    events = steady(4.0, 400, 5000)
+    feed(state, events, 5000)
+    fast = job_eta.read(state, events[-1][0])[1]
+    at, done = events[-1]
+    crawl = [(at + i * 25.0, done + i) for i in range(1, 13)]   # ~2.4 items/min
+    feed(state, crawl, 5000)
+    result = job_eta.read(state, crawl[-1][0])
+    assert result[0] == job_eta.ETA_READY
+    assert result[1] > fast * 10, (
+        f'still promising {result[1]:.0f} s after slowing 100x (was {fast:.0f})')
 
 
 def test_a_finished_job_carries_no_estimate(app):

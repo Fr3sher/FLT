@@ -196,7 +196,14 @@ def _raw_estimate(state, done, total):
         return None
     samples = state['samples']
     span, items = _window(samples)
-    if span < MIN_WINDOW_SECONDS or items < MIN_WINDOW_ITEMS:
+    # The item floor guards the FIRST publication — five items in a burst is not
+    # a speed.  Once a number is on screen the floor drops to one, because the
+    # alternative is worse: a pass that decays to two items a minute would fall
+    # under the floor, stop refreshing, and leave its old, far-too-short promise
+    # standing in front of the user for as long as the crawl lasts.  One item
+    # over a full window is a slow rate, not an absent one.
+    floor = 1 if state['published'] else MIN_WINDOW_ITEMS
+    if span < MIN_WINDOW_SECONDS or items < floor:
         return None
     if _is_burst(samples):
         return None
