@@ -4,6 +4,8 @@ from unittest.mock import Mock
 
 import pytest
 
+from _platform_stubs import ModuleWithOverrides
+
 
 def _bank(app, folder, *, user_id='local'):
     from app.extensions import db
@@ -152,15 +154,16 @@ def test_host_folder_launcher_never_uses_a_shell(
 
     path = str(tmp_path)
     calls = []
-    monkeypatch.setattr(banks.os, 'name', os_name)
-    monkeypatch.setattr(banks.sys, 'platform', platform)
-    monkeypatch.setattr(
-        banks.os, 'startfile',
-        lambda value, verb: calls.append(('startfile', value, verb)),
-        raising=False)
-    monkeypatch.setattr(
-        banks.subprocess, 'Popen',
-        lambda argv, **kwargs: calls.append(('popen', argv, kwargs)))
+    # Shadow the SUT's module references, never the real os/sys -- see
+    # _platform_stubs: patching os.name itself breaks pathlib process-wide.
+    monkeypatch.setattr(banks, 'os', ModuleWithOverrides(
+        banks.os, name=os_name,
+        startfile=lambda value, verb: calls.append(('startfile', value, verb))))
+    monkeypatch.setattr(banks, 'sys', ModuleWithOverrides(
+        banks.sys, platform=platform))
+    monkeypatch.setattr(banks, 'subprocess', ModuleWithOverrides(
+        banks.subprocess,
+        Popen=lambda argv, **kwargs: calls.append(('popen', argv, kwargs))))
 
     banks._open_host_folder(path)
 
@@ -178,11 +181,12 @@ def test_macos_app_bundle_is_revealed_in_finder_not_launched(monkeypatch):
 
     app_bundle = '/Applications/Example.app'
     calls = []
-    monkeypatch.setattr(banks.os, 'name', 'posix')
-    monkeypatch.setattr(banks.sys, 'platform', 'darwin')
-    monkeypatch.setattr(
-        banks.subprocess, 'Popen',
-        lambda argv, **kwargs: calls.append((argv, kwargs)))
+    monkeypatch.setattr(banks, 'os', ModuleWithOverrides(banks.os, name='posix'))
+    monkeypatch.setattr(banks, 'sys', ModuleWithOverrides(
+        banks.sys, platform='darwin'))
+    monkeypatch.setattr(banks, 'subprocess', ModuleWithOverrides(
+        banks.subprocess,
+        Popen=lambda argv, **kwargs: calls.append((argv, kwargs))))
 
     banks._open_host_folder(app_bundle)
 

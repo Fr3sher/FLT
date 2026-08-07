@@ -8,7 +8,17 @@ import re
 
 import pytest
 
+from _platform_stubs import ModuleWithOverrides
 from app.services import folder_picker
+
+
+def _pretend_os_name(monkeypatch, name):
+    """Make folder_picker see a different ``os.name`` -- and nothing else.
+
+    Patching ``os.name`` on the real module instead reconfigures pathlib for the
+    whole interpreter and kills an xdist worker mid-report; see _platform_stubs.
+    """
+    monkeypatch.setattr(folder_picker, 'os', ModuleWithOverrides(os, name=name))
 
 
 # --- POST /api/system/pick-folder (native dialog, mocked) --------------------
@@ -53,13 +63,13 @@ def test_pick_folder_forwards_initial(client, monkeypatch):
 
 # --- native dialog helper (no subprocess) ------------------------------------
 def test_native_dialog_unavailable_off_windows(monkeypatch):
-    monkeypatch.setattr(os, 'name', 'posix')
+    _pretend_os_name(monkeypatch, 'posix')
     with pytest.raises(folder_picker.NativePickerUnavailable):
         folder_picker.open_native_folder_dialog()
 
 
 def test_native_dialog_available_precheck(monkeypatch):
-    monkeypatch.setattr(os, 'name', 'posix')
+    _pretend_os_name(monkeypatch, 'posix')
     assert folder_picker.native_dialog_available() is False
 
 
@@ -74,7 +84,7 @@ def test_native_dialog_runs_file_not_stdin(monkeypatch, tmp_path):
     """The dialog must launch via a temp `-File` with the initial path in the
     environment — NOT `-Command -` with the script piped on stdin, which never
     actually opens the dialog. Locks in that regression."""
-    monkeypatch.setattr(os, 'name', 'nt')
+    _pretend_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(folder_picker, '_powershell_exe', lambda: 'powershell')
     seen = {}
 
@@ -99,7 +109,7 @@ def test_native_dialog_runs_file_not_stdin(monkeypatch, tmp_path):
 def test_native_dialog_nonzero_exit_is_unavailable(monkeypatch):
     """A crashing script (no desktop) -> NativePickerUnavailable, and a localized
     non-UTF-8 stderr must not crash the decode."""
-    monkeypatch.setattr(os, 'name', 'nt')
+    _pretend_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(folder_picker, '_powershell_exe', lambda: 'powershell')
     monkeypatch.setattr(folder_picker.subprocess, 'run',
                         lambda cmd, **kw: _FakeProc(returncode=1, stderr=b'\xae bad'))
@@ -179,7 +189,7 @@ def test_script_vtable_order_matches_the_reference_source():
 def test_picker_mode_env_reaches_the_script(monkeypatch):
     """LDS_PICKER_MODE=legacy is the escape hatch for a user whose modern dialog
     misbehaves; it has to actually reach PowerShell."""
-    monkeypatch.setattr(os, 'name', 'nt')
+    _pretend_os_name(monkeypatch, 'nt')
     monkeypatch.setattr(folder_picker, '_powershell_exe', lambda: 'pwsh')
     monkeypatch.setenv('LDS_PICKER_MODE', 'legacy')
     seen = {}

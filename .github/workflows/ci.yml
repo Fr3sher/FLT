@@ -262,7 +262,19 @@ jobs:
         run: python -m pip install --disable-pip-version-check --no-cache-dir -r backend/requirements-torch-tests.txt
 
       - name: Run backend tests
-        run: python -m pytest backend/tests -q
+        # The suite's cost is flat -- no hotspot to optimise away -- so
+        # parallelism is the only lever. A worker is a process, so the per-test
+        # isolation conftest.py relies on is unchanged, and --dist loadfile
+        # keeps each FILE on one worker because several files build state
+        # across their own tests.
+        #
+        # A PINNED 4, not `-n auto`. It is the same number on today's 4-CPU
+        # windows runner, but the suite contains at least one wall-clock
+        # assertion (test_bank_scan_no_db_lock measures SQLite write-lock
+        # latency against a 400 ms budget), and those get less true the busier
+        # the machine is. `auto` would silently follow GitHub to a bigger
+        # runner and turn that into an intermittent red nobody changed.
+        run: python -m pytest backend/tests -q -n 4 --dist loadfile
 
   frontend-quality:
     name: Frontend tests and build

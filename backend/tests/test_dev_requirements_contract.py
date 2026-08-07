@@ -93,10 +93,16 @@ def test_dev_requirements_exists_and_pulls_the_runtime_file():
 
 def test_pytest_is_pinned_exactly_and_only_in_the_dev_file():
     """`pytest>=8.0` floating in the RUNTIME file was both a dependency end users
-    never run and a version CI and a contributor could disagree on."""
+    never run and a version CI and a contributor could disagree on.
+
+    The xdist runner is pinned for the same reason and listed here rather than
+    passed inline in a workflow: the distribution mode decides the execution
+    ORDER, so a contributor whose xdist differs from CI's is not reproducing
+    CI's run."""
     dev = _lines(_DEV)
     assert [line for line in dev if line.lower().startswith('pytest')] == [
-        'pytest==9.0.3'
+        'pytest==9.0.3',
+        'pytest-xdist==3.6.1',
     ], 'pin the audited collector exactly — another pytest is not evidence about CI'
     assert not any(l.lower().startswith('pytest') for l in _lines(_RUNTIME)), \
         'test dependencies belong in requirements-dev.txt, not in the end-user install'

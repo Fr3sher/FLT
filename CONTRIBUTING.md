@@ -54,14 +54,34 @@ npm run build    # writes frontend/dist/
 
 ## Tests
 
-The backend has a large test suite (950+ tests) and it must stay green:
+The backend has a large test suite (7000+ tests) and it must stay green:
 
 ```bash
 pip install -r backend/requirements-dev.txt   # pytest + the two test-only ML extras
 # optional: execute the 16 Torch/ai-toolkit bridge runtime tests instead of skipping them
 pip install -r backend/requirements-torch-tests.txt
-python -m pytest backend/tests -q
+python -m pytest backend/tests -q -n 8 --dist loadfile
 ```
+
+**Run it in parallel — `-n` is not an optimisation, it is the normal way to
+run this suite.** Sequentially it takes about 30 minutes; on 8 workers it takes
+about 3-4 minutes. The cost is flat rather than concentrated (the ten slowest
+tests are 7.5% of the total; the long tail is 74%), so there is no subset worth
+running instead. Keep `--dist loadfile`: it keeps each file's tests on one
+worker, which several files depend on. Drop to `-n0` when you want a debugger,
+live output, or a readable single-file run.
+
+Prefer a fixed worker count over `-n auto`. A few tests assert on elapsed time
+rather than on a result — `test_bank_scan_no_db_lock` gives a concurrent writer
+a 400 ms budget — and those get less true the busier the machine is. On a
+many-core box `-n auto` saturates every core and they start reporting on the
+machine's load instead of on the code. (They can fail sequentially too, on a
+loaded machine; parallelism is not what makes them fragile.)
+
+⚠ Pass the `backend/tests` path. A bare `python -m pytest` from the repo root
+finds no `pytest.ini` at all (the config lives in `backend/`), so it silently
+runs *without* `-p no:flask` — the exact configuration that once made nine
+tests pass locally and fail on the release tag.
 
 `requirements-dev.txt` is the common CI/release baseline. CI adds the CPU-only `requirements-torch-tests.txt` overlay when training-state code changes (and for manual runs), while the release job always adds it. A suite green against a different set of packages is not evidence about CI: a stray `pytest-flask` on one dev machine once made nine tests pass locally and fail on the release tag. (The suite runs with `-p no:flask` for that reason; you do not need to uninstall anything.)
 
