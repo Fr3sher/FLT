@@ -495,7 +495,9 @@ export function useDataset() {
     const dup = d.duplicates || 0;
     const small = d.small || 0;
     toast.success(`${d.imported} imported${dup ? ` · ${dup} duplicate(s) skipped` : ''}`);
-    if (d.failed) toast.warning(`${d.failed} image${d.failed === 1 ? '' : 's'} not imported — use JPEG, PNG, WebP or BMP, up to 16 Mi-pixels and 8192 px per side; convert or resize before importing.`);
+    // No numbers here on purpose: the input budget is a setting now, and a
+    // copy of it in a toast is exactly how a hint goes stale.
+    if (d.failed) toast.warning(`${d.failed} image${d.failed === 1 ? '' : 's'} not imported — use JPEG, PNG, WebP or BMP within the image size budget (Settings ▸ Captioning & quality ▸ Image size budget); resize a larger file, or raise the budget.`);
     if (dup && !d.imported) toast.warning('All files were already in the dataset (perceptual duplicates).');
     if (small) toast.warning(`${small} image(s) are under 768 px — training only downscales, they will stay soft.`);
     await refresh();

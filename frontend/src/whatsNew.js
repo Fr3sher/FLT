@@ -64,6 +64,14 @@ export const WHATS_NEW = [
       'A ✨ Score over 37,000 images stopped at image 1849 with "Access denied" on its own cache — not a permissions problem, but an antivirus holding the freshly written file for a fraction of a second while the pass tried to swap it into place. On Windows that is enough to refuse the swap, and the work the pass had already computed and written was thrown away with it. Now the swap waits and retries for a few seconds, and if something really is holding the file the message says so instead of sending you into folder permissions. Better still, nothing is lost either way: work a previous run finished but could not file away is picked up automatically when the pass next starts, so a run interrupted by a lock, a crash or a power cut resumes from where it got to. Recovered work is checked before it is trusted — a half-written file is refused and removed rather than quietly becoming your cache. Applies to ✨ Score, faces, the semantic index and the video search vectors.',
   },
   {
+    id: '2026-08-07-image-size-budget-is-a-setting',
+    date: '2026-08-07',
+    title: 'Big panoramas and camera masters import now — and the size limit is yours to set',
+    blurb:
+      'A 10418×2100 panorama used to be refused with "reduce the image before import", which was the only advice possible while the limit was welded into the code. The limit is now a setting, and its default has moved from 16 Mi-pixels / 8192 px per side to 64 Mi-pixels / 16384 px — room for a 61 MP camera master or a stitched panorama without a second thought. Settings ▸ Captioning & quality ▸ Image size budget lets you raise it further, or switch it off entirely; the choices are labelled in the memory each one commits (a decoded pixel costs 3 bytes, and an edit can hold a second copy at once), and "No limit" says plainly what it disarms. One number governs the whole app — import, ZIP and scrape ingest, Bank scan and thumbnails, edits, ComfyUI staging and vision captioning — so an image you can import is an image you can look at. And when something is refused, the message now tells you where to change the budget instead of just telling you to shrink the file.',
+    to: '/settings/captioning',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',

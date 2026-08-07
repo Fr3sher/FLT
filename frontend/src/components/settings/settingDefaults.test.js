@@ -164,6 +164,8 @@ const COVERED = [
   // the same gap in the other sections
   ['CaptioningSection.jsx', 'dataset_import', 'max_side'],
   ['CaptioningSection.jsx', 'dataset_import', 'encoding'],
+  ['CaptioningSection.jsx', 'image_input', 'max_pixels'],
+  ['CaptioningSection.jsx', 'image_input', 'max_side'],
   ['CaptioningSection.jsx', 'captioning', 'backend'],
   ['CaptioningSection.jsx', 'watermark', 'device'],
   ['CaptioningSection.jsx', 'face_scoring', 'green'],
