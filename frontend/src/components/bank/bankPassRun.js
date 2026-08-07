@@ -36,6 +36,7 @@
  * Plain .js (no JSX) so `node --test` can execute all of it.
  */
 import { progressPresence, PROGRESS_RUNNING, PROGRESS_STALE } from './progressPresence.js';
+import { etaPhrase } from './passEta.js';
 
 /* Job kind (as `bank_jobs` stores it, and as the 409 body reports it in
    `busy_kind`) → how a human names that pass. Same emoji + words as the button
@@ -125,9 +126,14 @@ export function busyLine({ kind, activity, withDetail = true } = {}) {
   // it answers "why did my click do nothing", so it keeps the detail.
   const detail = withDetail && activity && !activity.finished
     ? usefulDetail(label, activity.detail) : null;
+  // How long the blocker still needs. This is the one thing a refusal could
+  // never answer before — "wait for it to finish" with no idea how long that is
+  // is advice you cannot act on.
+  const eta = etaPhrase(activity);
   let line = `${label} is running on this bank`;
   if (progress) line += ` — ${progress}`;
-  if (detail) line += `${progress ? ' · ' : ' — '}${detail}`;
+  if (eta) line += `${progress ? ' · ' : ' — '}${eta}`;
+  if (detail) line += `${(progress || eta) ? ' · ' : ' — '}${detail}`;
   return line;
 }
 
