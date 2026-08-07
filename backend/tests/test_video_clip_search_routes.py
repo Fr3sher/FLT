@@ -21,6 +21,11 @@ from app.services import video_bank_service as svc
 from app.services import clip_text_encoder
 from app.services import video_clip_search as vcs
 
+# The video-extra gate answers for the MACHINE, so without this these route
+# tests pass where PyAV/ffmpeg are installed and 503 where they are not.
+# Imported for its autouse effect; see _video_extra.py for why not importorskip.
+from _video_extra import video_extra_ready  # noqa: F401
+
 
 @pytest.fixture()
 def seams(monkeypatch):
