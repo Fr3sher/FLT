@@ -48,7 +48,12 @@ Point a bank at a folder, or scrape straight into one. It reads what is there **
 
 The cuts are measured rather than guessed: the aesthetic and near-duplicate thresholds were calibrated on a real bank of **7,316 images**, and every measure that cannot answer says "unsure" or "not measured" instead of inventing a verdict. The image lane is out of Beta; the **video** lane still carries the chip, and says why below.
 
-**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [**Launch all** — the whole triage in one go, each pass quoting what it would reject before you start it](docs/screenshots/bank/bank-launch-all.png)
+<p align="center">
+  <a href="docs/screenshots/bank/bank-launch-all.png"><img src="docs/screenshots/bank/bank-launch-all.png" alt="The Launch all dialog: eight passes ticked, each quality flag quoting how many images it would reject, and a warning that unscanned images will change those counts" width="340"></a><br>
+  <sub><strong>Launch all</strong> — the whole triage in one go. Every flag quotes what it would reject <em>today</em>, and says out loud that 3,602 images have not been scanned yet, so those counts will grow. Stop it at any time; a pass whose tool is missing is skipped, never failed.</sub>
+</p>
+
+Wider view: [the bank workspace](docs/screenshots/bank/bank-overview.png), with scoring, filters and review controls.
 
 | Capability | What it provides |
 |---|---|
