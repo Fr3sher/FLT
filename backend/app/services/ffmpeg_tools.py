@@ -21,9 +21,22 @@ NOT ffprobe. imageio-ffmpeg bundles ffmpeg alone, so an ffprobe-based inspection
 would work on the developer's machine — where a full ffmpeg install is on PATH —
 and fail on the install the extra was written for. PyAV answers the same
 questions in-process, and the video lane needs it for decoding anyway.
+
+RESOLVING a path and being ABLE TO ENCODE are two different questions, and only
+the second one is what the Setup row and the installer are allowed to answer
+with. `os.path.isfile` says yes about an interrupted 40-byte download, about a
+binary an antivirus has emptied into a stub, and about a file with no execute
+bit in a container. Each of those turns into an ffmpeg crash from the middle of
+an export — the very failure the split above exists to prevent — so
+`ffmpeg_ready()` runs the binary once and believes the exit code, not the
+directory entry.
 """
 import os
 import shutil
+import subprocess
+import time
+
+from ..utils.redact import redact_user_paths
 
 
 def ffmpeg_path():
@@ -46,6 +59,76 @@ def ffmpeg_path():
     return shutil.which('ffmpeg')
 
 
+# `ffmpeg -version` prints a banner and exits in ~50 ms. The budget is generous
+# only so a cold first run behind an on-access antivirus scan is not called a
+# failure.
+_PROBE_TIMEOUT = 20
+# The verdict is cached because probe_video() runs on EVERY /api/capabilities
+# poll and must not spawn a process each time. Same shape and lifetime as the
+# import-probe cache in capabilities.py, and cleared by the same
+# clear_import_cache() so a fresh install flips the row without a restart.
+_READY_TTL = 600.0
+_ready_cache = None      # (ts, verdict-dict)
+
+
+def clear_cache() -> None:
+    """Forget the cached encoder verdict (called right after an install)."""
+    global _ready_cache
+    _ready_cache = None
+
+
+def ffmpeg_ready(force: bool = False) -> dict:
+    """Can this process actually encode? -> {'ok', 'path', 'reason'}.
+
+    This is the ONE definition of "the encoder works", shared by the Setup probe
+    and by the installer's post-install check — when those two drift, an install
+    reports success while the row it was supposed to turn green stays ✗ and the
+    user reinstalls the wrong half (issue #24's shape, applied to video).
+
+    A binary that does not ANSWER (timeout) counts as present: an unproven
+    absence must never turn a working install red, exactly like the cold-import
+    timeouts elsewhere. Never raises.
+    """
+    global _ready_cache
+    if not force and _ready_cache is not None:
+        ts, verdict = _ready_cache
+        if time.time() - ts < _READY_TTL:
+            return dict(verdict)
+    verdict = _measure_ready()
+    _ready_cache = (time.time(), verdict)
+    return dict(verdict)
+
+
+def _measure_ready() -> dict:
+    # Paths reach the Setup panel and pasted diagnostics, so the account name is
+    # stripped out of every SENTENCE. `path` itself stays real — callers encode
+    # with it.
+    path = ffmpeg_path()
+    shown = redact_user_paths(path or '')
+    if not path:
+        return {'ok': False, 'path': None,
+                'reason': 'no ffmpeg binary found — imageio-ffmpeg is not installed '
+                          'in this Python, and there is none on PATH'}
+    try:
+        proc = subprocess.run([path, '-version'], capture_output=True, text=True,
+                              encoding='utf-8', errors='replace',
+                              timeout=_PROBE_TIMEOUT,
+                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except subprocess.TimeoutExpired:
+        return {'ok': True, 'path': path,
+                'reason': 'ffmpeg was slow to answer — treated as usable'}
+    except Exception as e:            # noqa: BLE001 — cannot launch it at all
+        return {'ok': False, 'path': path,
+                'reason': f'the ffmpeg at {shown} could not be launched: {e}'}
+    if proc.returncode == 0:
+        return {'ok': True, 'path': path, 'reason': 'ffmpeg runs'}
+    tail = ((proc.stderr or proc.stdout or '').strip().splitlines() or [''])[-1]
+    return {'ok': False, 'path': path,
+            'reason': f'the ffmpeg at {shown} exists but does not run '
+                      f'(exit {proc.returncode}{": " + tail if tail else ""}) — a '
+                      'truncated download or a quarantined binary looks exactly like this'}
+
+
 def has_ffmpeg():
     """True when an encode is possible at all."""
-    return ffmpeg_path() is not None
+    return ffmpeg_ready()['ok']

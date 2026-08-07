@@ -48,6 +48,7 @@ one venv fail 6/6 with WinError 2 / Errno 13). Each pip run also retries once on
 transient file-lock error (an antivirus holding a fresh file). Model downloads and the
 ollama pull don't touch a venv, so they stay parallel.
 """
+import importlib
 import json
 import logging
 import os
@@ -62,6 +63,7 @@ import requests
 
 from . import capabilities
 from . import config as cfg
+from .utils.redact import redact_user_paths
 
 logger = logging.getLogger(__name__)
 
@@ -1923,6 +1925,13 @@ def _verify_capability_import(action, python) -> bool:
     capabilities.CAPABILITY_IMPORTS, i.e. literally the one the probe runs, so the
     two can never drift apart again.
 
+    An import cannot speak for everything an action installs, though. When the
+    action delivers something else too — `video` ships a BINARY next to its
+    package — it registers an extra check in _CAPABILITY_EXTRA_CHECKS and this
+    gate runs it after the import. Per action, never globally: every other
+    capability IS fully described by its import and must not be made stricter as
+    a side effect.
+
     It also WARMS the import, like the watermark/bank verifications: the capability
     probe fires seconds later and its first cold import can be slow enough to time
     out and read ✗ on a perfectly good install.
@@ -1948,8 +1957,17 @@ def _verify_capability_import(action, python) -> bool:
         _append(action, f'could not run the verification import ({e}) — skipping the check')
         return True   # couldn't check -> don't punish a pip install that succeeded
     if proc.returncode == 0:
-        _append(action, f'import OK — {_CAPABILITY_LABEL.get(action, action)} is ready')
-        return True
+        extra = _CAPABILITY_EXTRA_CHECKS.get(action)
+        if extra is None:
+            _append(action, f'import OK — {_CAPABILITY_LABEL.get(action, action)} is ready')
+            return True
+        # This action delivers something an import cannot answer for. Saying
+        # "ready" here and then failing two lines down is the confusion this
+        # gate exists to remove, so the import result is announced as the HALF it
+        # actually proves, and the check that owns the other half speaks next.
+        _append(action, f'import OK — {_CAPABILITY_LABEL.get(action, action)} loads; '
+                        f'now checking the rest of what this install promises…')
+        return extra(action, python)
     stderr = proc.stderr or ''
     _append(action, f'pip finished, but {_CAPABILITY_LABEL.get(action, action)} still does '
                     f'not load in this environment — the capability stays OFF:')
@@ -1969,7 +1987,57 @@ _MISSING_MODULE_RE = re.compile(r"No module named ['\"]([\w.]+)['\"]")
 _CAPABILITY_LABEL = {'face_scoring': 'face scoring', 'masks': 'person masks',
                       'bank_scoring': 'bank scoring',
                       'bank_siglip2': 'SigLIP2 Bank semantics',
-                      'watermark_inpaint': 'watermark inpainting'}
+                      'watermark_inpaint': 'watermark inpainting',
+                      # `video` is TWO halves and the import proves only the
+                      # first, so its label names that half and never the extra.
+                      'video': 'video decoding (PyAV)'}
+
+
+def _verify_video_encoder(action, python) -> bool:
+    """The OTHER half of the `video` extra: an ffmpeg binary that runs.
+
+    `video` installs two things — PyAV for reading and imageio-ffmpeg for writing
+    — and an import can only speak for the first. So the action could install a
+    package whose bundled binary never arrived, watch `import av` succeed, and
+    announce "✓ installed successfully" while Setup's "Video bank — clip
+    encoding" row stayed ✗ behind the very same ↻ button. The user then reruns
+    the install that already worked, which is exactly the wrong-half reinstall
+    probe_video() splits its three rows to prevent.
+
+    Judged by capabilities' own definition (ffmpeg_tools.ffmpeg_ready), in the
+    process that will do the judging later — resolution happens IN FLASK, not in
+    `python`, because PyAV is what lives in the capability's interpreter while
+    ffmpeg is resolved in-process by whoever encodes.
+    """
+    # pip just wrote a package into this interpreter's site-packages; without
+    # this the still-running process can keep a cached "no such module" view of
+    # that directory and report a missing encoder that is in fact installed.
+    importlib.invalidate_caches()
+    from .services import ffmpeg_tools
+    status = ffmpeg_tools.ffmpeg_ready(force=True)
+    if status['ok']:
+        _append(action, f"clip encoding ready — ffmpeg at "
+                        f"{redact_user_paths(status['path'] or '')}")
+        return True
+    _append(action, 'HALF INSTALLED: your videos can be read, but clips cannot be '
+                    'ENCODED yet, so a bank still cannot be exported to a dataset.')
+    _append(action, f"  {status['reason']}")
+    if not _same_path(python, sys.executable):
+        # A dedicated video.python cannot fix encoding: Flask resolves ffmpeg in
+        # its OWN process. Worth saying, because the install genuinely succeeded.
+        _append(action, '  note: imageio-ffmpeg went into the interpreter above, but the '
+                        "app resolves ffmpeg inside its own Python — clear video.python, "
+                        'or put ffmpeg on PATH, so the encoder is visible to the app.')
+    _append(action, '  fix: run this install again with network access (imageio-ffmpeg '
+                    'fetches its binary), or install ffmpeg yourself and put it on '
+                    'PATH — then click ↻ once more. Decoding stays available either way.')
+    return False
+
+
+# Post-install checks that go BEYOND the probe import, per action. A dict and not
+# a branch inside the gate: every other capability is fully described by its
+# import, and must not become stricter because this one is not.
+_CAPABILITY_EXTRA_CHECKS = {'video': _verify_video_encoder}
 
 
 def _is_blocking_invalid(path, spec) -> bool:

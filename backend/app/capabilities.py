@@ -471,6 +471,10 @@ def clear_import_cache() -> None:
     probe re-checks freshly installed packages instead of a stale 600s 'False'."""
     global _cache, _cache_ts
     _import_cache.clear()
+    # The encoder verdict is a probe too (it RUNS ffmpeg), cached the same way —
+    # so it has to be dropped here or the video row keeps its pre-install ✗ for
+    # ten minutes after the install that fixed it.
+    ffmpeg_tools.clear_cache()
     _cache = None
     _cache_ts = 0.0
 
@@ -792,14 +796,19 @@ def probe_video() -> dict:
         (cfg.get('shot_detect.python') or cfg.get('bank_scoring.python')
          or sys.executable),
         CAPABILITY_IMPORTS['shot_detect'])
-    encode = ffmpeg_tools.ffmpeg_path() is not None
+    # RUNS the binary rather than trusting that a file sits at the resolved path:
+    # a truncated download and a quarantined stub both pass os.path.isfile and
+    # then crash from inside an export. Cached at the same TTL as the import
+    # probes, so this poll-path costs one subprocess per 10 min, not per call.
+    encoder = ffmpeg_tools.ffmpeg_ready()
+    encode = bool(encoder['ok'])
     missing = []
     if not decode:
         missing.append('av (video decoding)')
     if not detect:
         missing.append('shot detection (transnetv2-pytorch)')
     if not encode:
-        missing.append('ffmpeg (clip encoding)')
+        missing.append(f"ffmpeg (clip encoding) — {encoder['reason']}")
     return {
         'ok': bool(decode and detect and encode),
         'detail': 'video extra ready' if not missing else 'missing: ' + ', '.join(missing),

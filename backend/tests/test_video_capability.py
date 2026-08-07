@@ -68,9 +68,130 @@ def test_no_ffmpeg_anywhere_answers_none_instead_of_raising(monkeypatch):
     assert ffmpeg_tools.ffmpeg_path() is None
 
 
+# --- resolving a path is NOT the same as being able to encode ------------------
+
+@pytest.fixture(autouse=True)
+def _fresh_encoder_verdict():
+    """The encoder verdict is cached (it costs a subprocess); no test may read
+    another test's answer."""
+    ffmpeg_tools.clear_cache()
+    yield
+    ffmpeg_tools.clear_cache()
+
+
+def _fake_ffmpeg_run(monkeypatch, *, returncode=0, stderr='', boom=None):
+    def fake_run(cmd, **kw):
+        if boom is not None:
+            raise boom
+        class _P:
+            pass
+        p = _P()
+        p.returncode = returncode
+        p.stderr = stderr
+        p.stdout = ''
+        return p
+    monkeypatch.setattr(ffmpeg_tools.subprocess, 'run', fake_run)
+
+
+def test_a_binary_that_is_there_but_cannot_run_is_not_an_encoder(monkeypatch, tmp_path):
+    """The half-installed extra, exactly: imageio-ffmpeg is installed, a file sits
+    at the resolved path — and it is a truncated download, an emptied antivirus
+    stub, or a file with no execute bit. os.path.isfile says yes to all three and
+    the export then dies mid-encode."""
+    stub = tmp_path / 'ffmpeg.exe'
+    stub.write_bytes(b'')
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: str(stub))
+    _fake_ffmpeg_run(monkeypatch, returncode=1, stderr='not a valid executable')
+
+    verdict = ffmpeg_tools.ffmpeg_ready()
+
+    assert verdict['ok'] is False
+    assert 'does not run' in verdict['reason']
+
+
+def test_a_binary_that_cannot_even_be_launched_is_not_an_encoder(monkeypatch, tmp_path):
+    stub = tmp_path / 'ffmpeg.exe'
+    stub.write_bytes(b'')
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: str(stub))
+    _fake_ffmpeg_run(monkeypatch, boom=OSError('Exec format error'))
+
+    verdict = ffmpeg_tools.ffmpeg_ready()
+
+    assert verdict['ok'] is False
+    assert 'could not be launched' in verdict['reason']
+
+
+def test_an_ffmpeg_that_answers_is_ready(monkeypatch, tmp_path):
+    stub = tmp_path / 'ffmpeg.exe'
+    stub.write_bytes(b'')
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: str(stub))
+    _fake_ffmpeg_run(monkeypatch, returncode=0)
+
+    assert ffmpeg_tools.ffmpeg_ready()['ok'] is True
+    assert ffmpeg_tools.has_ffmpeg() is True
+
+
+def test_a_slow_ffmpeg_is_not_called_broken(monkeypatch, tmp_path):
+    """Same rule as the cold-import probes: an unproven absence must never turn a
+    working install red (an on-access antivirus scan of a 70 MB binary is the
+    ordinary case here)."""
+    import subprocess as _sp
+    stub = tmp_path / 'ffmpeg.exe'
+    stub.write_bytes(b'')
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: str(stub))
+    _fake_ffmpeg_run(monkeypatch, boom=_sp.TimeoutExpired('ffmpeg', 1))
+
+    assert ffmpeg_tools.ffmpeg_ready()['ok'] is True
+
+
+def test_no_binary_at_all_says_where_it_looked(monkeypatch):
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: None)
+
+    verdict = ffmpeg_tools.ffmpeg_ready()
+
+    assert verdict['ok'] is False
+    assert 'imageio-ffmpeg' in verdict['reason'] and 'PATH' in verdict['reason']
+
+
+def test_the_encoder_is_not_re_run_on_every_capability_poll(monkeypatch, tmp_path):
+    """probe_video() runs on every /api/capabilities call; spawning ffmpeg each
+    time would be a process per poll."""
+    stub = tmp_path / 'ffmpeg.exe'
+    stub.write_bytes(b'')
+    monkeypatch.setattr(ffmpeg_tools, 'ffmpeg_path', lambda: str(stub))
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        class _P:
+            returncode = 0
+            stderr = ''
+            stdout = ''
+        return _P()
+
+    monkeypatch.setattr(ffmpeg_tools.subprocess, 'run', fake_run)
+    ffmpeg_tools.ffmpeg_ready()
+    ffmpeg_tools.ffmpeg_ready()
+    assert len(calls) == 1
+
+    # …but an install that just fixed it must not wait out the TTL to show green.
+    capabilities.clear_import_cache()
+    ffmpeg_tools.ffmpeg_ready()
+    assert len(calls) == 2
+
+
+def test_the_probe_and_the_installer_share_one_definition_of_a_working_encoder():
+    """If they drift, an install can report success about the exact row it left
+    ✗ — the #24 shape applied to video."""
+    from app import setup_installer
+    assert setup_installer._CAPABILITY_EXTRA_CHECKS['video'] is \
+        setup_installer._verify_video_encoder
+
+
 # --- what the app says is missing ---------------------------------------------
 
-def _probe(monkeypatch, *, decode=True, detect=True, encode=True, seen=None):
+def _probe(monkeypatch, *, decode=True, detect=True, encode=True, seen=None,
+           reason='no ffmpeg binary found'):
     # Route on the probe KEY, not on the import expression: the detect expression
     # legitimately contains 'av' too, and matching on it made both pieces answer
     # with the same value.
@@ -80,8 +201,10 @@ def _probe(monkeypatch, *, decode=True, detect=True, encode=True, seen=None):
         return decode if key.endswith('decode') else detect
 
     monkeypatch.setattr(capabilities, '_cached_import', fake_import)
-    monkeypatch.setattr(capabilities.ffmpeg_tools, 'ffmpeg_path',
-                        lambda: '/usr/bin/ffmpeg' if encode else None)
+    monkeypatch.setattr(capabilities.ffmpeg_tools, 'ffmpeg_ready',
+                        lambda: {'ok': encode,
+                                 'path': '/usr/bin/ffmpeg' if encode else None,
+                                 'reason': 'ffmpeg runs' if encode else reason})
     return capabilities.probe_video()
 
 
@@ -120,6 +243,15 @@ def test_shot_detection_rides_the_environment_that_already_has_torch(monkeypatch
 
     assert seen['video_detect'] == '/envs/scoring/python'
     assert seen['video_decode'] == sys.executable
+
+
+def test_the_probe_says_WHY_encoding_is_unavailable(monkeypatch):
+    """'ffmpeg missing' and 'ffmpeg present but broken' are fixed differently —
+    one is an install, the other a re-download or an antivirus exclusion."""
+    result = _probe(monkeypatch, encode=False,
+                    reason='the ffmpeg at ~/x/ffmpeg.exe exists but does not run (exit 1)')
+
+    assert 'does not run' in result['detail']
 
 
 def test_the_probe_reports_each_piece_separately(monkeypatch):
