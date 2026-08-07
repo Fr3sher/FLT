@@ -88,6 +88,30 @@ export const WHATS_NEW = [
     to: '/datasets?section=images&panel=review',
   },
   {
+    id: '2026-08-07-pick-the-model-file-you-actually-have',
+    date: '2026-08-07',
+    title: 'Choose your Klein and Krea model files from a list instead of typing a filename',
+    blurb:
+      'The Klein model-file fields and the Krea 2 Edit base model and identity LoRA were blank boxes you had to fill from memory — one typo and the engine quietly used a different file. Each is now a searchable list of the model files actually found in your ComfyUI (extra_model_paths.yaml roots included), with a ↻ to rescan after you drop a new one in, and a plain sentence naming the folder when nothing is there. The Krea base list shows only what the app would really elect, so a checkpoint it refuses is never offered. Typing still works for a file that is not on disk yet, or an absolute path from anywhere.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-07-a-pinned-model-that-is-missing-stops-the-run',
+    date: '2026-08-07',
+    title: 'A model file you chose that is no longer there now stops the engine instead of being swapped',
+    blurb:
+      'If you pinned a Klein or Krea model file and that file is gone or renamed, the app used to fall back to picking one for you and write a line in a log nobody reads — so the graph loaded a file other than the one on screen, and you only found out from the images. Now the pinned name stays in the field, marked "not found", the engine refuses to start and says which file it is looking for. Clearing the field is the explicit way back to automatic detection. The one exception is the shipped identity/consistency LoRA name, which nobody typed: at its default it still recovers a renamed download on its own.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-07-krea-likeness-dials-reachable',
+    date: '2026-08-07',
+    title: 'When Krea 2 Edit does not look enough like your reference, you can now fix it',
+    blurb:
+      'Krea has two dials that decide how strongly it holds on to your reference photo — the reference pull and the identity LoRA\'s own strength — and neither had a control anywhere in the app: the only way to move them was to hand-edit config.json. They are now sliders in the "🧬 Krea 2 Edit tuning" panel of Generate variations, right where you judge the result. Reference pull is the one to reach for when the face is too loose (it used to ship paired with reference grounding, so raising grounding alone left you on an uncalibrated mix), and the identity LoRA strength has 50% of headroom above its shipped 1.0. Both write your global Krea settings — the panel says so, and each has a one-click way back to the shipped value.',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
     id: '2026-08-07-passes-say-how-long-is-left',
     date: '2026-08-07',
     title: 'Every pass now tells you how much longer it needs',

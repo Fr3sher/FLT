@@ -322,6 +322,29 @@ def loras_list():
     return jsonify({'loras': loras})
 
 
+@bp.get('/comfy/model-files')
+def comfy_model_files():
+    """The model files on disk for ONE picker slot — what backs the Klein model-file
+    fields and Krea 2 Edit's base model / identity LoRA, which used to be free text.
+
+    ``?slot=`` is one of ``comfy_model_picker.SLOTS``; ``?force=1`` bypasses the
+    mtime cache (the ↻ rescan button). Answers
+    ``{files: [relative loader name], folder: "where to put one"}``.
+
+    Each name is exactly the string the field already stored, so switching those
+    fields to a picker needs no alias and an install that typed a name by hand
+    finds it selected. ``folder`` is what the empty state SAYS to do — a mute
+    empty dropdown is the one outcome this endpoint must never produce.
+
+    An unknown slot and any scan failure both answer 200 with an empty list: the
+    picker degrades to a free-text field rather than blocking the panel."""
+    from ..services import comfy_model_picker
+    slot = (request.args.get('slot') or '').strip()
+    force = bool(request.args.get('force'))
+    files, folder = comfy_model_picker.list_slot_files(slot, force=force)
+    return jsonify({'files': files, 'folder': folder})
+
+
 @bp.get('/seedvr2/models')
 def seedvr2_models_list():
     """The SeedVR2 DiT builds actually PRESENT in this install's SEEDVR2 folder(s),

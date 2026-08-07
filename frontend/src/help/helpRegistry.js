@@ -1107,7 +1107,10 @@ const TOPICS = [
     ['chatgpt', 'auth', 'subscription', 'api key', 'codex', 'oauth', 'openai']),
   setting('klein.unet', 'engines', 'klein-model-unet', 'Klein diffusion model (UNET) file',
     ['klein', 'unet', 'diffusion model', 'model file', 'path', 'override', 'pin', 'custom model',
-     'unreadable', 'corrupt', 'says missing']),
+     'unreadable', 'corrupt', 'says missing',
+     // The field is a PICKER now, and a pin it cannot find stops the engine.
+     'dropdown', 'list', 'picker', 'choose', 'select', 'not found', 'refuses to run',
+     'engine will not start']),
   setting('klein.text_encoder', 'engines', 'klein-model-text_encoder', 'Klein text encoder file',
     ['klein', 'text encoder', 'clip', 'qwen', 'model file', 'path', 'override', 'pin']),
   setting('klein.vae', 'engines', 'klein-model-vae', 'Klein VAE file',
@@ -1133,6 +1136,26 @@ const TOPICS = [
   setting('krea.grounding_px', 'engines', 'krea-grounding', 'Krea 2 Edit reference grounding',
     ['krea', 'krea 2', 'grounding', 'grounding_px', 'consistency', 'likeness', 'resemblance',
      'prompt adherence', 'variety', 'identity', 'reference', 'dial', 'slider', 'local engine']),
+  // The two calibration dials that had NO input anywhere until they got sliders
+  // in the workspace's "🧬 Krea 2 Edit tuning" panel. They are settings (they
+  // change every future run), so they are documented in settings-reference —
+  // but their only control lives on the Generate-variations screen, which is
+  // where these topics point. No `focus`: there is no field on the Settings
+  // page to scroll to, and pointing at one that does not exist is worse than
+  // landing on the panel that owns them.
+  { id: 'krea.ref_boost', kind: 'setting', title: 'Krea 2 Edit reference pull',
+    keywords: ['krea', 'krea 2', 'ref boost', 'ref_boost', 'reference pull', 'reference boost',
+      'likeness', 'resemblance', 'does not look like', 'identity', 'weak likeness',
+      'similarity', 'too different', 'face', 'calibration', 'slider', 'local engine'],
+    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets?section=add&panel=generate' } },
+  { id: 'krea.identity_lora_strength', kind: 'setting',
+    title: 'Krea 2 Edit identity LoRA strength',
+    keywords: ['krea', 'krea 2', 'identity lora strength', 'identity_lora_strength',
+      'lora strength', 'identity', 'weight', 'face transfer', 'likeness', 'posterized',
+      'waxy', 'blocky', 'calibration', 'slider', 'local engine'],
+    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets?section=add&panel=generate' } },
   setting('krea.steps', 'engines', 'krea-steps', 'Krea 2 Edit sampler steps',
     ['krea', 'steps', 'sampler', 'quality', 'slower', 'local engine']),
   setting('krea.base_model', 'engines', 'krea-base-model', 'Krea 2 Edit base model',
@@ -1141,10 +1164,13 @@ const TOPICS = [
      // A GGUF quantised base is a dead end ComfyUI reports as a bare
      // "value_not_in_list" — these terms are what someone stuck on it searches for.
      'gguf', 'quant', 'quantised', 'quantized', 'q4_k_m', 'q8', 'value not in list',
-     'not in list', 'not detecting', 'model not found', 'unet_name', 'safetensors']),
+     'not in list', 'not detecting', 'model not found', 'unet_name', 'safetensors',
+     'dropdown', 'list', 'picker', 'choose', 'select', 'not found', 'refuses to run',
+     'engine will not start']),
   setting('krea.identity_lora', 'engines', 'krea-identity-lora', 'Krea 2 Edit identity LoRA',
     ['krea', 'identity', 'edit lora', 'lora', 'krea2_identity_edit', 'civitai',
-     'node pack', 'comfyui-krea2edit', 'missing', 'local engine']),
+     'node pack', 'comfyui-krea2edit', 'missing', 'local engine',
+     'dropdown', 'list', 'picker', 'choose', 'select', 'not found', 'refuses to run']),
   setting('krea.generation_lora_presets', 'engines', 'krea-generation-lora-presets',
     'Krea 2 Edit generation LoRA presets',
     ['krea', 'krea 2', 'lora', 'loras', 'generation lora', 'preset', 'presets',

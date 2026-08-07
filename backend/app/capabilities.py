@@ -1744,8 +1744,14 @@ def probe(force=False) -> dict:
     # engine dark; the advisory too_small does not gate.
     krea_invalid = _krh.krea_invalid_assets()
     krea_blocking_invalid = any(i['blocking'] for i in krea_invalid)
+    # A model file PINNED in Settings that is not on disk. Kept apart from
+    # krea_missing because it is a different sentence and a different fix: the
+    # file the user chose is absent, so nothing should be elected in its place.
+    # See krea_edit_helper.KreaPinnedModelMissing for the run that made this a
+    # gate instead of a log line.
+    krea_pin_gaps = _krh.krea_pin_gaps()
     krea_ready = (comfy['ok'] and not krea_missing and not krea_nodes_missing
-                  and not krea_blocking_invalid)
+                  and not krea_blocking_invalid and not krea_pin_gaps)
     # SeedVR2 — the fidelity upscaler (issue #32). Same three-part shape as Krea
     # (weights on disk / node pack present / weights actually loadable), because
     # it has the same three ways to be half-installed. It is NOT a generation
@@ -1880,6 +1886,13 @@ def probe(force=False) -> dict:
             # badge next to the Settings field, so a typo is never silent.
             # Ported from socrasteeze's branch (GitHub #20).
             'klein_overrides': _keh.klein_override_status(),
+            # Pinned-but-absent model files, per engine:
+            # [{slot, key, configured[, status]}]. Non-empty keeps that engine
+            # dark above, and the engine card reads THIS to say which file the
+            # user chose is missing — never "download the base model", which
+            # would send them to fix something that is already there.
+            'klein_pin_gaps': _keh.klein_pin_gaps(),
+            'krea_pin_gaps': krea_pin_gaps,
         },
         'ollama': {
             'reachable': ollama['ok'],

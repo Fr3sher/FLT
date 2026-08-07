@@ -323,6 +323,42 @@ def klein_override_status():
     return out
 
 
+def klein_pin_gaps():
+    """``[{'slot', 'key', 'configured', 'status'}]`` for every Klein model file the
+    USER pinned that cannot be resolved. Gates the engine — see
+    `klein_engine_ready`.
+
+    WHY THE ENGINE REFUSES RATHER THAN FALLING BACK
+    -----------------------------------------------
+    `_configured_model` degrades an unresolvable pin to auto-detection, and the
+    Settings badge says so. That badge is on a page the user is not looking at
+    while they generate: the run itself went ahead on a DIFFERENT file from the
+    one the field showed. The same shape once had a whole training run on a
+    third-party finetune nobody chose (see krea_edit_helper.
+    KreaPinnedModelMissing) — it is invisible until after the expensive part.
+    So a broken pin now stops the engine, by name, and clearing the field is the
+    explicit gesture that returns to auto-detection.
+
+    WHAT IS NOT A PIN: `klein.consistency_lora` ships a non-empty DEFAULT, so its
+    value being set is not evidence anybody chose it — an install that never
+    downloaded that optional LoRA would be bricked by treating it as a pin. Only
+    a value the user actually moved off the shipped one counts. The other three
+    slots default to '' , so for them set == pinned."""
+    defaults = (cfg.DEFAULTS.get('klein') or {})
+    gaps = []
+    for slot, (key, comfy_type) in KLEIN_OVERRIDE_KEYS.items():
+        raw = (cfg.get(key) or '').strip()
+        if not raw:
+            continue
+        shipped = str(defaults.get(key.split('.', 1)[1], '') or '').strip()
+        if shipped and raw == shipped:
+            continue
+        _, status = resolve_model_ref(comfy_type, raw)
+        if status != 'ok':
+            gaps.append({'slot': slot, 'key': key, 'configured': raw, 'status': status})
+    return gaps
+
+
 def _klein_unet_folders():
     """(prefix, [model files]) candidates for the Klein UNET across each diffusion-
     model search root (base models/unet + models/diffusion_models, then any
@@ -724,6 +760,12 @@ def klein_engine_ready(comfy_ok, *, missing=None, invalid=None, unsupported_enum
     cached /object_info for the widget values (which fails OPEN — an unreachable
     ComfyUI is already answered by `comfy_ok`)."""
     if not comfy_ok:
+        return False
+    # FIFTH condition, added after the pinned-model incident: a model file the
+    # user pinned that is not on disk. It comes before the asset scan because the
+    # asset scan would answer "everything is here" — auto-detection found files,
+    # they are just not the ones that were asked for. See klein_pin_gaps.
+    if klein_pin_gaps():
         return False
     enums = klein_unsupported_enums() if unsupported_enums is None else unsupported_enums
     if enums:
