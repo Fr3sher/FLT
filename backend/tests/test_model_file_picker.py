@@ -127,3 +127,45 @@ def test_the_shipped_consistency_lora_name_is_not_a_user_pin(app, comfy):
         assert keh.klein_pin_gaps() == []
         cfg.save_config({'klein': {'consistency_lora': 'klein/mine.safetensors'}})
         assert [g['slot'] for g in keh.klein_pin_gaps()] == ['consistency_lora']
+
+
+def test_the_klein_unet_list_is_the_RESOLVER_s_candidates_too(app, comfy):
+    """The Klein UNET slot had the same defect the Krea base was protected from,
+    and one consequence more.
+
+    A picker built on its own walk of diffusion_models offers every file in
+    there, so it can hand over one the resolver will not build — a choice that
+    silently does nothing. But Klein ALSO has a second, older picker: the
+    per-dataset one in KleinModelSetting, whose list comes from the capabilities
+    probe and has always been filtered to klein-named candidates. Two dropdowns
+    driving the SAME UNETLoader with different contents is the drift the repo
+    warned about in that component's own header, and it is invisible on a machine
+    whose diffusion_models holds nothing else."""
+    d = comfy / 'models' / 'diffusion_models' / 'klein'
+    _write(d / 'flux-2-klein-9b-fp8.safetensors')
+    _write(comfy / 'models' / 'diffusion_models' / 'some_sdxl_unet.safetensors')
+    with app.app_context():
+        files, hint = picker.list_slot_files('klein_unet')
+    assert any('flux-2-klein' in f for f in files)
+    assert not any('some_sdxl' in f for f in files), (
+        'the picker offered a UNET the Klein resolver refuses to build')
+    assert hint
+
+
+def test_both_unet_pickers_agree_with_what_capabilities_publishes(app, comfy):
+    """The two ends, side by side, on one tree. This is the assertion that would
+    have caught the divergence at the commit that introduced it: what Settings
+    offers globally and what the per-dataset control offers must be the same set,
+    because they write to the same loader."""
+    d = comfy / 'models' / 'diffusion_models' / 'klein'
+    _write(d / 'flux-2-klein-9b-fp8.safetensors')
+    _write(d / 'flux-2-klein-9b-bf16.safetensors')
+    _write(comfy / 'models' / 'diffusion_models' / 'some_sdxl_unet.safetensors')
+    from app import capabilities
+    with app.app_context():
+        globally, _hint = picker.list_slot_files('klein_unet', force=True)
+        per_dataset = capabilities._scan_models().get('klein') or []
+    assert sorted(os.path.basename(f) for f in globally) == \
+        sorted(os.path.basename(f) for f in per_dataset), (
+            'the Settings picker and the per-dataset picker disagree about which '
+            'files the same UNETLoader can load')

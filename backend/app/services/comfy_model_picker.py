@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 # The folder type is what makes the scan agree with the resolver; the hint is
 # what makes the "nothing found" state actionable instead of mute.
 SLOTS = {
-    'klein_unet': ('diffusion_models', 'ComfyUI’s models/unet (or models/diffusion_models)'),
+    # Special-cased below, for the same reason as the Krea base.
+    'klein_unet': ('diffusion_models', 'a klein-named folder under ComfyUI’s models/unet'),
     'klein_text_encoder': ('text_encoders', 'ComfyUI’s models/text_encoders'),
     'klein_vae': ('vae', 'ComfyUI’s models/vae'),
     'klein_consistency_lora': ('loras', 'ComfyUI’s models/loras'),
@@ -72,15 +73,26 @@ def _roots_signature(folder_type: str) -> tuple:
     return tuple(sig)
 
 
+def _folded(pairs) -> list[str]:
+    """``(prefix, [names])`` from a resolver's candidate walk -> loader strings."""
+    return sorted((os.path.join(sub, name) for sub, names in pairs for name in names),
+                  key=str.lower)
+
+
 def _scan(slot: str, folder_type: str) -> list[str]:
+    # A UNET slot lists the RESOLVER's candidate set, never the whole folder.
+    # Offering a file the resolver will not elect is a choice that silently does
+    # nothing -- and for Klein it would also disagree with the per-dataset picker
+    # in KleinModelSetting, which has always been filtered this way: two dropdowns
+    # driving the same UNETLoader with different contents. Imported here rather
+    # than at module import: both helpers are heavy and this module is pulled in
+    # by a settings route.
     if slot == 'krea_base_model':
-        # The resolver's own candidate set, so picker == election. Imported here
-        # rather than at module import: krea_edit_helper is a heavy module and
-        # this one is imported by a settings route.
         from . import krea_edit_helper as krh
-        return sorted((os.path.join(sub, name)
-                       for sub, names in krh._krea_unet_folders() for name in names),
-                      key=str.lower)
+        return _folded(krh._krea_unet_folders())
+    if slot == 'klein_unet':
+        from . import klein_edit_helper as kh
+        return _folded(kh._klein_unet_folders())
     return sorted((rel for rel, _ab in comfy_model_paths.list_models(folder_type)),
                   key=str.lower)
 
