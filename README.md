@@ -48,7 +48,20 @@ Point a bank at a folder, or scrape straight into one. It reads what is there **
 
 The cuts are measured rather than guessed: the aesthetic and near-duplicate thresholds were calibrated on a real bank of **7,316 images**, and every measure that cannot answer says "unsure" or "not measured" instead of inventing a verdict. The image lane is out of Beta; the **video** lane still carries the chip, and says why below.
 
-**📷 See it:** [bank overview](docs/screenshots/bank/bank-overview.png) · [**Launch all** — the whole triage in one go, each pass quoting what it would reject before you start it](docs/screenshots/bank/bank-launch-all.png)
+<table>
+  <tr>
+    <td width="62%" valign="top">
+      <a href="docs/screenshots/bank/bank-analyze-and-overview.png"><img src="docs/screenshots/bank/bank-analyze-and-overview.png" alt="The Bank workspace: the Analyze panel with every pass, the three-level watermark cleaning, and a Bank overview reporting coverage, resolution, framing, medium and structure across 50,461 images" width="100%"></a>
+    </td>
+    <td width="38%" valign="top">
+      <a href="docs/screenshots/bank/bank-launch-all.png"><img src="docs/screenshots/bank/bank-launch-all.png" alt="The Launch all dialog: eight passes ticked, each quality flag quoting how many images it would reject, and a warning that unscanned images will change those counts" width="100%"></a>
+    </td>
+  </tr>
+  <tr>
+    <td valign="top"><sub><strong>The workspace</strong> — every pass on the left, and on the right what the bank actually <em>is</em>: how much of it each pass has covered, its resolutions, framings, mediums, and how many duplicate and person groups are still unresolved. 50,461 images here, 93% measured for quality, 49% scored.</sub></td>
+    <td valign="top"><sub><strong>Launch all</strong> — the whole triage in one go. Every flag quotes what it would reject <em>today</em>, and says out loud that 3,602 images have not been scanned yet, so those counts will grow. Stop it any time; a pass whose tool is missing is skipped, never failed.</sub></td>
+  </tr>
+</table>
 
 | Capability | What it provides |
 |---|---|
