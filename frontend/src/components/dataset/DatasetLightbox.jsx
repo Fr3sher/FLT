@@ -62,6 +62,10 @@ export default function DatasetLightbox({
   onRotate,
   onImprove,
   busy = false,
+  // The sentence a refused write shows (which pass holds this dataset, where it
+  // is, what to do). Opening, zooming and comparing never consult it: they read
+  // the same bytes the grid is already showing.
+  busyReason = null,
   mirrorBusy = false,
   improvePending = false,
   improveReady = false,
@@ -164,9 +168,11 @@ export default function DatasetLightbox({
      a user with a screenshot of exactly that). The wording, the gating and the
      per-engine disabled reasons all come from the shared pure module, so this
      surface can never drift from the toolbar's. */
+  const refused = busy ? busyReason : null;
   const improveButtons = onImprove
     ? lightboxImproveButtons({
       caps, engines: caps?.engines, improving, improvePending, improveReady, busy,
+      busyReason,
     })
     : [];
 
@@ -283,7 +289,8 @@ export default function DatasetLightbox({
         )}
         {onCrop && (
           <button type="button" onClick={() => onCrop(img)} disabled={busy}
-            title="Open the crop editor for this image (stretchable box, any ratio)"
+            title={refused || 'Open the crop editor for this image (stretchable box, any ratio)'}
+            aria-label={refused || 'Open the crop editor for this image'}
             className="min-h-9 px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             ✂ Crop
           </button>
@@ -291,8 +298,10 @@ export default function DatasetLightbox({
         {onMirror && (
           <button type="button" onClick={mirror} disabled={busy || mirrorBusy}
             aria-busy={mirrorBusy}
-            aria-label={mirrorBusy ? `Mirroring ${alt} horizontally` : `Mirror ${alt} horizontally`}
-            title={mirrorBusy ? 'Mirroring horizontally…' : 'Mirror horizontally (flip left and right)'}
+            aria-label={refused
+              || (mirrorBusy ? `Mirroring ${alt} horizontally` : `Mirror ${alt} horizontally`)}
+            title={refused
+              || (mirrorBusy ? 'Mirroring horizontally…' : 'Mirror horizontally (flip left and right)')}
             className="min-h-9 w-full sm:w-auto px-3 py-1.5 rounded-lg bg-white/10 hover:bg-white/20 text-white text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-45">
             {mirrorBusy ? '⇆ Mirroring…' : '⇆ Mirror horizontally'}
           </button>
@@ -306,15 +315,17 @@ export default function DatasetLightbox({
              Emoji stay aria-hidden — the label is the text. */
           <div className={`flex items-stretch gap-2 ${rail ? 'w-full' : 'w-full sm:w-auto'}`}>
             <button type="button" onClick={rotate(270)} disabled={busy || mirrorBusy}
-              aria-busy={mirrorBusy} aria-label={`Rotate ${alt} 90 degrees left`}
-              title="Rotate 90° left (counter-clockwise) — keeps the file's format; four turns come back round"
+              aria-busy={mirrorBusy} aria-label={refused || `Rotate ${alt} 90 degrees left`}
+              title={refused
+                || "Rotate 90° left (counter-clockwise) — keeps the file's format; four turns come back round"}
               className={`min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
                 rail ? '' : 'sm:flex-none'}`}>
               <span aria-hidden="true">↺</span> Rotate left
             </button>
             <button type="button" onClick={rotate(90)} disabled={busy || mirrorBusy}
-              aria-busy={mirrorBusy} aria-label={`Rotate ${alt} 90 degrees right`}
-              title="Rotate 90° right (clockwise) — keeps the file's format; four turns come back round"
+              aria-busy={mirrorBusy} aria-label={refused || `Rotate ${alt} 90 degrees right`}
+              title={refused
+                || "Rotate 90° right (clockwise) — keeps the file's format; four turns come back round"}
               className={`min-h-9 flex-1 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-45 ${
                 rail ? '' : 'sm:flex-none'}`}>
               <span aria-hidden="true">↻</span> Rotate right

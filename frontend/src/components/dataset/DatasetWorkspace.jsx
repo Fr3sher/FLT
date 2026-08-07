@@ -14,6 +14,7 @@ import DatasetFolderNote from './DatasetFolderNote';
 import { isDatasetImportBlocked, isStopGenerationBlocked } from './scraperState';
 import { faceAnalysisState, faceAnalysisLabel } from './faceScoringGate.js';
 import DatasetGrid from './DatasetGrid';
+import { datasetBusyReason } from './datasetBusyReason.js';
 import KleinModelSetting from '../shared/KleinModelSetting';
 import SmallImageRescueReview from './SmallImageRescueReview';
 import CaptionToolsBar from './CaptionToolsBar';
@@ -2129,6 +2130,9 @@ export default function DatasetWorkspace({ ds, onBack }) {
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy || gridBulkBusy}
+          // The refused writes in there name the pass that holds them, exactly
+          // like the tiles behind the lightbox.
+          busyReason={(ds.busy || gridBulkBusy) ? datasetBusyReason(ds.busy ? act : null) : null}
           kleinAvailable={Boolean(caps.engines?.klein)}
           subjectType={d.subject_type || 'human'}
           onCrop={viewImgLive._rescueReviewPreview

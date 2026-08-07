@@ -122,7 +122,10 @@ export function improveBatchLabel(activity) {
 
     Pure: no JSX, no capabilities probing of its own — `node --test` covers it. */
 export function lightboxImproveButtons({ caps, engines, improving = false,
-  improvePending = false, improveReady = false, busy = false } = {}) {
+  improvePending = false, improveReady = false, busy = false,
+  // Which dataset pass is holding this image, when the caller knows. "Another
+  // action is running" is true and useless; the named pass tells you how long.
+  busyReason = null } = {}) {
   const active = improving || improvePending
   // Blocked for reasons that have nothing to do with WHICH engine: one
   // improvement per image at a time, and one waiting result must be reviewed
@@ -132,7 +135,7 @@ export function lightboxImproveButtons({ caps, engines, improving = false,
         ? 'A new version is waiting for validation.'
         : active
           ? 'An improvement is already running for this image.'
-          : 'Another action is running on this image.')
+          : (busyReason || 'Another action is running on this image.'))
     : null
   return availableImproveEngines(caps).map((engine) => {
     // `eligibleCount: 1` — the lightbox always acts on exactly this image, so
