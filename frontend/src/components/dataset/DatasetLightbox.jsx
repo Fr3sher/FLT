@@ -20,6 +20,7 @@ import { displayLabel } from '../../utils/labels';
 import SourceAttribution from './SourceAttribution';
 import {
   freshLightboxImageState, lightboxImageState, lightboxNeighbours, ownsArrowKeys,
+  stampedPatch,
 } from './lightboxNavigation';
 
 const COMPARE_HELP = 'Show the original this image was made from, next to it, at the same scale.';
@@ -124,12 +125,17 @@ export default function DatasetLightbox({
      and this is the part that must be tested case by case. */
   const imageId = img?.id ?? null;
   const { full, comparing, improving } = lightboxImageState(storedState, imageId);
-  // Always re-stamped with the CURRENT id: the `finally` of an improve started
-  // on the previous image writes that image's stamp and is then ignored, with
-  // no cancellation bookkeeping.
+  /* Which image is on screen when a setter actually RUNS — a ref, because the
+     `finally` of an improve resolves long after the render that created its
+     callback and must be compared against the present, not against the past it
+     closed over. */
+  const currentIdRef = useRef(imageId);
+  useEffect(() => { currentIdRef.current = imageId; }, [imageId]);
+  // Stamped with the id of the render that created it, and DROPPED if that is
+  // no longer the image being shown: one slot, so a late writer stamping it
+  // would reset the picture you moved to. See stampedPatch.
   const patchImageState = useCallback((patch) => {
-    setStoredState((prev) => (
-      { ...lightboxImageState(prev, imageId), ...patch, imageId }));
+    setStoredState((prev) => stampedPatch(prev, patch, imageId, currentIdRef.current));
   }, [imageId]);
   const nav = lightboxNeighbours(images, imageId);
   const canNavigate = !!onNavigate && nav.available;

@@ -29,9 +29,15 @@
  * The guarantee here is structural rather than a reset effect: the state is
  * stamped with the id it was computed for, and a render that finds a foreign
  * stamp ignores it and uses a fresh one. There is therefore no frame in which
- * stale state is painted, no ordering to get right, and — the part an effect
- * cannot offer — a late async writer (the `finally` of an improve that started
- * on the previous image) stamps its own id and is ignored for free.
+ * stale state is painted, and no ordering to get right.
+ *
+ * READING a foreign stamp is not enough on its own, because there is ONE slot.
+ * A late writer — the `finally` of an improve that started on the previous
+ * image — would stamp that slot with its own id, and the read would then find a
+ * foreign stamp for the image actually on screen and hand it a FRESH state:
+ * your zoom dropped and your comparison pane closed, on an image that improve
+ * never touched. Measured, not feared. So writing checks the stamp too, and a
+ * writer that no longer owns the screen is dropped: see `stampedPatch`.
  */
 
 /** Everything an image starts from, whatever the previous one ended on. */
@@ -47,6 +53,20 @@ export function lightboxImageState(stored, imageId) {
   const id = imageId ?? null;
   if (!stored || stored.imageId !== id) return freshLightboxImageState(id);
   return stored;
+}
+
+/**
+ * The next stored state when the holder of `stampId` asks for `patch`, given
+ * that `currentId` is the image on screen right now.
+ *
+ * A writer that no longer owns the screen is DROPPED rather than allowed to
+ * stamp the single slot — see the header. Pure, so the sequence that exposed it
+ * (improve on A → ⟩ → zoom B → A resolves) is testable without a DOM.
+ */
+export function stampedPatch(stored, patch, stampId, currentId) {
+  const stamp = stampId ?? null;
+  if (stamp !== (currentId ?? null)) return stored;
+  return { ...lightboxImageState(stored, stamp), ...patch, imageId: stamp };
 }
 
 const FIRST = (total) => `You are on the first of the ${total} images shown here.`;

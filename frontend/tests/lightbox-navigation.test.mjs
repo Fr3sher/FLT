@@ -25,6 +25,7 @@ import { render, renderToStaticMarkup, createElement } from './support/mountJsx.
 
 const {
   freshLightboxImageState, lightboxImageState, lightboxNeighbours, ownsArrowKeys,
+  stampedPatch,
 } = await import('../src/components/dataset/lightboxNavigation.js')
 const { pageOfIndex, GRID_PAGE_SIZE } = await import(
   '../src/components/dataset/gridPaging.js')
@@ -253,4 +254,48 @@ test('the lightbox and the grid are handed the SAME list', () => {
   assert.match(src, /images=\{viewImgLive\._rescueReviewPreview \? null : gridImages\}/)
   assert.match(src, /onNavigate=\{viewImgLive\._rescueReviewPreview \? null : setViewImg\}/)
   assert.match(src, /viewingImageId=\{viewImg\?\.id \?\? null\}/)
+})
+
+/* A LATE WRITER MUST NOT RESET THE IMAGE YOU MOVED TO.
+ *
+ * There is ONE state slot, stamped with the image it belongs to. Reading a
+ * foreign stamp already falls back to a fresh state — but that is precisely
+ * what makes a stale WRITE harmful: stamping the slot with the previous image
+ * makes the read hand a FRESH state to the image on screen, silently dropping
+ * its zoom and closing its comparison pane.
+ *
+ * The sequence below is the one that produced it: improve on A, ⟩ to B, zoom B,
+ * then A's `finally` resolves. It is expressed against the pure helper because
+ * the render harness is static markup and cannot drive an async resolution.
+ * `stampedPatch(stored, patch, stampId, currentId)` — stampId is what the
+ * callback closed over, currentId is what is on screen when it runs.
+ */
+test('an improve resolving on the previous image leaves the current one alone', () => {
+  let stored = freshLightboxImageState(11)
+  stored = stampedPatch(stored, { improving: true }, 11, 11)   // Improve clicked on A
+  stored = stampedPatch(stored, { full: true }, 22, 22)        // ⟩ to B, then zoom B
+  assert.equal(lightboxImageState(stored, 22).full, true)
+
+  stored = stampedPatch(stored, { improving: false }, 11, 22)  // A's `finally` lands
+  assert.equal(lightboxImageState(stored, 22).full, true,
+    "B's zoom survived A's improve finishing")
+  assert.equal(lightboxImageState(stored, 22).imageId, 22)
+})
+
+test('a patch from the image on screen still applies', () => {
+  // The guard drops FOREIGN writers only -- it must not freeze the live one,
+  // which would be a far worse cure than the disease.
+  const stored = stampedPatch(freshLightboxImageState(22), { comparing: true }, 22, 22)
+  assert.equal(lightboxImageState(stored, 22).comparing, true)
+})
+
+test('the lightbox routes its state writes through the stamp guard', () => {
+  // The guard lives in the pure module; this pins that the component actually
+  // uses it, and compares against the PRESENT (a ref) rather than the render it
+  // closed over -- reintroducing a raw setStoredState would restore the bug
+  // with every pure test above still green.
+  const src = readFileSync(
+    new URL('../src/components/dataset/DatasetLightbox.jsx', import.meta.url), 'utf8')
+  assert.match(src, /stampedPatch\(prev, patch, imageId, currentIdRef\.current\)/)
+  assert.doesNotMatch(src, /setStoredState\(\(prev\) => \(\s*\{ \.\.\.lightboxImageState/)
 })
