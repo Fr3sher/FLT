@@ -197,8 +197,8 @@ the target model accepts.
 <table>
   <tr>
     <td align="center" width="50%">
-      <a href="docs/screenshots/bank/bank-overview.png"><img src="docs/screenshots/bank/bank-overview.png" alt="Image Bank overview with scoring, filters and review controls" width="380"></a><br>
-      <sub><strong>Image Bank</strong> — score, search and shortlist large collections.</sub>
+      <a href="docs/screenshots/generate/generate-variations.png"><img src="docs/screenshots/generate/generate-variations.png" alt="Generate variations: subject type, and the five engines side by side with what each one costs, whether it needs a GPU and whether it accepts NSFW" width="380"></a><br>
+      <sub><strong>Generate</strong> — five engines side by side, each stating its price, its GPU need and what it will refuse.</sub>
     </td>
     <td align="center" width="50%">
       <a href="docs/screenshots/03-curate.png"><img src="docs/screenshots/03-curate.png" alt="Dataset image grid with keep/reject decisions, face-similarity scores and per-tile caption fields" width="380"></a><br>
