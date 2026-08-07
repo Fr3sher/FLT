@@ -98,6 +98,7 @@ def _reserve_locked(bank_id, kind, total=0, reserve_ids=None):
         _drop_job_locked(cur)
     job = {'kind': kind, 'done': 0, 'total': int(total or 0), 'error': None,
            'cancelled': False, 'finished': False, 'detail': None,
+           'stop_cost': None, 'stop_wait': None,
            'started_at': now, '_touched': now, '_cancel_hook': None,
            'pipeline': None, '_keys': keys, '_launched': False,
            '_owner_thread': threading.get_ident(),
@@ -342,6 +343,36 @@ def set_pipeline(job, snapshot):
         job['_touched'] = time.time()
 
 
+def set_stop_notice(job, cost=None, wait=None):
+    """Publish what pressing Stop RIGHT NOW costs, and what it then waits for.
+
+    The Bank's Stop button used to be a bare label with no state: the click was
+    honoured in 79 ms (this registry is in memory, ``cancel`` touches no
+    database) but the only feedback lived in the bank payload, which takes
+    seconds to rebuild while a pass is writing tens of thousands of rows. So the
+    button looked untouched and people pressed it again — seven POSTs inside
+    20 ms in one measured session.
+
+    The front end can make the button answer the click on its own, but it cannot
+    invent the two sentences that matter, because they are NOT properties of the
+    pass — they are properties of the PHASE it is in. ✨ Score alone stops three
+    different ways: during inference the computed scores are salvaged, during
+    the write-back the stop lands at the end of the current commit batch, and
+    during the style write it does not land at all because that step is written
+    whole or not at all. Only the worker knows which of those is true this
+    second, so it says so here and the bar relays it verbatim.
+
+    ``cost`` is read BEFORE the click (what you keep, what you lose); ``wait``
+    replaces it AFTER it (what the pass is finishing). Both are cleared by
+    passing None — a phase that has nothing specific to promise stays SILENT
+    rather than offering a generic reassurance it cannot back up.
+    """
+    with _lock:
+        job['stop_cost'] = str(cost) if cost else None
+        job['stop_wait'] = str(wait) if wait else None
+        job['_touched'] = time.time()
+
+
 def cancelled(job) -> bool:
     with _lock:
         # A few synchronous service-level callers (and older extensions) invoke
@@ -391,8 +422,11 @@ def cancel(bank_id) -> bool:
 
 def get(bank_id):
     """Snapshot for the payload: {kind, done, total, error, cancelled,
-    finished, detail, started_at, pipeline, eta_state, eta_seconds, eta_scope}
-    or None. Purges expired entries.
+    finished, detail, started_at, pipeline, eta_state, eta_seconds, eta_scope,
+    stop_cost, stop_wait} or None. Purges expired entries.
+
+    ``stop_*`` is what the Stop button promises in the phase running right now —
+    see :func:`set_stop_notice`.
 
     ``eta_*`` is how long the pass still has to run — see ``job_eta``. A
     FINISHED job never carries one: "about 20 minutes left" under a completed
@@ -411,6 +445,14 @@ def get(bank_id):
                                     'started_at')}
         pipeline = job.get('pipeline')
         snap['pipeline'] = dict(pipeline) if pipeline else None
+        # `.get` on purpose: a job mapping built before this field existed (an
+        # in-memory entry surviving a live upgrade, or one of the historical
+        # hand-built mappings some callers still pass) must not KeyError the
+        # whole payload. A finished pass has no Stop button to describe, so it
+        # carries no promise either.
+        running = not (job['finished'] or job['error'])
+        snap['stop_cost'] = job.get('stop_cost') if running else None
+        snap['stop_wait'] = job.get('stop_wait') if running else None
         state = job.get('_eta')
         if state is None or job['finished'] or job['cancelled'] or job['error']:
             snap['eta_state'] = job_eta.ETA_NONE

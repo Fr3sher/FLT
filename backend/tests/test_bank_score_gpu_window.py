@@ -38,7 +38,9 @@ def _capture_window(app, bank_id):
          patch.object(banks.bank_jobs, 'cancelled', lambda job: False), \
          patch.object(banks.bank_jobs, 'bump', lambda job, n=1: None), \
          patch.object(banks.bank_jobs, 'progress', lambda job, **kw: seen.setdefault(
-             'details', []).append(kw.get('detail'))):
+             'details', []).append(kw.get('detail'))), \
+         patch.object(banks.bank_jobs, 'set_stop_notice',
+                      lambda job, **kw: seen.setdefault('stop', []).append(kw)):
         banks._score_job(bank_id)(object())
     return seen
 
