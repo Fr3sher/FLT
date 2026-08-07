@@ -88,7 +88,14 @@ def test_overlapping_multi_bank_reservations_are_atomic_and_only_guard_their_key
 
     def hold(_job):
         entered.set()
-        release.wait(timeout=3)
+        # A SAFETY NET, not the mechanism: the test's own `finally` sets `release`,
+        # so a passing run never waits here at all. It was 3 s, which made the
+        # reservation expire in the MIDDLE of the test body — a dozen HTTP round
+        # trips happen before the confirmed relocate, and on a loaded CI runner
+        # they take longer than that. The lock then quietly lapsed and the write
+        # this test exists to see REFUSED came back 200/applied. A timeout that
+        # decides the verdict is a clock, not an assertion.
+        release.wait(timeout=120)
 
     def attempt(primary):
         start_gate.wait(timeout=3)
@@ -429,7 +436,14 @@ def test_reserved_destination_allows_reads_and_cancel_but_refuses_writes_and_del
 
     def hold(_job):
         entered.set()
-        release.wait(timeout=3)
+        # A SAFETY NET, not the mechanism: the test's own `finally` sets `release`,
+        # so a passing run never waits here at all. It was 3 s, which made the
+        # reservation expire in the MIDDLE of the test body — a dozen HTTP round
+        # trips happen before the confirmed relocate, and on a loaded CI runner
+        # they take longer than that. The lock then quietly lapsed and the write
+        # this test exists to see REFUSED came back 200/applied. A timeout that
+        # decides the verdict is a clock, not an assertion.
+        release.wait(timeout=120)
 
     bank_jobs.start(
         _runner_app(), source_id, 'bank_promote', hold,

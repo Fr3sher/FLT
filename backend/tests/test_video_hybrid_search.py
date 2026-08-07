@@ -178,11 +178,24 @@ def test_a_clip_with_no_caption_still_gets_its_empty_sidecar(app, tmp_path,
     assert (dst.parent / (dst.stem + '.txt')).read_text(encoding='utf-8') == ''
 
 
-def test_the_promotion_says_up_front_how_many_clips_have_no_caption(app, tmp_path):
+def test_the_promotion_says_up_front_how_many_clips_have_no_caption(app, tmp_path,
+                                                                   monkeypatch):
     """An empty sidecar trains as an EMPTY PROMPT and ai-toolkit says nothing
     about it. That is exactly the kind of limit that has to be visible before the
     encode, not discovered in a training run."""
     from app.services import video_bank_service as svc
+    # The assertion is about the COUNTS this promotion announces BEFORE it
+    # encodes, so the encode is stubbed - the same two seams every other
+    # promotion test stubs (test_video_promote_composition, _inset). Without
+    # them the real cutter looks for ffmpeg on the machine and raises: green
+    # where the video extra is installed, red on CI. The figures under test are
+    # computed before a single frame is written.
+    def _fake_ffmpeg(args):
+        with open(args[-1], 'wb') as fh:
+            fh.write(bytes(1))
+        return 0, ''
+    monkeypatch.setattr(svc, '_ffmpeg_or_raise', lambda: '/usr/bin/ffmpeg')
+    monkeypatch.setattr(svc, '_run_ffmpeg', _fake_ffmpeg)
     bank_id = _bank(app, 3, keep=True)
     ids = _clip_ids(app, bank_id)
     _caption(app, ids[0], 'A woman walks away.')
