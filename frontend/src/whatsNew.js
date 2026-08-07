@@ -58,6 +58,30 @@ export const WHATS_NEW = [
     to: '/datasets?section=images',
   },
   {
+    id: '2026-08-07-lora-preset-applies-itself',
+    date: '2026-08-07',
+    title: 'Your LoRA preset can now apply itself, every run',
+    blurb:
+      'Building a generation-LoRA preset in Settings was only half the job: the tuning panel in the workspace opened on "None" every single time you came back to a dataset, so the preset applied only if you remembered to re-pick it — and a run that forgot showed no LoRA at all in the finished image\'s metadata, which looks exactly like the app ignoring your settings. Each local engine now has its own "Preset selected by default" in Settings → Image engines: pick one and every run starts there. It stays a starting point, not a lock — you can still choose another preset, or None, for a single run without touching the setting. Shipped as None, so nothing changes until you choose. Preset mechanism by @waltm (Discord).',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-07-lora-row-that-would-be-ignored-says-so',
+    date: '2026-08-07',
+    title: 'A LoRA line that would be ignored now tells you, in the editor',
+    blurb:
+      'Both local engines already load one LoRA outside your presets — Klein its consistency LoRA, Krea 2 Edit its identity edit LoRA — and a preset row naming that same file is deliberately dropped: chaining it twice adds both strengths together, well past what the file was trained for, and the result goes blocky. That drop happened in complete silence, one line in a server log nobody reads. Write such a row now and the preset editor says so on that exact line, explains why, and points at the strength setting to change instead. The check spells the path the same way the server does, so a slash the other way round or a different capitalisation cannot slip past it.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-07-krea-base-model-is-named',
+    date: '2026-08-07',
+    title: 'Settings now names the Krea base model your runs actually load',
+    blurb:
+      'The "Base model file" field said "auto — finds a Krea 2 Turbo/Raw build" and stopped there. If your ComfyUI holds more than one candidate — the official Turbo build next to a community finetune whose filename also reads as turbo — the tie-break picked one and never told you which, so the only way to find out was to open a finished PNG and read its metadata. Every judgement about quality in between was about a model you had not chosen. The field now names the file the next run will load — and, when a filename you pinned yourself was not found under any krea folder, says so and names what is being loaded instead.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-07-bank-stop-answers-the-click',
     date: '2026-08-07',
     title: 'Stop on a Bank pass answers you the moment you press it',

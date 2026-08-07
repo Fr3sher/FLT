@@ -1117,9 +1117,28 @@ const TOPICS = [
     ['klein', 'consistency', 'lora', 'model file', 'path', 'override', 'pin', 'structure',
      'anchor', 'composition']),
   setting('klein.generation_lora_presets', 'engines', 'klein-generation-lora-presets', 'Klein generation LoRA presets',
-    ['lora', 'preset', 'presets', 'klein', 'generation', 'texture', 'anatomy', 'style', 'chain', 'nsfw'],
+    ['lora', 'preset', 'presets', 'klein', 'generation', 'texture', 'anatomy', 'style', 'chain', 'nsfw',
+     // The silently-dropped row: it names the consistency LoRA the graph already
+     // loads, so the server skips it. These are the words for the symptom.
+     'duplicate', 'skipped', 'ignored', 'row ignored', 'double', 'double-stack',
+     'stacked twice', 'blocky', 'posterized', 'macro-blocking', 'consistency lora'],
     { trigger: 'klein-tuning-open',
       text: 'Build named generation-LoRA presets in Settings → Image engines, then pick one per run.' }),
+  // The half of the preset feature that was missing: the run panel opened on
+  // "None" on every visit, so a configured preset applied only when the user
+  // remembered to re-pick it — and the keywords below are the words someone
+  // writes when they discover, in a finished PNG's metadata, that none of their
+  // LoRA lines were applied.
+  setting('klein.default_generation_lora_preset', 'engines', 'klein-default-lora-preset',
+    'Klein preset selected by default',
+    ['klein', 'lora', 'preset', 'default preset', 'default', 'always', 'automatic',
+     'applied', 'not applied', 'ignored', 'ignores my settings', 'nothing happens',
+     'resets to none', 'none', 'every run', 'remember', 'preselect']),
+  setting('krea.default_generation_lora_preset', 'engines', 'krea-default-lora-preset',
+    'Krea 2 Edit preset selected by default',
+    ['krea', 'krea 2', 'lora', 'preset', 'default preset', 'default', 'always',
+     'automatic', 'applied', 'not applied', 'ignored', 'resets to none', 'none',
+     'every run', 'preselect']),
   setting('klein.generation_steps', 'engines', 'klein-generation', 'Klein generation steps',
     ['klein', 'steps', 'sampler', 'generation', 'quality', 'slower', 'cleaner', 'sampling', '5 steps']),
   setting('klein.edit_base_lora_strength', 'engines', 'klein-generation',
@@ -1141,7 +1160,12 @@ const TOPICS = [
      // A GGUF quantised base is a dead end ComfyUI reports as a bare
      // "value_not_in_list" — these terms are what someone stuck on it searches for.
      'gguf', 'quant', 'quantised', 'quantized', 'q4_k_m', 'q8', 'value not in list',
-     'not in list', 'not detecting', 'model not found', 'unet_name', 'safetensors']),
+     'not in list', 'not detecting', 'model not found', 'unet_name', 'safetensors',
+     // Naming the ELECTED base on screen. Two Krea builds in one folder both read
+     // as "turbo", the tie-break picks one, and until it was named the only way to
+     // find out was a finished PNG's metadata.
+     'which model', 'which base', 'wrong model', 'currently loading', 'elected',
+     'auto', 'finetune', 'community model', 'two models', 'several builds']),
   setting('krea.identity_lora', 'engines', 'krea-identity-lora', 'Krea 2 Edit identity LoRA',
     ['krea', 'identity', 'edit lora', 'lora', 'krea2_identity_edit', 'civitai',
      'node pack', 'comfyui-krea2edit', 'missing', 'local engine']),
@@ -1149,7 +1173,9 @@ const TOPICS = [
     'Krea 2 Edit generation LoRA presets',
     ['krea', 'krea 2', 'lora', 'loras', 'generation lora', 'preset', 'presets',
      'always-on', 'always on', 'filter bypass', 'filterbypass', 'bypass', 'nsfw',
-     'uncensored', 'style lora', 'detail slider', 'chain', 'stack', 'strength']),
+     'uncensored', 'style lora', 'detail slider', 'chain', 'stack', 'strength',
+     'duplicate', 'skipped', 'ignored', 'row ignored', 'double', 'double-stack',
+     'blocky', 'posterized', 'macro-blocking', 'identity lora']),
   setting('identity_prompts.face', 'engines', 'identity-prompts', 'Identity lock prompts (API engines)',
     ['identity', 'prompt', 'guard', 'lock', 'face', 'reference', 'beautify', 'preserve', 'consistency', 'edit prompt',
      'subject type', 'animal', 'per subject', 'leak', 'tails', 'extra limbs']),

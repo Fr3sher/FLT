@@ -522,6 +522,20 @@ DEFAULTS = {
               # nsfw_lora keys are migrated in by _migrate_klein_loras() and
               # then dropped.
               'generation_lora_presets': [],
+              # Which of the presets above the run panel STARTS on. Empty = none,
+              # which is byte-for-byte the behaviour every install had before this
+              # key existed (the picker opened on "None" on every single visit —
+              # so a carefully configured preset applied only if you remembered to
+              # re-pick it, and the PNG metadata of a run that forgot showed no
+              # LoRA at all). It is a STARTING POINT, not a lock: the picker still
+              # offers None and every other preset for that run, and choosing
+              # differently there never rewrites this setting.
+              # Fail-closed like the rest of the preset chain: a name matching no
+              # configured preset falls back to "none", never to a blocked run.
+              # Per ENGINE on purpose — klein.generation_lora_presets and
+              # krea.generation_lora_presets are independent lists and the same
+              # name can mean two different chains.
+              'default_generation_lora_preset': '',
               # Optional instruction for small scraped-image rescue only.
               # Empty is intentional: never invent a restoration prompt for the user.
               'small_image_prompt': '',
@@ -591,6 +605,11 @@ DEFAULTS = {
         # is no migration and no save carve-out — _deep_merge preserves a list
         # the incoming partial doesn't mention.
         'generation_lora_presets': [],
+        # Krea's own starting preset for the run panel — the twin of
+        # klein.default_generation_lora_preset, and deliberately a SEPARATE key:
+        # the two preset lists are independent, so one name can name two
+        # different chains. Empty = none = the historical behaviour.
+        'default_generation_lora_preset': '',
         # THE consistency <-> prompt-adherence dial, in pixels: the resolution the
         # reference is shown to the vision text-encoder at. LOW = follows the
         # PROMPT (more variety, weaker likeness); HIGH = RESEMBLES the reference

@@ -163,14 +163,16 @@ Settings:
 
 - **Reference grounding** → `krea.grounding_px`. Range `512`–`1536`, default **`512`**. **The** dial of this engine: the resolution your reference is shown to the model's vision encoder at. At the low end it follows the shot description (more variety in pose, outfit and scene, looser likeness); **higher** values favor reference likeness and can copy the very pose and outfit you asked it to change. **512 is the dataset-restaging balance**: it keeps the prompt and selected catalog card in charge while preserving identity. Raise it deliberately when keeping the reference more closely matters than changing its pose. This is Krea-only: it does not change ChatGPT, Gemini/Nano Banana, OpenRouter, or Klein.
 - **Sampler steps** → `krea.steps`. Default **`10`**, the value the model's own reference workflow uses. More is slower and rarely better on this pipeline.
-- **Base model file** → `krea.base_model`. **This is the GENERATION setting only** — the checkpoint ComfyUI loads for Krea 2 Identity Edit. It has **nothing to do with LoRA training**, which never reads it: training pulls its base from Hugging Face and picks it from the **Krea 2 training base** dropdown in the training panel (**Raw**, the default and the official recommendation — you train on Raw and apply the LoRA on Turbo at inference). Nobody can accidentally train on Turbo by leaving this field alone. *(The naming confusion was raised by strouder, GitHub #19.)* Blank (default) = the app picks a Krea 2 **Turbo** then **Raw** build from your ComfyUI. Set it only if you own several. Checkpoints that merely carry "krea" in their name but are not Krea 2 bases are **skipped on purpose** — the identity LoRA renders pure noise on them, which looks like a broken app rather than a wrong file.
+- **Base model file** → `krea.base_model`. **This is the GENERATION setting only** — the checkpoint ComfyUI loads for Krea 2 Identity Edit. It has **nothing to do with LoRA training**, which never reads it: training pulls its base from Hugging Face and picks it from the **Krea 2 training base** dropdown in the training panel (**Raw**, the default and the official recommendation — you train on Raw and apply the LoRA on Turbo at inference). Nobody can accidentally train on Turbo by leaving this field alone. *(The naming confusion was raised by strouder, GitHub #19.)* Blank (default) = the app picks a Krea 2 **Turbo** then **Raw** build from your ComfyUI. Set it only if you own several. Checkpoints that merely carry "krea" in their name but are not Krea 2 bases are **skipped on purpose** — the identity LoRA renders pure noise on them, which looks like a broken app rather than a wrong file. **The field names the file your runs actually load**, right under the input: blank used to promise only "auto", and when a folder holds the official Turbo build next to a community finetune whose filename *also* reads as turbo, both land in the same regime tier and the tie-break silently picks one — discoverable only by reading a finished PNG's metadata, after every quality judgement had already been made on the wrong model. If a name you pinned here is not found under any krea folder, the line says so and names the file used instead. The value is resolved server-side by the same code the generation path calls, never re-ranked in the browser.
 - **Identity edit LoRA** → `krea.identity_lora`. Path relative to `models/loras`; if nothing is there under that name the app searches your LoRA folders for a `krea2_identity_edit` file, so a renamed download still works.
 - **Krea 2 Edit generation LoRA presets** → `krea.generation_lora_presets`. Named,
   ordered combinations of **your own** LoRA files, chained after the identity-edit
   LoRA when Krea 2 Edit generates dataset images. Max 8 LoRAs per preset, 12
   presets; inside a preset the row order **is** the chain order. Per run you pick
-  one preset (or None, the default on every visit) in the workspace's 🧬 Krea 2
-  Edit tuning panel — the run sends only the preset's NAME and the app resolves
+  one preset in the workspace's 🧬 Krea 2 Edit tuning panel — which opens on
+  **Preset selected by default** → `krea.default_generation_lora_preset` (default:
+  empty = *None*), a starting point you can override for a single run without
+  rewriting the setting — the run sends only the preset's NAME and the app resolves
   the files from this list, so renaming a preset can never make a run load
   something you didn't configure. Strength runs to 6, and to **20** for utility
   LoRAs whose filename says `filter-bypass`: those have no measurable effect below
@@ -182,7 +184,10 @@ Settings:
   pointing at the **same file as Identity edit LoRA** is skipped too — it would
   chain the identity LoRA a second time on top of itself, summing both strengths
   into one delta well past what the file was trained for (visible as blocky,
-  posterized output, not a subtler quality loss). Empty by default. *(Preset
+  posterized output, not a subtler quality loss) — **the preset editor flags that
+  row as you write it** rather than leaving the only trace in the server log, and
+  it compares paths the way the server does, so a different separator or
+  capitalisation cannot dodge the warning. Empty by default. *(Preset
   mechanism by @waltm, Discord.)*
 
 The pipeline's reference boost is an internal Krea calibration, not a second user-facing likeness slider; use **Reference grounding** for that trade-off.
@@ -283,11 +288,11 @@ Use **＋ New preset**, **Duplicate**, **Delete** and rename to manage them, and
 
 How presets are used matters:
 
-- A preset is **chosen per run** in the **🖥️ Klein tuning** panel of the workspace, and it **defaults to *None* every visit** — presets never apply on their own.
+- A preset is **chosen per run** in the **🖥️ Klein tuning** panel of the workspace. The panel opens on **Preset selected by default** → `klein.default_generation_lora_preset` (default: empty = *None*, the behaviour every install had before this key existed). That is a **starting point, not a lock**: the run panel still offers *None* and every other preset for that run, and choosing there **never rewrites the setting**. Fail-closed like the rest of the chain — a default naming a preset you have since renamed or deleted falls back to *None*, and the Settings field says so instead of pretending it is empty. Each engine has its **own** default key (`klein.default_generation_lora_preset` / `krea.default_generation_lora_preset`), because `klein.generation_lora_presets` and `krea.generation_lora_presets` are independent lists where the same name can designate two different chains.
 - Resolution happens **by name** on the server, and it's **fail-closed**: if a run references a preset name that no longer exists, it runs **with no extra LoRAs** rather than erroring.
 - **Trap:** *renaming* a preset does **not** follow a run that referenced it by the old name — that run silently falls back to no extra LoRAs. Rename before you queue, or re-pick the preset on the run.
 - There is deliberately **no automatic NSFW gating** on individual LoRAs — the preset you pick carries the intent. If you want an "NSFW full" stack, make it a preset.
-- **Trap:** a row pointing at the **same file as the consistency LoRA** (`klein.consistency_lora`) is skipped — it would chain that LoRA a second time on top of itself, summing both strengths into one delta well past what the file was trained for (visible as blocky, posterized output).
+- **Trap:** a row pointing at the **same file as the consistency LoRA** (`klein.consistency_lora`) is skipped — it would chain that LoRA a second time on top of itself, summing both strengths into one delta well past what the file was trained for (visible as blocky, posterized output). **The preset editor now flags that row as you write it**, on the row itself, instead of leaving the only trace in the server log — which is how a preset holding exactly one such row produced a run with no extra LoRA and nothing on screen to explain it. The check compares paths the way the server does (separators unified, case ignored), so `klein/x.safetensors` and `klein\X.safetensors` are both caught. It does **not** claim to catch an absolute path aliasing the same file — the server still drops that row, quietly.
 
 ### Klein generation quality
 
@@ -1412,6 +1417,8 @@ A flat cheat-sheet of the main `config.json` keys, for quick lookup or hand-edit
 | `klein.generation_steps` | Sampler steps for Klein **generation** (variations, regenerate, small-image rescue). Default `5` = the value hardcoded in the shipped workflow; 1–50. Not the improve pass (`klein.improve_steps`). |
 | `klein.edit_base_lora_strength` | Strength of the enhancement LoRA (`klein/realistic.safetensors`, node 139) on Klein **edits** — reference edit, variations, regenerate, small-image rescue. Default `0` = off, the render before that LoRA became a Setup download; 0–2. Not the improve pass (`klein.improve_base_lora_strength`). |
 | `klein.generation_lora_presets` | Named generation-LoRA stacks (default empty) picked per run in Klein tuning; each has a name and up to 8 `{file, strength}` rows. Managed in Settings → Image engines. |
+| `klein.default_generation_lora_preset` | Which of `klein.generation_lora_presets` the 🖥️ Klein tuning panel STARTS on. Default `''` = *None*, the behaviour before this key existed. A starting point only — the run panel still offers None and every other preset for that run, and picking there does not rewrite this. Fail-closed: a name matching no preset behaves as *None*. |
+| `krea.default_generation_lora_preset` | The same, for `krea.generation_lora_presets` and the 🧬 Krea 2 Edit tuning panel. A SEPARATE key on purpose: the two preset lists are independent and one name can designate two different chains. Default `''`. |
 | `identity_prompts.markings_lock` | Krea's “hold the skin” order — forbids inventing or redrawing marks. Blank = shipped default. Naming a body feature here summons it. |
 | `identity_prompts.outfit_vary` | The outfit directive injected into every human shot with no named garment. Blank = shipped default. |
 | `identity_prompts.expression_neutral` | The neutral-expression directive injected into every human shot with no named expression. Blank = shipped default. |
