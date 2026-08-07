@@ -58,8 +58,12 @@ test('the gallery lightbox, given what the panel passes, shows ✨ beside ⬇', 
     'Klein is always offered; SeedVR2 only once it is installed')
   assert.match(html, /data-testid="lightbox-download"/, 'and Download is still there')
   // Klein's amber note follows Klein, and it is the note that pulls in the
-  // settings pointers — the branch most likely to throw on a bare render.
-  assert.match(html, /Edit or turn off this instruction/)
+  // settings pointers AND the in-place instruction editor — the branch most
+  // likely to throw on a bare render. (The editor's own behaviour is covered by
+  // tests/klein-improve-inline-editor.test.mjs; what is asserted here is that
+  // this host still renders it at all.)
+  assert.match(html, /data-testid="klein-improve-edit-toggle"/)
+  assert.match(html, /focus=identity-prompt-klein-improve/)
 })
 
 test('the same lightbox with NO handler renders no improve button at all', () => {
