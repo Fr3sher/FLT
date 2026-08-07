@@ -46,6 +46,15 @@ export function clampPage(page, total, size = GRID_PAGE_SIZE) {
   return Math.min(Math.max(0, p), pageCount(total, size) - 1);
 }
 
+/** Which page holds the item at `index`. The lightbox's ⟨ / ⟩ walk the whole
+ *  filtered list, so the grid underneath has to be told where that landed. */
+export function pageOfIndex(index, size = GRID_PAGE_SIZE) {
+  const i = Number.isFinite(Number(index)) ? Math.floor(Number(index)) : -1;
+  if (i < 0) return 0;
+  const s = Math.max(1, Math.floor(Number(size) || GRID_PAGE_SIZE));
+  return Math.floor(i / s);
+}
+
 /**
  * The slice actually rendered, plus everything the pager needs to describe it.
  * `from`/`to` are 1-based and inclusive (the "1–500 of 6211" label); `paged` is

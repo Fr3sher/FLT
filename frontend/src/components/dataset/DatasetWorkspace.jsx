@@ -1247,6 +1247,10 @@ export default function DatasetWorkspace({ ds, onBack }) {
                   onScoreFace={ds.scoreFace} scoringFaceIds={ds.scoringFaceIds}
                   onRegenerate={(id, loraStrength, prompt, opts) => ds.regenerate(id, loraStrength, prompt, opts)}
                   onReimprove={ds.reimproveImage} onView={setViewImg}
+                  /* ⟨ / ⟩ cross page boundaries, so the page underneath follows:
+                     closing the lightbox must not leave you on a page that no
+                     longer holds the image you were looking at. */
+                  viewingImageId={viewImg?.id ?? null}
                   onBatch={ds.batchImages} busy={ds.busy}
                   onBulkBusyChange={setGridBulkBusy}
                   onImproveBatch={ds.improveBatch} activity={act}
@@ -2127,6 +2131,14 @@ export default function DatasetWorkspace({ ds, onBack }) {
           onImprove={canImproveViewImg
             ? ((imageId, engine) => ds.improveImage(imageId, { engine }))
             : undefined}
+          /* ⟨ / ⟩ walk `gridImages` — the filtered, sorted list the grid shows,
+             the SAME array it is handed below. Not `images` (the raw payload):
+             ⟩ would then land on a picture the current filters hide, behind an
+             overlay that gives no way to notice. The rescue-review preview
+             opens on a Curation pair, not on a position in that list, so it
+             gets no arrows rather than arrows into someone else's sequence. */
+          images={viewImgLive._rescueReviewPreview ? null : gridImages}
+          onNavigate={viewImgLive._rescueReviewPreview ? null : setViewImg}
           improvePending={viewImgImproving}
           improveReady={viewImgImprovementReady}
           busy={ds.busy || gridBulkBusy}

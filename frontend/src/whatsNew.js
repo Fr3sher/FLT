@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-07-dataset-lightbox-next-previous',
+    date: '2026-08-07',
+    title: 'Walk a dataset image by image, without closing the picture each time',
+    blurb:
+      'Reviewing image 41 of 340 full screen used to mean closing it, hunting tile 42 on the wall, and opening that — for every single image. The inspection view now has ⟨ and ⟩ on the edges of the picture, ← and → on the keyboard, and a 12 / 340 badge telling you where you are. It walks what the grid is SHOWING: chip it down to "awaiting ✓/✕", sort by face similarity, and the arrows follow that list in that order, crossing pages as they go — close the view and you are on the page holding the image you were looking at. The ends do not wrap: on the first image ⟨ goes grey and says so, because a loop that silently restarts makes "have I seen everything?" unanswerable. Zoom, an open comparison pane and a running improvement stay behind with the image they belong to, so the pane labelled "original" is always the parent of the picture in front of you. And since moving is only reading, the arrows keep working while a generation or a captioning pass holds the dataset.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-07-bank-stop-answers-the-click',
     date: '2026-08-07',
     title: 'Stop on a Bank pass answers you the moment you press it',

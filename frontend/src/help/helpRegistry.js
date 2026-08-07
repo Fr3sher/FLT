@@ -1708,6 +1708,18 @@ const TOPICS = [
      'regenerate', 'no regenerate button', 'missing button', 'klein improve', 'candidate',
      'steps', 'megapixels', 'strength', 'try again', 'source image', 'parent'],
     '/datasets?section=images', 'settings-reference', 'image-engines'),
+  // ⟨ / ⟩ in the dataset lightbox. The buttons are visible, but the ← → keys,
+  // the fact that the walk follows the FILTERS, and the deliberate absence of a
+  // wrap-around are all invisible — which is what earns this its own topic.
+  action('action-inspect-next-previous', 'Move through a dataset without closing the image',
+    ['next image', 'previous image', 'next', 'previous', 'navigate', 'navigation',
+     'arrows', 'arrow keys', 'left right', 'keyboard', 'shortcut', 'shortcuts',
+     'hotkey', 'browse', 'flip through', 'go through', 'one by one', 'review',
+     'lightbox', 'full screen', 'fullscreen', 'inspect', 'zoom', 'slideshow',
+     'close and reopen', 'have i seen everything', 'position', '12 / 340',
+     'counter', 'first image', 'last image', 'wrap', 'loop', 'end of the list',
+     'crosses pages', 'page', 'filters', 'sort'],
+    '/datasets?section=images', 'using-the-app', 'move-through-a-dataset-without-closing-the-image'),
   // The lightbox's ⧉ Compare with original. Its whole point is that the two
   // panes are shown at the SAME scale — the guide section explains why, and why
   // 100 % zoom is deliberately off in that mode.

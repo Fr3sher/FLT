@@ -5,7 +5,7 @@ import KleinImproveNote from './KleinImproveNote';
 import { isSmallImageRescueRow } from '../../utils/smallImageRescue';
 import { partitionKleinImproveSelection } from '../../utils/kleinBulkImprove';
 import { improvementStateByParent } from './improveCandidates.js';
-import { GRID_PAGE_SIZE, clampPage, pageSlice } from './gridPaging.js';
+import { GRID_PAGE_SIZE, clampPage, pageOfIndex, pageSlice } from './gridPaging.js';
 import {
   availableImproveEngines,
   describeImproveLaunch,
@@ -258,6 +258,9 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
                                       // trusted. Existing scores are NOT deleted.
                                       faceScoringBlocked = null,
                                       activity = null,
+                                      // Which image the lightbox is currently on
+                                      // (null when it is closed).
+                                      viewingImageId = null,
                                       onBulkBusyChange }) {
   const toast = useToast();
   const { caps } = useCapabilities();
@@ -325,6 +328,17 @@ export default function DatasetGrid({ images, datasetId, onStatus, onCaption, on
   useEffect(() => {
     setPage((p) => clampPage(p, (images || []).length));
   }, [images]);
+  // The lightbox's ⟨ / ⟩ walk the WHOLE filtered list (see lightboxNavigation.js),
+  // so they can carry the user off this page. Follow them, silently and without
+  // scrolling — the grid is behind an overlay; this is only so that closing it
+  // reveals the page the inspected image is actually on. No-op when the id is
+  // already on this page, which is every step inside a page.
+  useEffect(() => {
+    if (viewingImageId == null) return;
+    const index = (images || []).findIndex((i) => i && i.id === viewingImageId);
+    if (index < 0) return;
+    setPage((p) => (pageOfIndex(index) === p ? p : pageOfIndex(index)));
+  }, [viewingImageId, images]);
   // Prune ids that vanished (deleted / poll refresh) so stale selections can't act.
   useEffect(() => {
     setSelected((prev) => {

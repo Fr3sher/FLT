@@ -1539,6 +1539,40 @@ In a bank the ordering is done by the database over the *whole* filter, not just
 the page you can see — so **Select all in filter** and **▶ Review one by one**
 walk the same order you are looking at.
 
+## Move through a dataset without closing the image
+
+Open any dataset image full screen (the 🔍 on its tile) and you can walk the
+whole grid from there: **⟨** and **⟩** on the left and right edges of the picture,
+or the **←** and **→** keys. **Esc** closes, as before.
+
+The badge next to the image's name — **12 / 340** — is the part worth reading. It
+counts *the images the grid is showing you*, so:
+
+- **The arrows follow your filters and your sort.** Chip the grid down to "34
+  awaiting ✓/✕", sort by face similarity, and ⟩ walks those 34 in that order.
+  Change a filter and the badge changes with it. They never step onto an image
+  the grid is currently hiding — if they did, you would have no way to notice.
+- **They cross pages.** A dataset over 500 images is paged, and ⟩ turns the page
+  under the overlay: close the lightbox and you are on the page holding the
+  image you were just looking at, not where you started.
+- **They stop at the ends.** There is no wrap-around: on the first image ⟨ goes
+  grey and says *"You are on the first of the 340 images shown here"*, and the
+  same at the other end. On a wall of near-identical shots, a loop that silently
+  restarts makes "have I seen everything?" unanswerable.
+
+What does **not** travel with you: the 100 % zoom, an open **⧉ Compare with
+original** pane, and an improvement running on the image you left. Each image is
+inspected from a clean slate — a pane captioned *original* is always the parent
+of the picture in front of you, never of the previous one.
+
+Navigating is a *read*, so it keeps working while a generation, a captioning
+pass or a watermark scan holds the dataset — the same rule as opening an image
+and ticking a selection. Only the edits in the bar (crop, mirror, rotate,
+improve) wait for the pass.
+
+The rescue pairs in **Curation** are the one place with no arrows: there you are
+judging one pair, not walking a list.
+
 ## Compare an improved image with the original
 
 Two things in the app never overwrite an image — they add a **candidate** next
