@@ -96,7 +96,7 @@ function DownloadProgress({ download }) {
    dataset's newest run, so letting both draw it would print two checklists
    that can disagree. */
 export default function TrainingProgress({ datasetId, base, trainType, variant,
-                                          cloud = false, showLaunch = true }) {
+                                          cloud = false, showLaunch = true, runId = null }) {
   const [prog, setProg] = useState(null);
   const timer = useRef(null);
   useEffect(() => {
@@ -107,6 +107,7 @@ export default function TrainingProgress({ datasetId, base, trainType, variant,
         if (base != null) qs.set('base_model', base);
         if (trainType) qs.set('train_type', trainType);
         if (variant) qs.set('variant', variant);
+        if (cloud && runId != null) qs.set('run_id', runId);
         const r = await fetch(`/api/dataset/${datasetId}/train/${cloud ? 'cloud/' : ''}progress?${qs}`, { credentials: 'include' });
         if (r.ok) {
           const d = await r.json();
@@ -117,7 +118,7 @@ export default function TrainingProgress({ datasetId, base, trainType, variant,
     };
     poll();
     return () => { alive = false; clearTimeout(timer.current); };
-  }, [datasetId, base, trainType, variant, cloud]);
+  }, [datasetId, base, trainType, variant, cloud, runId]);
 
   // The export downgraded a requested masked run to UNMASKED (rembg missing or the
   // mask pass crashed). Warn loudly — a multi-hour run training the wrong way is
@@ -188,6 +189,7 @@ export default function TrainingProgress({ datasetId, base, trainType, variant,
               if (base != null) qs.set('base_model', base);
               if (trainType) qs.set('train_type', trainType);
               if (variant) qs.set('variant', variant);
+              if (cloud && runId != null) qs.set('run_id', runId);
               const url = `/api/dataset/${datasetId}/train/${cloud ? 'cloud/' : ''}sample/${encodeURIComponent(s.filename)}?${qs}`;
               return (
                 <a key={s.filename} href={url} target="_blank" rel="noreferrer"

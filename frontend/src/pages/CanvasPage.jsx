@@ -11,9 +11,10 @@ import {
   writeFamilySelection,
 } from '../utils/canvasFamilyFilter';
 import { toOverrideMap } from '../utils/canvasPlacement';
-import { toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
+import { pinWriteShortfall, toImageNodeMap, visibleImageNodes } from '../utils/canvasImageNodes';
 import { layoutImageNodes } from '../utils/canvasImageGroups';
 import { placeImageBatch, tidyGroupRows } from '../utils/canvasPinBatch';
+import { useToast } from '../components/common/Toast';
 import CanvasDatasetFilter from '../components/canvas/CanvasDatasetFilter';
 import LineageCanvas from '../components/canvas/LineageCanvas';
 import { HelpBadge } from '../help/HelpMode';
@@ -39,6 +40,7 @@ import { HelpBadge } from '../help/HelpMode';
 const MAX_PARALLEL_FETCHES = 3;
 
 export default function CanvasPage() {
+  const toast = useToast();
   const [index, setIndex] = useState({ status: 'loading', datasets: [], error: null });
   const [stored, setStored] = useState(() => readSelection(
     typeof localStorage !== 'undefined' ? localStorage : null));
@@ -149,8 +151,18 @@ export default function CanvasPage() {
       // `image` is the client's own render payload; the server resolves it from
       // the id and must not be handed a copy to trust.
       nodes: rows.map(({ image, ...row }) => row),
-    }).catch(() => {});
-  }, []);
+    })
+      // A row the SERVER refused (unusable geometry, an image from another lane)
+      // comes back as a 200 with a smaller `saved` count. Swallowing that is how
+      // a pin could appear, be dropped, and vanish on the next reload without a
+      // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
+      // stays silent as before: that write heals on the next gesture.
+      .then((d) => {
+        const said = pinWriteShortfall(rows, d);
+        if (said) toast.error(said);
+      })
+      .catch(() => {});
+  }, [toast]);
 
   const availableIds = useMemo(() => index.datasets.map((d) => d.id), [index.datasets]);
   const selected = useMemo(() => resolveSelection(availableIds, stored), [availableIds, stored]);

@@ -74,6 +74,22 @@ captioning rules and a few guards change with the dataset kind.
 11. **Export** — at any point, **Export ZIP** gives you the curated, captioned
     set as a standard ai-toolkit dataset. Nothing is locked in.
 
+## Compare settings with two runs at once
+
+A dataset that is already training in the cloud can launch a second run of the
+same family — change the toolkit settings, press Launch again, and confirm the
+dialog (each run rents its own pod and bills separately; the fleet ceiling in
+Settings › Training still applies). The Training panel then shows one chip per
+active run — click a chip to follow that run's progress, samples and
+checkpoint. If the dataset was edited between the two launches, the chips carry
+a ⚠: the runs are no longer training on the same data, so the comparison is no
+longer only about settings. If you launch right after the first run started,
+the request can take up to two minutes while it waits its turn — if the first
+run's export is still running when that time is up you'll get a busy error
+and can retry. Once the second run is underway, its own progress line may say
+**Waiting for the dataset — another run is exporting…** while it waits (up to
+an hour) for the first export to finish.
+
 ## Retry a reference edit
 
 After an **✦ Edit** candidate appears, **Retry** repeats the exact prompt, selected

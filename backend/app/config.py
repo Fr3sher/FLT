@@ -36,12 +36,18 @@ SECRET_KEYS = ('GEMINI_API_KEY', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'HF_TOK
 # config.json, so a changed DEFAULTS value alone would never reach it. This
 # marker lets us distinguish that one-time profile migration from settings the
 # user changes after the new profile is available.
-KREA_CALIBRATION_VERSION = 3
+KREA_CALIBRATION_VERSION = 4
 _LEGACY_KREA_GROUNDING_PX = 1024.0
 _LEGACY_KREA_REF_BOOST = 4.0
 _PREVIOUS_KREA_GROUNDING_PX = 512.0
 _PREVIOUS_KREA_REF_BOOST = 1.0
 _PREVIOUS_KREA_STEPS = 10
+# v3 shipped 512 / 0.25 / 8 — a pair that matched NEITHER calibrated profile
+# (v1 = 1024/4.0, v2 = 512/1.0): the reference pull had drifted to a quarter of
+# v2's. v4 returns to the identity-first pair; see _migrate_krea_calibration.
+_V3_KREA_GROUNDING_PX = 512.0
+_V3_KREA_REF_BOOST = 0.25
+_V3_KREA_STEPS = 8
 
 DEFAULTS = {
     # host: '127.0.0.1' = this machine only ; '0.0.0.0' = reachable from the LAN
@@ -614,15 +620,20 @@ DEFAULTS = {
         # reference is shown to the vision text-encoder at. LOW = follows the
         # PROMPT (more variety, weaker likeness); HIGH = RESEMBLES the reference
         # (stronger likeness, but it starts copying the pose and the outfit you
-        # asked it to change). 512 is the measured default for dataset poses: it
-        # keeps identity while giving the prompt room to move the pose.
-        'grounding_px': 512,
-        # Pack reference workflow values, measured working. cfg is pinned at 1.0
-        # in code (guidance-distilled model) and is deliberately NOT a setting.
-        'steps': 8,
+        # asked it to change). 1024 is the v4 profile: identity first. It pairs
+        # with ref_boost 4.0 — these two are ALWAYS shipped together, and the
+        # 512/0.25 of v3 matched neither calibrated pair.
+        'grounding_px': 1024,
+        # 12 = the value the v4 benchmark actually ran at (v3 shipped 8, the
+        # pack reference workflow's own). cfg is pinned at 1.0 in code
+        # (guidance-distilled model) and is deliberately NOT a setting.
+        'steps': 12,
         'identity_lora_strength': 1.0,
         # How hard the source latent is pushed back into the model each step.
-        'ref_boost': 0.25,
+        # 4.0 = the fidelity value the engine's own v1.2 notes give for strong
+        # face likeness, and the measured winner. See _migrate_krea_calibration
+        # for what that measurement does and does not establish.
+        'ref_boost': 4.0,
     },
     # The ✨ Upscale & improve pass — which engine runs it. Its own namespace
     # rather than a key under `klein`, because the whole point of the setting is
@@ -818,7 +829,23 @@ def _migrate_krea_pose_profile(conf: dict, stored: dict, incoming: dict | None =
         and _number_is(stored_krea.get('ref_boost'), _PREVIOUS_KREA_REF_BOOST)
         and _number_is(stored_krea.get('steps', _PREVIOUS_KREA_STEPS),
                        _PREVIOUS_KREA_STEPS))
-    if is_v1_default or is_v2_default:
+    # v3 shipped 512 / 0.25 / 8 and v4 goes back to the identity-first pair
+    # 1024 / 4.0 / 12. What that rests on, stated plainly because it walks back a
+    # default this project moved away from TWICE on purpose: a benchmark on ONE
+    # reference, four scored images per profile, where 1024/4.0 led by +0.17 face
+    # similarity on bust framing with no overlap between the runs — and did so at
+    # a LOWER reference pull, so the extra likeness was not bought by recopying
+    # the pose. The face-framing cards were dominated by seed noise (0.26 spread
+    # between two images of the SAME profile) and measured nothing; body framings
+    # produced no score at all. It is a deliberate product choice, not a proven
+    # optimum. Whoever reconsiders it should widen the evidence to a second face
+    # before trusting the number.
+    is_v3_default = (
+        stored_version == 3
+        and _number_is(stored_krea.get('grounding_px'), _V3_KREA_GROUNDING_PX)
+        and _number_is(stored_krea.get('ref_boost'), _V3_KREA_REF_BOOST)
+        and _number_is(stored_krea.get('steps', _V3_KREA_STEPS), _V3_KREA_STEPS))
+    if is_v1_default or is_v2_default or is_v3_default:
         krea['grounding_px'] = DEFAULTS['krea']['grounding_px']
         krea['ref_boost'] = DEFAULTS['krea']['ref_boost']
         krea['steps'] = DEFAULTS['krea']['steps']

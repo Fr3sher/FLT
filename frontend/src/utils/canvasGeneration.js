@@ -166,6 +166,27 @@ export function canvasRunSelections(selection, { blend = false, weights = {}, se
       } : {}) }));
 }
 
+/**
+ * ◉ The BASE MODEL axis of a launch from the board.
+ *
+ * The panel offers « BASE MODEL (MULTI) » and the engine has always swept a
+ * `z_models` list — but the board sent `zModels[0]` and dropped the rest in
+ * silence, so three ticked bases produced one generation and nothing said the
+ * other two had been left behind. A limit nobody is told about is indistinguish-
+ * able from a run that did what was asked.
+ *
+ * The scalar rides along with the list, exactly like the blend weights above:
+ * a backend that does not know `z_models` yet still renders a sensible image
+ * instead of falling back to whatever base happened to be first on disk.
+ */
+export function canvasBaseModelAxis(zModels) {
+  const list = [];
+  for (const m of (Array.isArray(zModels) ? zModels : [])) {
+    if (!list.includes(m)) list.push(m);
+  }
+  return { z_model: list[0] ?? null, z_models: list };
+}
+
 /** The checkpoints that would have to be deployed into ComfyUI before this
  *  launch can run. */
 export function canvasUndeployed(selection) {

@@ -21,6 +21,12 @@ test('continue request sends caption override flags and leaves their toast to th
   assert.match(hook, /includes\('UNCAPTIONED: '\)/);
 });
 
+test('the shared refusal registry carries the parallel-run marker', () => {
+  const refusals = fs.readFileSync(
+    new URL('../../utils/trainingRefusals.js', import.meta.url), 'utf8');
+  assert.match(refusals, /\['PARALLEL_RUN: ', 'allow_parallel_run'\]/);
+});
+
 test('a disabled Continue button states its reason IN the panel, not only in a title', () => {
   // Reported as "the Continue button does nothing": it was disabled, and the only
   // explanation lived in title=, which never shows without a mouse hover.

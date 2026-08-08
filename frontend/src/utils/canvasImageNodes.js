@@ -308,3 +308,30 @@ export function nudgeImageNode(node, key, shift) {
     default: return null;
   }
 }
+
+/**
+ * What to SAY when the server kept fewer pinned images than it was handed.
+ *
+ * `PUT /api/dataset/<id>/canvas/images` answers 200 even when it refuses rows —
+ * an unusable geometry, or an image that does not belong to this lane — and it
+ * reports the refusal only as a `saved` count nobody read. The board therefore
+ * had a third failure mode on top of "saved" and "network died": the picture
+ * appears, the row is dropped, and the next reload takes it away without a word.
+ * Optimistic writes are the right trade for a DRAG (a lost position heals on the
+ * next gesture, and a modal about a rectangle is worse than the loss); a PIN is
+ * not a position, it is the creation of the thing itself, so its loss is worth a
+ * sentence.
+ *
+ * Returns null — SILENCE — whenever the answer does not actually prove a
+ * refusal: an older backend publishes no `saved` at all, and a false alarm on
+ * every write would cost more trust than the bug it warns about.
+ */
+export function pinWriteShortfall(rows, result) {
+  const sent = Array.isArray(rows) ? rows.length : 0;
+  const saved = result?.saved;
+  if (!sent || typeof saved !== 'number' || !Number.isFinite(saved)) return null;
+  const lost = sent - saved;
+  if (lost <= 0) return null;
+  return `${lost} of ${sent} pinned image${sent > 1 ? 's' : ''} could not be saved `
+    + 'to the board — reload the page to see what was actually kept.';
+}

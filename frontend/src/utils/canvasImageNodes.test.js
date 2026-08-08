@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   IMG_MAX, IMG_MIN, IMG_REACH, clampImageBox, defaultImageSpot, imageNodeEdges,
   imageNodeExtent, nudgeImageNode, openGeometry, slideBelow, spotBesideCard,
-  toImageNodeMap, visibleImageNodes,
+  pinWriteShortfall, toImageNodeMap, visibleImageNodes,
 } from './canvasImageNodes.js';
 
 /* 🖼 Images pinned on the ◉ LoRA Canvas.
@@ -202,4 +202,33 @@ test('slideBelow drops past what is taken and carries the real footprint', () =>
   const moved = slideBelow(strip, [{ x: 900, y: 0, w: 200, h: 200 }]);
   assert.ok(moved.y >= 200, 'it went below the blocker it really overlapped');
   assert.equal(moved.w, 1600, 'a strip is not shrunk to one picture on the way');
+});
+
+/* Une écriture de board REFUSÉE ne doit plus être avalée.
+
+   `save_canvas_image_nodes` répond 200 avec `saved: 0` quand elle écarte une
+   ligne (géométrie inutilisable, image d'un autre dataset). Le front jetait la
+   réponse : l'image s'affichait, le serveur ne la gardait pas, et elle
+   disparaissait au rechargement sans qu'un mot ait été dit. */
+
+test('a write the server kept entirely says nothing', () => {
+  assert.equal(pinWriteShortfall([{ image_id: 1 }], { saved: 1, total: 4 }), null);
+  assert.equal(pinWriteShortfall([{ image_id: 1 }, { image_id: 2 }],
+    { saved: 2, total: 9 }), null);
+});
+
+test('a REFUSED row is named, with what it means for the board', () => {
+  const said = pinWriteShortfall([{ image_id: 1 }, { image_id: 2 }], { saved: 1 });
+  assert.match(said, /1 of 2/);
+  assert.match(said, /reload/i);
+});
+
+test('an answer that does not count stays silent rather than crying wolf', () => {
+  // Un backend plus ancien ne publie pas `saved` : l'absence de compte n'est pas
+  // une preuve de refus, et une alerte fausse coûte plus cher que le silence.
+  assert.equal(pinWriteShortfall([{ image_id: 1 }], {}), null);
+  assert.equal(pinWriteShortfall([{ image_id: 1 }], null), null);
+  assert.equal(pinWriteShortfall([{ image_id: 1 }], { saved: 'nope' }), null);
+  // Rien d'envoyé, rien à dire.
+  assert.equal(pinWriteShortfall([], { saved: 0 }), null);
 });

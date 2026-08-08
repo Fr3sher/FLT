@@ -102,9 +102,21 @@ def test_the_endpoint_answers_the_shape_the_picker_reads(client, app, comfy):
     assert client.get('/api/comfy/model-files?slot=../../etc').status_code == 200
 
 
-def test_a_klein_pin_that_is_not_on_disk_keeps_the_engine_dark(app, comfy):
-    """The Settings badge already existed; the RUN still went ahead on whatever
-    auto-detection found. Now the engine refuses and names the file."""
+def test_a_broken_unet_pin_asks_for_a_model_instead_of_killing_the_engine(app, comfy):
+    """A stale pin must not switch the engine off while usable models sit on disk.
+
+    THIS REPLACES the previous decision, deliberately. That one made
+    `klein_engine_ready` False on any pin gap, which darkened the whole engine
+    card — including the model picker sitting right under it. The user could see
+    four valid Klein builds and had no way to say "use that one": the only exit
+    was a Settings field on another page. Blocking the surface that would have
+    fixed the problem is a worse answer than the problem.
+
+    The property the old decision protected is NOT relaxed: nothing may ever run
+    on a file the screen did not show. It moves to where it belongs — the run
+    itself (see the two tests below) — instead of being enforced by removing the
+    user's ability to choose.
+    """
     from app import config as cfg
     from app.services import klein_edit_helper as keh
     _write(comfy / 'models' / 'unet' / 'klein' / 'flux-2-klein-9b-fp8.safetensors')
@@ -113,10 +125,52 @@ def test_a_klein_pin_that_is_not_on_disk_keeps_the_engine_dark(app, comfy):
         gaps = keh.klein_pin_gaps()
         assert [g['slot'] for g in gaps] == ['unet']
         assert gaps[0]['configured'] == 'klein/a-model-i-deleted.safetensors'
-        assert keh.klein_engine_ready(True) is False
-        # Clearing the field is the explicit way back to auto-detection.
+        # The gap is still REPORTED — the card names the file and asks for a pick.
+        # Ingredients passed in so this asserts the PIN rule and not the asset
+        # scan: the fixture writes the UNET only, and a missing VAE would refuse
+        # for a reason that has nothing to do with what is under test here.
+        assert keh.klein_engine_ready(
+            True, missing=[], invalid=[], unsupported_enums=[]) is True
+        # Clearing the field is still the explicit way back to auto-detection.
         cfg.save_config({'klein': {'unet': ''}})
         assert keh.klein_pin_gaps() == []
+
+
+def test_a_broken_unet_pin_with_no_model_on_disk_still_keeps_the_engine_dark(app, comfy):
+    """Nothing to choose from = nothing to ask the user. The card stays off."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    with app.app_context():
+        cfg.save_config({'klein': {'unet': 'klein/a-model-i-deleted.safetensors'}})
+        assert keh.klein_engine_ready(
+            True, missing=[], invalid=[], unsupported_enums=[]) is False
+
+
+def test_a_run_that_names_no_model_refuses_rather_than_auto_detecting(app, comfy):
+    """The incident, pinned. A broken pin + no explicit pick used to resolve to
+    whatever the scan found, so the job ran on a file nobody chose and the result
+    was indistinguishable from a correct one. It now REFUSES, by name."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    _write(comfy / 'models' / 'unet' / 'klein' / 'flux-2-klein-9b-fp8.safetensors')
+    with app.app_context():
+        cfg.save_config({'klein': {'unet': 'klein/a-model-i-deleted.safetensors'}})
+        with pytest.raises(keh.KleinModelGone) as e:
+            keh.unet_for_job()
+        assert 'a-model-i-deleted.safetensors' in str(e.value)
+
+
+def test_a_run_that_names_a_model_uses_exactly_that_one(app, comfy):
+    """The way out the card now offers: an explicit pick overrides the stale pin,
+    and loads the file the screen showed — never a neighbour of it."""
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    _write(comfy / 'models' / 'unet' / 'klein' / 'flux-2-klein-9b-fp8.safetensors')
+    with app.app_context():
+        cfg.save_config({'klein': {'unet': 'klein/a-model-i-deleted.safetensors'}})
+        chosen = keh.unet_for_job('klein/flux-2-klein-9b-fp8.safetensors')
+        assert chosen.replace('/', os.sep).endswith(
+            os.path.join('klein', 'flux-2-klein-9b-fp8.safetensors'))
 
 
 def test_the_shipped_consistency_lora_name_is_not_a_user_pin(app, comfy):
@@ -175,3 +229,36 @@ def test_both_unet_pickers_agree_with_what_capabilities_publishes(app, comfy):
         sorted(os.path.basename(f) for f in per_dataset), (
             'the Settings picker and the per-dataset picker disagree about which '
             'files the same UNETLoader can load')
+
+
+def test_a_bare_name_the_picker_itself_writes_is_not_a_gap(app, comfy):
+    """THE self-inflicted brick, pinned.
+
+    `set_dataset_klein_model` — what the run panel's dropdown calls — writes the
+    global `klein.unet` and REFUSES anything carrying a folder ("the loader
+    prefix is resolve_klein_unet's job"). So the value it stores for a model in a
+    klein/ sub-folder is the BARE file name.
+
+    `klein_pin_gaps` judged that same key with `resolve_model_ref`, which only
+    looks for a relative name at the ROOT of a search folder. Bare name + file in
+    a sub-folder = 'missing' — so choosing a model from the app's own dropdown
+    wrote a value the app's own gate then called broken, and the engine went dark
+    with "no missing or broken file" as its explanation. Nothing the user typed
+    was ever wrong.
+
+    The gate now asks the loader (`klein_model_on_disk`, the same scan the picker
+    lists from) before declaring a gap. A file that is genuinely gone still is
+    one — see the test above.
+    """
+    from app import config as cfg
+    from app.services import klein_edit_helper as keh
+    _write(comfy / 'models' / 'unet' / 'klein' / 'flux-2-klein-9b-fp8.safetensors')
+    with app.app_context():
+        # Exactly what the dropdown stores: no folder, because it may not store one.
+        cfg.save_config({'klein': {'unet': 'flux-2-klein-9b-fp8.safetensors'}})
+        assert keh.klein_pin_gaps() == []
+        assert keh.klein_engine_ready(
+            True, missing=[], invalid=[], unsupported_enums=[]) is True
+        # …and the run loads THAT file, prefix restored by the loader.
+        assert keh.unet_for_job().replace('/', os.sep) == os.path.join(
+            'klein', 'flux-2-klein-9b-fp8.safetensors')

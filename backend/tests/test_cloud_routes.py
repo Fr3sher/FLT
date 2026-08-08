@@ -174,7 +174,7 @@ def test_cloud_progress_and_stop(client, monkeypatch):
     monkeypatch.setenv('VAST_API_KEY', 'k-test')
     ds = _mkds(client)
     monkeypatch.setattr('app.services.cloud_training.cloud_progress',
-                        lambda uid, did, train_type=None: {
+                        lambda uid, did, train_type=None, run_id=None: {
                             'active': True, 'phase': 'training',
                             'step': 5, 'total': 100, 'samples': []})
     r = client.get(f'/api/dataset/{ds}/train/cloud/progress')

@@ -1816,6 +1816,7 @@ def dataset_train_cloud(dataset_id):
             # ... and the same last word about THIS machine's disk, for a full
             # model that is delivered here.
             allow_local_disk=bool(d.get('allow_local_disk')),
+            allow_parallel_run=bool(d.get('allow_parallel_run')),
             gpu_name=d.get('gpu_name'))
     except Exception as e:
         return _map_error(e)
@@ -2624,11 +2625,32 @@ def dataset_train_run_preview(run_key):
     return send_file(p, conditional=True)
 
 
+def _parse_run_id_arg():
+    """?run_id= as an int, or None when absent — but a malformed value (e.g.
+    '?run_id=abc') is a 404, never the silent fallback to the newest run that
+    `request.args.get('run_id', type=int)` gives: it also turns "the run I
+    just addressed" into a stranger."""
+    raw = request.args.get('run_id')
+    if raw is None:
+        return None, True
+    try:
+        return int(raw), True
+    except (TypeError, ValueError):
+        return None, False
+
+
 @bp.get('/dataset/<int:dataset_id>/train/cloud/progress')
 def dataset_train_cloud_progress(dataset_id):
+    run_id, ok = _parse_run_id_arg()
+    if not ok:
+        return jsonify({'error': 'invalid run_id'}), 404
     try:
-        return jsonify(ct.cloud_progress(LOCAL_USER, dataset_id,
-                                         train_type=request.args.get('train_type')))
+        return jsonify(ct.cloud_progress(
+            LOCAL_USER, dataset_id,
+            train_type=request.args.get('train_type'),
+            run_id=run_id))
+    except LookupError as e:
+        return jsonify({'error': str(e)}), 404
     except Exception as e:
         return _map_error(e)
 
@@ -2652,9 +2674,14 @@ def dataset_train_cloud_stop():
 @bp.get('/dataset/<int:dataset_id>/train/cloud/sample/<path:filename>')
 def dataset_train_cloud_sample(dataset_id, filename):
     from flask import send_from_directory, abort
-    # ?train_type= resolves THAT family's newest run (several families may
-    # train the same dataset in parallel); absent -> plain newest, unchanged.
-    run = ct.latest_run_for(dataset_id, request.args.get('train_type'))
+    # ?run_id addresses THAT run; ?train_type= resolves THAT family's newest
+    # run (several families may train the same dataset in parallel); neither
+    # -> plain newest, unchanged.
+    run_id, ok = _parse_run_id_arg()
+    if not ok:
+        abort(404)
+    run = ct.run_for(dataset_id, run_id=run_id,
+                     train_type=request.args.get('train_type'))
     if not run or not run.staging_dir:
         abort(404)
     # send_from_directory refuses path traversal by construction
@@ -2666,8 +2693,12 @@ def dataset_train_cloud_checkpoint(dataset_id):
     from flask import send_file, abort
     # ?run_id targets THAT run's file: with several finished runs of a family
     # in the hub history, 'newest run of the family' would serve the WRONG
-    # checkpoint from an older row's button.
-    rid = request.args.get('run_id', type=int)
+    # checkpoint from an older row's button. A malformed value is a 404, not
+    # the silent fallback to the newest run — this route hands out FILES, the
+    # worst place to serve a stranger's weights for a typo'd id.
+    rid, ok = _parse_run_id_arg()
+    if not ok:
+        abort(404)
     if rid is not None:
         from ..models import CloudTrainingRun
         from ..services import cloud_run_dataset as crd
@@ -2772,6 +2803,8 @@ def train_canvas_generate():
             seed=d.get('seed'), prompt=d.get('prompt'),
             # 📝 Lot : une passe par prompt coché dans l'historique du panneau.
             prompts=d.get('prompts'), z_model=d.get('z_model'),
+            # ◉ La base est un AXE : le panneau du board dit « BASE MODEL (MULTI) ».
+            z_models=d.get('z_models'),
             aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
             steps2_list=d.get('steps2'), count=d.get('count'),
             permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),

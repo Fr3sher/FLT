@@ -50,6 +50,27 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-klein-stops-switching-itself-off',
+    date: '2026-08-08',
+    title: 'Picking a Klein model no longer switches Klein off',
+    blurb: 'Choosing a model from the workspace dropdown stored its name without the folder it lives in — and the check that guards that setting only recognised the full path. So the app wrote a value its own guard then called missing, the engine went dark, and the message said no file was missing or broken. Both spellings are now accepted, so nothing you picked was ever wrong. And an unresolvable model no longer takes the whole engine hostage while usable Klein builds sit on your disk: the card asks you to pick one instead. What has not changed is the promise that made that guard exist — a run never quietly loads a file other than the one shown.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-08-krea-ships-identity-first',
+    date: '2026-08-08',
+    title: 'Krea 2 Edit now ships tuned for likeness, not for variety',
+    blurb: 'Its two identity dials shipped unpaired — reference grounding at 512 with a reference pull of 0.25, a quarter of what the calibrated 512 profile used. A benchmark scoring generated faces against the reference measured the 1024 / 4.0 pair ahead by a clear margin on bust shots, and it got there while pulling LESS hard on the reference, so the likeness is not bought by recopying the pose you asked to change. Both dials, and sampler steps, now ship at those values. If you had never touched them, your next generations will resemble your reference more; if you prefer the looser, more varied restaging, set grounding back to 512 and the pull to 1.0. Anything you had already changed yourself is left exactly as you set it.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-08-one-model-setting-wherever-you-change-it',
+    date: '2026-08-08',
+    title: 'Change the model where you are working, not in Settings',
+    blurb:
+      'The Krea 2 base could only be set in Settings, so the one thing you reach for when a whole run looks wrong meant leaving the screen you were judging on. It is now in the Krea 2 Edit panel of the work screen, using the same searchable list and writing the same value Settings shows. The Klein model works the same way, and there is now exactly one of each: change it from a dataset screen or from Settings and it is the same setting either way, applying to every run from then on rather than to the batch in front of you. Previously the Klein model was remembered per dataset, so two datasets could disagree with Settings about which model would actually run.',
+  },
+  {
     id: '2026-08-08-every-krea-build-you-own-is-offered',
     date: '2026-08-08',
     title: 'Every Krea build on your disk is offered, warning and all',
@@ -222,6 +243,13 @@ export const WHATS_NEW = [
     blurb:
       'Looking for faces across a concept dataset is the slow part of the training panel — the detector alone takes seconds to load before the first image, then every kept photo on top. That whole pass used to live only in the app\'s memory, so restarting the server threw it away and the panel offered to run it all over again. It is now saved beside your images and comes back with them. Stopping a pass keeps its credit too: the faces already found survive the restart, so "Resume — 47 of 153 already analyzed" is still waiting for you. If you changed your kept images while the app was down, the preview comes back labelled out of date rather than pretending to be current.',
     to: '/datasets',
+  },
+  {
+    id: '2026-08-07-parallel-cloud-runs',
+    date: '2026-08-07',
+    title: 'Train the same dataset twice at once',
+    blurb: 'Launch a second cloud run on a dataset that is already training to compare toolkit settings side by side — confirm the extra pod, then follow each run from its own chip on the Training panel. The runs warn you if the dataset changed between launches.',
+    to: '/cloud',
   },
   {
     id: '2026-08-03-phone-layout-full-width',
