@@ -164,13 +164,40 @@ def _run_simulate(url, max_items, cookies, extra_opts, image_range=None):
     return data, None
 
 
+# Exception classes gallery-dl reports when its OWN extractor code broke, as
+# opposed to a site refusing us (auth, 429, DDoS-Guard). Their messages are
+# Python internals -- "string indices must be integers, not 'str'" reached a
+# user as a bare red toast on a Civitai listing: it names nothing, blames
+# nobody, and reads as if THIS app crashed. It means the site changed shape
+# under the scraping tool.
+_UPSTREAM_BUG_ERRORS = frozenset({
+    'TypeError', 'KeyError', 'IndexError', 'AttributeError', 'ValueError',
+})
+
+
 def _error_sentinel(entries):
-    """Si une entrée type -1 (erreur d'extracteur) est présente, renvoie son message."""
+    """Si une entrée type -1 (erreur d'extracteur) est présente, renvoie son message.
+
+    An extractor CRASH is re-worded rather than forwarded. gallery-dl answers
+    `{'error': 'TypeError', 'message': "string indices must be integers, ..."}`
+    when its own parsing broke, and passing that through told the user only that
+    something Python-shaped went wrong somewhere. Naming the tool, and saying
+    what that class of failure actually means, is the difference between "the app
+    is broken" and "this site's support needs an update" -- which is also the
+    only one of the two the user can act on.
+    """
     for entry in entries:
         if isinstance(entry, (list, tuple)) and entry and entry[0] == -1:
             meta = entry[1] if len(entry) > 1 and isinstance(entry[1], dict) else {}
-            return (meta.get('message') or meta.get('error')
-                    or "gallery-dl: the extractor failed.")
+            kind = str(meta.get('error') or '').strip()
+            message = str(meta.get('message') or '').strip()
+            if kind in _UPSTREAM_BUG_ERRORS:
+                return ('The scraping tool could not read this site: its support for '
+                        'it is out of date (gallery-dl raised '
+                        f'{kind}{": " + message if message else ""}). This is not '
+                        'something a different URL will fix — the site changed and '
+                        'the tool has to catch up. Try another source meanwhile.')
+            return message or kind or "gallery-dl: the extractor failed."
     return None
 
 
