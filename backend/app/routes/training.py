@@ -3147,6 +3147,46 @@ def dataset_canvas_images_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
+@bp.get('/train/canvas/layouts')
+def train_canvas_layouts():
+    """💾 The named board arrangements this install has kept."""
+    return jsonify(ct.canvas_layout_presets(LOCAL_USER))
+
+
+@bp.post('/train/canvas/layouts')
+def train_canvas_layouts_save():
+    """Keep the board's current arrangement under a name.
+    Body: {name, positions:{ds:[{record_id,x,y}]}, images:{ds:[{image_id,...}]}}.
+
+    Saving under an existing name overwrites it — "save" on a board you have
+    just adjusted means "this is the arrangement now"."""
+    data = request.get_json(silent=True) or {}
+    try:
+        return jsonify(ct.save_canvas_layout_preset(
+            LOCAL_USER, data.get('name'),
+            positions=data.get('positions'), images=data.get('images')))
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+
+
+@bp.post('/train/canvas/layouts/<int:preset_id>/apply')
+def train_canvas_layouts_apply(preset_id):
+    """Put a remembered arrangement back. Everything travels through the live
+    writers, so anything that no longer exists is simply not restored."""
+    try:
+        return jsonify(ct.apply_canvas_layout_preset(LOCAL_USER, preset_id))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
+@bp.delete('/train/canvas/layouts/<int:preset_id>')
+def train_canvas_layouts_delete(preset_id):
+    try:
+        return jsonify(ct.delete_canvas_layout_preset(LOCAL_USER, preset_id))
+    except LookupError:
+        return jsonify({'error': 'not found'}), 404
+
+
 @bp.get('/dataset/<int:dataset_id>/train/lineage')
 def dataset_train_dataset_lineage(dataset_id):
     """🌳 Genealogy forest of ALL this dataset's runs (every launch + its

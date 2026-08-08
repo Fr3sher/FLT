@@ -8570,6 +8570,155 @@ def clear_canvas_image_nodes(user_id, dataset_id) -> dict:
     return {'cleared': int(removed or 0)}
 
 
+# --- 💾 ◉ LoRA Canvas: named layout presets ---------------------------------
+#
+# A preset is a MEMORY of the board, never a second source of truth for it. It
+# is written from what the board currently holds and restored THROUGH the same
+# validated writers the live board uses — so everything those refuse (a dataset
+# that is not yours, an image that belongs to another lane, unusable geometry)
+# is refused on restore too, and a preset carried over from a database that has
+# since lost a run simply puts back what is left.
+
+# How many presets one user may keep. Not a technical limit: a picker with
+# fifty entries in it is a picker nobody reads, and this is a board with a
+# handful of useful arrangements, not an archive.
+CANVAS_PRESET_MAX = 24
+CANVAS_PRESET_NAME_MAX = 80
+
+
+def _preset_payload(positions, images) -> dict:
+    """The stored shape, sanitised on the way IN as well as on the way out.
+
+    Sanitising here is belt and braces — the restore re-validates everything
+    through save_canvas_positions / save_canvas_image_nodes — but it keeps a
+    single fat row from being written at all, and it means the listing can
+    report honest counts without parsing arbitrary client JSON."""
+    out_pos, out_img = {}, {}
+    for ds_id, rows in (positions or {}).items():
+        lane = []
+        for p in (rows or []):
+            try:
+                lane.append({'record_id': int(p['record_id']),
+                             'x': float(p['x']), 'y': float(p['y'])})
+            except (KeyError, TypeError, ValueError):
+                continue
+        if lane:
+            out_pos[str(int(ds_id))] = lane
+    for ds_id, rows in (images or {}).items():
+        lane = []
+        for n in (rows or []):
+            try:
+                iid = int(n['image_id'])
+            except (KeyError, TypeError, ValueError):
+                continue
+            box = _clamp_image_box(n.get('x'), n.get('y'), n.get('w'), n.get('h'))
+            if box is None:
+                continue
+            gid, gpos = _clean_group(n)
+            lane.append({'image_id': iid, 'x': box[0], 'y': box[1],
+                         'w': box[2], 'h': box[3],
+                         'visible': bool(n.get('visible', True)),
+                         'group_id': gid, 'group_pos': gpos})
+        if lane:
+            out_img[str(int(ds_id))] = lane
+    return {'positions': out_pos, 'images': out_img}
+
+
+def _preset_row(row) -> dict:
+    try:
+        payload = json.loads(row.payload or '{}')
+    except (TypeError, ValueError):
+        payload = {}
+    positions = payload.get('positions') or {}
+    images = payload.get('images') or {}
+    return {
+        'id': row.id,
+        'name': row.name,
+        # The counts are what the picker shows: "3 lanes · 12 cards · 8 pictures"
+        # says whether this is the arrangement you meant far better than a name
+        # typed in a hurry three weeks ago.
+        'lanes': len(set(positions) | set(images)),
+        'cards': sum(len(v) for v in positions.values()),
+        'images': sum(len(v) for v in images.values()),
+        'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+
+def canvas_layout_presets(user_id) -> dict:
+    """Every named arrangement this user has kept, newest first."""
+    from ..models import CanvasLayoutPreset
+    rows = (CanvasLayoutPreset.query.filter_by(user_id=user_id)
+            .order_by(CanvasLayoutPreset.updated_at.desc(),
+                      CanvasLayoutPreset.id.desc()).all())
+    return {'presets': [_preset_row(r) for r in rows], 'max': CANVAS_PRESET_MAX}
+
+
+def save_canvas_layout_preset(user_id, name, positions=None, images=None) -> dict:
+    """Keep the board as it is, under a name.
+
+    Saving under a name that already exists OVERWRITES it, deliberately: "save"
+    on a board you have just adjusted means "this is the arrangement now", and
+    a second entry with the same name would leave the user to guess which of
+    the two the picker will hand back."""
+    from ..models import CanvasLayoutPreset
+    clean = (name or '').strip()[:CANVAS_PRESET_NAME_MAX]
+    if not clean:
+        raise ValueError('a preset needs a name')
+    payload = _preset_payload(positions, images)
+    if not payload['positions'] and not payload['images']:
+        raise ValueError('there is nothing arranged on the board to save')
+    row = CanvasLayoutPreset.query.filter_by(user_id=user_id, name=clean).first()
+    if row is None:
+        if CanvasLayoutPreset.query.filter_by(user_id=user_id).count() >= CANVAS_PRESET_MAX:
+            raise ValueError(
+                f'{CANVAS_PRESET_MAX} layout presets is the limit — delete one first')
+        row = CanvasLayoutPreset(user_id=user_id, name=clean)
+        db.session.add(row)
+    row.payload = json.dumps(payload)
+    db.session.commit()
+    return {'preset': _preset_row(row)}
+
+
+def apply_canvas_layout_preset(user_id, preset_id) -> dict:
+    """Put a remembered arrangement back on the board.
+
+    Every lane goes through the LIVE writers, so the ownership checks, the
+    geometry clamps and the "this image is not in that lane" refusal all apply
+    exactly as they do to a drag. What is missing (a run deleted since, a
+    dataset the user no longer has) is simply not put back, and the counts say
+    so rather than the restore failing on the first gap."""
+    from ..models import CanvasLayoutPreset
+    row = CanvasLayoutPreset.query.filter_by(user_id=user_id, id=preset_id).first()
+    if row is None:
+        raise LookupError('preset not found')
+    try:
+        payload = json.loads(row.payload or '{}')
+    except (TypeError, ValueError):
+        payload = {}
+    cards = pictures = 0
+    for ds_id, rows in (payload.get('positions') or {}).items():
+        try:
+            cards += save_canvas_positions(user_id, int(ds_id), rows).get('saved', 0)
+        except (LookupError, ValueError):
+            continue          # that lane is gone; the rest of the board still lands
+    for ds_id, rows in (payload.get('images') or {}).items():
+        try:
+            pictures += save_canvas_image_nodes(user_id, int(ds_id), rows).get('saved', 0)
+        except (LookupError, ValueError):
+            continue
+    return {'applied': {'cards': cards, 'images': pictures}, 'preset': _preset_row(row)}
+
+
+def delete_canvas_layout_preset(user_id, preset_id) -> dict:
+    from ..models import CanvasLayoutPreset
+    removed = CanvasLayoutPreset.query.filter_by(
+        user_id=user_id, id=preset_id).delete(synchronize_session=False)
+    db.session.commit()
+    if not removed:
+        raise LookupError('preset not found')
+    return {'deleted': int(removed)}
+
+
 def gpu_tiers(user_id, dataset_id, train_type=None, steps=None,
               variant=None, training_mode='lora') -> dict:
     """Live vast.ai offers for THIS dataset+family, grouped by GPU class
