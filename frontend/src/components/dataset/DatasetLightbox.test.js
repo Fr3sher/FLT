@@ -79,10 +79,10 @@ test('any dataset image can be inspected next to the reference photo', () => {
   // id-STAMPED per-image slot, not in a useState of its own: that is what makes
   // ⟩ leave the comparison behind with the image it belonged to, instead of
   // carrying an "Original" pane onto a picture whose parent is someone else's.
-  assert.match(lightbox, /const \{ full, compareMode, improving \} = lightboxImageState\(/);
+  assert.match(lightbox, /full, compareMode, improving, actionsOpen,\n  \} = lightboxImageState\(/);
   assert.doesNotMatch(lightbox, /useState\((true|false|'none')\)/);
   assert.match(lightbox,
-    /patchImageState\(\{ full: false, compareMode: compareMode === mode \? 'none' : mode \}\)/);
+    /patchImageState\(\{\s*full: false,\s*compareMode: compareMode === mode \? 'none' : mode,/);
   // The reference is NOT a payload row: its own cache nonce, same /img endpoint.
   assert.match(lightbox, /compareMode === 'reference' \? refNonce : parentNonce/);
   // The rail/bar rule only needs to know a comparison is open, whichever it is.

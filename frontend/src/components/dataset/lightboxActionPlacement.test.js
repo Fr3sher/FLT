@@ -5,6 +5,8 @@ import {
   RAIL_WIDTH_PX,
   MIN_RAIL_VIEWPORT_PX,
   RAIL_EXIT_VIEWPORT_PX,
+  SHEET_MAX_VIEWPORT_PX,
+  SHEET_EXIT_VIEWPORT_PX,
   PLACEMENT_HYSTERESIS,
   decideActionPlacement,
   rememberImageRatio,
@@ -26,10 +28,14 @@ test('a landscape image keeps the actions at the bottom — its scarce axis is w
   assert.equal(decideActionPlacement({ ...WIDE, ...LANDSCAPE }), 'bottom');
 });
 
-test('a phone-width window is always bottom, whatever the image shape', () => {
-  assert.equal(decideActionPlacement({ ...PHONE, ...PORTRAIT }), 'bottom');
-  assert.equal(decideActionPlacement({ ...PHONE, ...LANDSCAPE }), 'bottom');
-  assert.equal(decideActionPlacement({ ...PHONE, ...SQUARE }), 'bottom');
+test('a phone-width window is always the sheet, whatever the image shape', () => {
+  // It used to be the bottom bar, which on 400 px is not a bar: six full-width
+  // rows plus the Klein note, leaving the picture 96 px tall (measured at
+  // 400x860, Klein editor unfolded; 538 px after). Neither axis has
+  // room on a phone, so every action moves behind one button.
+  assert.equal(decideActionPlacement({ ...PHONE, ...PORTRAIT }), 'sheet');
+  assert.equal(decideActionPlacement({ ...PHONE, ...LANDSCAPE }), 'sheet');
+  assert.equal(decideActionPlacement({ ...PHONE, ...SQUARE }), 'sheet');
 });
 
 test('a square image follows the window, not a portrait/landscape label', () => {
@@ -170,6 +176,7 @@ test('a remembered portrait decides the rail before the image has painted', () =
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const lightbox = read('./DatasetLightbox.jsx');
 const gridItem = read('./DatasetGridItem.jsx');
+const navigation = read('./lightboxNavigation.js');
 
 test('the lightbox flips its axis from the rule, and only its axis', () => {
   assert.match(lightbox, /from '\.\/lightboxActionPlacement'/);
@@ -283,12 +290,134 @@ test('the viewport floor keeps its dead band only once a rail exists', () => {
   assert.equal(decideActionPlacement({ ...g, current: 'rail' }), 'rail');
 });
 
-test('a small window still opens at the bottom, and 400 px always does', () => {
+test('a small window still opens at the bottom, and 400 px opens the sheet', () => {
   const portrait = { imageWidth: 832, imageHeight: 1216 };
   assert.equal(decideActionPlacement({
     viewportWidth: 900, viewportHeight: 900, ...portrait }), 'bottom');
   assert.equal(decideActionPlacement({
-    viewportWidth: 400, viewportHeight: 900, ...portrait }), 'bottom');
+    viewportWidth: 400, viewportHeight: 900, ...portrait }), 'sheet');
+});
+
+/* ── The sheet: the phone answer ───────────────────────────────────────────
+   Reported with a screenshot at ~400 px, in comparison mode: two panes about a
+   hundred pixels tall each, and the rest of the screen spent on Exit
+   comparison / Crop / Mirror / Rotate ×2 / Improve / Upscale / the Klein note
+   with its fold-out editor / the model picker / three links. Nothing overflowed
+   horizontally, which is why the previous proof (scrollWidth − clientWidth = 0)
+   was green: the axis being confiscated was HEIGHT. */
+
+test('the comparison cannot drag a phone back to the bottom bar', () => {
+  // This is the inversion that matters. `comparing` outranks the geometry —
+  // but on a phone it used to outrank the phone too, sending the one mode that
+  // needs the height most into the stack that has none.
+  assert.equal(decideActionPlacement({ ...PHONE, ...PORTRAIT, comparing: true }), 'sheet');
+  assert.equal(
+    decideActionPlacement({ ...PHONE, ...PORTRAIT, comparing: true, current: 'sheet' }),
+    'sheet',
+  );
+});
+
+test('the sheet boundary is the width at which the bar stops being a row', () => {
+  const at = (viewportWidth, current) => decideActionPlacement({
+    viewportWidth, viewportHeight: 900, ...PORTRAIT, current,
+  });
+  // `sm` — the same breakpoint the buttons themselves switch on (w-full sm:w-auto).
+  assert.equal(at(SHEET_MAX_VIEWPORT_PX - 1, null), 'sheet');
+  assert.equal(at(SHEET_MAX_VIEWPORT_PX, null), 'bottom');
+  // Once a sheet is in force it takes a real widening to give it up — the same
+  // dead band the rail floor has, at the other end.
+  assert.equal(at(SHEET_MAX_VIEWPORT_PX, 'sheet'), 'sheet');
+  assert.equal(at(SHEET_EXIT_VIEWPORT_PX - 1, 'sheet'), 'sheet');
+  assert.equal(at(SHEET_EXIT_VIEWPORT_PX, 'sheet'), 'bottom');
+});
+
+test('a rotate-to-landscape sweep costs one move each way, not a flicker', () => {
+  // A phone turned sideways and back crosses the sheet boundary twice.
+  let current = 'sheet';
+  let moves = 0;
+  const widths = [];
+  for (let w = 380; w <= 900; w += 1) widths.push(w);
+  for (let w = 900; w >= 380; w -= 1) widths.push(w);
+  for (const w of widths) {
+    const next = decideActionPlacement({
+      viewportWidth: w, viewportHeight: 700, ...PORTRAIT, current,
+    });
+    if (next !== current) moves += 1;
+    current = next;
+  }
+  assert.equal(moves, 2, `the placement moved ${moves} times over one rotate/rotate-back`);
+  assert.equal(current, 'sheet');
+});
+
+test('a sheet is returned verbatim while an action runs', () => {
+  assert.equal(
+    decideActionPlacement({ ...PHONE, ...PORTRAIT, current: 'sheet', locked: true }),
+    'sheet',
+  );
+  // …and a lock cannot invent one on a desktop that never had it.
+  assert.equal(
+    decideActionPlacement({ ...WIDE, ...PORTRAIT, current: 'bottom', locked: true }),
+    'bottom',
+  );
+});
+
+test('an unknown viewport still falls back to the bottom bar, never to the sheet', () => {
+  // 0 is not "narrow": a server render or a detached window must not paint a
+  // phone panel over a desktop.
+  assert.equal(decideActionPlacement({ viewportWidth: 0, viewportHeight: 0, ...PORTRAIT }), 'bottom');
+  assert.equal(decideActionPlacement({ ...PORTRAIT, current: 'sheet' }), 'bottom');
+});
+
+test('the sheet constants bracket the bar breakpoint', () => {
+  assert.equal(SHEET_MAX_VIEWPORT_PX, 640);            // Tailwind sm
+  assert.ok(SHEET_EXIT_VIEWPORT_PX > SHEET_MAX_VIEWPORT_PX);
+  assert.ok(SHEET_MAX_VIEWPORT_PX < MIN_RAIL_VIEWPORT_PX);
+});
+
+test('the lightbox mounts the actions in the sheet, and floats one button', () => {
+  assert.match(lightbox, /const sheet = placement === 'sheet'/);
+  // ONE trigger, saying what it opens, with its state in aria and not in colour.
+  assert.match(lightbox, /aria-expanded=\{actionsOpen\} aria-controls=\{panelId\}/);
+  assert.match(lightbox, /Image actions for \$\{alt\} — compare, crop, mirror, rotate, improve/);
+  // It floats: a strip of its own is the height this placement exists to return.
+  assert.match(lightbox, /absolute bottom-3 left-1\/2 z-20/);
+  // 44 px so a thumb can hit it, like the ⟨ / ⟩ arrows.
+  assert.match(lightbox, /<button type="button" ref=\{actionsBtnRef\}[\s\S]{0,600}min-h-11/);
+  // The panel is a labelled dialog, and the SAME action block — one DOM order,
+  // one set of labels, no phone-only copy of six buttons to keep in step.
+  assert.match(lightbox, /<ActionsHost sheet=\{sheet\} open=\{panelOpen\} panelId=\{panelId\}/);
+  assert.match(lightbox, /role="dialog" aria-label=\{label\}/);
+  assert.equal((lightbox.match(/<ActionsHost\b/g) || []).length, 1);
+  // Pass-through off the phone: the rail and the bottom bar keep their element.
+  assert.match(lightbox, /if \(!sheet\) return children;/);
+});
+
+test('the panel is a detour, not a second window', () => {
+  // Escape peels one layer, so it cannot throw you out of the image you were
+  // about to act on.
+  assert.match(lightbox, /if \(panelOpen\) \{ closePanel\(\); return; \}/);
+  // Opening focuses the panel, closing hands focus back to the button that
+  // opened it…
+  assert.match(lightbox, /if \(panelOpen\) panelCloseRef\.current\?\.focus\(\)/);
+  assert.match(lightbox, /actionsBtnRef\.current\?\.focus\(\)/);
+  // …and the panel does NOT trap focus of its own: the image, its arrows and ✕
+  // must stay reachable from the keyboard while it is up. One trap, on the
+  // dialog, as before.
+  assert.equal((lightbox.match(/useFocusTrap\(/g) || []).length, 1);
+  // Opening writes ONE boolean — the zoom, the comparison and the position in
+  // the list are untouched.
+  assert.match(lightbox, /patchImageState\(\{ actionsOpen: !actionsOpen \}\)/);
+  // …and that boolean lives in the id-stamped slot, so ⟩ never lands you on an
+  // unseen image underneath a panel you did not reopen.
+  assert.match(lightbox, /full, compareMode, improving, actionsOpen,/);
+  assert.match(navigation, /actionsOpen: false,/);
+  // A stale flag cannot paint a phone panel over a desktop rail.
+  assert.match(lightbox, /const panelOpen = sheet && actionsOpen/);
+  // Entering a comparison closes the drawer — it is a request to LOOK at
+  // something, and leaving the panel over the two panes would be this defect
+  // rebuilt one level down.
+  assert.match(lightbox,
+    /compareMode: compareMode === mode \? 'none' : mode,\s*actionsOpen: false,/);
 });
 
 test('the bottom bar keeps the improve buttons on ONE row', () => {
