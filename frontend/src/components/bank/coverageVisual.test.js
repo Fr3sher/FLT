@@ -1,9 +1,13 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { spreadReadout, spreadCoverageNote } from './coverageVisual.js';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 
 test('an unscored pool reads as NOT MEASURED, never as varied', () => {
   // The failure this exists to prevent: silence painted green. A bank nobody

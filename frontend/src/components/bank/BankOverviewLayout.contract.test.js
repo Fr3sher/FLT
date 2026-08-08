@@ -1,10 +1,15 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
 
 const app = readFileSync(new URL('../../App.jsx', import.meta.url), 'utf8')
 const page = readFileSync(new URL('../../pages/BankPage.jsx', import.meta.url), 'utf8')
-const workspace = readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8')
+const workspace = bankTreeSource()
+const facets = readFileSync(new URL('./bankFacets.js', import.meta.url), 'utf8')
 const overview = readFileSync(new URL('./BankOverview.jsx', import.meta.url), 'utf8')
 
 test('/bank shares the wide 1800px shell with Canvas', () => {
@@ -17,23 +22,43 @@ test('bank list grows to three columns only at xl', () => {
 })
 
 test('the four-megapixel resolution bucket is inclusive in the workspace too', () => {
-  assert.match(workspace, /id: 'res_gt_4', label: '≥ 4 MP'/)
-  assert.doesNotMatch(workspace, /id: 'res_gt_4', label: '> 4 MP'/)
+  // The resolution tiers are a DATA table now (bankFacets.js), shared by the
+  // filter rail and the tiles — assert them where they are defined.
+  assert.match(facets, /id: 'res_gt_4', label: '≥ 4 MP'/)
+  assert.doesNotMatch(facets, /id: 'res_gt_4', label: '> 4 MP'/)
 })
 
-test('workspace stays stacked on mobile and uses a twelve-column xl layout', () => {
-  const grids = workspace.match(/grid gap-4 xl:grid-cols-12 xl:items-start/g) || []
-  assert.equal(grids.length, 2)
-  assert.match(workspace, /xl:col-span-7/)
-  assert.match(workspace, /xl:col-span-5 xl:sticky xl:top-20/)
-  assert.match(workspace, /xl:col-span-8/)
-  assert.match(workspace, /xl:col-span-4 xl:sticky xl:top-20/)
-  assert.match(workspace, /<BankOverview payload=\{payload\} \/>/)
+test('the rail sits beside the grid, and folds instead of squeezing it', () => {
+  /* This used to assert the FOUR-ZONE STACK: two twelve-column xl grids pairing
+     Analyze with the overview and Curate with Promote. The Encre redesign
+     replaced that stack on purpose — scrolling up to a filter and back down to
+     its result was the actual complaint — so the invariant is rewritten, not
+     relaxed. What has to stay true is the same thing it always protected: the
+     screen is a single column on a phone and uses the width on a desktop.
+
+     Two columns, not twelve: the rail has one job and a fixed measure, so a
+     twelve-column grid would only be a more expensive way of writing 17rem. */
+  assert.match(workspace, /sm:grid-cols-\[17rem_minmax\(0,1fr\)\]/)
+  // …and it really does collapse to one column rather than shrinking the grid.
+  assert.match(workspace, /railOpen && railIsColumnNow/)
+  assert.match(workspace, /: 'grid-cols-1'/)
+  // At 400 px the rail is a drawer OVER the grid, with a backdrop that closes it.
+  assert.match(workspace, /isDrawer=\{!railIsColumnNow\}/)
+  assert.match(workspace, /railOpen && !railIsColumnNow && \(/)
+
+  // The passes panel keeps the twelve-column pairing: the action list and the
+  // read-only overview answer the same question and belong side by side.
+  const panel = readFileSync(new URL('./BankPassesPanel.jsx', import.meta.url), 'utf8')
+  assert.match(panel, /grid gap-4 xl:grid-cols-12 xl:items-start/)
+  assert.match(panel, /xl:col-span-7/)
+  assert.match(panel, /xl:col-span-5/)
+  assert.match(panel, /<BankOverview payload=\{payload\} \/>/)
 })
 
 test('overview never opens the expensive kept-only coverage endpoint', () => {
-  const overviewMount = workspace.slice(workspace.indexOf('<BankOverview'),
-    workspace.indexOf('<BankOverview') + 200)
+  const panel = readFileSync(new URL('./BankPassesPanel.jsx', import.meta.url), 'utf8')
+  const overviewMount = panel.slice(panel.indexOf('<BankOverview'),
+    panel.indexOf('<BankOverview') + 200)
   assert.doesNotMatch(overviewMount, /coverage/)
 })
 

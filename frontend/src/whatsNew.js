@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-bank-filters-beside-the-grid',
+    date: '2026-08-09',
+    title: 'The bank filters now sit beside the images they filter',
+    blurb:
+      'Changing a filter on a 20 000-image bank meant scrolling up to the chips, clicking, and scrolling back down to see what it did. The filters now live in a rail down the left of the grid, so the result is in front of you as you click. The eight analysis passes moved into a ⚙ Passes panel you open when you need them — all of them are still there, each with the same window, scope and counts as before — which gives the images the third of the screen the passes used to hold. Score, Framing, Medium, Angle, Resolution and Origin fold behind 🎛 More filters so the everyday chips stay on one screen. On a narrow window the rail becomes a drawer behind ☰ Filters, and it remembers whether you keep it open.',
+    to: '/bank',
+  },
+  {
     id: '2026-08-08-launch-anyway-actually-asks',
     date: '2026-08-08',
     title: 'A second cloud run on one dataset now actually asks you',

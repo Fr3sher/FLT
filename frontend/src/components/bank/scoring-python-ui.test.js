@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 /* Wiring contract for the ✨ Score interpreter picker.
  *
  * The logic is unit-tested in scoringPython.test.js; what a rewrite of the
@@ -9,7 +13,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 const dialog = fs.readFileSync(new URL('./ScoringPythonDialog.jsx', import.meta.url), 'utf8');
 const device = fs.readFileSync(new URL('./bankScoreDevice.js', import.meta.url), 'utf8');
 const logic = fs.readFileSync(new URL('./scoringPython.js', import.meta.url), 'utf8');
@@ -23,7 +27,9 @@ test('the picker is reachable from BOTH dead ends: a CPU pass, and no extra at a
   assert.match(ws, /const \{ caps, loading: capsLoading, refresh: refreshCaps \}/);
   assert.match(ws, /openerLabel\(scoreGpuPresent\)/);
   assert.match(ws, /<ScoringPythonDialog/);
-  assert.match(ws, /setPythonPickerFor\('scoring'\)/);
+  assert.match(ws, /onPickPython\('scoring'\)/);
+  // …and the workspace really hands the panel the setter that opens it.
+  assert.match(ws, /onPickPython=\{setPythonPickerFor\}/);
 });
 
 test('ONE dialog serves both features — the semantic index gets the same picker', () => {
@@ -33,7 +39,7 @@ test('ONE dialog serves both features — the semantic index gets the same picke
   const semantic = fs.readFileSync(
     new URL('./BankSemanticEngine.jsx', import.meta.url), 'utf8');
   assert.match(ws, /profile=\{PICKER_PROFILES\[pythonPickerFor\]\}/);
-  assert.match(ws, /onPickPython=\{\(\) => setPythonPickerFor\('semantic'\)\}/);
+  assert.match(ws, /onPickPython=\{\(\) => onPickPython\('semantic'\)\}/);
   assert.match(semantic, /offersSemanticGpuPython\(state, gpuPresent\)/);
   assert.match(semantic, /openerLabel\(gpuPresent\)/);
   // The dialog reads its endpoint from the profile — never a hardcoded route,

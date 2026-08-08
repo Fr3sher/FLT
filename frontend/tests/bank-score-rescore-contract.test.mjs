@@ -24,6 +24,9 @@ import { BANK_PASSES } from '../src/components/bank/bankPasses.js'
 // Windows and every pattern below spans lines.
 const read = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n')
 const workspace = read('../src/components/bank/BankWorkspace.jsx')
+// ✨ Score is a button of the PASSES PANEL since the Encre redesign; the
+// workspace still owns the state the panel is handed.
+const passPanel = read('../src/components/bank/BankPassesPanel.jsx')
 const route = read('../../backend/app/routes/bank.py')
 const service = read('../../backend/app/services/image_bank_service.py')
 const passes = read('../src/components/bank/bankPasses.js')
@@ -36,7 +39,7 @@ test('the ✨ Score button posts nothing extra — its meaning is unchanged', ()
     workspace.indexOf('const runPass'))
   assert.match(body, /spec\?\.redo && redo \? \{ \[spec\.redo\.key\]: true \} : \{\}/)
   assert.match(passes, /key: 'rescore'/)
-  assert.match(workspace, /onClick=\{\(\) => setPassOpen\('score'\)\}/)
+  assert.match(passPanel, /onClick=\{\(\) => onPassOpen\('score'\)\}/)
 })
 
 test('"Rescore all" is a separate intent, and it is now a line in ✨ Score\'s window', () => {
@@ -75,7 +78,7 @@ test('✨ Score refuses a partial scope, visibly, with the reason', () => {
 test('the plain ✨ Score button tells the user a relaunch is cheap', () => {
   // The whole point of the resume is invisible unless it is said: without this
   // sentence people stop a long pass expecting to lose everything.
-  assert.match(workspace,
+  assert.match(passPanel,
     /Already-scored images are reused, so stopping and relaunching costs only what is left/)
 })
 

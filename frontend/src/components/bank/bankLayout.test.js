@@ -1,0 +1,119 @@
+import assert from 'node:assert/strict'
+import test from 'node:test'
+import {
+  PASSES_PANEL_DEFAULT_OPEN, RAIL_FOLDED_GROUPS, RAIL_PRIMARY_GROUPS,
+  RAIL_SIDE_BY_SIDE_PX, RAIL_STORAGE_KEY,
+  foldedCount, loadRailOpen, passesButtonLabel, passesPanelStartsOpen,
+  railDefaultOpen, railGroups, railIsColumn, saveRailOpen,
+} from './bankLayout.js'
+
+/** A localStorage stand-in. `failing` reproduces the private-mode browser, which
+ *  throws on ACCESS — the case that made gridSort.js inject its store too. */
+function fakeStore(initial = {}, { failing = false } = {}) {
+  const data = new Map(Object.entries(initial))
+  return {
+    getItem(k) { if (failing) throw new Error('denied'); return data.has(k) ? data.get(k) : null },
+    setItem(k, v) { if (failing) throw new Error('denied'); data.set(k, String(v)) },
+    removeItem(k) { if (failing) throw new Error('denied'); data.delete(k) },
+    get size() { return data.size },
+  }
+}
+
+test('the rail sits beside the grid from the sm breakpoint up', () => {
+  assert.equal(railIsColumn(1440), true)
+  assert.equal(railIsColumn(RAIL_SIDE_BY_SIDE_PX), true)
+})
+
+test('at 400 px the rail is a drawer, not a column — it folds instead of overflowing', () => {
+  // The whole point of the 400 px requirement: a 15-rem rail beside a grid at
+  // this width leaves neither usable.
+  assert.equal(railIsColumn(400), false)
+  assert.equal(railDefaultOpen(400), false)
+})
+
+test('an unknown width answers "beside", never "hidden"', () => {
+  // Guessing "drawer" on a real desktop would hide the filters behind a click
+  // nobody was told about. The desktop layout is the safe degradation.
+  for (const w of [undefined, null, NaN, 'wide']) {
+    assert.equal(railIsColumn(w), true, `width ${String(w)}`)
+    assert.equal(railDefaultOpen(w), true, `width ${String(w)}`)
+  }
+})
+
+test('the rail opens by default on a desktop', () => {
+  assert.equal(railDefaultOpen(1440), true)
+})
+
+test('a remembered rail state wins over the width default', () => {
+  assert.equal(loadRailOpen(1440, fakeStore({ [RAIL_STORAGE_KEY]: 'closed' })), false)
+  assert.equal(loadRailOpen(400, fakeStore({ [RAIL_STORAGE_KEY]: 'open' })), true)
+})
+
+test('a corrupt preference degrades to the width default, never to "no filters"', () => {
+  // A stored value from a future build, a truncated write, anything: the user
+  // must not end up on a screen with no way to reach the filters.
+  for (const raw of ['', 'yes', '1', 'OPEN', '{}']) {
+    assert.equal(loadRailOpen(1440, fakeStore({ [RAIL_STORAGE_KEY]: raw })), true, raw)
+    assert.equal(loadRailOpen(400, fakeStore({ [RAIL_STORAGE_KEY]: raw })), false, raw)
+  }
+})
+
+test('a storage that throws on access still yields a usable rail', () => {
+  assert.equal(loadRailOpen(1440, fakeStore({}, { failing: true })), true)
+  assert.equal(loadRailOpen(400, fakeStore({}, { failing: true })), false)
+  // …and saving must not throw either: a full quota must not break a toggle.
+  assert.equal(saveRailOpen(true, fakeStore({}, { failing: true })), true)
+})
+
+test('saving then loading round-trips both states', () => {
+  const store = fakeStore()
+  saveRailOpen(false, store)
+  assert.equal(loadRailOpen(1440, store), false)
+  saveRailOpen(true, store)
+  assert.equal(loadRailOpen(400, store), true)
+})
+
+test('the everyday facets stay visible and the measured axes fold below', () => {
+  const { primary, folded } = railGroups()
+  assert.deepEqual(primary, ['status', 'quality', 'groups'])
+  assert.deepEqual(folded, ['score', 'framing', 'medium', 'angle', 'resolution', 'origin'])
+})
+
+test('a group whose pass produced nothing is omitted, never rendered empty', () => {
+  // An empty "🎨 Medium" heading reads as a broken pass rather than an unrun one.
+  const { primary, folded } = railGroups({ medium: false, origin: false, quality: false })
+  assert.deepEqual(primary, ['status', 'groups'])
+  assert.deepEqual(folded, ['score', 'framing', 'angle', 'resolution'])
+})
+
+test('the folded count is what the disclosure prints, and it follows availability', () => {
+  assert.equal(foldedCount(), RAIL_FOLDED_GROUPS.length)
+  assert.equal(foldedCount({ score: false, angle: false }), RAIL_FOLDED_GROUPS.length - 2)
+})
+
+test('no facet is claimed by both halves of the rail', () => {
+  const overlap = RAIL_PRIMARY_GROUPS.filter((g) => RAIL_FOLDED_GROUPS.includes(g))
+  assert.deepEqual(overlap, [])
+})
+
+test('the passes button says the bank is busy, because the panel can be closed over a run', () => {
+  assert.equal(passesButtonLabel(false), '⚙ Passes')
+  assert.equal(passesButtonLabel(true), '⚙ Passes (running…)')
+})
+
+test('the passes panel starts closed on a bank that has already been scanned', () => {
+  assert.equal(passesPanelStartsOpen({ total: 9000, scanned: 9000 }), false)
+  assert.equal(passesPanelStartsOpen({ total: 9000, scanned: 1 }), false)
+})
+
+test('a freshly imported dump opens the panel — the grid alone offers nothing to do', () => {
+  assert.equal(passesPanelStartsOpen({ total: 9000, scanned: 0 }), true)
+})
+
+test('an unloaded payload does not pop the panel open under the user', () => {
+  assert.equal(passesPanelStartsOpen(null), PASSES_PANEL_DEFAULT_OPEN)
+  assert.equal(passesPanelStartsOpen(undefined), PASSES_PANEL_DEFAULT_OPEN)
+  assert.equal(passesPanelStartsOpen({}), PASSES_PANEL_DEFAULT_OPEN)
+  // An empty bank has nothing to scan either — the passes cannot help it.
+  assert.equal(passesPanelStartsOpen({ total: 0, scanned: 0 }), false)
+})

@@ -1,11 +1,16 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { defaultPipelineStepKeys } from './bankSemanticEngine.js';
 
+const facets = fs.readFileSync(new URL('./bankFacets.js', import.meta.url), 'utf8');
 const dialog = fs.readFileSync(new URL('./LaunchAllDialog.jsx', import.meta.url), 'utf8');
 const report = fs.readFileSync(new URL('./PipelineReport.jsx', import.meta.url), 'utf8');
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 
 test('the launch dialog posts the three config keys the backend expects', () => {
   assert.match(dialog, /steps:\s*\[\.\.\.steps\]/);
@@ -21,9 +26,9 @@ test('the overnight dialog offers no non-verdict flag; the attended button print
   assert.doesNotMatch(list[1], /bars/);
   // The standalone 🧹 Auto-reject still offers them — with the caveat SHOWN,
   // not left in a title= tooltip nobody sees on a phone.
-  assert.match(ws, /QUALITY_REJECT_FLAGS = \['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'\]/);
+  assert.match(facets, /QUALITY_REJECT_FLAGS = \['blur', 'noise', 'uniform', 'small', 'soft_detail', 'bars'\]/);
   assert.match(ws, /\{FLAG_HINT\[f\] && \(/);
-  assert.match(ws, /check before mass-rejecting/);
+  assert.match(facets, /check before mass-rejecting/);
 });
 
 test('captioning is OFF by default; auto-reject defaults to blur+uniform and keep-best dedup', () => {

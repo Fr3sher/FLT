@@ -1,3 +1,7 @@
+// Reads the image Bank TREE, not one file: the Encre redesign split the
+// workspace into a top bar, a filter rail, a passes panel and the grid, and a
+// wiring assertion must survive a move (see bankTreeSource.js).
+import { bankTreeSource } from './bankTreeSource.js';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
@@ -169,7 +173,7 @@ test('clampN matches the sibling selectors', () => {
 });
 
 // --- wiring contract on the JSX ----------------------------------------------
-const ws = fs.readFileSync(new URL('./BankWorkspace.jsx', import.meta.url), 'utf8');
+const ws = bankTreeSource();
 
 test('the search field is labelled, announced, and feeds the shared selection view', () => {
   assert.match(ws, /\/api\/bank\/\$\{bankId\}\/search-text/);
