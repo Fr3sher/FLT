@@ -47,6 +47,11 @@ from . import comfy_model_paths
 from ..utils import comfy_fs
 from ..utils.comfyui import load_workflow_local
 from ..job_queue import queue_manager
+# The SAME sizing Krea uses — imported, not re-implemented. Two engines filling
+# one dataset must not each own a private idea of how big a shot is.
+from .output_geometry import (
+    MAX_OUTPUT_MP, fit_output_size, source_size, variation_output_megapixels,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +62,10 @@ WORKFLOW_IMPROVE_SKIN_PATH = cfg.BACKEND_DIR / 'workflows' / 'improve skin.json'
 # Node 6 = CLIPTextEncode: the per-job prompt is written straight into its `text`
 # widget (the RES4LYF TextBox1 node 145 that used to hold it was removed so the
 # graph needs no custom-node packs).
-_REQUIRED_NODES = ('52', '6', '77', '9', '114', '10', '90')
+# 91/119/120/174 are the output-geometry nodes (see enqueue_klein_edit): a card
+# ratio is written straight into them, so a workflow file that lost one must say
+# so here rather than KeyError halfway through building a job.
+_REQUIRED_NODES = ('52', '6', '77', '9', '114', '10', '90', '91', '119', '120', '174')
 
 # The Klein pipeline's model dependencies, keyed by the setup_installer download
 # action that provides each. REQUIRED = the graph is invalid without it (block +
@@ -970,7 +978,7 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
                        extra_metadata=None, lora_strength=None, source_path=None,
                        extra_ref_paths=None, sampler_steps=None,
                        base_lora_strength=None, generation_loras=None,
-                       output_megapixels=None):
+                       output_megapixels=None, aspect_ratio=None):
     """Copy the source into ComfyUI input, configure the single Klein edit
     workflow, and enqueue it. Returns the app job_id. Raises ValueError on a
     missing source / unloadable workflow / missing required node, RuntimeError
@@ -984,6 +992,13 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
     resolved from config via resolve_generation_lora_preset() (a request can
     only NAME a preset, never define files/order). None/[] = no preset (the
     default). Capped at MAX_GENERATION_LORAS.
+    `aspect_ratio`: the dataset card's `W:H` framing. Present = this is a
+    variation: the OUTPUT canvas becomes that ratio at the shared
+    `variations.output_megapixels` budget (see output_geometry), instead of
+    inheriting the reference photo's shape. Absent = every historical lane,
+    unchanged.
+    `output_megapixels` overrides that budget for the caller that has its own
+    (✨ Upscale & improve, 2→8 MP on the source's own shape).
     `source_path` overrides the default ComfyUI output dir/<source_filename> lookup
     so callers with per-dataset storage can pass the full path directly.
     `extra_ref_paths`: additional identity reference images (the dataset's extra
@@ -1048,10 +1063,29 @@ def enqueue_klein_edit(user_id, source_filename, edit_prompt, klein_model=None,
         workflow["77"]["inputs"]["steps"] = max(1, int(sampler_steps))
     if base_lora_strength is not None and "139" in workflow:
         workflow["139"]["inputs"]["strength_model"] = float(base_lora_strength)
-    # Output size: node 174 rescales the source to a total pixel budget before the
-    # sampler, so it IS the resolution of the result. Hardcoded at 2 MP until now,
-    # which made "Upscale" a fixed 2 MP pass whatever the source was worth.
-    if output_megapixels is not None and "174" in workflow:
+    # Output size. Two different questions share these nodes:
+    #
+    #   174 ImageScaleToTotalPixels rescales the SOURCE before the VAE encode —
+    #       it is what the reference is read at.
+    #   119/120 PrimitiveInt feed 91 EmptyFlux2LatentImage, i.e. the canvas the
+    #       sampler actually fills. The shipped graph wires them to 175
+    #       GetImageSize of the rescaled source, which is exactly why a Klein
+    #       shot always came out in the REFERENCE's shape.
+    #
+    # A dataset card names its own ratio: pin 119/120 to the shared geometry so
+    # the card decides the frame, and read the reference at the same budget
+    # (leaving 174 at 2 MP while the canvas drops to 0.5 would burn the time the
+    # dial exists to save). The ✨ Upscale & improve lane names a budget and NO
+    # ratio — it keeps the historical source-shaped path untouched.
+    if aspect_ratio:
+        budget = (float(output_megapixels) if output_megapixels is not None
+                  else variation_output_megapixels())
+        ow, oh = fit_output_size(*source_size(staged_source), max_mp=budget,
+                                 requested_aspect=aspect_ratio)
+        workflow["119"]["inputs"]["value"] = ow
+        workflow["120"]["inputs"]["value"] = oh
+        workflow["174"]["inputs"]["megapixels"] = budget
+    elif output_megapixels is not None and "174" in workflow:
         workflow["174"]["inputs"]["megapixels"] = float(output_megapixels)
     # UNIQUE prefix per job: SaveImage numbers files from what's currently in
     # ComfyUI's output folder, and the app MOVES each result out right after

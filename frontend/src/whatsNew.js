@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-one-output-size-for-both-local-engines',
+    date: '2026-08-08',
+    title: 'Your generated shots are finally all the same size',
+    blurb:
+      'Klein and Krea 2 Edit used to size their images by two unrelated rules, so one dataset could hold 2 MP Klein tiles next to 0.84 MP Krea ones, in different shapes, with nothing on screen explaining either. There is now a single Output size dial at the top of the Generate variations panel, above the shot cards: both local engines spend that budget, on the shape of the shot card you picked. Klein therefore stops inheriting your reference photo\'s frame — a 16:9 card renders 16:9 even if your reference is portrait. It ships at 2.0 MP, exactly what Klein always did, so nothing moves until you touch it; drop it for quicker, lighter trial runs, or leave it at 2.0, which is as far as these edit models hold together (go bigger afterwards with ✨ Upscale & improve).',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
     id: '2026-08-08-start-comfyui-from-the-banner',
     date: '2026-08-08',
     title: 'Start ComfyUI from the banner that tells you it is down',

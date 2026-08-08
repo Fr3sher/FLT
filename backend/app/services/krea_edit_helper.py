@@ -88,7 +88,6 @@ measurement first — that sentence has already been wrong once, for weeks.
 """
 from __future__ import annotations
 import logging
-import math
 import os
 import random
 import time
@@ -681,98 +680,15 @@ def preflight():
 
 
 # --- Output geometry ---------------------------------------------------------
-# The node's v1.2 ``fit`` geometry can place the source into a different target
-# canvas. Dataset variations therefore request their catalog card ratio; a free
-# reference edit omits it and retains the source ratio. Both paths stay below the
-# edit model's ~2 MP drift threshold.
-MAX_OUTPUT_MP = 2.0
-_LATENT_MULTIPLE = 16
-
-
-def _aspect_ratio(requested_aspect):
-    """Return a positive finite ``W:H`` ratio, or None for an unusable request."""
-    if not isinstance(requested_aspect, str):
-        return None
-    try:
-        aw, ah = (float(part.strip()) for part in requested_aspect.split(':', 1))
-    except (TypeError, ValueError):
-        return None
-    if not (math.isfinite(aw) and math.isfinite(ah) and aw > 0 and ah > 0):
-        return None
-    ratio = aw / ah
-    # A catalog ratio is deliberately modest (the widest shipped card is 16:9).
-    # Treat pathological dimensions as invalid rather than letting them form an
-    # impractical one-cell canvas or an enormous target side.
-    if not math.isfinite(ratio) or not 1 / 32 <= ratio <= 32:
-        return None
-    return ratio
-
-
-def _requested_canvas(ratio, budget):
-    """Largest near-ratio 16-grid canvas that does not exceed ``budget``."""
-    cells = max(1, int(budget // (_LATENT_MULTIPLE ** 2)))
-    height_cells = max(1, int((cells / ratio) ** 0.5))
-    width_cells = max(1, int(round(ratio * height_cells)))
-    while width_cells * height_cells > cells:
-        # Reduce the dimension that currently leaves the ratio furthest from its
-        # requested value. This only runs on the 16px grid, so it cannot drift
-        # above the pixel budget while finding a close ratio.
-        if width_cells / height_cells > ratio:
-            width_cells = max(1, width_cells - 1)
-        else:
-            height_cells = max(1, height_cells - 1)
-    return width_cells * _LATENT_MULTIPLE, height_cells * _LATENT_MULTIPLE
-
-
-def fit_output_size(width, height, max_mp=MAX_OUTPUT_MP, requested_aspect=None):
-    """Return a 16-aligned output canvas under ``max_mp``.
-
-    A valid ``requested_aspect`` (``W:H``) picks that target ratio for a dataset
-    card without increasing the source pixel budget. With no ratio (or an invalid
-    one), preserve the historical source-ratio path, including its no-upscale
-    rule for small reference-edit images.
-    """
-    try:
-        w, h = int(width), int(height)
-    except (TypeError, ValueError):
-        w = h = 0
-    if w <= 0 or h <= 0:
-        return 1024, 1024
-    budget = max(0.1, float(max_mp)) * 1_000_000
-    ratio = _aspect_ratio(requested_aspect)
-    if ratio is not None:
-        # A card may change the shape, not quietly invent four times as many
-        # pixels from a 1024² reference. This retains the prior no-upscale / VRAM
-        # contract while giving Krea Fit v1.2 the selected catalog framing.
-        return _requested_canvas(ratio, min(budget, w * h))
-    if w * h > budget:
-        scale = (budget / (w * h)) ** 0.5
-        w, h = w * scale, h * scale
-    snap = lambda v: max(_LATENT_MULTIPLE,
-                          int(round(v / _LATENT_MULTIPLE)) * _LATENT_MULTIPLE)
-    ow, oh = snap(w), snap(h)
-    source_ratio = w / h
-    while ow * oh > budget:
-        # Nearest-grid snapping can cross the pixel cap by a single 16px step.
-        # Remove that step from the dimension that brings us closest to the
-        # original source ratio, retaining the historic source-geometry path.
-        if ow / oh > source_ratio:
-            ow = max(_LATENT_MULTIPLE, ow - _LATENT_MULTIPLE)
-        else:
-            oh = max(_LATENT_MULTIPLE, oh - _LATENT_MULTIPLE)
-    return ow, oh
-
-
-def _source_size(path):
-    try:
-        from PIL import Image
-        from . import image_encoding
-        with Image.open(path) as im:
-            return image_encoding.visual_size_from_header(im)
-    except Exception:
-        # A source we cannot measure still deserves a job: 1 MP square is the
-        # neutral fallback, not a crash.
-        return (1024, 1024)
+# Imported, never re-implemented: services/output_geometry.py is the SINGLE
+# calculation Klein and Krea both size their results with, so "the two engines
+# produce the same canvas" is a property of the code rather than a coincidence
+# between two call sites. `variation_output_megapixels` is the shared dial; the
+# no-ratio path here is still the free reference edit's source geometry.
+from .output_geometry import (            # noqa: E402  (module layout: see above)
+    MAX_OUTPUT_MP, _LATENT_MULTIPLE, _aspect_ratio, _requested_canvas,
+    fit_output_size, source_size as _source_size, variation_output_megapixels,
+)
 
 
 # --- Settings ----------------------------------------------------------------
@@ -1071,7 +987,8 @@ def _comfy_input_dir() -> str:
 
 def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
                       extra_metadata=None, krea_model=None, aspect_ratio=None,
-                      generation_loras=None, extra_ref_paths=None):
+                      generation_loras=None, extra_ref_paths=None,
+                      output_megapixels=None):
     """Copy the reference into ComfyUI's input folder, build the Krea 2 Edit
     graph against what is ACTUALLY installed, and enqueue it. Returns the app
     job_id.
@@ -1079,6 +996,11 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
     Raises KreaModelsMissing when an asset or a node is absent (checked BEFORE
     anything is copied or queued), ValueError on a missing source, RuntimeError
     when ComfyUI isn't configured.
+
+    `output_megapixels`: pixel budget for the result. None with an
+    `aspect_ratio` (a dataset card) spends the shared
+    `variations.output_megapixels` dial — the same one the Klein lane spends, so
+    the two engines fill a dataset with identically sized shots.
 
     `extra_ref_paths`: the SECOND subject, in order — one is used, because
     `Krea2EditModelPatch` and `Krea2EditGroundedEncode` each expose a single
@@ -1139,9 +1061,13 @@ def enqueue_krea_edit(user_id, source_filename, edit_prompt, source_path=None,
 
     # Measure the exact sanitized, EXIF-oriented PNG handed to the graph, never
     # the raw camera raster whose aspect can be transposed by orientation 5–8.
-    # A dataset card may request a different output ratio; free-prompt reference
-    # edits omit it and keep this source geometry.
-    width, height = fit_output_size(*_source_size(staged_source),
+    # A dataset card requests its own output ratio AND spends the shared
+    # `variations.output_megapixels` budget; free-prompt reference edits omit the
+    # ratio and keep this source geometry at the model's own ceiling.
+    budget = (float(output_megapixels) if output_megapixels is not None
+              else variation_output_megapixels() if aspect_ratio
+              else MAX_OUTPUT_MP)
+    width, height = fit_output_size(*_source_size(staged_source), max_mp=budget,
                                     requested_aspect=aspect_ratio)
     workflow = build_workflow(
         comfy_input, edit_prompt, unet=unet, clip=clip, vae=vae,
