@@ -1046,6 +1046,16 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const [extChecked, setExtChecked] = useState(new Set());
   const [extPickerOpen, setExtPickerOpen] = useState(false);
   const extLoadedOnce = useRef(false);
+  // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
+  // ever sees the render it was created in, and the payload it must send is
+  // whatever is CURRENT at unmount time, not whatever it was when the pending
+  // timer was scheduled — those are usually the same list but need not be).
+  const extNodesRef = useRef(extNodes);
+  // Is there a debounced PUT still pending? Set when the timer is armed,
+  // cleared once it actually fires (normally OR via the unmount flush) — the
+  // one flag both paths share so neither can send the same write twice.
+  const extDirtyRef = useRef(false);
+  useEffect(() => { extNodesRef.current = extNodes; }, [extNodes]);
   useEffect(() => {
     apiFetch('/api/train/canvas/external-loras')
       .then((d) => setExtNodes(normalizeExternalLoras(d?.loras)))
@@ -1056,13 +1066,27 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   // first render (the load above already reflects the server).
   useEffect(() => {
     if (!extLoadedOnce.current) { extLoadedOnce.current = true; return undefined; }
+    extDirtyRef.current = true;
     const t = setTimeout(() => {
-      putJson('/api/train/canvas/external-loras', { loras: extNodes }).catch(() => {
+      extDirtyRef.current = false;
+      putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }).catch(() => {
         /* best effort — the board keeps the in-memory state either way */
       });
     }, 500);
     return () => clearTimeout(t);
   }, [extNodes]);
+  // Leaving the Canvas view inside the 500 ms window above used to lose the
+  // last drag/check/strength edit silently: `clearTimeout` on unmount killed
+  // the pending PUT and nothing ever sent it. `keepalive` lets the request
+  // outlive the component even if the navigation that unmounts it also tears
+  // down the page (a plain unmount from an in-app route change does not abort
+  // an in-flight fetch on its own, but a real page unload would).
+  useEffect(() => () => {
+    if (!extDirtyRef.current) return;
+    extDirtyRef.current = false;
+    putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }, { keepalive: true })
+      .catch(() => { /* best effort on the way out — nothing left to update */ });
+  }, []);
 
   const isPicked = useCallback(
     (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
