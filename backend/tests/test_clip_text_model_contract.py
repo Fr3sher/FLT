@@ -131,3 +131,34 @@ def test_the_text_child_never_takes_the_gpu():
     assert hide < src.index('import torch', imp), \
         'CUDA must be hidden before torch is imported'
     assert "model.to('cpu')" in src
+
+
+def _aesthetic_expects():
+    """(model_name, pretrained) the aesthetic head was trained on, as
+    bank_score_infer.py declares it next to the checkpoint URL."""
+    src = SCORE.read_text(encoding='utf-8')
+    m = re.search(r"^_AESTHETIC_EXPECTS\s*=\s*\('([^']+)'\s*,\s*'([^']+)'\)",
+                  src, re.M)
+    assert m, 'could not find _AESTHETIC_EXPECTS in bank_score_infer.py'
+    return m.group(1), m.group(2)
+
+
+def test_the_aesthetic_head_gets_the_embedding_space_it_was_trained_on():
+    """✨ The aesthetic score is a 7-layer MLP over the CLIP embedding, trained
+    on ONE space: ViT-L/14 as OpenAI released it. The `l14` in the checkpoint
+    filename names that pair, not a family.
+
+    Every other 768-d CLIP also feeds it without error — datacomp_xl, laion2b,
+    the quickgelu variant — and it returns a number in the 1-10 range that
+    looks like a score and is noise. Nothing raises, nothing logs, and every
+    ✨ Score in every bank is quietly wrong.
+
+    The three tests above cannot catch it: they assert the CLIP call-sites
+    agree with EACH OTHER, which stays true when all three are changed together
+    to a model this head was never trained on."""
+    assert _score_spec() == _aesthetic_expects(), (
+        'bank_score_infer.py loads a CLIP pair the aesthetic head was not '
+        'trained on. The head will still return a plausible, meaningless '
+        'score. Changing the scoring model requires replacing or retraining '
+        f'{_aesthetic_expects()[0]}/{_aesthetic_expects()[1]} too — it is not '
+        'a one-line swap.')
