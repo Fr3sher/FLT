@@ -2,6 +2,8 @@ import { nudgeImageNode } from '../../utils/canvasImageNodes';
 import { CLUSTER_UNITS, chromeScale } from '../../utils/canvasNodeChrome';
 import { imageFactsLine } from '../../utils/generatedImageFacts';
 import { useImageDownload } from '../../hooks/useImageDownload';
+import { useCanvasImageDelete } from '../../hooks/useCanvasImageDelete';
+import { canvasDeleteButtonState } from '../../utils/canvasImageDelete';
 
 /* 🖼 One generated image, pinned ON the board.
 
@@ -47,7 +49,8 @@ import { useImageDownload } from '../../hooks/useImageDownload';
    arithmetic is nudgeImageNode(), unit-tested; this file only routes keys. */
 
 export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
-  onClose, onOpen, boardScale = 1, variant = 'node', box = null, blendNote = null }) {
+  onClose, onOpen, onDelete, boardScale = 1, variant = 'node', box = null,
+  blendNote = null }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
   // The gallery payload publishes the value persisted on LoraTestImage as
@@ -90,6 +93,10 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   const chrome = { transform: `scale(${k})`, transformOrigin: 'top right',
     maxWidth: CLUSTER_UNITS };
   const dl = useImageDownload();
+  // 🗑 One arm-then-confirm delete per node — never one shared by the board, or
+  // arming here and confirming there would be possible (see the hook).
+  const rm = useCanvasImageDelete(onDelete);
+  const rmState = canvasDeleteButtonState({ armed: rm.armed, busy: rm.busy, label: imageLabel });
   // Revealed on hover/focus for a member, always on for a node of its own.
   const reveal = member
     ? ' opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100'
@@ -195,7 +202,42 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
           {dl.busy ? '…' : '⬇'}
         </button>
+        {/* 🗑 Delete the PICTURE, not the node.
+            LAST, beside ⬇ on the second line, and the two are told apart by
+            colour AND by an arming step rather than by position alone: ✕ and 🗑
+            one tap apart on a 28-px cluster is how a board gets cleaned up by
+            accident. First press arms (the glyph gains a !, the button turns
+            red), second press deletes, and it disarms itself after a few
+            seconds — a live delete must not sit under the cursor of a board
+            left open for an hour. Only rendered when a host wired it, so the
+            surfaces that have no way to refresh afterwards do not offer it. */}
+        {onDelete && (
+          <button type="button" disabled={rmState.disabled}
+            onClick={(e) => { e.stopPropagation(); rm.press(node); }}
+            onBlur={rm.disarm}
+            data-testid="canvas-image-delete"
+            data-armed={rm.armed ? 'true' : 'false'}
+            title={rmState.title}
+            aria-label={rmState.aria}
+            className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border '
+              + 'backdrop-blur-sm transition-colors text-[0.75rem] leading-none disabled:opacity-50 '
+              + (rm.armed
+                ? 'border-red-300 bg-red-600/90 text-white'
+                : 'border-white/15 bg-black/50 text-white hover:border-red-400/60 hover:bg-red-500/70')}>
+            {rmState.glyph}
+          </button>
+        )}
       </div>
+      {/* A refused delete says so on the node, in the same strip a refused
+          download uses — one place on a thumbnail for "that did not work". */}
+      {rm.error && (
+        <div role="alert" data-testid="canvas-image-delete-error"
+          onClick={(e) => { e.stopPropagation(); rm.clearError(); }}
+          style={{ transform: `scale(${k})`, transformOrigin: 'bottom left' }}
+          className="absolute bottom-0 left-0 z-20 max-w-full cursor-pointer rounded-tr-md bg-red-900/90 px-1 py-0.5 text-[0.5rem] leading-tight text-red-50">
+          {rm.error}
+        </div>
+      )}
       {/* A refusal has to be READABLE, and the node is small — so it is a strip
           across the bottom of the picture, counter-scaled like the buttons are,
           rather than a tooltip nobody hovers on a phone. It happens: the board
