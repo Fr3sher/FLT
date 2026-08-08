@@ -279,3 +279,19 @@ def test_external_lora_nodes_persist_roundtrip(client):
     assert got == [
         {'filename': 'detail.safetensors', 'strength': 0.6, 'x': 12.5, 'y': -3.0},
         {'filename': 'other.safetensors', 'strength': 1.0, 'x': 0.0, 'y': 0.0}]
+
+
+def test_external_lora_put_survives_a_malformed_body(client):
+    """The sibling route (save_canvas_positions) drops rotten entries instead of
+    crashing. A `loras` entry that isn't a dict (bare string/int) or a `loras`
+    value that isn't a list at all must answer 200 with whatever survived
+    sanitizing — never a 500."""
+    for body in (
+        {'loras': ['x']},
+        {'loras': [1]},
+        {'loras': 'x'},
+        {'loras': 5},
+    ):
+        r = client.put('/api/train/canvas/external-loras', json=body)
+        assert r.status_code == 200, (body, r.status_code, r.get_data(as_text=True))
+        assert r.get_json()['loras'] == []

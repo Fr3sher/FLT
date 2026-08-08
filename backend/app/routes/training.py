@@ -3124,9 +3124,12 @@ def canvas_external_loras_put():
     """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
     cap 16, strength clamped [0..2] (default 1.0), x/y coerced to floats."""
     data = request.get_json(silent=True) or {}
+    raw = data.get('loras')
     cleaned, seen = [], set()
-    for e in (data.get('loras') or []):
-        fn = str((e or {}).get('filename') or '').strip()
+    for e in (raw if isinstance(raw, list) else []):
+        if not isinstance(e, dict):
+            continue
+        fn = str(e.get('filename') or '').strip()
         if not fn or fn in seen:
             continue
         seen.add(fn)
