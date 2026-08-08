@@ -316,7 +316,12 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onCloseGroup, o
 }
 
 export default function LineageCanvas({ entries, positions, imageNodes, allImageNodes = imageNodes, onPinLane,
-  onSaveImageNodes, onTidyUp, onRefetchDataset }) {
+  onSaveImageNodes, onTidyUp, onRefetchDataset,
+  // Rendered as the board's TOP overlay. A slot rather than an import: which
+  // datasets are shown is the page's question, but the answer belongs on the
+  // board it changes -- and the canvas should not have to know what a dataset
+  // filter is to give it a place to live.
+  filterSlot = null }) {
   const toast = useToast();
   // ▶ Continue's LOCAL lane guard (is ai-toolkit set up at all) — the app's own
   // capability probe, already loaded app-wide: no second request for it.
@@ -1487,129 +1492,23 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           <svg> references them by id (see lineageEdges.jsx). */}
       <svg width="0" height="0" aria-hidden className="absolute"><LineageEdgeDefs /></svg>
 
-      {/* 📱 The board's controls, on a phone.
-          Every target here is 40 px up to `lg` and the familiar 36 px above it.
-          Not cosmetics: this row is the ONLY way to zoom without a wheel, and a
-          36-px button is under the ~40 px a finger actually lands on — a miss on
-          − or + lands on the board and pans it, which reads as "the zoom buttons
-          are unreliable". The row already wrapped; it now wraps into rows a thumb
-          can use. Desktop keeps the exact sizes it has always had. */}
-      <div className="mb-2 flex flex-wrap items-center gap-1.5">
-        <div className="flex items-center gap-1">
-          <button type="button" onClick={() => zoomByButton(1 / ZOOM_STEP)}
-            disabled={view.scale <= MIN_SCALE + 1e-9}
-            title="Zoom out" aria-label="Zoom out"
-            className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">−</button>
-          <span className="min-w-[3.25rem] text-center text-content-muted text-[0.6875rem] tabular-nums">{pct}%</span>
-          <button type="button" onClick={() => zoomByButton(ZOOM_STEP)}
-            disabled={view.scale >= MAX_SCALE - 1e-9}
-            title="Zoom in" aria-label="Zoom in"
-            className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">+</button>
-        </div>
-        <button type="button" onClick={fitNow}
-          title="Fit the whole board in view"
-          className="flex h-10 items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
-          Fit
-        </button>
-        {/* The way out of an arrangement that got away from you. Twenty runs
-            later a hand-tidied board can be a knot, and "move them all back by
-            hand" is not an answer — this drops every remembered position, hands
-            the board to the automatic tree again, and brings every picture back
-            beside the run that made it, however far it was dragged. */}
-        <button type="button" onClick={onTidyUp} disabled={!arranged}
-          title={arranged
-            ? 'Forget every moved card, rebuild the automatic tree, and bring '
-              + 'every pinned image back beside its run'
-            : 'Nothing has been moved yet'}
-          className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
-          <span aria-hidden>✦</span> Tidy up
-        </button>
-        <HelpBadge topic="canvas-arrange" />
-        {/* 🎨 The board's own launch button. It carries the pick count so the
-            settings panel can be closed without losing sight of what is queued
-            up — at 400 px the panel covers the board, and closing it is normal. */}
-        <button type="button" onClick={() => setPanelOpen((v) => !v)}
-          aria-pressed={panelOpen}
-          title={picks.length
-            ? `${picks.length} checkpoint(s) picked — open the run settings`
-            : 'Tick checkpoints on the board, then set the run up here'}
-          className={'flex h-10 items-center gap-1 rounded-md border px-3 text-[0.6875rem] font-semibold lg:h-9 '
-            + (picks.length
-              ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
-              : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
-          <span aria-hidden>🎨</span> Generate
-          {picks.length > 0 && (
-            <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
-          )}
-        </button>
-        {/* The colour key. A colour with no legend is a guess, and this one
-            answers the question asked most often on this board: "which of these
-            can I generate from RIGHT NOW?". Each state carries a shape as well
-            as a colour (filled disc vs hollow ring), because roughly one man in
-            twelve reads red and green alike and the theme is dark graphite.
-            It renders from utils/checkpointDeployState, the same source the
-            pills read, so the key cannot drift from what it explains. */}
-        <span data-testid="canvas-deploy-legend"
-          className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
-          {DEPLOY_LEGEND.map((l) => (
-            <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
-              {/* The swatch is the pill's OWN bar class, so the key is drawn by
-                  the thing it explains and cannot drift from it. */}
-              <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
-              {l.label}
-            </span>
-          ))}
-        </span>
-        {/* The ONLY place the board's gestures are discoverable. A gesture that
-            is not listed here does not exist as far as anyone is concerned, so
-            every new one earns its clause — including 🖼🖼 drop-to-fuse, which
-            nobody would ever guess.
-
-            📱 …and below `lg` it used to be `hidden`, full stop. So on the one
-            device where the gestures are LEAST guessable — no wheel, no hover
-            title, no shift key — the board's instructions did not exist at all.
-            The line is too long to sit in a phone toolbar, so it folds into a
-            one-tap disclosure there instead of disappearing. Same words, written
-            once (BOARD_GESTURES), so the two can never drift. */}
-        <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
-          {BOARD_GESTURES}
-        </span>
-        {/* Closed it costs one more chip in a row that already wraps, not a row
-            of its own: every pixel spent above the frame is a pixel of board
-            pushed under the fold, which is the other half of this same pass. */}
-        <details className="lg:hidden">
-          <summary className="flex h-10 cursor-pointer list-none items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content">
-            <span aria-hidden className="mr-1">☝</span> Gestures
-          </summary>
-          <p className="mt-1.5 rounded-md border border-border bg-app/40 px-2.5 py-2 text-content-subtle text-[0.6875rem] leading-relaxed">
-            {BOARD_GESTURES}
-          </p>
-        </details>
-        {selectedForDiff.length > 0 && (
-          <button type="button" onClick={() => setSelectedForDiff([])}
-            className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2 py-1 text-amber-100 text-[0.625rem]">
-            Clear compare ({selectedForDiff.length})
-          </button>
-        )}
-      </div>
-
-      {/* 🎨 The generation in flight, ON the board. Visible with the settings
-          panel closed, and after a reload — which is the whole point: a launch
-          you can only watch at the second you fired it is a launch you cannot
-          come back to. Its finished state names where the images went. */}
-      <CanvasRunTracker
-        run={tracker.run.data} targets={trackerTargets}
-        onStop={() => tracker.run.cancel?.()}
-        onResume={() => tracker.run.resume?.()}
-        onOpenPanel={() => setPanelOpen(true)}
-        onOpenResult={(t) => setGallery({ recordId: t.recordId, step: t.step })}
-        pinCount={pinPending.length}
-        pinBusy={!!pinAllState?.busy}
-        pinSaid={pinAllState?.said || ''}
-        onPinAll={handlePinAll}
-        onUndoPinAll={pinAllState?.undo?.length ? handleUndoPinAll : null}
-        onDismiss={() => { setPinAllState(null); tracker.forget(); }} />
-
+      {/* THE BOARD IS THE PAGE, and everything that steers it floats ON it.
+      
+          Every control below used to be stacked ABOVE the frame: the zoom row,
+          the colour key, the gestures sheet, the run tracker, the dataset filter.
+          Measured at 400 px that chrome cost ~290 px before a single card was
+          drawn, which is why the frame was pinned to 60vh — and on a phone the
+          board opened at 10% zoom under a wall of buttons. Stacking chrome above
+          a canvas spends the one thing a canvas is for.
+      
+          So they are SIBLINGS of the frame, absolutely placed over it, and the
+          frame takes the height they gave back. Siblings, not children, and that
+          is the load-bearing part: the frame owns the pan/zoom pointer handlers
+          and `touch-none`, so a button nested inside it would hand every tap to
+          the board underneath. The wrapper is `pointer-events-none` and only the
+          controls themselves take the pointer, so the board stays draggable
+          through the gaps between them. */}
+      <div className="relative">
       <div
         ref={frameRef}
         data-testid="lora-canvas-frame"
@@ -1623,7 +1522,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
            little was on it. 60vh brings the WHOLE frame on screen, which is what
            makes Fit mean anything: a board you have to scroll the page to see
            the bottom of is a board whose pan gesture fights the page's. */
-        className="lds-canvas-frame relative h-[60vh] min-h-[320px] w-full select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40 sm:h-[65vh]"
+        className="lds-canvas-frame relative h-[72vh] min-h-[380px] w-full select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40 sm:h-[76vh]"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
@@ -1674,6 +1573,150 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
             ))}
           </div>
         )}
+      </div>
+
+        {/* TOP — what the board is SHOWING: which datasets, and what is being
+            generated right now. Scrolls inside the frame rather than growing it,
+            because the filter opens into a tall panel and a board that resizes
+            when you open a menu loses your place. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex max-h-full flex-col gap-2 overflow-y-auto p-2 sm:p-3">
+          {filterSlot ? <div className="pointer-events-auto">{filterSlot}</div> : null}
+          <div className="pointer-events-auto">
+        {/* 🎨 The generation in flight, ON the board. Visible with the settings
+            panel closed, and after a reload — which is the whole point: a launch
+            you can only watch at the second you fired it is a launch you cannot
+            come back to. Its finished state names where the images went. */}
+        <CanvasRunTracker
+          run={tracker.run.data} targets={trackerTargets}
+          onStop={() => tracker.run.cancel?.()}
+          onResume={() => tracker.run.resume?.()}
+          onOpenPanel={() => setPanelOpen(true)}
+          onOpenResult={(t) => setGallery({ recordId: t.recordId, step: t.step })}
+          pinCount={pinPending.length}
+          pinBusy={!!pinAllState?.busy}
+          pinSaid={pinAllState?.said || ''}
+          onPinAll={handlePinAll}
+          onUndoPinAll={pinAllState?.undo?.length ? handleUndoPinAll : null}
+          onDismiss={() => { setPinAllState(null); tracker.forget(); }} />
+          </div>
+        </div>
+
+        {/* BOTTOM — what you DO to the board. Bottom edge on purpose: it is
+            thumb-height on a phone, and it is the corner a board has least to
+            say in. */}
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 p-2 sm:p-3">
+          <div className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-app/85 p-1.5 shadow-lg backdrop-blur">
+        {/* 📱 The board's controls, on a phone.
+            Every target here is 40 px up to `lg` and the familiar 36 px above it.
+            Not cosmetics: this row is the ONLY way to zoom without a wheel, and a
+            36-px button is under the ~40 px a finger actually lands on — a miss on
+            − or + lands on the board and pans it, which reads as "the zoom buttons
+            are unreliable". The row already wrapped; it now wraps into rows a thumb
+            can use. Desktop keeps the exact sizes it has always had. */}
+        {/* `contents`: the pill above is the flex container now. Keeping a
+            second flex box here would nest a wrap inside a wrap, and its old
+            `mb-2` would push a gap under a bar that no longer has anything
+            below it. */}
+        <div className="contents">
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => zoomByButton(1 / ZOOM_STEP)}
+              disabled={view.scale <= MIN_SCALE + 1e-9}
+              title="Zoom out" aria-label="Zoom out"
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">−</button>
+            <span className="min-w-[3.25rem] text-center text-content-muted text-[0.6875rem] tabular-nums">{pct}%</span>
+            <button type="button" onClick={() => zoomByButton(ZOOM_STEP)}
+              disabled={view.scale >= MAX_SCALE - 1e-9}
+              title="Zoom in" aria-label="Zoom in"
+              className="flex h-10 w-10 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content disabled:opacity-40 lg:h-9 lg:w-9">+</button>
+          </div>
+          <button type="button" onClick={fitNow}
+            title="Fit the whole board in view"
+            className="flex h-10 items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content lg:h-9">
+            Fit
+          </button>
+          {/* The way out of an arrangement that got away from you. Twenty runs
+              later a hand-tidied board can be a knot, and "move them all back by
+              hand" is not an answer — this drops every remembered position, hands
+              the board to the automatic tree again, and brings every picture back
+              beside the run that made it, however far it was dragged. */}
+          <button type="button" onClick={onTidyUp} disabled={!arranged}
+            title={arranged
+              ? 'Forget every moved card, rebuild the automatic tree, and bring '
+                + 'every pinned image back beside its run'
+              : 'Nothing has been moved yet'}
+            className="flex h-10 items-center gap-1 rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content disabled:opacity-40 lg:h-9">
+            <span aria-hidden>✦</span> Tidy up
+          </button>
+          <HelpBadge topic="canvas-arrange" />
+          {/* 🎨 The board's own launch button. It carries the pick count so the
+              settings panel can be closed without losing sight of what is queued
+              up — at 400 px the panel covers the board, and closing it is normal. */}
+          <button type="button" onClick={() => setPanelOpen((v) => !v)}
+            aria-pressed={panelOpen}
+            title={picks.length
+              ? `${picks.length} checkpoint(s) picked — open the run settings`
+              : 'Tick checkpoints on the board, then set the run up here'}
+            className={'flex h-10 items-center gap-1 rounded-md border px-3 text-[0.6875rem] font-semibold lg:h-9 '
+              + (picks.length
+                ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100 '
+                : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+            <span aria-hidden>🎨</span> Generate
+            {picks.length > 0 && (
+              <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
+            )}
+          </button>
+          {/* The colour key. A colour with no legend is a guess, and this one
+              answers the question asked most often on this board: "which of these
+              can I generate from RIGHT NOW?". Each state carries a shape as well
+              as a colour (filled disc vs hollow ring), because roughly one man in
+              twelve reads red and green alike and the theme is dark graphite.
+              It renders from utils/checkpointDeployState, the same source the
+              pills read, so the key cannot drift from what it explains. */}
+          <span data-testid="canvas-deploy-legend"
+            className="flex items-center gap-2 text-content-subtle text-[0.625rem]">
+            {DEPLOY_LEGEND.map((l) => (
+              <span key={l.tone} className="flex items-center gap-1 whitespace-nowrap">
+                {/* The swatch is the pill's OWN bar class, so the key is drawn by
+                    the thing it explains and cannot drift from it. */}
+                <span aria-hidden className={`inline-block h-3 w-0 ${DEPLOY_BAR_CLASS[l.tone]}`} />
+                {l.label}
+              </span>
+            ))}
+          </span>
+          {/* The ONLY place the board's gestures are discoverable. A gesture that
+              is not listed here does not exist as far as anyone is concerned, so
+              every new one earns its clause — including 🖼🖼 drop-to-fuse, which
+              nobody would ever guess.
+  
+              📱 …and below `lg` it used to be `hidden`, full stop. So on the one
+              device where the gestures are LEAST guessable — no wheel, no hover
+              title, no shift key — the board's instructions did not exist at all.
+              The line is too long to sit in a phone toolbar, so it folds into a
+              one-tap disclosure there instead of disappearing. Same words, written
+              once (BOARD_GESTURES), so the two can never drift. */}
+          <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
+            {BOARD_GESTURES}
+          </span>
+          {/* Closed it costs one more chip in a row that already wraps, not a row
+              of its own: every pixel spent above the frame is a pixel of board
+              pushed under the fold, which is the other half of this same pass. */}
+          <details className="lg:hidden">
+            <summary className="flex h-10 cursor-pointer list-none items-center rounded-md border border-border bg-app/60 px-3 text-content-muted text-[0.6875rem] font-semibold hover:text-content">
+              <span aria-hidden className="mr-1">☝</span> Gestures
+            </summary>
+            <p className="mt-1.5 rounded-md border border-border bg-app/40 px-2.5 py-2 text-content-subtle text-[0.6875rem] leading-relaxed">
+              {BOARD_GESTURES}
+            </p>
+          </details>
+          {selectedForDiff.length > 0 && (
+            <button type="button" onClick={() => setSelectedForDiff([])}
+              className="rounded-md border border-amber-400/50 bg-amber-500/10 px-2 py-1 text-amber-100 text-[0.625rem]">
+              Clear compare ({selectedForDiff.length})
+            </button>
+          )}
+        </div>
+          </div>
+        </div>
       </div>
 
       {/* ◉ THE checkpoint actions — the very component the in-card graph draws,

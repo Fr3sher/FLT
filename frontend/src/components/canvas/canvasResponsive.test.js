@@ -31,7 +31,14 @@ test('the board toolbar carries 40-px targets on a phone and 36 on a desktop', (
   // No 36-px target left in the row at phone width.
   assert.doesNotMatch(bar, /className="flex h-9 /);
   // …and it still WRAPS rather than overflowing: 400 px cannot hold this row.
-  assert.match(canvas, /className="mb-2 flex flex-wrap items-center gap-1\.5"/);
+  // The wrap moved UP one level when the row became a floating bar ON the board
+  // instead of chrome stacked above it: the pill is the flex container now, and
+  // the old inner div is `contents` so its buttons stay direct flex items. What
+  // is pinned is the PROPERTY (it wraps, it does not overflow), not the element
+  // that happens to own it — pinning the old class string would have made the
+  // move look like a regression while 400 px still worked perfectly.
+  assert.match(canvas, /pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1\.5/);
+  assert.match(canvas, /className="contents"/);
 });
 
 /* The gesture list is the board's entire documentation. It was `lg:inline` with
@@ -67,7 +74,19 @@ test('the canvas page drops its blurb on a phone, never its help', () => {
    A board whose bottom you have to scroll the page to reach is a board whose
    pan gesture competes with the page's scroll. */
 test('the board frame fits the fold on a phone and is unchanged from sm up', () => {
-  assert.match(canvas, /h-\[60vh\] min-h-\[320px\][^"]*sm:h-\[65vh\]/);
+  // 60vh was the height left AFTER ~290 px of chrome — the zoom row, the colour
+  // key, the gestures sheet, the run tracker and the dataset filter, all stacked
+  // above the frame at 400 px. Every one of them now floats ON the board, so the
+  // frame takes that space back: the number went up because the reason it was
+  // small went away. Still short of the fold, which is the actual contract —
+  // a board whose bottom edge you have to scroll to is a board whose pan gesture
+  // fights the page's, and it is what makes ✦ Fit mean anything.
+  assert.match(canvas, /h-\[72vh\] min-h-\[380px\][^"]*sm:h-\[76vh\]/);
+  // The overlays must stay SIBLINGS of the frame, never children: the frame owns
+  // the pointer handlers and `touch-none`, so a control nested inside it would
+  // hand every tap to the board underneath.
+  assert.match(canvas, /pointer-events-none absolute inset-x-0 top-0 z-20/);
+  assert.match(canvas, /pointer-events-none absolute inset-x-0 bottom-0 z-20/);
 });
 
 /* The 🎨 Generate chip carries the pick count, which is what makes closing the

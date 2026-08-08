@@ -418,33 +418,36 @@ export default function CanvasPage() {
         </p>
       )}
 
-      <CanvasDatasetFilter
-        datasets={index.datasets}
-        selected={selected}
-        onToggle={onToggle}
-        onAll={() => persist(availableIds)}
-        onNone={() => persist([])}
-        families={families}
-        selectedFamilies={selectedFamilies}
-        onToggleFamily={onToggleFamily}
-        onAllFamilies={() => persistFamilies(families)}
-        onNoFamilies={() => persistFamilies([])}
-        query={query}
-        onQueryChange={setQuery}
-        statuses={statuses}
-        selectedStatuses={selectedStatuses}
-        onToggleStatus={onToggleStatus}
-        showPinned={extraFilters.showPinned}
-        onTogglePinned={() => persistExtraFilters({
-          ...extraFilters, showPinned: !extraFilters.showPinned,
-        })}
-        onResetFilters={onResetFilters}
-        visibleRuns={visibleRuns} />
-
       {index.status === 'loading'
         ? <p className="text-content-subtle text-[0.75rem]">Loading your datasets…</p>
         : (
           <LineageCanvas entries={entries} positions={positions}
+            /* The filter rides ON the board — see the overlay comment in
+               LineageCanvas. Same component, moved, not a second copy. */
+            filterSlot={(
+              <CanvasDatasetFilter
+              datasets={index.datasets}
+              selected={selected}
+              onToggle={onToggle}
+              onAll={() => persist(availableIds)}
+              onNone={() => persist([])}
+              families={families}
+              selectedFamilies={selectedFamilies}
+              onToggleFamily={onToggleFamily}
+              onAllFamilies={() => persistFamilies(families)}
+              onNoFamilies={() => persistFamilies([])}
+              query={query}
+              onQueryChange={setQuery}
+              statuses={statuses}
+              selectedStatuses={selectedStatuses}
+              onToggleStatus={onToggleStatus}
+              showPinned={extraFilters.showPinned}
+              onTogglePinned={() => persistExtraFilters({
+              ...extraFilters, showPinned: !extraFilters.showPinned,
+              })}
+              onResetFilters={onResetFilters}
+              visibleRuns={visibleRuns} />
+            )}
             imageNodes={filteredImageNodes} allImageNodes={imageNodes}
             onSaveImageNodes={onSaveImageNodes}
             onPinLane={onPinLane} onTidyUp={onTidyUp}
