@@ -40,6 +40,27 @@ def _ext_tree(tmp_path, monkeypatch, trigger, externals=()):
     return ds, 'z image' + chr(92) + trained
 
 
+def _ext_krea_tree(tmp_path, monkeypatch, trigger, externals=()):
+    """Same as `_ext_tree` but for the krea family: the trained checkpoint lives
+    under the 'krea' loras subfolder (krea's family-pool scan root), `externals`
+    still sit at the loras ROOT — outside ANY family subfolder, exactly what a
+    Canvas plugin node points at."""
+    from app import config
+    from app.services import face_dataset_service as svc
+    from app.config import LOCAL_USER
+    base = tmp_path / 'Comfy'
+    lora_dir = base / 'models' / 'loras' / 'krea'
+    lora_dir.mkdir(parents=True, exist_ok=True)
+    trained = f'lora_{trigger}_000002000.safetensors'
+    (lora_dir / trained).write_bytes(_ST)
+    loras_root = base / 'models' / 'loras'
+    for name in externals:
+        (loras_root / name).write_bytes(_ST)
+    config.save_config({'comfyui': {'base_dir': str(base)}})
+    ds = svc.create_dataset(LOCAL_USER, trigger.capitalize(), trigger)
+    return ds, 'krea' + chr(92) + trained
+
+
 def _wire(monkeypatch, lts, seen=None):
     """Common plumbing every test below needs: no GPU busy/active-run gate, and
     a `_build_cell_workflow` stub that records the `extra_loras` it was handed
@@ -153,3 +174,44 @@ def test_external_strength_clamped_and_defaulted(app, tmp_path, monkeypatch):
         assert {'filename': 'b.safetensors', 'strength': 1.0, 'external': True} \
             in row_extras
         assert len([e for e in row_extras if e['filename'] == 'a.safetensors']) == 1
+
+
+def test_external_lora_reaches_the_real_krea_graph(app, tmp_path, monkeypatch):
+    """Fix-round regression: Krea's family-pool allowlist (scan of the 'krea'
+    loras subfolder only) must NOT re-filter externals validated upstream.
+    Before the fix `apply_krea_lora_test_settings` built `allowed` from
+    `allowed_loras` alone when it was given (the studio's real call always
+    gives it), so `inject_krea_loras` silently dropped every external whose
+    file lives outside krea/ — persisted on the row with `external: True`,
+    never mounted in the graph. Only `_enqueue_cell` is replaced here; the
+    workflow is the REAL one `_build_cell_workflow` produces (same doctrine
+    as test_canvas_blend.py's 'THE proof' test) — no other stub can mask a
+    regression in that graph."""
+    from app.config import LOCAL_USER
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds, trained = _ext_krea_tree(tmp_path, monkeypatch, 'kext',
+                                     externals=['outside-krea.safetensors'])
+        monkeypatch.setattr(lts, 'gpu_busy_reason', lambda: None)
+        monkeypatch.setattr(lts, '_active_run_count', lambda *a: 0)
+        monkeypatch.setattr(lts, '_preflight_run', lambda *a, **k: None)
+        monkeypatch.setattr(lts, '_target_node_classes', lambda: None)
+        monkeypatch.setattr(lts, 'permanent_lora_candidates', lambda _f: [])
+        submitted = []
+
+        def capture(user_id, dataset_id, workflow, prompt, job_id=None, **_kw):
+            submitted.append(workflow)
+            return job_id
+        monkeypatch.setattr(lts, '_enqueue_cell', capture)
+
+        lts.create_comparison_run(
+            LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': trained}], [1.0],
+            prompt='p', external_loras=[{'filename': 'outside-krea.safetensors',
+                                         'strength': 0.6}])
+        assert len(submitted) == 1
+        wf = submitted[0]
+        loaders = {nid: n for nid, n in wf.items()
+                   if n.get('class_type') == 'LoraLoaderModelOnly'}
+        assert ('outside-krea.safetensors', 0.6) in {
+            (n['inputs']['lora_name'], n['inputs']['strength_model'])
+            for n in loaders.values()}

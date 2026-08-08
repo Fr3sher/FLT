@@ -1267,6 +1267,16 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
             st = 1.0
         requested.append({"filename": fn, "strength": st})
     allowed = set(allowed_loras) if allowed_loras is not None else {r["filename"] for r in requested}
+    if allowed_loras is not None:
+        # `allowed_loras` is a FAMILY-POOL scan (krea/ subfolder only): always-on
+        # AND external (Canvas plugin node) entries in `extra_loras` were already
+        # validated (path-injection / fail-closed) before reaching here, so this
+        # whitelist must not re-filter them out — the same silent-drop bug the
+        # Z-Image path guards against at `allowed_loras=(set(...) | {...})` above.
+        # Without this union, `inject_krea_loras` below drops every extra whose
+        # filename lives outside krea/ with NO error: persisted on the cell's
+        # JSON, never mounted in the graph.
+        allowed |= {r["filename"] for r in requested[1:]}
     inject_krea_loras(workflow, requested, allowed=allowed)
     # Krea2T-Enhancer (patcher texte-adhérence) injecté APRÈS les LoRA (wire-aware :
     # se branche sur ce qui alimente KSampler.model). enhancer_strength None = OFF ;
