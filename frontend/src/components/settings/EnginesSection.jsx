@@ -10,6 +10,17 @@ import { defaultValueAt } from './settingDefaults.js'
 import { kreaStrengthRange, KREA_LORA_STRENGTH_DEFAULT } from '../../utils/kreaGenerationLoras'
 import { isFixedLoraDuplicate, fixedLoraDuplicateWarning } from '../../utils/loraDuplicateGuard'
 import { kreaBaseNote, KREA_BASE_NOTE_CLASS } from '../../utils/kreaBaseNote'
+// The bounds mirror krea_edit_helper's clamps. They live in utils/kreaDials.js
+// because the workspace panel offers the SAME four dials — two copies of "512"
+// would be two chances to drift away from the server.
+import {
+  KREA_GROUNDING_MIN, KREA_GROUNDING_MAX, KREA_GROUNDING_STEP,
+  KREA_STEPS_MIN, KREA_STEPS_MAX,
+  KREA_REF_BOOST_MIN, KREA_REF_BOOST_MAX, KREA_REF_BOOST_STEP,
+  KREA_IDENTITY_STRENGTH_MIN, KREA_IDENTITY_STRENGTH_MAX, KREA_IDENTITY_STRENGTH_STEP,
+  clampRefBoost, clampIdentityStrength,
+  refBoostDescription, identityStrengthDescription, stepsDescription,
+} from '../../utils/kreaDials.js'
 import {
   identityPromptFields, PROMPT_SUBJECT_TYPES,
   readIdentityPrompt, writeIdentityPrompt, subjectHasOverride,
@@ -423,13 +434,17 @@ function KleinGenerationCard({ config, setField, configDefaults }) {
 /* Krea 2 Identity Edit — the second LOCAL engine. Its headline knob is
    `grounding_px`, THE consistency <-> prompt-adherence dial, so it is first and
    explained in plain words: a number nobody can interpret is not a setting.
-   The two path fields are BLANK-MEANS-AUTO on purpose: the resolver finds the
-   files by canonical name then by a narrow token across every ComfyUI model
-   root, so an install that looks nothing like the developer's works untouched —
-   they exist for the person whose files are named something else. */
-const KREA_GROUNDING_MIN = 512      // mirrors krea_edit_helper.GROUNDING_PX_MIN
-const KREA_GROUNDING_MAX = 1536     // mirrors krea_edit_helper.GROUNDING_PX_MAX
-const KREA_STEPS_MAX = 50
+   The FOUR calibration dials of this card (grounding, steps, reference pull,
+   identity LoRA strength) are the same four the workspace's "🧬 Krea 2 Edit
+   tuning" panel offers, on purpose: they are judged on the images that panel
+   produces and configured here, and since every control writes the SAME global
+   key through the same endpoint there is only ever one value to read.
+   The two path fields are NOT duplicated there — they are filled once at
+   install, not adjusted while looking at a result. They are BLANK-MEANS-AUTO on
+   purpose: the resolver finds the files by canonical name then by a narrow
+   token across every ComfyUI model root, so an install that looks nothing like
+   the developer's works untouched — they exist for the person whose files are
+   named something else. */
 
 // Mirror seedvr2_helper's clamps. The SERVER stays the authority (it re-clamps
 // every value), these only stop the input offering a number that would be
@@ -456,6 +471,13 @@ function KreaCard({ config, setField, configDefaults, caps }) {
   const baseScan = useModelFiles('krea_base_model')
   const identityScan = useModelFiles('krea_identity_lora')
   const grounding = Number(krea.grounding_px ?? dflt('grounding_px'))
+  const steps = krea.steps ?? dflt('steps')
+  // Clamped for DISPLAY only: a config.json hand-edited past the server's clamp
+  // would otherwise park the slider thumb at an end while the label showed a
+  // number the graph will never receive. The server re-clamps on its side.
+  const refBoost = clampRefBoost(krea.ref_boost, dflt('ref_boost'))
+  const identityStrength = clampIdentityStrength(krea.identity_lora_strength,
+    dflt('identity_lora_strength'))
   // WHICH Krea base this install loads, named. Resolved SERVER-side
   // (caps.comfyui.krea_base_resolved = the resolve_krea_unet() the generation
   // path calls) — the browser ranks nothing. See utils/kreaBaseNote.js.
@@ -475,7 +497,7 @@ function KreaCard({ config, setField, configDefaults, caps }) {
           type="range"
           min={KREA_GROUNDING_MIN}
           max={KREA_GROUNDING_MAX}
-          step={64}
+          step={KREA_GROUNDING_STEP}
           value={grounding}
           onChange={(e) => setField('krea', 'grounding_px', Number(e.target.value))}
           className="mt-1 w-full accent-violet-500"
@@ -487,7 +509,8 @@ function KreaCard({ config, setField, configDefaults, caps }) {
           the reference more, but can copy the pose and outfit you asked it to change.
           512 px is the dataset-restaging balance: it keeps the prompt and selected shot card
           in charge while preserving identity. Raise it deliberately when reference likeness
-          matters more.
+          matters more. Also adjustable, with this exact value, from the workspace&rsquo;s
+          🧬 Krea 2 Edit tuning panel.
         </p>
         <ResetToDefault label="Reference grounding" section="krea" field="grounding_px" {...reset} />
       </div>
@@ -499,19 +522,74 @@ function KreaCard({ config, setField, configDefaults, caps }) {
         <input
           id="krea-steps"
           type="number"
-          min={1}
+          min={KREA_STEPS_MIN}
           max={KREA_STEPS_MAX}
           step={1}
-          value={krea.steps ?? dflt('steps')}
+          value={steps}
           onChange={(e) => setField('krea', 'steps',
             e.target.value === '' ? dflt('steps') : Number(e.target.value))}
           className={INPUT_CLASS}
         />
         <p className="mt-1 text-[0.6875rem] text-content-subtle">
-          {dflt('steps')} is the value the model&rsquo;s own reference workflow uses. More is
-          slower and rarely better on this pipeline.
+          {stepsDescription(steps)}. {dflt('steps')} is the value the model&rsquo;s own
+          reference workflow uses. More is slower and rarely better on this pipeline.
         </p>
         <ResetToDefault label="Sampler steps" section="krea" field="steps" {...reset} />
+      </div>
+
+      {/* The two calibration dials that used to have NO input on this page: they
+          were reachable only from the workspace panel, so "where do I change
+          this?" had a different answer per dial. Same key, same endpoint, same
+          value — a slider here and a slider there cannot disagree. */}
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="krea-ref-boost" className="block text-xs font-medium text-content">
+          Reference pull ({refBoost})
+        </label>
+        <input
+          id="krea-ref-boost"
+          type="range"
+          min={KREA_REF_BOOST_MIN}
+          max={KREA_REF_BOOST_MAX}
+          step={KREA_REF_BOOST_STEP}
+          value={refBoost}
+          onChange={(e) => setField('krea', 'ref_boost',
+            clampRefBoost(e.target.value, dflt('ref_boost')))}
+          className="mt-1 w-full accent-violet-500"
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          {refBoostDescription(refBoost)}. How hard the source latent is pushed back into the
+          model at every denoising step — the lever for &ldquo;the subject does not look enough
+          like my reference&rdquo;. High values also recopy the composition, pose and outfit the
+          shot card asked it to change. Also on the workspace&rsquo;s 🧬 Krea 2 Edit tuning panel,
+          where you judge the result.
+        </p>
+        <ResetToDefault label="Reference pull" section="krea" field="ref_boost"
+          value={refBoost} {...reset} />
+      </div>
+
+      <div className="mt-3 sm:max-w-md">
+        <label htmlFor="krea-identity-lora-strength" className="block text-xs font-medium text-content">
+          Identity LoRA strength ({identityStrength})
+        </label>
+        <input
+          id="krea-identity-lora-strength"
+          type="range"
+          min={KREA_IDENTITY_STRENGTH_MIN}
+          max={KREA_IDENTITY_STRENGTH_MAX}
+          step={KREA_IDENTITY_STRENGTH_STEP}
+          value={identityStrength}
+          onChange={(e) => setField('krea', 'identity_lora_strength',
+            clampIdentityStrength(e.target.value, dflt('identity_lora_strength')))}
+          className="mt-1 w-full accent-violet-500"
+        />
+        <p className="mt-1 text-[0.6875rem] text-content-subtle">
+          {identityStrengthDescription(identityStrength)}. The weight of the Krea 2
+          identity-edit LoRA itself — the piece that carries the face across. Below 1 loosens
+          the likeness, 0 disables the face transfer, above 1 is past what the file was
+          trained for and can posterize. Also on the workspace&rsquo;s 🧬 Krea 2 Edit tuning panel.
+        </p>
+        <ResetToDefault label="Identity LoRA strength" section="krea"
+          field="identity_lora_strength" value={identityStrength} {...reset} />
       </div>
 
       <div className="mt-3 sm:max-w-md">

@@ -31,8 +31,11 @@ import { kreaUnavailableReason, groundingDescription } from '../../utils/kreaEng
 import {
   KREA_REF_BOOST_MIN, KREA_REF_BOOST_MAX, KREA_REF_BOOST_STEP,
   KREA_IDENTITY_STRENGTH_MIN, KREA_IDENTITY_STRENGTH_MAX, KREA_IDENTITY_STRENGTH_STEP,
-  clampRefBoost, clampIdentityStrength, createDialSaver, kreaDialPayload,
-  refBoostDescription, identityStrengthDescription,
+  KREA_GROUNDING_MIN, KREA_GROUNDING_MAX, KREA_GROUNDING_STEP,
+  KREA_STEPS_MIN, KREA_STEPS_MAX, KREA_STEPS_STEP,
+  clampRefBoost, clampIdentityStrength, clampGrounding, clampSteps,
+  createDialSaver, kreaDialPayload,
+  refBoostDescription, identityStrengthDescription, stepsDescription,
 } from '../../utils/kreaDials.js';
 import {
   defaultValueAt, isAtDefault, resetAriaLabel, RESET_TO_DEFAULT_TEXT,
@@ -544,8 +547,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   // this card used to state "gpt-image-2" flatly, which became a lie the moment
   // someone changed it. Blank = the engine's own default, named here.
   const [chatgptImageModel, setChatgptImageModel] = useState('');
-  // Krea's consistency <-> prompt-adherence dial, mirrored from Settings.
-  const [kreaGrounding, setKreaGrounding] = useState(512);
+  // Krea's consistency <-> prompt-adherence dial. `null` until /api/settings
+  // answers — like the other three, so no slider invents a number for a frame.
+  const [kreaGrounding, setKreaGrounding] = useState(null);
   // Krea's own always-on presets (krea.generation_lora_presets) — a SEPARATE
   // pick from Klein's, because one run can dispatch to both engines and each
   // graph takes its own family of LoRAs — including the STARTING pick, which
@@ -554,11 +558,12 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [kreaLoraPresets, setKreaLoraPresets] = useState([]);
   const [kreaLoraPresetName, setKreaLoraPresetName] = useState('');
   const activeKreaLoraPreset = kreaLoraPresets.find((p) => p.name === kreaLoraPresetName) || null;
-  // Krea's two other calibration dials. `null` until /api/settings answers, so
+  // Krea's other calibration dials. `null` until /api/settings answers, so
   // the slider never shows an invented number for a second: the fallback then
   // comes from the SERVER's config_defaults, never from a literal typed here.
   const [kreaRefBoost, setKreaRefBoost] = useState(null);
   const [kreaIdentityStrength, setKreaIdentityStrength] = useState(null);
+  const [kreaSteps, setKreaSteps] = useState(null);
   const [configDefaults, setConfigDefaults] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -587,13 +592,16 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           d.config?.klein?.default_generation_lora_preset, kleinPresets));
         setKreaLoraPresetName(resolveKreaDefaultPresetName(
           d.config?.krea?.default_generation_lora_preset, kreaPresets));
-        // Krea's one dial. It lives in Settings (it changes the meaning of every
-        // shot in the batch identically, so it is not a per-run argument), and is
-        // MIRRORED here so the workspace can say what the run will actually do.
-        setKreaGrounding(Number(d.config?.krea?.grounding_px) || 512);
-        // ...and the two dials this panel EDITS, off the same payload — one
-        // fetch, one truth. config_defaults is what "Reset to default" writes.
+        // Krea's four calibration dials, off the SAME payload — one fetch, one
+        // truth. They are settings (they change the meaning of every shot in the
+        // batch identically, so none is a per-run argument), and this panel both
+        // shows and EDITS them, exactly like the Settings card does.
+        // config_defaults is what "Reset to default" writes.
         setConfigDefaults(d.config_defaults || {});
+        setKreaGrounding(clampGrounding(d.config?.krea?.grounding_px,
+          defaultValueAt(d.config_defaults, 'krea', 'grounding_px')));
+        setKreaSteps(clampSteps(d.config?.krea?.steps,
+          defaultValueAt(d.config_defaults, 'krea', 'steps')));
         setKreaRefBoost(clampRefBoost(d.config?.krea?.ref_boost,
           defaultValueAt(d.config_defaults, 'krea', 'ref_boost')));
         setKreaIdentityStrength(clampIdentityStrength(d.config?.krea?.identity_lora_strength,
@@ -602,7 +610,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
       .catch(() => { /* keep the permissive default on a transient failure */ });
     return () => { cancelled = true; };
   }, []);
-  // One coalescing writer for both dials: a drag emits dozens of events and
+  // One coalescing writer for all four dials: a drag emits dozens of events and
   // each must not become a PUT. Created once (the toast api is memoised), and
   // flushed on unmount so leaving the screen mid-drag still saves.
   const kreaDialSaver = useRef(null);
@@ -614,12 +622,23 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
     });
   }
   useEffect(() => () => kreaDialSaver.current?.flush(), []);
+  // Keyed by CONFIG key so adding a dial is one line, not a branch to forget.
+  const KREA_DIAL_SETTERS = {
+    grounding_px: setKreaGrounding,
+    steps: setKreaSteps,
+    ref_boost: setKreaRefBoost,
+    identity_lora_strength: setKreaIdentityStrength,
+  };
   const setKreaDial = (field, value) => {
-    if (field === 'ref_boost') setKreaRefBoost(value); else setKreaIdentityStrength(value);
+    KREA_DIAL_SETTERS[field](value);
     kreaDialSaver.current.schedule(field, value);
   };
+  const kreaGroundingDefault = defaultValueAt(configDefaults, 'krea', 'grounding_px');
+  const kreaStepsDefault = defaultValueAt(configDefaults, 'krea', 'steps');
   const kreaRefBoostDefault = defaultValueAt(configDefaults, 'krea', 'ref_boost');
   const kreaIdentityDefault = defaultValueAt(configDefaults, 'krea', 'identity_lora_strength');
+  const groundingValue = clampGrounding(kreaGrounding, kreaGroundingDefault);
+  const stepsValue = clampSteps(kreaSteps, kreaStepsDefault);
   const refBoostValue = clampRefBoost(kreaRefBoost, kreaRefBoostDefault);
   const identityStrengthValue = clampIdentityStrength(kreaIdentityStrength, kreaIdentityDefault);
   const nbAvailable = enabledEngines.includes('nanobanana') && caps.engines.nanobanana;
@@ -1234,70 +1253,95 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         </details>
       )}
 
-      {/* Krea tuning — the rule that survives: ONE truth, editable from here.
+      {/* Krea tuning — the rule that survives: ONE truth, TWO doors onto it.
           Every Krea dial is a SETTING: it changes the meaning of every shot in
           the batch identically, so a PER-RUN copy would be a second truth to
           keep in sync and a value silently different from the one Settings
           shows. That still holds — none of these controls adds a run argument.
-          What changed is where you may turn them: `ref_boost` and
-          `identity_lora_strength` are judged HERE, on the images this screen
-          produced, and they had no input anywhere in the app, so the only lever
-          for "the likeness is too weak" was hand-editing config.json. They now
-          write the GLOBAL setting from this panel — same key, same endpoint,
-          same value the Settings page shows — and the panel says so, loudly,
-          because a control that silently changes every future run is only
-          acceptable when it admits it. `grounding_px` stays a read-out with its
-          link: it is the dial the Settings card already explains at length, and
-          duplicating that explanation here would be the second truth we just
-          refused. */}
+          What is settled is WHERE you may turn them: all four (`grounding_px`,
+          `steps`, `ref_boost`, `identity_lora_strength`) are editable here AND
+          on the Settings card, because every control writes the SAME global key
+          through the same endpoint. Duplicating a control cannot fork the value
+          when there is only one value — there is nothing to synchronise, so the
+          old argument for keeping grounding a read-out here ("a second surface
+          would be a second truth") never applied and is gone. What survives is
+          the honesty requirement: a control that changes every FUTURE run, not
+          just this batch, has to say so — hence the warning below.
+          The two PATH fields (`base_model`, `identity_lora`) deliberately stay
+          in Settings alone: they are filled once at install, not adjusted while
+          judging an image, and the link below still leads to them. */}
       {isKrea && krAvailable && (
         <details className="rounded-lg border border-border bg-app/30 open:pb-2">
           <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
             🧬 Krea 2 Edit tuning
             <span className="ml-2 font-normal text-content-subtle text-[0.625rem]">
-              reference grounding {groundingDescription(kreaGrounding)}
-              {` · reference pull ${refBoostValue} · identity ${identityStrengthValue}`}
+              reference grounding {groundingDescription(groundingValue)}
+              {` · ${stepsValue} steps · reference pull ${refBoostValue} · identity ${identityStrengthValue}`}
               {activeKreaLoraPreset && activeKreaLoraPreset.loras.length > 0
                 ? ` · LoRA preset: ${activeKreaLoraPreset.name}` : ''}
             </span>
           </summary>
           <div className="px-2.5 pt-1 flex flex-col gap-1.5">
             <p className="text-content-subtle text-[0.625rem]">
-              <b className="text-content-muted font-semibold">Reference grounding</b> is the
-              consistency ↔ prompt dial: the low end follows the shot description (more variety
-              in pose, outfit and scene, looser likeness), while HIGH resembles the reference
-              more closely — and can copy the very pose and outfit you asked it to change.
-              512 px is the dataset-restaging balance: it keeps the prompt and selected shot
-              card in charge while preserving identity. Raise it deliberately when reference
-              likeness matters more.
-            </p>
-            <p className="text-content-subtle text-[0.625rem]">
               Identity comes from the reference photo alone — no character LoRA needed. Extra
               reference images are not used by this engine. Krea Fit v1.2 honors each selected
               card&rsquo;s framing and aspect ratio instead of forcing the source photo&rsquo;s shape.
             </p>
             <p className="text-content-subtle text-[0.625rem]">
-              Change it in{' '}
-              <SettingsLink section="engines" focus="krea-grounding" tone="warning" className="text-[0.625rem]">
+              The engine&rsquo;s <b className="text-content-muted font-semibold">file paths</b> and
+              its LoRA presets are defined in{' '}
+              <SettingsLink section="engines" focus="krea-engine" tone="warning" className="text-[0.625rem]">
                 Settings › Image engines
-              </SettingsLink>{' '}— it applies to every Krea run.
+              </SettingsLink>, which also carries these same four dials — one value either way.
             </p>
-            {/* The two dials that had no input anywhere in the app. They save
-                the GLOBAL setting, debounced — see the block comment above. */}
+            {/* All four dials, editable here. They save the GLOBAL setting,
+                debounced through one shared saver — see the block comment. */}
             <div className="flex flex-col gap-2 pt-1 border-t border-white/10">
-              {/* The target is the Krea CARD, not a field: these two keys have
-                  no input on the Settings page, and the sentence promises "the
-                  rest of the engine's knobs" — which is exactly that card. */}
+              {/* The target is the Krea CARD, not a field: the sentence promises
+                  "the rest of the engine's knobs" — which is exactly that card. */}
               <p className="text-amber-300/90 text-[0.625rem]">
-                ⚠ These two save straight to your settings: they apply to <b>every</b> Krea
+                ⚠ These four save straight to your settings: they apply to <b>every</b> Krea
                 run from now on, not just this batch — the same values every other Krea
-                surface reads. They live with the rest of the engine&rsquo;s knobs in{' '}
+                surface reads, and the same ones{' '}
                 <SettingsLink section="engines" focus="krea-engine" tone="warning" className="text-[0.625rem]">
                   Settings › Image engines
-                </SettingsLink>.
+                </SettingsLink>{' '}shows.
               </p>
               <KreaDial
-                id="krea-ref-boost"
+                id="krea-grounding-dial"
+                label="Reference grounding"
+                topic="krea.grounding_px"
+                value={groundingValue}
+                min={KREA_GROUNDING_MIN}
+                max={KREA_GROUNDING_MAX}
+                step={KREA_GROUNDING_STEP}
+                description={groundingDescription(groundingValue)}
+                defaultValue={kreaGroundingDefault}
+                onChange={(v) => setKreaDial('grounding_px', clampGrounding(v, kreaGroundingDefault))}
+              >
+                The resolution your reference is shown to the vision encoder at — the
+                consistency ↔ prompt dial. Low follows the shot description (more variety
+                in pose, outfit and scene, looser likeness); high resembles the reference
+                more and can copy the very pose and outfit you asked the card to change.
+              </KreaDial>
+              <KreaDial
+                id="krea-steps-dial"
+                label="Sampler steps"
+                topic="krea.steps"
+                value={stepsValue}
+                min={KREA_STEPS_MIN}
+                max={KREA_STEPS_MAX}
+                step={KREA_STEPS_STEP}
+                description={stepsDescription(stepsValue)}
+                defaultValue={kreaStepsDefault}
+                onChange={(v) => setKreaDial('steps', clampSteps(v, kreaStepsDefault))}
+              >
+                How long each shot is sampled for. The default is the value the model&rsquo;s
+                own reference workflow uses; this base is guidance-distilled, so more steps
+                mostly buy waiting. Raise it only if detail looks unfinished.
+              </KreaDial>
+              <KreaDial
+                id="krea-ref-boost-dial"
                 label="Reference pull"
                 topic="krea.ref_boost"
                 value={refBoostValue}
@@ -1314,7 +1358,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                 the shot card to change.
               </KreaDial>
               <KreaDial
-                id="krea-identity-lora-strength"
+                id="krea-identity-lora-strength-dial"
                 label="Identity LoRA strength"
                 topic="krea.identity_lora_strength"
                 value={identityStrengthValue}

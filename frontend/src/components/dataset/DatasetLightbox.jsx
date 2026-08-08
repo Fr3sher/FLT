@@ -5,10 +5,12 @@
  *
  * The action bar is NOT always at the bottom: beside a portrait image on a wide
  * window it becomes a side rail in the space that image cannot use, which hands
- * the bar's height back to the photo. `lightboxActionPlacement.js` owns that
- * decision and its stability guarantees.
+ * the bar's height back to the photo; below `sm` it becomes ONE button opening a
+ * panel, because on a phone neither axis has room and the picture was being left
+ * 96 px tall. `lightboxActionPlacement.js` owns that decision and its
+ * stability guarantees.
  */
-import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useRef, useState } from 'react';
 import KleinImproveNote from './KleinImproveNote';
 import { lightboxImproveButtons } from '../../utils/improveEngines';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -65,6 +67,47 @@ function ComparePane({ label, url, alt, accent }) {
           className="h-full w-full select-none object-contain" />
       </div>
     </figure>
+  );
+}
+
+/**
+ * Where the action block is MOUNTED — the third placement's whole job.
+ *
+ * In the rail and the bottom bar the actions are a child of the dialog and this
+ * is a pass-through: same element, same DOM order, no wrapper. In the sheet they
+ * become the body of a labelled dialog that slides over the bottom of the
+ * picture, and everything else on screen is unchanged — the image keeps its
+ * zoom, its comparison and its place in the list, because opening this panel
+ * writes ONE boolean and renders nothing else differently.
+ *
+ * It deliberately does NOT trap focus of its own. The lightbox already traps Tab
+ * inside itself; a second trap here would be the one thing this panel must never
+ * do — make the picture, its ⟨ / ⟩ and its ✕ unreachable from the keyboard while
+ * the panel is up.
+ */
+function ActionsHost({ sheet, open, panelId, label, closeRef, onDone, children }) {
+  if (!sheet) return children;
+  if (!open) return null;
+  return (
+    <div id={panelId} role="dialog" aria-label={label}
+      onClick={(e) => e.stopPropagation()}
+      /* max-h-[70vh]: the panel is a drawer over the image, never a new screen.
+         Seeing the picture you are about to rotate is the point of acting from
+         here rather than from a menu. */
+      className="absolute inset-x-0 bottom-0 z-30 flex max-h-[70vh] flex-col
+        rounded-t-2xl border-t border-white/15 bg-neutral-950 shadow-2xl">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-2">
+        <h2 className="min-w-0 truncate text-sm font-semibold text-white">Image actions</h2>
+        <button type="button" ref={closeRef} onClick={onDone}
+          title="Close the actions panel (Esc)" aria-label="Close the actions panel"
+          className="min-h-9 shrink-0 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20">
+          Done
+        </button>
+      </div>
+      {/* The panel scrolls, the page does not: overscroll-contain stops a flick
+          at the end of the list from dragging the lightbox behind it. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">{children}</div>
+    </div>
   );
 }
 
@@ -148,7 +191,9 @@ export default function DatasetLightbox({
      "original" pane onto an image whose parent is somebody else's. Inside the
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
-  const { full, compareMode, improving } = lightboxImageState(storedState, imageId);
+  const {
+    full, compareMode, improving, actionsOpen,
+  } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
      callback and must be compared against the present, not against the past it
@@ -216,6 +261,25 @@ export default function DatasetLightbox({
   }, [ratio, compareMode, actionsLocked]);
 
   const rail = placement === 'rail';
+  const sheet = placement === 'sheet';
+  /* The panel only exists in the sheet: a stale `actionsOpen` left behind by a
+     rotated phone must not paint a bottom sheet over a desktop rail. Derived
+     rather than reset in an effect — there is no frame in which it is wrong. */
+  const panelOpen = sheet && actionsOpen;
+  const panelId = `lightbox-actions${useId()}`;
+  const actionsBtnRef = useRef(null);
+  const panelCloseRef = useRef(null);
+  const closePanel = useCallback(() => {
+    patchImageState({ actionsOpen: false });
+    // Back to the button that opened it, not to the top of the dialog: the
+    // panel is a detour, and losing your place in the tab order on the way out
+    // is how a keyboard user ends up re-walking the whole overlay.
+    actionsBtnRef.current?.focus();
+  }, [patchImageState]);
+  // Opening moves focus INTO the panel. The outer trap keeps Tab in the dialog,
+  // so the image, its arrows and ✕ all stay reachable from there — the panel
+  // deliberately does not trap on its own.
+  useEffect(() => { if (panelOpen) panelCloseRef.current?.focus(); }, [panelOpen]);
 
   // Focus trap keeps Tab inside the dialog (P2-7).
   useFocusTrap(dialogRef, !!(img && img.filename));
@@ -226,7 +290,15 @@ export default function DatasetLightbox({
   const next = nav.next;
   useEffect(() => {
     const onKey = (e) => {
-      if (e.key === 'Escape') { onClose(); return; }
+      /* Escape peels ONE layer: an open actions panel first, the lightbox only
+         once it is closed. Closing everything at once would throw the user out
+         of the image they were about to act on — the panel is a detour, not a
+         second window. */
+      if (e.key === 'Escape') {
+        if (panelOpen) { closePanel(); return; }
+        onClose();
+        return;
+      }
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
       // A shortcut that fires on ⌥←/⇧→ would fight browser history and text
       // selection; and a focused field owns its own caret keys.
@@ -239,7 +311,7 @@ export default function DatasetLightbox({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, prev, next]);
+  }, [onClose, onNavigate, prev, next, panelOpen, closePanel]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -272,7 +344,17 @@ export default function DatasetLightbox({
   // press that resolves after ⟩ cannot reopen a pane on the next image.
   const toggleCompare = (mode) => (event) => {
     event.stopPropagation();
-    patchImageState({ full: false, compareMode: compareMode === mode ? 'none' : mode });
+    // …and the narrow-screen panel closes with it. Entering a comparison is a
+    // request to LOOK at something; leaving the drawer over the two panes you
+    // just asked for would be the bug this placement was written to remove.
+    // The edits (rotate, mirror, improve) deliberately do NOT close it: those
+    // are chained — two quarter turns, then a mirror — and the picture stays
+    // visible above a panel that only claims 70 % of the height.
+    patchImageState({
+      full: false,
+      compareMode: compareMode === mode ? 'none' : mode,
+      actionsOpen: false,
+    });
   };
   const improvementActive = improving || improvePending;
   /* ONE button per engine that can run here, exactly like the selection
@@ -337,7 +419,13 @@ export default function DatasetLightbox({
            stacked pair keeps each image at full width where width is the scarce
            axis. Equal grid cells on both layouts = equal display scale. */
         <div onClick={(e) => e.stopPropagation()}
-          className="flex-1 min-h-0 grid grid-rows-2 grid-cols-1 sm:grid-rows-1 sm:grid-cols-2 gap-2 p-2 sm:p-4">
+          /* The floating ☰ Actions button is the ONE thing allowed to overlap
+             the picture, and in the stacked comparison the bottom pane is drawn
+             right where it sits — so that pane pays for it in padding rather
+             than in a covered chin. It costs each pane ~28 px; the placement it
+             belongs to bought them ~210 each. */
+          className={`flex-1 min-h-0 grid grid-rows-2 grid-cols-1 sm:grid-rows-1 sm:grid-cols-2 gap-2 p-2 sm:p-4 ${
+            sheet ? 'pb-16' : ''}`}>
           <ComparePane label={activeCompare.beforeLabel} alt={alt}
             url={fileUrl(activeCompare.parent.filename, activeParentNonce)} />
           <ComparePane label={activeCompare.afterLabel} alt={alt} url={url} accent />
@@ -377,14 +465,36 @@ export default function DatasetLightbox({
           for a worse one, so nothing here reorders itself; only the axis
           changes. `overflow-y-auto` is the promise that a short window can
           still reach the last action. */}
+      {/* THE one button, and only on a narrow screen. It floats over the
+          picture instead of sitting in a strip of its own, because a strip is
+          exactly the height this placement exists to give back: the panel it
+          opens costs the image nothing while it is closed. It says what it
+          opens — "Actions" alone would be a mystery-meat pill — and its state is
+          carried by aria-expanded, not by its colour. */}
+      {sheet && (
+        <button type="button" ref={actionsBtnRef}
+          onClick={(e) => { e.stopPropagation(); patchImageState({ actionsOpen: !actionsOpen }); }}
+          aria-expanded={actionsOpen} aria-controls={panelId}
+          aria-label={`Image actions for ${alt} — compare, crop, mirror, rotate, improve`}
+          title="Image actions — compare, crop, mirror, rotate, improve"
+          className="absolute bottom-3 left-1/2 z-20 flex min-h-11 -translate-x-1/2 items-center
+            rounded-full border border-white/25 bg-black/75 px-5 py-2 text-sm font-semibold
+            text-white shadow-lg hover:bg-black/90">
+          <span aria-hidden="true">☰&nbsp;</span>Actions
+        </button>
+      )}
+      <ActionsHost sheet={sheet} open={panelOpen} panelId={panelId}
+        label={`Image actions — ${alt}`} closeRef={panelCloseRef} onDone={closePanel}>
       <div onClick={(e) => e.stopPropagation()}
         className={rail
           ? 'shrink-0 flex w-[17rem] flex-col items-stretch gap-2 overflow-y-auto border-l border-white/10 bg-black/60 px-4 pb-4 pt-14'
-          : 'shrink-0 flex flex-wrap items-center justify-center gap-2 px-4 py-2.5 bg-black/60'}>
+          : sheet
+            ? 'flex flex-col items-stretch gap-2 px-4 pb-4 pt-3'
+            : 'shrink-0 flex flex-wrap items-center justify-center gap-2 px-4 py-2.5 bg-black/60'}>
         {/* One group, so the rail stacks four lines of context instead of four
             full-width blocks (a stretched 10 px pill reads as a button). */}
         <div className={`flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${
-          rail ? 'justify-start' : 'justify-center'}`}>
+          rail || sheet ? 'justify-start' : 'justify-center'}`}>
           <span className="text-white text-sm">{alt}</span>
           {/* Where you are in the list you are walking — the answer to "have I
               seen everything?", which arrows alone cannot give. It counts the
@@ -554,6 +664,7 @@ export default function DatasetLightbox({
             right of six buttons. A rule above it ties it to the ✨ it explains. */}
 
       </div>
+      </ActionsHost>
     </div>
   );
 }

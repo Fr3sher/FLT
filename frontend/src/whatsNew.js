@@ -57,11 +57,38 @@ export const WHATS_NEW = [
       'A checkpoint measured to render noise under the identity-edit LoRA used to be removed from every Krea list, so a file sitting in your own Krea folder was simply absent, with nothing on screen saying it existed or why it had gone. Choosing is yours: those builds are listed again and you can select them. What the app still will not do is pick one FOR you when nothing is pinned, because a base chosen in silence has already sent a run onto the wrong model without anyone noticing until the output was wrong. It is only elected automatically when it is the only Krea build you have, which beats refusing to run at all.',
   },
   {
+    id: '2026-08-08-phone-lightbox-image-first',
+    date: '2026-08-08',
+    title: 'On a phone, the image you opened finally gets the screen',
+    blurb:
+      'Opening a dataset image on a phone showed you the buttons, not the picture: '
+      + 'Crop, Mirror, two Rotates, two Improves and the Klein note stacked into six '
+      + 'full-width rows, leaving the photo about 100 px tall — and side-by-side '
+      + 'comparison, the one place where size is the whole point, gave each pane even '
+      + 'less. Below a phone-sized width the lightbox now flips: the image (or both '
+      + 'comparison panes) takes the screen, and every action — compare, crop, mirror, '
+      + 'rotate, improve, upscale, the Klein instruction and its editor — moves behind '
+      + 'one ☰ Actions button that opens a panel over the bottom of the picture. '
+      + 'Measured at 400 px: a single image goes from 96 to 538 px tall with the Klein '
+      + 'editor open, and each comparison pane from 144 to 354 px. Esc closes the panel '
+      + 'first and the image second, and ⟨ / ⟩ still walk the grid. On a desktop nothing '
+      + 'changes — the side rail was already doing this job with space the image cannot use.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-08-a-just-deployed-model-generates-right-away',
     date: '2026-08-08',
     title: 'A model you just deployed works right away, not a minute later',
     blurb:
       'Deploy a checkpoint, hit Generate, and the job died: "Your ComfyUI does not offer a model file this workflow requires", followed by advice to go and check your ComfyUI address — which was right all along. The app reads the list of models ComfyUI offers once a minute and reuses it, so a model deployed seconds ago was judged against a list drawn up before it existed, and the refusal it produced is final: the job was never retried. Now, before a job is refused over a missing model, the app asks ComfyUI again — once, on the spot, ignoring what it had cached — and the model it finds is used immediately, spelled exactly the way that ComfyUI spells it. When the file really is absent the job still stops before queuing, but the explanation has stopped guessing: it now says the list was just re-read, so a fresh deploy is not what you are looking at, which leaves a second ComfyUI install as the thing to check.',
+  },
+  {
+    id: '2026-08-08-krea-tuning-same-four-dials-both-screens',
+    date: '2026-08-08',
+    title: 'Every Krea 2 Edit dial, on both screens that talk about it',
+    blurb:
+      'Krea\'s four calibration dials used to be split three ways: reference grounding was a slider in Settings but only a read-out in the workspace panel, sampler steps existed in Settings alone, and reference pull and identity LoRA strength existed in the panel alone. "Where do I change this?" had a different answer per dial. Now all four — reference grounding, sampler steps, reference pull, identity LoRA strength — are sliders in BOTH places, so you can retune from wherever you happen to be judging the result. There is still exactly one value per dial: every control writes the same global setting, so nothing can disagree with anything. Each slider says in words what its current number means, and offers Reset to default the moment you leave it. The two file-path fields stay in Settings alone — you fill those once at install, not while looking at an image.',
+    to: '/settings/engines',
   },
   {
     id: '2026-08-07-compare-any-image-with-the-reference',

@@ -13,8 +13,10 @@ import assert from 'node:assert/strict';
 import {
   KREA_REF_BOOST_MIN, KREA_REF_BOOST_MAX,
   KREA_IDENTITY_STRENGTH_MIN, KREA_IDENTITY_STRENGTH_MAX,
-  clampDial, clampRefBoost, clampIdentityStrength,
-  refBoostDescription, identityStrengthDescription,
+  KREA_GROUNDING_MIN, KREA_GROUNDING_MAX, KREA_GROUNDING_STEP,
+  KREA_STEPS_MIN, KREA_STEPS_MAX,
+  clampDial, clampRefBoost, clampIdentityStrength, clampGrounding, clampSteps,
+  refBoostDescription, identityStrengthDescription, stepsDescription,
   kreaDialPayload, createDialSaver,
 } from './kreaDials.js';
 
@@ -75,6 +77,50 @@ test('every dial position gets a phrase, and 0 says "off"', () => {
   }
   // The trained weight is named as such rather than left as a bare "1".
   assert.match(identityStrengthDescription(1), /trained/);
+});
+
+// --- the two dials that joined them ------------------------------------------
+
+test('grounding and steps mirror the server clamps too', () => {
+  // krea_edit_helper: GROUNDING_PX_MIN/MAX = 512/1536, _steps() = _clamp(.., 1, 50).
+  assert.deepEqual([KREA_GROUNDING_MIN, KREA_GROUNDING_MAX], [512, 1536]);
+  assert.deepEqual([KREA_STEPS_MIN, KREA_STEPS_MAX], [1, 50]);
+  assert.equal(clampGrounding(9999), 1536);
+  assert.equal(clampGrounding(1), 512);
+  assert.equal(clampSteps(999), 50);
+  assert.equal(clampSteps(0), 1);
+});
+
+test('grounding snaps to the 64px grid the server rounds to', () => {
+  // _grounding() is int(round(v / 64) * 64): a UI showing 1000 while the graph
+  // receives 1024 is exactly the "my settings are ignored" report we chase.
+  assert.equal(clampGrounding(1000) % KREA_GROUNDING_STEP, 0);
+  assert.equal(clampGrounding(1000), 1024);
+  assert.equal(clampGrounding(1216), 1216);   // already on a stop, untouched
+  assert.equal(clampGrounding('768'), 768);   // <input type=range> gives strings
+});
+
+test('steps stay integers — a KSampler cannot run 13.5 of them', () => {
+  assert.equal(clampSteps('13'), 13);
+  assert.equal(clampSteps(13.4), 13);
+  assert.equal(Number.isInteger(clampSteps(7.6)), true);
+});
+
+test('grounding and steps also fall back to the server default, not to 0', () => {
+  assert.equal(clampGrounding(null, 768), 768);
+  assert.equal(clampSteps(undefined, 12), 12);
+  // Backend too old to send config_defaults: the mirrored literal is the
+  // server's OWN fallback (512 / 8), so we land where the graph would.
+  assert.equal(clampGrounding(null, undefined), 512);
+  assert.equal(clampSteps(null, undefined), 8);
+});
+
+test('the two new dials get a phrase as well', () => {
+  for (const v of [1, 8, 20, 50]) {
+    assert.ok(stepsDescription(v).trim().length > 3, `no phrase for steps ${v}`);
+    assert.ok(stepsDescription(v).startsWith(String(v)), 'the phrase must name the value');
+  }
+  assert.match(stepsDescription(50), /no expected quality gain/);
 });
 
 // --- the payload is PARTIAL --------------------------------------------------
