@@ -137,18 +137,18 @@ def test_legacy_krea_default_pair_migrates_on_read_and_persists_on_next_save(tmp
 
     # Reads do not rewrite user configuration, but the corrected profile applies
     # immediately to generation on an upgraded install.
-    assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 0.25
-    assert config.get('krea.steps') == 8
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 12
     untouched = json.loads(path.read_text(encoding='utf-8'))
     assert untouched['krea'] == {'grounding_px': 1024, 'ref_boost': 4.0}
 
     # Its next ordinary Settings save records the one-time migration too.
     config.save_config({'server': {'port': 5051}})
     saved = json.loads(path.read_text(encoding='utf-8'))['krea']
-    assert saved['grounding_px'] == 512
-    assert saved['ref_boost'] == 0.25
-    assert saved['steps'] == 8
+    assert saved['grounding_px'] == 1024
+    assert saved['ref_boost'] == 4.0
+    assert saved['steps'] == 12
     assert saved['calibration_version'] == config.KREA_CALIBRATION_VERSION
 
 
@@ -159,9 +159,9 @@ def test_previous_krea_default_profile_migrates_but_a_v2_custom_profile_survives
         'calibration_version': 2, 'grounding_px': 512, 'ref_boost': 1.0, 'steps': 10,
     }}), encoding='utf-8')
     config = _fresh(monkeypatch, tmp_path)
-    assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 0.25
-    assert config.get('krea.steps') == 8
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 12
 
     path.write_text(json.dumps({'krea': {
         'calibration_version': 2, 'grounding_px': 512, 'ref_boost': 0.5, 'steps': 8,
@@ -207,3 +207,49 @@ def test_a_legacy_krea_pair_with_custom_steps_is_not_rewritten(tmp_path, monkeyp
     assert config.get('krea.grounding_px') == 1024
     assert config.get('krea.ref_boost') == 4.0
     assert config.get('krea.steps') == 20
+
+
+def test_v3_krea_default_profile_migrates_to_v4_but_a_v3_custom_profile_survives(
+        tmp_path, monkeypatch):
+    """v4 = 1024 / 4.0 / 12 — the identity-first profile.
+
+    v3 shipped 512 / 0.25, which is neither calibrated pair the engine ever had
+    (v1 = 1024/4.0, v2 = 512/1.0): the reference pull had drifted to a quarter of
+    v2's. A benchmark on one reference measured 1024/4.0 ahead by +0.17 face
+    similarity on bust framing, with no overlap between the two runs, and at a
+    LOWER pull — so more likeness bought with less recopying, not more.
+
+    This is a deliberate product choice, not a proven optimum: the evidence is
+    one face and four scored images, and it walks back a default the project
+    moved away from twice on purpose (the v1 and v2 profiles were judged too
+    reference-dominated for varied dataset poses). It is recorded here so
+    whoever reconsiders it knows exactly what it rests on.
+
+    An install that never touched the v3 dials follows. Anything else is a
+    choice and is left alone — the same contract every earlier bump honoured.
+    """
+    path = tmp_path / 'config.json'
+    path.write_text(json.dumps({'krea': {
+        'calibration_version': 3, 'grounding_px': 512, 'ref_boost': 0.25, 'steps': 8,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 12
+
+    # One dial moved by hand = a profile the user owns. Untouched, in full.
+    path.write_text(json.dumps({'krea': {
+        'calibration_version': 3, 'grounding_px': 512, 'ref_boost': 2.0, 'steps': 8,
+    }}), encoding='utf-8')
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 512
+    assert config.get('krea.ref_boost') == 2.0
+    assert config.get('krea.steps') == 8
+
+
+def test_a_fresh_install_gets_the_v4_identity_profile(tmp_path, monkeypatch):
+    """No config.json at all: what a brand-new install actually generates with."""
+    config = _fresh(monkeypatch, tmp_path)
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert config.get('krea.steps') == 12

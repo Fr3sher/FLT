@@ -57,6 +57,20 @@ export const WHATS_NEW = [
       'When LDS cannot reach ComfyUI, the banner explaining it offered one button: "I restarted ComfyUI — clear it", which only lets you say someone else fixed it. On an install whose ComfyUI this app can launch, there is now a ▶ Start ComfyUI button right there, and it comes first: it is the one that ends the outage rather than declaring it over. The banner then clears itself once ComfyUI actually answers, so a start that spawns and dies cannot be mistaken for a fix, and your paused job resumes on its own. The button is deliberately absent when your ComfyUI is not ours to launch — ComfyUI Desktop, your own launcher script, or one running on another machine — because on the one screen whose job is to unblock you, a button that fails costs more than no button at all.',
   },
   {
+    id: '2026-08-08-klein-stops-switching-itself-off',
+    date: '2026-08-08',
+    title: 'Picking a Klein model no longer switches Klein off',
+    blurb: 'Choosing a model from the workspace dropdown stored its name without the folder it lives in — and the check that guards that setting only recognised the full path. So the app wrote a value its own guard then called missing, the engine went dark, and the message said no file was missing or broken. Both spellings are now accepted, so nothing you picked was ever wrong. And an unresolvable model no longer takes the whole engine hostage while usable Klein builds sit on your disk: the card asks you to pick one instead. What has not changed is the promise that made that guard exist — a run never quietly loads a file other than the one shown.',
+    to: '/settings/engines',
+  },
+  {
+    id: '2026-08-08-krea-ships-identity-first',
+    date: '2026-08-08',
+    title: 'Krea 2 Edit now ships tuned for likeness, not for variety',
+    blurb: 'Its two identity dials shipped unpaired — reference grounding at 512 with a reference pull of 0.25, a quarter of what the calibrated 512 profile used. A benchmark scoring generated faces against the reference measured the 1024 / 4.0 pair ahead by a clear margin on bust shots, and it got there while pulling LESS hard on the reference, so the likeness is not bought by recopying the pose you asked to change. Both dials, and sampler steps, now ship at those values. If you had never touched them, your next generations will resemble your reference more; if you prefer the looser, more varied restaging, set grounding back to 512 and the pull to 1.0. Anything you had already changed yourself is left exactly as you set it.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-08-one-model-setting-wherever-you-change-it',
     date: '2026-08-08',
     title: 'Change the model where you are working, not in Settings',

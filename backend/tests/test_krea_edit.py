@@ -574,10 +574,11 @@ def test_no_loader_value_is_ever_hardcoded_in_the_graph_builder():
 
 def test_grounding_is_clamped_and_snapped_and_junk_degrades_to_the_default(krea):
     keh, _base, config = krea
-    assert config.get('krea.grounding_px') == 512
-    assert config.get('krea.ref_boost') == 0.25
-    assert keh.grounding_px() == 512
-    assert keh._ref_boost() == 0.25
+    # The v4 identity-first pair — grounding and pull always ship together.
+    assert config.get('krea.grounding_px') == 1024
+    assert config.get('krea.ref_boost') == 4.0
+    assert keh.grounding_px() == 1024
+    assert keh._ref_boost() == 4.0
     config.save_config({'krea': {'grounding_px': 700}})
     assert keh.grounding_px() == 704, 'snapped to the 64px patch grid'
     config.save_config({'krea': {'grounding_px': 99999}})
