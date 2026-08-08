@@ -3113,6 +3113,41 @@ def dataset_canvas_positions_clear(dataset_id):
         return jsonify({'error': 'not found'}), 404
 
 
+@bp.get('/train/canvas/external-loras')
+def canvas_external_loras_get():
+    """🔌 The board's external LoRA plugin nodes, as persisted."""
+    return jsonify({'loras': cfg.get('canvas.external_loras', []) or []})
+
+
+@bp.put('/train/canvas/external-loras')
+def canvas_external_loras_put():
+    """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
+    cap 16, strength clamped [0..2] (default 1.0), x/y coerced to floats."""
+    data = request.get_json(silent=True) or {}
+    cleaned, seen = [], set()
+    for e in (data.get('loras') or []):
+        fn = str((e or {}).get('filename') or '').strip()
+        if not fn or fn in seen:
+            continue
+        seen.add(fn)
+        try:
+            st = max(0.0, min(2.0, round(float(e.get('strength', 1.0)), 2)))
+        except (TypeError, ValueError):
+            st = 1.0
+
+        def _f(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+        cleaned.append({'filename': fn, 'strength': st,
+                        'x': _f(e.get('x')), 'y': _f(e.get('y'))})
+        if len(cleaned) >= 16:
+            break
+    cfg.save_config({'canvas': {'external_loras': cleaned}})
+    return jsonify({'ok': True, 'loras': cleaned})
+
+
 @bp.get('/train/canvas/images')
 def train_canvas_images():
     """🖼 Every image pinned on the ◉ LoRA Canvas, grouped by dataset id, with

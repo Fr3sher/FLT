@@ -259,3 +259,23 @@ def test_studio_route_forwards_external_loras(client, monkeypatch):
         'external_loras': [{'filename': 'detail.safetensors', 'strength': 0.6}]})
     assert r.status_code == 200
     assert seen['external_loras'] == [{'filename': 'detail.safetensors', 'strength': 0.6}]
+
+
+# --- persistence -------------------------------------------------------------
+
+def test_external_lora_nodes_persist_roundtrip(client):
+    """PUT sanitizes (dedupe by filename, clamp strength, coerce x/y) and
+    persists; GET reads back exactly the cleaned list — not the raw body."""
+    body = {'loras': [
+        {'filename': 'detail.safetensors', 'strength': 0.6, 'x': 12.5, 'y': -3},
+        {'filename': 'detail.safetensors', 'strength': 9, 'x': 0, 'y': 0},   # dupe → dropped
+        {'filename': '', 'strength': 1},                                     # empty → dropped
+        {'filename': 'other.safetensors', 'strength': 'x'},                  # bad strength → 1.0
+    ]}
+    r = client.put('/api/train/canvas/external-loras', json=body)
+    assert r.status_code == 200
+    r = client.get('/api/train/canvas/external-loras')
+    got = r.get_json()['loras']
+    assert got == [
+        {'filename': 'detail.safetensors', 'strength': 0.6, 'x': 12.5, 'y': -3.0},
+        {'filename': 'other.safetensors', 'strength': 1.0, 'x': 0.0, 'y': 0.0}]
