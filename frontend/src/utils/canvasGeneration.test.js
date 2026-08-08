@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  anchorDataset, canvasBlendBlocker, canvasCheckpointKey, canvasFamily,
+  anchorDataset, canvasBaseModelAxis, canvasBlendBlocker, canvasCheckpointKey, canvasFamily,
   canvasRunSelections, canvasSelectionSummary, canvasStackKey, canvasStackTriggers,
   canvasStackWeight, canvasStackWithoutTrigger, canvasUndeployed,
   describeCanvasLaunch, isCanvasCheckpointSelected,
@@ -195,4 +195,30 @@ test('the triggers a blend will inject are listed in pick order, de-duplicated',
   assert.deepEqual(canvasStackTriggers(sel), ['aaa', 'BBB']);
   assert.deepEqual(canvasStackWithoutTrigger(sel).map((e) => e.recordId), [30]);
   assert.deepEqual(canvasStackTriggers([]), []);
+});
+
+/* ◉ L'axe des BASES. Le panneau du board dit « BASE MODEL (MULTI) » et laissait
+   cocher plusieurs bases ; le lancement n'en envoyait qu'une (`zModels[0]`) et
+   jetait les autres sans un mot — trois bases cochées, une seule génération.
+   Ce qui est épinglé ici, c'est la VALEUR envoyée, pas la forme du code. */
+
+test('every ticked base model is sent, not just the first', () => {
+  assert.deepEqual(canvasBaseModelAxis(['base_one', 'base_two', 'base_three']), {
+    z_model: 'base_one',
+    z_models: ['base_one', 'base_two', 'base_three'],
+  });
+});
+
+test('nothing ticked stays the run it always was', () => {
+  // `z_model: null` est ce que la route lisait déjà — un backend plus ancien
+  // (ou plus récent) qui ignore `z_models` retrouve exactement l'ancien corps.
+  assert.deepEqual(canvasBaseModelAxis([]), { z_model: null, z_models: [] });
+  assert.deepEqual(canvasBaseModelAxis(null), { z_model: null, z_models: [] });
+  assert.deepEqual(canvasBaseModelAxis(undefined), { z_model: null, z_models: [] });
+});
+
+test('the axis keeps the order it was ticked in, without duplicates', () => {
+  // L'ordre est la lecture : le balayage rend les bases dans cet ordre-là.
+  assert.deepEqual(canvasBaseModelAxis(['b', 'a', 'b']),
+    { z_model: 'b', z_models: ['b', 'a'] });
 });

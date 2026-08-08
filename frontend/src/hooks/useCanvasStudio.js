@@ -40,7 +40,7 @@ import { useCallback, useState } from 'react';
 import { useToast } from '../components/common/Toast';
 import { postJson } from './useDataset';
 import { useLoraTestStudio } from './useLoraTestStudio';
-import { canvasRunSelections, canvasUndeployed } from '../utils/canvasGeneration';
+import { canvasBaseModelAxis, canvasRunSelections, canvasUndeployed } from '../utils/canvasGeneration';
 
 export function useCanvasStudio(selection, family,
   { onDeploy, tracker, blend = false, weights = null, sets = null } = {}) {
@@ -95,9 +95,10 @@ export function useCanvasStudio(selection, family,
       //    not sent at all (the engine replaces it with the head LoRA's weight).
       const d = await postJson('/api/train/canvas/generate', {
         selections, ...(blending ? { combine: true } : { strengths }), seed, prompt,
-        // Cross-dataset runs sweep ONE base model (the comparison engine's
-        // contract); the canvas sends the first pick of the model axis.
-        z_model: (zModels || [])[0] ?? null,
+        // The base model is an AXIS, like every other knob on this panel: the
+        // engine sweeps `z_models` and the scalar rides along for a backend that
+        // predates it (utils/canvasGeneration.canvasBaseModelAxis).
+        ...canvasBaseModelAxis(zModels),
         aspects, cfgs, steps: stepsList, steps2: steps2List, count, ...genSettings,
       });
       if (d.ok) {

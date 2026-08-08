@@ -2472,7 +2472,8 @@ def _combine_weights(sel) -> list:
 
 
 def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None,
-                          z_model=None, aspects=None, cfgs=None, steps_list=None, steps2_list=None,
+                          z_model=None, z_models=None, aspects=None, cfgs=None,
+                          steps_list=None, steps2_list=None,
                           count=1, permanent_loras=None, batch_loras=None, rebalance=None, rebalance_strength=None,
                           negative=None, sampler=None, scheduler=None, weight_dtype=None,
                           enhancer=None, enhancer_strength=None, detail_amount=None,
@@ -2531,7 +2532,12 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         models = get_zimage_models()
         if not models:
             raise ValueError('no Z-Image model available')
-    z_model = z_model if (z_model and z_model in models) else models[0]
+    # Modèle(s) de base — AXE de balayage, exactement comme dans `create_run` :
+    # le Canvas offre « BASE MODEL (MULTI) » et n'en lançait qu'UN, en silence.
+    # z_models (liste) prioritaire ; sinon z_model unique (rétrocompat) ; sinon le 1er.
+    _req_models = list(z_models) if z_models else ([z_model] if z_model else [])
+    _req_models = [None if m in ('', None) else m for m in _req_models]
+    valid_models = [m for m in _req_models if m in models] or [models[0]]
     try:
         seed = int(seed) if seed is not None else random.randint(1, 2**31 - 1)
     except (TypeError, ValueError):
@@ -2611,7 +2617,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
             continue
         _pf_cp = _sel.get('checkpoint')
         if _pf_cp in _pf_allowed:
-            _preflight_run(user_id, run_type, _pf_cp, [z_model], _pf_allowed,
+            _preflight_run(user_id, run_type, _pf_cp, valid_models, _pf_allowed,
                            prompt_axis[0] or identity_prompt(_pf_ds), seeds[0],
                            _sel.get('dataset_id'), getattr(_pf_ds, 'trigger_word', None))
             break
@@ -2687,20 +2693,24 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # checkpoints therefore finish before the first non-zero tested-LoRA cell,
     # while each group's checkpoint-major and strength order stays unchanged.
     cell_plan = []
-    for sel in selections:
-        checkpoint = sel.get('checkpoint')
-        for combo in combos:
-            # En pile, l'axe strengths n'a plus de sens (chaque LoRA porte son
-            # poids) : il vaut le poids de TÊTE de la combinaison courante.
-            combo_strengths = [combo[0]] if combo is not None else strengths
-            for cell in build_matrix([checkpoint], combo_strengths, aspects, cfgs,
-                                     steps_list, steps2_list):
-                cell_plan.append((sel, cell, combo))
+    # Base-major, comme `create_run` : un balayage à une seule base produit
+    # EXACTEMENT le plan d'avant, et à plusieurs les bases se lisent l'une
+    # après l'autre au lieu de s'entrelacer.
+    for zm in valid_models:
+        for sel in selections:
+            checkpoint = sel.get('checkpoint')
+            for combo in combos:
+                # En pile, l'axe strengths n'a plus de sens (chaque LoRA porte son
+                # poids) : il vaut le poids de TÊTE de la combinaison courante.
+                combo_strengths = [combo[0]] if combo is not None else strengths
+                for cell in build_matrix([checkpoint], combo_strengths, aspects, cfgs,
+                                         steps_list, steps2_list):
+                    cell_plan.append((sel, cell, combo, zm))
     cell_plan = _krea_zero_strength_first(
         cell_plan, run_type, lambda planned: planned[1][1])
 
     ids = []
-    for sel, cell, combo in cell_plan:
+    for sel, cell, combo, zm in cell_plan:
         # Les poids des MEMBRES de cette combinaison. `stack_extra` (monté dans le
         # graphe) garde le format des always-on ; seule la copie PERSISTÉE porte
         # l'identité du membre, pour que la vue pile puisse redonner son dataset et
@@ -2732,7 +2742,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
            for cell_seed in seeds:
             img = LoraTestImage(dataset_id=ds.id, checkpoint=cp, strength=strength,
                                 seed=cell_seed, run_seed=seed, run_id=run_id,
-                                status='pending', z_model=z_model, aspect=cell_aspect,
+                                status='pending', z_model=zm, aspect=cell_aspect,
                                 prompt=cell_prompt, cfg=cell_cfg, steps=cell_steps, steps2=cell_steps2,
                                 extra_loras=cell_extra_json, krea_rebalance=cell_rebalance,
                                 negative=knobs['negative'], sampler=knobs['sampler'],
@@ -2746,8 +2756,11 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                                 step=origin_of.get(cp, (None, None))[1])
             _persist_and_enqueue_cell(
                 img, user_id, ds.id, cell_prompt,
-                lambda: _build_cell_workflow(user_id, cp, strength, cell_prompt,
-                                     cell_seed, z_model, allowed, width=width,
+                # `zm` est lié PAR DÉFAUT, pas capturé : le graphe est construit
+                # après coup, et une capture tardive donnerait à toutes les
+                # cellules la base de la DERNIÈRE — un balayage qui ment.
+                lambda _zm=zm: _build_cell_workflow(user_id, cp, strength, cell_prompt,
+                                     cell_seed, _zm, allowed, width=width,
                                      height=height, cfg=cell_cfg, steps=cell_steps,
                                      steps2=cell_steps2, dataset_id=ds.id,
                                      train_type=run_type, extra_loras=wf_extra,

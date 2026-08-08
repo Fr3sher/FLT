@@ -226,6 +226,7 @@ def studio_run():
         res = lts.create_comparison_run(
             LOCAL_USER, d.get('selections') or [], d.get('strengths') or [],
             seed=d.get('seed'), prompt=d.get('prompt'), z_model=d.get('z_model'),
+            z_models=d.get('z_models'),
             aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
             steps2_list=d.get('steps2'), count=d.get('count'),
             permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),
