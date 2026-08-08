@@ -134,6 +134,28 @@ def _cells():
 # Plafond dur d'images par run (~4-6 min de GPU max en Z-Image Turbo).
 MAX_TEST_IMAGES = 24
 
+# 🔆 LA plage de force d'un LoRA dans cette app — UN seul couple de bornes.
+#
+# Elle borne DEUX choses qui ne se ressemblent pas mais atterrissent dans la
+# même colonne (`LoraTestImage.strength`) : l'axe de balayage « Strengths » du
+# Test Studio, et le poids de TÊTE d'une pile 🧬 Blend (create_comparison_run
+# fait passer `combo[0]` par build_matrix). Deux bornes séparées ont donc un
+# mode de panne précis et silencieux : un blend réglé au-dessus de la borne de
+# l'axe n'est pas rendu plus faible, il est REFUSÉ, run entier compris.
+#
+# Le plafond est passé de 4.0 à 5.0 le 08/08/2026. C'était un plafond de
+# confort : rien côté ComfyUI n'interdit d'aller plus haut, et pousser un LoRA
+# sous-entraîné ou un style qu'on veut écrasant sont des usages réels qui
+# obligeaient à sortir de l'app. Ça reste un plafond — au-delà ce n'est plus
+# « fort », c'est du bruit — et le plancher négatif ne bouge pas : -2.0 est le
+# pôle inverse d'un slider LoRA, pas une force.
+#
+# ⚠️ Miroirs côté navigateur, à bouger dans le MÊME commit :
+#   frontend/src/components/dataset/studio/loraStack.js  (COMBINE_MAX_WEIGHT)
+#   frontend/src/components/dataset/studio/constants.js  (STRENGTH_CHOICES_EXTENDED)
+MIN_LORA_STRENGTH = -2.0
+MAX_LORA_STRENGTH = 5.0
+
 # Prompt preset d'identité (le trigger word du dataset est substitué).
 IDENTITY_PROMPT_TEMPLATE = "{trigger}, close-up portrait, neutral expression, looking at camera"
 
@@ -733,14 +755,22 @@ def _unknown_submit_recovery(rows, activity):
 
 def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=None, steps2_list=None) -> list[tuple]:
     """Materialize the (checkpoint, strength, aspect) grid cells, validated:
-    non-empty checkpoint/strength axes, strengths in [-2.0, 4.0] (0 = base model /
+    non-empty checkpoint/strength axes, strengths in [MIN_LORA_STRENGTH,
+    MAX_LORA_STRENGTH] (0 = base model /
     LoRA off, a valid control column; above 2.0 = over-cook / breaking-point range,
     behind the « + » disclosure in the UI; NEGATIVE = the LoRA pulled the other
     way — the whole point of a slider LoRA, and a legit probe for any LoRA —
     behind a symmetric « − » disclosure) (deduped, order
     kept), aspects within the whitelist (deduped, défaut 9:16). PAS de plafond sur
     le nombre de cellules : la file est sérielle et l'utilisateur voit le compte +
-    l'estimation de durée avant de lancer (choix assumé sur sa propre machine)."""
+    l'estimation de durée avant de lancer (choix assumé sur sa propre machine).
+
+    ⚠️ Ce plafond n'est PAS seulement celui de l'axe de balayage. En mode 🧬 Blend,
+    le poids de TÊTE de chaque combinaison passe par ici (cf. create_comparison_run :
+    `combo_strengths = [combo[0]]`) et atterrit dans la même colonne
+    `LoraTestImage.strength`. Un plafond de blend plus haut que celui-ci ne
+    donnerait donc pas un rendu clampé mais un run REFUSÉ — c'est pour ça qu'il
+    n'y a qu'un nombre, ici, et que COMBINE_MAX_WEIGHT le réutilise."""
     cps = [c for c in (checkpoints or []) if isinstance(c, str) and c.strip()]
     sts = []
     for s in (strengths or []):
@@ -748,8 +778,9 @@ def build_matrix(checkpoints, strengths, aspects=None, cfgs=None, steps_list=Non
             v = round(float(s), 2)
         except (TypeError, ValueError):
             raise ValueError(f'invalid strength: {s!r}')
-        if not -2.0 <= v <= 4.0:
-            raise ValueError(f'strength out of range [-2.0, 4.0]: {v}')
+        if not MIN_LORA_STRENGTH <= v <= MAX_LORA_STRENGTH:
+            raise ValueError(
+                f'strength out of range [{MIN_LORA_STRENGTH}, {MAX_LORA_STRENGTH}]: {v}')
         if v not in sts:
             sts.append(v)
     asp = []
@@ -2440,11 +2471,20 @@ def create_run(user_id, dataset_id, checkpoints, strengths, seed=None, prompt=No
             'run_id': run_id, 'ids': ids}
 
 
+# 🧬 Plafond d'un poids de blend (pile combinée) — la borne haute de la plage
+# commune ci-dessus, pas un second nombre. Le poids de tête d'une combinaison
+# traverse build_matrix : un plafond de blend au-dessus du sien ferait échouer
+# le run au lieu de le clamper. Miroir navigateur : `COMBINE_MAX_WEIGHT` dans
+# frontend/src/components/dataset/studio/loraStack.js.
+COMBINE_MAX_WEIGHT = MAX_LORA_STRENGTH
+
+
 def _combine_weight(sel) -> float:
-    """Poids d'un LoRA dans une pile combinée : 0..2, arrondi au centième,
-    1.0 par défaut/valeur illisible (même clamp que les LoRA always-on)."""
+    """Poids d'un LoRA dans une pile combinée : 0..COMBINE_MAX_WEIGHT, arrondi au
+    centième, 1.0 par défaut/valeur illisible."""
     try:
-        return max(0.0, min(2.0, round(float((sel or {}).get('weight', 1.0)), 2)))
+        return max(0.0, min(COMBINE_MAX_WEIGHT,
+                            round(float((sel or {}).get('weight', 1.0)), 2)))
     except (TypeError, ValueError):
         return 1.0
 
@@ -2453,7 +2493,7 @@ def _combine_weights(sel) -> list:
     """Les poids que CE LoRA balaye dans la pile : la liste `weights` si elle est
     fournie (cases de poids du panneau 🧬 Blend), sinon le scalaire `weight`.
 
-    Toujours non vide, clampée 0..2, arrondie au centième, dédupliquée en gardant
+    Toujours non vide, clampée 0..COMBINE_MAX_WEIGHT, arrondie au centième, dédupliquée en gardant
     l'ordre reçu. Une sélection qui ne parle que de `weight` (client d'avant le
     balayage, ou repli d'un frontend neuf sur un backend ancien) rend donc
     exactement une valeur — le balayage est ADDITIF, il ne réinterprète rien."""
@@ -2463,7 +2503,7 @@ def _combine_weights(sel) -> list:
     out = []
     for v in raw:
         try:
-            w = max(0.0, min(2.0, round(float(v), 2)))
+            w = max(0.0, min(COMBINE_MAX_WEIGHT, round(float(v), 2)))
         except (TypeError, ValueError):
             continue
         if w not in out:
