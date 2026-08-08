@@ -2479,7 +2479,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                           enhancer=None, enhancer_strength=None, detail_amount=None,
                           resolution_tier=None, resolution_multiplier=None,
                           init_image=None, denoise=None, combine=None,
-                          prompts=None) -> dict:
+                          prompts=None, external_loras=None) -> dict:
     """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
     [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
     (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
@@ -2499,7 +2499,13 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     n'a alors plus de sens (chaque LoRA a son poids) : il est remplacé par le poids
     du 1er LoRA de la pile. La règle « un run = une seule famille » vaut aussi ici —
     combiner un LoRA Krea et un LoRA SDXL est impossible (bases et workflows
-    différents), et c'est refusé avec un message nommant les familles."""
+    différents), et c'est refusé avec un message nommant les familles.
+
+    `external_loras` (Canvas plugin nodes) : `[{filename, strength}]` de N'IMPORTE
+    QUEL fichier models/loras, stacké sur CHAQUE cellule via le même canal
+    `extra_loras` que les always-on — mais sans restriction au pool de la famille :
+    un nom introuvable est une erreur dure (jamais un skip silencieux), et l'arch
+    preflight le couvre comme un checkpoint normal."""
     if not selections:
         raise ValueError('no LoRA selected')
     reason = gpu_busy_reason()
@@ -2566,6 +2572,24 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         except (TypeError, ValueError):
             st = 1.0
         extra_loras.append({'filename': fn, 'strength': st})
+    # 🔌 External LoRAs (Canvas plugin nodes): ANY models/loras file, stacked on
+    # top of every cell via the same extra_loras channel. Unlike always-on LoRA
+    # they are NOT restricted to the family pool, so validation is fail-closed:
+    # a name that does not resolve under a loras root is a hard error, never a
+    # silent skip.
+    externals = []
+    for e in (external_loras or []):
+        fn = str((e or {}).get('filename') or '').strip()
+        if not fn or any(x['filename'] == fn for x in externals):
+            continue
+        if not _resolve_lora_abs_path(fn):
+            raise ValueError(f'external LoRA not found: {fn}')
+        try:
+            st = max(0.0, min(2.0, round(float(e.get('strength', 1.0)), 2)))
+        except (TypeError, ValueError):
+            st = 1.0
+        externals.append({'filename': fn, 'strength': st, 'external': True})
+    extra_loras.extend(externals)
     # Axe « ⚖ batch » : chaque config tourne une fois SANS puis une fois AVEC
     # chaque LoRA coché batch (même mécanique que create_run).
     batch_axis = _batch_lora_axis(batch_loras, run_type)
@@ -2591,8 +2615,10 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # checkpoint sélectionné, lue dans son en-tête, doit correspondre à la famille
     # du run — sinon ComfyUI le droppe en silence (grille no-op). Vérifié AVANT
     # toute ligne → 409 actionnable.
-    _preflight_checkpoint_arch(run_type,
-                               [s.get('checkpoint') for s in selections if s.get('checkpoint')])
+    _preflight_checkpoint_arch(
+        run_type,
+        [s.get('checkpoint') for s in selections if s.get('checkpoint')]
+        + [x['filename'] for x in externals])
     # Un dataset = UN scan de LoRA. `list_test_checkpoints` walks the family's whole
     # LoRA folder (and stats every match): its result only depends on (dataset, family),
     # so a 24-cell grid over 8 checkpoints of the same dataset re-scanned that folder 9
