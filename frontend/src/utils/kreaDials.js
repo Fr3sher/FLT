@@ -1,26 +1,45 @@
-/* Krea 2 Edit's two hidden dials — `krea.ref_boost` and
-   `krea.identity_lora_strength` — made adjustable from the screen where they
-   are actually judged. PURE JS (no JSX) so `node --test` can exercise it, the
-   same split as kreaEngine.js.
+/* Krea 2 Edit's FOUR calibration dials — `grounding_px`, `steps`, `ref_boost`
+   and `identity_lora_strength` — each editable from BOTH surfaces that talk
+   about them. PURE JS (no JSX) so `node --test` can exercise it, the same split
+   as kreaEngine.js.
 
-   WHY THESE TWO WERE UNREACHABLE
-   ------------------------------
-   Both are real config keys the graph reads on every Krea run
-   (krea_edit_helper._ref_boost / _identity_strength), both are clamped
-   server-side, and NEITHER had an input anywhere in the app. So the only way to
-   move them was to hand-edit config.json — which meant that when likeness came
-   out too weak, the one lever that fixes it was the one nobody could touch.
+   WHY TWO OF THEM WERE UNREACHABLE
+   --------------------------------
+   `ref_boost` and `identity_lora_strength` are real config keys the graph reads
+   on every Krea run (krea_edit_helper._ref_boost / _identity_strength), both
+   clamped server-side, and NEITHER had an input anywhere in the app. So the only
+   way to move them was to hand-edit config.json — which meant that when likeness
+   came out too weak, the one lever that fixes it was the one nobody could touch.
    `grounding_px` and `ref_boost` used to ship as a matched pair (v1 = 1024/4.0,
    v2 = 512/1.0); raise the first alone and you land on a combination no shipped
    profile ever calibrated, with no way to bring the second along.
 
-   SCOPE: these write the GLOBAL setting, exactly like the Settings page does.
-   There is no per-run copy — see the panel comment in VariationCatalog.jsx for
-   why a second truth would be worse than a wide one.
+   WHY ALL FOUR NOW LIVE ON BOTH SCREENS
+   -------------------------------------
+   They used to be split three ways — grounding editable in Settings and a
+   read-out in the panel, two dials editable only in the panel, steps only in
+   Settings — so "where do I change this?" had a different answer per dial. The
+   rule that replaces that: there is exactly ONE value per key, the global
+   setting; every control writes THAT key through the same endpoint. Duplicating
+   the control therefore cannot create a second truth — there is nothing to keep
+   in sync, only two doors onto the same value. The two PATH fields
+   (`base_model`, `identity_lora`) stay in Settings alone on purpose: they are
+   filled once at install, not adjusted while judging an image.
 
    The SERVER stays the authority: it re-clamps every value it is sent. The
    bounds here only stop the UI from offering a number that would be silently
    corrected. */
+
+// Mirrors krea_edit_helper.GROUNDING_PX_MIN / GROUNDING_PX_MAX. The 64 px step
+// is the vision encoder's patch grid — anything between two stops is rounded.
+export const KREA_GROUNDING_MIN = 512;
+export const KREA_GROUNDING_MAX = 1536;
+export const KREA_GROUNDING_STEP = 64;
+
+// Mirrors krea_edit_helper._steps()'s clamp: _clamp(..., 1, 50, 8.0).
+export const KREA_STEPS_MIN = 1;
+export const KREA_STEPS_MAX = 50;
+export const KREA_STEPS_STEP = 1;
 
 // Mirrors krea_edit_helper._ref_boost's clamp: _clamp(..., 0.0, 10.0, 0.25).
 export const KREA_REF_BOOST_MIN = 0;
@@ -57,6 +76,31 @@ export const clampRefBoost = (v, fallback) =>
 export const clampIdentityStrength = (v, fallback) =>
   round2(clampDial(v, KREA_IDENTITY_STRENGTH_MIN, KREA_IDENTITY_STRENGTH_MAX,
     clampDial(fallback, KREA_IDENTITY_STRENGTH_MIN, KREA_IDENTITY_STRENGTH_MAX, 1.0)));
+
+/* Grounding is quantised server-side (`int(round(v / 64) * 64)`), so the UI
+   snaps to the same grid rather than showing a number the graph would move. */
+export const clampGrounding = (v, fallback) => {
+  const raw = clampDial(v, KREA_GROUNDING_MIN, KREA_GROUNDING_MAX,
+    clampDial(fallback, KREA_GROUNDING_MIN, KREA_GROUNDING_MAX, 512));
+  return Math.round(raw / KREA_GROUNDING_STEP) * KREA_GROUNDING_STEP;
+};
+
+/* `8` is krea_edit_helper._steps()'s own fallback AND DEFAULTS['krea']['steps'],
+   so a backend too old to send config_defaults still lands where the graph runs. */
+export const clampSteps = (v, fallback) => Math.round(
+  clampDial(v, KREA_STEPS_MIN, KREA_STEPS_MAX,
+    clampDial(fallback, KREA_STEPS_MIN, KREA_STEPS_MAX, 8)));
+
+/** What the sampler-step count currently means. Krea 2 Turbo is
+ *  guidance-distilled: past its calibrated window more steps buy waiting, not
+ *  quality, and that is exactly what a bare number fails to say. */
+export function stepsDescription(value) {
+  const n = clampSteps(value);
+  if (n <= 4) return `${n} · very fast, expect soft or unfinished detail`;
+  if (n <= 12) return `${n} · the calibrated window for Krea 2 Turbo`;
+  if (n <= 25) return `${n} · slower, marginal gain on this pipeline`;
+  return `${n} · long renders for no expected quality gain here`;
+}
 
 /** What the reference-pull dial currently means, in one short phrase. A bare
  *  number is not a setting — same reasoning as groundingDescription. */
