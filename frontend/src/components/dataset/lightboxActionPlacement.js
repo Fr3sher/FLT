@@ -5,7 +5,24 @@
  * black and the buttons still queued on one line under it: the actions pay rent
  * on the ONE axis the image is already short of.
  *
- * The rule is geometric, not a portrait/landscape label, because "portrait" is
+ * ── THE THIRD ANSWER: 'sheet' (narrow screens) ──────────────────────────────
+ * The two placements below both assume the actions can sit NEXT TO the image on
+ * one axis or the other. On a phone neither axis has room. Measured on a 400 px
+ * screen: the bar wraps to six full-width rows plus the Klein note (which now
+ * carries a fold-out instruction editor), the image is left 96 px tall — 11 %
+ * of the screen — and in comparison mode the two panes get 144 px EACH, which is the
+ * exact opposite of what a comparison is for. Nothing overflowed horizontally
+ * there, which is why a scrollWidth check called this layout fine; the axis
+ * being confiscated was height.
+ *
+ * So below `SHEET_MAX_VIEWPORT_PX` (Tailwind `sm`, the width at which every
+ * button in the bar becomes full-width and the bar stops being a row) the whole
+ * lightbox flips: the image — or both comparison panes — takes the screen, and
+ * EVERY action moves behind one button into a labelled panel. This answer
+ * outranks the comparison and the geometry below it: a comparison on a phone is
+ * the case that needs the height most, not least.
+ *
+ * The rule below is geometric, not a portrait/landscape label, because "portrait" is
  * not what makes a rail free. With `object-contain` the image is drawn at
  * `min(boxW / w, boxH / h)`. When it is HEIGHT-limited — when the leftover
  * width still fits it drawn at full height — taking width away costs the image
@@ -34,7 +51,8 @@
  *    with 12 % margin, leaving it needs it to fail by 12 %. Dragging a window
  *    edge across the threshold therefore cannot oscillate.
  *  - `RAIL_EXIT_VIEWPORT_PX`: the same dead band on the viewport floor, so
- *    1024 px is not a flip-flop point either.
+ *    1024 px is not a flip-flop point either. `SHEET_EXIT_VIEWPORT_PX` is the
+ *    same idea at the other end, for the sheet.
  *  - `locked`: while a pixel edit is in flight the current placement is
  *    returned verbatim, whatever the geometry says.
  * Both dead bands apply ONLY once a placement is in force. The opening decision
@@ -52,6 +70,14 @@ export const RAIL_WIDTH_PX = 272;
 /** No rail below this viewport width (Tailwind `lg`). */
 export const MIN_RAIL_VIEWPORT_PX = 1024;
 
+/** Below this width every action moves into the sheet (Tailwind `sm`). It is
+ *  the SAME number the buttons already switch on (`w-full sm:w-auto`): below it
+ *  the bar is a stack of full-width rows, not a bar. */
+export const SHEET_MAX_VIEWPORT_PX = 640;
+
+/** An existing sheet survives up to here — dead band on the width above. */
+export const SHEET_EXIT_VIEWPORT_PX = 704;
+
 /** An existing rail survives down to here — dead band on the floor above. */
 export const RAIL_EXIT_VIEWPORT_PX = 960;
 
@@ -60,17 +86,21 @@ export const PLACEMENT_HYSTERESIS = 0.12;
 
 const positive = (n) => typeof n === 'number' && Number.isFinite(n) && n > 0;
 
+/** The three answers. Anything else means "no placement in force yet". */
+const PLACEMENTS = new Set(['rail', 'bottom', 'sheet']);
+
 /**
  * @param {object} input
  * @param {number} input.viewportWidth
  * @param {number} input.viewportHeight
  * @param {number} [input.imageWidth]   intrinsic px — unknown until the image loads
  * @param {number} [input.imageHeight]
- * @param {'rail'|'bottom'|null} [input.current]  placement in force right now;
- *   omit it for the FIRST decision (mount), where there is nothing to stabilise
+ * @param {'rail'|'bottom'|'sheet'|null} [input.current]  placement in force right
+ *   now; omit it for the FIRST decision (mount), where there is nothing to
+ *   stabilise
  * @param {boolean} [input.comparing]  side-by-side mode: both panes want the width
  * @param {boolean} [input.locked]     an action is running — do not move anything
- * @returns {'rail'|'bottom'}
+ * @returns {'rail'|'bottom'|'sheet'}
  */
 export function decideActionPlacement({
   viewportWidth,
@@ -81,17 +111,24 @@ export function decideActionPlacement({
   comparing = false,
   locked = false,
 } = {}) {
-  const held = current === 'rail' ? 'rail' : 'bottom';
   // No placement in force yet = this is the opening decision. Hysteresis exists
   // to stop a bar changing side under a pointer while a window edge is dragged;
   // applied to the FIRST answer it is not stability, it is a thumb on the scale
   // towards whatever the default happens to be — and the default is 'bottom'.
-  const settling = current === 'rail' || current === 'bottom';
-  // Comparison first, and it outranks the lock: entering it is a full relayout
+  const settling = PLACEMENTS.has(current);
+  const held = settling ? current : 'bottom';
+  if (!positive(viewportWidth) || !positive(viewportHeight)) return 'bottom';
+  // THE NARROW SCREEN OUTRANKS EVERYTHING BELOW, the comparison included. On a
+  // phone the bar is not a bar, it is a stack that leaves the picture 96 px
+  // tall — and a comparison forced back to that stack gets TWO ~100 px panes,
+  // which is the one reading it exists to make possible.
+  const sheetFloor = (settling && held === 'sheet')
+    ? SHEET_EXIT_VIEWPORT_PX : SHEET_MAX_VIEWPORT_PX;
+  if (viewportWidth < sheetFloor) return 'sheet';
+  // Comparison next, and it outranks the lock: entering it is a full relayout
   // the user asked for, and its two panes split the width the rail would take.
   if (comparing) return 'bottom';
   if (locked) return held;
-  if (!positive(viewportWidth) || !positive(viewportHeight)) return 'bottom';
   // Unknown intrinsic size → the bottom bar, which fits every shape. Never a
   // guess: guessing is what makes the bar jump when the image finally paints.
   if (!positive(imageWidth) || !positive(imageHeight)) return 'bottom';

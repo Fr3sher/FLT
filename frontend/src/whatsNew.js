@@ -50,6 +50,25 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-phone-lightbox-image-first',
+    date: '2026-08-08',
+    title: 'On a phone, the image you opened finally gets the screen',
+    blurb:
+      'Opening a dataset image on a phone showed you the buttons, not the picture: '
+      + 'Crop, Mirror, two Rotates, two Improves and the Klein note stacked into six '
+      + 'full-width rows, leaving the photo about 100 px tall — and side-by-side '
+      + 'comparison, the one place where size is the whole point, gave each pane even '
+      + 'less. Below a phone-sized width the lightbox now flips: the image (or both '
+      + 'comparison panes) takes the screen, and every action — compare, crop, mirror, '
+      + 'rotate, improve, upscale, the Klein instruction and its editor — moves behind '
+      + 'one ☰ Actions button that opens a panel over the bottom of the picture. '
+      + 'Measured at 400 px: a single image goes from 96 to 538 px tall with the Klein '
+      + 'editor open, and each comparison pane from 144 to 354 px. Esc closes the panel '
+      + 'first and the image second, and ⟨ / ⟩ still walk the grid. On a desktop nothing '
+      + 'changes — the side rail was already doing this job with space the image cannot use.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-08-a-just-deployed-model-generates-right-away',
     date: '2026-08-08',
     title: 'A model you just deployed works right away, not a minute later',

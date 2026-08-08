@@ -1780,6 +1780,18 @@ const TOPICS = [
      'counter', 'first image', 'last image', 'wrap', 'loop', 'end of the list',
      'crosses pages', 'page', 'filters', 'sort'],
     '/datasets?section=images', 'using-the-app', 'move-through-a-dataset-without-closing-the-image'),
+  // ☰ Actions — the one button the whole action list moves behind on a phone.
+  // Its own topic because the question it raises is "where did Crop go?", which
+  // no other topic answers: the buttons are not hidden, they are one tap away,
+  // and Esc now means two different things depending on what is open.
+  action('action-lightbox-phone-actions', 'Inspect an image on a phone',
+    ['phone', 'mobile', 'tablet', 'small screen', 'narrow', 'portrait mode',
+     'actions', 'actions button', 'hamburger', 'menu', 'panel', 'drawer',
+     'sheet', 'where is crop', 'no crop button', 'missing buttons', 'buttons gone',
+     'image too small', 'thumbnail', 'tiny image', 'cannot see the image',
+     'lightbox', 'full screen', 'inspect', 'compare on a phone', 'side by side',
+     'escape', 'esc', 'close the panel', 'klein note', 'instruction editor'],
+    '/datasets?section=images', 'using-the-app', 'inspect-an-image-on-a-phone'),
   // The lightbox's ⧉ Compare with original. Its whole point is that the two
   // panes are shown at the SAME scale — the guide section explains why, and why
   // 100 % zoom is deliberately off in that mode.

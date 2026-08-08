@@ -49,9 +49,21 @@
  * 'reference' is the honest shape. It replaced a boolean `comparing`; keeping
  * the state in one slot is what makes "moving image closes whichever pane was
  * open" true for both without a second reset path.
+ *
+ * `actionsOpen` — the narrow-screen actions panel — lives here for the same
+ * reason, not because a panel belongs to a picture: it is a full-screen overlay
+ * on a phone, and ⟩ pressed behind it would otherwise land you on an image you
+ * cannot see, under a panel you did not reopen. Sharing the stamped slot makes
+ * "moving image gives you the picture back" structural, like the two panes.
  */
 export function freshLightboxImageState(imageId) {
-  return { imageId: imageId ?? null, full: false, compareMode: 'none', improving: false };
+  return {
+    imageId: imageId ?? null,
+    full: false,
+    compareMode: 'none',
+    improving: false,
+    actionsOpen: false,
+  };
 }
 
 /**

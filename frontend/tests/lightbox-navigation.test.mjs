@@ -99,10 +99,15 @@ test('state computed for one image is never rendered for another', () => {
   // comparisons (against the original, against the reference photo) — the
   // reference one is the dangerous one to carry over, since it is offered on
   // every image and would silently follow you all the way down the grid.
-  const stale = { imageId: 11, full: true, compareMode: 'reference', improving: true }
+  // `actionsOpen` joined them for a narrow-screen reason: the panel is a
+  // full-screen drawer on a phone, and ⟩ pressed behind it would land you on an
+  // image you cannot see, under a panel you never reopened.
+  const stale = {
+    imageId: 11, full: true, compareMode: 'reference', improving: true, actionsOpen: true,
+  }
   const live = lightboxImageState(stale, 22)
   assert.deepEqual(live, {
-    imageId: 22, full: false, compareMode: 'none', improving: false,
+    imageId: 22, full: false, compareMode: 'none', improving: false, actionsOpen: false,
   })
   // The derived pane is the one that would be actively MISLEADING: captioned
   // "Original", showing the previous image's parent.

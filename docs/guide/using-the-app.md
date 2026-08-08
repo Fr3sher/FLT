@@ -1573,6 +1573,40 @@ improve) wait for the pass.
 The rescue pairs in **Curation** are the one place with no arrows: there you are
 judging one pair, not walking a list.
 
+## Inspect an image on a phone
+
+Below a phone-sized window the lightbox changes shape, and it is the same
+picture, the same actions and the same keys — only their arrangement moves.
+
+- **The image takes the screen.** In a side-by-side comparison, both panes do.
+- **Every action moves behind one button**, the **☰ Actions** pill floating at
+  the bottom of the picture: compare with the original, compare with the
+  reference, crop, mirror, rotate left and right, improve, upscale, the Klein
+  instruction with its editor and its model, and the links to Settings. Nothing
+  is dropped and nothing is renamed — it is the same list, in the same order,
+  in a panel instead of a strip.
+- **The panel is a drawer, not a new screen.** It covers the bottom of the
+  picture and leaves the top of it visible, so you can see what you are about to
+  rotate. **Esc** peels one layer: it closes the panel first, and the lightbox
+  only once the panel is closed. **Done** and the pill itself close it too.
+- **Asking to compare closes the drawer**, because a comparison is a request to
+  *look* at something. The edits (rotate, mirror, improve) leave it open — those
+  get chained.
+- **⟨ / ⟩ and the ← → keys still walk the grid**, and moving to another image
+  closes the panel with the picture it belonged to.
+
+Why it changed: at 400 px the old bar was not a bar. Crop, Mirror, two Rotates,
+two Improve buttons and the Klein note each took a full-width row, and with the
+Klein instruction editor unfolded the photo itself was left **96 px tall** —
+about 11 % of the screen. Side-by-side comparison, where size is the entire
+point, gave each pane **144 px**. Measured again after the change, on the same
+screen: **538 px** for a single image whatever the editor is doing, and **354 px
+per pane** in comparison.
+
+On a desktop none of this applies: the actions stay in the bottom bar, or in the
+side rail beside a portrait photo, which already spends width the image cannot
+use.
+
 ## Compare an improved image with the original
 
 Two things in the app never overwrite an image — they add a **candidate** next
