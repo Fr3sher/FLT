@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-krea-tuning-same-four-dials-both-screens',
+    date: '2026-08-08',
+    title: 'Every Krea 2 Edit dial, on both screens that talk about it',
+    blurb:
+      'Krea\'s four calibration dials used to be split three ways: reference grounding was a slider in Settings but only a read-out in the workspace panel, sampler steps existed in Settings alone, and reference pull and identity LoRA strength existed in the panel alone. "Where do I change this?" had a different answer per dial. Now all four — reference grounding, sampler steps, reference pull, identity LoRA strength — are sliders in BOTH places, so you can retune from wherever you happen to be judging the result. There is still exactly one value per dial: every control writes the same global setting, so nothing can disagree with anything. Each slider says in words what its current number means, and offers Reset to default the moment you leave it. The two file-path fields stay in Settings alone — you fill those once at install, not while looking at an image.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-07-compare-any-image-with-the-reference',
     date: '2026-08-07',
     title: 'Check any image against your reference photo, side by side',
