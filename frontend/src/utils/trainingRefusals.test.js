@@ -163,6 +163,9 @@ test('the retry lane can answer every pre-flight guard Start can answer', () => 
     // delivery lands here first and its size is an estimate.
     'allow_local_disk',
     'allow_not_ready',
+    // A second cloud run of the same family on the same dataset — the retry
+    // lane's sibling can hit this too (auto-retry replays it).
+    'allow_parallel_run',
     'allow_uncaptioned',
     'allow_unverified_weights',
   ]);

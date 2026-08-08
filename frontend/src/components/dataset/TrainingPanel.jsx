@@ -2092,11 +2092,17 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
   // Compat: older servers (or a stale poll) may still answer with only the
   // single `active` field — fall back to a 1-element list built from it.
   const actives = cloudStatus.actives || (cloudStatus.active ? [cloudStatus.active] : []);
-  // Per-(dataset, family): switching the LoRA-type selector shows THAT
-  // family's run. A run without train_type (older server payload) matches
-  // any family, preserving the previous behavior.
-  const cloudActiveHere = actives.find((a) => a.dataset_id === ds.currentId
+  // Per-(dataset, family) as before — but PLURAL now: two same-family runs may
+  // train this dataset at once (settings A/B). A run without train_type (older
+  // server payload) matches any family, preserving the previous behavior.
+  const cloudActivesHere = actives.filter((a) => a.dataset_id === ds.currentId
     && (!a.train_type || a.train_type === trainType));
+  // Which of them the card + progress + checkpoint link follow. View state
+  // only (never server state): defaults to the newest, snaps back when the
+  // selected run leaves the active list.
+  const [selectedCloudRunId, setSelectedCloudRunId] = useState(null);
+  const cloudActiveHere = cloudActivesHere.find((a) => a.run_id === selectedCloudRunId)
+    || cloudActivesHere[cloudActivesHere.length - 1] || null;
   const cloudLastHere = cloudStatus.last
     && cloudStatus.last.dataset_id === ds.currentId
     && (!cloudStatus.last.train_type || cloudStatus.last.train_type === trainType)
@@ -2412,11 +2418,45 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
 
       {/* Cloud run progress + stop (this dataset only) — separate from the local
           poll above; runs entirely on the vast.ai pod. */}
+      {cloudActivesHere.length > 1 && (() => {
+        // Two runs whose frozen dataset generations differ are NOT a settings
+        // A/B any more — mark the odd ones out against the newest run.
+        const newestFp = cloudActivesHere[cloudActivesHere.length - 1]?.dataset_fingerprint;
+        return (
+          <div className="flex items-center gap-1 flex-wrap" role="tablist"
+            aria-label="Active cloud runs on this dataset">
+            {cloudActivesHere.map((a) => {
+              const selected = a.run_id === cloudActiveHere?.run_id;
+              const diverges = Boolean(a.dataset_fingerprint && newestFp
+                && a.dataset_fingerprint !== newestFp);
+              return (
+                <button key={a.run_id} type="button" role="tab" aria-selected={selected}
+                  onClick={() => setSelectedCloudRunId(a.run_id)}
+                  title={diverges
+                    ? 'This run trains a different dataset generation than its sibling — the runs are not comparing settings on the same data.'
+                    : `Cloud run #${a.run_id} — ${a.status}`}
+                  className={`rounded-full border px-2 py-0.5 text-[0.6875rem] tabular-nums ${
+                    selected
+                      ? 'border-sky-400/60 bg-sky-500/15 text-sky-200'
+                      : 'border-border bg-surface text-content-muted hover:text-content'}`}>
+                  ☁ #{a.run_id} · {a.status}{diverges ? ' ⚠' : ''}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
       {cloudActiveHere && (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2 text-[0.6875rem] text-sky-200 flex-wrap">
             <span aria-hidden>☁️</span>
             <span className="font-semibold">Cloud run — {cloudActiveHere.status}</span>
+            {cloudActivesHere.length > 1 && (() => {
+              const fps = new Set(cloudActivesHere.map((a) => a.dataset_fingerprint).filter(Boolean));
+              return fps.size > 1 ? (
+                <span className="text-amber-300">⚠ different dataset generation</span>
+              ) : null;
+            })()}
             {cloudActiveHere.gpu && <span>{cloudActiveHere.gpu}</span>}
             {cloudActiveHere.price_per_hour != null && (
               <span className="tabular-nums">${cloudActiveHere.price_per_hour}/h · ~${cloudActiveHere.cost_estimate} so far</span>
@@ -2443,7 +2483,8 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
           <TrainingProgress datasetId={ds.currentId}
             base={cloudActiveHere.base_model ?? ''}
             trainType={cloudActiveHere.train_type || trainType}
-            variant={cloudActiveHere.variant || variant} cloud />
+            variant={cloudActiveHere.variant || variant} cloud
+            runId={cloudActiveHere.run_id} />
           {normalizeTrainingMode(cloudActiveHere.training_mode) === TRAINING_MODE_FULL_TRANSFORMER && (
             <FullTransformerArtifactNotice run={cloudActiveHere} />
           )}

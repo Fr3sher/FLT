@@ -231,6 +231,13 @@ export const WHATS_NEW = [
     to: '/datasets',
   },
   {
+    id: '2026-08-07-parallel-cloud-runs',
+    date: '2026-08-07',
+    title: 'Train the same dataset twice at once',
+    blurb: 'Launch a second cloud run on a dataset that is already training to compare toolkit settings side by side — confirm the extra pod, then follow each run from its own chip on the Training panel. The runs warn you if the dataset changed between launches.',
+    to: '/cloud',
+  },
+  {
     id: '2026-08-03-phone-layout-full-width',
     date: '2026-08-03',
     title: 'The dataset page uses the whole screen again on a phone',

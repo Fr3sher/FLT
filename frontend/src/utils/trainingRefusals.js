@@ -29,6 +29,11 @@ export const CONFIRMABLE_REFUSALS = [
   // not exist yet). Confirmable for the same reason — and said before the GPU
   // is rented rather than discovered when the drive fills up at the very end.
   ['LOCAL_DISK_FULL: ', 'allow_local_disk'],
+  // A second cloud run of the same family on the SAME dataset. Confirmable on
+  // purpose: it rents a second pod (billed separately), so a double-click must
+  // stay free — but a deliberate settings A/B must not wait hours behind the
+  // first run.
+  ['PARALLEL_RUN: ', 'allow_parallel_run'],
 ];
 
 /* The readiness floor (NOT_READY:) is confirmable too, but the dataset panel

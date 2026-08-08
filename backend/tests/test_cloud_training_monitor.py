@@ -718,6 +718,123 @@ def test_stop_during_boot_wait_terminates_immediately(ct, app, client, monkeypat
         assert ct._load_bad_hosts() == {}
 
 
+def test_stop_during_dataset_wait_lands_as_stopped_not_error(ct, app, client, monkeypatch):
+    """A user Stop while _prepare_staging is retrying a busy export lease (a
+    sibling run's export can take minutes) must land the run as 'stopped' —
+    the same treatment the boot-wait's Stop check gets — not fall through to
+    the monitor's generic error handler as a red 'Run failed'."""
+    destroyed = []
+    remote = FakeRemote()
+    # The launch above must go through normally (real begin_exclusive) so the
+    # run row exists; only from _monitor's _prepare_staging onward do we
+    # simulate a sibling run holding the export lease.
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+
+    from app.services import dataset_activity
+    monkeypatch.setattr(dataset_activity, 'begin_exclusive', lambda *a, **kw: None)
+
+    def sleep_then_stop(s):
+        ct._stop_event_for(run_id).set()
+
+    monkeypatch.setattr(ct, '_wait_sleep', sleep_then_stop)
+
+    with app.app_context():
+        ct._monitor(app, run_id)
+        run = ct.CloudTrainingRun.query.get(run_id)
+        assert run.status == 'stopped'
+        assert 'dataset' in (run.phase_detail or '').lower()
+        # the stop event is cleared, exactly like the boot-wait's Stop path
+        assert not ct._stop_event_for(run_id).is_set()
+        # no pod was rented yet — nothing to destroy
+        assert destroyed == []
+
+
+def test_stop_survives_a_wait_past_the_stop_handoff_window(ct, app, client, monkeypatch):
+    """Regression: on_wait used to fire ONCE, before the first sleep. With
+    _prepare_staging's wait bounded at wait_seconds=3600, a single write left
+    run.updated_at stale past STOP_HANDOFF_SECONDS (120 s) long before an
+    hour-long sibling export finished — so _monitor_is_responsive read False
+    and a Stop pressed then would have force-terminated a pod that was never
+    even rented, with a message blaming a monitor that was alive and simply
+    waiting (see _stop_one).
+
+    _prepare_staging stamps phase_detail (hence updated_at) once BEFORE the
+    wait even starts, so backdating updated_at only ONCE up front (and
+    checking only the final status) would pass even without the heartbeat —
+    that write alone keeps the run 'responsive' through a short test. Instead
+    this backdates updated_at EVERY time the wait goes on to sleep — undoing
+    whatever the loop's own on_wait tick just wrote — and checks
+    _monitor_is_responsive at the START of the NEXT call, i.e. right after
+    that iteration's tick ran and before this callback stales it again: with
+    the fix, every check after the first sees a monitor the Stop button would
+    trust; with the old fire-once on_wait, only the first would.
+
+    The 30 s heartbeat throttle is real, so the wait clock is faked to jump
+    well past it (and still nowhere near the 3600 s deadline) on every
+    read — otherwise this near-instant test would never cross 30 s of
+    simulated wait time and the tick would always skip."""
+    import threading
+    from datetime import datetime, timedelta
+    destroyed = []
+    remote = FakeRemote()
+    ds_id, run_id = _launch(ct, app, client, monkeypatch, remote, destroyed)
+
+    from app.services import dataset_activity
+    monkeypatch.setattr(dataset_activity, 'begin_exclusive', lambda *a, **kw: None)
+
+    fake_clock = [0.0]
+
+    def fake_wait_clock():
+        fake_clock[0] += 40.0
+        return fake_clock[0]
+
+    monkeypatch.setattr(ct, '_wait_clock', fake_wait_clock)
+
+    # _monitor_is_responsive also requires a registered, live monitor thread
+    # (see test_monitor_responsiveness_still_reads_updated_at) — this test
+    # runs _monitor synchronously in-process, so stand one in for real.
+    class _Alive(threading.Thread):
+        def is_alive(self):
+            return True
+
+    ct._monitor_threads[int(run_id)] = _Alive()
+    try:
+        calls = {'n': 0}
+        responsive_checks = []
+
+        def sleep_then_stop(s):
+            calls['n'] += 1
+            with app.app_context():
+                run = ct.CloudTrainingRun.query.get(run_id)
+                # Recorded BEFORE backdating: this reflects whether the
+                # on_wait tick that ran just before THIS sleep (inside the
+                # real wait loop) refreshed updated_at since the LAST time
+                # this callback staled it, below.
+                responsive_checks.append(ct._monitor_is_responsive(run))
+                run.updated_at = (datetime.utcnow()
+                                  - timedelta(seconds=ct.STOP_HANDOFF_SECONDS + 80))
+                ct.db.session.commit()
+            if calls['n'] >= 3:
+                ct._stop_event_for(run_id).set()
+
+        monkeypatch.setattr(ct, '_wait_sleep', sleep_then_stop)
+
+        with app.app_context():
+            ct._monitor(app, run_id)
+            run = ct.CloudTrainingRun.query.get(run_id)
+            assert run.status == 'stopped'
+            assert 'dataset' in (run.phase_detail or '').lower()
+            assert not ct._stop_event_for(run_id).is_set()
+            assert destroyed == []
+        assert calls['n'] == 3
+        # call 1 is not meaningful (nothing was backdated yet); calls 2 and 3
+        # each ran after a PRIOR backdate, and prove the heartbeat refreshed
+        # updated_at since then — the actual regression this test guards.
+        assert responsive_checks[1:] == [True, True]
+    finally:
+        ct._monitor_threads.pop(int(run_id), None)
+
+
 def test_midrun_checkpoint_sync_harvests_every_save(ct, app, client, monkeypatch):
     """Saves are mirrored locally DURING the run (user-observed gap 2026-07-13:
     step 1400 reached, step-1250 save existed on the pod, nothing local — a

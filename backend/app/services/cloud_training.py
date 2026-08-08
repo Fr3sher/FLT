@@ -122,6 +122,11 @@ _CONFIRMATION_FLAGS = (
     # locally. Same reasoning, same replay: the size of a checkpoint that does
     # not exist yet is an estimate too.
     'allow_local_disk',
+    # « Launch anyway » on the same-(dataset, family) sibling guard: a second
+    # run rents a second pod, so a double-click must stay free — but a
+    # deliberate settings A/B must not wait hours. Stamped so the Runs hub can
+    # explain why two pods exist; replayed like the others.
+    'allow_parallel_run',
 )
 
 
@@ -1175,7 +1180,8 @@ def _verify_full_transformer_artifact_with_retries(run, _api=None) -> str:
     return state
 
 
-def _assert_launch_guardrails(dataset_id, fam, dataset_table=crd.FACE):
+def _assert_launch_guardrails(dataset_id, fam, dataset_table=crd.FACE,
+                              allow_parallel_run=False):
     """Raise when a cloud launch cannot reserve an active slot.
 
     Callers may use this once as a cheap fast-fail before expensive preflight,
@@ -1194,21 +1200,47 @@ def _assert_launch_guardrails(dataset_id, fam, dataset_table=crd.FACE):
     # Uniqueness is per (dataset, table, family): a zimage run and a krea run may
     # train the same dataset in parallel. An active run whose family is
     # unknown (pre-feature row) blocks every family of its dataset, out of
-    # caution — and so does one whose TABLE cannot be read, for the same reason.
-    # `crd.owns` answers False there, which is right for a route deciding whether
-    # to serve a file and wrong for a guard deciding whether to spend money, so
-    # this one asks the question itself.
-    def _same_dataset(r):
+    # caution — and so does one whose TABLE cannot be read, for the same
+    # reason. `crd.owns` answers False there, which is right for a route
+    # deciding whether to serve a file and wrong for a guard deciding whether
+    # to spend money, so this one asks the question itself. Both are
+    # AMBIGUOUS siblings, not same-family ones: allow_parallel_run answers
+    # "yes, another <fam> run" and cannot cover a case where the guard does
+    # not even know what it would be confirming past — those stay hard blocks.
+    def _sibling_kind(r):
+        """None (unrelated), 'ambiguous' (unreadable table or unknown family —
+        never waivable) or 'same_family' (the only confirmable case) /
+        'other_family' (no block at all)."""
         if int(r.dataset_id or 0) != int(dataset_id):
-            return False
+            return None
         try:
-            return crd.table_of(r) == dataset_table
+            same_table = crd.table_of(r) == dataset_table
         except ValueError:
-            return True          # unreadable table -> block, never spend twice
+            return 'ambiguous'   # unreadable table -> block, never spend twice
+        if not same_table:
+            return None
+        rfam = _run_family(r)
+        if rfam is None:
+            return 'ambiguous'   # unknown family -> block, never spend twice
+        return 'same_family' if rfam == fam else None
 
-    if any(_same_dataset(r) and (_run_family(r) or fam) == fam
-           for r in actives):
-        raise RuntimeError(f'this dataset already has an active {fam} cloud run')
+    ambiguous = next((r for r in actives if _sibling_kind(r) == 'ambiguous'),
+                     None)
+    if ambiguous is not None:
+        raise RuntimeError(
+            'this dataset already has an active cloud run that cannot be '
+            'attributed to a family or table — refusing to rent a second '
+            'pod on ambiguity')
+    sibling = next((r for r in actives if _sibling_kind(r) == 'same_family'),
+                   None)
+    if sibling is not None and not allow_parallel_run:
+        # Confirmable (PARALLEL_RUN: contract, mirrors MISMATCH_CAPTION:):
+        # the UI strips the marker, window.confirm IS the answer, and the
+        # retry carries allow_parallel_run.
+        raise RuntimeError(
+            f'PARALLEL_RUN: this dataset already has an active {fam} cloud '
+            f'run (#{sibling.id}) — launching another one rents a second '
+            'pod, billed separately. Launch anyway?')
     if len(actives) >= limit:
         raise RuntimeError(
             f'cloud run limit reached ({len(actives)}/{limit} active) — '
@@ -1462,6 +1494,23 @@ def latest_run_for(dataset_id, train_type=None, dataset_table=crd.FACE):
         if _run_family(r) == fam:
             return r
     return newest
+
+
+def run_for(dataset_id, run_id=None, train_type=None, dataset_table=crd.FACE):
+    """ONE resolution point for "which run of this dataset".
+
+    With run_id: that run, only if the (id, table) ownership holds — the same
+    barrier the checkpoint download applies, because face and video datasets
+    share one integer space. None on a miss, NEVER a fallback to the newest:
+    a poll quietly answering for a different run is the mis-attribution
+    latest_run_for's docstring warns about. Without run_id: exactly
+    latest_run_for, so legacy callers keep their behaviour."""
+    if run_id is not None:
+        run = db.session.get(CloudTrainingRun, int(run_id))
+        if run is None or not crd.owns(run, dataset_id, dataset_table):
+            return None
+        return run
+    return latest_run_for(dataset_id, train_type, dataset_table=dataset_table)
 
 
 # A monitor state write that loses a race for the SQLite write lock must not
@@ -2311,16 +2360,43 @@ def continue_local_run_in_cloud(user_id, dataset_id, extra_steps=1000,
     return res
 
 
-def _with_frozen_dataset_generation(user_id, dataset_id, detail, operation):
-    """Run ``operation`` while every LDS Dataset mutation is excluded."""
+# Module-local seams for the retry loop below, patched by tests instead of
+# stdlib `time` (which other threads — the heartbeat, SQLAlchemy — also read).
+_wait_sleep = time.sleep
+_wait_clock = time.monotonic
+
+
+def _with_frozen_dataset_generation(user_id, dataset_id, detail, operation,
+                                    wait_seconds=0, on_wait=None,
+                                    should_abort=None):
+    """Run ``operation`` while every LDS Dataset mutation is excluded.
+
+    ``wait_seconds`` bounds a retry on a BUSY lease (default 0 = today's
+    fail-fast: a single blocking acquire, byte-identical to before). Two
+    parallel launches are the case that needs it: the first run's monitor
+    exports the dataset for minutes, and the second launch's freeze colliding
+    with that is expected traffic, not an error. With ``wait_seconds > 0``
+    the ingest lock is acquired with a short timeout instead of blocking
+    unboundedly, so a sibling run holding it for its whole export cannot eat
+    the deadline before a single retry is even attempted. ``on_wait`` fires on
+    EVERY iteration that goes on to sleep — not once — the monitor uses it as
+    a heartbeat: with ``wait_seconds`` running to the better part of an hour, a
+    single write at the start of the wait leaves the run's ``updated_at``
+    (and so ``_monitor_is_responsive``) stale long before the wait ends, and a
+    Stop pressed then takes the false "monitor was not responding" path even
+    though this loop is alive and simply waiting. ``should_abort`` is polled
+    every iteration, before sleeping — a Stop during the wait must not leave
+    this call waiting up to ``wait_seconds`` for a dataset it will export for
+    a run that no longer wants it."""
     lock = fds._dataset_ingest_lock(user_id, dataset_id)
-    with lock:
+    bounded = bool(wait_seconds and wait_seconds > 0)
+    deadline = _wait_clock() + max(0.0, float(wait_seconds or 0))
+
+    def _try_once():
         token = dataset_activity.begin_exclusive(
             dataset_id, 'training_export', detail=detail)
         if token is None:
-            raise dataset_activity.DatasetActivityBusy(
-                'This dataset already has work in progress. Wait for it to '
-                'finish before launching cloud training.')
+            return False, None
         stop = threading.Event()
 
         def heartbeat():
@@ -2332,11 +2408,37 @@ def _with_frozen_dataset_generation(user_id, dataset_id, detail, operation):
             name=f'dataset-{dataset_id}-cloud-freeze-heartbeat')
         lease.start()
         try:
-            return operation()
+            return True, operation()
         finally:
             stop.set()
             lease.join(timeout=1.0)
             dataset_activity.end(token)
+
+    while True:
+        if bounded:
+            remaining = max(0.0, deadline - _wait_clock())
+            if lock.acquire(timeout=min(2.0, remaining)):
+                try:
+                    got, result = _try_once()
+                finally:
+                    lock.release()
+                if got:
+                    return result
+        else:
+            with lock:
+                got, result = _try_once()
+            if got:
+                return result
+        if should_abort is not None and should_abort():
+            raise _WaitAborted(
+                'stop requested while waiting for the dataset')
+        if _wait_clock() >= deadline:
+            raise dataset_activity.DatasetActivityBusy(
+                'This dataset already has work in progress. Wait for it to '
+                'finish before launching cloud training.')
+        if on_wait is not None:
+            on_wait()
+        _wait_sleep(2.0)
 
 
 def _prepare_cloud_generation(user_id, dataset_id, base_model):
@@ -2350,7 +2452,8 @@ def _prepare_cloud_generation(user_id, dataset_id, base_model):
         return frozen
 
     return _with_frozen_dataset_generation(
-        user_id, dataset_id, 'freezing the Dataset for cloud training', prepare)
+        user_id, dataset_id, 'freezing the Dataset for cloud training', prepare,
+        wait_seconds=120)
 
 
 def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
@@ -2359,6 +2462,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
                           allow_caption_quality=False,
                           allow_unverified_weights=False, allow_not_ready=False,
                           allow_hf_storage=False, allow_local_disk=False,
+                          allow_parallel_run=False,
                           gpu_name=None, resume_ckpt_path=None, resume_step=None,
                           resume_hf=None,
                           auto_retry_count=0, auto_retry_of=None,
@@ -2533,6 +2637,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         'allow_not_ready': bool(allow_not_ready),
         'allow_hf_storage': bool(allow_hf_storage),
         'allow_local_disk': bool(allow_local_disk),
+        'allow_parallel_run': bool(allow_parallel_run),
     }
     recipe = None
     if fam == 'zimage':
@@ -2591,8 +2696,11 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
             _hf_token_for_mode(mode))
     # Cheap fast-fail before the image/caption preflight below. This read is
     # intentionally advisory: another Flask request can reserve a slot after
-    # it, so the same checks are repeated atomically at reservation time.
-    _assert_launch_guardrails(dataset_id, fam)
+    # it, so the same checks are repeated atomically at reservation time. The
+    # confirmation flag must ride along here too — otherwise a confirmed retry
+    # would still die on this early call before ever reaching the ceiling/budget
+    # checks it is meant to fall through to.
+    _assert_launch_guardrails(dataset_id, fam, allow_parallel_run=allow_parallel_run)
 
     # Same caption-mismatch preflight as launch_training (MISMATCH_CAPTION
     # contract): assert_trainable is ALREADY a standalone helper in
@@ -2621,7 +2729,7 @@ def launch_cloud_training(user_id, dataset_id, steps=None, base_model=_UNSET,
         # Authoritative re-check + insert. Keeping the commit inside this
         # process-wide critical section means a second request always sees the
         # first request's preparing row before it can reserve or rent a pod.
-        _assert_launch_guardrails(dataset_id, fam)
+        _assert_launch_guardrails(dataset_id, fam, allow_parallel_run=allow_parallel_run)
         run = CloudTrainingRun(
             dataset_id=dataset_id, status='preparing', run_name=run_name,
             # Stamp the family in the reservation itself. Without this, the
@@ -2925,6 +3033,13 @@ def _maybe_auto_retry(run, error):
         # Reuse the GPU class actually rented. requested_gpu may have fallen
         # back on the initial launch, so it is not necessarily the effective GPU.
         gpu_name = run.gpu_name or params.get('requested_gpu')
+        # An auto-retry replaces a run whose pod is already dead, so a live
+        # sibling's same-family guard must never block it — the fleet ceiling
+        # and monthly budget still guard the spend either way. Overridden
+        # AFTER _confirmation_flags(params) replays this run's own stamped
+        # answer (which may be False — this run never confirmed it).
+        retry_flags = _confirmation_flags(params)
+        retry_flags['allow_parallel_run'] = True
         try:
             result = launch_cloud_training(
                 'local', run.dataset_id,
@@ -2934,7 +3049,7 @@ def _maybe_auto_retry(run, error):
                 train_type=params.get('train_type'),
                 training_mode=params.get('training_mode', 'lora'),
                 masked=params.get('masked', True),
-                **_confirmation_flags(params),
+                **retry_flags,
                 gpu_name=gpu_name,
                 resume_ckpt_path=params.get('resume_ckpt_path'),
                 resume_step=params.get('resume_step'),
@@ -2975,9 +3090,13 @@ def _prepare_staging(run):
     """Heavy part of the launch, run from the MONITOR thread: staging dirs +
     dataset export (rembg masks — ~1-2 s/image). No-op when staging already
     exists (resume). A failure propagates to the monitor's generic error
-    handler (run flips to 'error', slot freed)."""
+    handler (run flips to 'error', slot freed) — except a Stop fired while
+    waiting for a sibling's export lease, which the monitor lands as
+    'stopped' (see ``_WaitAborted``)."""
     if run.staging_dir:
         return
+    run_id = run.id           # captured once: should_abort polls it up to
+    ev = _stop_event_for(run_id)   # ~1800 times and must not re-read the ORM
     staging = _staging_root() / f'run_{run.id}'
     if crd.is_video(run):
         # Nothing to export, and none of the face-dataset generation checks
@@ -2995,6 +3114,9 @@ def _prepare_staging(run):
     params = json.loads(run.train_params or '{}')
 
     def verify_and_export():
+        # Re-stamp in case on_wait overwrote it with the "waiting" text below
+        # — this only runs once the lease is actually held.
+        _set(run, phase_detail='Preparing dataset (masks)…')
         record = checkpoint_registry.record_by_id(params.get('record_id'))
         expected = checkpoint_registry.record_generation_identity(record)
         current = checkpoint_registry.prepare_launch(
@@ -3020,10 +3142,35 @@ def _prepare_staging(run):
             masked=bool(params.get('masked', True)),
             dest_dir=str(staging / 'dataset'))
 
+    # on_wait now ticks every ~2 s of the wait (see _with_frozen_dataset_
+    # generation) instead of firing once — a wait_seconds=3600 export lease
+    # would otherwise leave run.updated_at stale past STOP_HANDOFF_SECONDS,
+    # and a Stop pressed mid-wait would find _monitor_is_responsive False and
+    # force-terminate a pod that does not exist yet, with a message claiming
+    # the monitor had died. Throttled to one write per ~30 s: still far under
+    # the 120 s handoff window, without hammering the DB every tick.
+    last_heartbeat = [float('-inf')]   # first tick always fires
+
+    def _wait_tick():
+        now = _wait_clock()
+        if now - last_heartbeat[0] < 30.0:
+            return
+        last_heartbeat[0] = now
+        # _set_soft, not _set: this write is purely cosmetic (see its own
+        # docstring). A sibling run hammering the DB with its export can
+        # outlive the write-lock retry budget, and _set would then record
+        # this WAITING run as 'Run failed — database is locked' — exactly
+        # the outcome this heartbeat exists to prevent. A skipped tick is
+        # harmless: the next one lands in 30 s, well inside the 120 s window.
+        _set_soft(run, phase_detail='Waiting for the dataset — another run '
+                                    'is exporting…')
+
     _with_frozen_dataset_generation(
         'local', run.dataset_id,
         'verifying and exporting the Dataset for cloud training',
-        verify_and_export)
+        verify_and_export, wait_seconds=3600,
+        on_wait=_wait_tick,
+        should_abort=ev.is_set)
     _set(run, staging_dir=str(staging))
 
 
@@ -4462,6 +4609,15 @@ class _RunClosedExternally(Exception):
     resurrecting the row (or renting a pod for a run nobody waits for)."""
 
 
+class _WaitAborted(RuntimeError):
+    """A user Stop fired while ``_with_frozen_dataset_generation`` was
+    retrying a busy export lease (another run's export can take minutes).
+    Carried as its own type so the monitor can land the run as 'stopped',
+    the same treatment the boot-wait's Stop check gets — the generic
+    ``except Exception`` below would otherwise report this as a red 'Run
+    failed', which is not what happened."""
+
+
 class _ReattachFailed(RuntimeError):
     """A pod whose job was ALREADY running could not be reached again after an
     app restart, for the whole reconnect window.
@@ -5683,6 +5839,14 @@ def _monitor(app, run_id):
                 except Exception:
                     logger.exception('stand-down destroy of %s raised',
                                      run.vast_instance_id)
+        except _WaitAborted:
+            # Same gesture, same treatment as the boot-wait's Stop check
+            # (~5384): no pod exists yet at this point in the launch, so
+            # there is nothing to destroy — just land the row as 'stopped'
+            # instead of falling through to the generic 'Run failed' below.
+            stop_event.clear()
+            _finish(run, 'stopped',
+                    detail='Stopped by user while waiting for the dataset')
         except Exception as e:
             error_text = _redacted_error_text(e)
             if _is_full_transformer_run(run):
@@ -6554,6 +6718,12 @@ def _run_payload(run) -> dict:
             # local rows use 'rec-<record id>' (set in all_runs).
             'share_key': f'cloud-{run.id}',
             'run_name': run.run_name, 'dataset_name': run_dataset_name(run),
+            # The frozen dataset generation this run trains on (provenance
+            # registry). Two parallel runs whose fingerprints differ are NOT
+            # an A/B of settings any more — the chips say so. None on a
+            # pre-registry row.
+            'dataset_fingerprint': getattr(_cloud_run_record(run),
+                                           'fingerprint', None),
             'vast_instance_id': run.vast_instance_id,   # for the per-run "console ↗" tooltip
             'phase_detail': run.phase_detail, 'gpu': run.gpu_name,
             'price_per_hour': run.price_per_hour,
@@ -8915,12 +9085,16 @@ def _rescue_loose_checkpoints(path, folder_name) -> int:
     return moved
 
 
-def cloud_progress(user_id, dataset_id, train_type=None) -> dict:
+def cloud_progress(user_id, dataset_id, train_type=None, run_id=None) -> dict:
     """Same shape as lt.training_progress + cloud phase/cost fields, built
     from the staging mirror (log + samples) written by the monitor. With
     train_type, reads THAT family's newest run (several families may train
-    the same dataset in parallel)."""
-    run = latest_run_for(dataset_id, train_type)
+    the same dataset in parallel). With run_id, addresses THAT run — unknown
+    or foreign ids raise LookupError rather than silently answering for the
+    newest run."""
+    run = run_for(dataset_id, run_id=run_id, train_type=train_type)
+    if run_id is not None and run is None:
+        raise LookupError(f'no cloud run {int(run_id)} on this dataset')
     empty = {'step': None, 'total': None, 'loss': None, 'speed': None,
              'eta': None, 'loss_curve': []}
     if not run:
