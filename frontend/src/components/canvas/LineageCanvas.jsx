@@ -1678,10 +1678,19 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       </div>
 
         {/* TOP — what the board is SHOWING: which datasets, and what is being
-            generated right now. Scrolls inside the frame rather than growing it,
-            because the filter opens into a tall panel and a board that resizes
-            when you open a menu loses your place. */}
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex max-h-full flex-col gap-2 overflow-y-auto p-2 sm:p-3">
+            generated right now. Absolutely placed, so it can never grow the
+            board: opening a menu must not resize the surface you are reading.
+
+            ⚠️ `overflow-visible`, and it used to be `overflow-y-auto`. That was
+            right for as long as the filter WAS a tall fold-out panel — it kept
+            the panel scrolling inside the frame instead of running off it. The
+            filter is now a 36-px row of chips whose controls live in POPOVERS,
+            and a scroll container clips its children: the Datasets menu opened
+            354 px tall inside a 76-px box and the user saw a 20-px sliver of
+            it. The reason for the clip left with the panel; the clip had to go
+            with it. Nothing replaced it, because there is nothing left here
+            that can grow — chips wrap to at most three rows at 400 px. */}
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex max-h-full flex-col gap-2 overflow-visible p-2 sm:p-3">
           {filterSlot ? <div className="pointer-events-auto">{filterSlot}</div> : null}
           <div className="pointer-events-auto">
         {/* 🎨 The generation in flight, ON the board. Visible with the settings

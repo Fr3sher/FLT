@@ -69,6 +69,18 @@ test('a floating panel is painted with an OPAQUE token', () => {
   }
 });
 
+test('the board’s top overlay does not CLIP the filter’s menus', () => {
+  // It was `overflow-y-auto`, which was right while the filter was a tall
+  // fold-out panel. Against popovers a scroll container is a guillotine: the
+  // Datasets menu opened 354 px tall inside a 76-px box and showed a 20-px
+  // sliver. Measured on the real page, not reasoned about.
+  const src = read('LineageCanvas.jsx');
+  const top = /className="pointer-events-none absolute inset-x-0 top-0 z-20[^"]*"/.exec(src);
+  assert.ok(top, 'the top overlay must keep its handle');
+  assert.match(top[0], /overflow-visible/);
+  assert.doesNotMatch(top[0], /overflow-y-auto/);
+});
+
 test('the filter costs the board a row of chips, not a panel', () => {
   const src = read('CanvasDatasetFilter.jsx');
   // No fold-out body at all any more: the controls live in popovers, so there
