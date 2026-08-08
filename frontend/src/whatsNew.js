@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-a-just-deployed-model-generates-right-away',
+    date: '2026-08-08',
+    title: 'A model you just deployed works right away, not a minute later',
+    blurb:
+      'Deploy a checkpoint, hit Generate, and the job died: "Your ComfyUI does not offer a model file this workflow requires", followed by advice to go and check your ComfyUI address — which was right all along. The app reads the list of models ComfyUI offers once a minute and reuses it, so a model deployed seconds ago was judged against a list drawn up before it existed, and the refusal it produced is final: the job was never retried. Now, before a job is refused over a missing model, the app asks ComfyUI again — once, on the spot, ignoring what it had cached — and the model it finds is used immediately, spelled exactly the way that ComfyUI spells it. When the file really is absent the job still stops before queuing, but the explanation has stopped guessing: it now says the list was just re-read, so a fresh deploy is not what you are looking at, which leaves a second ComfyUI install as the thing to check.',
+  },
+  {
     id: '2026-08-07-compare-any-image-with-the-reference',
     date: '2026-08-07',
     title: 'Check any image against your reference photo, side by side',

@@ -554,8 +554,20 @@ def queue_prompt_to_comfyui(prompt_workflow, client_id, worker_url=None):
         except Exception as e:                    # a broken probe must never block
             logger.warning(f"Model-file preflight skipped: {e}")
             unavailable = []
+        # A DETERMINISTIC kill may not rest on a cached observation. The list above
+        # can be up to _OBJECT_INFO_TTL old and the deploy path does not invalidate
+        # it, so a model deployed seconds ago used to die here for good. Re-ask once
+        # — bounded and gguf-exempt, see confirm_unavailable_model_files.
+        rechecked = False
         if unavailable:
-            message = format_unavailable_models_message(unavailable)
+            try:
+                unavailable, prompt_workflow, rechecked = (
+                    confirm_unavailable_model_files(prompt_workflow, unavailable))
+            except Exception as e:                # a broken probe must never block
+                logger.warning(f"Model-file re-check skipped: {e}")
+        if unavailable:
+            message = format_unavailable_models_message(unavailable,
+                                                        rechecked=rechecked)
             logger.error(f"Workflow refused before queuing — {message}")
             return None, f"WORKFLOW_INVALIDE (ComfyUI capability): {message}"
 
@@ -1073,7 +1085,7 @@ def _distill_model_files(data):
     return out
 
 
-def _fetch_object_info(timeout=None):
+def _fetch_object_info(timeout=None, force=False):
     """(classes, enums, model_files) from ONE `GET /object_info`, all three served
     by the same short TTL cache — the payload is the heaviest probe in the app, so
     the checks below must never cost a second request. (None, None, None) on any
@@ -1081,14 +1093,20 @@ def _fetch_object_info(timeout=None):
 
     `timeout` is the READ budget in seconds; None (the normal case) reads
     `object_info_timeout()`. The connect budget is separate and fixed — see
-    _OBJECT_INFO_CONNECT_TIMEOUT."""
+    _OBJECT_INFO_CONNECT_TIMEOUT.
+
+    `force` skips BOTH caches for this one call and refreshes them with what comes
+    back. It exists for exactly one caller — the model-file refusal in
+    `queue_prompt`, which must not kill a job on a snapshot that predates the model
+    (see `confirm_unavailable_model_files`). Nothing on a hot path may pass it."""
     addr = api_address()
     now = time.time()
-    if (_object_info_cache["data"] is not None and _object_info_cache["key"] == addr
+    if (not force and _object_info_cache["data"] is not None
+            and _object_info_cache["key"] == addr
             and now - _object_info_cache["timestamp"] < _OBJECT_INFO_TTL):
         return (_object_info_cache["data"], _object_info_cache["enums"],
                 _object_info_cache["files"])
-    if (_object_info_last["status"] not in ('ok', 'unknown')
+    if (not force and _object_info_last["status"] not in ('ok', 'unknown')
             and _object_info_last["key"] == addr
             and now - _object_info_last["timestamp"] < _OBJECT_INFO_FAIL_TTL):
         # Negative cache: one failure answers the burst behind it. See
@@ -1226,7 +1244,79 @@ def unavailable_model_files(workflow, files=None):
     return out
 
 
-def format_unavailable_models_message(items):
+# How old the /object_info snapshot behind a DETERMINISTIC refusal is allowed to be.
+# Below this, re-asking cannot change the answer, so we don't; above it, we re-ask
+# once. This single number is also what bounds the cost — see
+# `confirm_unavailable_model_files`.
+_OBJECT_INFO_RECHECK_MAX_AGE = 5
+
+
+def confirm_unavailable_model_files(workflow, items):
+    """`(items, workflow)` — `items` re-checked against a FRESH `/object_info`
+    before anyone is allowed to kill a job over them.
+
+    WHY THIS EXISTS (reported in #help, 2026-08-08): "there is a delay after
+    deploying a new checkpoint from Canvas before LDS can use it — even though I
+    can clearly select the deployed LoRA inside Comfy". Both halves were true.
+    `_fetch_object_info` serves a snapshot for `_OBJECT_INFO_TTL` (60 s) and the
+    deploy path does not invalidate it, so a model deployed at t+0 was judged
+    against the list as it stood at t-59. The refusal that followed is
+    DETERMINISTIC (`WORKFLOW_INVALIDE`, never retried — job_queue), so the job was
+    killed for good, and the message sent the user to check an API address that was
+    correct all along. A deterministic verdict may not rest on a stale observation:
+    that is the whole content of this function.
+
+    Re-asking WORKS, which is the fact that makes this the right fix rather than a
+    hopeful one. ComfyUI answers `/object_info` from `folder_paths.get_filename_list`,
+    whose cache is invalidated by the mtime of every scanned directory INCLUDING
+    subdirectories (`recursive_search` records one entry per subdir), so a file
+    dropped into `loras/<sub>/` invalidates it. Its second, mtime-blind cache
+    (`CacheHelper`) is activated only for the duration of one `/object_info` request
+    and cleared on exit — a within-request dedup, not a cross-request cache.
+
+    COST — one extra `/object_info` in the worst case, and it cannot run away:
+      * only reached when a graph is about to be REFUSED, never on a healthy queue;
+      * never for `gguf`, which is definitive whatever any list says;
+      * skipped when the snapshot is already younger than
+        `_OBJECT_INFO_RECHECK_MAX_AGE`, which is what bounds a batch: the forced
+        probe refreshes the cache, so a grid of N tiles against a genuinely missing
+        model pays one probe per 5 s, not one per tile — and since the probe itself
+        takes seconds on the installs where it is expensive, it throttles itself.
+
+    Fails OPEN when the fresh probe fails: with no current evidence the honest move
+    is to hand the graph to ComfyUI, whose own 400 is ground truth and is already
+    handled. `gguf` items survive that, because no probe was ever their basis.
+
+    Returns the workflow too: a name confirmed present is re-spelled against the
+    FRESH list (`canonical_model_widgets`), because the spelling the graph carries
+    was resolved against the stale one and ComfyUI validates by exact string.
+
+    The third value is `fresh`: True when the surviving verdict rests on an
+    observation no older than `_OBJECT_INFO_RECHECK_MAX_AGE` — either one we just
+    forced, or one already that young. It is what earns the message the right to
+    blame a second install; False keeps the message hedged. Nothing else may set
+    it, which is the point: the sentence and the evidence travel together."""
+    if not items:
+        return items, workflow, False
+    gguf = [i for i in items if i.get('reason') == 'gguf']
+    if len(gguf) == len(items):
+        # Extension, not availability: no list from anyone can make a core loader
+        # read a .gguf, so there is nothing to re-ask and nothing to hedge.
+        return items, workflow, True
+    now = time.time()
+    if (_object_info_cache["data"] is not None
+            and _object_info_cache["key"] == api_address()
+            and now - _object_info_cache["timestamp"] <= _OBJECT_INFO_RECHECK_MAX_AGE):
+        return items, workflow, True    # already young enough to be trusted
+    fresh = _fetch_object_info(force=True)[2]
+    if not fresh:
+        # No current evidence. Hand the graph to ComfyUI and let its own 400 judge.
+        return gguf, workflow, bool(gguf)
+    workflow, _ = comfy_names.canonical_model_widgets(workflow, fresh)
+    return unavailable_model_files(workflow, files=fresh), workflow, True
+
+
+def format_unavailable_models_message(items, rechecked=False):
     """One paste-safe English sentence for a model-file gap: which file, why this
     ComfyUI cannot use it, and the action that fixes it.
 
@@ -1236,7 +1326,18 @@ def format_unavailable_models_message(items):
 
     Deliberately never says "copy it into the model folder": that is the advice the
     reporter followed for an hour (into three folders) while neither cause could be
-    fixed that way."""
+    fixed that way.
+
+    `rechecked` says whether the caller established the gap against a FRESH
+    /object_info (`confirm_unavailable_model_files`) rather than a cached one. It
+    gates the "different install" sentence, which used to be asserted — "it is most
+    likely a different ComfyUI install" — on evidence that did not support it: with
+    a snapshot up to _OBJECT_INFO_TTL old, a model deployed a moment ago produced
+    that exact sentence, and it sent its reader to check an API address that was
+    right (#help, 2026-08-08). Unrechecked, the message now names the stale list as
+    the first thing to rule out; rechecked, the install hypothesis is earned and the
+    reader is told, in so many words, that a fresh deploy is NOT what they are
+    looking at."""
     seen, bits, has_gguf, has_missing = set(), [], False, False
     for i in items or []:
         key = (i.get('input'), i.get('value'))
@@ -1258,14 +1359,27 @@ def format_unavailable_models_message(items):
             f"pack ({url}), and this app's workflows use ComfyUI's standard model "
             "loader, which cannot read .gguf even once that pack is installed. Use a "
             ".safetensors build of the model instead.")
-    if has_missing:
+    if has_missing and rechecked:
         fixes.append(
             "This file is on disk where the app looked, but the ComfyUI answering on "
-            "the configured API address does not list it — it is most likely a "
-            "different ComfyUI install. Check that the ComfyUI API address and the "
-            "models folder in Settings point at the SAME install (ComfyUI Desktop "
-            "keeps a shared models folder AND one inside its install directory), "
-            "then restart ComfyUI.")
+            "the configured API address does not list it. That list was re-read "
+            "seconds ago, after any model you just deployed, and the file is still "
+            "not on it — so a fresh deploy is NOT what you are looking at, and "
+            "waiting or deploying it again will not change it. That leaves a second "
+            "ComfyUI: check that the ComfyUI API address and the models folder in "
+            "Settings point at the SAME install (ComfyUI Desktop keeps a shared "
+            "models folder AND one inside its install directory), then restart "
+            "ComfyUI.")
+    elif has_missing:
+        fixes.append(
+            "This file is on disk where the app looked, but the ComfyUI answering on "
+            "the configured API address does not list it. If you deployed this model "
+            "in the last minute, the list this check read may simply predate it — "
+            "try once more. Otherwise the two ends are looking at different ComfyUI "
+            "installs: check that the ComfyUI API address and the models folder in "
+            "Settings point at the SAME install (ComfyUI Desktop keeps a shared "
+            "models folder AND one inside its install directory), then restart "
+            "ComfyUI.")
     return ("Your ComfyUI does not offer a model file this workflow requires: "
             + '; '.join(bits) + '. ' + ' '.join(fixes))
 
