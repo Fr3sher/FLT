@@ -1,7 +1,34 @@
 # Multi-engine Bank search with rank fusion — design
 
 Date: 2026-08-08
-Status: approved; slices 0 and 2 landed; slice 1 (measurement gate) not run.
+Status: closed. Slices 0 and 2 landed; slice 1 (the measurement gate) ran and
+answered NO — slices 3-5 are not built and will not be.
+
+## Measurement verdict (2026-08-08)
+
+recall@10 on the real Bank, 5 independent samples of 200 captioned images
+(100 NSFW / 100 SFW each), 20 caption-anchored queries per run, mean [min-max]:
+
+| register | SigLIP 2 | LAION H/14 | RRF |
+|---|---|---|---|
+| SFW | 0.622 [0.57-0.65] | 0.634 [0.61-0.66] | 0.649 [0.63-0.68] |
+| explicit (mild) | 0.527 [0.44-0.62] | 0.474 [0.41-0.54] | 0.520 [0.45-0.60] |
+| explicit (hard) | 0.292 [0.20-0.42] | 0.300 [0.20-0.54] | 0.310 [0.23-0.37] |
+
+- The blind-spot hypothesis is refuted on this data: LAION shows no stable
+  advantage anywhere, including the hard register WebLI filtering predicted it
+  would dominate. Single-seed runs flipped the ordering both ways — every
+  between-engine delta sits inside sampling noise.
+- The one finding stable across all five seeds: BOTH engines collapse on hard
+  explicit vocabulary (~0.30 vs ~0.63 SFW). The bottleneck is the CLIP text
+  encoders themselves, not the training-corpus filter.
+- What shipped stays because it never depended on this outcome: the aesthetic
+  pin guards a real present-day defect, and the RRF module is inert until a
+  second engine worth having exists.
+- Untested lead for the hard register: the captions already contain the
+  vocabulary the encoders miss. Full-text caption search fused with SigLIP 2
+  via the existing rrf() would cost zero models; the probe protocol in this
+  document measures it unchanged.
 
 ## Why
 
