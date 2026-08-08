@@ -1989,27 +1989,16 @@ def _krea_root_candidate(name) -> bool:
     root also holds Z-Image, FLUX and Klein weights, so at a root the filename is
     the only claim there is.
 
-    Only the claim. Whether the file is a Krea base the pipeline can actually use
-    is `_krea_base_usable`, which applies at EVERY depth — that separation is the
-    fix for a checkpoint being refused here and accepted one folder down.
+    Only the claim. Whether a listed build is one the identity-edit LoRA behaves
+    on is no longer asked here at all: a file on the user's disk is offered, and
+    only `elect_krea_base` declines to PREFER a flagged one when the app is the
+    one choosing.
 
     The wired workflow default used to be named explicitly on this line. It was
     dead code (the name carries 'krea' and matches no exclusion) and it was the
     last hardcoded filename in the lister, so it is gone.
     """
     return 'krea' in str(name or '').lower()
-
-
-def _krea_base_usable(name) -> bool:
-    """False for the checkpoints that carry 'krea' without being a Krea 2 base —
-    `KREA_INCOMPATIBLE_TOKENS`, borrowed from the Generate resolver rather than
-    re-declared so the two surfaces cannot drift."""
-    low = str(name or '').lower()
-    try:
-        from ..services.krea_edit_helper import KREA_INCOMPATIBLE_TOKENS
-    except Exception:                               # noqa: BLE001 — never fatal
-        KREA_INCOMPATIBLE_TOKENS = ('biglove',)
-    return not any(tok in low for tok in KREA_INCOMPATIBLE_TOKENS)
 
 
 def get_krea_models():
