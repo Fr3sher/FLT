@@ -162,3 +162,23 @@ def test_the_aesthetic_head_gets_the_embedding_space_it_was_trained_on():
         'score. Changing the scoring model requires replacing or retraining '
         f'{_aesthetic_expects()[0]}/{_aesthetic_expects()[1]} too — it is not '
         'a one-line swap.')
+
+
+def test_the_expected_pair_is_anchored_to_the_checkpoint_that_requires_it():
+    """The test above compares two constants that live five lines apart in the
+    same file, so a model swap can be "fixed" by editing the expectation — the
+    exact reflex the guard exists to stop.
+
+    The pair is not a property of this codebase. It is a property of the
+    checkpoint: sac+logos+ava1-l14-linearMSE was fitted on ViT-L/14 as OpenAI
+    released it, and always will be. So while THAT file is the aesthetic head,
+    the expectation is not editable — changing it requires changing the
+    checkpoint too, which is the real precondition."""
+    src = SCORE.read_text(encoding='utf-8')
+    m = re.search(r"^_AESTHETIC_FILE\s*=\s*'([^']+)'", src, re.M)
+    assert m, 'could not find _AESTHETIC_FILE in bank_score_infer.py'
+    if 'l14-linearMSE' in m.group(1):
+        assert _aesthetic_expects() == ('ViT-L-14', 'openai'), (
+            f'{m.group(1)} was trained on ViT-L/14-OpenAI embeddings. While it '
+            'is the aesthetic head, _AESTHETIC_EXPECTS cannot be anything '
+            'else — change the checkpoint, or leave the pair alone.')

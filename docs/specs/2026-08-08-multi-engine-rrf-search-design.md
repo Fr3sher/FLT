@@ -1,7 +1,7 @@
 # Multi-engine Bank search with rank fusion — design
 
 Date: 2026-08-08
-Status: approved (design), not yet planned
+Status: approved; slices 0 and 2 landed; slice 1 (measurement gate) not run.
 
 ## Why
 
@@ -55,7 +55,11 @@ call-sites agree *with each other*, which stays true when all three are changed
 together to a model that breaks the head.
 
 Consequence: `ViT-L-14/openai` stays, pinned, serving the aesthetic head. It is
-removed from search duty, not from the app.
+removed from search duty, not from the app. Concretely, the existing CLIP-L
+engine stays registered and keeps answering searches on installs that already
+have its cache (`bank_semantic_engine.py:35-51`, aliases `clip`/`open-clip`/
+`score`) — what it is removed from is being the engine we invest in improving;
+its constants stay pinned for the aesthetic head instead.
 
 The NSFW score is unaffected — it uses `Marqo/nsfw-image-detection-384` on the
 PIL image (lines 561-564), not the CLIP embedding.
@@ -96,6 +100,13 @@ MOD  bank_semantic_engine.py       third engine in _ENGINE_ALIASES
 MOD  clip_text_infer.py            --model/--pretrained, defaults UNCHANGED
 MOD  clip_image_embed_infer.py     --model/--pretrained, defaults UNCHANGED
 ```
+
+Parameterising `clip_image_embed_infer.py` is also where its module docstring's
+"THE MODEL SPEC IS A CONTRACT, NOT A CHOICE" warning has to be rewritten: once
+the defaults become overridable, that warning would mislead every later reader
+into believing the constants can never change, while the strengthened
+defaults-only contract test quietly passes around it. Rewriting it is part of
+slice 3's scope, not a follow-up.
 
 Workers are parameterised rather than duplicated. A caller passing nothing gets
 today's behaviour bit-for-bit. This keeps a single execution path: duplicated
@@ -207,7 +218,7 @@ practice, and we would have added 4 GB and an indexing pass for nothing.
 | 0 | Aesthetic head guard (`_AESTHETIC_EXPECTS` + red-first test) | — | Fixes an existing gap, independent of everything else |
 | 1 | Real-data probe | — | **Decides** whether slices 3-5 are worth building |
 | 2 | RRF module + pure tests | — | No GPU, no model; valid even if slice 1 says no |
-| 3 | Parameterised workers + strengthened contract test | 1 ✅ | |
+| 3 | Parameterised workers + strengthened contract test | 1 (gate) | |
 | 4 | LAION engine + indexing pass + capability probe | 3 | The only expensive slice |
 | 5 | UI wiring + provenance display | 4 | |
 

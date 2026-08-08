@@ -34,6 +34,8 @@ def rrf(ranked_lists, k=RRF_K, limit=None):
 
     Ties break on ``item_id`` so the ranking never depends on dict iteration
     order or float noise.
+
+    ``limit=None`` returns every fused row; ``limit=0`` returns none.
     """
     if k <= 0:
         raise ValueError(f'RRF k must be positive, got {k!r}')
