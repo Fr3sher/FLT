@@ -42,6 +42,28 @@
 # Pinned, not floated: CI and a contributor must run the SAME collector.
 pytest==9.0.3
 
+# The suite is ~7150 tests whose cost is FLAT: measured 2026-08-08, the ten
+# slowest tests are 7.5% of the time and the 5286-test tail is 74% of it, at
+# ~243 ms each. There is no hotspot to fix -- more than half of that time is
+# fixture setup, i.e. the per-test `create_app` that every one of conftest's
+# isolation comments exists to justify. Making that fixture cheaper would mean
+# sharing an app between tests, which is exactly the leak those comments were
+# written after. So the suite is made parallel instead: a worker is a process,
+# so every module-global, env var and :memory: DB stays as isolated as it is
+# today, and the wall clock drops from ~30 min to ~2.5 min on a 32-core box.
+#
+# Run it with:  python -m pytest backend/tests -q -n 8 --dist loadfile
+#
+# `--dist loadfile` (not the default `load`) keeps every test of one FILE on one
+# worker. Several files build state across their tests, and per-test scattering
+# is a different execution order, not just a faster one.
+#
+# A fixed worker count, not `-n auto`: a few tests assert on ELAPSED TIME rather
+# than on a result (test_bank_scan_no_db_lock gives a concurrent writer a 400 ms
+# budget), so saturating every core on a big machine makes them report on the
+# load instead of on the code. CI pins 4; 8 is the local default.
+pytest-xdist==3.6.1
+
 # Torch's official CPU index otherwise resolves an old vulnerable setuptools.
 # Install the audited build backend from PyPI in the base environment first so
 # the optional overlay reuses it instead of downgrading through that index.
