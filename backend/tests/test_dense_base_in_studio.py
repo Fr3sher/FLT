@@ -58,12 +58,17 @@ def test_a_root_file_with_no_krea_in_its_name_is_still_ignored(comfy):
     assert get_krea_models() == []
 
 
-def test_the_incompatible_tokens_of_the_generate_surface_are_honoured(comfy):
+def test_a_build_measured_to_render_noise_is_still_offered(comfy):
     """BigLove* carries 'krea' and renders pure noise under the Krea pipeline —
-    measured. The Generate resolver already refuses it; the Studio now agrees."""
+    measured. The Studio used to drop it, so a file the user had put there was
+    absent from the list with nothing saying it existed or why.
+
+    It is listed now. The measurement is a warning the user is entitled to
+    overrule; what it still does is stop the app PREFERRING it when nobody picked
+    (test_krea_default_base_election)."""
     from app.utils.comfyui import get_krea_models
     _put(comfy, 'BigLoveKreaEdit1_fp8mixed.safetensors')
-    assert get_krea_models() == []
+    assert get_krea_models() == ['BigLoveKreaEdit1_fp8mixed.safetensors']
 
 
 def test_a_krea_subfolder_still_wins_everything_it_used_to(comfy):

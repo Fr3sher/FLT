@@ -111,16 +111,24 @@ def test_turbo_wins_over_raw_and_the_choice_is_deterministic(krea):
     assert keh.resolve_krea_unet() == first, 'a regenerate must reproduce the render'
 
 
-def test_the_incompatible_biglove_base_is_never_picked(krea):
-    """MEASURED: the identity LoRA renders PURE NOISE on BigLoveKreaEdit1. It
-    carries 'krea' in its name, so a naive scan would select it on a shared
-    ComfyUI and the user would see noise with no explanation."""
+def test_the_incompatible_biglove_base_is_offered_but_never_preferred(krea):
+    """MEASURED: the identity LoRA renders PURE NOISE on BigLoveKreaEdit1. That
+    fact used to REMOVE the file from every list, which meant a build sitting in
+    the user's own Krea folder was invisible, with nothing on screen saying it
+    existed or why it was gone.
+
+    Choosing is the user's call, so the file is listed. What survives is the rule
+    about the app choosing FOR them: a flagged build never wins an election it
+    shares with a real base. Alone on disk it IS elected -- refusing to run at
+    all, on the only model present, would be the app deciding again."""
     keh, base, _ = krea
     d = base / 'models' / 'diffusion_models' / 'Krea'
     _write(d / 'BigLoveKreaEdit1_fp8mixed.safetensors')
-    assert keh.resolve_krea_unet() is None
-    assert 'krea_model' in keh.krea_missing_assets()
-    # ...but a real base alongside it is found, and it is the one picked.
+    listed = [n for _sub, names in keh._krea_unet_folders() for n in names]
+    assert 'BigLoveKreaEdit1_fp8mixed.safetensors' in listed, (
+        'a file on the user own disk must not be hidden from them')
+    assert keh.resolve_krea_unet().endswith('BigLoveKreaEdit1_fp8mixed.safetensors')
+    # ...but a real base alongside it wins the election every time.
     _write(d / 'krea2_turbo_fp8.safetensors')
     assert keh.resolve_krea_unet().endswith('krea2_turbo_fp8.safetensors')
 

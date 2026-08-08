@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-every-krea-build-you-own-is-offered',
+    date: '2026-08-08',
+    title: 'Every Krea build on your disk is offered, warning and all',
+    blurb:
+      'A checkpoint measured to render noise under the identity-edit LoRA used to be removed from every Krea list, so a file sitting in your own Krea folder was simply absent, with nothing on screen saying it existed or why it had gone. Choosing is yours: those builds are listed again and you can select them. What the app still will not do is pick one FOR you when nothing is pinned, because a base chosen in silence has already sent a run onto the wrong model without anyone noticing until the output was wrong. It is only elected automatically when it is the only Krea build you have, which beats refusing to run at all.',
+  },
+  {
     id: '2026-08-08-a-just-deployed-model-generates-right-away',
     date: '2026-08-08',
     title: 'A model you just deployed works right away, not a minute later',

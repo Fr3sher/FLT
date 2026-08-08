@@ -194,16 +194,24 @@ def test_the_only_krea_base_on_disk_stays_the_default_even_carrying_a_payload(kr
     assert keh.resolve_krea_unet() == os.path.join('Krea', 'krea2_turbo_fp8.safetensors')
 
 
-def test_a_base_the_family_knows_renders_noise_is_never_elected(krea):
+def test_a_base_the_family_knows_renders_noise_never_WINS_an_election(krea):
     """BigLove* carries 'krea' and renders pure noise under this pipeline —
-    already measured, already excluded from the Generate resolver's folders. The
-    elector applies it too, so a list that happens to include one cannot promote
-    it to default."""
+    measured. It is no longer filtered out of the lists: the user may pick it,
+    and hiding a file that sits on their own disk told them nothing.
+
+    What the elector still refuses is to CHOOSE it over a real base. An election
+    is not a choice the user made, and one made in silence has already sent a run
+    onto a third-party finetune nobody noticed until the output was wrong. Alone,
+    it IS elected: electing nothing would leave a working install unable to run on
+    the only model it has."""
     keh, _kdir = krea
-    assert keh.elect_krea_base(['Krea\\BigLoveKreaEdit1_fp8mixed.safetensors']) is None
     assert keh.elect_krea_base([
         'Krea\\BigLoveKreaEdit1_fp8mixed.safetensors',
-        'Krea\\plain.safetensors']) == 'Krea\\plain.safetensors'
+        'Krea\\plain.safetensors']) == 'Krea\\plain.safetensors', (
+            'a flagged build must never win over a real base')
+    assert keh.elect_krea_base(['Krea\\BigLoveKreaEdit1_fp8mixed.safetensors']) == \
+        'Krea\\BigLoveKreaEdit1_fp8mixed.safetensors', (
+            'alone on disk it is still the only thing that can run')
 
 
 def test_a_file_no_loader_can_open_is_never_elected(krea):

@@ -57,9 +57,15 @@ def test_each_slot_lists_its_own_folder_and_says_where_that_is(app, comfy):
 
 
 def test_the_krea_base_list_is_the_RESOLVER_s_candidates_not_the_whole_folder(app, comfy):
-    """BigLove carries 'krea' in its name and renders pure noise under the
-    identity LoRA, so the resolver excludes it. A picker built on its own walk of
-    diffusion_models would offer it — a choice that silently does nothing."""
+    """The picker lists what the RESOLVER can build, not everything in
+    diffusion_models — offering a file the resolver will not load is a choice that
+    silently does nothing.
+
+    That is a question about the FOLDER, not about the build. BigLove is listed:
+    it renders noise under the identity LoRA, which is a measured warning the user
+    is entitled to overrule, not a reason to hide a file from their own disk. What
+    the resolver still declines is to PREFER it when nobody picked (see
+    test_krea_default_base_election)."""
     d = comfy / 'models' / 'diffusion_models' / 'Krea'
     _write(d / 'krea2_turbo_fp8_scaled.safetensors')
     _write(d / 'BigLoveKreaEdit1_fp8mixed.safetensors')
@@ -67,8 +73,8 @@ def test_the_krea_base_list_is_the_RESOLVER_s_candidates_not_the_whole_folder(ap
     with app.app_context():
         files, _hint = picker.list_slot_files('krea_base_model')
     assert any('krea2_turbo' in f for f in files)
-    assert not any('BigLove' in f for f in files), (
-        'the picker offered a checkpoint the resolver refuses to elect')
+    assert any('BigLove' in f for f in files), (
+        'the picker hides a file sitting in the user own Krea folder')
     assert not any('some_other_model' in f for f in files), (
         'a non-krea folder file is not a Krea base candidate')
 

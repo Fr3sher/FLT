@@ -238,15 +238,16 @@ def _krea_unet_folders():
     os.path.join('', name) == name is exactly what UNETLoader loads. Mirrors
     klein_edit_helper._klein_unet_folders so anything listed is loadable.
 
-    `accept=_krea_base_compatible` is applied EVERYWHERE here, root and subfolder
-    alike. The Studio's own lister applies the same exclusion only at a root (the
-    check lives inside `_krea_root_candidate`), so a BigLove inside `Krea/` is
-    offered there and refused here. That asymmetry is pinned by
-    `test_model_scanners_agree` rather than silently levelled: it is a behaviour
-    change, not a refactor."""
+    NOTHING IS FILTERED OUT HERE. This walk used to drop every file matching
+    `KREA_INCOMPATIBLE_TOKENS`, which meant a build sitting in the user's own
+    `Krea/` folder was absent from every list with nothing on screen saying it
+    existed or why it was gone. Choosing is the user's call: a measured warning
+    belongs next to the name, not in place of it. `elect_krea_base` still keeps a
+    flagged build from WINNING an automatic election, which is a different
+    question — see there."""
     return comfy_model_paths.scan_family_folders(
         comfy_model_paths.search_roots('diffusion_models'), ('krea',),
-        accept=_krea_base_compatible, suffixes=_MODEL_SUFFIXES)
+        suffixes=_MODEL_SUFFIXES)
 
 
 def _krea_base_compatible(name):
@@ -317,10 +318,18 @@ def elect_krea_base(candidates):
     picker offers, Generate ranks what its own resolver found. Ranking a name the
     caller does not list would elect a base its own whitelist then refuses."""
     ranked = [(name, i) for i, name in enumerate(candidates or [])
-              if name and comfy_model_paths.is_loadable_model(name)
-              and _krea_base_compatible(os.path.basename(str(name).replace('\\', '/')))]
+              if name and comfy_model_paths.is_loadable_model(name)]
     if not ranked:
         return None
+    # A build flagged by KREA_INCOMPATIBLE_TOKENS is ELECTABLE but never PREFERRED.
+    # The two halves are deliberate. The user picking one is their call and is not
+    # filtered anywhere. An automatic election is not a choice at all, and one made
+    # in silence has already sent a run onto a third-party finetune nobody noticed
+    # until the results were wrong -- so a flagged build only wins when it is the
+    # only thing on disk, and the surfaces that name the running base say so.
+    preferred = [c for c in ranked
+                 if _krea_base_compatible(os.path.basename(str(c[0]).replace('\\', '/')))]
+    ranked = preferred or ranked
     tiers = {name: _krea_regime_tier(os.path.basename(str(name).replace('\\', '/')))
              for name, _i in ranked}
     best = min(tiers[name] for name, _i in ranked)

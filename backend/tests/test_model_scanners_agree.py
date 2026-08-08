@@ -27,7 +27,7 @@ behaviour change and that pass was a refactor:
     ComfyUI itself lists is a question that deserves its own measurement.
 
 The other one was levelled, in its own commit and on purpose — see
-`test_the_studio_no_longer_offers_a_base_generate_refuses` below.
+`test_both_listers_offer_every_krea_file_the_user_has` below.
 """
 import importlib
 import os
@@ -96,6 +96,8 @@ def _j(*parts):
 def test_get_krea_models_is_pinned_file_by_file(tree):
     from app.utils.comfyui import get_krea_models
     assert get_krea_models() == [
+        'BigLoveKreaEdit1_fp8mixed.safetensors',
+        _j('Krea', 'BigLoveKreaEdit1_fp8mixed.safetensors'),
         _j('Krea', 'krea2_turbo_fp8.safetensors'),
         _j('Krea', 'nested', 'deep_krea.safetensors'),
         _j('Krea', 'quant.gguf'),
@@ -104,25 +106,29 @@ def test_get_krea_models_is_pinned_file_by_file(tree):
     ]
 
 
-def test_the_studio_no_longer_offers_a_base_generate_refuses(tree):
-    """THE ONE BEHAVIOUR CHANGE, and the reason for it.
+def test_both_listers_offer_every_krea_file_the_user_has(tree):
+    """THE BEHAVIOUR CHANGE, and the reason for it.
 
     `BigLove*` carries 'krea' and renders PURE NOISE under the Krea pipeline —
-    measured, and already in `KREA_INCOMPATIBLE_TOKENS`. The Generate resolver
-    refuses it everywhere. The Studio's lister refused it only at a ROOT, because
-    the check lived inside `_krea_root_candidate`, which by construction never
-    runs on a subfolder. So the same file was refused at a root and offered as a
-    Test Studio base one folder down — an accident of placement, not a decision.
+    measured. That fact used to REMOVE it from the lists, and the two surfaces did
+    not even agree about where: the Studio dropped it at a root only, Generate
+    everywhere, so the same file was offered or hidden depending on which folder
+    it happened to sit in.
 
-    Someone picking it got noise and concluded the model, or the app, was broken.
-    The exclusion now applies at every depth, on both surfaces."""
+    Both now list it. Hiding a file that sits on the user's own disk told them
+    nothing — not that it existed, not why it was gone — and choosing is theirs to
+    do. The measured fact did not disappear: it moved from filter to warning, and
+    to `elect_krea_base`, which still refuses to PREFER a flagged build when the
+    app is the one choosing (test_krea_default_base_election)."""
     from app.utils.comfyui import get_krea_models
     from app.services import krea_edit_helper as keh
     importlib.reload(keh)
     listed = get_krea_models()
-    assert not any('biglove' in m.lower() for m in listed)
     resolver = [n for _sub, group in keh._krea_unet_folders() for n in group]
-    assert not any('biglove' in n.lower() for n in resolver)
+    assert any('biglove' in m.lower() for m in listed), (
+        'the Studio hides a file the user put in their own Krea folder')
+    assert any('biglove' in n.lower() for n in resolver), (
+        'Generate hides a file the user put in their own Krea folder')
 
 
 # --- Z-Image, the Studio's list ----------------------------------------------
@@ -149,18 +155,21 @@ def test_krea_unet_folders_is_pinned_group_by_group(tree):
     from app.services import krea_edit_helper as keh
     importlib.reload(keh)
     assert keh._krea_unet_folders() == [
-        ('Krea', ['krea2_turbo_fp8.safetensors', 'quant.gguf']),
-        ('', ['Krea_full_x_fp8.safetensors']),
+        ('Krea', ['BigLoveKreaEdit1_fp8mixed.safetensors',
+                  'krea2_turbo_fp8.safetensors', 'quant.gguf']),
+        ('', ['BigLoveKreaEdit1_fp8mixed.safetensors',
+              'Krea_full_x_fp8.safetensors']),
         ('krea2', ['another_krea.safetensors']),
     ]
 
 
-def test_the_resolver_refuses_the_noise_base_in_a_subfolder_too(tree):
-    """The other half of the asymmetry above, on the same tree and the same file."""
+def test_the_resolver_lists_the_noise_base_at_every_depth(tree):
+    """The other half of the change, on the same tree and the same file: a
+    subfolder is no longer a place where a file quietly disappears either."""
     from app.services import krea_edit_helper as keh
     importlib.reload(keh)
     names = [n for _sub, group in keh._krea_unet_folders() for n in group]
-    assert not any('biglove' in n.lower() for n in names)
+    assert any('biglove' in n.lower() for n in names)
 
 
 def test_the_resolver_never_sees_a_model_two_folders_deep(tree):

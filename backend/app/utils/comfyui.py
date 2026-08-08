@@ -2049,10 +2049,15 @@ def get_krea_models():
     if out_dir:
         try:
             from ..services import comfy_model_paths
+            # No `accept=`: a Krea file on the user's disk is listed, full stop.
+            # Dropping the ones KREA_INCOMPATIBLE_TOKENS flags meant a build in
+            # their own Krea/ folder was absent with nothing saying why. The
+            # measured fact lives on as a warning next to the name, and in
+            # elect_krea_base, which still will not PREFER a flagged build when
+            # the app is the one choosing.
             out = comfy_model_paths.scan_family_tree(
                 _model_scan_roots(out_dir), ("krea",),
-                root_file_accept=_krea_root_candidate,
-                accept=_krea_base_usable)
+                root_file_accept=_krea_root_candidate)
         except Exception as e:
             logger.error(f"get_krea_models error: {e}")
     _krea_models_cache["data"] = out
