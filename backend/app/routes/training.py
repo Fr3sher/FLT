@@ -2778,12 +2778,12 @@ def train_canvas_datasets():
 def train_canvas_generate():
     """◉ Generate from the LoRA Canvas — the same Test-Studio engine, driven by
     the checkpoints ticked on the board instead of by a picker. Body:
-    {selections:[{dataset_id, checkpoint, record_id, step}], …every Studio
-    setting}. Selections MAY span several datasets (that is the point of the
-    canvas); they may NOT span several families — the engine refuses, and the
-    reason travels back so the button can say it. Same gates as the other launch
-    routes: ComfyUI not set up → 409/503, missing models/nodes → the actionable
-    409 the Studio already returns.
+    {selections:[{dataset_id, checkpoint, record_id, step}], external_loras,
+    …every Studio setting}. Selections MAY span several datasets (that is the
+    point of the canvas); they may NOT span several families — the engine
+    refuses, and the reason travels back so the button can say it. Same gates
+    as the other launch routes: ComfyUI not set up → 409/503, missing
+    models/nodes → the actionable 409 the Studio already returns.
 
     🧬 `combine: true` (the board's Blend toggle) switches from one pass per
     ticked checkpoint to ONE generation loading them all, each at the `weight`
@@ -2808,6 +2808,7 @@ def train_canvas_generate():
             aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
             steps2_list=d.get('steps2'), count=d.get('count'),
             permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),
+            external_loras=d.get('external_loras'),
             rebalance=d.get('rebalance'),
             rebalance_strength=d.get('rebalance_strength'),
             negative=d.get('negative'), sampler=d.get('sampler'),

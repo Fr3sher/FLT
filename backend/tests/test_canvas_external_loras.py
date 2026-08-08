@@ -215,3 +215,47 @@ def test_external_lora_reaches_the_real_krea_graph(app, tmp_path, monkeypatch):
         assert ('outside-krea.safetensors', 0.6) in {
             (n['inputs']['lora_name'], n['inputs']['strength_model'])
             for n in loaders.values()}
+
+
+# --- routes forward external_loras ------------------------------------------
+
+def _comfy(monkeypatch):
+    monkeypatch.setattr('app.capabilities.probe',
+                        lambda *a, **k: {'comfyui': {'reachable': True}})
+
+
+def test_canvas_route_forwards_external_loras(client, monkeypatch):
+    """POST /api/train/canvas/generate with external_loras forwards the
+    parameter untouched to the engine."""
+    _comfy(monkeypatch)
+    seen = {}
+
+    def fake(user_id, selections, **kwargs):
+        seen['external_loras'] = kwargs.get('external_loras')
+        return {'created': 1, 'seed': 7, 'count': 1, 'run_id': 'r1', 'ids': []}
+
+    monkeypatch.setattr('app.services.cloud_training.canvas_generate', fake)
+    r = client.post('/api/train/canvas/generate', json={
+        'selections': [{'dataset_id': 1, 'checkpoint': 'z image\\a.safetensors'}],
+        'external_loras': [{'filename': 'detail.safetensors', 'strength': 0.6}]})
+    assert r.status_code == 200
+    assert seen['external_loras'] == [{'filename': 'detail.safetensors', 'strength': 0.6}]
+
+
+def test_studio_route_forwards_external_loras(client, monkeypatch):
+    """POST /api/studio/run with external_loras forwards the parameter
+    untouched to the engine."""
+    _comfy(monkeypatch)
+    seen = {}
+
+    def fake(user_id, selections, strengths, **kwargs):
+        seen['external_loras'] = kwargs.get('external_loras')
+        return {'created': 1, 'seed': 7, 'count': 1, 'run_id': 'r1', 'ids': []}
+
+    monkeypatch.setattr('app.services.lora_test_studio.create_comparison_run', fake)
+    r = client.post('/api/studio/run', json={
+        'selections': [{'dataset_id': 1, 'checkpoint': 'z image\\a.safetensors'}],
+        'strengths': [1.0],
+        'external_loras': [{'filename': 'detail.safetensors', 'strength': 0.6}]})
+    assert r.status_code == 200
+    assert seen['external_loras'] == [{'filename': 'detail.safetensors', 'strength': 0.6}]
