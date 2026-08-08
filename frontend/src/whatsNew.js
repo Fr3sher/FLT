@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-krea-ships-identity-first',
+    date: '2026-08-08',
+    title: 'Krea 2 Edit now ships tuned for likeness, not for variety',
+    blurb: 'Its two identity dials shipped unpaired — reference grounding at 512 with a reference pull of 0.25, a quarter of what the calibrated 512 profile used. A benchmark scoring generated faces against the reference measured the 1024 / 4.0 pair ahead by a clear margin on bust shots, and it got there while pulling LESS hard on the reference, so the likeness is not bought by recopying the pose you asked to change. Both dials, and sampler steps, now ship at those values. If you had never touched them, your next generations will resemble your reference more; if you prefer the looser, more varied restaging, set grounding back to 512 and the pull to 1.0. Anything you had already changed yourself is left exactly as you set it.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-08-one-model-setting-wherever-you-change-it',
     date: '2026-08-08',
     title: 'Change the model where you are working, not in Settings',
