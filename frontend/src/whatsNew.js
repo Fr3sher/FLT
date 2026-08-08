@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-klein-stops-switching-itself-off',
+    date: '2026-08-08',
+    title: 'Picking a Klein model no longer switches Klein off',
+    blurb: 'Choosing a model from the workspace dropdown stored its name without the folder it lives in — and the check that guards that setting only recognised the full path. So the app wrote a value its own guard then called missing, the engine went dark, and the message said no file was missing or broken. Both spellings are now accepted, so nothing you picked was ever wrong. And an unresolvable model no longer takes the whole engine hostage while usable Klein builds sit on your disk: the card asks you to pick one instead. What has not changed is the promise that made that guard exist — a run never quietly loads a file other than the one shown.',
+    to: '/settings/engines',
+  },
+  {
     id: '2026-08-08-krea-ships-identity-first',
     date: '2026-08-08',
     title: 'Krea 2 Edit now ships tuned for likeness, not for variety',

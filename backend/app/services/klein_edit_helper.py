@@ -354,6 +354,18 @@ def klein_pin_gaps():
         if shipped and raw == shipped:
             continue
         _, status = resolve_model_ref(comfy_type, raw)
+        # THE UNET SLOT IS WRITTEN BY THE APP ITSELF, and not in this dialect.
+        # `set_dataset_klein_model` — the run panel's dropdown — stores the BARE
+        # file name into this very key and refuses to store a folder ("the loader
+        # prefix is resolve_klein_unet's job"). `resolve_model_ref` only looks for
+        # a relative name at the ROOT of a search folder, so every model living in
+        # a klein/ sub-folder came back 'missing': picking a model from the app's
+        # own menu wrote a value the app's own gate then called broken, and the
+        # engine went dark explaining that no file was missing.
+        # So the gate asks the LOADER before it declares a gap — the same scan the
+        # picker lists from. A file that is genuinely gone still fails both.
+        if status != 'ok' and slot == 'unet' and klein_model_on_disk(raw):
+            continue
         if status != 'ok':
             gaps.append({'slot': slot, 'key': key, 'configured': raw, 'status': status})
     return gaps
@@ -381,6 +393,19 @@ def _klein_unet_folders():
         suffixes=_MODEL_SUFFIXES)
 
 
+def klein_unet_choices_exist() -> bool:
+    """Is there at least ONE Klein UNET on disk for the run panel to offer?
+
+    The question `klein_engine_ready` asks before letting a broken pin through:
+    "can the user actually repair this from the screen they are on?" With nothing
+    to choose from, an enabled card would only be a dead end dressed as an offer,
+    so the engine stays dark and Setup keeps owning that conversation.
+
+    Reads the SAME scan the picker lists from, so the card can never be lit over
+    a choice the dropdown will not show."""
+    return any(files for _prefix, files in _klein_unet_folders())
+
+
 class KleinModelGone(ValueError):
     """A model was NAMED for this job and is not on disk any more.
 
@@ -391,11 +416,18 @@ class KleinModelGone(ValueError):
     one, and the result looks fine, so nothing ever tells them. Named exception so
     the routes can say WHICH file went missing rather than "improve failed"."""
 
-    def __init__(self, name):
+    def __init__(self, name, *, pinned_in_settings=False):
         self.name = name
+        self.pinned_in_settings = pinned_in_settings
+        # Two origins, two sentences: a stored DATASET pick and a Settings PIN are
+        # repaired in different places, and a message naming the wrong one sends
+        # the user hunting through a page that holds nothing to change.
         super().__init__(
-            f'the Klein model chosen for this dataset is no longer on disk: {name} '
-            '— pick another one, or put the file back')
+            (f'the Klein model pinned in Settings is not on disk: {name} '
+             '— pick a model for this run, or clear that field to go back to '
+             'auto-detection') if pinned_in_settings else
+            (f'the Klein model chosen for this dataset is no longer on disk: {name} '
+             '— pick another one, or put the file back'))
 
 
 def klein_model_on_disk(selected):
@@ -476,6 +508,15 @@ def unet_for_job(klein_model=None):
     calling resolve_klein_unet() with no argument: it was the last place where a
     stored dataset pick was ignored AND a vanished model was swapped in silence."""
     if not klein_model:
+        # A BROKEN PIN and no explicit pick is the one case that must not resolve.
+        # `_configured_model` degrades an unresolvable pin to auto-detection, so
+        # this lane used to load a neighbour of the requested file and produce a
+        # result indistinguishable from a correct one — the pinned-model incident.
+        # The engine card stays lit (klein_engine_ready) precisely so the picker
+        # can answer this refusal; what it may not do is answer it by guessing.
+        gap = next((g for g in klein_pin_gaps() if g.get('slot') == 'unet'), None)
+        if gap:
+            raise KleinModelGone(gap['configured'], pinned_in_settings=True)
         return resolve_klein_unet()
     unet_ref = klein_model_on_disk(klein_model)
     if not unet_ref:
@@ -765,7 +806,18 @@ def klein_engine_ready(comfy_ok, *, missing=None, invalid=None, unsupported_enum
     # user pinned that is not on disk. It comes before the asset scan because the
     # asset scan would answer "everything is here" — auto-detection found files,
     # they are just not the ones that were asked for. See klein_pin_gaps.
-    if klein_pin_gaps():
+    #
+    # ONE EXCEPTION, and it is about where the fix lives rather than about safety:
+    # a broken UNET pin does NOT darken the engine while usable Klein builds sit
+    # on disk. That slot — and only that slot — has a picker in the run panel, so
+    # switching the engine off there removes the very control that would repair
+    # the situation, and leaves Settings-on-another-page as the only exit. The
+    # promise that nothing runs on an unshown file is not relaxed: it moves to
+    # `unet_for_job`, which now REFUSES a run that names no model while the pin is
+    # broken instead of quietly auto-detecting one.
+    for gap in klein_pin_gaps():
+        if gap.get('slot') == 'unet' and klein_unet_choices_exist():
+            continue
         return False
     enums = klein_unsupported_enums() if unsupported_enums is None else unsupported_enums
     if enums:
