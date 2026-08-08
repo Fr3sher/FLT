@@ -87,3 +87,44 @@ test('every state renders without throwing, including the unreadable record', ()
     assert.doesNotThrow(() => render(state))
   }
 })
+
+/* ── The button that ENDS the outage, when we can actually press it ──────────
+ *
+ * The banner offered "I restarted ComfyUI — clear it", which only lets the user
+ * DECLARE that they fixed it elsewhere. On an install whose ComfyUI this app can
+ * launch, that reads as the app standing by while its own outage continues.
+ *
+ * It is offered only when the server says the launch would work — the same check
+ * its start route runs immediately before spawning. On a Desktop install, a
+ * hand-written .bat, or a ComfyUI on another machine, the button is ABSENT
+ * rather than present-and-failing: this is the one screen whose job is to
+ * unblock someone, and a dead button there costs more than no button.
+ */
+const startable = (extra = {}) => ({
+  recovery: {
+    kind: 'unknown_submit', job_id: 'job-9', can_confirm_restart: true,
+    stalled_since: '2026-08-08T04:00:00Z',
+    connection: { reachable: false, url: 'http://127.0.0.1:8188',
+      status: 'unreachable', hint: null },
+    ...extra,
+  },
+})
+
+test('the banner offers to START ComfyUI when this install can', () => {
+  const html = render(startable({ can_start_comfyui: true }))
+  assert.match(html, /Start ComfyUI/, 'no way to end the outage from here')
+  assert.match(html, /I restarted ComfyUI/, 'the confirmation must stay available')
+  assert.ok(html.indexOf('Start ComfyUI') < html.indexOf('I restarted ComfyUI'),
+    'the button that fixes it must come before the one that only declares it fixed')
+})
+
+test('it does NOT offer to start a ComfyUI it cannot launch', () => {
+  for (const state of [startable({ can_start_comfyui: false }),
+    startable(),                                   // key absent (older backend)
+    startable({ can_start_comfyui: 'yes' })]) {    // anything but true
+    const html = render(state)
+    assert.doesNotMatch(html, /Start ComfyUI/,
+      'a button that would fail is worse than none on the unblocking screen')
+    assert.match(html, /I restarted ComfyUI/, 'the way out must not disappear with it')
+  }
+})

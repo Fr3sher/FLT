@@ -361,3 +361,23 @@ def start_comfyui(*, wait_timeout: float = _READY_TIMEOUT,
         return _failure()
     logger.warning('ComfyUI portable readiness timed out')
     return {'ok': True, 'reachable': False, 'starting': True}
+
+
+def can_start() -> bool:
+    """Can this install actually LAUNCH ComfyUI from a button?
+
+    Answered by the very check `start_comfyui` runs immediately before spawning,
+    so a button gated on this cannot appear over an endpoint that would refuse.
+    Deliberately narrow, and NOT the same question as "is ComfyUI installed":
+    `capabilities.resolve_comfyui_base` accepts several user-managed layouts,
+    which is right for finding models and too broad for starting a binary.
+
+    False therefore covers the ordinary case where ComfyUI is perfectly fine and
+    simply not ours to run — a Desktop install, a .bat the user wrote, another
+    machine. Offering to start one of those would be a button that fails, which
+    on a screen whose whole job is to unblock someone is worse than no button.
+    """
+    try:
+        return _validated_portable_layout() is not None
+    except Exception:                     # noqa: BLE001 — a probe is never fatal
+        return False

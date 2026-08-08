@@ -196,6 +196,15 @@ def comfyui_recovery_state():
         # Only ever paid for while something is actually blocking: a healthy app
         # polls this route forever and must not probe ComfyUI for nothing.
         recovery['connection'] = _comfyui_connection(probe.link)
+        # Whether the banner may offer to START ComfyUI itself, rather than only
+        # ask the user to confirm they restarted it. Same check the start route
+        # runs before spawning, so the button can never appear over an endpoint
+        # that would refuse. False on every install whose ComfyUI is not ours to
+        # run — Desktop, a hand-written .bat, another machine — where the honest
+        # offer is the confirmation, not a launch that would fail. Computed only
+        # inside this branch: an unblocked app must not pay for it.
+        from ..services import comfyui_control
+        recovery['can_start_comfyui'] = comfyui_control.can_start()
     return jsonify({'ok': True,
                     'recovery': recovery,
                     'auto_cleared': peek_auto_recovery_notice()})

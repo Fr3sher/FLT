@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-start-comfyui-from-the-banner',
+    date: '2026-08-08',
+    title: 'Start ComfyUI from the banner that tells you it is down',
+    blurb:
+      'When LDS cannot reach ComfyUI, the banner explaining it offered one button: "I restarted ComfyUI — clear it", which only lets you say someone else fixed it. On an install whose ComfyUI this app can launch, there is now a ▶ Start ComfyUI button right there, and it comes first: it is the one that ends the outage rather than declaring it over. The banner then clears itself once ComfyUI actually answers, so a start that spawns and dies cannot be mistaken for a fix, and your paused job resumes on its own. The button is deliberately absent when your ComfyUI is not ours to launch — ComfyUI Desktop, your own launcher script, or one running on another machine — because on the one screen whose job is to unblock you, a button that fails costs more than no button at all.',
+  },
+  {
     id: '2026-08-08-one-model-setting-wherever-you-change-it',
     date: '2026-08-08',
     title: 'Change the model where you are working, not in Settings',

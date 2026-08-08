@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { apiFetch, postJson } from '../../api/fetchClient'
+import { apiFetch, getCsrfToken, postJson } from '../../api/fetchClient'
 import { useToast } from './Toast'
 import { autoClearedMessage, recoveryBannerModel } from '../../utils/comfyRecovery'
 
@@ -22,6 +22,7 @@ export default function ComfyRecoveryBanner() {
   const toast = useToast()
   const [state, setState] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [starting, setStarting] = useState(false)
   const seenNoticeRef = useRef(null)
   const aliveRef = useRef(true)
 
@@ -82,6 +83,35 @@ export default function ComfyRecoveryBanner() {
     }
   }
 
+  // Start it ourselves. Body-free POST on purpose: the route reads only the saved
+  // config and a fixed portable command, never anything from this screen. A
+  // success does NOT clear the barrier here — the poll below does, and only once
+  // ComfyUI actually answers, so a start that spawns and then dies cannot be
+  // mistaken for a fix.
+  const startIt = async () => {
+    setStarting(true)
+    try {
+      const res = await apiFetch('/api/setup/comfyui/start', {
+        method: 'POST', headers: { 'X-CSRFToken': getCsrfToken() },
+      })
+      if (res?.reachable) {
+        toast.success(res.already_running
+          ? 'ComfyUI was already running — reconnected.'
+          : 'ComfyUI started. Your paused job resumes on its own.')
+      } else if (res?.starting) {
+        toast.info('ComfyUI is starting. This banner clears itself once it answers.')
+      } else {
+        toast.error(res?.error || "ComfyUI could not start. Check the install, then try again.")
+      }
+      await poll()
+    } catch (e) {
+      toast.error(e?.message || 'ComfyUI could not start.')
+      await poll()
+    } finally {
+      setStarting(false)
+    }
+  }
+
   // No route opens a specific dataset (the workspace remembers its selection in
   // localStorage), so pointing at one means writing that selection and letting
   // the app boot on it. Only ever on an explicit click, in a state where the
@@ -93,8 +123,8 @@ export default function ComfyRecoveryBanner() {
   }
 
   return (
-    <RecoveryBannerBody model={model} busy={busy}
-      onConfirm={clearIt} onOpenDataset={openOwningDataset} />
+    <RecoveryBannerBody model={model} busy={busy} starting={starting}
+      onConfirm={clearIt} onStart={startIt} onOpenDataset={openOwningDataset} />
   )
 }
 
@@ -105,7 +135,8 @@ export default function ComfyRecoveryBanner() {
  * never runs effects, so mounting the default export proves nothing about what
  * a blocked user actually sees.
  */
-export function RecoveryBannerBody({ model, busy = false, onConfirm, onOpenDataset }) {
+export function RecoveryBannerBody({ model, busy = false, starting = false,
+                                     onConfirm, onStart, onOpenDataset }) {
   if (!model) return null
   const warning = model.tone === 'warning'
   return (
@@ -134,6 +165,19 @@ export function RecoveryBannerBody({ model, busy = false, onConfirm, onOpenDatas
         )}
         {/* Stacks on a 400 px screen, sits on one row from `sm` up. */}
         <div className="mt-2 flex flex-col gap-2 sm:flex-row sm:items-center">
+          {/* FIRST, when it is on offer: this is the button that ENDS the
+              problem. "I restarted ComfyUI" only declares that someone else
+              fixed it, and a screen that leads with that makes the app look
+              like a bystander to its own outage. Absent whenever ComfyUI is
+              not ours to launch — see canStart. */}
+          {model.canStart && (
+            <button type="button" onClick={onStart} disabled={busy || starting}
+              className="rounded-md border border-amber-400/50 bg-amber-500/20 px-3 py-1.5
+                         text-xs font-medium text-content hover:bg-amber-500/30
+                         disabled:cursor-not-allowed disabled:opacity-60">
+              {starting ? 'Starting…' : model.startLabel}
+            </button>
+          )}
           {model.canConfirm && (
             <button type="button" onClick={onConfirm} disabled={busy}
               className="rounded-md border border-amber-400/50 bg-amber-500/20 px-3 py-1.5
