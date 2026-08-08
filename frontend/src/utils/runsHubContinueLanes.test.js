@@ -116,7 +116,13 @@ test('the confirmable refusal markers have ONE definition, shared by both mounts
   // Runs hub's ↻ Retry answers it (GitHub #23), the dataset panel's own
   // "Continue anyway" checkbox answers it there.
   assert.ok(util.includes('NOT_READY: '), 'NOT_READY: must live in the shared util');
-  assert.match(panel, /import \{ confirmableRetryFlag \} from '\.\.\/\.\.\/utils\/trainingRefusals'/);
+  // The panel imports from the shared util — WHICH names it takes is not the
+  // contract. It gained `postWithConfirmations` when the cloud launch stopped
+  // hand-rolling a retry that could never run: that loop tested `d.ok === false`
+  // around a client that THROWS on a 409, so a confirmable refusal reached the
+  // user as an error toast asking a question it gave no way to answer. Pinning
+  // the exact import line would have made that fix look like a violation.
+  assert.match(panel, /import \{[^}]*confirmableRetryFlag[^}]*\} from '\.\.\/\.\.\/utils\/trainingRefusals'/);
   assert.match(page, /from '\.\.\/utils\/trainingRefusals'/);
   assert.doesNotMatch(panel, /const CONFIRMABLE_REFUSALS = \[/);
   assert.doesNotMatch(page, /const CONFIRMABLE_REFUSALS = \[/);

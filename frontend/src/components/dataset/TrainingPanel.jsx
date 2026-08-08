@@ -27,7 +27,7 @@ import {
   trainingRunSelection,
   trainFamilyLabel,
 } from '../../utils/checkpointBrowser';
-import { confirmableRetryFlag } from '../../utils/trainingRefusals';
+import { confirmableRetryFlag, postWithConfirmations } from '../../utils/trainingRefusals';
 import {
   deployedFilenamesOf,
   orphanImportedCheckpoints,
@@ -2237,14 +2237,28 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
       }),
       ...(allowNotReady ? { allow_not_ready: true } : {}),
     };
-    let d = await postJson(`/api/dataset/${ds.currentId}/train/cloud`, body);
-    for (let flag; d && d.ok === false && (flag = confirmableRetryFlag(d.error, 'Train anyway (force)')); ) {
-      if (flag === 'declined') { d = null; break; }  // the confirm WAS the answer
-      body = { ...body, [flag]: true };
-      d = await postJson(`/api/dataset/${ds.currentId}/train/cloud`, body);
-    }
-    if (d && d.ok === false) {
-      toastTrainError(d, 'Cloud training failed');
+    // postWithConfirmations, NOT a hand-rolled loop on `d.ok === false`.
+    //
+    // That loop could never run. Every confirmable refusal leaves the service as a
+    // RuntimeError, which the route maps to HTTP 409 with `{error: "..."}` -- a
+    // body carrying no `ok` key at all -- and postJson THROWS on any non-2xx
+    // rather than returning it. So the await raised, everything below it was dead
+    // code, and the user got the raw refusal text as an error toast with no way to
+    // answer the question it was asking. Reported on the parallel-run one: "I
+    // still cannot run two trainings on the same dataset", on an install whose
+    // backend supported it perfectly.
+    //
+    // This helper is what the Runs hub and the canvas already use for these same
+    // refusals: it catches, asks, and retries carrying the flag -- and refuses to
+    // ask twice for a flag it already sent, so a refusal that survives its own
+    // confirmation ends instead of looping.
+    let d;
+    try {
+      d = await postWithConfirmations(
+        (b) => postJson(`/api/dataset/${ds.currentId}/train/cloud`, b),
+        body, 'Train anyway (force)');
+    } catch (e) {
+      toastTrainError({ ...(e?.body || {}), error: e?.message }, 'Cloud training failed');
       return false;
     }
     // The dialog closes on success and the panel's own launch view only appears

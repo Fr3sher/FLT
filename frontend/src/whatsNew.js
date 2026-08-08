@@ -50,6 +50,20 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-launch-anyway-actually-asks',
+    date: '2026-08-08',
+    title: 'A second cloud run on one dataset now actually asks you',
+    blurb:
+      'Launching a second cloud training on a dataset that already had one was supposed to ask "launch anyway?" and go ahead if you said yes. The question never reached you: the refusal arrived as an error toast printing the question at you, with no way to answer it, so the second run was simply impossible however many times you tried. The confirmation now appears and the run starts when you accept. Nothing about what is allowed has changed — the guard, your fleet limit and your budget behave exactly as before; the answer you gave it was being thrown away. Reported by Arrow (Discord).',
+  },
+  {
+    id: '2026-08-08-start-comfyui-from-the-banner',
+    date: '2026-08-08',
+    title: 'Start ComfyUI from the banner that tells you it is down',
+    blurb:
+      'When LDS cannot reach ComfyUI, the banner explaining it offered one button: "I restarted ComfyUI — clear it", which only lets you say someone else fixed it. On an install whose ComfyUI this app can launch, there is now a ▶ Start ComfyUI button right there, and it comes first: it is the one that ends the outage rather than declaring it over. The banner then clears itself once ComfyUI actually answers, so a start that spawns and dies cannot be mistaken for a fix, and your paused job resumes on its own. The button is deliberately absent when your ComfyUI is not ours to launch — ComfyUI Desktop, your own launcher script, or one running on another machine — because on the one screen whose job is to unblock you, a button that fails costs more than no button at all.',
+  },
+  {
     id: '2026-08-08-klein-stops-switching-itself-off',
     date: '2026-08-08',
     title: 'Picking a Klein model no longer switches Klein off',
