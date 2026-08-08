@@ -1121,14 +1121,33 @@ def set_caption_options(user_id, dataset_id, patch) -> dict:
 # for improve". NULL = auto (resolve_klein_unet decides), which is exactly what
 # every improve did before this setting existed.
 def dataset_klein_model(ds):
-    """The bare Klein model file name this dataset chose, or None for auto."""
-    name = (getattr(ds, 'klein_model', None) or '').strip() if ds else ''
-    return name or None
+    """The bare Klein model file name in use, or None for auto.
+
+    ONE VALUE, NOT ONE PER DATASET — and the `ds` argument is now ignored on
+    purpose. The setting used to live in a per-dataset column, which meant the
+    same question ("which Klein model runs?") had two different answers depending
+    on which screen asked, and Settings could disagree with the dataset you were
+    looking at. Every model setting is now the same setting wherever it is
+    edited; `klein.unet` is that value, and it is the one the resolver has always
+    honoured.
+
+    ⚠️ The `face_dataset.klein_model` COLUMN is deliberately left in place and
+    simply unread. Dropping it would destroy picks made under the old behaviour,
+    SQLite cannot drop a column on the versions this app supports, and an
+    unread column costs nothing — while a deleted one cannot be reconsidered.
+    """
+    return (cfg.get('klein.unet') or '').strip() or None
 
 
 def set_dataset_klein_model(user_id, dataset_id, name):
-    """Persist the dataset's Klein model pick. '' / None clears it back to auto —
+    """Persist the Klein model pick. '' / None clears it back to auto —
     un-choosing has to be a real gesture, not a value you can never take back.
+
+    It writes the GLOBAL `klein.unet`, the same key Settings edits: choosing from
+    a dataset screen and choosing from Settings are the same act on the same
+    value. `dataset_id` is still required and still validated — a write from a
+    screen that is not looking at a real dataset is a bug worth answering with a
+    404, and dropping the argument would change every caller for nothing.
 
     Only a BARE file name is accepted: the picker lists bare names (the loader
     prefix is resolve_klein_unet's job), so a value carrying a path separator is
@@ -1136,8 +1155,7 @@ def set_dataset_klein_model(user_id, dataset_id, name):
     a model can be moved away long after it was chosen, and the honest place to
     say so is the run (KleinModelGone names the file), not a settings write that
     would silently drop the user's answer."""
-    ds = get_dataset(user_id, dataset_id)
-    if not ds:
+    if not get_dataset(user_id, dataset_id):
         raise ValueError('dataset not found')
     value = (name or '').strip()
     # BOTH separators, on every OS: os.path.basename alone reads a backslash as
@@ -1147,9 +1165,8 @@ def set_dataset_klein_model(user_id, dataset_id, name):
                   or posixpath.basename(value) != value
                   or value in ('.', '..')):
         raise ValueError('a Klein model is named by its file name, without a folder')
-    ds.klein_model = value or None
-    db.session.commit()
-    return dataset_klein_model(ds)
+    cfg.save_config({'klein': {'unet': value}})
+    return dataset_klein_model(None)
 
 
 # --- Who actually WROTE the captions of a pass ---------------------------------

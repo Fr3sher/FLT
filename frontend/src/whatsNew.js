@@ -50,6 +50,13 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-08-one-model-setting-wherever-you-change-it',
+    date: '2026-08-08',
+    title: 'Change the model where you are working, not in Settings',
+    blurb:
+      'The Krea 2 base could only be set in Settings, so the one thing you reach for when a whole run looks wrong meant leaving the screen you were judging on. It is now in the Krea 2 Edit panel of the work screen, using the same searchable list and writing the same value Settings shows. The Klein model works the same way, and there is now exactly one of each: change it from a dataset screen or from Settings and it is the same setting either way, applying to every run from then on rather than to the batch in front of you. Previously the Klein model was remembered per dataset, so two datasets could disagree with Settings about which model would actually run.',
+  },
+  {
     id: '2026-08-08-every-krea-build-you-own-is-offered',
     date: '2026-08-08',
     title: 'Every Krea build on your disk is offered, warning and all',

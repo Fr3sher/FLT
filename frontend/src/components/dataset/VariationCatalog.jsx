@@ -1,6 +1,7 @@
 /** Variation catalog: presets + per-entry toggles + multiplier + Klein picker. */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import KleinModelSetting from '../shared/KleinModelSetting';
+import GlobalModelPicker from '../shared/GlobalModelPicker';
 import { useToast } from '../common/Toast';
 import SettingsLink from '../common/SettingsLink';
 import { useCapabilities } from '../../context/CapabilitiesContext';
@@ -564,6 +565,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const [kreaRefBoost, setKreaRefBoost] = useState(null);
   const [kreaIdentityStrength, setKreaIdentityStrength] = useState(null);
   const [kreaSteps, setKreaSteps] = useState(null);
+  // The Krea base, held like the dials: one GLOBAL value mirrored locally so
+  // the field answers the click before the PUT comes back.
+  const [kreaBaseModel, setKreaBaseModel] = useState('');
   const [configDefaults, setConfigDefaults] = useState(null);
   useEffect(() => {
     let cancelled = false;
@@ -598,6 +602,7 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
         // shows and EDITS them, exactly like the Settings card does.
         // config_defaults is what "Reset to default" writes.
         setConfigDefaults(d.config_defaults || {});
+        setKreaBaseModel((d.config?.krea?.base_model || '').trim());
         setKreaGrounding(clampGrounding(d.config?.krea?.grounding_px,
           defaultValueAt(d.config_defaults, 'krea', 'grounding_px')));
         setKreaSteps(clampSteps(d.config?.krea?.steps,
@@ -1267,9 +1272,15 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           would be a second truth") never applied and is gone. What survives is
           the honesty requirement: a control that changes every FUTURE run, not
           just this batch, has to say so — hence the warning below.
-          The two PATH fields (`base_model`, `identity_lora`) deliberately stay
-          in Settings alone: they are filled once at install, not adjusted while
-          judging an image, and the link below still leads to them. */}
+          `identity_lora` still stays in Settings alone: it is filled once at
+          install, not adjusted while judging an image, and the link below leads
+          to it.
+
+          `base_model` no longer does. It is the ONE thing you reach for when a
+          run looks wrong, and being sent to Settings to change it mid-judgement
+          is what got reported. It is the same GLOBAL key from either screen —
+          same value, same widget, same scan — so the sentence above about every
+          future run covers it too. */}
       {isKrea && krAvailable && (
         <details className="rounded-lg border border-border bg-app/30 open:pb-2">
           <summary className="cursor-pointer select-none px-2.5 py-1.5 text-[0.75rem] text-content font-semibold">
@@ -1294,19 +1305,32 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
                 Settings › Image engines
               </SettingsLink>, which also carries these same four dials — one value either way.
             </p>
-            {/* All four dials, editable here. They save the GLOBAL setting,
-                debounced through one shared saver — see the block comment. */}
+            {/* The base model and all four dials, editable here. They save the
+                GLOBAL setting — the dials debounced through one shared saver, the
+                base model on pick. See the block comment. */}
             <div className="flex flex-col gap-2 pt-1 border-t border-white/10">
               {/* The target is the Krea CARD, not a field: the sentence promises
                   "the rest of the engine's knobs" — which is exactly that card. */}
               <p className="text-amber-300/90 text-[0.625rem]">
-                ⚠ These four save straight to your settings: they apply to <b>every</b> Krea
+                ⚠ These save straight to your settings: they apply to <b>every</b> Krea
                 run from now on, not just this batch — the same values every other Krea
                 surface reads, and the same ones{' '}
                 <SettingsLink section="engines" focus="krea-engine" tone="warning" className="text-[0.625rem]">
                   Settings › Image engines
                 </SettingsLink>{' '}shows.
               </p>
+              {/* The base itself, first: it is the coarsest control here, and the
+                  one you reach for when the whole run looks wrong rather than
+                  slightly off. Empty = let the resolver elect one. */}
+              <label className="flex flex-col gap-1 min-w-0">
+                <span className="text-content-muted text-[0.625rem]">Krea 2 base model</span>
+                <GlobalModelPicker
+                  section="krea" field="base_model" slot="krea_base_model"
+                  label="Krea 2 base model"
+                  value={kreaBaseModel}
+                  onSaved={setKreaBaseModel}
+                />
+              </label>
               <KreaDial
                 id="krea-grounding-dial"
                 label="Reference grounding"
