@@ -54,7 +54,8 @@ import { canImproveCanvasImage } from '../../utils/canvasImprove';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
-import ExternalLoraNodes from './ExternalLoraNodes';
+import PluginNodeLayer from './pluginNodes/PluginNodeLayer';
+import { PLUGIN_NODE_TYPES } from './pluginNodes/registry';
 import { externalLoraPayload, normalizeExternalLoras } from '../../utils/externalLoras';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
@@ -1088,6 +1089,22 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const [extChecked, setExtChecked] = useState(new Set());
   const [extPickerOpen, setExtPickerOpen] = useState(false);
   const extLoadedOnce = useRef(false);
+  // Per-node world-space boxes reported by PluginNodeLayer (key -> {x,y,w,h}),
+  // consumed by later tasks for edge anchoring. A ref backs the state so the
+  // geometry callback can compare against the last known box and only
+  // re-render when something actually moved or resized — every drag frame
+  // reporting through `setState` unconditionally would re-render the whole
+  // canvas on every pointermove.
+  const pluginBoxesRef = useRef(new Map());
+  const [pluginBoxes, setPluginBoxes] = useState(pluginBoxesRef.current);
+  const onPluginGeometry = useCallback((key, box) => {
+    const prev = pluginBoxesRef.current.get(key);
+    if (prev && prev.x === box.x && prev.y === box.y && prev.w === box.w && prev.h === box.h) return;
+    const next = new Map(pluginBoxesRef.current);
+    next.set(key, box);
+    pluginBoxesRef.current = next;
+    setPluginBoxes(next);
+  }, []);
   // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
   // ever sees the render it was created in, and the payload it must send is
   // whatever is CURRENT at unmount time, not whatever it was when the pending
@@ -1742,15 +1759,24 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                   onOpenGallery={(recordId, step) => setGallery({ recordId, step })} />
               </div>
             ))}
-            {/* 🔌 The external LoRA nodes live in this SAME transformed layer as
-                the lanes, so they pan and zoom with the board like any other
-                node — the add popover they share the file with is portalled
-                out of here instead (see ExternalLoraNodes.jsx). */}
-            <ExternalLoraNodes nodes={extNodes} onNodesChange={setExtNodes}
-              checked={extChecked} onCheckedChange={setExtChecked}
-              family={picks[0]?.family || 'zimage'}
+            {/* 🔌 Plugin nodes (the external LoRA type is the first one) live in
+                this SAME transformed layer as the lanes, so they pan and zoom
+                with the board like any other node — the add popover they
+                share the file with is portalled out of here instead (see
+                pluginNodes/PluginNodeLayer.jsx and ExternalLoraNodes.jsx). */}
+            <PluginNodeLayer types={PLUGIN_NODE_TYPES}
+              stores={{
+                'external-lora': {
+                  nodes: extNodes, onNodesChange: setExtNodes,
+                  checked: extChecked, onCheckedChange: setExtChecked,
+                  extra: {
+                    family: picks[0]?.family || 'zimage',
+                    pickerOpen: extPickerOpen, onClosePicker: () => setExtPickerOpen(false),
+                  },
+                },
+              }}
               boardScale={clampScale(view.scale)}
-              pickerOpen={extPickerOpen} onClosePicker={() => setExtPickerOpen(false)} />
+              onGeometry={onPluginGeometry} />
           </div>
         )}
       </div>
