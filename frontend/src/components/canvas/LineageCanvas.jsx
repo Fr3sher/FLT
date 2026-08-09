@@ -41,7 +41,9 @@ import { clampPopoverToViewport, POPOVER_H, POPOVER_W } from '../dataset/checkpo
 import { useCheckpointActions } from '../../hooks/useCheckpointActions';
 import { useCanvasImageImprove } from '../../hooks/useCanvasImageImprove';
 import { useCanvasRun } from '../../hooks/useCanvasRun';
-import { canvasRunDatasetIds, readyImageCount, runPinCandidates } from '../../utils/canvasRunResults';
+import {
+  canvasRunDatasetIds, describeCanvasRun, readyImageCount, runPinCandidates,
+} from '../../utils/canvasRunResults';
 import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeChrome';
 import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility';
 import {
@@ -1377,6 +1379,12 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      a launch could only be watched at the moment it was fired. */
   const tracker = useCanvasRun();
   const trackerTargets = tracker.targets;
+  /* Which of the four states the launch is in — read from the SAME helper the
+     bar itself renders from, so "is there anything to show" and "what is shown"
+     can never disagree. The overlay needs it to decide whether to draw a pill at
+     all (an empty painted box above the board is worse than no box) and whether
+     the settings panel is already saying this. */
+  const runPhase = describeCanvasRun(tracker.run.data).phase;
   // New images = new × N badges and new thumbnails on the pills, which come from
   // the LINEAGE, not from the run. Without this re-read the board looked exactly
   // as it did before the launch until a full reload — the images were there, and
@@ -1816,10 +1824,54 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
             354 px tall inside a 76-px box and the user saw a 20-px sliver of
             it. The reason for the clip left with the panel; the clip had to go
             with it. Nothing replaced it, because there is nothing left here
-            that can grow — chips wrap to at most three rows at 400 px. */}
+            that can grow — measured at 400 px the chips wrap to two rows, and
+            the search field, which was the third, unfolds only when asked. */}
         <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex max-h-full flex-col gap-2 overflow-visible p-2 sm:p-3">
-          {filterSlot ? <div className="pointer-events-auto">{filterSlot}</div> : null}
-          <div className="pointer-events-auto">
+          {/* 🩹 The chrome is PAINTED, and that is the actual fix for "a pinned
+              strip runs over the filter".
+
+              The board could never paint over this row — the frame clips
+              (`overflow-hidden`) and owns its own stacking context, so no
+              z-index inside it can reach a sibling overlay, and two passes of
+              z-index work went into proving that. The symptom kept coming back
+              anyway, because it was never a z-order bug: the chips are
+              `bg-app/60`, Reset and the runs readout have no fill at all, and
+              between and behind them the row was simply TRANSPARENT. A group of
+              pinned images parked in the top-right corner was legible straight
+              through it, which reads as a strip lying on top of Reset — and no
+              amount of z-index can fix something that is already underneath.
+
+              So the top chrome gets what the bottom toolbar has had all along:
+              an opaque pill. Same tokens, deliberately — the two bars are the
+              same kind of object and were never meant to be one solid and one
+              made of glass. */}
+          {filterSlot ? (
+            <div className="pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
+              {filterSlot}
+            </div>
+          ) : null}
+          {/* 🎨/📱 One status, not two. The board's tracker and the settings
+              panel's own in-flight bar read the SAME numbers (useCanvasStudio
+              hands `run.data` to both), so with the panel open a phone showed
+              "N generating · M queued · Stop (resumable)" twice, ~70 px each,
+              stacked at the two ends of a 800-px screen.
+
+              The BOARD's copy is the one that steps aside, and only while the
+              panel is open AND the run is in flight — which is exactly the state
+              the panel duplicates. It has to be that way round: the panel hides
+              its whole setup form while `pending > 0`, so dropping the panel's
+              bar instead would leave an open sheet with nothing in it, and the
+              board's copy is also the one that survives the panel being closed
+              and the page reloaded. Stopped and finished runs keep the board's
+              bar at every width: ▶ Resume, 📌 Pin all and the result links exist
+              nowhere else.
+
+              From `lg` up nothing changes — a side drawer and the board are read
+              at once there, and the desktop layout is not what this pass is
+              about. */}
+          {runPhase !== 'idle' && (
+          <div className={'pointer-events-auto rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg'
+            + (panelOpen && runPhase === 'working' ? ' hidden lg:block' : '')}>
         {/* 🎨 The generation in flight, ON the board. Visible with the settings
             panel closed, and after a reload — which is the whole point: a launch
             you can only watch at the second you fired it is a launch you cannot
@@ -1837,6 +1889,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           onUndoPinAll={pinAllState?.undo?.length ? handleUndoPinAll : null}
           onDismiss={() => { setPinAllState(null); tracker.forget(); }} />
           </div>
+          )}
         </div>
 
         {/* BOTTOM — what you DO to the board. Bottom edge on purpose: it is
@@ -1859,7 +1912,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-app/60 text-content-muted hover:text-content">×</button>
             </div>
           )}
-          <div className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-app/85 p-1.5 shadow-lg backdrop-blur">
+          <div className="pointer-events-auto inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-xl border border-border bg-surface-overlay p-1.5 shadow-lg">
         {/* 📱 The board's controls, on a phone.
             Every target here is 40 px up to `lg` and the familiar 36 px above it.
             Not cosmetics: this row is the ONLY way to zoom without a wheel, and a

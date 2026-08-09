@@ -125,9 +125,79 @@ test('the Layouts menu opens on the screen, not off the side of it', () => {
    65vh = 520, and 304 + 520 > 800 — the board's bottom edge never fit. The
    blurb is 72 of those pixels and it explains the page exactly once. */
 test('the canvas page drops its blurb on a phone, never its help', () => {
-  assert.match(page, /className="mt-1 hidden text-content-muted text-\[0\.75rem\] sm:block"/);
+  // …and it stays dropped up to `lg`, not `sm`. 640 px was one breakpoint too
+  // early: measured at 900×2000 the paragraph came back and cost 40 px of page
+  // above the board (header 74 → 34), on a width a phone browser really does
+  // report. `lg` is also where every other control on this screen stops being
+  // finger-sized, so the whole screen now switches on ONE line.
+  assert.match(page, /className="mt-1 hidden text-content-muted text-\[0\.75rem\] lg:block"/);
+  assert.doesNotMatch(page, /text-\[0\.75rem\] sm:block/);
   // The ? badge stays at every width, so the explanation is still one tap away.
   assert.match(page, /<HelpBadge topic="page-canvas" \/>/);
+});
+
+/* 📏 Measured at 400×800 with a real board on screen: the filter bar wrapped to
+   THREE rows (132 px) of the frame it floats on, and 224 of the 346 available
+   px belonged to a search field that is empty on all but a handful of visits.
+   Folded behind 🔍 and with the chips down to glyph + count, the same bar is two
+   rows — 86 px. 46 px of board back, for nothing that was being used. */
+test('the board search folds behind 🔍 on a phone and is untouched from lg', () => {
+  assert.match(filter, /data-testid="canvas-filter-search-toggle"/);
+  // The toggle exists ONLY below lg — above it the field is in the bar, so a
+  // magnifier next to a visible search box would be a control with no job.
+  const toggle = filter.slice(filter.indexOf('data-testid="canvas-filter-search-toggle"'));
+  assert.match(toggle.slice(0, 600), /\blg:hidden\b/);
+  // The field itself: hidden while folded, its own full-width row while open,
+  // and from `lg` the exact 12-rem flex item it has always been.
+  assert.match(filter, /searchOpen \? 'basis-full ' : 'hidden '/);
+  assert.match(filter, /lg:h-9 lg:block lg:basis-48/);
+  // A filter you cannot see must still announce itself — the bar's own rule.
+  // Folding the field away does NOT clear the query, so the chip lights up and
+  // carries the words that are narrowing the board.
+  assert.match(filter, /queryActive\n?\s*\? 'border-indigo-400\/60 bg-indigo-500\/15/);
+  assert.match(filter, /max-w-\[6rem\] truncate font-normal">\{query\}</);
+});
+
+/* The chips carried "Datasets All 3 datasets" + "Models 1/1" + "Status 1/1" +
+   "Pinned" — 400 px cannot hold that and a search box on two rows. The words go
+   below `sm`, exactly like the board toolbar under them; the glyph, the count
+   and the 40-px target never do. */
+test('the filter chips drop their words on a phone, never their counts', () => {
+  const menu = fs.readFileSync(new URL('./CanvasFilterMenu.jsx', import.meta.url), 'utf8');
+  assert.match(menu, /className="hidden truncate sm:inline">\{label\}</);
+  // A hidden word is never a lost one: the accessible name stays a sentence.
+  const named = (menu.match(/\{`\$\{label\}\$\{summary \? ` — \$\{summary\}` : ''\}`\}/g) || []);
+  // Both the title AND the accessible name — an aria-label replaces the button's
+  // contents, so labelling it "Datasets" alone would take the count away from
+  // the one user who cannot see the chip light up.
+  assert.equal(named.length, 2, 'title and aria-label both carry label + count');
+  // The count survives at every width, in its short form where there is one —
+  // that count is the whole reason a folded filter can be trusted.
+  assert.match(menu, /\{short \?\? summary\}/);
+  assert.match(filter, /short=\{`\$\{sel\.size\}\/\$\{total\}`\}/);
+  // 🖼 Pinned loses its word too — but never its "off", which is the state that
+  // explains an empty-looking board.
+  assert.match(filter, /className="hidden sm:inline">Pinned</);
+  assert.match(filter, /\{!showPinned && <span className="font-normal">off<\/span>\}/);
+  assert.match(filter, /aria-label="Pinned images on the board"/);
+  // …and the readout keeps its number, dropping only the word "shown".
+  assert.match(filter, /<span className="hidden lg:inline"> shown<\/span>/);
+});
+
+/* 🎨 The board's tracker and the settings panel's in-flight bar read the SAME
+   numbers (useCanvasStudio hands one `run.data` to both), so an open panel on a
+   phone said "N generating · M queued · Stop (resumable)" twice. */
+test('a run in flight is announced once on a phone, and Stop stays reachable', () => {
+  // Only while the panel is open AND the run is working — the state the panel
+  // duplicates. It cannot be the other way round: RunSetupPanel hides its whole
+  // form while `pending > 0`, so dropping the PANEL's bar would leave an open
+  // sheet with nothing in it.
+  assert.match(canvas, /panelOpen && runPhase === 'working' \? ' hidden lg:block' : ''/);
+  // Stopped and finished runs keep the board's bar at every width: ▶ Resume,
+  // 📌 Pin all and the result links exist nowhere else.
+  assert.match(canvas, /runPhase !== 'idle' && \(/);
+  // One reading of the phase, from the helper the bar itself renders from.
+  assert.match(canvas, /const runPhase = describeCanvasRun\(tracker\.run\.data\)\.phase;/);
 });
 
 /* …and the frame itself gives back the last 5vh, so the WHOLE board — bottom

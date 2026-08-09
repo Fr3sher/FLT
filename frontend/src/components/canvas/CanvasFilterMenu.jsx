@@ -23,7 +23,8 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
  * lights up whenever it is NARROWING anything, at rest, with the popover shut.
  */
 export default function CanvasFilterMenu({ label, glyph = null, summary = '',
-  active = false, disabled = false, children, testId = null, align = 'left' }) {
+  short = null, active = false, disabled = false, children, testId = null,
+  align = 'left' }) {
   const [open, setOpen] = useState(false);
   const root = useRef(null);
   const id = useId();
@@ -60,15 +61,35 @@ export default function CanvasFilterMenu({ label, glyph = null, summary = '',
         aria-controls={id}
         data-testid={testId}
         data-active={active ? 'true' : 'false'}
+        /* 📱 The word goes below `sm`, the target and the state never do — the
+           board toolbar under this bar has worked that way since its own
+           responsive pass, and the reason is the same: at 400 px this row cost
+           three wrapped lines of the board it floats on. What replaces the word
+           is not nothing — the glyph stays, the COUNT stays (in its short form),
+           and the accessible name is a full sentence in `title`/`aria-label`
+           rather than an emoji, so a hidden word is never a lost one. */
+        title={`${label}${summary ? ` — ${summary}` : ''}`}
+        // The COUNT rides in the accessible name too. An `aria-label` replaces
+        // everything inside the button, so labelling this "Datasets" would have
+        // taken the "3/17" away from the one user who cannot see the chip light
+        // up — the exact readout this bar exists to keep.
+        aria-label={`${label}${summary ? ` — ${summary}` : ''}`}
         className={'flex h-10 max-w-full items-center gap-1.5 rounded-md border px-2.5 '
           + 'text-[0.75rem] font-semibold disabled:opacity-40 lg:h-9 '
           + (active
             ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100'
             : 'border-border bg-app/60 text-content hover:border-indigo-400/50')}>
         {glyph && <span aria-hidden>{glyph}</span>}
-        <span className="truncate">{label}</span>
+        <span className="hidden truncate sm:inline">{label}</span>
         {summary && (
-          <span className="shrink-0 font-normal text-content-muted tabular-nums">{summary}</span>
+          <span className="shrink-0 font-normal text-content-muted tabular-nums">
+            {/* The count is what makes a folded filter announce itself, so it
+                survives at every width — in the compact form when there is one
+                ("3/17" for "All 3 datasets"), which is the same fact in fewer
+                pixels, not less of it. */}
+            <span className={short ? 'sm:hidden' : ''}>{short ?? summary}</span>
+            {short && <span className="hidden sm:inline">{summary}</span>}
+          </span>
         )}
         <span aria-hidden className="shrink-0 text-content-subtle">{open ? '▴' : '▾'}</span>
       </button>

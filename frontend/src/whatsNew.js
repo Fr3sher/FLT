@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-phone-board-room',
+    date: '2026-08-09',
+    title: 'The canvas gives the board back its screen on a phone',
+    blurb:
+      'On a phone the filter row was three wrapped lines floating on the board and the search box you rarely type in took most of one — it is now two lines: the chips keep their icon and their count, and 🔍 unfolds the search only when you ask for it (with the words still shown on the chip while a search is narrowing the board). The page blurb stays out of the way up to a laptop width, and a run in flight is announced once instead of twice when the Generate sheet is open. The board’s floating rows are also properly opaque now, so a strip of pinned images parked in a corner can no longer be read through Reset.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-canvas-external-lora-links',
     date: '2026-08-09',
     title: 'See which images an external LoRA actually touched',

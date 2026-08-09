@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { selectionSummary } from '../../utils/canvasSelection';
 import { familyLabel } from '../../utils/canvasFamilyFilter';
 import { statusLabel, matchesDatasetQuery } from '../../utils/canvasFilterBar';
@@ -52,6 +52,27 @@ export default function CanvasDatasetFilter({
      checkbox list to find a dataset while the board silently filtered itself. */
   const [pick, setPick] = useState('');
 
+  /* 📱 Is the board search unfolded? Below `lg` only — from `lg` up the field is
+     in the bar unconditionally and this state is not consulted at all, which is
+     what keeps a desktop from noticing this pass.
+
+     It opens by itself when there IS a query, so a board that comes back
+     filtered (the query is remembered across a reload) shows the words doing the
+     filtering rather than a magnifier the user has to think to press. */
+  const queryActive = (query || '').trim().length > 0;
+  const [searchOpen, setSearchOpen] = useState(queryActive);
+  const searchRef = useRef(null);
+  /* Asked for BY HAND -> the keyboard should already be up; opened by itself
+     because a query was restored -> leave the focus alone, or landing on the
+     page would scroll a phone to the filter bar and raise a keyboard nobody
+     asked for. The flag is set by the tap rather than inferred from "is this the
+     first render", which is a fact React is free to give twice. */
+  const askedFor = useRef(false);
+  useEffect(() => {
+    if (searchOpen && askedFor.current) searchRef.current?.focus();
+    askedFor.current = false;
+  }, [searchOpen]);
+
   const sel = new Set(selected || []);
   const familySel = new Set(selectedFamilies || []);
   const total = (datasets || []).length;
@@ -77,11 +98,12 @@ export default function CanvasDatasetFilter({
     // sits above the board's. The frame is isolated too, so the two cannot argue.
     <section data-testid="canvas-dataset-filter"
       aria-label="Canvas filters"
-      className="lds-canvas-filter relative isolate z-20 mb-2 flex flex-wrap items-center gap-1.5">
+      className="lds-canvas-filter relative isolate z-20 flex flex-wrap items-center gap-1.5">
 
       {/* ── Datasets ─────────────────────────────────────────────────────── */}
       <CanvasFilterMenu label="Datasets" glyph="◧" testId="canvas-filter-datasets"
-        summary={selectionSummary(sel.size, total)} active={narrowing.datasets}
+        summary={selectionSummary(sel.size, total)} short={`${sel.size}/${total}`}
+        active={narrowing.datasets}
         disabled={total === 0}>
         <label className="sr-only" htmlFor="canvas-dataset-pick">Find a dataset</label>
         <input id="canvas-dataset-pick" type="search" value={pick}
@@ -193,6 +215,7 @@ export default function CanvasDatasetFilter({
       {/* ── 🖼 Pinned images: one state, so a chip and not a menu ─────────── */}
       <button type="button" onClick={onTogglePinned}
         aria-pressed={showPinned}
+        aria-label="Pinned images on the board"
         data-testid="canvas-filter-pinned"
         title={showPinned
           ? 'Pinned images are on the board — click to hide them'
@@ -203,19 +226,57 @@ export default function CanvasDatasetFilter({
             // Hidden is the state worth shouting about: pinned pictures missing
             // from the board with no visible cause is a bug report.
             : 'border-amber-400/60 bg-amber-500/15 text-amber-100')}>
-        <span aria-hidden>🖼</span> Pinned
+        <span aria-hidden>🖼</span>
+        {/* The word drops below `sm` like every other label in this row — but
+            "off" NEVER does: pinned pictures missing from the board with no
+            visible cause is a bug report, and that is precisely the state a
+            phone must not have to guess at. */}
+        <span className="hidden sm:inline">Pinned</span>
         {!showPinned && <span className="font-normal">off</span>}
       </button>
 
-      {/* ── The board search. Stays in the bar, at full size: it is the only
-             control here that is TYPED, and burying a text field one click
-             deep costs more than the 12 rem it occupies. ───────────────── */}
+      {/* ── The board search.
+             From `lg` up it is exactly what it always was: a text field in the
+             bar, at full size, because it is the only control here that is TYPED
+             and burying a text field one click deep costs more than the 12 rem it
+             occupies.
+
+             📱 Below `lg` that arithmetic flips. Measured at 400×800: the field
+             is 224 px of a 360-px row, which is what pushed the bar from two
+             wrapped rows to three — 46 px of board, above the board, on every
+             load, for a control that is empty on all but a handful of visits. So
+             it collapses behind 🔍 and unfolds onto a row of its own when asked
+             for, keeping its full width when it IS being used.
+
+             It obeys the bar's own rule about hidden filters: with a query set
+             and the field folded away, the 🔍 chip lights up and carries the
+             query in its title, so "the board is filtered" is never a fact you
+             have to go looking for. Folding it away also CLEARS nothing — the
+             query survives, which is why announcing it matters. ────────── */}
+      <button type="button"
+        onClick={() => { askedFor.current = true; setSearchOpen((v) => !v); }}
+        aria-expanded={searchOpen}
+        aria-controls="canvas-filter-search"
+        data-testid="canvas-filter-search-toggle"
+        title={queryActive
+          ? `Search is narrowing the board: “${query}” — tap to edit or clear it`
+          : 'Search runs — dataset, ID, model, variant'}
+        aria-label="Search runs"
+        className={'flex h-10 items-center gap-1.5 rounded-md border px-2.5 text-[0.75rem] font-semibold lg:hidden '
+          + (queryActive
+            ? 'border-indigo-400/60 bg-indigo-500/15 text-indigo-100'
+            : 'border-border bg-app/60 text-content hover:border-indigo-400/50')}>
+        <span aria-hidden>🔍</span>
+        {queryActive && <span className="max-w-[6rem] truncate font-normal">{query}</span>}
+      </button>
+
       <label className="sr-only" htmlFor="canvas-filter-search">Search canvas runs</label>
-      <input id="canvas-filter-search" type="search" value={query}
+      <input id="canvas-filter-search" ref={searchRef} type="search" value={query}
         onChange={(e) => onQueryChange(e.target.value)}
         placeholder="Search runs — dataset, ID, model, variant…"
-        className={'h-10 min-w-[9rem] flex-1 basis-48 rounded-md border bg-app/60 px-3 text-content text-[0.75rem] placeholder:text-content-subtle lg:h-9 '
-          + ((query || '').trim() ? 'border-indigo-400/60' : 'border-border')} />
+        className={'h-10 min-w-[9rem] flex-1 rounded-md border bg-app/60 px-3 text-content text-[0.75rem] placeholder:text-content-subtle lg:h-9 lg:block lg:basis-48 '
+          + (searchOpen ? 'basis-full ' : 'hidden ')
+          + (queryActive ? 'border-indigo-400/60' : 'border-border')} />
 
       <button type="button" onClick={() => { setPick(''); onResetFilters(); }}
         disabled={!anyNarrowing}
@@ -229,7 +290,12 @@ export default function CanvasDatasetFilter({
       {/* The readout that makes the whole bar honest: whatever is set, this says
           how much of the library actually reached the board. */}
       <span className="ml-auto shrink-0 text-content-subtle text-[0.6875rem] tabular-nums">
-        {visibleRuns} run{visibleRuns === 1 ? '' : 's'} shown
+        {visibleRuns} run{visibleRuns === 1 ? '' : 's'}
+        {/* "shown" is the word that makes it a readout rather than a total, and
+            it is also 40 px of a 360-px row. Below `lg` the number carries the
+            meaning on its own next to a bar that is visibly a filter; the word
+            comes back the moment there is room for it. */}
+        <span className="hidden lg:inline"> shown</span>
       </span>
     </section>
   );

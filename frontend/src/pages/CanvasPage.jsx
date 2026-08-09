@@ -417,19 +417,27 @@ export default function CanvasPage() {
 
   return (
     <div>
-      {/* 📱 The blurb is the first thing a phone can afford to lose. It explains
-          the page once; after that it is 72 px of the 800 this screen has, spent
-          above the board, on every single load — and it was those 72 px that
-          pushed the frame's bottom edge past the fold at 400 px. It stays in full
-          from `sm` up, and the ? badge next to the title carries the same
-          explanation at every width, so nothing is actually hidden. */}
+      {/* 📱 The blurb is the first thing a small screen can afford to lose. It
+          explains the page once; after that it is height spent above the board,
+          on every single load.
+
+          The threshold was `sm` (640 px) and that was one breakpoint too early.
+          A phone in portrait reports ~400 CSS px and was already covered, but the
+          widths between 640 and 1024 — a phone in landscape, a tablet, a phone
+          whose browser reports a 900-px layout viewport — got the full paragraph
+          back: measured at 900 px it is 36 px of blurb plus its margin above a
+          board that is the entire point of the page. It now stays hidden right
+          up to `lg`, which is also where every other control on this screen stops
+          being finger-sized — one line, not two. Desktop is untouched, and the ?
+          badge next to the title carries the same explanation at every width, so
+          nothing is actually lost. */}
       <header className="mb-2 sm:mb-3">
         <h1 className="flex items-center gap-2 text-lg font-semibold text-content">
           <span aria-hidden>◉</span> LoRA Canvas
           <span className="px-1.5 py-0.5 rounded border border-amber-400/50 bg-amber-500/10 text-amber-300 text-[0.625rem] font-semibold uppercase tracking-wide">Beta</span>
           <HelpBadge topic="page-canvas" />
         </h1>
-        <p className="mt-1 hidden text-content-muted text-[0.75rem] sm:block">
+        <p className="mt-1 hidden text-content-muted text-[0.75rem] lg:block">
           Every training run you have made, on one board: each dataset gets a lane, each run a card,
           and a continuation is joined to the exact checkpoint it resumed from.
         </p>

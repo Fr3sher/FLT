@@ -69,6 +69,40 @@ test('a floating panel is painted with an OPAQUE token', () => {
   }
 });
 
+/* 🩹 The one that kept coming back — and it was never a z-order bug.
+ *
+ * The frame clips and owns its own stacking context, so nothing drawn on the
+ * board can PAINT OVER the chrome, and two passes of z-index work proved it.
+ * The symptom (a pinned strip lying across Reset and the runs readout) survived
+ * both, because the chrome was simply see-through: `bg-app/60` chips, a Reset
+ * and a readout with no fill at all, and nothing behind them. Measured headless
+ * at 400×800 and at 1440×900 with a two-image group panned into the top-right
+ * corner: the group's bar, its ✕ and its thumbnails were legible straight
+ * through the filter row at BOTH widths. No z-index can fix something that is
+ * already underneath.
+ *
+ * So the top chrome is PAINTED, with the same opaque token the app's floating
+ * panels already use. Pinned as a source test because the symptom reads as a
+ * layout bug nobody can locate, and one token is all that stands between here
+ * and the third report of it.
+ */
+test('the board’s chrome is painted, so nothing on the board can be read through it', () => {
+  const src = read('LineageCanvas.jsx');
+  // Every pill that floats ON the board: the filter, the run tracker, and the
+  // toolbar — which had the same flaw and is the row the other two now match.
+  const pills = src.split('\n').filter((l) => /pointer-events-auto/.test(l) && /rounded-xl/.test(l));
+  assert.ok(pills.length >= 3, 'the board should float three painted rows');
+  for (const line of pills) {
+    assert.match(line, /\bbg-surface-overlay\b/,
+      'a row floating on the board must not be transparent');
+    // …and never with an alpha modifier: `bg-surface-overlay/85` is a pane of
+    // smoked glass, which is the bug in a politer shade.
+    assert.doesNotMatch(line, /bg-surface-overlay\/(?!95\b)\d/);
+  }
+  // The board is still visible AROUND the chrome — these are rows, not a lid.
+  assert.match(src, /pointer-events-none absolute inset-x-0 top-0 z-20/);
+});
+
 test('the board’s top overlay does not CLIP the filter’s menus', () => {
   // It was `overflow-y-auto`, which was right while the filter was a tall
   // fold-out panel. Against popovers a scroll container is a guillotine: the
