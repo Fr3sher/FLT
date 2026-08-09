@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-phone-toolbar',
+    date: '2026-08-09',
+    title: 'The LoRA Canvas gives the board back to your phone',
+    blurb:
+      'On a phone the board’s bottom controls took a quarter of the screen, and tapping ☝ Gestures buried the board under its own instructions with no way to put them away. The row is icons-only below a tablet — two rows instead of five, every button still thumb-sized — and the gesture help is now a sheet that floats over the board and closes with its ×. Nothing changes on a desktop.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-canvas-external-loras',
     date: '2026-08-09',
     title: 'Pin any LoRA onto the Canvas, even one you never trained here',
