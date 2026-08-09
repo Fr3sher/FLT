@@ -3122,7 +3122,11 @@ def canvas_external_loras_get():
 @bp.put('/train/canvas/external-loras')
 def canvas_external_loras_put():
     """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
-    cap 16, strength clamped [0..2] (default 1.0), x/y coerced to floats."""
+    reject path-traversal/absolute/drive-letter names (dropped, not erred —
+    this is a save-what-survives sanitizer, same spirit as the sibling
+    `save_canvas_positions`), cap 16, strength clamped [0..2] (default 1.0),
+    x/y coerced to floats."""
+    from ..services.lora_test_studio import _is_unsafe_external_lora_name
     data = request.get_json(silent=True) or {}
     raw = data.get('loras')
     cleaned, seen = [], set()
@@ -3130,7 +3134,7 @@ def canvas_external_loras_put():
         if not isinstance(e, dict):
             continue
         fn = str(e.get('filename') or '').strip()
-        if not fn or fn in seen:
+        if not fn or fn in seen or _is_unsafe_external_lora_name(fn):
             continue
         seen.add(fn)
         try:

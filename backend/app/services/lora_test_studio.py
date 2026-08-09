@@ -1633,6 +1633,20 @@ class StudioArchMismatch(Exception):
         super().__init__(f'{checkpoint} is a {detected} LoRA, not {family}')
 
 
+def _is_unsafe_external_lora_name(fn) -> bool:
+    """True if `fn` could resolve OUTSIDE a loras root once handed to
+    `_ci_resolve` (path traversal / drive-letter / rooted path). `os.path.isabs`
+    alone is not enough: on Windows it is False for a POSIX-style rooted path
+    like '/abs/x.safetensors' (no drive letter), yet `_ci_resolve` still walks
+    it as a normal — if odd — first component, and `_resolve_lora_abs_path`
+    would otherwise `lstrip(os.sep)` it into something that LOOKS validated.
+    So every rooted form is rejected explicitly, not inferred from `isabs`."""
+    s = str(fn or '')
+    if not s or os.path.isabs(s) or s.startswith(('/', '\\')) or ':' in s:
+        return True
+    return any(part == '..' for part in s.replace('\\', '/').split('/'))
+
+
 def _resolve_lora_abs_path(checkpoint) -> str | None:
     """Absolute path of a LoraLoader-form checkpoint ('<subfolder>\\name.safetensors',
     relative to models/loras), resolved case-INSENSITIVELY (the workflow paths
@@ -2592,6 +2606,15 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         fn = str((e or {}).get('filename') or '').strip()
         if not fn or any(x['filename'] == fn for x in externals):
             continue
+        # Path-traversal guard: `external_loras` is the FIRST free-text channel
+        # to reach `_resolve_lora_abs_path` → `_ci_resolve` (every other caller —
+        # permanent/batch/checkpoint — is gated by a disk-scan allowlist first).
+        # `_ci_resolve` walks each component checking `os.path.exists` and treats
+        # '..' as an ordinary component, so it happily climbs OUT of the loras
+        # root. Checked BEFORE the resolve call, not after: a name that escapes
+        # must never even get a "not found" vs "found" answer.
+        if _is_unsafe_external_lora_name(fn):
+            raise ValueError(f'invalid external LoRA name: {fn}')
         if not _resolve_lora_abs_path(fn):
             raise ValueError(f'external LoRA not found: {fn}')
         try:
@@ -2599,6 +2622,8 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         except (TypeError, ValueError):
             st = 1.0
         externals.append({'filename': fn, 'strength': st, 'external': True})
+        if len(externals) >= 16:   # same cap as the PUT route + the board's UI
+            break
     extra_loras.extend(externals)
     # Axe « ⚖ batch » : chaque config tourne une fois SANS puis une fois AVEC
     # chaque LoRA coché batch (même mécanique que create_run).

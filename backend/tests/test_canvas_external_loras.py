@@ -295,3 +295,70 @@ def test_external_lora_put_survives_a_malformed_body(client):
         r = client.put('/api/train/canvas/external-loras', json=body)
         assert r.status_code == 200, (body, r.status_code, r.get_data(as_text=True))
         assert r.get_json()['loras'] == []
+
+
+# --- final-review fix wave: path-traversal on the free-text filename channel -
+
+_TRAVERSAL_NAMES = (
+    '..' + chr(92) + '..' + chr(92) + 'evil.safetensors',
+    'C:' + chr(92) + 'evil.safetensors',
+    '/abs/evil.safetensors',
+)
+
+
+def test_external_lora_rejects_path_traversal_names(app, tmp_path, monkeypatch):
+    """`external_loras` is the FIRST free-text channel to reach
+    `_resolve_lora_abs_path` -> `_ci_resolve` (every other caller is gated by a
+    disk-scan allowlist first). `_ci_resolve` treats '..' as an ordinary path
+    component and happily climbs OUT of the loras root, and a drive-letter or
+    rooted name bypasses it a different way — all three must be a hard
+    ValueError, before ANY row is created, never a silent skip."""
+    from app.config import LOCAL_USER
+    from app.models import LoraTestImage
+    from app.services import lora_test_studio as lts
+    with app.app_context():
+        ds, trained = _ext_tree(tmp_path, monkeypatch, 'trav1')
+        _wire(monkeypatch, lts)
+        for bad in _TRAVERSAL_NAMES:
+            with pytest.raises(ValueError, match='invalid external LoRA name'):
+                lts.create_comparison_run(
+                    LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': trained}], [1.0],
+                    prompt='p', external_loras=[{'filename': bad, 'strength': 1.0}])
+        assert LoraTestImage.query.count() == 0
+
+
+def test_external_lora_put_drops_path_traversal_names(client):
+    """The PUT route sanitizes (drop, no 500/400) rather than hard-errors — same
+    contract as its dedupe/empty-filename handling — but the SAME three names
+    must never survive into the persisted list."""
+    body = {'loras': [{'filename': bad, 'strength': 1.0} for bad in _TRAVERSAL_NAMES]
+            + [{'filename': 'good.safetensors', 'strength': 1.0}]}
+    r = client.put('/api/train/canvas/external-loras', json=body)
+    assert r.status_code == 200
+    assert r.get_json()['loras'] == [
+        {'filename': 'good.safetensors', 'strength': 1.0, 'x': 0.0, 'y': 0.0}]
+
+
+def test_external_loras_capped_at_16(app, tmp_path, monkeypatch):
+    """Same cap as the PUT route (and the board's UI): a 17th valid external
+    must not reach the graph — the engine truncates, it does not error."""
+    from app.config import LOCAL_USER
+    from app.services import lora_test_studio as lts
+    names = [f'cap{i}.safetensors' for i in range(17)]
+    with app.app_context():
+        ds, trained = _ext_tree(tmp_path, monkeypatch, 'cap1', externals=names)
+        seen = {}
+        _wire(monkeypatch, lts, seen)
+
+        def fake_persist(img, user_id, dataset_id, prompt, build_workflow):
+            build_workflow()
+            seen['img'] = img
+            return 'job-1'
+        monkeypatch.setattr(lts, '_persist_and_enqueue_cell', fake_persist)
+
+        lts.create_comparison_run(
+            LOCAL_USER, [{'dataset_id': ds.id, 'checkpoint': trained}], [1.0],
+            prompt='p', external_loras=[{'filename': n, 'strength': 1.0} for n in names])
+        row_extras = json.loads(seen['img'].extra_loras)
+        assert len(row_extras) == 16
+        assert {e['filename'] for e in row_extras} == set(names[:16])
