@@ -212,7 +212,16 @@ test('the board frame fits the fold on a phone and is unchanged from sm up', () 
   // small went away. Still short of the fold, which is the actual contract —
   // a board whose bottom edge you have to scroll to is a board whose pan gesture
   // fights the page's, and it is what makes ✦ Fit mean anything.
-  assert.match(canvas, /h-\[72vh\] min-h-\[380px\][^"]*sm:h-\[76vh\]/);
+  //
+  // 72vh/76vh stayed the CEILING (still in this pin, as the third `clamp()`
+  // argument) once the frame became adaptive: a board that fills the frame
+  // still gets exactly the same space it always did, so the fold contract
+  // above still holds verbatim. What changed — a product call, after
+  // `previewFrameHeight` showed a one-lane board opening with ~370 px of
+  // empty canvas above the pill — is that a SPARSE board is now allowed to
+  // shrink the frame down to its own content height, floored at 40vh (44 from
+  // `sm`) and never below the original 380px phone floor either.
+  assert.match(canvas, /h-\[clamp\(max\(40vh,380px\),var\(--canvas-content-h,72vh\),72vh\)\][^"]*sm:h-\[clamp\(max\(44vh,380px\),var\(--canvas-content-h,76vh\),76vh\)\]/);
   // The overlays must stay SIBLINGS of the frame, never children: the frame owns
   // the pointer handlers and `touch-none`, so a control nested inside it would
   // hand every tap to the board underneath.

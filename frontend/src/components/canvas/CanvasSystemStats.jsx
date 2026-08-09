@@ -21,8 +21,8 @@ import {
  *  • no per-process breakdown. "Which of these is ComfyUI?" is a Task Manager
  *    question and pretending to answer it here would need a far more expensive
  *    probe on every poll.
- *  • no alerting. Numbers go amber then red past 70 % / 90 % of a resource and
- *    that is the entire vocabulary.
+ *  • no alerting. Numbers are emerald below 50 %, amber 50-80 % and rose past
+ *    80 % of a resource, and that is the entire vocabulary.
  *
  * COST. Three deliberate limits, because this is the only thing on the page
  * that polls forever:
@@ -41,7 +41,7 @@ import {
  */
 
 const TONE_CLASS = {
-  calm: 'text-content-subtle',
+  calm: 'text-emerald-300/90',
   warm: 'text-amber-300/90',
   hot: 'text-rose-300',
 };
@@ -104,7 +104,7 @@ export default function CanvasSystemStats() {
           {segments.map((s) => (
             <span key={s.key} className="flex items-center gap-1 whitespace-nowrap"
               title={s.title}>
-              <span className="text-content-subtle/70">{s.label}</span>
+              <span className="text-content-muted">{s.label}</span>
               <span className={TONE_CLASS[s.tone] || TONE_CLASS.calm}>{s.text}</span>
             </span>
           ))}

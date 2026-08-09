@@ -3,7 +3,7 @@ import { buildLineageGraph, CARD_W } from '../../utils/lineageGraph';
 import {
   LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
   clampScale, clampView, fitView, initialView, panBy, pinchCenter, pinchDistance,
-  stackLanes, viewTransform, zoomAt,
+  previewFrameHeight, stackLanes, viewTransform, zoomAt,
 } from '../../utils/canvasLayout';
 import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
 import {
@@ -642,6 +642,17 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const touched = useRef(false);
   const fitSignature = `${world.width}x${world.height}:${viewport.width}x${viewport.height}`;
   const lastFit = useRef('');
+  // 📐 The frame's own PREFERRED height for the board sitting on it right now —
+  // fed to the `lds-canvas-frame` CSS as a custom property, so a sparse board
+  // stops hoarding a screen's worth of empty canvas above the toolbar pill.
+  // Bound by `viewport.width`, never `viewport.height`: the frame's height is
+  // what this number produces, so measuring the frame's OWN height to compute
+  // it would be circular. Width does not have that problem — the frame is
+  // `w-full` from its parent, so its width is independent of its height.
+  const framePreferredHeight = useMemo(
+    () => previewFrameHeight(world, viewport.width),
+    [world, viewport.width],
+  );
   /* 🖐 ARRANGING THE BOARD IS TAKING THE VIEW OVER, and that is the half that was
      missing. Not re-fitting mid-gesture fixed the board sliding under the finger
      while it dragged; it left the jump at the DROP. So: you carry a render up
@@ -1872,13 +1883,26 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         // select-none: shift-click is the compare gesture, and shift-click is ALSO
         // the browser's extend-selection — without this, comparing two runs paints
         // half the board blue.
-        /* 📱 60vh on a phone, the usual 65 from `sm` up. Measured at 400×800:
-           the chrome above this frame — nav, title, the folded filter, the
-           toolbar — costs ~290 px, and 290 + 65vh is 812 on an 800-px screen, so
-           the board's bottom edge fell under the fold on every load however
-           little was on it. 60vh brings the WHOLE frame on screen, which is what
-           makes Fit mean anything: a board you have to scroll the page to see
-           the bottom of is a board whose pan gesture fights the page's. */
+        /* 📱 A CEILING of 72vh on a phone, 76 from `sm` up — never taller than
+           that, so the frame still brings the WHOLE board on screen the way it
+           always has: measured at 400×800, the chrome above this frame — nav,
+           title, the folded filter, the toolbar — costs ~290 px, and a board
+           you have to scroll the PAGE to see the bottom of is a board whose pan
+           gesture fights the page's.
+
+           But a ceiling sized for a board that fills it left every SPARSER
+           board — the common case, a fresh dataset with a handful of runs —
+           opening under a few hundred px of plain canvas before the toolbar
+           pill: measured, a one-lane board opened with ~370 px of nothing
+           above the pill on desktop. `--canvas-content-h` (set below from
+           `previewFrameHeight`) is the board's own preferred height for its
+           current width; `clamp()` lets the frame SHRINK to that — down to a
+           floor of 40vh (44 from `sm`, and never under 380px either, the
+           original phone floor) — while still growing back up to the ceiling
+           for a board that earns it. Unmeasured on the first paint (`viewport`
+           starts at 0), the var is unset and the ceiling is what `var()`'s
+           fallback supplies — exactly today's fixed height, so there is no
+           flash between "no adaptive height yet" and "the old behaviour". */
         /* `isolate z-0`. The frame already clips (`overflow-hidden`), and the
            controls are now SIBLINGS drawn over it — so "the board cannot cover
            its own filter" was resting on one class name plus a sibling order.
@@ -1886,7 +1910,8 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
            at any z-index, can paint over a sibling overlay: two independent
            guarantees instead of one, for the controls the user cannot afford to
            lose. It sits at z-0 so every overlay above it (z-20) still wins. */
-        className="lds-canvas-frame relative isolate z-0 h-[72vh] min-h-[380px] w-full select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40 sm:h-[76vh]"
+        className="lds-canvas-frame relative isolate z-0 h-[clamp(max(40vh,380px),var(--canvas-content-h,72vh),72vh)] w-full select-none touch-none overflow-hidden rounded-xl border border-border bg-app/40 sm:h-[clamp(max(44vh,380px),var(--canvas-content-h,76vh),76vh)]"
+        style={framePreferredHeight ? { '--canvas-content-h': `${framePreferredHeight}px` } : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
