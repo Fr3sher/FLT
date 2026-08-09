@@ -63,6 +63,7 @@ import CanvasImageGroup from './CanvasImageGroup';
 import CanvasGroupBar from './CanvasGroupBar';
 import CanvasLayoutPresets from './CanvasLayoutPresets';
 import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges';
+import { externalEdgesFor } from '../../utils/canvasExternalEdges';
 import {
   boardExportFilename, boardExportPlan, boardExportRefusal, drawBoardExport,
 } from '../../utils/canvasExportPng';
@@ -477,6 +478,77 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     };
   })), [placed, layoutByLane]);
 
+  /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
+     any run here) that, when checked, stack on top of the next generation.
+     Deliberately SEPARATE state from `picks` — the liveKeys purge just below
+     only knows about checkpoints drawn from the lanes on the board, and would
+     silently drop these on every render since they belong to no lane.
+     Declared here, ABOVE the `provenance` memo below, because that memo's
+     dependency array now reads `extNodes`/`pluginBoxes` — a dep-array is
+     evaluated at render time, not lazily inside the callback, so declaring
+     them any later throws a TDZ ReferenceError the moment the board renders. */
+  const [extNodes, setExtNodes] = useState([]);
+  const [extChecked, setExtChecked] = useState(new Set());
+  const [extPickerOpen, setExtPickerOpen] = useState(false);
+  const extLoadedOnce = useRef(false);
+  // Per-node world-space boxes reported by PluginNodeLayer (key -> {x,y,w,h}),
+  // consumed by later tasks for edge anchoring. A ref backs the state so the
+  // geometry callback can compare against the last known box and only
+  // re-render when something actually moved or resized — every drag frame
+  // reporting through `setState` unconditionally would re-render the whole
+  // canvas on every pointermove.
+  const pluginBoxesRef = useRef(new Map());
+  const [pluginBoxes, setPluginBoxes] = useState(pluginBoxesRef.current);
+  const onPluginGeometry = useCallback((key, box) => {
+    const prev = pluginBoxesRef.current.get(key);
+    if (prev && prev.x === box.x && prev.y === box.y && prev.w === box.w && prev.h === box.h) return;
+    const next = new Map(pluginBoxesRef.current);
+    next.set(key, box);
+    pluginBoxesRef.current = next;
+    setPluginBoxes(next);
+  }, []);
+  // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
+  // ever sees the render it was created in, and the payload it must send is
+  // whatever is CURRENT at unmount time, not whatever it was when the pending
+  // timer was scheduled — those are usually the same list but need not be).
+  const extNodesRef = useRef(extNodes);
+  // Is there a debounced PUT still pending? Set when the timer is armed,
+  // cleared once it actually fires (normally OR via the unmount flush) — the
+  // one flag both paths share so neither can send the same write twice.
+  const extDirtyRef = useRef(false);
+  useEffect(() => { extNodesRef.current = extNodes; }, [extNodes]);
+  useEffect(() => {
+    apiFetch('/api/train/canvas/external-loras')
+      .then((d) => setExtNodes(normalizeExternalLoras(d?.loras)))
+      .catch(() => { /* the board just starts with none pinned */ });
+  }, []);
+  // Persist on change, debounced: a slider drag or a card drag fires many
+  // updates a second, and each is a full PUT of the list. Skips the very
+  // first render (the load above already reflects the server).
+  useEffect(() => {
+    if (!extLoadedOnce.current) { extLoadedOnce.current = true; return undefined; }
+    extDirtyRef.current = true;
+    const t = setTimeout(() => {
+      extDirtyRef.current = false;
+      putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }).catch(() => {
+        /* best effort — the board keeps the in-memory state either way */
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [extNodes]);
+  // Leaving the Canvas view inside the 500 ms window above used to lose the
+  // last drag/check/strength edit silently: `clearTimeout` on unmount killed
+  // the pending PUT and nothing ever sent it. `keepalive` lets the request
+  // outlive the component even if the navigation that unmounts it also tears
+  // down the page (a plain unmount from an in-app route change does not abort
+  // an in-flight fetch on its own, but a real page unload would).
+  useEffect(() => () => {
+    if (!extDirtyRef.current) return;
+    extDirtyRef.current = false;
+    putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }, { keepalive: true })
+      .catch(() => { /* best effort on the way out — nothing left to update */ });
+  }, []);
+
   /* 🧬 GENERATION PROVENANCE — a blended picture descends from SEVERAL pills at
      once, and they are routinely in different lanes (blending across datasets is
      the point of doing it from the board). A cross-lane edge cannot live in a
@@ -484,7 +556,11 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      under everything (see the layer below). The head LoRA keeps the ordinary
      image → pill edge its lane already draws; only the other parents are added,
      or one pair would carry two connectors. Declared after `world` — the
-     dependency array reads it at render time, not lazily inside the memo. */
+     dependency array reads it at render time, not lazily inside the memo.
+     🔌 The same pass also draws image → external-LoRA-plugin-node edges: a
+     pinned file is not part of any lane's training lineage, so those edges are
+     computed by `externalEdgesFor` and appended rather than folded into
+     `blendEdgesFor`, which only knows about pills drawn from the board's own lanes. */
   const provenance = useMemo(() => {
     const nodes = [];
     for (const lane of world.lanes) {
@@ -492,8 +568,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
         nodes.push({ ...n, datasetId: lane.datasetId });
       }
     }
-    return blendEdgesFor(nodes, world.lanes);
-  }, [world.lanes, layoutByLane]);
+    const blended = blendEdgesFor(nodes, world.lanes);
+    const external = externalEdgesFor(nodes, world.lanes, extNodes, pluginBoxes);
+    return { ...blended, edges: [...blended.edges, ...external] };
+  }, [world.lanes, layoutByLane, extNodes, pluginBoxes]);
   // What each blended picture must OWN UP TO: the sources it could not place.
   const blendNotes = useMemo(() => {
     const out = new Map();
@@ -1079,73 +1157,6 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [gesturesOpen]);
-
-  /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
-     any run here) that, when checked, stack on top of the next generation.
-     Deliberately SEPARATE state from `picks` — the liveKeys purge just below
-     only knows about checkpoints drawn from the lanes on the board, and would
-     silently drop these on every render since they belong to no lane. */
-  const [extNodes, setExtNodes] = useState([]);
-  const [extChecked, setExtChecked] = useState(new Set());
-  const [extPickerOpen, setExtPickerOpen] = useState(false);
-  const extLoadedOnce = useRef(false);
-  // Per-node world-space boxes reported by PluginNodeLayer (key -> {x,y,w,h}),
-  // consumed by later tasks for edge anchoring. A ref backs the state so the
-  // geometry callback can compare against the last known box and only
-  // re-render when something actually moved or resized — every drag frame
-  // reporting through `setState` unconditionally would re-render the whole
-  // canvas on every pointermove.
-  const pluginBoxesRef = useRef(new Map());
-  const [pluginBoxes, setPluginBoxes] = useState(pluginBoxesRef.current);
-  const onPluginGeometry = useCallback((key, box) => {
-    const prev = pluginBoxesRef.current.get(key);
-    if (prev && prev.x === box.x && prev.y === box.y && prev.w === box.w && prev.h === box.h) return;
-    const next = new Map(pluginBoxesRef.current);
-    next.set(key, box);
-    pluginBoxesRef.current = next;
-    setPluginBoxes(next);
-  }, []);
-  // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
-  // ever sees the render it was created in, and the payload it must send is
-  // whatever is CURRENT at unmount time, not whatever it was when the pending
-  // timer was scheduled — those are usually the same list but need not be).
-  const extNodesRef = useRef(extNodes);
-  // Is there a debounced PUT still pending? Set when the timer is armed,
-  // cleared once it actually fires (normally OR via the unmount flush) — the
-  // one flag both paths share so neither can send the same write twice.
-  const extDirtyRef = useRef(false);
-  useEffect(() => { extNodesRef.current = extNodes; }, [extNodes]);
-  useEffect(() => {
-    apiFetch('/api/train/canvas/external-loras')
-      .then((d) => setExtNodes(normalizeExternalLoras(d?.loras)))
-      .catch(() => { /* the board just starts with none pinned */ });
-  }, []);
-  // Persist on change, debounced: a slider drag or a card drag fires many
-  // updates a second, and each is a full PUT of the list. Skips the very
-  // first render (the load above already reflects the server).
-  useEffect(() => {
-    if (!extLoadedOnce.current) { extLoadedOnce.current = true; return undefined; }
-    extDirtyRef.current = true;
-    const t = setTimeout(() => {
-      extDirtyRef.current = false;
-      putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }).catch(() => {
-        /* best effort — the board keeps the in-memory state either way */
-      });
-    }, 500);
-    return () => clearTimeout(t);
-  }, [extNodes]);
-  // Leaving the Canvas view inside the 500 ms window above used to lose the
-  // last drag/check/strength edit silently: `clearTimeout` on unmount killed
-  // the pending PUT and nothing ever sent it. `keepalive` lets the request
-  // outlive the component even if the navigation that unmounts it also tears
-  // down the page (a plain unmount from an in-app route change does not abort
-  // an in-flight fetch on its own, but a real page unload would).
-  useEffect(() => () => {
-    if (!extDirtyRef.current) return;
-    extDirtyRef.current = false;
-    putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }, { keepalive: true })
-      .catch(() => { /* best effort on the way out — nothing left to update */ });
-  }, []);
 
   const isPicked = useCallback(
     (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
