@@ -9,20 +9,22 @@
  *  • A field the server did not send is a field the machine cannot measure —
  *    no NVIDIA card, no psutil. It is DROPPED, never drawn as 0. "GPU 0%" on a
  *    machine with no GPU is a lie that reads as good news.
- *  • Colour is a warning, not decoration. Below 70% of a resource nothing is
- *    tinted at all, because a line where every number is coloured says nothing.
+ *  • Colour reads the state at a glance: every number carries a tone (emerald
+ *    below 50%, amber 50-80%, rose past 80%), not just the ones in trouble —
+ *    a line where nothing is coloured until it is already a problem is a line
+ *    you have to read the digits of to trust.
  */
 
-/** Fractions of a resource at which the number stops being neutral. */
-export const WARM_AT = 0.70;
-export const HOT_AT = 0.90;
+/** Fractions of a resource at which the tone changes. */
+export const WARM_AT = 0.50;
+export const HOT_AT = 0.80;
 
 /** localStorage key for "the user folded this away". NEVER rename it — a new
  *  key would silently re-open the widget for everyone who had closed it. */
 export const MACHINE_LOAD_PREF_KEY = 'lds.canvas.machineLoad';
 
 /** 'calm' | 'warm' | 'hot' for a 0..1 fraction. Anything unmeasurable is calm:
- *  an unknown load must never paint a warning. */
+ *  an unknown load must never paint a warning — it draws as the resting tone. */
 export function loadTone(fraction) {
   if (typeof fraction !== 'number' || !Number.isFinite(fraction)) return 'calm';
   if (fraction >= HOT_AT) return 'hot';

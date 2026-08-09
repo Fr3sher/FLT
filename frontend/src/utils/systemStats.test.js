@@ -43,12 +43,12 @@ test('a total of zero is unknown, not a division by zero', () => {
   assert.deepEqual(segments, []);
 });
 
-test('colour only appears when a resource is actually under pressure', () => {
+test('the tone steps at 50% and 80%, not only once a resource is in trouble', () => {
   assert.equal(loadTone(0.10), 'calm');
-  assert.equal(loadTone(0.69), 'calm');
-  assert.equal(loadTone(0.70), 'warm');
-  assert.equal(loadTone(0.89), 'warm');
-  assert.equal(loadTone(0.90), 'hot');
+  assert.equal(loadTone(0.49), 'calm');
+  assert.equal(loadTone(0.50), 'warm');
+  assert.equal(loadTone(0.79), 'warm');
+  assert.equal(loadTone(0.80), 'hot');
   assert.equal(loadTone(1), 'hot');
   // An unmeasured value must never paint a warning.
   assert.equal(loadTone(null), 'calm');
@@ -61,8 +61,8 @@ test('the tone of each segment comes from its own fraction, not the raw number',
     vram_used_gb: 23.5, vram_total_gb: 24,
     ram_used_gb: 8, ram_total_gb: 64,
   });
-  assert.equal(cpu.tone, 'hot');
-  assert.equal(gpu.tone, 'calm');
+  assert.equal(cpu.tone, 'hot');      // 95%
+  assert.equal(gpu.tone, 'calm');     // 5%
   assert.equal(vram.tone, 'hot');     // 23.5/24 = 0.979
   assert.equal(ram.tone, 'calm');     // 8/64 = 0.125
 });
