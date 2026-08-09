@@ -1610,6 +1610,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
             <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
           )}
         </button>
+        <HelpBadge topic="canvas-external-loras" />
         {/* The colour key. A colour with no legend is a guess, and this one
             answers the question asked most often on this board: "which of these
             can I generate from RIGHT NOW?". Each state carries a shape as well
