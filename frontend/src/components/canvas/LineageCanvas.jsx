@@ -64,6 +64,7 @@ import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
 import CanvasGroupBar from './CanvasGroupBar';
 import CanvasLayoutPresets from './CanvasLayoutPresets';
+import CanvasSystemStats from './CanvasSystemStats';
 import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges';
 import { externalEdgesFor } from '../../utils/canvasExternalEdges';
 import {
@@ -2040,6 +2041,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               The line is too long to sit in a phone toolbar, so it folds into a
               one-tap disclosure there instead of disappearing. Same words, written
               once (BOARD_GESTURES), so the two can never drift. */}
+          <CanvasSystemStats />
           <span className="ml-auto hidden text-content-subtle text-[0.625rem] lg:inline">
             {BOARD_GESTURES}
           </span>

@@ -2513,6 +2513,17 @@ badges and hover highlights are not in it — and a picture whose file has been
 cleaned off the disk comes out as a labelled placeholder rather than silently
 missing.
 
+**Machine load.** The right-hand end of the board toolbar carries four small
+numbers for the machine *running LDS* — **CPU**, **GPU**, **VRAM**, **RAM** —
+refreshed every five seconds while the tab is in front. It answers the one
+question the board could not: whether a run that shows no new pictures is
+working or wedged. A number goes amber past 70 % of its resource and red past
+90 %; **▾** folds the readout away and stops the polling with it, and the choice
+is remembered. It is a glance, not a monitor: there is no history, no graph and
+no per-process breakdown. On a machine with no NVIDIA card (or with `nvidia-smi`
+unavailable, as in some containers) the GPU and VRAM numbers are simply absent
+rather than shown as zeros, and the row is hidden on phone-width screens.
+
 **Deleting a picture from the board.** A pinned image carries **✕** and **🗑**,
 and they are not the same thing. **✕** takes it off the board and remembers where
 it was, so re-pinning it from its gallery puts it back at the same spot and size.

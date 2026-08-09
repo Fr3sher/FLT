@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-machine-load',
+    date: '2026-08-09',
+    title: 'See how hard the machine is working, without leaving the board',
+    blurb:
+      'The Canvas toolbar now carries a small CPU · GPU · VRAM · RAM readout of the machine running LDS, so you can tell a run that is working from one that is stuck without opening Task Manager. It turns amber past 70% and red past 90%, refreshes only while the tab is open, and folds away with ▾ if you would rather not see it. No NVIDIA card: it simply shows no GPU numbers.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-lightbox-side-by-side-tablet',
     date: '2026-08-09',
     title: 'Full-height images on a tablet, with the facts beside them',

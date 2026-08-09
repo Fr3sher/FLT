@@ -270,6 +270,23 @@ def comfyui_recovery_resolve():
         'if it persists, check the server log.')}), 409
 
 
+@bp.get('/stats')
+def machine_stats():
+    """📊 CPU / RAM / GPU / VRAM of the machine RUNNING the server.
+
+    Feeds the small load readout on the Canvas, polled every few seconds while
+    the tab is visible. Two properties make that polling harmless: the reading
+    is cached ~3 s and SHARED (N tabs cost one `nvidia-smi`, not N), and every
+    field is optional — a machine with no NVIDIA card simply answers without
+    the GPU keys instead of answering zeros the widget would draw as "idle".
+
+    Always 200: this is a glance, never a gate. A machine that cannot answer
+    anything answers `{}`, and the widget draws nothing.
+    """
+    from ..services import system_stats
+    return jsonify(system_stats.machine_stats())
+
+
 @bp.get('/ollama-fence')
 def ollama_fence_state():
     """Is the local Ollama fence standing in the way, and because of what?
