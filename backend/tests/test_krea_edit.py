@@ -395,10 +395,19 @@ def test_an_invalid_requested_aspect_keeps_the_reference_edit_source_geometry():
             keh.fit_output_size(1536, 2048))
 
 
-def test_requested_catalog_aspect_never_upscales_a_normal_reference():
+def test_requested_catalog_aspect_spends_the_dial_not_the_reference_size():
+    """REPLACES the previous no-upscale rule on the card path (deliberate).
+
+    That rule capped a card at the reference's own pixel count, so a 1024x832
+    reference produced 0.84 MP Krea tiles beside 2 MP Klein ones in the same
+    dataset — the dial the user set said 2. The output size is now the setting's
+    answer on both engines; see tests/test_variation_output_size.py. The
+    no-upscale rule still governs the free reference edit below.
+    """
     from app.services import krea_edit_helper as keh
     ow, oh = keh.fit_output_size(1024, 1024, requested_aspect='3:4')
-    assert ow * oh <= 1024 * 1024
+    assert ow * oh > 1024 * 1024, 'the card budget is no longer capped by the source'
+    assert ow * oh <= 2_000_000
     assert abs((ow / oh) - (3 / 4)) / (3 / 4) < 0.02
 
 

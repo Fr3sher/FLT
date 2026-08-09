@@ -1178,6 +1178,16 @@ const TOPICS = [
     ['krea', 'krea 2', 'lora', 'preset', 'default preset', 'default', 'always',
      'automatic', 'applied', 'not applied', 'ignored', 'resets to none', 'none',
      'every run', 'preselect']),
+  // Shared by BOTH local engines, so it is not a klein.* or krea.* topic and it
+  // does not live in Settings: the dial is in the Generate-variations panel,
+  // above the shot cards whose size it decides. Route points there.
+  { id: 'variations.output_megapixels', kind: 'setting', title: 'Variation output size',
+    keywords: ['size', 'output size', 'resolution', 'megapixels', 'mp', 'pixels',
+      'dimensions', 'too small', 'smaller', 'bigger', 'larger', 'upscale',
+      '2 mp', 'klein', 'krea', 'krea 2', 'variations', 'shots', 'aspect',
+      'ratio', 'different sizes', 'mixed sizes', 'vram', 'faster'],
+    guide: { chapter: 'settings-reference', anchor: 'image-engines' },
+    app: { route: '/datasets?section=add&panel=generate' } },
   setting('klein.generation_steps', 'engines', 'klein-generation', 'Klein generation steps',
     ['klein', 'steps', 'sampler', 'generation', 'quality', 'slower', 'cleaner', 'sampling', '5 steps']),
   setting('klein.edit_base_lora_strength', 'engines', 'klein-generation',

@@ -9483,6 +9483,10 @@ def generate_variations(user_id, dataset_id, variations, multiplier, klein_model
                             # path — deterministic, so a regenerate reproduces it.
                             label=v.get('label') or ''),
                         klein_model=klein_model,
+                        # Same card ratio the Krea lane asks for, resolved from
+                        # the same catalog: the two engines frame a shot alike
+                        # or the dataset is not one dataset.
+                        aspect_ratio=aspect_for_label(v.get('label'), v.get('framing')),
                         lora_strength=lora_strength, extra_ref_paths=extra_paths,
                         generation_loras=run_loras, sampler_steps=_generation_steps(),
                         base_lora_strength=_generation_base_lora_strength(),
@@ -10381,6 +10385,9 @@ def regenerate_image(user_id, image_id, lora_strength=None, prompt=None, app=Non
                 subject_type=subject_type_of(ds),
                 label=img.variation_label or ''),
             klein_model=model,
+            # The card's framing, like the Krea branch above — a regenerate must
+            # produce a tile the same shape and size as its siblings.
+            aspect_ratio=aspect_for_label(img.variation_label, img.framing),
             lora_strength=lora_strength, extra_ref_paths=extra_paths,
             generation_loras=resolve_generation_lora_preset(generation_lora_preset),
             sampler_steps=_generation_steps(),

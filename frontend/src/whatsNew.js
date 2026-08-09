@@ -169,6 +169,14 @@ export const WHATS_NEW = [
       'Launching a second cloud training on a dataset that already had one was supposed to ask "launch anyway?" and go ahead if you said yes. The question never reached you: the refusal arrived as an error toast printing the question at you, with no way to answer it, so the second run was simply impossible however many times you tried. The confirmation now appears and the run starts when you accept. Nothing about what is allowed has changed — the guard, your fleet limit and your budget behave exactly as before; the answer you gave it was being thrown away. Reported by Arrow (Discord).',
   },
   {
+id: '2026-08-08-one-output-size-for-both-local-engines',
+    date: '2026-08-08',
+    title: 'Your generated shots are finally all the same size',
+    blurb:
+      'Klein and Krea 2 Edit used to size their images by two unrelated rules, so one dataset could hold 2 MP Klein tiles next to 0.84 MP Krea ones, in different shapes, with nothing on screen explaining either. There is now a single Output size dial at the top of the Generate variations panel, above the shot cards: both local engines spend that budget, on the shape of the shot card you picked. Klein therefore stops inheriting your reference photo\'s frame — a 16:9 card renders 16:9 even if your reference is portrait. It ships at 2.0 MP, exactly what Klein always did, so nothing moves until you touch it; drop it for quicker, lighter trial runs, or leave it at 2.0, which is as far as these edit models hold together (go bigger afterwards with ✨ Upscale & improve).',
+    to: '/datasets?section=add&panel=generate',
+  },
+  {
     id: '2026-08-08-start-comfyui-from-the-banner',
     date: '2026-08-08',
     title: 'Start ComfyUI from the banner that tells you it is down',

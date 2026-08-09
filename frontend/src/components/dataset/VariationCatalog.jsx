@@ -43,6 +43,10 @@ import {
   clampKleinSteps, kleinDialPayload, kleinStepsDescription,
 } from '../../utils/kleinDials.js';
 import {
+  VARIATION_MP_MIN, VARIATION_MP_MAX, VARIATION_MP_STEP,
+  clampVariationMegapixels, variationOutputSizePayload, variationSizeDescription,
+} from '../../utils/variationOutputSize.js';
+import {
   defaultValueAt, isAtDefault, resetAriaLabel, RESET_TO_DEFAULT_TEXT,
 } from '../settings/settingDefaults.js';
 import { kleinUnavailableReason } from '../../utils/localEngineReason.js';
@@ -573,6 +577,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   // shot of the batch identically), held the same way: null until the server
   // answers, so no invented number is ever on screen.
   const [kleinSteps, setKleinSteps] = useState(null);
+  // Shared by BOTH local engines — not a klein/ or krea/ value, so it is read
+  // and written on its own key and shown above the shot cards it governs.
+  const [variationMp, setVariationMp] = useState(null);
   // The Krea base, held like the dials: one GLOBAL value mirrored locally so
   // the field answers the click before the PUT comes back.
   const [kreaBaseModel, setKreaBaseModel] = useState('');
@@ -621,6 +628,9 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
           defaultValueAt(d.config_defaults, 'krea', 'identity_lora_strength')));
         setKleinSteps(clampKleinSteps(d.config?.klein?.generation_steps,
           defaultValueAt(d.config_defaults, 'klein', 'generation_steps')));
+        setVariationMp(clampVariationMegapixels(
+          d.config?.variations?.output_megapixels,
+          defaultValueAt(d.config_defaults, 'variations', 'output_megapixels')));
       })
       .catch(() => { /* keep the permissive default on a transient failure */ });
     return () => { cancelled = true; };
@@ -661,6 +671,25 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
   const setKleinDial = (field, value) => {
     if (field === 'generation_steps') setKleinSteps(value);
     kleinDialSaver.current.schedule(field, value);
+  };
+  // Its OWN coalescing saver, for the same reason Klein has one next to Krea's:
+  // merging two sections into one PUT would write a value into a namespace its
+  // owner never touched.
+  const variationSizeSaver = useRef(null);
+  if (variationSizeSaver.current === null) {
+    variationSizeSaver.current = createDialSaver((patch) => {
+      putJson('/api/settings', variationOutputSizePayload(patch)).catch(() => {
+        toast.error('Could not save the output size — check Settings › Image engines.');
+      });
+    });
+  }
+  useEffect(() => () => variationSizeSaver.current?.flush(), []);
+  const variationMpDefault = defaultValueAt(configDefaults, 'variations', 'output_megapixels');
+  const variationMpValue = clampVariationMegapixels(variationMp, variationMpDefault);
+  const setVariationSize = (v) => {
+    const mp = clampVariationMegapixels(v, variationMpDefault);
+    setVariationMp(mp);
+    variationSizeSaver.current.schedule('output_megapixels', mp);
   };
   const kleinStepsDefault = defaultValueAt(configDefaults, 'klein', 'generation_steps');
   const kleinStepsValue = clampKleinSteps(kleinSteps, kleinStepsDefault);
@@ -1192,6 +1221,35 @@ export default function VariationCatalog({ datasetId = null, onGenerate, busy, g
             );
           })}
         </fieldset>
+      )}
+
+      {/* Output size — ONE dial for both local engines, deliberately OUTSIDE
+          their tuning blocks. It is the property of the dataset's images, not of
+          the engine that happened to render them: Klein used to pin 2 MP in the
+          reference's shape while Krea capped itself at the reference's own pixel
+          count, so the same dataset held tiles of two sizes and two shapes.
+          Both now spend this budget on the shot card's ratio. */}
+      {(isKlein || isKrea) && (klAvailable || krAvailable) && (
+        <div className="rounded-lg border border-border bg-app/30 px-2.5 py-2">
+          <KreaDial
+            id="variation-output-size-dial"
+            label="Output size (MP)"
+            topic="variations.output_megapixels"
+            value={variationMpValue}
+            min={VARIATION_MP_MIN}
+            max={VARIATION_MP_MAX}
+            step={VARIATION_MP_STEP}
+            description={variationSizeDescription(variationMpValue)}
+            defaultValue={variationMpDefault}
+            onChange={setVariationSize}
+          >
+            How many pixels every generated shot gets, on the shape of its own
+            card. Shared by 🖥️ Klein and Krea 2 Edit so one dataset never mixes
+            two sizes. Larger costs more VRAM and more time per image, and the
+            edit models lose coherence past 2 MP — upscale further afterwards with
+            ✨ Upscale &amp; improve instead.
+          </KreaDial>
+        </div>
       )}
 
       {/* Klein-only tuning, grouped: model file + consistency-LoRA strength.

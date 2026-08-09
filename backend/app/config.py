@@ -586,6 +586,20 @@ DEFAULTS = {
               # Total pixel budget the source is rescaled to before sampling, so it
               # is the output resolution. 2 = the value hardcoded in the workflow.
               'improve_megapixels': 2.0},
+    # Dataset variations — what BOTH local engines share, rather than what each
+    # one does on its own. Its own namespace on purpose: a key under `klein` or
+    # `krea` would be a value one engine owns and the other happens to read, and
+    # the whole point of this one is that a dataset's shots come out the same
+    # size whichever local engine rendered them.
+    'variations': {
+        # Total pixels every generated variation is rendered at, in megapixels,
+        # on the CARD's ratio. 2.0 is Klein's historical hardcoded value, so an
+        # untouched install frames exactly as before; Krea used to cap this at
+        # the reference's own pixel count, which is what made its tiles smaller
+        # than Klein's in the same dataset. Clamped [0.5, 2.0] — 2.0 is where
+        # the edit models start to drift (output_geometry.MAX_OUTPUT_MP).
+        'output_megapixels': 2.0,
+    },
     # Krea 2 Identity Edit — the second LOCAL generation engine (services/
     # krea_edit_helper.py). Every value here is a RESOLUTION HINT or a sampler
     # knob, never a hardcoded machine path: blank/absent means "find it yourself"
