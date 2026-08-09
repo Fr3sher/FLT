@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-pins-float-both-ways',
+    date: '2026-08-09',
+    title: 'Park a pinned picture below its lane without shoving the next dataset',
+    blurb:
+      'On the Canvas, dragging a pinned image above its dataset always let it float free — dragging it below pushed every dataset underneath further down the board. Pinned pictures now sit on a free layer in both directions: they overlap the lane below if you park them there, and nothing else moves. Fit still frames them, Export PNG still includes them, and ✦ Tidy up still brings them back beside the run that made them.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-dataset-thumbnails',
     date: '2026-08-09',
     title: 'Grids and the board load in a blink',

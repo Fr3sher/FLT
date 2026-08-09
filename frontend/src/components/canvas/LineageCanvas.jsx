@@ -488,25 +488,25 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   // taken again from the same functions at pointerup.
   const [dropHint, setDropHint] = useState(null);
 
-  // A lane has to be big enough to hold its pinned pictures too, or Fit would
-  // crop one off the board with no way back to it. Measured on the STRIPS: a
-  // group is wider than any of its members and cropping it would put a picture
-  // out of reach with no way back.
+  /* The board's geometry, from TWO different extents (see stackLanes).
+     A lane's STACKING size is its tree, and only its tree — so the lane below
+     sits where it always sat no matter where the pictures went. The pictures'
+     REACH, on all four sides, is reported separately and grows only the box
+     that ✦ Fit frames, that 📷 Export draws and that the pan clamp keeps
+     reachable: a render dragged out of the row is still framed, exported and
+     scrollable-to, it just no longer shoves anything.
+     Measured on the STRIPS: a group is wider than any of its members and
+     cropping it would put a picture out of reach with no way back. */
   const world = useMemo(() => stackLanes(placed.map((e) => {
     const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
     return {
       ...e,
-      width: Math.max(e.graph?.width || 0, ext.width),
-      height: Math.max(e.graph?.height || 0, ext.height),
-      // …and as far ABOVE and LEFT of the lane as anything reaches. A picture is
-      // no longer penned into the quadrant below its lane's corner, so the board
-      // is a BOX whose top-left may be negative rather than a size measured from
-      // the origin. Without these two the one gesture free placement exists for
-      // — drag a render up, above its lane — would produce something ✦ Fit
-      // frames off the top of the screen with no way back to it. The lanes
-      // themselves do not move: stackLanes only grows the box around them.
+      width: e.graph?.width || 0,
+      height: e.graph?.height || 0,
       minX: ext.minX,
       minY: ext.minY,
+      maxX: ext.width,
+      maxY: ext.height,
     };
   })), [placed, layoutByLane]);
 
