@@ -1424,6 +1424,7 @@ export function useDataset() {
       allow_unverified_weights: !!opts.allowUnverifiedWeights,
       allow_caption_quality: !!opts.allowCaptionQuality,
       allow_not_ready: !!opts.allowNotReady,
+      allow_parallel_run: !!opts.allowParallelRun,
       ...(opts.fromStep != null ? { from_step: opts.fromStep } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
       resume_mode: opts.resumeMode || 'weights_only',

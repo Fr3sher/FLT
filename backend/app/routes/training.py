@@ -2293,7 +2293,8 @@ def dataset_train_cloud_continue():
                                     overrides=d.get('overrides'),
                                     resume_mode=d.get('resume_mode', 'weights_only'),
                                     state_bundle_id=d.get('state_bundle_id'),
-                                    transport=d.get('transport'))
+                                    transport=d.get('transport'),
+                                    allow_parallel_run=bool(d.get('allow_parallel_run')))
     except Exception as e:
         return _map_error(e)
     return jsonify({'ok': True, **res})
@@ -2432,6 +2433,7 @@ def dataset_train_cloud_continue_local(dataset_id):
     kw['allow_uncaptioned'] = bool(d.get('allow_uncaptioned'))
     kw['allow_caption_quality'] = bool(d.get('allow_caption_quality'))
     kw['allow_not_ready'] = bool(d.get('allow_not_ready'))
+    kw['allow_parallel_run'] = bool(d.get('allow_parallel_run'))
     try:
         res = ct.continue_local_run_in_cloud(LOCAL_USER, dataset_id, **kw)
     except Exception as e:
