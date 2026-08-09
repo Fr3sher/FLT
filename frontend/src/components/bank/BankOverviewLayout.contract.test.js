@@ -62,6 +62,48 @@ test('the rail sits beside the grid, and folds instead of squeezing it', () => {
   assert.match(panel, /<BankOverview payload=\{payload\} \/>/)
 })
 
+test('the rail stays on screen while the grid scrolls under it', () => {
+  /* The layout's whole justification is that you no longer scroll up to a
+     filter and back down to its result. A rail that is merely PLACED beside
+     the grid does not deliver that: it is ~500 px tall against a grid that is
+     thousands (20 000 images), so it leaves the viewport after one screen and
+     the round trip comes straight back. Measured on a 48-image bank at 1440:
+     page 2 326 px, rail ending at ~1 345 — the lower 1 000 px of grid had no
+     filters beside it at all.
+
+     Three parts, and the assertion names all three because dropping any one
+     silently restores the defect:
+       · `sticky` — the pin itself;
+       · `self-start` — without it the grid item STRETCHES to the row height,
+         so the element is already as tall as its container and sticky has no
+         room to travel. This is the failure that looks like "sticky doesn't
+         work" and gets fixed by deleting sticky;
+       · `overflow-y-auto` + a viewport-bounded max height — a rail taller than
+         the screen must scroll inside its pin, or its lower half becomes
+         permanently unreachable, which is worse than never pinning.
+     All four are `lg:`-scoped, matching the breakpoint at which the rail is a
+     column at all; below it the rail is a `fixed` drawer, where sticky is
+     meaningless. */
+  assert.match(workspace, /lg:sticky/)
+  assert.match(workspace, /lg:self-start/)
+  assert.match(workspace, /lg:overflow-y-auto/)
+  assert.match(workspace, /lg:max-h-\[calc\(100vh-var\(--app-header-h\)-1\.5rem\)\]/)
+  // …and only as a column: the drawer branch must stay plain.
+  assert.match(workspace, /railIsColumnNow\s*\n?\s*\?\s*'min-w-0 lg:sticky/)
+
+  /* The pin clears the app's own sticky top bar, and it does so through a
+     token rather than a number repeated in two files.
+     ⚠️ This last assertion is the one that matters most, because the failure it
+     guards is SILENT: an undefined custom property makes the whole `calc()`
+     invalid, `top` falls back to `auto`, and a `sticky` element with no `top`
+     simply never pins. Nothing errors, nothing looks broken in review — the
+     rail just quietly scrolls away again and the layout loses its reason to
+     exist. Deleting the token from index.css must break a test, not a screen. */
+  const css = readFileSync(new URL('../../index.css', import.meta.url), 'utf8')
+  assert.match(css, /--app-header-h:\s*\d/)
+  assert.match(workspace, /lg:top-\[calc\(var\(--app-header-h\)\+0\.75rem\)\]/)
+})
+
 test('overview never opens the expensive kept-only coverage endpoint', () => {
   const panel = readFileSync(new URL('./BankPassesPanel.jsx', import.meta.url), 'utf8')
   const overviewMount = panel.slice(panel.indexOf('<BankOverview'),

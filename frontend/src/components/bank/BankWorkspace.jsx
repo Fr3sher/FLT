@@ -1747,7 +1747,28 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           <div className="fixed inset-0 z-40 bg-black/60" onClick={closeRail} aria-hidden />
         )}
         {railOpen && (
-          <div id="bank-filter-rail" className="min-w-0">
+          /* ⚠️ Plain block comment, NOT {/* … *!/}: this is the inside of
+             `{railOpen && ( … )}`, an EXPRESSION position where braces are read
+             as an object literal, not JSX children. `node --test` cannot parse
+             JSX, so nothing in the suite would have caught it.
+
+             ⚠️ STICKY is not decoration — it is what makes layout B keep its own
+              promise. The rail is ~500 px tall; the grid it filters is thousands
+              (20 000 images). As a plain grid column the rail scrolls away after
+              one screen, so changing a filter means scrolling back UP — the exact
+              round trip this layout was built to remove, reintroduced by a
+              missing property. Pinned, the filters are beside the grid at every
+              scroll position, and the empty band under a short rail is never on
+              screen.
+              It carries its own overflow: a rail taller than the viewport (many
+              people, many tags) must scroll INSIDE its pin, otherwise its lower
+              half becomes unreachable — worse than not pinning at all.
+              Only when it IS a column: as a drawer it is `fixed` already, and
+             sticky on a drawer does nothing. */
+          <div id="bank-filter-rail"
+            className={railIsColumnNow
+              ? 'min-w-0 lg:sticky lg:top-[calc(var(--app-header-h)+0.75rem)] lg:max-h-[calc(100vh-var(--app-header-h)-1.5rem)] lg:overflow-y-auto lg:self-start'
+              : 'min-w-0'}>
             <BankFilterRail
               bankId={bankId} filter={filter} setF={setF}
               clusters={clusters} styleClusters={styleClusters}
