@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
-import { apiFetch, postJson } from '../../api/fetchClient'
-import { INPUT_CLASS, Card, StatusBadge, SecretField } from './primitives'
+import { INPUT_CLASS, Card, SecretField } from './primitives'
 import KleinLoraCombobox, { useKleinGenerationLoras } from './KleinLoraCombobox'
 import ModelFilePicker, { useModelFiles } from './ModelFilePicker'
+import ChatgptSubscriptionConnect from '../common/ChatgptSubscriptionConnect'
 import PromptOverrideField from '../common/PromptOverrideField'
 import PromptPreview from './PromptPreview'
 import ResetToDefault from './ResetToDefault'
@@ -1404,110 +1404,18 @@ const CHATGPT_AUTH_OPTIONS = [
   { id: 'subscription', label: 'Subscription only' },
 ]
 
-/* ChatGPT subscription (Codex OAuth) — EXPERIMENTAL lane. Device-code login:
-   the user opens the verification URL from ANY device and types the one-time
-   code; we poll the backend until it reports connected. */
+/* ChatGPT subscription (Codex OAuth) — EXPERIMENTAL lane. The device-code login
+   itself is ChatgptSubscriptionConnect (components/common): the Setup wizard's
+   image step offers the same connection, and two copies of an OAuth polling loop
+   would be two chances for them to drift. This card adds what only Settings has:
+   the auth-mode preference. */
 function ChatgptSubscriptionCard({ caps, config, setField, refreshCaps, toast, configDefaults }) {
-  const sub = caps.chatgpt_subscription || {}
-  const [device, setDevice] = useState(null)     // {verification_url, user_code}
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-
-  useEffect(() => {
-    if (!device) return undefined
-    const id = setInterval(async () => {
-      try {
-        const r = await apiFetch('/api/settings/chatgpt-oauth/poll', { background: true })
-        if (r.status === 'connected') {
-          setDevice(null)
-          toast.success('ChatGPT subscription connected.')
-          await refreshCaps(true)
-        } else if (r.status === 'error') {
-          setDevice(null)
-          setError(r.detail || 'Login failed — try again.')
-        }
-      } catch { /* transient — keep polling */ }
-    }, 3000)
-    return () => clearInterval(id)
-  }, [device, refreshCaps, toast])
-
-  const start = async () => {
-    setBusy(true); setError(null)
-    try {
-      const r = await postJson('/api/settings/chatgpt-oauth/start', {})
-      setDevice(r)
-    } catch (e) {
-      setError(e.message || 'Could not start the login.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const importCodex = async () => {
-    setBusy(true); setError(null)
-    try {
-      await postJson('/api/settings/chatgpt-oauth/import-codex', {})
-      setDevice(null)
-      toast.success('Codex CLI session imported.')
-      await refreshCaps(true)
-    } catch (e) {
-      setError(e.message || 'Import failed.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const disconnect = async () => {
-    setBusy(true); setError(null)
-    try {
-      await postJson('/api/settings/chatgpt-oauth/logout', {})
-      toast.success('ChatGPT subscription disconnected.')
-      await refreshCaps(true)
-    } catch (e) {
-      setError(e.message || 'Disconnect failed.')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const btn = 'rounded-md border border-border-strong px-3 py-1.5 text-xs font-medium ' +
-    'text-content hover:bg-surface-raised disabled:opacity-50'
-
   return (
     <Card
       title="ChatGPT subscription (experimental)"
       help="Run the ChatGPT engine on your ChatGPT Plus/Pro image quota instead of a pay-per-use API key. Undocumented lane — it may stop working if OpenAI closes it. Limits vs API mode: up to 5 reference images (instead of 16), your plan's daily image cap applies, SFW only."
     >
-      <div className="flex items-center justify-between">
-        <StatusBadge ok={!!sub.connected} okLabel={sub.email ? `Connected — ${sub.email}` : 'Connected'} missingLabel="Not connected" />
-        <div className="flex gap-2">
-          {!sub.connected && (
-            <button type="button" onClick={start} disabled={busy || !!device} className={btn}>
-              {device ? 'Waiting for you to enter the code…' : 'Connect with ChatGPT'}
-            </button>
-          )}
-          {!sub.connected && sub.codex_cli_detected && (
-            <button type="button" onClick={importCodex} disabled={busy || !!device} className={btn}>
-              Import from Codex CLI
-            </button>
-          )}
-          {sub.connected && (
-            <button type="button" onClick={disconnect} disabled={busy} className={btn}>
-              Disconnect
-            </button>
-          )}
-        </div>
-      </div>
-
-      {device && (
-        <div role="status" className="rounded-lg border border-primary/40 bg-primary/10 p-3 text-sm text-content">
-          <p>1. Open <a href={device.verification_url} target="_blank" rel="noreferrer" className="font-medium underline">{device.verification_url}</a> on any device and sign in.</p>
-          <p className="mt-1">2. Enter this one-time code (expires in 15 minutes):</p>
-          <p className="mt-1 select-all font-mono text-lg font-semibold tracking-widest">{device.user_code}</p>
-        </div>
-      )}
-
-      {error && <p className="text-xs text-rose-400"><span aria-hidden="true">✗</span> {error}</p>}
+      <ChatgptSubscriptionConnect caps={caps} refreshCaps={refreshCaps} toast={toast} />
 
       <div>
         <label htmlFor="chatgpt-auth-mode" className="block text-sm font-medium text-content">ChatGPT engine auth</label>

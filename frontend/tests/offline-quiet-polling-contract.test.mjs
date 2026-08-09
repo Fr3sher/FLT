@@ -96,7 +96,10 @@ test('the polls that fire on a timer are marked background', () => {
     ['components/bank/BankWorkspace.jsx', /refreshPayload\(\{ background: true \}\)/],
     ['hooks/useTrainingActivity.js', /'\/api\/train\/activity', \{ background: true \}/],
     ['components/settings/MaintenanceSection.jsx', /background: true/],
-    ['components/settings/EnginesSection.jsx', /background: true/],
+    // The ChatGPT device-code poll. It used to live inside EnginesSection; it
+    // moved out whole when the Setup wizard started offering the same login, so
+    // the property is pinned where the setInterval actually is.
+    ['components/common/ChatgptSubscriptionConnect.jsx', /background: true/],
     ['components/dataset/CaptionOptionsPopover.jsx', /background: true/],
     ['App.jsx', /update\/check\?auto=1', \{ background: true \}/],
   ];

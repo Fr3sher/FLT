@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-setup-chatgpt-subscription',
+    date: '2026-08-09',
+    title: 'Set up ChatGPT with your Plus/Pro plan, no API key',
+    blurb:
+      'The first-run Setup screen only ever offered an OpenAI API key, so the ChatGPT engine looked like it cost money per image. It now shows both ways in side by side — paste a key, or sign in once with your ChatGPT Plus/Pro subscription and run on your plan\'s image quota. The step turns green as soon as either one is in place.',
+    to: '/setup?step=image',
+  },
+  {
     id: '2026-08-09-dataset-thumbnails',
     date: '2026-08-09',
     title: 'Grids and the board load in a blink',
