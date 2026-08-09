@@ -67,6 +67,8 @@ import CanvasLayoutPresets from './CanvasLayoutPresets';
 import CanvasSystemStats from './CanvasSystemStats';
 import { blendEdgesFor, blendSourcesNote } from '../../utils/canvasBlendEdges';
 import { externalEdgesFor } from '../../utils/canvasExternalEdges';
+// 🎨 Which colour this dataset's connectors are drawn in (utils/datasetTint).
+import { tintIndexFor, tintFor } from '../../utils/datasetTint';
 import {
   boardExportFilename, boardExportPlan, boardExportRefusal, drawBoardExport,
 } from '../../utils/canvasExportPng';
@@ -183,6 +185,14 @@ const LaneHeader = memo(function LaneHeader({ lane, onZoomRef }) {
             className="h-full w-full object-cover" />
         </button>
       )}
+      {/* 🎨 The dataset's edge colour, said once where its name is. Without it
+          the tints on the connectors are only "these two lines are different";
+          with it they read "this line comes from THAT lane", which is the whole
+          point on a board where pictures can be parked anywhere. A 6-px dot, no
+          label: the name next to it IS the label. */}
+      <span aria-hidden data-testid="lane-tint-dot"
+        className="shrink-0 rounded-full"
+        style={{ width: 6, height: 6, background: tintFor(lane.datasetId) }} />
       <span className="truncate text-[0.8125rem] font-semibold text-content" title={lane.name}>
         {lane.name}
       </span>
@@ -232,7 +242,7 @@ const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, d
       viewBox={`0 0 ${g.width} ${g.height}`}
       role="img"
       aria-label={`${lane.name}: lineage of ${g.nodes.length} run${g.nodes.length === 1 ? '' : 's'}`}>
-      <LineageEdges edges={g.edges} isLit={isLit} />
+      <LineageEdges edges={g.edges} isLit={isLit} tintIndex={tintIndexFor(lane.datasetId)} />
       <g>
         {g.nodes.map((n) => (
           <foreignObject key={n.node.record_id}
@@ -340,7 +350,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
   return (
     <div style={{ position: 'absolute', left: 0, top: lane.graphY }}>
       <svg width="1" height="1" className="block overflow-visible" aria-hidden>
-        <LineageEdges edges={edges} isLit={() => false} />
+        <LineageEdges edges={edges} isLit={() => false} tintIndex={tintIndexFor(lane.datasetId)} />
       </svg>
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasImageGroup key={r.key} group={r} datasetId={lane.datasetId}
