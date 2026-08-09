@@ -235,7 +235,9 @@ def test_put_settings_preserves_unknown_config_section_on_disk(client):
     assert body['config']['ollama']['url'] == 'http://example.test:11434'
     assert body['preserved_unknown_sections'] == ['variations_from_the_future']
     on_disk = json.loads(config._config_path().read_text(encoding='utf-8'))
-    assert on_disk['variations_from_the_future'] == {'flag': True}   # untouched, byte for byte
+    # Untouched semantically, not byte-for-byte: save_config() rewrites the whole
+    # file (indent=2), so formatting can differ even though the value doesn't.
+    assert on_disk['variations_from_the_future'] == {'flag': True}
 
 
 def test_put_settings_ignores_unknown_section_absent_from_disk(client):
