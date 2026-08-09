@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-lightbox-side-by-side-tablet',
+    date: '2026-08-09',
+    title: 'Full-height images on a tablet, with the facts beside them',
+    blurb:
+      'Opening a generated image on a tablet in landscape used to shrink it to a thumbnail with the prompt, Download and ✨ Upscale & improve buttons stacked below the fold. The picture now takes the whole height on the left and everything else reads in a scrollable column on the right — the same split you already had on a desktop, from 768 px up. Held upright, or on a phone, the stacked layout is unchanged.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-canvas-phone-board-room',
     date: '2026-08-09',
     title: 'The canvas gives the board back its screen on a phone',
