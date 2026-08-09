@@ -2679,11 +2679,25 @@ def dataset_train_run_preview(run_key):
     `run_key` is 'cloud-<id>' or 'rec-<id>' (same addressing as /share). The
     file path is resolved fully server-side from the run's own record (staging
     dir for cloud, the stamped local run dir otherwise) — the client never
-    sends a path. Open like the other Runs-hub reads: unknown/sampleless → 404."""
+    sends a path. Open like the other Runs-hub reads: unknown/sampleless → 404.
+
+    `?s=` asks for the cached tile instead of the file. The hub draws this at
+    64-80 px in a list that can hold every run ever launched, and a training
+    sample is a full-resolution generation — the card used to download all of it
+    to paint a square the size of a favicon. Without `?s=` (the link the card
+    wraps itself in, "open full size") the untouched bytes still come back."""
     from flask import send_file
+    from ..services import dataset_thumbs
     p = ct.run_preview_path(run_key)
     if not p:
         return jsonify({'error': 'no preview for this run'}), 404
+    if request.args.get('s'):
+        side = dataset_thumbs.clamp_thumb_side(request.args.get('s'))
+        thumb = dataset_thumbs.ensure_thumb(f'run-{run_key}', p,
+                                            os.path.basename(p), side)
+        if thumb is not None:
+            return send_file(thumb, mimetype='image/webp', max_age=0,
+                             conditional=True)
     return send_file(p, conditional=True)
 
 

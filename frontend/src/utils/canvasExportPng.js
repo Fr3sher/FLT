@@ -216,6 +216,12 @@ export async function drawBoardExport(canvas, { world, lanes, drawnByLane, cardW
   const jobs = [];
   for (const lane of lanes) {
     for (const n of (drawnByLane[lane.datasetId] || [])) {
+      // The ORIGINAL bytes, deliberately — this is the one place on the board
+      // that does NOT take the thumbnail the nodes draw. The export is a file
+      // that leaves the app to be zoomed, printed and compared, it is drawn at
+      // up to 2 device pixels per board unit for nodes that can be 1400 units
+      // wide, and it is a one-shot action the user asked for: none of the
+      // reasons the screen uses tiles apply to it.
       jobs.push(loadImage(n?.image?.url).then((im) => ({ lane, n, im })));
     }
   }

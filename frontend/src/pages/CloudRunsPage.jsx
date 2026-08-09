@@ -131,7 +131,11 @@ function RunThumb({ run, broken, onBroken }) {
       <a href={run.preview_url} target="_blank" rel="noreferrer"
         title="Last sample this run generated (open full size)"
         className="relative block h-16 w-16 sm:h-20 sm:w-20 shrink-0 overflow-hidden rounded-lg border border-border hover:border-indigo-400">
-        <img src={run.preview_url} loading="lazy" onError={onBroken}
+        {/* `?s=` on the img, nothing on the <a>: the card draws a 64-80 px
+            square and the hub lists every run ever launched, so downloading a
+            full training sample per card was the whole page's weight. The link
+            around it still opens the untouched file. */}
+        <img src={`${run.preview_url}?s=192`} loading="lazy" decoding="async" onError={onBroken}
           alt={`Last training sample of ${run.dataset_name || run.run_name || 'this run'}`}
           className="h-full w-full object-cover" />
       </a>

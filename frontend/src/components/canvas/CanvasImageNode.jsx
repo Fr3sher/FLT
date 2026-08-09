@@ -1,9 +1,12 @@
+import { useRef } from 'react';
+
 import { nudgeImageNode } from '../../utils/canvasImageNodes';
 import { CONTROL_UNITS, chromeScale, clusterUnits } from '../../utils/canvasNodeChrome';
 import { imageFactsLine } from '../../utils/generatedImageFacts';
 import { useImageDownload } from '../../hooks/useImageDownload';
 import { useCanvasImageDelete } from '../../hooks/useCanvasImageDelete';
 import { canvasDeleteButtonState } from '../../utils/canvasImageDelete';
+import { datasetThumbUrl, ratchetThumbSide } from '../../utils/datasetThumbUrl';
 
 /* 🖼 One generated image, pinned ON the board.
 
@@ -111,6 +114,15 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   // same counter-scale, so the reservation is in the same unscaled units).
   const corner = member ? 0 : CONTROL_UNITS;
   const k = chromeScale(boardScale, geom.w, rowUnits, corner);
+  // Which thumbnail rung this node's picture is fetched at. Held in a ref and
+  // ratcheted, so a live resize crossing a rung upgrades the picture ONCE
+  // instead of re-requesting it on every frame of the drag; keyed on the url so
+  // a node reused for a different image starts its own ratchet.
+  const thumbRung = useRef({ url: null, side: 0 });
+  if (thumbRung.current.url !== img.url) thumbRung.current = { url: img.url, side: 0 };
+  thumbRung.current.side = ratchetThumbSide(thumbRung.current.side,
+    Math.max(geom.w || 0, geom.h || 0));
+  const thumbSide = thumbRung.current.side;
   // ⚠️ maxWidth, not a guess: it is the number chromeScale capped k against.
   // Without it flex would happily draw a wider row inside that budget and every
   // target would silently lose size at low zoom.
@@ -292,7 +304,17 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
         </span>
       )}
       <div className="relative min-h-0 flex-1 bg-black/30">
-        <img src={img.url} alt={`Generated at ${imageLabel}`} draggable={false}
+        {/* The TILE, not the file. A board carries dozens of these and each one
+            used to request the original 1-4 megapixel PNG, so opening a seeded
+            board was a multi-megabyte, multi-decode event for pictures drawn a
+            couple of hundred pixels wide. The rung follows the node's own drawn
+            size and only ever goes up (see utils/datasetThumbUrl), so enlarging
+            a node to judge it does get sharper pixels without re-fetching on
+            every frame of the drag. Full resolution stays one 🔍, one ⬇ or one
+            board export away. `lazy` because a board is panned: the nodes
+            off-screen right now cost nothing until they are scrolled to. */}
+        <img src={datasetThumbUrl(img.url, thumbSide)} alt={`Generated at ${imageLabel}`}
+          draggable={false} loading="lazy" decoding="async"
           className="h-full w-full select-none object-contain" />
       </div>
       {/* The resize corner. 28 px on purpose — a hairline handle is a desktop-only

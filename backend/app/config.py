@@ -1236,6 +1236,24 @@ def dataset_images_root() -> Path:
     root.mkdir(parents=True, exist_ok=True)
     return root
 
+def dataset_thumbs_root(create=False) -> Path:
+    """Cached grid/board thumbnails of dataset images — pure derived data.
+
+    Deliberately NOT inside dataset_images_root(): that tree is the user's
+    dataset, it gets zipped on export, scanned on import and copied into a bank,
+    and a `thumbs/` folder sitting in it would end up in every one of those.
+    Under the app data dir it can be deleted wholesale at any time; the worst
+    outcome is one re-encode.
+
+    ``create=False`` for the READ path: a thumbnail request that finds nothing
+    must not leave a directory behind (the /img/ route is read-only for the same
+    reason), so the directory is created only when a file is about to be written.
+    """
+    root = _data_dir() / 'dataset_thumbs'
+    if create:
+        root.mkdir(parents=True, exist_ok=True)
+    return root
+
 def cloud_runs_root(create=True) -> Path:
     """Working area of cloud training runs (one ``run_<id>/`` per run: the
     exported dataset copy, the sample images and the mirrored training log).

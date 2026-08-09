@@ -2895,6 +2895,11 @@ def delete_dataset(user_id, dataset_id):
         db.session.rollback()
         _restore_from_trash(trashed_path, dataset_path)
         raise
+    # The tile-size thumbnail cache is derived data that lives OUTSIDE the folder
+    # the trash just swallowed, so nothing else would ever collect it. Dropped
+    # after the commit, best effort: a locked cache file must not undo a delete.
+    from . import dataset_thumbs
+    dataset_thumbs.drop_dataset_thumbs(dataset_id)
     # Purge les artefacts d'entraînement (LoRA ComfyUI + ai-toolkit + config). Best
     # effort : un échec ici ne doit pas faire échouer la suppression du dataset.
     if lt is not None:
