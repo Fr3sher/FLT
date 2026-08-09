@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-external-lora-links',
+    date: '2026-08-09',
+    title: 'See which images an external LoRA actually touched',
+    blurb:
+      'A permanent cyan line now joins each 🔌 plugin node to every board image generated with it, and an image’s facts panel lists its External LoRAs on their own row instead of filing them under always-on.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-09-preview-prompts-from-captions',
     date: '2026-08-09',
     title: 'Preview images that finally show YOUR subject',
