@@ -3,6 +3,23 @@
 Rules for AI agents (and humans) shipping changes to LoRA Dataset Studio.
 Public repo — everything here is visible; keep it free of personal data.
 
+## How work gets done here (decided 2026-08-10)
+
+- **Work directly. Subagents are the exception, not the default.** Spawn one only
+  when it is genuinely necessary: several independent chantiers that must run in
+  parallel RIGHT NOW, or a task so large it cannot fit one session's context.
+  A single feature, fix or investigation — even a big one — is done in the main
+  session, hands on the code.
+- **No orchestrator/supervisor pattern.** No standing wakeup loops, no fleet of
+  named agents to brief/chase/verify. The cost of supervision (briefing, idle
+  chasing, report verification, merge coordination, cleanup) proved higher than
+  doing the work. Two real incidents in one night: a cleanup filter matching
+  `run.py` killed the user's live instances; a reserved port was reused.
+- If a subagent IS warranted: isolated worktree, local branch never pushed,
+  `git commit --only`, source-only, kill own processes by captured PID or by
+  port — never by command-line pattern — and the main session still owns
+  verification, merges, the dist rebuild and the push.
+
 ## Identity & privacy (non-negotiable)
 
 - Commits are authored as `lora-dataset-studio <noreply@lora-dataset-studio.dev>`
