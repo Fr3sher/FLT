@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { buildLineageGraph, CARD_W } from '../../utils/lineageGraph';
 import {
   LANE_HEADER_H, MAX_SCALE, MIN_SCALE,
@@ -115,6 +115,20 @@ const LONG_PRESS_MS = 420;
 // is still a click, so inspecting a run never depends on holding perfectly
 // still — and a 2-px twitch must not write a position to the database.
 const DRAG_SLOP = 4;
+/* ONE empty layout array for every lane that has no pinned picture.
+   `layoutByLane[id] || []` looks harmless and is not: a fresh [] on every render
+   is a new prop identity, and a new prop identity is a re-render of the whole
+   lane — which is precisely what the memo boundaries below exist to stop. */
+const NO_LAYOUT = [];
+/* How long a stale frame rectangle may be reused during a wheel burst (ms).
+   The board preventDefault()s the wheel, so nothing can scroll the frame out
+   from under a burst; a resize invalidates it explicitly (see the observer). */
+const RECT_TTL_MS = 250;
+/* Floor between two "the run produced images, re-read the lanes" refreshes. A
+   generation reports new images every poll for minutes; re-reading every lane's
+   full lineage on each of those ticks is the board's most expensive background
+   habit, and nothing about a × N badge needs to be four seconds fresher. */
+const REFETCH_MIN_MS = 6000;
 
 /* What the board can be told to do, written ONCE.
    The toolbar shows it inline from `lg` up and behind a one-tap ☝ Gestures
@@ -149,7 +163,7 @@ const BOARD_GESTURES = (
  *
  *  Only a CHARACTER dataset has one: a concept or a style dataset is not built
  *  around a face, and `kind` says so rather than a filename being guessed at. */
-function LaneHeader({ lane, onZoomRef }) {
+const LaneHeader = memo(function LaneHeader({ lane, onZoomRef }) {
   const showRef = lane.kind !== 'concept' && lane.kind !== 'style' && Boolean(lane.refFilename);
   const refUrl = showRef
     ? `/api/dataset/${lane.datasetId}/img/${encodeURIComponent(lane.refFilename)}`
@@ -188,10 +202,25 @@ function LaneHeader({ lane, onZoomRef }) {
       )}
     </div>
   );
-}
+});
 
-/** One dataset's tree, drawn exactly as the in-card graph draws it. */
-function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId,
+/** One dataset's tree, drawn exactly as the in-card graph draws it.
+ *
+ *  ⚡ MEMOISED, and that is not a micro-optimisation — it is what makes panning
+ *  a big board possible at all. Every frame of a pan is one `setView`, and
+ *  without a boundary here that single state change re-rendered every lane,
+ *  every run card and every checkpoint pill on the board, sixty times a second,
+ *  to draw the exact same SVG at a different CSS transform. A pan changes the
+ *  view's translation and NOTHING this component reads (`boardScale` is the
+ *  scale, which a pan does not touch), so the memo turns the whole subtree into
+ *  a no-op for the one gesture that fires most often.
+ *
+ *  ⚠️ The contract that keeps it honest: every prop reaching this component must
+ *  be stable across renders that changed nothing — hence the useCallback'd
+ *  handlers and the NO_LAYOUT sentinel at the top of the file. A prop rebuilt
+ *  inline in the parent's JSX silently disables the memo without failing
+ *  anything, which is the only way this can rot. */
+const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, liftedId,
   isPicked, onTogglePick, onOpenGallery, onOpenActions, onZoomPreview, boardScale }) {
   const g = lane.graph;
   if (!g || !g.nodes.length) return null;
@@ -267,7 +296,7 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
       </g>
     </svg>
   );
-}
+});
 
 /** One lane's pinned images, plus the links back to the checkpoints that made
  *  them. The links are drawn with the SAME connector the tree uses for "this
@@ -278,7 +307,7 @@ function LaneGraph({ lane, isLit, onHover, onNodeClick, diffRole, noteOf, lifted
  *
  *  Its own <svg>, sized 1x1 and overflow-visible, because a pinned image may sit
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
-function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onCloseGroup,
+const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onCloseGroup,
   onExportGrid, boardScale, hint, blendNotes }) {
   if (!layout.length) return null;
   /* Edges are drawn from where each picture actually IS — a member's slot in
@@ -341,7 +370,7 @@ function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onClo
       )}
     </div>
   );
-}
+});
 
 export default function LineageCanvas({ entries, positions, imageNodes, allImageNodes = imageNodes, onPinLane,
   onSaveImageNodes, onForgetImageNodes, onTidyUp, onRefetchDataset, onReloadLayout,
@@ -595,7 +624,12 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   useEffect(() => {
     const el = frameRef.current;
     if (!el) return undefined;
-    const measure = () => setViewport({ width: el.clientWidth, height: el.clientHeight });
+    const measure = () => {
+      // The frame moved or changed size: whatever rectangle a gesture or a wheel
+      // burst was holding is now a lie.
+      rectRef.current = null;
+      setViewport({ width: el.clientWidth, height: el.clientHeight });
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);
@@ -640,10 +674,23 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     setView(initialView(world, viewport));
   }, [fitSignature, world, viewport, gesturing]);
 
+  /* ⚡ applyView must be STABLE — it is the hot path of every pan, pinch and
+     wheel frame, and half a dozen listeners hang off its identity.
+     It used to close over `world` and `viewport` directly, so it was rebuilt on
+     every board change; the native wheel listener below is bound to it, so a
+     card drag (which recomputes `world` every frame) removed and re-added a DOM
+     listener sixty times a second for the duration of the gesture. The clamp
+     reads the same two values through refs instead, exactly as it already read
+     the live view through `viewRef`. */
+  const worldRef = useRef(world);
+  useEffect(() => { worldRef.current = world; }, [world]);
+  const viewportRef = useRef(viewport);
+  useEffect(() => { viewportRef.current = viewport; }, [viewport]);
+
   const applyView = useCallback((next) => {
     touched.current = true;
-    setView(clampView(next, world, viewport));
-  }, [world, viewport]);
+    setView(clampView(next, worldRef.current, viewportRef.current));
+  }, []);
 
   const fitNow = useCallback(() => {
     touched.current = false;
@@ -651,15 +698,46 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     if (viewport.width && viewport.height) setView(fitView(world, viewport));
   }, [world, viewport]);
 
-  const zoomByButton = useCallback((factor) => {
-    const anchor = { x: viewport.width / 2, y: viewport.height / 2 };
-    applyView(zoomAt(view, factor, anchor));
-  }, [applyView, view, viewport]);
-
   // The wheel listener is bound once per applyView identity; it reads the live
   // view through a ref so it never zooms from a stale one.
   const viewRef = useRef(view);
   useEffect(() => { viewRef.current = view; }, [view]);
+
+  const zoomByButton = useCallback((factor) => {
+    const vp = viewportRef.current;
+    const anchor = { x: vp.width / 2, y: vp.height / 2 };
+    applyView(zoomAt(viewRef.current, factor, anchor));
+  }, [applyView]);
+
+  /* 📐 The frame's rectangle, cached for the duration of ONE gesture.
+     `getBoundingClientRect()` forces a style/layout flush, and the pointer path
+     asked for it two and three times PER pointermove — right after the previous
+     frame's transform was written, so every read paid for a full re-layout of
+     the board. The rectangle of the frame cannot move while a finger is down
+     (the board is the scroll container, and a drag does not resize it), so it is
+     read once at pointerdown and dropped at pointerup.
+     The wheel path has no down/up to hang that on, so it caches for RECT_TTL_MS
+     instead — long enough to cover a burst, short enough that a layout change
+     between two bursts is never zoomed from a stale anchor. */
+  const rectRef = useRef(null);
+  const rectAt = useRef(0);
+  const dropRect = useCallback(() => { rectRef.current = null; }, []);
+  const frameRect = useCallback((ttl = 0) => {
+    const now = ttl ? Date.now() : 0;
+    if (rectRef.current && (!ttl || now - rectAt.current < ttl)) return rectRef.current;
+    const r = frameRef.current?.getBoundingClientRect();
+    rectRef.current = r || { left: 0, top: 0 };
+    rectAt.current = now;
+    return rectRef.current;
+  }, []);
+  // A gesture always starts from a FRESH measurement — a rectangle left behind
+  // by an older wheel burst, or by a gesture that ended before a layout change,
+  // must never be what a new drag is measured against.
+  const refreshRect = useCallback(() => {
+    rectRef.current = null;
+    rectAt.current = 0;
+    return frameRect();
+  }, [frameRect]);
 
   // Wheel zoom needs a NON-PASSIVE listener: React's onWheel is registered
   // passive, so preventDefault() there is ignored and the page scrolls behind
@@ -669,7 +747,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     if (!el) return undefined;
     const onWheel = (e) => {
       e.preventDefault();
-      const rect = el.getBoundingClientRect();
+      const rect = frameRect(RECT_TTL_MS);
       const anchor = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       // A trackpad pinch arrives as ctrl+wheel with small deltas; a mouse wheel
       // as large ones. Normalising on the sign keeps both feeling the same.
@@ -678,16 +756,18 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => el.removeEventListener('wheel', onWheel);
-  }, [applyView]);
+  }, [applyView, frameRect]);
 
   // --- pointer gestures (pan with one, pinch with two) -----------------------
   const pointers = useRef(new Map());
   const pan = useRef(null);
   const pinch = useRef(null);
 
+  // Reads the cached rectangle above — never the DOM — so a pointermove that
+  // asks for three points pays for zero layout flushes.
   const localPoint = (e) => {
-    const rect = frameRef.current?.getBoundingClientRect();
-    return { x: e.clientX - (rect?.left || 0), y: e.clientY - (rect?.top || 0) };
+    const rect = frameRect();
+    return { x: e.clientX - (rect.left || 0), y: e.clientY - (rect.top || 0) };
   };
 
   // --- node dragging ---------------------------------------------------------
@@ -805,6 +885,9 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const onPointerDown = useCallback((e) => {
     suppressClick.current = false;
     press.current = null;
+    // One measurement for the whole gesture (see frameRect). Taken BEFORE any
+    // localPoint() call below, which all read the cache from here on.
+    refreshRect();
     // A press on a pill is an inspection, never a drag or a pan.
     if (e.target.closest?.('.lds-ckpill-wrap')) return;
     /* A pinned image's own buttons (close, open) answer for themselves.
@@ -892,7 +975,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       }
     }
     frameRef.current?.classList.add('is-grabbing');
-  }, [beginDrag, beginImage]);
+  }, [beginDrag, beginImage, refreshRect]);
 
   const onPointerMove = useCallback((e) => {
     // A press that travels is a drag or a pan, never a click — whichever of the
@@ -991,6 +1074,10 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
 
   const endPointer = useCallback((e) => {
     cancelLongPress();
+    // The gesture is over: the cached frame rectangle dies with it, so the next
+    // one measures the board as it is then (see frameRect). Nothing below reads
+    // a local point, so this is safe at the top and covers both exits.
+    dropRect();
     const gi = imgRef.current;
     if (gi) {
       imgRef.current = null;
@@ -1067,7 +1154,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
       pan.current = null;
       frameRef.current?.classList.remove('is-grabbing');
     }
-  }, [onPinLane, runCardGesture, saveImage, saveRows, takeOverView]);
+  }, [dropRect, onPinLane, runCardGesture, saveImage, saveRows, takeOverView]);
 
   // --- inspection / compare (identical rules to the in-card graph) -----------
   const nodeById = useMemo(() => {
@@ -1380,6 +1467,11 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      a launch could only be watched at the moment it was fired. */
   const tracker = useCanvasRun();
   const trackerTargets = tracker.targets;
+  // Read by the throttled refresh below, which may fire from a timer armed
+  // several polls earlier: it must aim at the run's targets NOW, not at the
+  // ones that happened to be current when the timer was set.
+  const trackerTargetsRef = useRef(trackerTargets);
+  useEffect(() => { trackerTargetsRef.current = trackerTargets; }, [trackerTargets]);
   /* Which of the four states the launch is in — read from the SAME helper the
      bar itself renders from, so "is there anything to show" and "what is shown"
      can never disagree. The overlay needs it to decide whether to draw a pill at
@@ -1390,15 +1482,55 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   // the LINEAGE, not from the run. Without this re-read the board looked exactly
   // as it did before the launch until a full reload — the images were there, and
   // nowhere to be seen.
+  /* ⏱ …at most once every REFETCH_MIN_MS, and never one call per image.
+     The run poller ticks every three seconds and each tick that carries a new
+     image used to re-read the FULL lineage of every target lane — a long
+     generation therefore fired dozens of lineage requests per lane, each one
+     rebuilding every lane's graph and, before the memo boundaries above, the
+     whole board with it. A leading-edge throttle keeps the first batch instant
+     (which is the one the user is watching for) and a trailing call guarantees
+     the last images are never the ones left out. */
   const seenReady = useRef(0);
+  const refetchAt = useRef(0);
+  const refetchTimer = useRef(null);
+  const refetchLanes = useCallback(() => {
+    refetchAt.current = Date.now();
+    for (const id of canvasRunDatasetIds(trackerTargetsRef.current)) {
+      Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
+    }
+  }, [onRefetchDataset]);
   useEffect(() => {
     const n = readyImageCount(tracker.run.data);
     if (n <= seenReady.current) return;
     seenReady.current = n;
-    for (const id of canvasRunDatasetIds(trackerTargets)) {
-      Promise.resolve(onRefetchDataset?.(id)).catch(() => { /* the poll retries */ });
-    }
-  }, [tracker.run.data, trackerTargets, onRefetchDataset]);
+    const since = Date.now() - refetchAt.current;
+    if (since >= REFETCH_MIN_MS) { refetchLanes(); return; }
+    // Inside the window: one trailing call, re-armed rather than duplicated.
+    if (refetchTimer.current) return;
+    refetchTimer.current = setTimeout(() => {
+      refetchTimer.current = null;
+      refetchLanes();
+    }, REFETCH_MIN_MS - since);
+  }, [tracker.run.data, refetchLanes]);
+  // A board left mid-run must not fire a lineage read after it is gone.
+  useEffect(() => () => {
+    if (refetchTimer.current) clearTimeout(refetchTimer.current);
+  }, []);
+
+  /* The three handlers the lanes are given, hoisted out of the JSX below.
+     They were written inline — `onOpenGallery={(recordId, step) => setGallery(…)}`
+     and friends — which is the ordinary way to write them and, on this board,
+     the thing that made the memo boundaries on LaneGraph/LaneImages worthless:
+     a new arrow on every render is a changed prop, and a changed prop re-renders
+     the lane. `onExportGrid` takes the dataset id as an argument rather than
+     closing over the lane's, so it can be one function for the whole board
+     (CanvasGroupBar passes the id it was given). */
+  const openGallery = useCallback((recordId, step) => setGallery({ recordId, step }), []);
+  const openPinnedImage = useCallback((n) => setPinnedZoom(n.image), []);
+  const openExportGrid = useCallback((group, datasetId) => setExportGroup({
+    datasetId,
+    imageIds: group.members.map((member) => member.node.imageId),
+  }), []);
 
   const noteOf = useCallback((node) => noteEdits[node.record_id] || node, [noteEdits]);
   const handleNodeChanged = useCallback((updated) => {
@@ -1617,12 +1749,15 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
 
   // The keyboard path into the same write (arrows / +- on a focused node), so
   // moving and resizing are not mouse-only gestures.
-  const handleImageGeometry = useCallback((node, box) => {
+  const handleImageGeometry = useCallback((node, box, opts) => {
     const dsId = node?.image?.dataset_id;
     if (dsId == null) return;
+    // `opts` is forwarded verbatim: a held arrow key asks for the write to be
+    // coalesced (see CanvasImageNode), and only the host knows how to do that
+    // without delaying the move the key just made.
     onSaveImageNodes?.(dsId, [{
       image_id: node.imageId, ...clampImageBox(box), visible: true, image: node.image,
-    }]);
+    }], opts);
   }, [onSaveImageNodes]);
 
   const pct = Math.round(clampScale(view.scale) * 100);
@@ -1780,16 +1915,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
             {world.lanes.map((lane) => (
               <div key={lane.datasetId}>
                 <LaneHeader lane={lane} onZoomRef={setRefZoom} />
-                <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || []}
+                <LaneImages lane={lane} layout={layoutByLane[lane.datasetId] || NO_LAYOUT}
                   blendNotes={blendNotes}
                   onGeometry={handleImageGeometry} onClose={handleCloseImage}
                   onDelete={handleDeleteImage}
                   onCloseGroup={handleCloseGroup}
-                  onExportGrid={(group) => setExportGroup({
-                    datasetId: lane.datasetId,
-                    imageIds: group.members.map((member) => member.node.imageId),
-                  })}
-                  onOpen={(n) => setPinnedZoom(n.image)}
+                  onExportGrid={openExportGrid}
+                  onOpen={openPinnedImage}
                   hint={dropHint?.datasetId === lane.datasetId ? dropHint : null}
                   boardScale={clampScale(view.scale)} />
                 <LaneGraph lane={lane} isLit={isLit} onHover={onHover}
@@ -1798,7 +1930,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                   liftedId={drag && drag.datasetId === lane.datasetId ? drag.recordId : null}
                   isPicked={isPicked} onTogglePick={onTogglePick}
                   onOpenActions={onOpenActions} onZoomPreview={zoomPreview}
-                  onOpenGallery={(recordId, step) => setGallery({ recordId, step })} />
+                  onOpenGallery={openGallery} />
               </div>
             ))}
             {/* 🔌 Plugin nodes (the external LoRA type is the first one) live in

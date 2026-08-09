@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { memo, useRef } from 'react';
 
 import { nudgeImageNode } from '../../utils/canvasImageNodes';
 import { CONTROL_UNITS, chromeScale, clusterUnits } from '../../utils/canvasNodeChrome';
@@ -64,7 +64,7 @@ import { datasetThumbUrl, ratchetThumbSide } from '../../utils/datasetThumbUrl';
    would put the whole feature out of reach of anyone who does not use one. The
    arithmetic is nudgeImageNode(), unit-tested; this file only routes keys. */
 
-export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
+function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   onClose, onOpen, onDelete, boardScale = 1, variant = 'node', box = null,
   blendNote = null }) {
   const img = node.image || {};
@@ -143,7 +143,13 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
     if (!next) return;                    // never swallow a key we do not handle
     e.preventDefault();
     e.stopPropagation();
-    onGeometry?.(node, next);
+    /* ⌨ `coalesce`: the picture MOVES on every key — that is the whole feedback
+       of the gesture and it stays instant — but the SAVE waits for the key to
+       stop. A held arrow repeats about thirty times a second, and each repeat
+       was one full PUT of the node's geometry: thirty writes, twenty-nine of
+       them describing a position the user was passing through. The host
+       coalesces them onto the last one (pages/CanvasPage.jsx). */
+    onGeometry?.(node, next, { coalesce: true });
   };
 
   return (
@@ -199,7 +205,18 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           neither ever hides the other. Each target is 28 units square with air
           between them — two glyphs a pixel apart is how a miss on ✕ opened 🔍
           instead. `flex-nowrap` is load-bearing: a wrap here is the 2×2 block
-          this layout exists to undo. */}
+          this layout exists to undo.
+
+          ⚠️ NO `backdrop-blur` on these four, deliberately, and it is a
+          performance decision rather than a taste one. Each blurred element is
+          its own compositor pass over whatever is behind it, and behind these is
+          a photograph; a board with forty pinned pictures therefore asked the
+          GPU for ~160 live blur passes on every frame of a pan, which is what
+          made panning stutter on a phone. Their legibility never came from the
+          blur anyway — it comes from the opaque-enough plate under the glyph, so
+          that plate went from bg-black/50 to /65 and the blur went away. The
+          member's label badge and the 🧬 note keep theirs: there are at most two
+          of those per picture and they sit over text, not under a finger. */}
       <div style={chrome}
         data-testid="canvas-image-controls"
         // gap-0.5/p-0.5 and not gap-1/p-1: every unit of padding is a unit the
@@ -213,14 +230,14 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
         <button type="button" onClick={(e) => { e.stopPropagation(); onOpen?.(node); }}
           title="Open this image full-screen with all its settings"
           aria-label={`Open ${imageLabel} full-screen`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70">🔍</button>
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white transition-colors text-[0.75rem] leading-none hover:bg-black/70">🔍</button>
         {/* ✕ closes the node and REMEMBERS where it was. Re-pinning the same
             image from its gallery brings it back here, this size. */}
         <button type="button" onClick={(e) => { e.stopPropagation(); onClose?.(node); }}
           data-testid="canvas-image-close"
           title="Close this image — re-opening it from its gallery puts it back here, at this size"
           aria-label={`Close the pinned image at ${imageLabel}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.875rem] leading-none hover:border-red-400/60 hover:bg-red-500/70">✕</button>
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white transition-colors text-[0.875rem] leading-none hover:border-red-400/60 hover:bg-red-500/70">✕</button>
         {/* ⬇ Keep this picture. Third in the row, after the two controls a hand
             already knows the position of.
             The file lands under a name that still says where it came from —
@@ -233,7 +250,7 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           data-testid="canvas-image-download"
           title="Download this image — the file name keeps its dataset, run, step and seed"
           aria-label={`Download the image at ${imageLabel}`}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/50 text-white backdrop-blur-sm transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
           {dl.busy ? '…' : '⬇'}
         </button>
         {/* 🗑 Delete the PICTURE, not the node.
@@ -254,10 +271,10 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
             title={rmState.title}
             aria-label={rmState.aria}
             className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border '
-              + 'backdrop-blur-sm transition-colors text-[0.75rem] leading-none disabled:opacity-50 '
+              + 'transition-colors text-[0.75rem] leading-none disabled:opacity-50 '
               + (rm.armed
                 ? 'border-red-300 bg-red-600/90 text-white'
-                : 'border-white/15 bg-black/50 text-white hover:border-red-400/60 hover:bg-red-500/70')}>
+                : 'border-white/15 bg-black/65 text-white hover:border-red-400/60 hover:bg-red-500/70')}>
             {rmState.glyph}
           </button>
         )}
@@ -332,3 +349,14 @@ export default function CanvasImageNode({ node, datasetId, laneName, onGeometry,
     </div>
   );
 }
+
+/* ⚡ Memoised. A pan is one `setView` per frame on the board above, and without
+   a boundary here every pinned picture on it re-rendered sixty times a second
+   to produce byte-identical markup. Nothing this component reads changes during
+   a pan — `boardScale` is the zoom, and a pan does not zoom.
+   ⚠️ The props must therefore stay stable: `onClose`/`onOpen`/`onDelete`/
+   `onGeometry` are useCallback'd by the board, and `blendNote` resolves to a
+   plain string or null. A group MEMBER is the exception — its `box` is rebuilt
+   by the strip on every render, so a member re-renders with its group; the
+   group itself is memoised, which is where that gesture is actually paid for. */
+export default memo(CanvasImageNode);

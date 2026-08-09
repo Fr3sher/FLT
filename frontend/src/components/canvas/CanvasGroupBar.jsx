@@ -29,9 +29,10 @@
  * as the strip, because the frame's pointer handler reads the gesture's target
  * off exactly those — the bar moves the ANCHOR, whose box IS the strip's.
  */
+import { memo } from 'react';
 import { groupBarHeight } from '../../utils/canvasNodeChrome';
 
-export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
+function CanvasGroupBar({ group, datasetId, boardScale = 1,
   onCloseGroup, onExportGrid }) {
   const barH = groupBarHeight(boardScale, group.h);
   const count = group.members.length;
@@ -53,7 +54,11 @@ export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
         <span aria-hidden>⠿</span> {count} images
       </span>
       <button type="button"
-        onClick={(e) => { e.stopPropagation(); onExportGrid?.(group); }}
+        // The dataset id travels WITH the group rather than being baked into a
+        // closure by the lane: that is what lets the board hand every lane the
+        // same `onExportGrid` function, and a stable function is what keeps the
+        // lane's memo boundary alive during a pan.
+        onClick={(e) => { e.stopPropagation(); onExportGrid?.(group, datasetId); }}
         onPointerDown={(e) => e.stopPropagation()}
         data-testid="canvas-group-export-grid"
         style={{ height: barH, fontSize: Math.max(9, barH * 0.36) }}
@@ -82,3 +87,7 @@ export default function CanvasGroupBar({ group, datasetId, boardScale = 1,
     </div>
   );
 }
+
+// Memoised for the same reason the lanes are: a pan is one state change per
+// frame, and nothing here reads the board's translation.
+export default memo(CanvasGroupBar);

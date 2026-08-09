@@ -38,6 +38,11 @@ import { HelpBadge } from '../help/HelpMode';
    that also has to answer whatever training or captioning is running. */
 
 const MAX_PARALLEL_FETCHES = 3;
+/* How long a coalesced geometry write waits for the burst to end. Same 500 ms
+   as the external-LoRA list on the board, so the two feel alike; short enough
+   that letting go of an arrow key and closing the tab still lands the write
+   through the unmount flush. */
+const COALESCE_WRITE_MS = 500;
 
 export default function CanvasPage() {
   const toast = useToast();
@@ -121,6 +126,55 @@ export default function CanvasPage() {
     () => Promise.all([loadPositions(), loadImageNodes()]),
     [loadPositions, loadImageNodes]);
 
+  /* The write itself, extracted so the immediate path and the coalesced one
+     below cannot drift into two different requests. */
+  const sendImageNodes = useCallback((datasetId, rows) => putJson(
+    `/api/dataset/${datasetId}/canvas/images`, {
+      // `image` is the client's own render payload; the server resolves it from
+      // the id and must not be handed a copy to trust.
+      nodes: rows.map(({ image, ...row }) => row),
+    })
+    // A row the SERVER refused (unusable geometry, an image from another lane)
+    // comes back as a 200 with a smaller `saved` count. Swallowing that is how
+    // a pin could appear, be dropped, and vanish on the next reload without a
+    // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
+    // stays silent as before: that write heals on the next gesture.
+    .then((d) => {
+      const said = pinWriteShortfall(rows, d);
+      if (said) toast.error(said);
+    })
+    .catch(() => {}), [toast]);
+
+  /* The deferred half. `pending` is a dataset id → (image id → row) map, so a
+     burst of thirty nudges of the same picture collapses to one row, and two
+     pictures nudged in the same burst still both get written. */
+  const pending = useRef(new Map());
+  const flushTimer = useRef(null);
+  const flushImageWrites = useCallback(() => {
+    if (flushTimer.current) { clearTimeout(flushTimer.current); flushTimer.current = null; }
+    const batches = pending.current;
+    if (!batches.size) return;
+    pending.current = new Map();
+    for (const [datasetId, byImage] of batches) {
+      sendImageNodes(datasetId, [...byImage.values()]);
+    }
+  }, [sendImageNodes]);
+  const queueImageWrite = useCallback((datasetId, rows) => {
+    const byImage = pending.current.get(datasetId) || new Map();
+    for (const r of rows) byImage.set(r.image_id, r);
+    pending.current.set(datasetId, byImage);
+    if (flushTimer.current) clearTimeout(flushTimer.current);
+    flushTimer.current = setTimeout(() => {
+      flushTimer.current = null;
+      flushImageWrites();
+    }, COALESCE_WRITE_MS);
+  }, [flushImageWrites]);
+  // Leaving the board inside the coalescing window must not lose the last nudge
+  // — the same trap the external-LoRA list had to be taught about.
+  const flushRef = useRef(flushImageWrites);
+  useEffect(() => { flushRef.current = flushImageWrites; }, [flushImageWrites]);
+  useEffect(() => () => flushRef.current(), []);
+
   /* Pin, move, resize or CLOSE one or more images of a lane. Applied to the
      screen first and sent afterwards, exactly like a card position -- and for
      the same reason: a picture has to follow the finger at the speed of the
@@ -134,8 +188,17 @@ export default function CanvasPage() {
      this picture belongs to, and where in it. They are ADDITIVE and nullable:
      an install whose database predates them reads null and draws the board it
      always drew. A row that does not MENTION them keeps whatever it had, so a
-     plain move or resize can never quietly dissolve a group. */
-  const onSaveImageNodes = useCallback((datasetId, rows) => {
+     plain move or resize can never quietly dissolve a group.
+
+     ⌨ `opts.coalesce` — the screen half ALWAYS happens immediately; only the
+     PUT is deferred, and only when the caller says the write is one of a burst
+     it is still in the middle of (a held arrow key repeats ~30×/s, and each
+     repeat was a full PUT of the node). The pending rows are merged per
+     dataset, so the request that finally goes out describes where the picture
+     ENDED UP rather than every position it passed through. Flushed on unmount
+     with `keepalive`, exactly like the external-LoRA list: a nudge followed
+     immediately by leaving the page must not be the write that vanishes. */
+  const onSaveImageNodes = useCallback((datasetId, rows, opts = null) => {
     setImageNodes((cur) => {
       const lane = { ...(cur[datasetId] || {}) };
       for (const r of rows) {
@@ -150,22 +213,9 @@ export default function CanvasPage() {
       }
       return { ...cur, [datasetId]: lane };
     });
-    putJson(`/api/dataset/${datasetId}/canvas/images`, {
-      // `image` is the client's own render payload; the server resolves it from
-      // the id and must not be handed a copy to trust.
-      nodes: rows.map(({ image, ...row }) => row),
-    })
-      // A row the SERVER refused (unusable geometry, an image from another lane)
-      // comes back as a 200 with a smaller `saved` count. Swallowing that is how
-      // a pin could appear, be dropped, and vanish on the next reload without a
-      // word — see utils/canvasImageNodes.pinWriteShortfall. A dropped NETWORK
-      // stays silent as before: that write heals on the next gesture.
-      .then((d) => {
-        const said = pinWriteShortfall(rows, d);
-        if (said) toast.error(said);
-      })
-      .catch(() => {});
-  }, [toast]);
+    if (opts?.coalesce) { queueImageWrite(datasetId, rows); return; }
+    sendImageNodes(datasetId, rows);
+  }, [queueImageWrite, sendImageNodes]);
 
   /* 🗑 Forget pinned nodes LOCALLY — no write at all, deliberately.
      Used after the picture itself has been deleted: its canvas_image_node row

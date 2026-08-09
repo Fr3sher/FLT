@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { groupBarHeight } from '../../utils/canvasNodeChrome';
 import CanvasImageNode from './CanvasImageNode';
 
@@ -46,7 +47,7 @@ import CanvasImageNode from './CanvasImageNode';
    stopped being a strip at some threshold nobody can see would be worse than a
    wide one. */
 
-export default function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
+function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
   onClose, onOpen, onDelete, dropHint = null, blendNotes = null }) {
   const count = group.members.length;
   const anchorId = group.members[0]?.node.imageId;
@@ -109,3 +110,8 @@ export default function CanvasImageGroup({ group, datasetId, laneName, boardScal
     </div>
   );
 }
+
+/* ⚡ Memoised — and this is the boundary that pays for the whole strip: its
+   members are given a `box` rebuilt here on every render, so they can never
+   memoise on their own. Stopping the group stops all of them at once. */
+export default memo(CanvasImageGroup);
