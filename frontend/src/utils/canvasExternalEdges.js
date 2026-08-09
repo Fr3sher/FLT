@@ -7,7 +7,15 @@
    separators and case may differ, identity may not. JSX-free for node --test. */
 
 import { edgePath } from './lineageGraph.js';
-import { normalizeLoraName, nodeKey } from '../components/canvas/pluginNodes/registry.js';
+import { PLUGIN_NODE_TYPES, normalizeLoraName, nodeKey } from '../components/canvas/pluginNodes/registry.js';
+
+/** The world-space X where an edge should touch a node's box, per the
+    type's declared anchor side (`registry.js`'s `edge.side`) — 'left'
+    anchors at the box's left edge, anything else (including no config)
+    anchors at the right, the historical default. */
+function anchorX(box, side) {
+  return side === 'left' ? box.x : box.x + box.w;
+}
 
 /** External entries recorded on an image, or [] — never a throw. */
 export function externalMembersOf(image) {
@@ -38,7 +46,7 @@ export function externalEdgesFor(imageNodes, lanes, extNodes, boxByKey) {
       const key = nodeKey('external-lora', node);
       const box = boxByKey?.get?.(key);
       if (!box) continue;                        // not measured yet this frame
-      const x1 = box.x + box.w;
+      const x1 = anchorX(box, PLUGIN_NODE_TYPES['external-lora']?.edge?.side);
       const y1 = box.y + box.h / 2;
       edges.push({ parentId: key, childId: `img:${n.imageId}`,
         x1, y1, x2, y2, d: edgePath(x1, y1, x2, y2), external: true });

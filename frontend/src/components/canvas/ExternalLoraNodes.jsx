@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import KleinLoraCombobox, { useKleinGenerationLoras } from '../settings/KleinLoraCombobox';
 import { findLora } from '../../utils/kleinLoraOptions';
 import { clampStrength, MAX_EXTERNAL_LORAS } from '../../utils/externalLoras';
+import { normalizeLoraName } from './pluginNodes/registry';
 
 // Strip directories (either separator) and the .safetensors extension — the
 // same file a Klein preset row stores, read back as a short label.
@@ -68,7 +69,13 @@ export function ExternalLoraAddFlow({ nodes = [], onNodesChange, family = 'zimag
   const addNode = useCallback(() => {
     const filename = pickText.trim();
     if (!filename || nodes.length >= MAX_EXTERNAL_LORAS) return;
-    if (nodes.some((n) => n.filename === filename)) { setPickText(''); onClose?.(); return; }
+    // Dedupe on the same NORMALIZED name `nodeKey` keys the board with — a
+    // separator or case difference from the picker (`Krea\Foo.safetensors`
+    // vs `krea/foo.safetensors`) must not let both onto the board, or they
+    // collide on the geometry/edge map the moment they're both there.
+    if (nodes.some((n) => normalizeLoraName(n.filename) === normalizeLoraName(filename))) {
+      setPickText(''); onClose?.(); return;
+    }
     const i = nodes.length;
     onNodesChange([...nodes, { filename, strength: 1, x: 16 + 24 * i, y: 16 + 24 * i }]);
     setPickText('');

@@ -22,3 +22,19 @@ test('unknown types are reported unknown', () => {
   assert.equal(knownType('external-lora'), true);
   assert.equal(knownType('teleporter'), false);
 });
+
+test('external-lora payload returns only the checked nodes, in the shape genSettings expects', () => {
+  const nodes = [
+    { filename: 'a.safetensors', strength: 0.5 },
+    { filename: 'b.safetensors', strength: 1 },
+    { filename: 'c.safetensors', strength: 2 },
+  ];
+  const checked = new Set(['a.safetensors', 'c.safetensors']);
+  const payload = PLUGIN_NODE_TYPES['external-lora'].payload(nodes, checked);
+  assert.deepEqual(payload, {
+    external_loras: [
+      { filename: 'a.safetensors', strength: 0.5 },
+      { filename: 'c.safetensors', strength: 2 },
+    ],
+  });
+});

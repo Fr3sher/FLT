@@ -56,7 +56,7 @@ import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
 import PluginNodeLayer from './pluginNodes/PluginNodeLayer';
 import { PLUGIN_NODE_TYPES } from './pluginNodes/registry';
-import { externalLoraPayload, normalizeExternalLoras } from '../../utils/externalLoras';
+import { normalizeExternalLoras } from '../../utils/externalLoras';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
@@ -1677,6 +1677,28 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const arranged = shown.some((e) => Object.keys(positions?.[e.datasetId] || {}).length > 0
     || (imagesByLane[e.datasetId] || []).length > 0);
 
+  // 🔌 One `stores` object, read by BOTH the layer that renders the plugin
+  // nodes and the generic payload merge just below — a single definition so
+  // the two can never drift apart on what a type's store looks like.
+  const pluginStores = {
+    'external-lora': {
+      nodes: extNodes, onNodesChange: setExtNodes,
+      checked: extChecked, onCheckedChange: setExtChecked,
+      extra: {
+        family: picks[0]?.family || 'zimage',
+        pickerOpen: extPickerOpen, onClosePicker: () => setExtPickerOpen(false),
+      },
+    },
+  };
+  // Every registered type contributes its own slice of `genSettings` through
+  // its `payload(nodes, checked)` — this loop never names a type, so a 2nd
+  // plugin-node type starts contributing here the moment it is added to
+  // `PLUGIN_NODE_TYPES`, with nothing in this file to touch.
+  const pluginPayload = Object.entries(pluginStores).reduce((acc, [type, store]) => {
+    const typeDef = PLUGIN_NODE_TYPES[type];
+    return typeDef ? { ...acc, ...typeDef.payload(store.nodes, store.checked) } : acc;
+  }, {});
+
   return (
     <>
       {/* The edge gradients + glow, defined ONCE for the whole page: every lane's
@@ -1775,17 +1797,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                 with the board like any other node — the add popover they
                 share the file with is portalled out of here instead (see
                 pluginNodes/PluginNodeLayer.jsx and ExternalLoraNodes.jsx). */}
-            <PluginNodeLayer types={PLUGIN_NODE_TYPES}
-              stores={{
-                'external-lora': {
-                  nodes: extNodes, onNodesChange: setExtNodes,
-                  checked: extChecked, onCheckedChange: setExtChecked,
-                  extra: {
-                    family: picks[0]?.family || 'zimage',
-                    pickerOpen: extPickerOpen, onClosePicker: () => setExtPickerOpen(false),
-                  },
-                },
-              }}
+            <PluginNodeLayer types={PLUGIN_NODE_TYPES} stores={pluginStores}
               boardScale={clampScale(view.scale)}
               onGeometry={onPluginGeometry} />
           </div>
@@ -2102,7 +2114,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           onClear={() => setPicks([])}
           onDeploy={handleDeploy}
           tracker={tracker}
-          externalLoras={externalLoraPayload(extNodes, extChecked)}
+          externalLoras={pluginPayload.external_loras || []}
           onClose={() => setPanelOpen(false)} />
       )}
 

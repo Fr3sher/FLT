@@ -1,6 +1,11 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from 'react';
-import { knownType, nodeKey } from './registry';
+import { nodeKey } from './registry';
 import { useBoardDrag } from './useBoardDrag';
+
+// A type is "known" when the CALLER's own `types` map declares it — not the
+// registry singleton. A caller that only wires up a subset of the registry
+// (or, in a future test, a stub map) gets exactly the types it declared.
+const isKnownType = (types, type) => Boolean(types && types[type]);
 
 // One React.lazy() per loader function, cached for the module's lifetime —
 // the loader (`type.Card`/`type.AddFlow`) is a stable reference from the
@@ -27,7 +32,7 @@ const idOf = (node) => node?.filename ?? node?.id;
 function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
   const posRef = useRef({ x: node.x, y: node.y });
   const [pos, setPos] = useState({ x: node.x, y: node.y });
-  const heightRef = useRef(0);
+  const sizeRef = useRef({ w: 0, h: 0 });
   const roRef = useRef(null);
 
   // The node's committed x/y (from the store) is the source of truth once a
@@ -39,7 +44,7 @@ function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
   }, [node.x, node.y]);
 
   const report = useCallback((x, y) => {
-    onGeometry?.(nodeKey(typeDef.type, node), { x, y, w: 172, h: heightRef.current });
+    onGeometry?.(nodeKey(typeDef.type, node), { x, y, w: sizeRef.current.w, h: sizeRef.current.h });
   }, [onGeometry, typeDef.type, node]);
 
   useEffect(() => { report(pos.x, pos.y); }, [pos.x, pos.y, report]);
@@ -56,11 +61,11 @@ function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
   const attachRoot = useCallback((el) => {
     if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
     if (!el) return;
-    heightRef.current = el.offsetHeight;
+    sizeRef.current = { w: el.offsetWidth, h: el.offsetHeight };
     report(posRef.current.x, posRef.current.y);
     if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
-      heightRef.current = el.offsetHeight;
+      sizeRef.current = { w: el.offsetWidth, h: el.offsetHeight };
       report(posRef.current.x, posRef.current.y);
     });
     ro.observe(el);
@@ -127,7 +132,7 @@ export default function PluginNodeLayer({ types, stores, boardScale = 1, onGeome
   return (
     <>
       {Object.entries(stores || {}).map(([type, store]) => {
-        if (!knownType(type)) {
+        if (!isKnownType(types, type)) {
           warnUnknown(type);
           return null;
         }
