@@ -345,7 +345,11 @@ export function FullTransformerAdvancedRecipe({
     }
     if (value !== warmup) patch({ dense_warmup: value });
   };
-  const controlClass = 'rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
+  // min-w-0 on both the control and its label: a <select> sizes itself on its
+  // WIDEST option ("Sigmoid — favour…" is 303 px), and a flex item defaults to
+  // min-width:auto, so without this the row cannot shrink and spills off a
+  // 400 px screen instead of wrapping.
+  const controlClass = 'min-w-0 rounded border border-sky-300/40 bg-app/70 px-2 py-1 text-content tabular-nums disabled:opacity-50';
 
   return (
     <section aria-label="Krea 2 full-model recipe"
@@ -417,7 +421,7 @@ export function FullTransformerAdvancedRecipe({
         </label>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Learning rate</span>
             <input type="number" step="1e-7" min={lrMin} max={lrMax} value={lrDraft}
               onChange={(event) => setLrDraft(event.target.value)}
@@ -425,7 +429,7 @@ export function FullTransformerAdvancedRecipe({
               aria-label="Full-model learning rate"
               className={`w-[7rem] ${controlClass}`} />
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Resolution</span>
             <select value={String(resolution)} disabled={disabled}
               onChange={(event) => patch({ dense_resolution: Number(event.target.value) })}
@@ -443,7 +447,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Images per step</span>
             <select value={String(gradAccum)} disabled={disabled}
               onChange={(event) => patch({ dense_grad_accum: Number(event.target.value) })}
@@ -454,7 +458,7 @@ export function FullTransformerAdvancedRecipe({
               ))}
             </select>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Noise schedule</span>
             <select value={timestepType} disabled={disabled}
               onChange={(event) => patch({ dense_timestep_type: event.target.value })}
@@ -483,7 +487,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Learning-rate schedule</span>
             <select value={lrSchedule} disabled={disabled}
               onChange={(event) => patch({ dense_lr_schedule: event.target.value })}
@@ -499,7 +503,7 @@ export function FullTransformerAdvancedRecipe({
           {/* Warmup steps only reach the trainer on the one schedule that
               accepts them; the server gates it the same way. */}
           {warmupApplies && (
-            <label className="flex items-center gap-2">
+            <label className="flex min-w-0 items-center gap-2">
               <span className="font-semibold">Warm up over</span>
               <input type="number" min={warmupMin} max={warmupMax} step={10} value={warmupDraft}
                 onChange={(event) => setWarmupDraft(event.target.value)}
@@ -517,7 +521,7 @@ export function FullTransformerAdvancedRecipe({
         </div>
 
         <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-sky-300/30 bg-sky-400/10 px-3 py-2 text-sky-50">
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Checkpoint every</span>
             <input type="number" min={saveEveryMin} max={saveEveryMax} step={50} value={saveDraft}
               onChange={(event) => setSaveDraft(event.target.value)}
@@ -526,7 +530,7 @@ export function FullTransformerAdvancedRecipe({
               className={`w-[6rem] ${controlClass}`} />
             <span className="text-sky-100/80">steps</span>
           </label>
-          <label className="flex items-center gap-2">
+          <label className="flex min-w-0 items-center gap-2">
             <span className="font-semibold">Keep</span>
             <select value={String(keeps)} disabled={disabled}
               onChange={(event) => patch({ dense_max_step_saves: Number(event.target.value) })}
