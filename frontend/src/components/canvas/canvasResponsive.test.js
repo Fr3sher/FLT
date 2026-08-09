@@ -216,9 +216,9 @@ test('the board frame fits the fold on a phone and is unchanged from sm up', () 
   // 72vh/76vh stayed the CEILING (still in this pin, as the third `clamp()`
   // argument) once the frame became adaptive: a board that fills the frame
   // still gets exactly the same space it always did, so the fold contract
-  // above still holds verbatim. What changed — a product call from Jeremy,
-  // after `previewFrameHeight` showed a one-lane board opening with ~370 px
-  // of empty canvas above the pill — is that a SPARSE board is now allowed to
+  // above still holds verbatim. What changed — a product call, after
+  // `previewFrameHeight` showed a one-lane board opening with ~370 px of
+  // empty canvas above the pill — is that a SPARSE board is now allowed to
   // shrink the frame down to its own content height, floored at 40vh (44 from
   // `sm`) and never below the original 380px phone floor either.
   assert.match(canvas, /h-\[clamp\(max\(40vh,380px\),var\(--canvas-content-h,72vh\),72vh\)\][^"]*sm:h-\[clamp\(max\(44vh,380px\),var\(--canvas-content-h,76vh\),76vh\)\]/);
