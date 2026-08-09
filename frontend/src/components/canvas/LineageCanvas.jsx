@@ -48,7 +48,7 @@ import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeCh
 import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
-  groupPinnedBatchBySource, groupPinnedBatchTogether,
+  groupPinnedBatchBySource, groupPinnedBatchTogether, tidyLaneReach,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { galleryDeleteSummary } from '../../utils/gallerySelection';
@@ -496,19 +496,30 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      reachable: a render dragged out of the row is still framed, exported and
      scrollable-to, it just no longer shoves anything.
      Measured on the STRIPS: a group is wider than any of its members and
-     cropping it would put a picture out of reach with no way back. */
+     cropping it would put a picture out of reach with no way back.
+
+     ⚠️ The stacking height is the tree OR THE TIDY REACH, whichever is taller
+     (utils/canvasPinBatch.tidyLaneReach) — not the tree alone. ✦ Tidy up lays a
+     lane's strips and its contact-sheet band BELOW the tree, so a stack that
+     reserved only the tree started the next dataset straight through them and
+     the button that rebuilds the board produced strips piled on strips and on
+     other lanes' run cards. The tidy reach is computed from the tree and the
+     pictures' SIZES only, never from where they currently sit, so a render
+     dragged anywhere still moves no lane — which is the whole point of the
+     split above. */
   const world = useMemo(() => stackLanes(placed.map((e) => {
     const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
+    const tidy = tidyLaneReach({ graph: e.graph, nodes: imagesByLane[e.datasetId] || [] });
     return {
       ...e,
       width: e.graph?.width || 0,
-      height: e.graph?.height || 0,
+      height: Math.max(e.graph?.height || 0, tidy),
       minX: ext.minX,
       minY: ext.minY,
       maxX: ext.width,
       maxY: ext.height,
     };
-  })), [placed, layoutByLane]);
+  })), [placed, layoutByLane, imagesByLane]);
 
   /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
      any run here) that, when checked, stack on top of the next generation.

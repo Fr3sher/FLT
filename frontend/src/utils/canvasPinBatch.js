@@ -640,6 +640,72 @@ export function tidyGroupRows({ graph, layout, taken } = {}) {
   return { rows, boxes };
 }
 
+/**
+ * ✦ Tidy up for a WHOLE lane: the strips first, then the loose pictures in the
+ * contact-sheet band below them. Returns `{ rows, boxes }` — the geometry to
+ * persist, and every footprint the tidied lane occupies.
+ *
+ * Extracted so there is exactly ONE answer to "where does this lane's content
+ * land when the board is rebuilt". It has two callers that must never disagree:
+ * the button itself, and the LANE STACK, which has to reserve that much room
+ * before the button is ever pressed (see `tidyLaneReach`).
+ *
+ * ⚠️ POSITION-INDEPENDENT, and that is load-bearing. Nothing here reads where a
+ * picture currently sits — only the lane's tree, the strips' membership and the
+ * pictures' SIZES. So dragging a render anywhere on the board cannot change
+ * what this returns, which is what lets the stack reserve it without the lane
+ * below jumping under the hand still dragging.
+ */
+export function tidyLaneRows({ graph, nodes } = {}) {
+  const visible = (Array.isArray(nodes) ? nodes : []).filter((n) => n?.visible !== false);
+  const strips = tidyGroupRows({ graph, layout: layoutImageNodes(visible) });
+  const rows = [...strips.rows];
+  const boxes = [...strips.boxes];
+  const loose = visible.filter((n) => !n.groupId);
+  if (loose.length) {
+    const res = placeImageBatch({
+      graph,
+      // Nothing may land ON one of those strips either — nor on the BAR above
+      // one, which is the group's only grip and carries its ✕. These are the
+      // footprints the strips ended up on, so the two passes cannot disagree.
+      existing: strips.boxes,
+      images: loose.map((n) => ({ id: n.imageId,
+        record_id: n.image?.record_id, step: n.image?.step })),
+      max: loose.length,
+    });
+    for (const p of res.placed) {
+      rows.push({ imageId: p.imageId, x: p.x, y: p.y, w: p.w, h: p.h });
+      boxes.push({ x: p.x, y: p.y, w: p.w, h: p.h });
+    }
+  }
+  return { rows, boxes };
+}
+
+/**
+ * How far down a lane's content reaches once it is tidied — the room the STACK
+ * has to leave under the tree.
+ *
+ * ── The bug this exists for ──────────────────────────────────────────────────
+ * A lane's stacking height is its tree and nothing else, so that a picture
+ * dragged below its dataset stops shoving every lane underneath it down the
+ * board. Right for a DRAG, wrong for ✦ Tidy up: the tidy layout puts the strips
+ * and the contact-sheet band BELOW the tree, often thousands of units below it,
+ * and a stack that reserves only the tree starts the next dataset straight
+ * through them. On a loaded board that reads as strips piled on strips and on
+ * other datasets' run cards — nobody dragged anything, so nobody asked for it.
+ *
+ * Reserving the tidy reach instead of the CURRENT reach keeps both promises: a
+ * drag still moves nothing (this number does not depend on where anything sits),
+ * and the layout the button produces has room to exist. Resizing a picture does
+ * move it, which is correct — a bigger strip genuinely needs more room.
+ */
+export function tidyLaneReach({ graph, nodes } = {}) {
+  const { boxes } = tidyLaneRows({ graph, nodes });
+  let bottom = 0;
+  for (const b of boxes) bottom = Math.max(bottom, (Number(b?.y) || 0) + (Number(b?.h) || 0));
+  return bottom;
+}
+
 /** The button's own words. It must say HOW MANY it is about to put down —
  *  "Pin all" alone gives no idea whether one click adds two pictures or thirty. */
 export function pinBatchLabel(count) {
