@@ -2840,12 +2840,12 @@ def train_canvas_datasets():
 def train_canvas_generate():
     """◉ Generate from the LoRA Canvas — the same Test-Studio engine, driven by
     the checkpoints ticked on the board instead of by a picker. Body:
-    {selections:[{dataset_id, checkpoint, record_id, step}], …every Studio
-    setting}. Selections MAY span several datasets (that is the point of the
-    canvas); they may NOT span several families — the engine refuses, and the
-    reason travels back so the button can say it. Same gates as the other launch
-    routes: ComfyUI not set up → 409/503, missing models/nodes → the actionable
-    409 the Studio already returns.
+    {selections:[{dataset_id, checkpoint, record_id, step}], external_loras,
+    …every Studio setting}. Selections MAY span several datasets (that is the
+    point of the canvas); they may NOT span several families — the engine
+    refuses, and the reason travels back so the button can say it. Same gates
+    as the other launch routes: ComfyUI not set up → 409/503, missing
+    models/nodes → the actionable 409 the Studio already returns.
 
     🧬 `combine: true` (the board's Blend toggle) switches from one pass per
     ticked checkpoint to ONE generation loading them all, each at the `weight`
@@ -2870,6 +2870,7 @@ def train_canvas_generate():
             aspects=d.get('aspects'), cfgs=d.get('cfgs'), steps_list=d.get('steps'),
             steps2_list=d.get('steps2'), count=d.get('count'),
             permanent_loras=d.get('permanent_loras'), batch_loras=d.get('batch_loras'),
+            external_loras=d.get('external_loras'),
             rebalance=d.get('rebalance'),
             rebalance_strength=d.get('rebalance_strength'),
             negative=d.get('negative'), sampler=d.get('sampler'),
@@ -3172,6 +3173,48 @@ def dataset_canvas_positions_clear(dataset_id):
         return jsonify(ct.clear_canvas_positions(LOCAL_USER, dataset_id))
     except LookupError:
         return jsonify({'error': 'not found'}), 404
+
+
+@bp.get('/train/canvas/external-loras')
+def canvas_external_loras_get():
+    """🔌 The board's external LoRA plugin nodes, as persisted."""
+    return jsonify({'loras': cfg.get('canvas.external_loras', []) or []})
+
+
+@bp.put('/train/canvas/external-loras')
+def canvas_external_loras_put():
+    """Replace the board's external LoRA nodes. Sanitizes: dedupe by filename,
+    reject path-traversal/absolute/drive-letter names (dropped, not erred —
+    this is a save-what-survives sanitizer, same spirit as the sibling
+    `save_canvas_positions`), cap 16, strength clamped [0..2] (default 1.0),
+    x/y coerced to floats."""
+    from ..services.lora_test_studio import _is_unsafe_external_lora_name
+    data = request.get_json(silent=True) or {}
+    raw = data.get('loras')
+    cleaned, seen = [], set()
+    for e in (raw if isinstance(raw, list) else []):
+        if not isinstance(e, dict):
+            continue
+        fn = str(e.get('filename') or '').strip()
+        if not fn or fn in seen or _is_unsafe_external_lora_name(fn):
+            continue
+        seen.add(fn)
+        try:
+            st = max(0.0, min(2.0, round(float(e.get('strength', 1.0)), 2)))
+        except (TypeError, ValueError):
+            st = 1.0
+
+        def _f(v):
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return 0.0
+        cleaned.append({'filename': fn, 'strength': st,
+                        'x': _f(e.get('x')), 'y': _f(e.get('y'))})
+        if len(cleaned) >= 16:
+            break
+    cfg.save_config({'canvas': {'external_loras': cleaned}})
+    return jsonify({'ok': True, 'loras': cleaned})
 
 
 @bp.get('/train/canvas/images')

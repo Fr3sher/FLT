@@ -1298,6 +1298,16 @@ def apply_krea_lora_test_settings(workflow, *, lora_name, strength, prompt, seed
             st = 1.0
         requested.append({"filename": fn, "strength": st})
     allowed = set(allowed_loras) if allowed_loras is not None else {r["filename"] for r in requested}
+    if allowed_loras is not None:
+        # `allowed_loras` is a FAMILY-POOL scan (krea/ subfolder only): always-on
+        # AND external (Canvas plugin node) entries in `extra_loras` were already
+        # validated (path-injection / fail-closed) before reaching here, so this
+        # whitelist must not re-filter them out — the same silent-drop bug the
+        # Z-Image path guards against at `allowed_loras=(set(...) | {...})` above.
+        # Without this union, `inject_krea_loras` below drops every extra whose
+        # filename lives outside krea/ with NO error: persisted on the cell's
+        # JSON, never mounted in the graph.
+        allowed |= {r["filename"] for r in requested[1:]}
     inject_krea_loras(workflow, requested, allowed=allowed)
     # Krea2T-Enhancer (patcher texte-adhérence) injecté APRÈS les LoRA (wire-aware :
     # se branche sur ce qui alimente KSampler.model). enhancer_strength None = OFF ;
@@ -1652,6 +1662,20 @@ class StudioArchMismatch(Exception):
         self.detected = detected
         self.checkpoint = checkpoint
         super().__init__(f'{checkpoint} is a {detected} LoRA, not {family}')
+
+
+def _is_unsafe_external_lora_name(fn) -> bool:
+    """True if `fn` could resolve OUTSIDE a loras root once handed to
+    `_ci_resolve` (path traversal / drive-letter / rooted path). `os.path.isabs`
+    alone is not enough: on Windows it is False for a POSIX-style rooted path
+    like '/abs/x.safetensors' (no drive letter), yet `_ci_resolve` still walks
+    it as a normal — if odd — first component, and `_resolve_lora_abs_path`
+    would otherwise `lstrip(os.sep)` it into something that LOOKS validated.
+    So every rooted form is rejected explicitly, not inferred from `isabs`."""
+    s = str(fn or '')
+    if not s or os.path.isabs(s) or s.startswith(('/', '\\')) or ':' in s:
+        return True
+    return any(part == '..' for part in s.replace('\\', '/').split('/'))
 
 
 def _resolve_lora_abs_path(checkpoint) -> str | None:
@@ -2519,7 +2543,7 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
                           enhancer=None, enhancer_strength=None, detail_amount=None,
                           resolution_tier=None, resolution_multiplier=None,
                           init_image=None, denoise=None, combine=None,
-                          prompts=None) -> dict:
+                          prompts=None, external_loras=None) -> dict:
     """Lance UN run de comparaison sur plusieurs LoRA. `selections` =
     [{dataset_id, checkpoint}] — chaque entrée peut aussi porter `record_id`/`step`
     (le LoRA Canvas les connaît : ce sont l'identité de la pastille cliquée), ce qui
@@ -2539,7 +2563,13 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     n'a alors plus de sens (chaque LoRA a son poids) : il est remplacé par le poids
     du 1er LoRA de la pile. La règle « un run = une seule famille » vaut aussi ici —
     combiner un LoRA Krea et un LoRA SDXL est impossible (bases et workflows
-    différents), et c'est refusé avec un message nommant les familles."""
+    différents), et c'est refusé avec un message nommant les familles.
+
+    `external_loras` (Canvas plugin nodes) : `[{filename, strength}]` de N'IMPORTE
+    QUEL fichier models/loras, stacké sur CHAQUE cellule via le même canal
+    `extra_loras` que les always-on — mais sans restriction au pool de la famille :
+    un nom introuvable est une erreur dure (jamais un skip silencieux), et l'arch
+    preflight le couvre comme un checkpoint normal."""
     if not selections:
         raise ValueError('no LoRA selected')
     reason = gpu_busy_reason()
@@ -2606,6 +2636,35 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
         except (TypeError, ValueError):
             st = 1.0
         extra_loras.append({'filename': fn, 'strength': st})
+    # 🔌 External LoRAs (Canvas plugin nodes): ANY models/loras file, stacked on
+    # top of every cell via the same extra_loras channel. Unlike always-on LoRA
+    # they are NOT restricted to the family pool, so validation is fail-closed:
+    # a name that does not resolve under a loras root is a hard error, never a
+    # silent skip.
+    externals = []
+    for e in (external_loras or []):
+        fn = str((e or {}).get('filename') or '').strip()
+        if not fn or any(x['filename'] == fn for x in externals):
+            continue
+        # Path-traversal guard: `external_loras` is the FIRST free-text channel
+        # to reach `_resolve_lora_abs_path` → `_ci_resolve` (every other caller —
+        # permanent/batch/checkpoint — is gated by a disk-scan allowlist first).
+        # `_ci_resolve` walks each component checking `os.path.exists` and treats
+        # '..' as an ordinary component, so it happily climbs OUT of the loras
+        # root. Checked BEFORE the resolve call, not after: a name that escapes
+        # must never even get a "not found" vs "found" answer.
+        if _is_unsafe_external_lora_name(fn):
+            raise ValueError(f'invalid external LoRA name: {fn}')
+        if not _resolve_lora_abs_path(fn):
+            raise ValueError(f'external LoRA not found: {fn}')
+        try:
+            st = max(0.0, min(2.0, round(float(e.get('strength', 1.0)), 2)))
+        except (TypeError, ValueError):
+            st = 1.0
+        externals.append({'filename': fn, 'strength': st, 'external': True})
+        if len(externals) >= 16:   # same cap as the PUT route + the board's UI
+            break
+    extra_loras.extend(externals)
     # Axe « ⚖ batch » : chaque config tourne une fois SANS puis une fois AVEC
     # chaque LoRA coché batch (même mécanique que create_run).
     batch_axis = _batch_lora_axis(batch_loras, run_type)
@@ -2631,8 +2690,10 @@ def create_comparison_run(user_id, selections, strengths, seed=None, prompt=None
     # checkpoint sélectionné, lue dans son en-tête, doit correspondre à la famille
     # du run — sinon ComfyUI le droppe en silence (grille no-op). Vérifié AVANT
     # toute ligne → 409 actionnable.
-    _preflight_checkpoint_arch(run_type,
-                               [s.get('checkpoint') for s in selections if s.get('checkpoint')])
+    _preflight_checkpoint_arch(
+        run_type,
+        [s.get('checkpoint') for s in selections if s.get('checkpoint')]
+        + [x['filename'] for x in externals])
     # Un dataset = UN scan de LoRA. `list_test_checkpoints` walks the family's whole
     # LoRA folder (and stats every match): its result only depends on (dataset, family),
     # so a 24-cell grid over 8 checkpoints of the same dataset re-scanned that folder 9

@@ -24,7 +24,7 @@ import {
   canvasCheckpointKey, describeCanvasLaunch, isCanvasCheckpointSelected,
   pruneCanvasSelection, refreshCanvasSelection, toggleCanvasCheckpoint,
 } from '../../utils/canvasGeneration';
-import { apiFetch, postJson } from '../../api/fetchClient';
+import { apiFetch, postJson, putJson } from '../../api/fetchClient';
 import LineageDetailPanel from '../dataset/LineageDetailPanel';
 import LineageDiffPanel from '../dataset/LineageDiffPanel';
 import CheckpointActionsPopover from '../dataset/CheckpointActionsPopover';
@@ -54,6 +54,8 @@ import { canImproveCanvasImage } from '../../utils/canvasImprove';
 import { loraFolderLabel } from '../../utils/checkpointBrowser';
 import { runIdentityLabel } from '../../utils/runIdentity';
 import CanvasGenerationPanel from './CanvasGenerationPanel';
+import ExternalLoraNodes from './ExternalLoraNodes';
+import { externalLoraPayload, normalizeExternalLoras } from '../../utils/externalLoras';
 import CanvasRunTracker from './CanvasRunTracker';
 import CanvasImageNode from './CanvasImageNode';
 import CanvasImageGroup from './CanvasImageGroup';
@@ -1061,6 +1063,57 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
   const [picks, setPicks] = useState([]);
   const [panelOpen, setPanelOpen] = useState(false);
 
+  /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
+     any run here) that, when checked, stack on top of the next generation.
+     Deliberately SEPARATE state from `picks` — the liveKeys purge just below
+     only knows about checkpoints drawn from the lanes on the board, and would
+     silently drop these on every render since they belong to no lane. */
+  const [extNodes, setExtNodes] = useState([]);
+  const [extChecked, setExtChecked] = useState(new Set());
+  const [extPickerOpen, setExtPickerOpen] = useState(false);
+  const extLoadedOnce = useRef(false);
+  // Mirrors `extNodes` for the unmount flush below (a cleanup closure only
+  // ever sees the render it was created in, and the payload it must send is
+  // whatever is CURRENT at unmount time, not whatever it was when the pending
+  // timer was scheduled — those are usually the same list but need not be).
+  const extNodesRef = useRef(extNodes);
+  // Is there a debounced PUT still pending? Set when the timer is armed,
+  // cleared once it actually fires (normally OR via the unmount flush) — the
+  // one flag both paths share so neither can send the same write twice.
+  const extDirtyRef = useRef(false);
+  useEffect(() => { extNodesRef.current = extNodes; }, [extNodes]);
+  useEffect(() => {
+    apiFetch('/api/train/canvas/external-loras')
+      .then((d) => setExtNodes(normalizeExternalLoras(d?.loras)))
+      .catch(() => { /* the board just starts with none pinned */ });
+  }, []);
+  // Persist on change, debounced: a slider drag or a card drag fires many
+  // updates a second, and each is a full PUT of the list. Skips the very
+  // first render (the load above already reflects the server).
+  useEffect(() => {
+    if (!extLoadedOnce.current) { extLoadedOnce.current = true; return undefined; }
+    extDirtyRef.current = true;
+    const t = setTimeout(() => {
+      extDirtyRef.current = false;
+      putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }).catch(() => {
+        /* best effort — the board keeps the in-memory state either way */
+      });
+    }, 500);
+    return () => clearTimeout(t);
+  }, [extNodes]);
+  // Leaving the Canvas view inside the 500 ms window above used to lose the
+  // last drag/check/strength edit silently: `clearTimeout` on unmount killed
+  // the pending PUT and nothing ever sent it. `keepalive` lets the request
+  // outlive the component even if the navigation that unmounts it also tears
+  // down the page (a plain unmount from an in-app route change does not abort
+  // an in-flight fetch on its own, but a real page unload would).
+  useEffect(() => () => {
+    if (!extDirtyRef.current) return;
+    extDirtyRef.current = false;
+    putJson('/api/train/canvas/external-loras', { loras: extNodesRef.current }, { keepalive: true })
+      .catch(() => { /* best effort on the way out — nothing left to update */ });
+  }, []);
+
   const isPicked = useCallback(
     (dsId, recId, step) => isCanvasCheckpointSelected(picks, dsId, recId, step), [picks]);
 
@@ -1673,6 +1726,15 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
                   onOpenGallery={(recordId, step) => setGallery({ recordId, step })} />
               </div>
             ))}
+            {/* 🔌 The external LoRA nodes live in this SAME transformed layer as
+                the lanes, so they pan and zoom with the board like any other
+                node — the add popover they share the file with is portalled
+                out of here instead (see ExternalLoraNodes.jsx). */}
+            <ExternalLoraNodes nodes={extNodes} onNodesChange={setExtNodes}
+              checked={extChecked} onCheckedChange={setExtChecked}
+              family={picks[0]?.family || 'zimage'}
+              boardScale={clampScale(view.scale)}
+              pickerOpen={extPickerOpen} onClosePicker={() => setExtPickerOpen(false)} />
           </div>
         )}
       </div>
@@ -1794,6 +1856,22 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
               <span className="rounded-full bg-indigo-500/40 px-1.5 tabular-nums">{picks.length}</span>
             )}
           </button>
+          {/* 🔌 A LoRA that never trained on this board — pinned as a node instead
+              of a pill, and stacked on top of the next run when checked. See
+              ExternalLoraNodes.jsx for the popover and the node cards. */}
+          <button type="button" onClick={() => setExtPickerOpen((v) => !v)}
+            aria-pressed={extPickerOpen}
+            title="Add an external LoRA to the board"
+            className={'flex h-10 items-center gap-1 rounded-md border px-3 text-[0.6875rem] font-semibold lg:h-9 '
+              + (extPickerOpen
+                ? 'border-cyan-400/60 bg-cyan-500/15 text-cyan-100 '
+                : 'border-border bg-app/60 text-content-muted hover:text-content ')}>
+            <span aria-hidden>🔌</span> + LoRA
+            {extNodes.length > 0 && (
+              <span className="rounded-full bg-cyan-500/40 px-1.5 tabular-nums">{extNodes.length}</span>
+            )}
+          </button>
+          <HelpBadge topic="canvas-external-loras" />
           {/* The colour key. A colour with no legend is a guess, and this one
               answers the question asked most often on this board: "which of these
               can I generate from RIGHT NOW?". Each state carries a shape as well
@@ -1941,6 +2019,7 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
           onClear={() => setPicks([])}
           onDeploy={handleDeploy}
           tracker={tracker}
+          externalLoras={externalLoraPayload(extNodes, extChecked)}
           onClose={() => setPanelOpen(false)} />
       )}
 

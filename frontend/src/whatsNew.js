@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-canvas-external-loras',
+    date: '2026-08-09',
+    title: 'Pin any LoRA onto the Canvas, even one you never trained here',
+    blurb:
+      'Pin any LoRA from your ComfyUI folder onto the LoRA Canvas as a 🔌 plugin node and stack it on your generations, with its own strength. It stacks on a run anchored by a checkpoint trained here — there is no solo generation from an external LoRA alone.',
+    to: '/canvas',
+  },
+  {
     id: '2026-08-08-the-canvas-controls-live-on-the-board',
     date: '2026-08-08',
     title: 'The Canvas gives the screen back to the board',
