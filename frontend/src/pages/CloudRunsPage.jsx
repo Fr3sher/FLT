@@ -1293,13 +1293,15 @@ export default function CloudRunsPage() {
 
               <RecipeWarning run={run} />
               <SilenceWarning run={run} />
-              {/* THIS run's launch, read from its own payload. The progress poll
-                  below is addressed by dataset+family, so on a dataset that has
-                  several runs it answers for the newest one — fine for a step
-                  counter, wrong for a checklist that says "your launch is here". */}
+              {/* THIS run's launch, read from its own payload — and THIS run's
+                  progress, addressed by its own id. The unaddressed poll fell
+                  back to the dataset's NEWEST run, which was survivable when a
+                  dataset had one active run and wrong the day it had two: a
+                  sibling's launch phase (then its steps, loss and samples)
+                  rendered under this card's healthy status. */}
               <LaunchProgress launch={run.launch} />
               <TrainingProgress datasetId={run.dataset_id} trainType={run.train_type}
-                variant={run.variant} cloud showLaunch={false} />
+                variant={run.variant} cloud showLaunch={false} runId={run.run_id} />
               {isFullTransformerRun(run) && (
                 <FullArtifactStatus run={run} onRecheck={recheckFullDelivery}
                   rechecking={!!recheckingDelivery[run.run_id]}
