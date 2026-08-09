@@ -309,6 +309,23 @@ const LaneGraph = memo(function LaneGraph({ lane, isLit, onHover, onNodeClick, d
  *  well outside the tree's box and the tree's <svg> is sized to the tree. */
 const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose, onOpen, onDelete, onCloseGroup,
   onExportGrid, boardScale, hint, blendNotes }) {
+  /* 🖼🖼 Which STRIPS are showing their originals instead of their tiles.
+     Held here, by group id, and deliberately not inside CanvasImageGroup: the
+     button that flips it lives in CanvasGroupBar, which is drawn in a separate
+     LAYER above every picture (see that file's header) and is therefore a
+     SIBLING of the group, not a child of it. This is the nearest node that owns
+     both. Not persisted, like every HQ on this board.
+     A group id that leaves the board (the strip was dissolved or closed) simply
+     stops being read — a stale key here costs nothing and a sweep on every
+     layout change would cost a render. */
+  const [hqGroups, setHqGroups] = useState(() => new Set());
+  const toggleGroupHq = useCallback((g) => {
+    setHqGroups((prev) => {
+      const next = new Set(prev);
+      if (!next.delete(g.groupId)) next.add(g.groupId);
+      return next;
+    });
+  }, []);
   if (!layout.length) return null;
   /* Edges are drawn from where each picture actually IS — a member's slot in
      its strip, not the box it remembers while it waits to leave one.
@@ -330,6 +347,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
           laneName={lane.name} onClose={onClose} onOpen={onOpen} onDelete={onDelete}
           boardScale={boardScale}
           blendNotes={blendNotes}
+          hq={hqGroups.has(r.groupId)}
           dropHint={hint?.leaving && hint.groupId === r.groupId ? 'leaving' : null} />
       ) : (
         <CanvasImageNode key={r.key} node={r.node} datasetId={lane.datasetId}
@@ -346,6 +364,7 @@ const LaneImages = memo(function LaneImages({ lane, layout, onGeometry, onClose,
       {layout.map((r) => (r.kind === 'group' ? (
         <CanvasGroupBar key={`bar:${r.key}`} group={r} datasetId={lane.datasetId}
           boardScale={boardScale}
+          hq={hqGroups.has(r.groupId)} onToggleHq={toggleGroupHq}
           onCloseGroup={onCloseGroup} onExportGrid={onExportGrid} />
       ) : null))}
       {/* ⊕ "Let go here and these become one node." Without it the very first

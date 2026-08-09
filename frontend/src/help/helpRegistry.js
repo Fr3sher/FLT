@@ -1013,7 +1013,12 @@ const TOPICS = [
      'my images merged', 'two images became one', 'images stuck together',
      'ungroup', 'split a group', 'take an image out of the group',
      'undo a group', 'move a group of images', 'resize a group',
-     'close a whole group', 'which x closes which image'],
+     'close a whole group', 'which x closes which image',
+     // The strip's own HQ. Somebody comparing eight renders asks for the whole
+     // strip, not for one picture — and the per-picture wording above would
+     // send them clicking eight buttons.
+     'hq for the whole group', 'full quality for every image in the strip',
+     'all the images in high quality', 'group hq'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-deploy-state', 'Which checkpoints are deployed (the edge colour)',
     ['deployed', 'not deployed', 'blue bar', 'dashed bar', 'edge colour', 'legend',
