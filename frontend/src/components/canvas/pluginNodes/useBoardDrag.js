@@ -6,6 +6,7 @@ import { useRef, useCallback } from 'react';
 export function useBoardDrag(boardScale, onMove, onCommit) {
   const drag = useRef(null);
   const onPointerDown = useCallback((e) => {
+    if (e.button != null && e.button !== 0) return;
     if (e.target.closest('button')) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     drag.current = { x: e.clientX, y: e.clientY };

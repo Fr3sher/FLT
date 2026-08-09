@@ -25,10 +25,10 @@ function warnUnknown(type) {
 const idOf = (node) => node?.filename ?? node?.id;
 
 function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
-  const rootRef = useRef(null);
   const posRef = useRef({ x: node.x, y: node.y });
   const [pos, setPos] = useState({ x: node.x, y: node.y });
   const heightRef = useRef(0);
+  const roRef = useRef(null);
 
   // The node's committed x/y (from the store) is the source of truth once a
   // drag isn't in flight — a reload or an external update must win over any
@@ -44,18 +44,28 @@ function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
 
   useEffect(() => { report(pos.x, pos.y); }, [pos.x, pos.y, report]);
 
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
+  // A CALLBACK ref, not a ref + effect with `[]` deps: the Card is behind
+  // `React.lazy`/`Suspense`, so it isn't mounted yet on the render where an
+  // effect with empty deps would run — that effect would fire once while
+  // the card is still suspended, find `rootRef.current` null, and never run
+  // again, leaving `h` at 0 forever. A callback ref is invoked by React the
+  // moment the real DOM node appears (i.e. once the lazy component actually
+  // resolves and mounts), so the observer always gets attached and an
+  // immediate measurement is reported even if the card's size never changes
+  // again after that.
+  const attachRoot = useCallback((el) => {
+    if (roRef.current) { roRef.current.disconnect(); roRef.current = null; }
+    if (!el) return;
+    heightRef.current = el.offsetHeight;
+    report(posRef.current.x, posRef.current.y);
+    if (typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       heightRef.current = el.offsetHeight;
       report(posRef.current.x, posRef.current.y);
     });
     ro.observe(el);
-    heightRef.current = el.offsetHeight;
-    return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    roRef.current = ro;
+  }, [report]);
 
   const onMove = useCallback((dx, dy) => {
     posRef.current = { x: posRef.current.x + dx, y: posRef.current.y + dy };
@@ -88,7 +98,7 @@ function PluginNodeCard({ typeDef, node, store, boardScale, onGeometry }) {
   const Card = lazyFor(typeDef.Card);
   return (
     <Suspense fallback={null}>
-      <Card ref={rootRef} node={{ ...node, x: pos.x, y: pos.y }} dragHandlers={dragHandlers}
+      <Card ref={attachRoot} node={{ ...node, x: pos.x, y: pos.y }} dragHandlers={dragHandlers}
         onUpdate={onUpdate} onRemove={onRemove}
         checked={!!store.checked?.has(idOf(node))}
         onToggleChecked={onToggleChecked}
