@@ -23,6 +23,7 @@ import test from 'node:test'
 import { clampImageBox, imageNodeExtent } from '../src/utils/canvasImageNodes.js'
 import { layoutImageNodes } from '../src/utils/canvasImageGroups.js'
 import { fitView, stackLanes } from '../src/utils/canvasLayout.js'
+import { laneStackEntries } from '../src/utils/canvasPinBatch.js'
 import { render } from './support/mountJsx.mjs'
 
 /* ⚠️ Dynamic — the hooks that teach Node to read .jsx are installed while
@@ -152,18 +153,49 @@ test('and the board FITS around it — the picture is reachable, not stranded', 
 })
 
 test('the board actually HANDS stackLanes the overhang it measured', () => {
-  /* The load-bearing two lines, and the ones a refactor drops without noticing:
+  /* The load-bearing lines, and the ones a refactor drops without noticing:
      `imageNodeExtent` reports how far a lane's pictures reach above and left of
      it, and `stackLanes` grows the board box by exactly that. Between them sits
-     one object literal in LineageCanvas. Drop `minX`/`minY` from it and every
-     test above still passes — the picture still draws at -640 — while ✦ Fit
-     quietly goes back to framing the quadrant below the origin and the picture
-     becomes unreachable. There is no unit to catch that; the seam is the
-     object. */
+     `laneStackEntries`. Drop `minX`/`minY` from it and every test above still
+     passes — the picture still draws at -640 — while ✦ Fit quietly goes back to
+     framing the quadrant below the origin and the picture becomes unreachable.
+     There is no unit to catch that; the seam is the entry. */
+  const nodes = [{ ...clampImageBox({ x: -640, y: -320, w: 200, h: 150 }), imageId: 1, visible: true }]
+  const [entry] = laneStackEntries({
+    placed: [{ datasetId: 7, graph: { width: 900, height: 400, nodes: [] } }],
+    layoutByLane: { 7: layoutImageNodes(nodes) },
+    restingByLane: { 7: nodes },
+  })
+  const ext = imageNodeExtent(nodes)
+  assert.equal(entry.minX, ext.minX, 'the leftward overhang is handed over')
+  assert.equal(entry.minY, ext.minY, 'the upward overhang is handed over')
+  assert.ok(entry.minX < 0 && entry.minY < 0, 'and this fixture really overhangs')
+})
+
+test('the stack is measured on the RESTING rows, never on the gesture', () => {
+  /* The seam the "lanes stay free" promise lives on, and it is a WIRING fact
+     no unit can assert: `laneStackEntries` takes two lane maps, and the whole
+     fix is that they are two DIFFERENT ones. Hand it `imagesByLane` for both —
+     the shape shipped before this — and every arithmetic test still passes
+     while a picture dragged out of a strip shoves the next dataset down the
+     board under the hand still moving it. So the call itself is the assertion.
+
+     Behaviour is covered in src/utils/canvasPinBatch.test.js ("a drag moves NO
+     lane below it"); what is checked here is that the component still routes
+     through it, with the resting rows in the resting slot. */
   const canvas = readFileSync(
     new URL('../src/components/canvas/LineageCanvas.jsx', import.meta.url), 'utf8')
-  const memo = /const world = useMemo\(\(\) => stackLanes\(([\s\S]*?)\)\), \[/.exec(canvas)
-  assert.ok(memo, 'the world is still stacked from the lanes')
-  assert.match(memo[1], /minX:\s*ext\.minX/)
-  assert.match(memo[1], /minY:\s*ext\.minY/)
+  const memo = /const world = useMemo\(\(\) => stackLanes\(laneStackEntries\(([\s\S]*?)\)\), \[/
+    .exec(canvas)
+  assert.ok(memo, 'the world is still stacked from laneStackEntries')
+  assert.match(memo[1], /layoutByLane/, 'the reach follows what the lane draws')
+  assert.match(memo[1], /restingByLane/, 'the stack follows the committed rows')
+  assert.doesNotMatch(memo[1], /imagesByLane/,
+    'the in-flight list must not reach the stack — that is the bug this undoes')
+  // …and `restingByLane` must be the drag-free list, not an alias of the other.
+  const resting = /const restingByLane = useMemo\(\(\) => \{([\s\S]*?)\}, \[([^\]]*)\]\)/
+    .exec(canvas)
+  assert.ok(resting, 'the resting rows are derived on their own')
+  assert.doesNotMatch(resting[2], /imgDrag/,
+    'a resting list that depends on the drag is not a resting list')
 })

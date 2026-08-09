@@ -4,7 +4,7 @@ import {
   PIN_BATCH_MAX, batchTileSize, boardObstacles, pinBatchAnnouncement,
   groupPinnedBatchBySource, groupPinnedBatchTogether, pinBatchLabel, pinBatchPending,
   pinBatchPendingAcrossLanes, placeImageBatch, tidyGroupRows, tidyLaneReach,
-  tidyLaneRows,
+  tidyLaneRows, laneStackEntries,
 } from './canvasPinBatch.js';
 import { layoutImageNodes, occupiedBox } from './canvasImageGroups.js';
 import { CARD_W } from './lineageGraph.js';
@@ -915,4 +915,89 @@ test('tidyLaneRows is deterministic — the same lane twice gives the same board
   assert.deepEqual(
     key(tidyLaneRows({ graph: GRAPH, nodes: [...nodes].reverse() }).rows),
     key(tidyLaneRows({ graph: GRAPH, nodes }).rows));
+});
+
+/* ── The lane stack, during a drag ───────────────────────────────────────────
+   Reported as "I cannot bring the top node down without bringing the bottom one
+   down too": a pinned picture dragged out of a strip in the FIRST lane, and the
+   whole floor below spreads apart while the hand is still moving.
+
+   `tidyLaneReach` is position-independent, and these tests do not doubt it —
+   the first one pins exactly that. But it is not membership-independent, and a
+   picture on its way out of a strip changes the membership on every frame: the
+   strip loses a member and the contact-sheet band gains one, so the room the
+   stack reserves moves under the hand. Hence the split the rest of these drive:
+   the REACH follows the gesture, the STACK is measured on the resting rows. */
+
+const dragLane = () => {
+  const mk = (id, x, y, w, h, extra = {}) => ({
+    imageId: id, x, y, w, h, visible: true,
+    image: { record_id: 'r1', step: id * 100, aspect: '1:1' }, ...extra,
+  });
+  return [
+    mk(11, 40, 20, 200, 200, { groupId: 'g11', groupPos: 0 }),
+    mk(12, 40, 20, 200, 200, { groupId: 'g11', groupPos: 1 }),
+    mk(13, 40, 20, 200, 200, { groupId: 'g11', groupPos: 2 }),
+  ];
+};
+
+// Mid-gesture, `imagesByLane` gives the dragged member the drag box — and once
+// it clears the strip that box is its OWN remembered size, three times the slot
+// it had in the band (LineageCanvas: the "leaving" preview).
+const leavingList = (nodes) => nodes.map((n) => (n.imageId === 11
+  ? { ...n, x: 40, y: 720, w: 620, h: 620 } : n));
+
+test('tidyLaneReach ignores where a picture SITS', () => {
+  const nodes = dragLane();
+  const moved = nodes.map((n) => (n.imageId === 11 ? { ...n, x: 900, y: 4000 } : n));
+  assert.equal(tidyLaneReach({ graph: GRAPH, nodes: moved }),
+    tidyLaneReach({ graph: GRAPH, nodes }));
+});
+
+test('tidyLaneReach is NOT membership-independent — which is why the stack '
+  + 'must not be fed the gesture', () => {
+  const nodes = dragLane();
+  // Not a bug in this function: a lane really does need different room once a
+  // picture has left its strip. Asserted so the reason the fix lives in
+  // `laneStackEntries` rather than here stays on the record.
+  assert.notEqual(tidyLaneReach({ graph: GRAPH, nodes: leavingList(nodes) }),
+    tidyLaneReach({ graph: GRAPH, nodes }));
+});
+
+test('a drag moves NO lane below it, however far it goes', () => {
+  const resting = { 1: dragLane(), 2: [] };
+  const placed = [
+    { datasetId: 1, graph: GRAPH },
+    { datasetId: 2, graph: GRAPH },
+  ];
+  const laneTops = (restingByLane, layoutByLane) => stackLanes(
+    laneStackEntries({ placed, layoutByLane, restingByLane }),
+  ).lanes.map((l) => l.graphY);
+
+  const atRest = laneTops(resting, {
+    1: layoutImageNodes(resting[1]), 2: [],
+  });
+  // The frame the report is about: member 11 dragged 700 units down and out of
+  // its strip. The layout follows it (detached, at its own size) — the stack
+  // must not.
+  const live = leavingList(resting[1]).map((n) => (n.imageId === 11
+    ? { ...n, groupId: null, groupPos: null } : n));
+  const mid = laneTops(resting, { 1: layoutImageNodes(live), 2: [] });
+
+  assert.deepEqual(mid, atRest, 'no lane moved while the picture was in flight');
+});
+
+test('the dragged picture still grows the BOX that ✦ Fit and 📷 Export frame', () => {
+  const resting = { 1: dragLane(), 2: [] };
+  const placed = [{ datasetId: 1, graph: GRAPH }, { datasetId: 2, graph: GRAPH }];
+  const live = leavingList(resting[1]).map((n) => (n.imageId === 11
+    ? { ...n, groupId: null, groupPos: null } : n));
+  const world = stackLanes(laneStackEntries({
+    placed, restingByLane: resting, layoutByLane: { 1: layoutImageNodes(live), 2: [] },
+  }));
+  const still = stackLanes(laneStackEntries({
+    placed, restingByLane: resting, layoutByLane: { 1: layoutImageNodes(resting[1]), 2: [] },
+  }));
+  assert.ok(world.height > still.height,
+    'a picture dragged below its lane is still reachable, framed and exported');
 });

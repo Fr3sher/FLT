@@ -7,7 +7,7 @@ import {
 } from '../../utils/canvasLayout';
 import { applyPlacement, pinSnapshot, toOverrideMap } from '../../utils/canvasPlacement';
 import {
-  clampImageBox, defaultImageSpot, imageNodeEdges, imageNodeExtent,
+  clampImageBox, defaultImageSpot, imageNodeEdges,
   openGeometry, visibleImageNodes,
 } from '../../utils/canvasImageNodes';
 import {
@@ -48,7 +48,7 @@ import { isNodeControlTarget, nodePointerIntent } from '../../utils/canvasNodeCh
 import { showsZoomLabels, zoomLabelScale, zoomLabelText } from '../../utils/canvasZoomLegibility';
 import {
   pinBatchAnnouncement, pinBatchPendingAcrossLanes, placeImageBatch,
-  groupPinnedBatchBySource, groupPinnedBatchTogether, tidyLaneReach,
+  groupPinnedBatchBySource, groupPinnedBatchTogether, laneStackEntries,
 } from '../../utils/canvasPinBatch';
 import { cardClickAction, runGalleryTarget } from '../../utils/canvasCardClick';
 import { galleryDeleteSummary } from '../../utils/gallerySelection';
@@ -463,18 +463,28 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      that is only half yours -- and you find that out on the day you change
      desk. Geometry mid-gesture is an override on top, exactly like a card drag. */
   const [imgDrag, setImgDrag] = useState(null);   // {datasetId,imageId,x,y,w,h}
+  /* The lanes' COMMITTED rows — the board as it would come back from a reload,
+     with no gesture folded in. Split out from `imagesByLane` below because the
+     LANE STACK has to be measured on it and on nothing else: see
+     utils/canvasPinBatch.laneStackEntries for what went wrong when the stack
+     was measured on the in-flight list instead. */
+  const restingByLane = useMemo(() => {
+    const out = {};
+    for (const e of placed) out[e.datasetId] = visibleImageNodes(imageNodes?.[e.datasetId] || {});
+    return out;
+  }, [placed, imageNodes]);
   const imagesByLane = useMemo(() => {
+    if (!imgDrag) return restingByLane;
     const out = {};
     for (const e of placed) {
-      let list = visibleImageNodes(imageNodes?.[e.datasetId] || {});
-      if (imgDrag && imgDrag.datasetId === e.datasetId) {
-        list = list.map((n) => (n.imageId === imgDrag.imageId
-          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n));
-      }
-      out[e.datasetId] = list;
+      const list = restingByLane[e.datasetId] || [];
+      out[e.datasetId] = imgDrag.datasetId === e.datasetId
+        ? list.map((n) => (n.imageId === imgDrag.imageId
+          ? { ...n, x: imgDrag.x, y: imgDrag.y, w: imgDrag.w, h: imgDrag.h } : n))
+        : list;
     }
     return out;
-  }, [placed, imageNodes, imgDrag]);
+  }, [placed, restingByLane, imgDrag]);
   const imagesRef = useRef(imagesByLane);
   useEffect(() => { imagesRef.current = imagesByLane; }, [imagesByLane]);
 
@@ -522,23 +532,13 @@ export default function LineageCanvas({ entries, positions, imageNodes, allImage
      lane's strips and its contact-sheet band BELOW the tree, so a stack that
      reserved only the tree started the next dataset straight through them and
      the button that rebuilds the board produced strips piled on strips and on
-     other lanes' run cards. The tidy reach is computed from the tree and the
-     pictures' SIZES only, never from where they currently sit, so a render
-     dragged anywhere still moves no lane — which is the whole point of the
-     split above. */
-  const world = useMemo(() => stackLanes(placed.map((e) => {
-    const ext = imageNodeExtent(layoutBoxes(layoutByLane[e.datasetId] || []));
-    const tidy = tidyLaneReach({ graph: e.graph, nodes: imagesByLane[e.datasetId] || [] });
-    return {
-      ...e,
-      width: e.graph?.width || 0,
-      height: Math.max(e.graph?.height || 0, tidy),
-      minX: ext.minX,
-      minY: ext.minY,
-      maxX: ext.width,
-      maxY: ext.height,
-    };
-  })), [placed, layoutByLane, imagesByLane]);
+     other lanes' run cards. That reserve is measured on the RESTING rows, never
+     on the gesture in flight — the reach is position-independent but not
+     membership-independent, and a picture on its way out of a strip changes the
+     membership on every frame. See utils/canvasPinBatch.laneStackEntries. */
+  const world = useMemo(() => stackLanes(laneStackEntries({
+    placed, layoutByLane, restingByLane,
+  })), [placed, layoutByLane, restingByLane]);
 
   /* 🔌 External LoRA plugin nodes: files pinned on the board (not produced by
      any run here) that, when checked, stack on top of the next generation.

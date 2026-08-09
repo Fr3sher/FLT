@@ -52,10 +52,12 @@
    them. Nothing is ever stacked quietly. */
 
 import { CARD_W } from './lineageGraph.js';
-import { layoutImageNodes, nextGroupId, occupiedBox } from './canvasImageGroups.js';
+import {
+  layoutBoxes, layoutImageNodes, nextGroupId, occupiedBox,
+} from './canvasImageGroups.js';
 import { groupBarMaxHeight } from './canvasNodeChrome.js';
 import {
-  IMG_DEFAULT, IMG_MAX, IMG_MIN, slideBelow, spotBesideCard,
+  IMG_DEFAULT, IMG_MAX, IMG_MIN, imageNodeExtent, slideBelow, spotBesideCard,
 } from './canvasImageNodes.js';
 
 /* How many pictures one click may put down. Not a technical limit — the band
@@ -704,6 +706,53 @@ export function tidyLaneReach({ graph, nodes } = {}) {
   let bottom = 0;
   for (const b of boxes) bottom = Math.max(bottom, (Number(b?.y) || 0) + (Number(b?.h) || 0));
   return bottom;
+}
+
+/**
+ * The entries the LANE STACK is built from (utils/canvasLayout.stackLanes) —
+ * one per placed dataset, carrying the two extents that function keeps apart.
+ *
+ * Lives here, out of the component, for one reason: this is where the promise
+ * "a drag moves no lane" is either kept or quietly lost, and `node --test`
+ * cannot parse JSX. The wiring below is the whole fix, so the wiring is what
+ * the test drives.
+ *
+ * ── The two lists, and why they must NOT be the same one ─────────────────────
+ * `layoutByLane` is what the lane DRAWS this frame: the picture under the hand
+ * sits where the hand is, at the size it is being given, pulled out of its
+ * strip if it is on its way out. The REACH (minX/minY/maxX/maxY) is measured on
+ * it, and must be — ✦ Fit, 📷 Export and the pan clamp all have to reach a
+ * picture while it is still moving.
+ *
+ * `restingByLane` is the lane's COMMITTED rows — the board as it would reload.
+ * The stacking height is measured on it, and only on it. `tidyLaneReach` was
+ * written to be position-independent, and it is; but it is not, and cannot be,
+ * gesture-independent, because ✦ Tidy up's layout depends on how many strips a
+ * lane has, how many members each one holds, and how many loose pictures go in
+ * the contact-sheet band — and a drag changes all three, live. Measured on a
+ * three-member strip whose anchor is dragged out: the reserve went 576 → 1143
+ * mid-gesture, shoving the next dataset 567 units down the board while the
+ * hand was still moving. Pulling the drag OUT of this input is what freezes it.
+ *
+ * ⚠️ The lane still settles ONCE on release, and that is not the bug: a picture
+ * that has genuinely left its strip is a membership change, so the lane really
+ * does need a different amount of room for the button to have somewhere to put
+ * it. What nothing may do is move a lane while the gesture is still in flight.
+ */
+export function laneStackEntries({ placed, layoutByLane, restingByLane } = {}) {
+  return (Array.isArray(placed) ? placed : []).map((e) => {
+    const ext = imageNodeExtent(layoutBoxes(layoutByLane?.[e.datasetId] || []));
+    const tidy = tidyLaneReach({ graph: e.graph, nodes: restingByLane?.[e.datasetId] || [] });
+    return {
+      ...e,
+      width: e.graph?.width || 0,
+      height: Math.max(e.graph?.height || 0, tidy),
+      minX: ext.minX,
+      minY: ext.minY,
+      maxX: ext.width,
+      maxY: ext.height,
+    };
+  });
 }
 
 /** The button's own words. It must say HOW MANY it is about to put down —
