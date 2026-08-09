@@ -46,7 +46,10 @@ test('every edit is persisted to the bank route, and a failure says so', () => {
 test('the review lightbox offers the editor on flagged images only', () => {
   assert.match(lightbox, /canEditMask\(img\) && \(/)
   assert.match(lightbox, /🚩 Edit mask/)
-  assert.match(lightbox, /k === 'm' && canEditMask\(img\)/)
+  // M is the Bank's OWN key, read off the same event once the shared review
+  // grammar (K/R/S, ← , Esc) has declined it — and still behind the same
+  // "does this field own the keystroke?" guard.
+  assert.match(lightbox, /toLowerCase\(\) === 'm' && canEditMask\(img\)/)
   assert.match(lightbox, /M watermark mask/)       // printed, not folklore
 })
 

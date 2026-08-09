@@ -13,6 +13,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { WHATS_NEW } from '../src/whatsNew.js'
 import { getHelpTopic } from '../src/help/helpRegistry.js'
+import { REVIEW_SHORTCUT_HINT, ownsTypedKeys } from '../src/components/shared/reviewShortcuts.js'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const frontend = path.resolve(here, '..')
@@ -24,19 +25,35 @@ test('the lightbox offers Keep, Reject and Skip with their K/R/S shortcuts', () 
   assert.match(lightbox, /✓ Keep/)
   assert.match(lightbox, /✕ Reject/)
   assert.match(lightbox, /⏭ Skip/)
-  assert.match(lightbox, /k === 'k'[^\n]*sendDecision\('keep'\)/)
-  assert.match(lightbox, /k === 'r'[^\n]*sendDecision\('reject'\)/)
-  assert.match(lightbox, /k === 's' \|\| e\.key === 'ArrowRight'/)
-  assert.match(lightbox, /e\.key === 'Escape'/)
-  // Discoverable, not folklore: the shortcuts are printed in the UI.
-  assert.match(lightbox, /K keep · R reject · S skip/)
+  // The keys themselves now come from the SHARED grammar (unit-tested in
+  // src/components/shared/reviewShortcuts.test.js) — the same module the
+  // dataset lightbox reads, so the two review surfaces cannot drift apart. What
+  // is pinned here is that this lightbox still binds each verdict to its own
+  // action rather than quietly dropping one.
+  assert.match(lightbox, /reviewKeyAction\(e\)/)
+  assert.match(lightbox, /action === 'keep'[^\n]*sendDecision\('keep'\)/)
+  assert.match(lightbox, /action === 'reject'[^\n]*sendDecision\('reject'\)/)
+  assert.match(lightbox, /action === 'skip'[^\n]*doSkip\(\)/)
+  assert.match(lightbox, /action === 'back'[^\n]*goBack\(\)/)
+  assert.match(lightbox, /action === 'close'[^\n]*onClose\(\)/)
+  // Discoverable, not folklore: the shortcuts are printed in the UI, from the
+  // same constant the handler is built around.
+  assert.match(lightbox, /\{REVIEW_SHORTCUT_HINT\}/)
+  assert.equal(REVIEW_SHORTCUT_HINT, 'K keep · R reject · S skip')
 })
 
 test('the shortcuts survive the focus trap landing on the 🎲 checkbox', () => {
   // A blanket `tag === 'input'` guard silently killed K/R/S: useFocusTrap
-  // focuses the first focusable, which is the Random-order checkbox.
+  // focuses the first focusable, which is the Random-order checkbox. The guard
+  // moved into the shared module with the rest of the grammar; this pins that
+  // the Bank has NOT grown a private copy of it again.
   assert.doesNotMatch(lightbox, /if \(tag === 'input'[^\n]*\) return/)
-  assert.match(lightbox, /\['checkbox', 'radio', 'button', 'submit', 'range'\]\.includes\(type\)/)
+  assert.doesNotMatch(lightbox, /\['checkbox', 'radio', 'button', 'submit', 'range'\]/)
+  assert.equal(ownsTypedKeys({ tagName: 'INPUT', type: 'checkbox' }), false)
+  assert.equal(ownsTypedKeys({ tagName: 'TEXTAREA' }), true)
+  // …and that the Bank's OWN keys still honour it — [ ] and M are read off the
+  // same event after the shared grammar has declined it.
+  assert.match(lightbox, /ownsTypedKeys\(e\.target\)\) return/)
 })
 
 test('each decision is one immediate POST for one image', () => {

@@ -24,9 +24,10 @@ import { readFileSync } from 'node:fs'
 import { render, renderToStaticMarkup, createElement } from './support/mountJsx.mjs'
 
 const {
-  freshLightboxImageState, lightboxImageState, lightboxNeighbours, ownsArrowKeys,
-  stampedPatch,
+  freshLightboxImageState, lightboxImageState, lightboxNeighbours, stampedPatch,
 } = await import('../src/components/dataset/lightboxNavigation.js')
+const { ownsTypedKeys, reviewKeyAction } = await import(
+  '../src/components/shared/reviewShortcuts.js')
 const { pageOfIndex, GRID_PAGE_SIZE } = await import(
   '../src/components/dataset/gridPaging.js')
 const { default: DatasetLightbox } = await import(
@@ -102,12 +103,18 @@ test('state computed for one image is never rendered for another', () => {
   // `actionsOpen` joined them for a narrow-screen reason: the panel is a
   // full-screen drawer on a phone, and ⟩ pressed behind it would land you on an
   // image you cannot see, under a panel you never reopened.
+  // `deciding` — a ✓ Keep / ✕ Reject in flight — is in the same slot for the
+  // plainest reason of the lot: the verdict advances to the next picture as
+  // soon as it lands, so a slow POST must not grey out the buttons of the image
+  // you moved to.
   const stale = {
     imageId: 11, full: true, compareMode: 'reference', improving: true, actionsOpen: true,
+    deciding: true,
   }
   const live = lightboxImageState(stale, 22)
   assert.deepEqual(live, {
     imageId: 22, full: false, compareMode: 'none', improving: false, actionsOpen: false,
+    deciding: false,
   })
   // The derived pane is the one that would be actively MISLEADING: captioned
   // "Original", showing the previous image's parent.
@@ -140,14 +147,21 @@ test('a missing or malformed stored state degrades to a fresh one', () => {
 // ── 3. The arrow keys, and who owns them ────────────────────────────────────
 
 test('a focused field keeps its own caret keys', () => {
+  // The guard moved into components/shared/reviewShortcuts.js when the lightbox
+  // started answering K/R/S as well: one grammar for both review surfaces. A
+  // text field still owns ← →; a CHECKBOX deliberately does not, which is what a
+  // private copy here got wrong in the Bank (the focus trap lands on the 🎲 box
+  // and every shortcut went inert).
   for (const tag of ['INPUT', 'TEXTAREA', 'SELECT', 'input', 'textarea']) {
-    assert.equal(ownsArrowKeys({ tagName: tag }), true, `${tag} owns ← →`)
+    assert.equal(ownsTypedKeys({ tagName: tag }), true, `${tag} owns ← →`)
   }
-  assert.equal(ownsArrowKeys({ tagName: 'DIV', isContentEditable: true }), true)
+  assert.equal(ownsTypedKeys({ tagName: 'DIV', isContentEditable: true }), true)
   for (const tag of ['DIV', 'BUTTON', 'IMG', 'BODY']) {
-    assert.equal(ownsArrowKeys({ tagName: tag }), false, `${tag} does not own ← →`)
+    assert.equal(ownsTypedKeys({ tagName: tag }), false, `${tag} does not own ← →`)
   }
-  assert.equal(ownsArrowKeys(null), false)
+  assert.equal(ownsTypedKeys(null), false)
+  assert.equal(reviewKeyAction({ key: 'ArrowRight', target: { tagName: 'INPUT' } }), null)
+  assert.equal(reviewKeyAction({ key: 'ArrowRight', target: { tagName: 'DIV' } }), 'skip')
 })
 
 // ── 4. The page underneath follows ──────────────────────────────────────────
@@ -254,6 +268,77 @@ test('the lightbox still renders in every view state it has, with arrows on', ()
   }
 })
 
+// ── 5b. Judging the picture you are looking at ──────────────────────────────
+//
+// The verdict used to live on the thumbnail BEHIND the overlay: you inspected an
+// image full screen, then closed it to press ✓. The lightbox now carries the
+// Bank's review bar — same three verdicts, same keys — wired to the dataset's
+// own pending|keep|reject. These assertions are on the RENDERED markup for the
+// same reason the arrows' are: whether a button survives the props it is
+// computed from is what a regex over the source cannot answer.
+
+test('the review bar appears only when a verdict can actually be written', () => {
+  // No handler, no buttons — the rescue-review preview resolves its pair in
+  // Curation, and three dead controls would be worse than none.
+  const bare = lightbox({})
+  for (const label of ['✓ Keep', '✕ Reject', '⏭ Skip']) {
+    assert.ok(!bare.includes(label), `${label} must not appear without onStatus`)
+  }
+  const html = lightbox({ onStatus: () => {} })
+  for (const label of ['✓ Keep', '✕ Reject', '⏭ Skip']) {
+    assert.ok(html.includes(label), `${label} must be on screen`)
+  }
+  // The keys are printed on the caps AND spelled out under them.
+  assert.match(html, /<kbd[^>]*>K<\/kbd>/)
+  assert.match(html, /<kbd[^>]*>R<\/kbd>/)
+  assert.match(html, /<kbd[^>]*>S<\/kbd>/)
+  assert.ok(html.includes('K keep · R reject · S skip'))
+  // …and in the tooltip AND the aria-label of each button, not in one channel:
+  // a title is invisible to a screen reader and unreachable on a touch screen.
+  const keep = buttonAround(html, '✓ Keep')
+  assert.match(keep, /title="Keep this image and move on \(K\)/)
+  assert.match(keep, /aria-label="Keep bust and move to the next image"/)
+  assert.match(buttonAround(html, '✕ Reject'), /title="Reject this image and move on \(R\)/)
+  assert.match(buttonAround(html, '⏭ Skip'), /title="Decide later \(S\)/)
+})
+
+test('the chip says which verdict the image already carries', () => {
+  // Three buttons that also CHANGE the state cannot be its only reading: on the
+  // last image of a list, where nothing moves, "did my K land?" would otherwise
+  // have no answer at all.
+  const kept = lightbox({ onStatus: () => {}, img: { ...IMAGES[1], status: 'keep' } })
+  assert.ok(kept.includes('✓ kept'))
+  const rejected = lightbox({ onStatus: () => {}, img: { ...IMAGES[1], status: 'reject' } })
+  assert.ok(rejected.includes('✕ rejected'))
+  const pending = lightbox({ onStatus: () => {}, img: { ...IMAGES[1], status: 'pending' } })
+  assert.ok(pending.includes('· undecided'),
+    'a never-judged image must say so rather than look kept')
+})
+
+test('⏭ Skip goes dead at the end of the list, and says why', () => {
+  // Same rule as the ⟩ arrow: an end is a disabled control that NAMES the end,
+  // never a mute no-op. The two verdicts stay live there — the picture simply
+  // stays put once it is judged.
+  const html = lightbox({ onStatus: () => {}, img: IMAGES[2] })
+  const skip = buttonAround(html, '⏭ Skip')
+  assert.match(skip, DISABLED_ATTR)
+  assert.match(skip, /title="You are on the last of the 3 images shown here\."/)
+  assert.match(skip, /aria-label="You are on the last of the 3 images shown here\."/)
+  assert.doesNotMatch(buttonAround(html, '✓ Keep'), DISABLED_ATTR)
+})
+
+test('a running pass refuses the verdict in words, like the other writes', () => {
+  // A status IS a write, unlike moving and zooming: it waits for the pass, and
+  // says which one holds it rather than going quietly grey.
+  const reason = datasetBusyReason({ kind: 'generate', done: 12, total: 64, started_at: 0 })
+  const html = lightbox({ onStatus: () => {}, busy: true, busyReason: reason })
+  const keep = buttonAround(html, '✓ Keep')
+  assert.match(keep, DISABLED_ATTR)
+  assert.match(keep, /title="[^"]*generat/i)
+  // …while ⏭ Skip stays live: moving on is a read.
+  assert.doesNotMatch(buttonAround(html, '⏭ Skip'), DISABLED_ATTR)
+})
+
 // ── 6. The wiring the harness cannot mount ──────────────────────────────────
 
 test('the lightbox and the grid are handed the SAME list', () => {
@@ -267,6 +352,11 @@ test('the lightbox and the grid are handed the SAME list', () => {
   assert.match(src, /<DatasetGrid images=\{gridImages\}/)
   assert.match(src, /images=\{viewImgLive\._rescueReviewPreview \? null : gridImages\}/)
   assert.match(src, /onNavigate=\{viewImgLive\._rescueReviewPreview \? null : setViewImg\}/)
+  // The verdict taken in the lightbox is the SAME write the grid tile makes —
+  // one status, not a second notion of "kept" for export and training to
+  // disagree with.
+  assert.match(src, /onStatus=\{viewImgLive\._rescueReviewPreview \? null : ds\.setStatus\}/)
+  assert.match(src, /onStatus=\{ds\.setStatus\}|<DatasetGrid images=\{gridImages\} datasetId=\{d\.id\} onStatus=\{ds\.setStatus\}/)
   assert.match(src, /viewingImageId=\{viewImg\?\.id \?\? null\}/)
 })
 

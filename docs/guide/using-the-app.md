@@ -1589,6 +1589,37 @@ improve) wait for the pass.
 The rescue pairs in **Curation** are the one place with no arrows: there you are
 judging one pair, not walking a list.
 
+## Keep or reject a dataset image without leaving the picture
+
+The full-screen view is where you can actually *see* whether a hand is right or
+an eye is mush — so that is where the verdict belongs. The bar under the image
+carries the same three buttons as the Bank's **▶ Review**, on the same keys:
+
+- **✓ Keep** — `K`
+- **✕ Reject** — `R`
+- **⏭ Skip** — `S` (or **→**)
+
+**Keep and Reject move you on** as soon as the verdict is saved, so a folder of
+300 pictures is worked through with one hand on the keyboard and never a return
+trip to the grid. **Skip is nothing but "next"**: the image keeps whatever it
+already had, undecided included. **←** goes back the same way — navigation only,
+it decides nothing.
+
+It is the *same* verdict as the ✓ / ✕ on the tile behind the overlay, not a
+second one: only kept images are captioned, exported and trained on, and the
+grid, the counters and the ⬇ Export all read that one status. The chip beside
+the image's name says which one it is carrying right now — **✓ kept**,
+**✕ rejected** or **· undecided** — so you can tell a landed decision from a
+missed keystroke.
+
+Two things it deliberately does not do. **Nothing is deleted**: a reject is a
+status, the file stays on disk and ✓ takes it back. And **the verdict is sent
+before you move** — on a slow disk the buttons grey out for a moment rather than
+walking on with a decision still in flight.
+
+At the end of the list there is nowhere to advance to, so the picture stays in
+front of you wearing its new chip; the ⟩ arrow already says which end that is.
+
 ## Inspect an image on a phone
 
 Below a phone-sized window the lightbox changes shape, and it is the same

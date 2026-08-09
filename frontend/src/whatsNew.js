@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-10-lightbox-keep-reject-shortcuts',
+    date: '2026-08-10',
+    title: 'Judge a dataset image while you are looking at it — K, R, S',
+    blurb:
+      'The full-screen view is where you can actually see whether a hand is right, but the ✓/✕ lived on the thumbnail behind it. It now carries the Bank review bar: ✓ Keep (K), ✕ Reject (R), ⏭ Skip (S or →), and each verdict moves you to the next picture as soon as it is saved. Same keys as ▶ Review in the Image Bank, same green and red, and the same status the grid writes — a chip beside the name says whether the image is kept, rejected or still undecided. ← still goes back without deciding anything, and nothing is ever deleted.',
+    to: '/datasets?section=images',
+  },
+  {
     id: '2026-08-09-canvas-pins-float-both-ways',
     date: '2026-08-09',
     title: 'Park a pinned picture below its lane without shoving the next dataset',

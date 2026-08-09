@@ -22,11 +22,23 @@ import { displayLabel } from '../../utils/labels';
 import { describeReferenceComparison } from '../../utils/referenceCompare';
 import SourceAttribution from './SourceAttribution';
 import {
-  freshLightboxImageState, lightboxImageState, lightboxNeighbours, ownsArrowKeys,
-  stampedPatch,
+  freshLightboxImageState, lightboxImageState, lightboxNeighbours, stampedPatch,
 } from './lightboxNavigation';
+import {
+  REVIEW_SHORTCUT_HINT, reviewKeyAction,
+} from '../shared/reviewShortcuts';
+import ShortcutKey from '../shared/ShortcutKey';
 
 const COMPARE_HELP = 'Show the original this image was made from, next to it, at the same scale.';
+/* The verdict this image currently carries, in the SAME words and the same
+   colours as the Bank's review chips: green means kept in both screens, and a
+   dataset image that has never been judged says so rather than looking kept. */
+const VERDICT_CHIP = {
+  keep: { text: '✓ kept', cls: 'bg-emerald-500/25 text-emerald-200' },
+  reject: { text: '✕ rejected', cls: 'bg-rose-500/25 text-rose-200' },
+  pending: { text: '· undecided', cls: 'bg-white/10 text-white/60' },
+  failed: { text: '⚠ failed', cls: 'bg-amber-500/25 text-amber-200' },
+};
 /* The SECOND comparison, and deliberately a second BUTTON rather than a picker:
    an improved image can answer both questions and a selector would hide one of
    them behind the other. The two modes are mutually exclusive though — two
@@ -165,6 +177,11 @@ export default function DatasetLightbox({
   // preview) = no navigation, rather than arrows onto a list that isn't there.
   images = null,
   onNavigate = null,
+  /* ✓ Keep / ✕ Reject from here — the SAME (imageId, status) write the grid
+     tile does, never a second notion of "kept". Omitted = the verdict buttons
+     and their keys are simply absent (rescue-review preview, where the pair is
+     resolved in Curation instead). */
+  onStatus = null,
 }) {
   const { caps } = useCapabilities();
   /* Zoom, comparison and "improving" belong to ONE image and are stamped with
@@ -192,7 +209,7 @@ export default function DatasetLightbox({
      slot the guarantee is structural: a foreign stamp yields a fresh state, so
      moving image closes the comparison with no reset effect to get right. */
   const {
-    full, compareMode, improving, actionsOpen,
+    full, compareMode, improving, actionsOpen, deciding,
   } = lightboxImageState(storedState, imageId);
   /* Which image is on screen when a setter actually RUNS — a ref, because the
      `finally` of an improve resolves long after the render that created its
@@ -208,6 +225,39 @@ export default function DatasetLightbox({
   }, [imageId]);
   const nav = lightboxNeighbours(images, imageId);
   const canNavigate = !!onNavigate && nav.available;
+  /* ── Reviewing, not just looking ──────────────────────────────────────────
+     ✓ Keep / ✕ Reject / ⏭ Skip, on the same K/R/S the Bank's ▶ Review uses
+     (components/shared/reviewShortcuts.js owns the grammar for both). The
+     verdict is the dataset's OWN status — pending|keep|reject, the one the grid
+     tile writes — so nothing here invents a second notion of "kept" that would
+     have to be reconciled with captioning, export and training.
+
+     The move happens only once the write LANDS. Advancing first and posting
+     afterwards is how a decision gets silently dropped on a slow disk, and the
+     Bank already paid for that lesson: a lost verdict is worse than a slow one.
+     `nav.next` is captured BEFORE the call because refreshing can retire this
+     very image from the shown list (a "◧ Undecided only" filter does exactly
+     that), which would leave the neighbours unanswerable a moment later. */
+  const nextImage = nav.next;
+  const decide = useCallback(async (status) => {
+    if (!onStatus || deciding || busy || imageId == null) return;
+    const after = nextImage;
+    patchImageState({ deciding: true });
+    try {
+      await onStatus(imageId, status);
+      // At the end of the list there is nowhere to go: the picture stays under
+      // the cursor wearing its new chip, rather than closing the overlay on the
+      // user — the arrows already say which end this is.
+      if (after && onNavigate) onNavigate(after);
+    } finally {
+      patchImageState({ deciding: false });
+    }
+  }, [onStatus, deciding, busy, imageId, nextImage, onNavigate, patchImageState]);
+  // ⏭ Skip is deliberately nothing but "next": the image keeps whatever status
+  // it already had. That is the promise that makes walking fast safe.
+  const skipImage = useCallback(() => {
+    if (nextImage && onNavigate) onNavigate(nextImage);
+  }, [nextImage, onNavigate]);
   // A rail decided mid-rotation would move under the pointer that started it.
   const actionsLocked = busy || mirrorBusy || improving || improvePending;
   const [ratio, setRatio] = useState(() => readImageRatio(imageId));
@@ -284,34 +334,40 @@ export default function DatasetLightbox({
   // Focus trap keeps Tab inside the dialog (P2-7).
   useFocusTrap(dialogRef, !!(img && img.filename));
 
-  // Keyboard: Escape closes, ← / → step through the shown list, initial focus on
-  // the close button.
+  /* Keyboard. The grammar — K keep, R reject, S/→ skip, ← back, Esc close, and
+     which keystrokes a focused field owns — is READ from the shared module, not
+     re-decided here: it is the Bank's, and a reflex learned there has to be
+     right here too. Modifier keys and text entry are handled inside it (⌘R must
+     reload the page, not reject the picture). */
   const prev = nav.prev;
-  const next = nav.next;
   useEffect(() => {
     const onKey = (e) => {
+      const action = reviewKeyAction(e);
       /* Escape peels ONE layer: an open actions panel first, the lightbox only
          once it is closed. Closing everything at once would throw the user out
          of the image they were about to act on — the panel is a detour, not a
          second window. */
-      if (e.key === 'Escape') {
+      if (action === 'close') {
         if (panelOpen) { closePanel(); return; }
         onClose();
         return;
       }
-      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
-      // A shortcut that fires on ⌥←/⇧→ would fight browser history and text
-      // selection; and a focused field owns its own caret keys.
-      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-      if (ownsArrowKeys(e.target)) return;
-      const target = e.key === 'ArrowLeft' ? prev : next;
+      if (!action) return;
+      if (action === 'keep' || action === 'reject') {
+        if (!onStatus) return;
+        e.preventDefault();
+        decide(action);
+        return;
+      }
+      // 'back' and 'skip' move without touching anything.
+      const target = action === 'back' ? prev : nextImage;
       if (!onNavigate || !target) return;
       e.preventDefault();
       onNavigate(target);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose, onNavigate, prev, next, panelOpen, closePanel]);
+  }, [onClose, onNavigate, onStatus, decide, prev, nextImage, panelOpen, closePanel]);
   useEffect(() => { closeRef.current?.focus(); }, []);
   /* No "close the comparison when the image changes" effect on purpose: the id
      stamp above already guarantees it, for BOTH comparison modes, without a
@@ -505,6 +561,17 @@ export default function DatasetLightbox({
               {nav.position}
             </span>
           )}
+          {/* The verdict this image carries RIGHT NOW. Without it the three
+              buttons below would be the only reading of a state they also
+              change, and "did my K land?" would have no answer on a picture
+              that happens to be the last of the list. Same words and colours as
+              the Bank's review chips. */}
+          {VERDICT_CHIP[img.status] && (
+            <span className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${VERDICT_CHIP[img.status].cls}`}
+              title="The status this image carries in the dataset — only kept images are captioned, exported and trained on.">
+              {VERDICT_CHIP[img.status].text}
+            </span>
+          )}
           <span className="px-1.5 py-0.5 rounded text-[10px] bg-white/10 text-white/80">
             {img.source === 'import' ? 'real' : 'generated'}{img.framing ? ` · ${img.framing}` : ''}
           </span>
@@ -526,6 +593,45 @@ export default function DatasetLightbox({
                 : full ? '100 % — click image to fit' : 'fitted — click image for 100 %'}
           </span>
         </div>
+        {onStatus && (
+          /* ✓ Keep / ✕ Reject / ⏭ Skip — the Bank's review bar, in the screen
+             where a dataset is actually curated. Same order, same glyphs, same
+             colours and same keys, because the two screens ask the user the
+             very same question and a learned reflex must not be right in only
+             one of them. Each verdict then MOVES ON, which is what turns the
+             lightbox from a viewer into a way through 300 pictures.
+             The keys are printed on the buttons AND spelled out below: a
+             shortcut nobody can discover is folklore. */
+          <div className={`flex items-stretch gap-2 ${rail ? 'w-full flex-col' : 'w-full sm:w-auto'}`}>
+            <button type="button" onClick={() => decide('keep')} disabled={deciding || busy}
+              aria-label={refused || `Keep ${alt} and move to the next image`}
+              title={refused || 'Keep this image and move on (K) — kept images are the ones captioned, exported and trained on'}
+              className="min-h-9 flex-1 rounded-lg border border-emerald-400/60 bg-emerald-500/20 px-4 py-1.5 text-xs font-semibold text-emerald-100 hover:bg-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-45">
+              ✓ Keep<ShortcutKey>K</ShortcutKey>
+            </button>
+            <button type="button" onClick={() => decide('reject')} disabled={deciding || busy}
+              aria-label={refused || `Reject ${alt} and move to the next image`}
+              title={refused || 'Reject this image and move on (R) — reversible, and nothing is deleted from disk'}
+              className="min-h-9 flex-1 rounded-lg border border-rose-400/60 bg-rose-500/20 px-4 py-1.5 text-xs font-semibold text-rose-100 hover:bg-rose-500/30 disabled:cursor-not-allowed disabled:opacity-45">
+              ✕ Reject<ShortcutKey>R</ShortcutKey>
+            </button>
+            <button type="button" onClick={skipImage} disabled={!nextImage || !onNavigate}
+              aria-label={nextImage
+                ? `Skip ${alt} and move to the next image`
+                : nav.nextReason || 'There is no next image to skip to'}
+              title={nextImage
+                ? 'Decide later (S) — moves on and leaves this image exactly as it is'
+                : nav.nextReason || 'There is no next image to skip to'}
+              className="min-h-9 flex-1 rounded-lg border border-white/25 px-4 py-1.5 text-xs font-semibold text-white hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-45">
+              ⏭ Skip<ShortcutKey>S</ShortcutKey>
+            </button>
+          </div>
+        )}
+        {onStatus && (
+          <p className={`text-[11px] text-white/45 ${rail || sheet ? 'w-full' : ''}`}>
+            {REVIEW_SHORTCUT_HINT} · ← → move without deciding · Esc close
+          </p>
+        )}
         {canCompare && (
           <button type="button" aria-pressed={compareMode === 'derived'}
             onClick={toggleCompare('derived')}
