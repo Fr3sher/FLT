@@ -1584,6 +1584,17 @@ const TOPICS = [
     app: { route: '/datasets?section=training' },
     tip: { trigger: 'dual-captions-advanced',
       text: 'New: train each image on a long AND a short caption (Advanced options → Dual captions) so the LoRA leans less on any single wording.' } },
+  // 🎲 Use dataset captions — an action on the Preview-prompts field, in both
+  // the LoRA and the full-model recipe. It writes an existing setting
+  // (sample_prompts), so it points at the same Training section of the
+  // settings reference where that field is documented.
+  { id: 'training.sample_prompts_from_dataset', kind: 'action',
+    title: 'Use dataset captions as preview prompts',
+    keywords: ['preview prompts', 'sample prompts', 'sample_prompts', 'captions',
+      'dataset captions', 'random', 'draw', 're-roll', 'reroll', 'dice', 'fill',
+      'defaults', 'generic', 'trigger', 'advanced', 'training'],
+    guide: { chapter: 'settings-reference', anchor: 'training' },
+    app: { route: '/datasets?section=training&panel=advanced' } },
   // Expert controls, not global Settings: factor is meaningful only for a LoKr
   // network, and the Krea fields intentionally surface one reported community
   // starting point without claiming its result transfers to every dataset.

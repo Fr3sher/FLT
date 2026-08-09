@@ -50,6 +50,14 @@ import { SETUP_DEEP_LINK_STEPS } from './hooks/useSetupSteps.js';
 // Newest first. Prepend new waves at the top.
 export const WHATS_NEW = [
   {
+    id: '2026-08-09-preview-prompts-from-captions',
+    date: '2026-08-09',
+    title: 'Preview images that finally show YOUR subject',
+    blurb:
+      'The preview prompts a run renders every few hundred steps used to be generic defaults that describe nobody — so the images you judge an expensive run by showed a stranger. A new 🎲 Use dataset captions button under Preview prompts fills the field with up to five real captions drawn at random from this dataset’s kept images. Click it again for a different draw.',
+    to: '/datasets?section=training&panel=advanced',
+  },
+  {
     id: '2026-08-09-canvas-phone-toolbar',
     date: '2026-08-09',
     title: 'The LoRA Canvas gives the board back to your phone',
