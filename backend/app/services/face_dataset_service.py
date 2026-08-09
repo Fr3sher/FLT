@@ -58,6 +58,7 @@ from .face_variations import (CAPTION_PROMPT, CAPTION_PROMPT_BOORU,
                               caption_has_identity_leak, caption_has_concept_leak,
                               compose_prompt_suffix, concept_lexical_field,
                               drop_identity_sentences, drop_identity_tags,
+                              drop_style_lead_in,
                               is_nsfw_label, prompt_by_label, wrap_variation,
                               wrap_variation_klein, wrap_variation_krea,
                               get_identity_prompt,
@@ -7549,12 +7550,14 @@ def caption_images(user_id, dataset_id, force=False, mode=None, image_ids=None, 
     mode = (mode or ('booru' if ttype == 'sdxl' else 'prose')).lower()
     style = is_style(ds)
     if style:
-        # Dataset STYLE : captions de CONTENU pur — le rendu n'est jamais décrit (le
-        # prompt porte la règle) pour qu'il soit absorbé par le LoRA. AUCUN nettoyage
-        # d'identité : les sujets varient, leur description EST le contenu contrôlable.
+        # Dataset STYLE : captions de CONTENU pur — le rendu n'est jamais décrit pour
+        # qu'il soit absorbé par le LoRA. AUCUN nettoyage d'identité : les sujets varient,
+        # leur description EST le contenu contrôlable. Le prompt porte la règle, mais elle
+        # est NÉGATIVE et JoyCaption ne la suit pas — d'où le post-filtre d'amorce, exact
+        # pendant de drop_identity_sentences sur la voie character.
         cap_prompt = caption_prompt_for_style(mode)
         def cleaner(text):
-            return text
+            return drop_style_lead_in(text)
     else:
         # Fidélité corps : le prompt bannit EN PLUS les marques corporelles permanentes
         # (tatouages/cicatrices/piercings…) et le post-filtre les retire — elles doivent
@@ -8034,7 +8037,9 @@ def _scrub_short_like_long(ds, text, mode) -> str:
     if not t:
         return ''
     if is_style(ds):
-        return style_content_caption(ds, t)
+        # Same net as the long pass: the shortening LLM is told not to name the medium,
+        # and like the captioner it sometimes opens with one anyway.
+        return style_content_caption(ds, drop_style_lead_in(t))
     if is_concept(ds):
         leak_re = _concept_terms_re(_get_concept_terms(ds, describe=None))
         return _enforce_concept_omission(t, leak_re, b'', (ds.concept_desc or '').strip(),
