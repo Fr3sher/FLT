@@ -17,12 +17,12 @@
 /* ── The rail ───────────────────────────────────────────────────────────────
    It FOLDS rather than overflows. At 400 px a 15-rem rail beside a grid leaves
    neither of them usable, so below the breakpoint the rail is a drawer the top
-   bar opens; from `sm` up it is a column and the toggle only decides whether
+   bar opens; from `lg` up it is a column and the toggle only decides whether
    the grid gets that width back. */
 
 /** Below this the rail cannot share the row with the grid — matches Tailwind's
  *  `sm`, which every other responsive decision on this screen already uses. */
-export const RAIL_SIDE_BY_SIDE_PX = 640;
+export const RAIL_SIDE_BY_SIDE_PX = 1024;
 
 /** Does the rail sit BESIDE the grid at this width, or over it as a drawer?
  *  A missing/absurd width answers "beside": the desktop layout is the one that

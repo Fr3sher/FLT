@@ -10,10 +10,9 @@
  * These render UI only. Anything with a decision in it belongs in bankLayout.js
  * or one of the other pure modules, where `node --test` can actually reach it.
  *
- * The two Encre identity details — the brand gradient on a panel header and the
- * violet halo for elevation — are NOT here: they are named classes in index.css
- * (`bank-encre-header`, `bank-encre-raise`) applied where the chrome actually
- * is, so there is one definition of the skin rather than two.
+ * These carry NO palette of their own. A trialled "Encre" skin was dropped in
+ * favour of the app's existing colours, so an atom that hard-coded a hex here
+ * would be the one thing standing between the Bank and the rest of the app.
  */
 /** A filter chip. `active` is the selected state, not a hover — the rail is
  *  read at a glance and "which facets am I on" has to survive that glance. */

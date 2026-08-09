@@ -1,7 +1,27 @@
-# Bank redesign — skin “Encre”, layout B
+# Bank redesign — layout B (the “Encre” skin was tried and dropped)
 
-**Status:** decided, not built. Skin and structure are both settled; this file is
-what a session two weeks from now reads instead of guessing.
+**Status:** structure built and kept; skin reverted. This file is what a session
+two weeks from now reads instead of guessing — including about the part that was
+undone, which is the half nobody writes down.
+
+> ## ⛔ The skin decision was REVERSED after seeing it running
+>
+> Encre was chosen from static mockups and looked right there. In the actual app,
+> beside the rest of the product, it read as foreign: **“la couleur ne me plaît
+> pas, on va rester sur ce qui se fait ici.”** The Bank keeps the app's own
+> palette.
+>
+> **What survives:** structure B, the split of `BankWorkspace.jsx`, the frozen
+> surface inventory — everything below section 2. **What was removed:** the
+> `.bank-encre*` token override in `index.css` and its three class usages.
+>
+> The removal was cheap for one reason worth repeating: the skin was a **scoped
+> token override on a single wrapper**, not a rewrite. It re-coloured ~1 900
+> existing utility usages without editing any of them, so undoing it was deleting
+> one CSS block and three class names — and the whole structure stayed put. **A
+> skin that had touched every button would have been a skin nobody could undo.**
+>
+> Section 1 is kept as the record of what was trialled, not as an instruction.
 
 **Why this file exists.** The skin was chosen in a brainstorm whose three mockups
 lived in a session scratchpad — a temp folder. The technical half of the work
@@ -12,7 +32,7 @@ of archaeology to recover. A brand decision for a whole screen must not depend o
 
 ---
 
-## 1. The skin — “Encre”
+## 1. The skin — “Encre” (TRIALLED, THEN DROPPED — do not implement)
 
 Chosen over **Slate** (neutral, dense, indigo accent) and **Verre** (translucent,
 drop shadows, teal). Encre keeps the product's violet gradient and pushes it:
@@ -55,7 +75,10 @@ B puts the filter beside the thing it filters:
 - **top bar** — bank identity, counters, and the decisive actions
   (`⚙ Passes`, `🚀 Launch all`, `→ Promote`);
 - **left rail** — all of triage: search, Status, Quality, Person, then Score /
-  Framing / Medium / Angle / Resolution / Origin folded below;
+  Framing / Medium / Angle / Resolution / Origin folded below. It sits beside the
+  grid only from **`lg` (1024 px)**, not `sm`: a 17 rem rail *fits* from 640 px
+  but leaves the grid ~350 px — two thumbnails — and a triage screen showing two
+  images is not one. Below that it is a drawer;
 - **centre** — the grid, full height, with the selection bar above it
   (count, Select all, ✓ Keep, ✕ Reject, Sort, ▶ Review).
 

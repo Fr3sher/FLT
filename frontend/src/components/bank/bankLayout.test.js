@@ -19,9 +19,20 @@ function fakeStore(initial = {}, { failing = false } = {}) {
   }
 }
 
-test('the rail sits beside the grid from the sm breakpoint up', () => {
+test('the rail sits beside the grid only once the grid still has room', () => {
   assert.equal(railIsColumn(1440), true)
   assert.equal(railIsColumn(RAIL_SIDE_BY_SIDE_PX), true)
+})
+
+/* The threshold is about the GRID, not about the rail. A 17rem rail fits from
+   ~640 px, which is why it first sat there — but it left the grid ~350 px, two
+   thumbnails wide, and the screen stopped being a triage screen. The rail is a
+   drawer until the grid keeps a workable width. */
+test('a 17rem rail never leaves the grid narrower than a usable strip', () => {
+  const RAIL_PX = 17 * 16
+  assert.ok(RAIL_SIDE_BY_SIDE_PX - RAIL_PX >= 700,
+    `at ${RAIL_SIDE_BY_SIDE_PX}px the grid would get ${RAIL_SIDE_BY_SIDE_PX - RAIL_PX}px`)
+  assert.equal(railIsColumn(800), false, '800px still belongs to the drawer')
 })
 
 test('at 400 px the rail is a drawer, not a column — it folds instead of overflowing', () => {

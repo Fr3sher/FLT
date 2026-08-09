@@ -1572,20 +1572,22 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
   const promoteZone = BANK_ZONES.find((z) => z.id === 'promote')
 
   return (
-    /* ── "Encre" + structure B ────────────────────────────────────────────
-       `bank-encre` is the SKIN: it redefines the semantic colour tokens for
-       this subtree only, so every bg-surface / border-border / text-content
-       under it re-skins without one utility class being edited (see index.css).
+    /* ── Structure B ──────────────────────────────────────────────────────
+       Layout only. An "Encre" skin was trialled here — a scoped token override
+       that re-coloured the whole subtree — and dropped: the app keeps its own
+       palette, and the Bank must not be the one screen that looks foreign.
+       Every surface below therefore speaks the app's semantic utilities
+       (bg-surface, border-border, text-content) and nothing else.
 
        The children are in READING ORDER — top bar, rail, grid — which is also
        the tab order. Nothing here carries a tabindex; the DOM is the
        accessibility contract, and a rail that tabbed out of order would be a
        regression the eye cannot see. */
-    <div className="bank-encre space-y-3">
+    <div className="space-y-3">
       {/* ── The top bar ──────────────────────────────────────────────────
           Bank identity, the counters, and the DECISIVE actions. Everything
           here is bank-wide; anything that narrows the grid lives in the rail. */}
-      <header className="bank-encre-header bank-encre-raise space-y-2 rounded-xl border border-border px-4 py-3">
+      <header className="space-y-2 rounded-xl border border-border bg-surface px-4 py-3">
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={onBack}
             className="rounded-md border border-border px-2 py-1 text-xs text-content-muted hover:text-content hover:bg-surface-raised">
@@ -1740,7 +1742,7 @@ export default function BankWorkspace({ bankId, onBack, onGone }) {
           Below `sm` it cannot share this row, so it becomes a drawer OVER the
           grid instead of squeezing it: at 400 px both would be unusable. */}
       <div className={`grid gap-3 ${railOpen && railIsColumnNow
-        ? 'sm:grid-cols-[17rem_minmax(0,1fr)]' : 'grid-cols-1'}`}>
+        ? 'lg:grid-cols-[17rem_minmax(0,1fr)]' : 'grid-cols-1'}`}>
         {railOpen && !railIsColumnNow && (
           <div className="fixed inset-0 z-40 bg-black/60" onClick={closeRail} aria-hidden />
         )}

@@ -67,7 +67,7 @@ export default function BankFilterRail({
   return (
     <aside aria-label="Bank filters"
       className={isDrawer
-        ? 'bank-encre-raise fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[88vw] overflow-y-auto border-r border-border bg-surface p-3 space-y-3'
+        ? 'shadow-2xl fixed inset-y-0 left-0 z-50 w-[19rem] max-w-[88vw] overflow-y-auto border-r border-border bg-surface p-3 space-y-3'
         : 'space-y-3 self-start rounded-xl border border-border bg-surface p-3 sm:sticky sm:top-3 sm:max-h-[calc(100vh-1.5rem)] sm:overflow-y-auto'}>
       <div className="flex items-center gap-2">
         <GroupLabel>Filters</GroupLabel>
