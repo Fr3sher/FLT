@@ -1594,7 +1594,9 @@ const TOPICS = [
       'dataset captions', 'random', 'draw', 're-roll', 'reroll', 'dice', 'fill',
       'defaults', 'generic', 'trigger', 'advanced', 'training'],
     guide: { chapter: 'settings-reference', anchor: 'training' },
-    app: { route: '/datasets?section=training&panel=advanced' } },
+    app: { route: '/datasets?section=training&panel=advanced' },
+    tip: { trigger: 'sample-prompts-from-dataset',
+      text: 'Preview images can show YOUR subject instead of generic defaults: 🎲 Use dataset captions, under Preview prompts, fills the prompts from your own captions.' } },
   // Expert controls, not global Settings: factor is meaningful only for a LoKr
   // network, and the Krea fields intentionally surface one reported community
   // starting point without claiming its result transfers to every dataset.

@@ -848,6 +848,15 @@ export default function TrainingPanel({ ds, keptCount, kind, onCheckpointsChange
     }
   }, [advancedOpen, trainingMode]);
 
+  // Same problem for 🎲 Use dataset captions: it sits below the Preview-prompts
+  // textarea, in BOTH recipes, and nothing points at it. The TipHost shows one
+  // card at a time and does not mark the loser seen, so on the very first LoRA
+  // open dual-captions wins and this one arrives on the next open — in
+  // full-model mode, where dual captions does not apply, it shows right away.
+  useEffect(() => {
+    if (advancedOpen) requestHelpTip('sample-prompts-from-dataset');
+  }, [advancedOpen]);
+
   const togglePanel = (panelId, current, setter) => (event) => {
     event.preventDefault();
     const next = !current;
