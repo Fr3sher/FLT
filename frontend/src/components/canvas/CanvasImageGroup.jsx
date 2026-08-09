@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { groupBarHeight } from '../../utils/canvasNodeChrome';
+import { groupBarHeight, groupCornerScale } from '../../utils/canvasNodeChrome';
 import CanvasImageNode from './CanvasImageNode';
 
 /* 🖼🖼 Several pinned images fused into ONE node: a continuous strip, side by
@@ -75,10 +75,16 @@ function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
       className="lds-canvas-group rounded-md border border-indigo-400/40 bg-surface-overlay shadow-lg">
 
       {/* The pictures. Edge to edge, gap zero — the strip is one band. */}
-      {group.members.map((m) => (
+      {group.members.map((m, i) => (
         <CanvasImageNode key={m.node.imageId} node={m.node} datasetId={datasetId}
           laneName={laneName} variant="member"
           box={{ x: m.x - group.x, y: m.y - group.y, w: m.w, h: m.h }}
+          // ◢ The strip's resize corner (below) is drawn at the strip's
+          // bottom-right, which is the LAST tile's bottom-right — so that one
+          // member, and only it, has to keep its control row clear of a handle
+          // it does not draw itself. Without this the armed 🗑 landed on top of
+          // the group's only size grip.
+          lastInGroup={i === count - 1}
           onClose={onClose} onOpen={onOpen} onDelete={onDelete} boardScale={boardScale}
           blendNote={blendNotes?.get(m.node.imageId) || null} />
       ))}
@@ -86,11 +92,15 @@ function CanvasImageGroup({ group, datasetId, laneName, boardScale = 1,
       {/* Resizing the strip resizes it as a WHOLE, keeping its shape: a member
           has no width of its own to drag (it is its aspect ratio at the strip's
           height), so a per-member handle would be a control with nothing behind
-          it. Same 28 units and the same counter-scale as everywhere else. */}
+          it. Same 28 units and the same counter-scale as everywhere else.
+          ⚠️ That scale comes from canvasNodeChrome.groupCornerScale rather than
+          being spelled out here: the last member's control row has to reserve
+          exactly this much board space, and a counter-scale written twice is a
+          counter-scale that will be changed once. */}
       <span data-canvas-group-resize="" aria-hidden
         title="Drag to resize the whole group"
         style={{ position: 'absolute', right: 0, bottom: 0, width: 28, height: 28,
-          transform: `scale(${Math.max(1, 1 / Math.max(boardScale, 0.01))})`,
+          transform: `scale(${groupCornerScale(boardScale)})`,
           transformOrigin: 'bottom right' }}
         className="cursor-nwse-resize touch-none rounded-tl-md border-l border-t border-indigo-400/40 bg-app/80 text-content-subtle after:absolute after:bottom-1 after:right-1 after:text-[0.625rem] after:content-['◢']" />
 

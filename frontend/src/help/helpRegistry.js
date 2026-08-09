@@ -983,7 +983,13 @@ const TOPICS = [
      // Reported from a phone: the ✕ "did not work". It was reachable-sized only
      // at 100 % zoom, so this is a real search term, not a hypothetical one.
      'cross does not close', 'cannot close a pinned image', 'close button too small',
-     'x does nothing', 'buttons too small on the canvas', 'canvas on a phone'],
+     'x does nothing', 'buttons too small on the canvas', 'canvas on a phone',
+     // HQ. The board draws WebP tiles for speed, so "my pinned image looks
+     // soft" is now a thing someone types — and the answer is a button on the
+     // picture itself, not a setting.
+     'hq', 'hq button', 'full quality', 'original file', 'pinned image looks blurry',
+     'pinned image is soft', 'canvas image quality', 'image looks compressed',
+     'thumbnail instead of the real image', 'show the full resolution image'],
     '/canvas', 'using-the-app', 'the-lora-canvas-every-run-on-one-board'),
   action('canvas-download-images', '⬇ Download images (one, or a gallery as ZIP)',
     ['download an image', 'download image', 'save an image', 'save the picture',

@@ -1,7 +1,10 @@
-import { memo, useRef } from 'react';
+import { memo, useRef, useState } from 'react';
 
 import { nudgeImageNode } from '../../utils/canvasImageNodes';
-import { CONTROL_UNITS, chromeScale, clusterUnits } from '../../utils/canvasNodeChrome';
+import {
+  CONTROL_UNITS, chromeScale, clusterUnits, groupCornerUnits, hasOwnResizeCorner,
+  hasResizeCornerOver,
+} from '../../utils/canvasNodeChrome';
 import { imageFactsLine } from '../../utils/generatedImageFacts';
 import { useImageDownload } from '../../hooks/useImageDownload';
 import { useCanvasImageDelete } from '../../hooks/useCanvasImageDelete';
@@ -53,7 +56,17 @@ import { datasetThumbUrl, ratchetThumbSide } from '../../utils/datasetThumbUrl';
    bottom-right precisely because the top corners belong to what LABELS a tile
    (the 👍/👎 verdict there, the step/strength label here). Actions and labels do
    not share a corner. The row keeps clear of the resize corner by reserving it,
-   which is why chromeScale is told about it.
+   which is why chromeScale is told about it — and "which corner" is a question
+   with two answers, which is the bug that followed: a group MEMBER draws no
+   handle of its own, so it reserved nothing, but the STRIP draws one at its
+   bottom-right and that is the LAST member's bottom-right. An armed 🗑 sat on
+   the group's only size grip. Both the drawing and the reserving now read
+   canvasNodeChrome.hasOwnResizeCorner / groupCornerUnits.
+
+   HQ. Every picture here is a WebP tile (utils/datasetThumbUrl) because a board
+   of forty full-resolution PNGs is tens of megabytes; HQ swaps THIS one for the
+   original file, in place, and lights up while it is on. Per node and not
+   persisted: it is a look you take at one picture, not a property of the board.
 
    What ⬇ downloads keeps its lineage in its NAME — dataset, run, step, seed —
    because this board is the only place that knows all four and a file called
@@ -66,7 +79,7 @@ import { datasetThumbUrl, ratchetThumbSide } from '../../utils/datasetThumbUrl';
 
 function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   onClose, onOpen, onDelete, boardScale = 1, variant = 'node', box = null,
-  blendNote = null }) {
+  blendNote = null, lastInGroup = false }) {
   const img = node.image || {};
   const stepLabel = img.step == null ? 'step unknown' : `step ${img.step}`;
   // The gallery payload publishes the value persisted on LoraTestImage as
@@ -104,16 +117,47 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   // 🗑 One arm-then-confirm delete per node — never one shared by the board, or
   // arming here and confirming there would be possible (see the hook).
   const rm = useCanvasImageDelete(onDelete);
-  // The row's width budget is the row that is actually drawn: 🔍 ✕ ⬇, plus 🗑
-  // when a host wired it. Asking for four when three are rendered would shrink
-  // the three for nothing.
-  const controlCount = 3 + (onDelete ? 1 : 0);
+  /* HQ — this picture at full quality, on demand.
+     The board draws WebP tiles (datasetThumbUrl below), which is what made a
+     seeded board open in seconds instead of tens of megabytes. A tile is a
+     re-encode though, and a board exists to JUDGE renders: comparing two
+     checkpoints on skin or on fine text is exactly where a lossy tile is not
+     good enough. So the original bytes are one button away, per picture.
+     Deliberately NOT persisted and not a board-wide setting: it is a look, not
+     a property of the node — a board reopened tomorrow is back to being cheap,
+     and turning HQ on for the one picture you are squinting at never costs the
+     other thirty-nine. */
+  const [hq, setHq] = useState(false);
+  // The row's width budget is the row that is actually drawn: 🔍 ✕ ⬇ HQ, plus
+  // 🗑 when a host wired it. Asking for five when four are rendered would
+  // shrink the four for nothing.
+  const controlCount = 4 + (onDelete ? 1 : 0);
   const rowUnits = clusterUnits(controlCount);
-  // A member has no resize corner; a node of its own has one, on this very
-  // edge, so the row must be told to leave room for it (both are drawn at the
-  // same counter-scale, so the reservation is in the same unscaled units).
-  const corner = member ? 0 : CONTROL_UNITS;
-  const k = chromeScale(boardScale, geom.w, rowUnits, corner);
+  /* ◢ The corner the row must not sit on — and the reason this is two numbers
+     rather than the one it used to be.
+
+     It used to read `member ? 0 : CONTROL_UNITS`: "a member has no resize
+     corner". A member draws none, true — but the STRIP draws one at its own
+     bottom-right, and that is the same pixel as the LAST member's bottom-right.
+     Reported on a group: the armed (red) 🗑 was laid exactly over the ◢ that
+     resizes the group, so the gesture the strip's only size handle exists for
+     hit a delete button instead. The condition now comes from
+     canvasNodeChrome.hasOwnResizeCorner / groupCornerUnits, which is also what
+     draws them, so the two cannot diverge again.
+
+       • own corner — drawn below at THIS row's scale k, so it is reserved in
+         unscaled units and both share one width budget;
+       • the strip's corner — counter-scaled by the raw zoom, uncapped, so it is
+         a fixed number of BOARD units and is subtracted before the row is given
+         what is left. */
+  const ownCorner = hasOwnResizeCorner(variant);
+  const corner = ownCorner ? CONTROL_UNITS : 0;
+  // "There is a corner over me and I am not the one drawing it" — i.e. the
+  // strip's. Written with the same predicate the test holds, so a member that
+  // stops being last stops reserving on the same day.
+  const groupCorner = !ownCorner && hasResizeCornerOver(variant, lastInGroup)
+    ? groupCornerUnits(boardScale) : 0;
+  const k = chromeScale(boardScale, geom.w, rowUnits, corner, groupCorner);
   // Which thumbnail rung this node's picture is fetched at. Held in a ref and
   // ratcheted, so a live resize crossing a rung upgrades the picture ONCE
   // instead of re-requesting it on every frame of the drag; keyed on the url so
@@ -127,7 +171,7 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
   // Without it flex would happily draw a wider row inside that budget and every
   // target would silently lose size at low zoom.
   const chrome = { transform: `scale(${k})`, transformOrigin: 'bottom right',
-    maxWidth: rowUnits, right: corner * k };
+    maxWidth: rowUnits, right: corner * k + groupCorner };
   const rmState = canvasDeleteButtonState({ armed: rm.armed, busy: rm.busy, label: imageLabel });
   // Revealed on hover/focus for a member, always on for a node of its own.
   const reveal = member
@@ -207,7 +251,7 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           instead. `flex-nowrap` is load-bearing: a wrap here is the 2×2 block
           this layout exists to undo.
 
-          ⚠️ NO `backdrop-blur` on these four, deliberately, and it is a
+          ⚠️ NO `backdrop-blur` on these five, deliberately, and it is a
           performance decision rather than a taste one. Each blurred element is
           its own compositor pass over whatever is behind it, and behind these is
           a photograph; a board with forty pinned pictures therefore asked the
@@ -219,11 +263,13 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           of those per picture and they sit over text, not under a finger. */}
       <div style={chrome}
         data-testid="canvas-image-controls"
-        // gap-0.5/p-0.5 and not gap-1/p-1: every unit of padding is a unit the
+        // gap-0.5/p-px and not gap-1/p-1: every unit of padding is a unit the
         // buttons do not get, because the cap chromeScale applies is spent on
-        // the row's total width.
+        // the row's total width. The padding went from p-0.5 to p-px when HQ
+        // made the row five controls — see CHROME_PAD, which is the same two
+        // units and carries the reasoning. Keep the two in step.
         className={'absolute bottom-0 z-10 flex flex-nowrap items-center justify-end'
-          + ' gap-0.5 p-0.5' + reveal}>
+          + ' gap-0.5 p-px' + reveal}>
         {/* Opens the full record — every setting, the prompt, the copy buttons.
             The node is the picture; the facts stay one click away rather than
             being crammed onto a thumbnail. */}
@@ -253,6 +299,29 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-white/15 bg-black/65 text-white transition-colors text-[0.75rem] leading-none hover:bg-black/70 disabled:opacity-50">
           {dl.busy ? '…' : '⬇'}
         </button>
+        {/* HQ — swap the WebP tile for the ORIGINAL bytes, this picture only.
+            A toggle and not a one-way switch: full quality is heavy on purpose,
+            so the way back has to be the same button. It LIGHTS UP when it is
+            on, because "am I looking at the tile or at the file?" is the whole
+            question this button answers and a board full of pictures gives no
+            other clue. Letters rather than a glyph: every emoji considered for
+            it (🔎 🖼 ✨) reads as another word for 🔍, which is the button
+            immediately beside it. */}
+        <button type="button" onClick={(e) => { e.stopPropagation(); setHq((v) => !v); }}
+          data-testid="canvas-image-hq"
+          data-hq={hq ? 'true' : 'false'}
+          aria-pressed={hq}
+          title={hq
+            ? 'HQ is on — showing the original file. Click to go back to the fast tile'
+            : 'HQ — show this picture at full quality (the original file)'}
+          aria-label={hq
+            ? `Show the fast tile again for the image at ${imageLabel}`
+            : `Show the image at ${imageLabel} at full quality`}
+          className={'flex h-7 w-7 shrink-0 items-center justify-center rounded-md border '
+            + 'font-semibold transition-colors text-[0.5rem] leading-none '
+            + (hq
+              ? 'border-indigo-300 bg-indigo-500/90 text-white'
+              : 'border-white/15 bg-black/65 text-white hover:bg-black/70')}>HQ</button>
         {/* 🗑 Delete the PICTURE, not the node.
             LAST in the row, furthest from ✕, and the two are told apart by
             colour AND by an arming step rather than by position alone: ✕ and 🗑
@@ -329,8 +398,12 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
             a node to judge it does get sharper pixels without re-fetching on
             every frame of the drag. Full resolution stays one 🔍, one ⬇ or one
             board export away. `lazy` because a board is panned: the nodes
-            off-screen right now cost nothing until they are scrolled to. */}
-        <img src={datasetThumbUrl(img.url, thumbSide)} alt={`Generated at ${imageLabel}`}
+            off-screen right now cost nothing until they are scrolled to.
+            …unless HQ is on for THIS picture, in which case the original URL is
+            used verbatim — same box, same object-contain, so it simply becomes
+            the sharpest thing that box can hold. */}
+        <img src={hq ? img.url : datasetThumbUrl(img.url, thumbSide)}
+          alt={`Generated at ${imageLabel}`}
           draggable={false} loading="lazy" decoding="async"
           className="h-full w-full select-none object-contain" />
       </div>
@@ -338,8 +411,10 @@ function CanvasImageNode({ node, datasetId, laneName, onGeometry,
           affordance, and this board is used on a phone. Hit-tested BEFORE the
           drag/pan decision, so a finger landing here always resizes.
           A group MEMBER has none: its width is its aspect ratio at the strip's
-          height, so there is nothing about it to drag. The strip has one. */}
-      {!member && (
+          height, so there is nothing about it to drag. The strip has one — and
+          the row above reserves THAT one for the last member, from the same
+          helper this condition reads. */}
+      {ownCorner && (
       <span data-canvas-image-resize="" aria-hidden
         title="Drag to resize"
         style={{ position: 'absolute', right: 0, bottom: 0, width: 28, height: 28,

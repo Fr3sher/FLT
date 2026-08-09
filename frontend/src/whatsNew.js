@@ -62,7 +62,7 @@ export const WHATS_NEW = [
     date: '2026-08-09',
     title: 'Grids and the board load in a blink',
     blurb:
-      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original.',
+      'Every thumbnail surface — the Canvas board, the dataset grid, Test Studio result tiles, checkpoint pills and the run cards — used to download and decode your full-resolution images just to paint a small tile. They now ask for a right-sized WebP thumbnail instead: a board that pulled 47 MB of pictures fetches 0.4 MB, and off-screen tiles no longer load at all. Opening an image, downloading it or exporting the board still uses the full-quality original — and a pinned image now carries an HQ button that swaps its tile for the original file in place, one picture at a time, for when you are judging skin or fine text and a re-encode is not good enough.',
     to: '/canvas',
   },
   {
